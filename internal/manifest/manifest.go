@@ -15,13 +15,14 @@ import (
 )
 
 type CheckinOpts struct {
-	Files   []File
-	Comment string
-	User    string
-	Parent  libfossil.FslID
-	Delta   bool
-	Time    time.Time
-	Tags    []deck.TagCard
+	Files        []File
+	Comment      string
+	User         string
+	Parent       libfossil.FslID
+	MergeParents []libfossil.FslID // additional parents beyond Parent (for merge commits)
+	Delta        bool
+	Time         time.Time
+	Tags         []deck.TagCard
 }
 
 type File struct {
@@ -120,6 +121,17 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		}
 	}
 
+	// Inherit propagating tags (branch, sym-*, bgcolor) from the primary parent.
+	// Without this, a new commit on an existing branch would not carry its
+	// parent's branch tag — breaking branch-aware queries. Matches the
+	// corresponding PropagateAll call in crosslink's applyInlineTags so the
+	// fresh-commit and sync-import paths converge on the same tagxref state.
+	if opts.Parent > 0 {
+		if err := tag.PropagateAll(r.DB(), opts.Parent); err != nil {
+			return 0, "", fmt.Errorf("manifest.Checkin propagate from parent: %w", err)
+		}
+	}
+
 	return manifestRid, manifestUUID, nil
 }
 
@@ -146,13 +158,24 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 		U:    opts.User,
 	}
 
-	// Parent
+	// Parents: primary parent first, then any merge parents. Fossil renders
+	// this as a space-separated P-card; plink marks i==0 as the primary.
 	if opts.Parent > 0 {
 		var parentUUID string
 		if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", opts.Parent).Scan(&parentUUID); err != nil {
 			return nil, fmt.Errorf("parent uuid: %w", err)
 		}
 		d.P = []string{parentUUID}
+		for _, mp := range opts.MergeParents {
+			if mp <= 0 || mp == opts.Parent {
+				continue
+			}
+			var mpUUID string
+			if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", mp).Scan(&mpUUID); err != nil {
+				return nil, fmt.Errorf("merge parent uuid: %w", err)
+			}
+			d.P = append(d.P, mpUUID)
+		}
 	}
 
 	// Tags: use custom tags if provided, otherwise default trunk tags for initial checkin
@@ -226,11 +249,19 @@ func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) erro
 }
 
 func markLeafAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {
-	// plink
-	if opts.Parent > 0 {
+	// plink: one row per parent; primary (isprim=1) is opts.Parent, merge
+	// parents are secondary (isprim=0). Matches the sync-path layout in
+	// crosslink.go so merged history looks identical however it arrived.
+	mtime := libfossil.TimeToJulian(opts.Time)
+	allParents := collectParents(opts)
+	for i, pid := range allParents {
+		isPrim := 0
+		if i == 0 {
+			isPrim = 1
+		}
 		if _, err := tx.Exec(
-			"INSERT INTO plink(pid, cid, isprim, mtime) VALUES(?, ?, 1, ?)",
-			opts.Parent, manifestRid, libfossil.TimeToJulian(opts.Time),
+			"INSERT INTO plink(pid, cid, isprim, mtime) VALUES(?, ?, ?, ?)",
+			pid, manifestRid, isPrim, mtime,
 		); err != nil {
 			return fmt.Errorf("plink: %w", err)
 		}
@@ -244,12 +275,13 @@ func markLeafAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) 
 		return fmt.Errorf("event: %w", err)
 	}
 
-	// leaf
+	// leaf: this checkin is new; remove every parent from leaf so merge
+	// commits correctly supersede both sides.
 	if _, err := tx.Exec("INSERT OR IGNORE INTO leaf(rid) VALUES(?)", manifestRid); err != nil {
 		return fmt.Errorf("leaf insert: %w", err)
 	}
-	if opts.Parent > 0 {
-		if _, err := tx.Exec("DELETE FROM leaf WHERE rid=?", opts.Parent); err != nil {
+	for _, pid := range allParents {
+		if _, err := tx.Exec("DELETE FROM leaf WHERE rid=?", pid); err != nil {
 			return fmt.Errorf("leaf delete parent: %w", err)
 		}
 	}
@@ -260,6 +292,25 @@ func markLeafAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) 
 	}
 
 	return nil
+}
+
+// collectParents returns the primary parent followed by any merge parents,
+// skipping zero entries and de-duplicating. Used for both the plink insert
+// loop and the leaf cleanup so both see the same set.
+func collectParents(opts CheckinOpts) []libfossil.FslID {
+	if opts.Parent <= 0 {
+		return nil
+	}
+	seen := map[libfossil.FslID]bool{opts.Parent: true}
+	out := []libfossil.FslID{opts.Parent}
+	for _, mp := range opts.MergeParents {
+		if mp <= 0 || seen[mp] {
+			continue
+		}
+		seen[mp] = true
+		out = append(out, mp)
+	}
+	return out
 }
 
 func ensureFilename(tx *db.Tx, name string) (int64, error) {

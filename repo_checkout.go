@@ -17,7 +17,12 @@ type CommitOpts struct {
 	Tags     []TagSpec
 	Time     time.Time
 	ParentID int64
-	Delta    bool
+	// MergeParents lists additional parents for a merge commit. The resulting
+	// manifest's P-card is [ParentID, MergeParents...]; ParentID is the primary
+	// parent (branch tip being committed onto), and each MergeParent contributes
+	// a secondary plink row (isprim=0).
+	MergeParents []int64
+	Delta        bool
 }
 
 // FileToCommit describes a file to include in a commit.
@@ -72,14 +77,22 @@ func (r *Repo) Commit(opts CommitOpts) (int64, string, error) {
 			Value: t.Value,
 		})
 	}
+	var mergeParents []fsltype.FslID
+	if len(opts.MergeParents) > 0 {
+		mergeParents = make([]fsltype.FslID, len(opts.MergeParents))
+		for i, mp := range opts.MergeParents {
+			mergeParents[i] = fsltype.FslID(mp)
+		}
+	}
 	copts := manifest.CheckinOpts{
-		Files:   files,
-		Comment: opts.Comment,
-		User:    opts.User,
-		Parent:  fsltype.FslID(opts.ParentID),
-		Delta:   opts.Delta,
-		Time:    opts.Time,
-		Tags:    tagCards,
+		Files:        files,
+		Comment:      opts.Comment,
+		User:         opts.User,
+		Parent:       fsltype.FslID(opts.ParentID),
+		MergeParents: mergeParents,
+		Delta:        opts.Delta,
+		Time:         opts.Time,
+		Tags:         tagCards,
 	}
 	rid, uuid, err := manifest.Checkin(r.inner, copts)
 	if err != nil {

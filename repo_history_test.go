@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,6 +148,77 @@ func TestDiff_AbsentBothSides(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("want empty slice for file absent in both checkins, got %d entries:\n%+v", len(entries), entries)
+	}
+}
+
+func TestReadFile_Present(t *testing.T) {
+	r := newTestRepo(t)
+	rid := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "hello.txt", Content: []byte("hello\nworld\n")},
+		{Name: "other.txt", Content: []byte("other\n")},
+	})
+
+	data, err := r.ReadFile(rid, "hello.txt")
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "hello\nworld\n" {
+		t.Errorf("content = %q, want %q", data, "hello\nworld\n")
+	}
+}
+
+func TestReadFile_AcrossRevs(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "f.txt", Content: []byte("first\n")},
+	})
+	b := commit(t, r, a, "v2", []FileToCommit{
+		{Name: "f.txt", Content: []byte("second\n")},
+	})
+
+	got, err := r.ReadFile(a, "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFile(a): %v", err)
+	}
+	if string(got) != "first\n" {
+		t.Errorf("rev a = %q, want %q", got, "first\n")
+	}
+	got, err = r.ReadFile(b, "f.txt")
+	if err != nil {
+		t.Fatalf("ReadFile(b): %v", err)
+	}
+	if string(got) != "second\n" {
+		t.Errorf("rev b = %q, want %q", got, "second\n")
+	}
+}
+
+func TestReadFile_NotInCheckin(t *testing.T) {
+	r := newTestRepo(t)
+	rid := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "only.txt", Content: []byte("x\n")},
+	})
+
+	_, err := r.ReadFile(rid, "missing.txt")
+	if err == nil {
+		t.Fatal("expected error for missing file, got nil")
+	}
+	if !errors.Is(err, ErrFileNotFound) {
+		t.Errorf("err = %v, want errors.Is ErrFileNotFound", err)
+	}
+}
+
+func TestReadFile_EmptyFilePath(t *testing.T) {
+	r := newTestRepo(t)
+	rid := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "x.txt", Content: []byte("x\n")},
+	})
+
+	_, err := r.ReadFile(rid, "")
+	if err == nil {
+		t.Fatal("expected error for empty filePath, got nil")
+	}
+	if !strings.Contains(err.Error(), "filePath is required") {
+		t.Errorf("err = %q, want message mentioning filePath", err.Error())
 	}
 }
 

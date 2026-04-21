@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,10 @@ import (
 	"github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/manifest"
 )
+
+// ErrFileNotFound is returned by ReadFile when the requested filePath is
+// not tracked in the given checkin. Callers can match with errors.Is.
+var ErrFileNotFound = errors.New("libfossil: file not found in checkin")
 
 // LogOpts configures a log/timeline query.
 type LogOpts struct {
@@ -104,6 +109,23 @@ func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
 		return []DiffEntry{}, nil
 	}
 	return []DiffEntry{{Name: filePath, Unified: unified}}, nil
+}
+
+// ReadFile returns the bytes of filePath as they existed in checkin rid.
+// Returns ErrFileNotFound (wrapped) if the file is not tracked in that
+// checkin. A file that exists but is empty returns ([]byte{}, nil).
+func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
+	if filePath == "" {
+		return nil, fmt.Errorf("libfossil: read file: filePath is required")
+	}
+	data, err := blobAt(r, rid, filePath)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: read file: checkin %d: %w", rid, err)
+	}
+	if data == nil {
+		return nil, fmt.Errorf("libfossil: read file: %q in checkin %d: %w", filePath, rid, ErrFileNotFound)
+	}
+	return data, nil
 }
 
 // blobAt returns the bytes of filePath as they exist in the given checkin.

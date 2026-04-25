@@ -27,9 +27,6 @@ type PullOpts struct {
 // Tiger Style: hostile inputs panic via assert at the boundary; transport
 // failures return wrapped errors. Idempotent on a repo already at peer's
 // tip (returns a SyncResult with Rounds=0–1 and FilesRecvd=0).
-//
-// Threading: a Repo is safe for one Pull at a time. Concurrent Pulls
-// against the same Repo will serialize at the underlying *libfossil.Repo.
 func (r *Repo) Pull(ctx context.Context, url string, opts PullOpts) (*SyncResult, error) {
 	if ctx == nil {
 		panic("libfossil: Pull: ctx is nil")

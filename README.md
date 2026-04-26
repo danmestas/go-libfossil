@@ -1,5 +1,6 @@
 # libfossil
 
+[![Docs](https://img.shields.io/badge/docs-online-c63a0f)](https://libfossil-docs.daniel-mestas.workers.dev/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/libfossil.svg)](https://pkg.go.dev/github.com/danmestas/libfossil)
 [![Go Report Card](https://goreportcard.com/badge/github.com/danmestas/libfossil)](https://goreportcard.com/report/github.com/danmestas/libfossil)
 [![Tests](https://github.com/danmestas/libfossil/actions/workflows/test.yml/badge.svg)](https://github.com/danmestas/libfossil/actions/workflows/test.yml)
@@ -187,7 +188,7 @@ Test strategy — unit tests, dual-driver matrix, and deterministic simulation (
 
 ## Documentation
 
-Full documentation: **https://libfossil-docs.<your-cf-subdomain>.workers.dev** _(set the actual URL after the CF dashboard is connected)_.
+Full documentation: **<https://libfossil-docs.daniel-mestas.workers.dev>**.
 
 Local preview: `make docs-serve`, then visit http://localhost:1313/.
 

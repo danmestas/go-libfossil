@@ -8,22 +8,23 @@ import (
 
 func TestSplitLines(t *testing.T) {
 	tests := []struct {
-		name  string
-		input string
-		want  []string
+		name         string
+		input        string
+		want         []string
+		wantHasNL    bool
 	}{
-		{"empty", "", nil},
-		{"single no newline", "hello", []string{"hello"}},
-		{"single with newline", "hello\n", []string{"hello"}},
-		{"two lines", "a\nb\n", []string{"a", "b"}},
-		{"no trailing newline", "a\nb", []string{"a", "b"}},
-		{"crlf normalized", "a\r\nb\r\n", []string{"a", "b"}},
-		{"mixed eol", "a\nb\r\nc\n", []string{"a", "b", "c"}},
-		{"blank lines", "a\n\nb\n", []string{"a", "", "b"}},
+		{"empty", "", nil, true},
+		{"single no newline", "hello", []string{"hello"}, false},
+		{"single with newline", "hello\n", []string{"hello"}, true},
+		{"two lines", "a\nb\n", []string{"a", "b"}, true},
+		{"no trailing newline", "a\nb", []string{"a", "b"}, false},
+		{"crlf normalized", "a\r\nb\r\n", []string{"a", "b"}, true},
+		{"mixed eol", "a\nb\r\nc\n", []string{"a", "b", "c"}, true},
+		{"blank lines", "a\n\nb\n", []string{"a", "", "b"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := splitLines([]byte(tt.input))
+			got, gotHasNL := splitLines([]byte(tt.input))
 			if len(got) != len(tt.want) {
 				t.Fatalf("splitLines(%q) = %v (len %d), want %v (len %d)",
 					tt.input, got, len(got), tt.want, len(tt.want))
@@ -32,6 +33,9 @@ func TestSplitLines(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Errorf("line %d: got %q, want %q", i, got[i], tt.want[i])
 				}
+			}
+			if gotHasNL != tt.wantHasNL {
+				t.Errorf("endsWithNewline = %v, want %v", gotHasNL, tt.wantHasNL)
 			}
 		})
 	}
@@ -365,6 +369,115 @@ func TestUnifiedNoTrailingNewlineBoth(t *testing.T) {
 	got := Unified(a, b, Options{ContextLines: 3})
 	if got == "" {
 		t.Fatal("expected diff for no-trailing-newline")
+	}
+}
+
+// TestNoNewlineMarker_WithToWithout: file ends with newline, new version does not.
+// Marker should appear on the + side only.
+func TestNoNewlineMarker_WithToWithout(t *testing.T) {
+	a := []byte("line1\nline2\n")   // ends with newline
+	b := []byte("line1\nchanged")   // no trailing newline
+	got := Unified(a, b, Options{ContextLines: 3, SrcName: "a/f", DstName: "b/f"})
+	const marker = "\\ No newline at end of file"
+	if !strings.Contains(got, marker) {
+		t.Fatalf("expected no-newline marker on + side, got:\n%s", got)
+	}
+	// Marker must follow the last + line, not the - line.
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	for i, line := range lines {
+		if line == marker {
+			if i == 0 {
+				t.Fatalf("marker at line 0, expected after a +/- line")
+			}
+			prev := lines[i-1]
+			if !strings.HasPrefix(prev, "+") {
+				t.Fatalf("marker must follow a + line; instead follows %q", prev)
+			}
+		}
+	}
+	// No marker on the - side (src ended with newline).
+	markerCount := strings.Count(got, marker)
+	if markerCount != 1 {
+		t.Fatalf("expected exactly 1 marker, got %d:\n%s", markerCount, got)
+	}
+}
+
+// TestNoNewlineMarker_WithoutToWith: old file has no trailing newline, new one does.
+// Marker should appear on the - side only.
+func TestNoNewlineMarker_WithoutToWith(t *testing.T) {
+	a := []byte("line1\nline2")     // no trailing newline
+	b := []byte("line1\nchanged\n") // ends with newline
+	got := Unified(a, b, Options{ContextLines: 3, SrcName: "a/f", DstName: "b/f"})
+	const marker = "\\ No newline at end of file"
+	if !strings.Contains(got, marker) {
+		t.Fatalf("expected no-newline marker on - side, got:\n%s", got)
+	}
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	for i, line := range lines {
+		if line == marker {
+			if i == 0 {
+				t.Fatalf("marker at line 0, expected after a +/- line")
+			}
+			prev := lines[i-1]
+			if !strings.HasPrefix(prev, "-") {
+				t.Fatalf("marker must follow a - line; instead follows %q", prev)
+			}
+		}
+	}
+	markerCount := strings.Count(got, marker)
+	if markerCount != 1 {
+		t.Fatalf("expected exactly 1 marker, got %d:\n%s", markerCount, got)
+	}
+}
+
+// TestNoNewlineMarker_BothWithout: both sides lack trailing newline.
+// Marker should appear on both the - and + sides.
+func TestNoNewlineMarker_BothWithout(t *testing.T) {
+	a := []byte("line1\nline2")   // no trailing newline
+	b := []byte("line1\nchanged") // no trailing newline
+	got := Unified(a, b, Options{ContextLines: 3, SrcName: "a/f", DstName: "b/f"})
+	const marker = "\\ No newline at end of file"
+	markerCount := strings.Count(got, marker)
+	if markerCount != 2 {
+		t.Fatalf("expected 2 markers (one per side), got %d:\n%s", markerCount, got)
+	}
+	// First marker follows a - line, second follows a + line.
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+	markerFollows := []string{}
+	for i, line := range lines {
+		if line == marker && i > 0 {
+			markerFollows = append(markerFollows, lines[i-1])
+		}
+	}
+	if len(markerFollows) != 2 {
+		t.Fatalf("could not find preceding lines for both markers in:\n%s", got)
+	}
+	if !strings.HasPrefix(markerFollows[0], "-") {
+		t.Fatalf("first marker should follow a - line, follows %q", markerFollows[0])
+	}
+	if !strings.HasPrefix(markerFollows[1], "+") {
+		t.Fatalf("second marker should follow a + line, follows %q", markerFollows[1])
+	}
+}
+
+// TestNoNewlineMarker_IdenticalNoNewline: identical files with no trailing newline
+// produce no diff (short-circuit still works).
+func TestNoNewlineMarker_IdenticalNoNewline(t *testing.T) {
+	a := []byte("hello\nworld")
+	got := Unified(a, a, Options{ContextLines: 3})
+	if got != "" {
+		t.Fatalf("identical no-newline inputs should return empty string, got:\n%s", got)
+	}
+}
+
+// TestNoNewlineMarker_Absent: normal files with trailing newlines must not have the marker.
+func TestNoNewlineMarker_Absent(t *testing.T) {
+	a := []byte("line1\nline2\n")
+	b := []byte("line1\nchanged\n")
+	got := Unified(a, b, Options{ContextLines: 3})
+	const marker = "\\ No newline at end of file"
+	if strings.Contains(got, marker) {
+		t.Fatalf("normal diff must not contain no-newline marker, got:\n%s", got)
 	}
 }
 

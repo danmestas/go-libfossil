@@ -23,20 +23,22 @@ type DiffStat struct {
 }
 
 // splitLines splits data into lines, stripping \r and trailing empty line.
-func splitLines(data []byte) []string {
+// The second return value is true if data ends with a newline (or is empty).
+func splitLines(data []byte) ([]string, bool) {
 	if len(data) == 0 {
-		return nil
+		return nil, true
 	}
 	s := strings.ReplaceAll(string(data), "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
+	endsWithNewline := strings.HasSuffix(s, "\n")
 	lines := strings.Split(s, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
 	if len(lines) == 0 {
-		return nil
+		return nil, true
 	}
-	return lines
+	return lines, endsWithNewline
 }
 
 // isBinary returns true if data contains a null byte.
@@ -295,8 +297,14 @@ func buildHunks(ops []editOp, contextLines int) []hunk {
 	return hunks
 }
 
+// noNewlineMarker is the POSIX / Fossil marker for files lacking a trailing newline.
+const noNewlineMarker = "\\ No newline at end of file\n"
+
 // formatUnified formats hunks as a unified diff string.
-func formatUnified(hunks []hunk, srcName, dstName string) string {
+// srcNoNL and dstNoNL indicate whether the respective sides lack a trailing newline.
+// When a side lacks a trailing newline, the marker is emitted after the last
+// line of the final hunk that came from that side.
+func formatUnified(hunks []hunk, srcName, dstName string, srcNoNL, dstNoNL bool, srcTotal, dstTotal int) string {
 	if len(hunks) == 0 {
 		return ""
 	}
@@ -311,17 +319,60 @@ func formatUnified(hunks []hunk, srcName, dstName string) string {
 	fmt.Fprintf(&buf, "--- %s\n", srcName)
 	fmt.Fprintf(&buf, "+++ %s\n", dstName)
 
-	for _, h := range hunks {
+	nHunks := len(hunks)
+
+	for i := range hunks {
+		h := &hunks[i]
 		fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n",
 			h.srcStart, h.srcCount, h.dstStart, h.dstCount)
-		for _, op := range h.ops {
+
+		isLast := i == nHunks-1
+
+		// Pre-compute the index of the last op that contributes to each side,
+		// used only for the final hunk (where marker emission is possible).
+		lastSrcOpIdx := -1
+		lastDstOpIdx := -1
+		if isLast {
+			hunkSrcEnd := h.srcStart + h.srcCount - 1
+			hunkDstEnd := h.dstStart + h.dstCount - 1
+			if srcNoNL && hunkSrcEnd == srcTotal {
+				for k := len(h.ops) - 1; k >= 0; k-- {
+					if h.ops[k].kind == opDelete || h.ops[k].kind == opEqual {
+						lastSrcOpIdx = k
+						break
+					}
+				}
+			}
+			if dstNoNL && hunkDstEnd == dstTotal {
+				for k := len(h.ops) - 1; k >= 0; k-- {
+					if h.ops[k].kind == opInsert || h.ops[k].kind == opEqual {
+						lastDstOpIdx = k
+						break
+					}
+				}
+			}
+		}
+
+		for j, op := range h.ops {
 			switch op.kind {
 			case opEqual:
 				fmt.Fprintf(&buf, " %s\n", op.text)
+				if j == lastSrcOpIdx {
+					buf.WriteString(noNewlineMarker)
+				}
+				if j == lastDstOpIdx {
+					buf.WriteString(noNewlineMarker)
+				}
 			case opDelete:
 				fmt.Fprintf(&buf, "-%s\n", op.text)
+				if j == lastSrcOpIdx {
+					buf.WriteString(noNewlineMarker)
+				}
 			case opInsert:
 				fmt.Fprintf(&buf, "+%s\n", op.text)
+				if j == lastDstOpIdx {
+					buf.WriteString(noNewlineMarker)
+				}
 			}
 		}
 	}
@@ -346,8 +397,8 @@ func Unified(a, b []byte, opts Options) string {
 		}
 		return fmt.Sprintf("--- %s\n+++ %s\ncannot compute difference between binary files\n", srcName, dstName)
 	}
-	srcLines := splitLines(a)
-	dstLines := splitLines(b)
+	srcLines, srcHasNL := splitLines(a)
+	dstLines, dstHasNL := splitLines(b)
 	ops := myers(srcLines, dstLines)
 
 	allEqual := true
@@ -362,7 +413,7 @@ func Unified(a, b []byte, opts Options) string {
 	}
 
 	hunks := buildHunks(ops, opts.ContextLines)
-	return formatUnified(hunks, opts.SrcName, opts.DstName)
+	return formatUnified(hunks, opts.SrcName, opts.DstName, !srcHasNL, !dstHasNL, len(srcLines), len(dstLines))
 }
 
 // Stat returns insertion/deletion counts between a and b.
@@ -370,8 +421,8 @@ func Stat(a, b []byte) DiffStat {
 	if isBinary(a) || isBinary(b) {
 		return DiffStat{Binary: true}
 	}
-	srcLines := splitLines(a)
-	dstLines := splitLines(b)
+	srcLines, _ := splitLines(a)
+	dstLines, _ := splitLines(b)
 	ops := myers(srcLines, dstLines)
 
 	var stat DiffStat

@@ -89,41 +89,47 @@ func encodeGimme(w *bytes.Buffer, c *GimmeCard) error {
 	return nil
 }
 
-// encodePush writes "push [ServerCode [ProjectCode]]\n", omitting trailing
-// empty args so the wire form does not contain consecutive spaces (which
-// strings.Fields collapses on the receiving end).
+// encodePush writes "push <project-code> [<server-code>]\n".
 //
-// Divergence from fossil-scm/c: the C client always emits both args because
-// g.zPushCode is populated from the repo's project_code at startup. In the
-// Go port, callers may construct SyncOpts{} directly with empty codes
-// (no prior session, fresh repo); accepting fewer args avoids a wire-form
-// arg-count mismatch. parsePush mirrors this on the decoder side.
+// The Fossil C xfer parser (src/xfer.c xfer_push_card) requires at least the
+// project code; a bare "push\n" is rejected by real Fossil servers. The
+// project code must always be present — callers must populate PushCard.ProjectCode
+// before encoding. ServerCode is optional (omitted on the first round when no
+// prior session exists).
+//
+// Wire-format arg order matches Fossil C: project-code first, server-code second.
 func encodePush(w *bytes.Buffer, c *PushCard) error {
-	w.WriteString("push")
+	if c.ProjectCode == "" {
+		panic("xfer: encodePush: ProjectCode must not be empty")
+	}
+	w.WriteString("push ")
+	w.WriteString(c.ProjectCode)
 	if c.ServerCode != "" {
 		w.WriteByte(' ')
 		w.WriteString(c.ServerCode)
-		if c.ProjectCode != "" {
-			w.WriteByte(' ')
-			w.WriteString(c.ProjectCode)
-		}
 	}
 	w.WriteByte('\n')
 	return nil
 }
 
-// encodePull writes "pull [ServerCode [ProjectCode]]\n", omitting trailing
-// empty args. See encodePush for the divergence rationale.
+// encodePull writes "pull <project-code> <server-code>\n".
+//
+// The Fossil C xfer parser requires both args on pull — a bare "pull\n" or
+// single-arg "pull <code>\n" is rejected. Both ProjectCode and ServerCode must
+// be non-empty before encoding.
+//
+// Wire-format arg order matches Fossil C: project-code first, server-code second.
 func encodePull(w *bytes.Buffer, c *PullCard) error {
-	w.WriteString("pull")
-	if c.ServerCode != "" {
-		w.WriteByte(' ')
-		w.WriteString(c.ServerCode)
-		if c.ProjectCode != "" {
-			w.WriteByte(' ')
-			w.WriteString(c.ProjectCode)
-		}
+	if c.ProjectCode == "" {
+		panic("xfer: encodePull: ProjectCode must not be empty")
 	}
+	if c.ServerCode == "" {
+		panic("xfer: encodePull: ServerCode must not be empty")
+	}
+	w.WriteString("pull ")
+	w.WriteString(c.ProjectCode)
+	w.WriteByte(' ')
+	w.WriteString(c.ServerCode)
 	w.WriteByte('\n')
 	return nil
 }

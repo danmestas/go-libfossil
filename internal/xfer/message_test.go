@@ -21,7 +21,7 @@ func TestMessage_MultiCardRoundTrip(t *testing.T) {
 	msg := &Message{
 		Cards: []Card{
 			&PragmaCard{Name: "client-version", Values: []string{"2.24"}},
-			&PullCard{ServerCode: "srv1", ProjectCode: "proj1"},
+			&PullCard{ProjectCode: "proj1", ServerCode: "srv1"},
 			&IGotCard{UUID: "abc123def456abc123def456abc123def456abcd"},
 			&GimmeCard{UUID: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
 		},
@@ -56,7 +56,7 @@ func TestMessage_MultiCardRoundTrip(t *testing.T) {
 		t.Errorf("pragma = %+v", pragma)
 	}
 	pull := got.Cards[1].(*PullCard)
-	if pull.ServerCode != "srv1" || pull.ProjectCode != "proj1" {
+	if pull.ProjectCode != "proj1" || pull.ServerCode != "srv1" {
 		t.Errorf("pull = %+v", pull)
 	}
 }
@@ -399,7 +399,7 @@ func BenchmarkEncodeMessage(b *testing.B) {
 	cards := make([]Card, 0, 50)
 	cards = append(cards, &PragmaCard{Name: "client-version", Values: []string{"2.24"}})
 	cards = append(cards, &PragmaCard{Name: "http-auth", Values: []string{"1"}})
-	cards = append(cards, &PullCard{ServerCode: "srv1code", ProjectCode: "proj1code"})
+	cards = append(cards, &PullCard{ProjectCode: "proj1code", ServerCode: "srv1code"})
 	cards = append(cards, &LoginCard{User: "anonymous", Nonce: "12345", Signature: "sig"})
 	cards = append(cards, &CookieCard{Value: "cookie-value"})
 
@@ -435,7 +435,7 @@ func BenchmarkDecodeMessage(b *testing.B) {
 	cards := make([]Card, 0, 50)
 	cards = append(cards, &PragmaCard{Name: "client-version", Values: []string{"2.24"}})
 	cards = append(cards, &PragmaCard{Name: "http-auth", Values: []string{"1"}})
-	cards = append(cards, &PullCard{ServerCode: "srv1code", ProjectCode: "proj1code"})
+	cards = append(cards, &PullCard{ProjectCode: "proj1code", ServerCode: "srv1code"})
 	cards = append(cards, &LoginCard{User: "anonymous", Nonce: "12345", Signature: "sig"})
 	cards = append(cards, &CookieCard{Value: "cookie-value"})
 	for i := 0; i < 20; i++ {

@@ -9,8 +9,8 @@ import (
 func ExampleMessage_Encode() {
 	msg := &xfer.Message{
 		Cards: []xfer.Card{
-			&xfer.PushCard{ServerCode: "abc123"},
-			&xfer.PullCard{ServerCode: "abc123"},
+			&xfer.PushCard{ProjectCode: "abc123"},
+			&xfer.PullCard{ProjectCode: "abc123", ServerCode: "def456"},
 			&xfer.IGotCard{UUID: "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"},
 		},
 	}

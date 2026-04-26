@@ -59,17 +59,19 @@ func TestRoundTrip_Gimme(t *testing.T) {
 }
 
 func TestRoundTrip_Push(t *testing.T) {
-	c := &PushCard{ServerCode: "srv1", ProjectCode: "proj1"}
+	// Both codes present: "push <project-code> <server-code>\n"
+	c := &PushCard{ProjectCode: "proj1", ServerCode: "srv1"}
 	got := roundTrip(t, c).(*PushCard)
-	if got.ServerCode != c.ServerCode || got.ProjectCode != c.ProjectCode {
+	if got.ProjectCode != c.ProjectCode || got.ServerCode != c.ServerCode {
 		t.Errorf("Push = %+v, want %+v", got, c)
 	}
 }
 
 func TestRoundTrip_Pull(t *testing.T) {
-	c := &PullCard{ServerCode: "srv2", ProjectCode: "proj2"}
+	// Both codes required on pull: "pull <project-code> <server-code>\n"
+	c := &PullCard{ProjectCode: "proj2", ServerCode: "srv2"}
 	got := roundTrip(t, c).(*PullCard)
-	if got.ServerCode != c.ServerCode || got.ProjectCode != c.ProjectCode {
+	if got.ProjectCode != c.ProjectCode || got.ServerCode != c.ServerCode {
 		t.Errorf("Pull = %+v, want %+v", got, c)
 	}
 }
@@ -288,6 +290,8 @@ func TestDecode_IGotBadArgCount(t *testing.T) {
 	}
 }
 
+// TestDecode_PushOneArg verifies that "push <project-code>" (1 arg) decodes
+// correctly — arg[0] is the project code, not the server code.
 func TestDecode_PushOneArg(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("push only-one\n"))
 	card, err := DecodeCard(r)
@@ -295,76 +299,93 @@ func TestDecode_PushOneArg(t *testing.T) {
 		t.Fatalf("push with 1 arg should succeed: %v", err)
 	}
 	push := card.(*PushCard)
-	if push.ServerCode != "only-one" {
-		t.Errorf("ServerCode = %q, want %q", push.ServerCode, "only-one")
+	if push.ProjectCode != "only-one" {
+		t.Errorf("ProjectCode = %q, want %q", push.ProjectCode, "only-one")
 	}
-	if push.ProjectCode != "" {
-		t.Errorf("ProjectCode should be empty, got %q", push.ProjectCode)
+	if push.ServerCode != "" {
+		t.Errorf("ServerCode should be empty, got %q", push.ServerCode)
 	}
 }
 
-// TestRoundTrip_PushEmptyCodes verifies a PushCard with empty ServerCode
-// and ProjectCode encodes to "push\n" (no trailing spaces) and decodes
-// back to an empty-codes PushCard. Without trailing-empty-arg suppression
-// the wire form would be "push  \n" and the decoder's strings.Fields
-// would collapse adjacent spaces, producing a 0-arg parse error.
-func TestRoundTrip_PushEmptyCodes(t *testing.T) {
-	c := &PushCard{}
+// TestEncode_PushEmptyCodes verifies that encoding a PushCard with empty
+// ProjectCode panics — bare "push\n" is rejected by the upstream Fossil C
+// server, so we prevent it at encode time.
+func TestEncode_PushEmptyCodes(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when encoding PushCard with empty ProjectCode")
+		}
+	}()
+	var buf bytes.Buffer
+	_ = EncodeCard(&buf, &PushCard{})
+}
+
+// TestEncode_PullEmptyCodes verifies that encoding a PullCard with empty
+// codes panics — both project-code and server-code are required by the
+// upstream Fossil C xfer parser.
+func TestEncode_PullEmptyCodes(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when encoding PullCard with empty codes")
+		}
+	}()
+	var buf bytes.Buffer
+	_ = EncodeCard(&buf, &PullCard{})
+}
+
+// TestEncode_PullMissingServerCode verifies that a PullCard with ProjectCode
+// but no ServerCode panics — Fossil C requires both args on pull.
+func TestEncode_PullMissingServerCode(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when encoding PullCard with empty ServerCode")
+		}
+	}()
+	var buf bytes.Buffer
+	_ = EncodeCard(&buf, &PullCard{ProjectCode: "proj1"})
+}
+
+// TestDecode_PushZeroArgs verifies that a bare "push\n" (0 args) is now
+// rejected by the decoder — it was previously accepted as a Go-only extension
+// that masked the encoder bug.
+func TestDecode_PushZeroArgs(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("push\n"))
+	_, err := DecodeCard(r)
+	if err == nil {
+		t.Error("expected error for bare push with 0 args")
+	}
+}
+
+// TestDecode_PullOneArg verifies that a single-arg "pull <code>\n" is
+// rejected — Fossil C requires both project-code and server-code on pull.
+func TestDecode_PullOneArg(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("pull only-one\n"))
+	_, err := DecodeCard(r)
+	if err == nil {
+		t.Error("expected error for pull with 1 arg (requires 2)")
+	}
+}
+
+// TestDecode_PullZeroArgs verifies that a bare "pull\n" is rejected.
+func TestDecode_PullZeroArgs(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("pull\n"))
+	_, err := DecodeCard(r)
+	if err == nil {
+		t.Error("expected error for bare pull with 0 args")
+	}
+}
+
+// TestRoundTrip_PushProjectCodeOnly verifies that a PushCard with only
+// ProjectCode set (no ServerCode) round-trips correctly.
+// Wire form: "push <project-code>\n"
+func TestRoundTrip_PushProjectCodeOnly(t *testing.T) {
+	c := &PushCard{ProjectCode: "proj123"}
 	var buf bytes.Buffer
 	if err := EncodeCard(&buf, c); err != nil {
 		t.Fatalf("EncodeCard: %v", err)
 	}
-	if buf.String() != "push\n" {
-		t.Errorf("wire form = %q, want %q", buf.String(), "push\n")
-	}
-	r := bufio.NewReader(&buf)
-	got, err := DecodeCard(r)
-	if err != nil {
-		t.Fatalf("DecodeCard: %v", err)
-	}
-	push, ok := got.(*PushCard)
-	if !ok {
-		t.Fatalf("decoded type %T, want *PushCard", got)
-	}
-	if push.ServerCode != "" || push.ProjectCode != "" {
-		t.Errorf("decoded = %+v, want empty codes", push)
-	}
-}
-
-// TestRoundTrip_PullEmptyCodes mirrors TestRoundTrip_PushEmptyCodes for pull.
-func TestRoundTrip_PullEmptyCodes(t *testing.T) {
-	c := &PullCard{}
-	var buf bytes.Buffer
-	if err := EncodeCard(&buf, c); err != nil {
-		t.Fatalf("EncodeCard: %v", err)
-	}
-	if buf.String() != "pull\n" {
-		t.Errorf("wire form = %q, want %q", buf.String(), "pull\n")
-	}
-	r := bufio.NewReader(&buf)
-	got, err := DecodeCard(r)
-	if err != nil {
-		t.Fatalf("DecodeCard: %v", err)
-	}
-	pull, ok := got.(*PullCard)
-	if !ok {
-		t.Fatalf("decoded type %T, want *PullCard", got)
-	}
-	if pull.ServerCode != "" || pull.ProjectCode != "" {
-		t.Errorf("decoded = %+v, want empty codes", pull)
-	}
-}
-
-// TestRoundTrip_PushServerCodeOnly verifies that a PushCard with only
-// ServerCode set (no ProjectCode) encodes without a trailing space.
-func TestRoundTrip_PushServerCodeOnly(t *testing.T) {
-	c := &PushCard{ServerCode: "abc123"}
-	var buf bytes.Buffer
-	if err := EncodeCard(&buf, c); err != nil {
-		t.Fatalf("EncodeCard: %v", err)
-	}
-	if buf.String() != "push abc123\n" {
-		t.Errorf("wire form = %q, want %q", buf.String(), "push abc123\n")
+	if buf.String() != "push proj123\n" {
+		t.Errorf("wire form = %q, want %q", buf.String(), "push proj123\n")
 	}
 	r := bufio.NewReader(&buf)
 	got, err := DecodeCard(r)
@@ -372,8 +393,38 @@ func TestRoundTrip_PushServerCodeOnly(t *testing.T) {
 		t.Fatalf("DecodeCard: %v", err)
 	}
 	push := got.(*PushCard)
-	if push.ServerCode != "abc123" || push.ProjectCode != "" {
-		t.Errorf("decoded = %+v, want ServerCode=abc123, ProjectCode=\"\"", push)
+	if push.ProjectCode != "proj123" || push.ServerCode != "" {
+		t.Errorf("decoded = %+v, want ProjectCode=proj123, ServerCode=\"\"", push)
+	}
+}
+
+// TestWireFormat_PushBothCodes verifies the Fossil-wire byte order for push:
+// "push <project-code> <server-code>\n" — project first, server second.
+// This is the format a real Fossil C client emits on the second+ round when
+// both codes are known.
+func TestWireFormat_PushBothCodes(t *testing.T) {
+	c := &PushCard{ProjectCode: "proj1", ServerCode: "srv1"}
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+	const want = "push proj1 srv1\n"
+	if buf.String() != want {
+		t.Errorf("wire form = %q, want %q", buf.String(), want)
+	}
+}
+
+// TestWireFormat_PullBothCodes verifies the Fossil-wire byte order for pull:
+// "pull <project-code> <server-code>\n" — project first, server second.
+func TestWireFormat_PullBothCodes(t *testing.T) {
+	c := &PullCard{ProjectCode: "proj1", ServerCode: "srv1"}
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+	const want = "pull proj1 srv1\n"
+	if buf.String() != want {
+		t.Errorf("wire form = %q, want %q", buf.String(), want)
 	}
 }
 

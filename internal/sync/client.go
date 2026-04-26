@@ -40,17 +40,50 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 		Values: []string{"22800", "20260315", "120000"},
 	})
 
-	// 2. Push/Pull cards
+	// 2. Push/Pull cards.
+	//
+	// The project code is required on the wire (Fossil C rejects bare push/pull).
+	// Prefer the caller-supplied code; fall back to the local repo's stored
+	// project-code so callers that don't populate SyncOpts.ProjectCode still work.
+	// Every repo created by libfossil has a project-code (see db/schema.go).
+	projCode := s.opts.ProjectCode
+	if projCode == "" {
+		_ = s.repo.DB().QueryRow(
+			"SELECT value FROM config WHERE name='project-code'",
+		).Scan(&projCode)
+	}
+	// Fossil C also reads a cached remote server-code from the local repo
+	// config ('server-code' written by a prior pull). Fall back to that when
+	// SyncOpts.ServerCode is not provided.
+	srvCode := s.opts.ServerCode
+	if srvCode == "" {
+		_ = s.repo.DB().QueryRow(
+			"SELECT value FROM config WHERE name='server-code'",
+		).Scan(&srvCode)
+	}
 	if s.opts.Push {
+		if projCode == "" {
+			panic("sync.buildRequest: ProjectCode is required for push but not found in SyncOpts or repo config")
+		}
 		cards = append(cards, &xfer.PushCard{
-			ServerCode:  s.opts.ServerCode,
-			ProjectCode: s.opts.ProjectCode,
+			ProjectCode: projCode,
+			ServerCode:  srvCode, // optional; omitted on first push to a remote
 		})
 	}
 	if s.opts.Pull {
+		if projCode == "" {
+			panic("sync.buildRequest: ProjectCode is required for pull but not found in SyncOpts or repo config")
+		}
+		// Fossil C's pull parser requires both project-code and server-code.
+		// Use "0" as the server-code placeholder when none is cached — this is
+		// what Fossil C itself sends on the first pull to an unknown remote
+		// (xfer.c: zSCode defaults to "0" when not found in the config).
+		if srvCode == "" {
+			srvCode = "0"
+		}
 		cards = append(cards, &xfer.PullCard{
-			ServerCode:  s.opts.ServerCode,
-			ProjectCode: s.opts.ProjectCode,
+			ProjectCode: projCode,
+			ServerCode:  srvCode,
 		})
 	}
 

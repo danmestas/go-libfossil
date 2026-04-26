@@ -106,8 +106,10 @@ import "github.com/danmestas/libfossil"
   - [func \(r \*Repo\) Path\(\) string](<#Repo.Path>)
   - [func \(r \*Repo\) Pull\(ctx context.Context, url string, opts PullOpts\) \(\*SyncResult, error\)](<#Repo.Pull>)
   - [func \(r \*Repo\) ReadFile\(rid int64, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFile>)
+  - [func \(r \*Repo\) ReadFileAt\(version string, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFileAt>)
   - [func \(r \*Repo\) Redo\(dir string\) error](<#Repo.Redo>)
   - [func \(r \*Repo\) ResolveConflictFork\(filename string\) error](<#Repo.ResolveConflictFork>)
+  - [func \(r \*Repo\) ResolveVersion\(name string\) \(int64, error\)](<#Repo.ResolveVersion>)
   - [func \(r \*Repo\) ServeHTTP\(ctx context.Context, addr string\) error](<#Repo.ServeHTTP>)
   - [func \(r \*Repo\) SetCaps\(login, caps string\) error](<#Repo.SetCaps>)
   - [func \(r \*Repo\) SetConfig\(key, value string\) error](<#Repo.SetConfig>)
@@ -170,6 +172,12 @@ const (
 
 ## Variables
 
+<a name="ErrAmbiguousVersion"></a>ErrAmbiguousVersion is returned by ResolveVersion when a UUID prefix matches more than one artifact \(collision\). Callers can match with errors.Is.
+
+```go
+var ErrAmbiguousVersion = errors.New("libfossil: ambiguous version prefix")
+```
+
 <a name="ErrFileNotFound"></a>ErrFileNotFound is returned by ReadFile when the requested filePath is not tracked in the given checkin. Callers can match with errors.Is.
 
 ```go
@@ -180,6 +188,12 @@ var ErrFileNotFound = errors.New("libfossil: file not found in checkin")
 
 ```go
 var ErrMergeConflict = errors.New("libfossil: merge has conflicts")
+```
+
+<a name="ErrVersionNotFound"></a>ErrVersionNotFound is returned by ResolveVersion when the requested version string does not match any artifact in the repository. Callers can match with errors.Is.
+
+```go
+var ErrVersionNotFound = errors.New("libfossil: version not found")
 ```
 
 <a name="Clone"></a>
@@ -210,7 +224,7 @@ func TimeToJulian(t time.Time) float64
 TimeToJulian converts a time.Time to a Fossil Julian day number.
 
 <a name="AnnotateOpts"></a>
-## type [AnnotateOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L51-L54>)
+## type [AnnotateOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L52-L55>)
 
 AnnotateOpts configures an annotate operation.
 
@@ -222,7 +236,7 @@ type AnnotateOpts struct {
 ```
 
 <a name="AnnotatedLine"></a>
-## type [AnnotatedLine](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L43-L48>)
+## type [AnnotatedLine](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L44-L49>)
 
 AnnotatedLine is a single line of blame/annotate output.
 
@@ -236,7 +250,7 @@ type AnnotatedLine struct {
 ```
 
 <a name="BisectSession"></a>
-## type [BisectSession](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L62-L64>)
+## type [BisectSession](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L63-L65>)
 
 BisectSession holds state for a binary\-search bisect operation.
 
@@ -580,7 +594,7 @@ type CreateOpts struct {
 ```
 
 <a name="DiffEntry"></a>
-## type [DiffEntry](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L37-L40>)
+## type [DiffEntry](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L38-L41>)
 
 DiffEntry describes a unified diff for a single file.
 
@@ -665,7 +679,7 @@ type Fork struct {
 ```
 
 <a name="FslError"></a>
-## type [FslError](<https://github.com/danmestas/libfossil/blob/main/errors.go#L58-L62>)
+## type [FslError](<https://github.com/danmestas/libfossil/blob/main/errors.go#L61-L65>)
 
 
 
@@ -678,7 +692,7 @@ type FslError struct {
 ```
 
 <a name="FslError.Error"></a>
-### func \(\*FslError\) [Error](<https://github.com/danmestas/libfossil/blob/main/errors.go#L64>)
+### func \(\*FslError\) [Error](<https://github.com/danmestas/libfossil/blob/main/errors.go#L67>)
 
 ```go
 func (e *FslError) Error() string
@@ -687,7 +701,7 @@ func (e *FslError) Error() string
 
 
 <a name="FslError.Unwrap"></a>
-### func \(\*FslError\) [Unwrap](<https://github.com/danmestas/libfossil/blob/main/errors.go#L68>)
+### func \(\*FslError\) [Unwrap](<https://github.com/danmestas/libfossil/blob/main/errors.go#L71>)
 
 ```go
 func (e *FslError) Unwrap() error
@@ -766,7 +780,7 @@ type HandleStart struct {
 ```
 
 <a name="LogEntry"></a>
-## type [LogEntry](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L27-L34>)
+## type [LogEntry](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L28-L35>)
 
 LogEntry represents a single checkin in the timeline.
 
@@ -782,7 +796,7 @@ type LogEntry struct {
 ```
 
 <a name="LogOpts"></a>
-## type [LogOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L21-L24>)
+## type [LogOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L22-L25>)
 
 LogOpts configures a log/timeline query.
 
@@ -900,7 +914,7 @@ type PullOpts struct {
 ```
 
 <a name="RC"></a>
-## type [RC](<https://github.com/danmestas/libfossil/blob/main/errors.go#L5>)
+## type [RC](<https://github.com/danmestas/libfossil/blob/main/errors.go#L8>)
 
 
 
@@ -944,7 +958,7 @@ const (
 ```
 
 <a name="RC.String"></a>
-### func \(RC\) [String](<https://github.com/danmestas/libfossil/blob/main/errors.go#L51>)
+### func \(RC\) [String](<https://github.com/danmestas/libfossil/blob/main/errors.go#L54>)
 
 ```go
 func (rc RC) String() string
@@ -982,7 +996,7 @@ func Open(path string) (*Repo, error)
 Open opens an existing Fossil repository.
 
 <a name="Repo.Annotate"></a>
-### func \(\*Repo\) [Annotate](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L67>)
+### func \(\*Repo\) [Annotate](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L68>)
 
 ```go
 func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error)
@@ -1072,7 +1086,7 @@ func (r *Repo) DetectForks() ([]Fork, error)
 DetectForks finds divergent branches in the repository.
 
 <a name="Repo.Diff"></a>
-### func \(\*Repo\) [Diff](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L91>)
+### func \(\*Repo\) [Diff](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L92>)
 
 ```go
 func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error)
@@ -1200,13 +1214,22 @@ Pull fetches commits and ancillary objects from a Fossil HTTP peer and applies t
 Tiger Style: hostile inputs panic via assert at the boundary; transport failures return wrapped errors. Idempotent on a repo already at peer's tip \(returns a SyncResult with Rounds=0–1 and FilesRecvd=0\).
 
 <a name="Repo.ReadFile"></a>
-### func \(\*Repo\) [ReadFile](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L117>)
+### func \(\*Repo\) [ReadFile](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L118>)
 
 ```go
 func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error)
 ```
 
 ReadFile returns the bytes of filePath as they existed in checkin rid. Returns ErrFileNotFound \(wrapped\) if the file is not tracked in that checkin. A file that exists but is empty returns \(\[\]byte\{\}, nil\).
+
+<a name="Repo.ReadFileAt"></a>
+### func \(\*Repo\) [ReadFileAt](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L236>)
+
+```go
+func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error)
+```
+
+ReadFileAt reads filePath from the checkin identified by a symbolic version name \(e.g. "tip", "trunk", a branch name, a UUID, or a UUID prefix\). It calls ResolveVersion to obtain the RID, then delegates to ReadFile. Use ReadFile directly when you already have a numeric RID.
 
 <a name="Repo.Redo"></a>
 ### func \(\*Repo\) [Redo](<https://github.com/danmestas/libfossil/blob/main/repo_extras.go#L92>)
@@ -1225,6 +1248,25 @@ func (r *Repo) ResolveConflictFork(filename string) error
 ```
 
 ResolveConflictFork marks a conflict\-fork entry as resolved.
+
+<a name="Repo.ResolveVersion"></a>
+### func \(\*Repo\) [ResolveVersion](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L146>)
+
+```go
+func (r *Repo) ResolveVersion(name string) (int64, error)
+```
+
+ResolveVersion resolves a symbolic version name to a repository artifact RID.
+
+Resolution order:
+
+1. "" or "tip" — newest checkin by mtime from the event table.
+2. "trunk" — tip of the trunk branch via tagxref/tag; falls back to "tip" if the repository has no trunk tag.
+3. Named branch — tag lookup for "sym\-\<name\>" in tagxref/tag \(e.g. "feature\-x" resolves via sym\-feature\-x\).
+4. Full UUID \(≥40 chars\) — exact match against blob.uuid.
+5. UUID prefix \(4–39 chars\) — unique\-prefix match; returns ErrAmbiguousVersion if more than one artifact matches.
+
+An empty result or no match returns ErrVersionNotFound \(wrapped\). An ambiguous prefix returns ErrAmbiguousVersion \(wrapped\).
 
 <a name="Repo.ServeHTTP"></a>
 ### func \(\*Repo\) [ServeHTTP](<https://github.com/danmestas/libfossil/blob/main/repo_sync.go#L234>)
@@ -1497,7 +1539,7 @@ type StatusEntry struct {
 ```
 
 <a name="StatusOpts"></a>
-## type [StatusOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L57-L59>)
+## type [StatusOpts](<https://github.com/danmestas/libfossil/blob/main/repo_history.go#L58-L60>)
 
 StatusOpts configures a working\-tree status query.
 

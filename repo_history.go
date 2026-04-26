@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -126,6 +127,118 @@ func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
 		return nil, fmt.Errorf("libfossil: read file: %q in checkin %d: %w", filePath, rid, ErrFileNotFound)
 	}
 	return data, nil
+}
+
+// ResolveVersion resolves a symbolic version name to a repository artifact RID.
+//
+// Resolution order:
+//  1. "" or "tip"  — newest checkin by mtime from the event table.
+//  2. "trunk"      — tip of the trunk branch via tagxref/tag; falls back to "tip"
+//     if the repository has no trunk tag.
+//  3. Named branch — tag lookup for "sym-<name>" in tagxref/tag (e.g. "feature-x"
+//     resolves via sym-feature-x).
+//  4. Full UUID (≥40 chars) — exact match against blob.uuid.
+//  5. UUID prefix (4–39 chars) — unique-prefix match; returns ErrAmbiguousVersion
+//     if more than one artifact matches.
+//
+// An empty result or no match returns ErrVersionNotFound (wrapped).
+// An ambiguous prefix returns ErrAmbiguousVersion (wrapped).
+func (r *Repo) ResolveVersion(name string) (int64, error) {
+	db := r.inner.DB()
+
+	switch name {
+	case "", "tip":
+		var rid int64
+		err := db.QueryRow(
+			"SELECT objid FROM event WHERE type='ci' ORDER BY mtime DESC LIMIT 1",
+		).Scan(&rid)
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, ErrVersionNotFound)
+		}
+		if err != nil {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+		}
+		return rid, nil
+
+	case "trunk":
+		var rid int64
+		err := db.QueryRow(`
+			SELECT tagxref.rid FROM tagxref
+			JOIN tag ON tag.tagid = tagxref.tagid
+			WHERE tag.tagname = 'sym-trunk'
+			  AND tagxref.tagtype > 0
+			ORDER BY tagxref.mtime DESC LIMIT 1`,
+		).Scan(&rid)
+		if err == nil {
+			return rid, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+		}
+		// No trunk tag — fall back to tip.
+		return r.ResolveVersion("tip")
+
+	default:
+		// First try as a named branch ("sym-<name>").
+		var rid int64
+		err := db.QueryRow(`
+			SELECT tagxref.rid FROM tagxref
+			JOIN tag ON tag.tagid = tagxref.tagid
+			WHERE tag.tagname = ?
+			  AND tagxref.tagtype > 0
+			ORDER BY tagxref.mtime DESC LIMIT 1`,
+			"sym-"+name,
+		).Scan(&rid)
+		if err == nil {
+			return rid, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+		}
+
+		// Try as a UUID or UUID prefix.
+		rows, err := db.Query(
+			"SELECT rid FROM blob WHERE uuid LIKE ?", name+"%",
+		)
+		if err != nil {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+		}
+		defer rows.Close()
+
+		var matches []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+			}
+			matches = append(matches, id)
+		}
+		if err := rows.Err(); err != nil {
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+		}
+
+		switch len(matches) {
+		case 0:
+			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, ErrVersionNotFound)
+		case 1:
+			return matches[0], nil
+		default:
+			return 0, fmt.Errorf("libfossil: resolve version %q matches %d artifacts: %w",
+				name, len(matches), ErrAmbiguousVersion)
+		}
+	}
+}
+
+// ReadFileAt reads filePath from the checkin identified by a symbolic version
+// name (e.g. "tip", "trunk", a branch name, a UUID, or a UUID prefix).
+// It calls ResolveVersion to obtain the RID, then delegates to ReadFile.
+// Use ReadFile directly when you already have a numeric RID.
+func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error) {
+	rid, err := r.ResolveVersion(version)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: read file at %q: %w", version, err)
+	}
+	return r.ReadFile(rid, filePath)
 }
 
 // blobAt returns the bytes of filePath as they exist in the given checkin.

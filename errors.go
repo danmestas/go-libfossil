@@ -1,6 +1,9 @@
 package libfossil
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type RC int
 
@@ -68,3 +71,13 @@ func (e *FslError) Error() string {
 func (e *FslError) Unwrap() error {
 	return e.Cause
 }
+
+// ErrVersionNotFound is returned by ResolveVersion when the requested version
+// string does not match any artifact in the repository. Callers can match
+// with errors.Is.
+var ErrVersionNotFound = errors.New("libfossil: version not found")
+
+// ErrAmbiguousVersion is returned by ResolveVersion when a UUID prefix
+// matches more than one artifact (collision). Callers can match with
+// errors.Is.
+var ErrAmbiguousVersion = errors.New("libfossil: ambiguous version prefix")

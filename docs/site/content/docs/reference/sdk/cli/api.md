@@ -168,7 +168,7 @@ import "github.com/danmestas/libfossil/cli"
 
 
 <a name="Globals"></a>
-## type [Globals](<https://github.com/danmestas/libfossil/blob/main/cli/shared.go#L15-L18>)
+## type [Globals](<https://github.com/danmestas/libfossil/blob/main/cli/shared.go#L14-L17>)
 
 Globals holds flags shared by all CLI commands.
 
@@ -180,7 +180,7 @@ type Globals struct {
 ```
 
 <a name="Globals.OpenRepo"></a>
-### func \(\*Globals\) [OpenRepo](<https://github.com/danmestas/libfossil/blob/main/cli/shared.go#L22>)
+### func \(\*Globals\) [OpenRepo](<https://github.com/danmestas/libfossil/blob/main/cli/shared.go#L21>)
 
 ```go
 func (g *Globals) OpenRepo() (*libfossil.Repo, error)

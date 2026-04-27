@@ -442,7 +442,13 @@ func (h *handler) handleFile(uuid, deltaSrc string, payload []byte) error {
 		})
 		return nil
 	}
-	rid, _ := blob.Exists(h.repo.DB(), uuid)
+	rid, ok := blob.Exists(h.repo.DB(), uuid)
+	if !ok {
+		h.resp = append(h.resp, &xfer.ErrorCard{
+			Message: fmt.Sprintf("blob %s missing after store", uuid),
+		})
+		return nil
+	}
 	if h.nextIsPrivate {
 		if err := content.MakePrivate(h.repo.DB(), int64(rid)); err != nil {
 			return fmt.Errorf("handler: MakePrivate %s: %w", uuid, err)

@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/libfossil/internal/auth"
@@ -352,6 +353,39 @@ func TestHandlePushFileStoreFails(t *testing.T) {
 	errs := findCards[*xfer.ErrorCard](resp)
 	if len(errs) == 0 {
 		t.Fatal("expected error card for bad hash")
+	}
+}
+
+// alwaysAtSite is a BuggifyChecker that fires only for one named site.
+type alwaysAtSite string
+
+func (s alwaysAtSite) Check(site string, _ float64) bool { return string(s) == site }
+
+// TestHandleFileMissingAfterStore exercises the regression path from
+// issue #14: blob.Exists returning ok=false after a successful
+// storeReceivedFile must not reach content.MakePublic / MakePrivate
+// (which panic on rid <= 0). The handler should emit an ErrorCard
+// and continue processing.
+func TestHandleFileMissingAfterStore(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	data := []byte("payload that stores cleanly")
+	uuid := hash.SHA1(data)
+
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.FileCard{UUID: uuid, Content: data},
+	}}
+	opts := HandleOpts{Buggify: alwaysAtSite("handler.handleFile.missingAfterStore")}
+	resp, err := HandleSyncWithOpts(context.Background(), r, req, opts)
+	if err != nil {
+		t.Fatalf("HandleSyncWithOpts: %v", err)
+	}
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 {
+		t.Fatalf("error cards = %d, want 1", len(errs))
+	}
+	if want := "missing after store"; !strings.Contains(errs[0].Message, want) {
+		t.Fatalf("error card message = %q, want containing %q", errs[0].Message, want)
 	}
 }
 

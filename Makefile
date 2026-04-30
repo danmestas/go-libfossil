@@ -72,3 +72,25 @@ ci-ncruces:
 
 ci-otel-target:
 	cd observer/otel && GOWORK=off go test ./... -count=1
+
+.PHONY: release
+release:
+	@test -n "$(VERSION)" || { echo "VERSION=vX.Y.Z required"; exit 1; }
+	@echo "$(VERSION)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-.+)?$$' || { echo "bad version format: $(VERSION)"; exit 1; }
+	@git diff --quiet || { echo "tree dirty; commit or stash first"; exit 1; }
+	@git fetch origin --tags
+	@if git rev-parse "$(VERSION)" >/dev/null 2>&1; then echo "tag $(VERSION) already exists"; exit 1; fi
+	@$(MAKE) ci
+	@PREV=$$(git describe --tags --abbrev=0 2>/dev/null || echo ""); \
+	  TMPL=.github/RELEASE_TEMPLATE.md; \
+	  TMP=$$(mktemp); \
+	  { echo "Release $(VERSION)"; echo; \
+	    [ -f $$TMPL ] && { cat $$TMPL; echo; }; \
+	    echo "## Changes"; \
+	    if [ -n "$$PREV" ]; then git log --oneline $$PREV..HEAD; else git log --oneline; fi; } > $$TMP; \
+	  $${EDITOR:-vi} $$TMP; \
+	  git tag -a "$(VERSION)" -F $$TMP; \
+	  rm $$TMP
+	@echo ""
+	@echo "Tag $(VERSION) created locally. To publish:"
+	@echo "  git push origin $(VERSION)"

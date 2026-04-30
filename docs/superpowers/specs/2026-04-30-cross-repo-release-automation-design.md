@@ -87,17 +87,20 @@ Each repo additionally gains:
 
 ### libfossil (top of chain — currently has no release pipeline)
 
-**New files**:
-- `.github/workflows/release.yml` — triggers on `push: tags: [v*]`. Two steps: `gh release create $TAG --generate-notes --verify-tag` and the dispatch step to edgesync.
-- `Makefile` targets: `ci`, `ci-fast`, `ci-default`, `ci-ncruces`, `ci-otel`, `release`, `setup-hooks` (extended).
-- `scripts/install-hooks.sh`.
-- `.github/RELEASE_TEMPLATE.md`.
+> **Deviation from PR #1/#2 (decided 2026-04-30, option A):** libfossil's existing `.githooks/pre-commit` is comprehensive (~45s — modernc + ncruces + vet + otel + build + SDK drift) and exceeds what `make ci-fast` would do. Therefore PR #3 does NOT add a `pre-push` hook or a `ci-fast` target. The existing pre-commit is libfossil's sole local gate; `make ci` is for manual full-CI verification before tagging.
 
-**Existing — unchanged**: `.github/workflows/test.yml`, `Makefile` (extended, not replaced).
+**New files**:
+- `.github/workflows/release.yml` (PR #6) — triggers on `push: tags: [v*]`. Two steps: `gh release create $TAG --generate-notes --verify-tag` and the dispatch step to edgesync.
+- `Makefile` targets (PR #3, merged): `ci`, `ci-default`, `ci-ncruces`, `ci-otel-target`, `release`. (No `ci-fast` per the deviation above.)
+- `.github/RELEASE_TEMPLATE.md` (PR #3, merged).
+
+**Existing — unchanged**: `.github/workflows/test.yml`, `.githooks/pre-commit`, `setup-hooks` Makefile target, `test/test-drivers/test-otel` Makefile targets (the dev-friendly fast-path; intentionally distinct from the new `ci-*` targets which mirror CI verbatim).
 
 **No goreleaser**: libfossil is a library — no binaries are published. `gh release create --generate-notes` provides auto-changelog and source tarballs without 50 lines of goreleaser config. Revisit if `cmd/libfossil` ever ships as a published binary.
 
-**Secret needed**: `DISPATCH_PAT` — fine-grained PAT, repo access scoped to `danmestas/EdgeSync` only, permission `Contents: Read and write`.
+**Multi-module note**: libfossil has 3 sub-modules with their own `go.mod` (`db/driver/modernc/`, `db/driver/ncruces/`, `observer/otel/`). The new `ci-default`/`ci-ncruces`/`ci-otel-target` targets handle this via explicit `cd <subdir> && go test ./...` steps. If a future `ci-fast` is ever added, it must do the same — `go test ./...` from repo root would silently skip the sub-modules.
+
+**Secret needed**: `DISPATCH_PAT` — fine-grained PAT, repo access scoped to `danmestas/EdgeSync` only, permission `Contents: Read and write` (for PR #6).
 
 ### edgesync (middle — receives + dispatches)
 

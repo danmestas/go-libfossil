@@ -748,8 +748,12 @@ git push origin --delete chore/local-dev-hygiene
 
 **Repo:** `/Users/dmestas/projects/libfossil`
 **Branch:** `chore/local-dev-hygiene`
-**Files added:** `.githooks/pre-push`, `.github/RELEASE_TEMPLATE.md`
+**Files added:** `.github/RELEASE_TEMPLATE.md`
 **Files modified:** `Makefile`
+
+> **Deliberate deviation from PR #1/#2 (decided 2026-04-30, option A):** libfossil's existing `.githooks/pre-commit` is comprehensive (~45s — modernc + ncruces + vet + otel + build + SDK drift) and already exceeds what `make ci-fast` would do. So PR #3 does **not** add a `pre-push` hook and does **not** add a `ci-fast` Makefile target. libfossil uses its existing pre-commit as the sole local gate; `make ci` is for manual full-CI verification before tagging. **Tasks 3.3 (pre-push hook) and the `ci-fast` recipe in Task 3.1 below are obsolete and were not implemented.** PR #19 (merged 2026-04-30) shipped only `ci`/`ci-default`/`ci-ncruces`/`ci-otel-target` + `release` + RELEASE_TEMPLATE.
+
+> **Multi-module note for any future libfossil pre-push:** libfossil has 3 sub-modules with their own `go.mod` (`db/driver/modernc/`, `db/driver/ncruces/`, `observer/otel/`). `go test ./...` from repo root does not descend into them. Any future `make ci-fast` would need explicit `cd <subdir> && go test -short ./...` per sub-module — same gap edgesync hit and fixed.
 
 libfossil has the most complex `make ci` because its CI runs three jobs: default driver (modernc), ncruces driver, and otel.
 

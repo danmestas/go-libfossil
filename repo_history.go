@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/danmestas/libfossil/internal/annotate"
@@ -85,14 +86,36 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
 	return result, nil
 }
 
-// Diff returns a unified diff for filePath between two checkins.
-// When the file is absent from a side, that side is treated as empty
-// bytes, so additions and deletions render as pure insert/delete hunks.
-// Returns an empty slice when both sides are byte-identical.
+// Diff returns the unified diff(s) between ridA and ridB.
+//
+// When filePath is non-empty, returns 0 or 1 entries for that single file:
+// the file is treated as empty bytes on any side where it is absent, so
+// additions and deletions render as pure insert/delete hunks. An empty
+// slice is returned when both sides are byte-identical.
+//
+// When filePath is empty, returns one entry per file that changed between
+// the two checkins (the union of files across both sides where the content
+// UUID differs or the file exists on only one side). Entries are sorted by
+// Name for deterministic ordering. An empty slice is returned when the two
+// checkins have identical file sets and content.
+//
+// Whole-checkin enumeration is currently name-keyed: a rename with no
+// content change surfaces as a delete of the old name plus an add of the
+// new name, and permission-only changes are not reflected. Proper rename
+// and perm-change detection (via the underlying mlink table) is tracked as
+// a follow-up; per-file diff behaviour for an explicitly named file is
+// unchanged.
 func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
 	if filePath == "" {
-		return nil, fmt.Errorf("libfossil: diff: filePath is required")
+		return r.diffWholeCheckin(ridA, ridB)
 	}
+	return r.diffSingleFile(ridA, ridB, filePath)
+}
+
+// diffSingleFile produces the diff for a single named path between two
+// checkins. Extracted from Diff so the whole-checkin path can reuse the
+// same per-file rendering for each changed file in the union set.
+func (r *Repo) diffSingleFile(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
 	a, err := blobAt(r, ridA, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: diff: checkin %d: %w", ridA, err)
@@ -110,6 +133,65 @@ func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
 		return []DiffEntry{}, nil
 	}
 	return []DiffEntry{{Name: filePath, Unified: unified}}, nil
+}
+
+// diffWholeCheckin enumerates the union of files across the two checkins
+// and emits one DiffEntry per file whose content UUID differs or that
+// exists on only one side. Results are sorted by Name.
+func (r *Repo) diffWholeCheckin(ridA, ridB int64) ([]DiffEntry, error) {
+	filesA, err := manifest.ListFiles(r.inner, fsltype.FslID(ridA))
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridA, err)
+	}
+	filesB, err := manifest.ListFiles(r.inner, fsltype.FslID(ridB))
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridB, err)
+	}
+
+	uuidA := make(map[string]string, len(filesA))
+	for _, f := range filesA {
+		uuidA[f.Name] = f.UUID
+	}
+	uuidB := make(map[string]string, len(filesB))
+	for _, f := range filesB {
+		uuidB[f.Name] = f.UUID
+	}
+
+	changed := make(map[string]struct{}, len(uuidA)+len(uuidB))
+	for name, ua := range uuidA {
+		if uuidB[name] != ua {
+			changed[name] = struct{}{}
+		}
+	}
+	for name, ub := range uuidB {
+		if uuidA[name] != ub {
+			changed[name] = struct{}{}
+		}
+	}
+
+	if len(changed) == 0 {
+		return []DiffEntry{}, nil
+	}
+
+	names := make([]string, 0, len(changed))
+	for name := range changed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out := make([]DiffEntry, 0, len(names))
+	for _, name := range names {
+		entries, err := r.diffSingleFile(ridA, ridB, name)
+		if err != nil {
+			return nil, err
+		}
+		// diffSingleFile returns an empty slice when both sides are byte-
+		// identical. Identical bytes under a changed UUID are not expected
+		// (UUID is content-addressed), but skip the entry rather than emit
+		// an empty diff if it does happen.
+		out = append(out, entries...)
+	}
+	return out, nil
 }
 
 // ReadFile returns the bytes of filePath as they existed in checkin rid.

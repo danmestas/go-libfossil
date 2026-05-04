@@ -222,20 +222,135 @@ func TestReadFile_EmptyFilePath(t *testing.T) {
 	}
 }
 
-func TestDiff_EmptyFilePath(t *testing.T) {
+func TestDiff_WholeCheckin_Identical(t *testing.T) {
 	r := newTestRepo(t)
 	a := commit(t, r, 0, "v1", []FileToCommit{
 		{Name: "hello.txt", Content: []byte("hello\n")},
-	})
-	b := commit(t, r, a, "v2", []FileToCommit{
-		{Name: "hello.txt", Content: []byte("world\n")},
+		{Name: "other.txt", Content: []byte("other\n")},
 	})
 
-	_, err := r.Diff(a, b, "")
-	if err == nil {
-		t.Fatal("expected error for empty filePath, got nil")
+	entries, err := r.Diff(a, a, "")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
 	}
-	if !strings.Contains(err.Error(), "filePath is required") {
-		t.Errorf("error = %q, want it to mention filePath", err.Error())
+	if entries == nil {
+		t.Fatal("entries = nil, want empty non-nil slice for identical checkins")
+	}
+	if len(entries) != 0 {
+		t.Errorf("got %d entries, want 0:\n%+v", len(entries), entries)
+	}
+}
+
+func TestDiff_WholeCheckin_SingleFileChange(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "hello.txt", Content: []byte("hello\nworld\n")},
+		{Name: "stable.txt", Content: []byte("unchanged\n")},
+	})
+	b := commit(t, r, a, "v2", []FileToCommit{
+		{Name: "hello.txt", Content: []byte("hello\nbrave new world\n")},
+		{Name: "stable.txt", Content: []byte("unchanged\n")},
+	})
+
+	entries, err := r.Diff(a, b, "")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1:\n%+v", len(entries), entries)
+	}
+	if entries[0].Name != "hello.txt" {
+		t.Errorf("Name = %q, want %q", entries[0].Name, "hello.txt")
+	}
+	if !strings.Contains(entries[0].Unified, "+brave new world") {
+		t.Errorf("missing expected hunk in unified diff:\n%s", entries[0].Unified)
+	}
+}
+
+func TestDiff_WholeCheckin_MultiFileChange(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "a.txt", Content: []byte("a-old\n")},
+		{Name: "b.txt", Content: []byte("b-old\n")},
+		{Name: "c.txt", Content: []byte("c-stable\n")},
+	})
+	b := commit(t, r, a, "v2", []FileToCommit{
+		{Name: "a.txt", Content: []byte("a-new\n")},
+		{Name: "b.txt", Content: []byte("b-new\n")},
+		{Name: "c.txt", Content: []byte("c-stable\n")},
+	})
+
+	entries, err := r.Diff(a, b, "")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2:\n%+v", len(entries), entries)
+	}
+	// Deterministic order: sorted by Name.
+	if entries[0].Name != "a.txt" || entries[1].Name != "b.txt" {
+		t.Errorf("entry order = [%q, %q], want [a.txt, b.txt]", entries[0].Name, entries[1].Name)
+	}
+	if !strings.Contains(entries[0].Unified, "-a-old") || !strings.Contains(entries[0].Unified, "+a-new") {
+		t.Errorf("a.txt hunk missing expected lines:\n%s", entries[0].Unified)
+	}
+	if !strings.Contains(entries[1].Unified, "-b-old") || !strings.Contains(entries[1].Unified, "+b-new") {
+		t.Errorf("b.txt hunk missing expected lines:\n%s", entries[1].Unified)
+	}
+}
+
+func TestDiff_WholeCheckin_AdditionOnly(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "anchor.txt", Content: []byte("anchor\n")},
+	})
+	b := commit(t, r, a, "add new", []FileToCommit{
+		{Name: "anchor.txt", Content: []byte("anchor\n")},
+		{Name: "new.txt", Content: []byte("brand new\n")},
+	})
+
+	entries, err := r.Diff(a, b, "")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1:\n%+v", len(entries), entries)
+	}
+	if entries[0].Name != "new.txt" {
+		t.Errorf("Name = %q, want %q", entries[0].Name, "new.txt")
+	}
+	if !strings.Contains(entries[0].Unified, "+brand new") {
+		t.Errorf("expected addition hunk, got:\n%s", entries[0].Unified)
+	}
+	if strings.Contains(entries[0].Unified, "-brand new") {
+		t.Errorf("unexpected deletion marker for pure addition:\n%s", entries[0].Unified)
+	}
+}
+
+func TestDiff_WholeCheckin_DeletionOnly(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "anchor.txt", Content: []byte("anchor\n")},
+		{Name: "doomed.txt", Content: []byte("goodbye\n")},
+	})
+	b := commit(t, r, a, "drop doomed", []FileToCommit{
+		{Name: "anchor.txt", Content: []byte("anchor\n")},
+	})
+
+	entries, err := r.Diff(a, b, "")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1:\n%+v", len(entries), entries)
+	}
+	if entries[0].Name != "doomed.txt" {
+		t.Errorf("Name = %q, want %q", entries[0].Name, "doomed.txt")
+	}
+	if !strings.Contains(entries[0].Unified, "-goodbye") {
+		t.Errorf("expected deletion hunk, got:\n%s", entries[0].Unified)
+	}
+	if strings.Contains(entries[0].Unified, "+goodbye") {
+		t.Errorf("unexpected insertion marker for pure deletion:\n%s", entries[0].Unified)
 	}
 }

@@ -142,6 +142,18 @@ func (r *Repo) Config(key string) (string, error) {
 	return value, nil
 }
 
+// UUIDByRID returns the UUID (manifest hash) of the artifact with the given
+// rid by querying the blob table. Returns sql.ErrNoRows (wrapped) when no
+// blob row exists for the rid.
+func (r *Repo) UUIDByRID(rid int64) (string, error) {
+	var uuid string
+	err := r.db.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid)
+	if err != nil {
+		return "", fmt.Errorf("repo.UUIDByRID rid=%d: %w", rid, err)
+	}
+	return uuid, nil
+}
+
 // SetConfig writes a configuration value to the repo's config table.
 func (r *Repo) SetConfig(key, value string) error {
 	_, err := r.db.Exec(

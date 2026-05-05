@@ -120,6 +120,12 @@ func (r *Repo) Close() error {
 	return r.db.Close()
 }
 
+// Checkpoint runs PRAGMA wal_checkpoint(<mode>) against the repo's database.
+// See db.DB.Checkpoint for semantics.
+func (r *Repo) Checkpoint(mode db.CheckpointMode) error {
+	return r.db.Checkpoint(mode)
+}
+
 func (r *Repo) Path() string {
 	return r.path
 }

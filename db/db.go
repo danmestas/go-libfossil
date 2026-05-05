@@ -2,9 +2,41 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 )
+
+// CheckpointMode mirrors SQLite's PRAGMA wal_checkpoint(<mode>) argument.
+type CheckpointMode int
+
+const (
+	// CheckpointPassive checkpoints frames not held by readers; never blocks.
+	// Appropriate for periodic background checkpoints.
+	CheckpointPassive CheckpointMode = iota
+	// CheckpointFull blocks new writers until all frames are checkpointed.
+	CheckpointFull
+	// CheckpointRestart is FULL plus restarts the WAL file.
+	CheckpointRestart
+	// CheckpointTruncate is RESTART plus truncates the WAL file to zero bytes.
+	// Produces the most compact on-disk file and is what Close uses.
+	CheckpointTruncate
+)
+
+func (m CheckpointMode) String() string {
+	switch m {
+	case CheckpointPassive:
+		return "PASSIVE"
+	case CheckpointFull:
+		return "FULL"
+	case CheckpointRestart:
+		return "RESTART"
+	case CheckpointTruncate:
+		return "TRUNCATE"
+	default:
+		return fmt.Sprintf("CheckpointMode(%d)", int(m))
+	}
+}
 
 // DB wraps a SQLite database connection.
 type DB struct {
@@ -83,8 +115,37 @@ func (d *DB) SqlDB() *sql.DB {
 	return d.conn
 }
 
+// Close runs PRAGMA wal_checkpoint(TRUNCATE) before closing the underlying
+// connection so the on-disk file is readable by external SQLite/fossil
+// tooling. The WASM/WASI build path does not use WAL, so the checkpoint is
+// skipped there. Checkpoint errors are joined with the close error so the
+// connection is always closed regardless of checkpoint outcome.
 func (d *DB) Close() error {
-	return d.conn.Close()
+	var ckptErr error
+	if !wasmClearPragmas {
+		ckptErr = d.Checkpoint(CheckpointTruncate)
+	}
+	closeErr := d.conn.Close()
+	return errors.Join(ckptErr, closeErr)
+}
+
+// Checkpoint runs PRAGMA wal_checkpoint(<mode>) against the database.
+// Safe to call on a live database. PASSIVE never blocks; TRUNCATE produces
+// the most compact on-disk layout. On a non-WAL database the underlying
+// PRAGMA is a no-op and returns nil.
+func (d *DB) Checkpoint(mode CheckpointMode) error {
+	if d == nil {
+		panic("db.Checkpoint: receiver must not be nil")
+	}
+	if mode < CheckpointPassive || mode > CheckpointTruncate {
+		return fmt.Errorf("db.Checkpoint: invalid mode %d", int(mode))
+	}
+	var busy, log, ckpt int
+	err := d.conn.QueryRow(fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode)).Scan(&busy, &log, &ckpt)
+	if err != nil {
+		return fmt.Errorf("db.Checkpoint(%s): %w", mode, err)
+	}
+	return nil
 }
 
 func (d *DB) Path() string {

@@ -14,7 +14,7 @@ import (
 func setupTestRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

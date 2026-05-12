@@ -22,7 +22,7 @@ func TestShunnedBlobDoesNotPropagate(t *testing.T) {
 
 	// Create server repo and seed blobs.
 	serverPath := filepath.Join(tmpDir, "server.fossil")
-	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{})
+	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("create server repo: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestShunnedBlobDoesNotPropagate(t *testing.T) {
 
 	// Create client repo with matching project-code.
 	clientPath := filepath.Join(tmpDir, "client.fossil")
-	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{})
+	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("create client repo: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPrivateBlobPropagatesWithFlag(t *testing.T) {
 
 	// Create server repo and seed blobs.
 	serverPath := filepath.Join(tmpDir, "server.fossil")
-	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{})
+	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("create server repo: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestPrivateBlobPropagatesWithFlag(t *testing.T) {
 
 	// Create client repo with matching project-code.
 	clientPath := filepath.Join(tmpDir, "client.fossil")
-	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{})
+	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("create client repo: %v", err)
 	}

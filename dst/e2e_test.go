@@ -16,7 +16,7 @@ import (
 func createMasterRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "master.fossil")
-	r, err := repo.Create(path, "master", simio.CryptoRand{})
+	r, err := repo.Create(path, "master", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create master: %v", err)
 	}

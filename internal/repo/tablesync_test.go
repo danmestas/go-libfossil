@@ -10,7 +10,7 @@ import (
 func setupTSRepo(t *testing.T) *Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "ts.fossil")
-	r, err := Create(path, "testuser", simio.CryptoRand{})
+	r, err := Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

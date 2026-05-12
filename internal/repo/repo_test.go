@@ -12,7 +12,7 @@ import (
 
 func TestCreate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := Create(path, "testuser", simio.CryptoRand{})
+	r, err := Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -28,7 +28,7 @@ func TestCreate_FossilValidation(t *testing.T) {
 		t.Skip("skipping fossil validation")
 	}
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := Create(path, "testuser", simio.CryptoRand{})
+	r, err := Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestOpen_NonExistent(t *testing.T) {
 
 func TestWithTx(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := Create(path, "testuser", simio.CryptoRand{})
+	r, err := Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestRoundTrip_FossilValidation(t *testing.T) {
 
 	// 3. Go creates repo
 	goPath := filepath.Join(t.TempDir(), "go-created.fossil")
-	r2, err := Create(goPath, "testuser", simio.CryptoRand{})
+	r2, err := Create(goPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

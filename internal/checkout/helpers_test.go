@@ -15,7 +15,7 @@ func newTestRepoWithCheckin(t *testing.T) (*repo.Repo, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	path := dir + "/test.fossil"
-	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv())
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,13 +14,17 @@ type Repo struct {
 	path string
 }
 
-func Create(path string, user string, rng simio.Rand) (*Repo, error) {
+// Create creates a new repo at path, seeded with the given user.
+// If projectCode is empty, a fresh project-code is generated; otherwise
+// projectCode must already be valid (40-char lowercase hex) — validation
+// is enforced at the libfossil.Create boundary.
+func Create(path string, user string, rng simio.Rand, projectCode string) (*Repo, error) {
 	env := simio.RealEnv()
 	env.Rand = rng
-	return CreateWithEnv(path, user, env)
+	return CreateWithEnv(path, user, env, projectCode)
 }
 
-func CreateWithEnv(path string, user string, env *simio.Env) (*Repo, error) {
+func CreateWithEnv(path string, user string, env *simio.Env, projectCode string) (*Repo, error) {
 	if path == "" {
 		panic("repo.CreateWithEnv: path must not be empty")
 	}
@@ -67,7 +71,7 @@ func CreateWithEnv(path string, user string, env *simio.Env) (*Repo, error) {
 		return nil, fmt.Errorf("repo.CreateWithEnv seed nobody: %w", err)
 	}
 
-	if err := db.SeedConfig(d, env.Rand); err != nil {
+	if err := db.SeedConfig(d, env.Rand, projectCode); err != nil {
 		d.Close()
 		if rmErr := env.Storage.Remove(path); rmErr != nil {
 			return nil, fmt.Errorf("repo.CreateWithEnv: %w (cleanup failed: %v)", err, rmErr)

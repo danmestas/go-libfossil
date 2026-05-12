@@ -13,6 +13,12 @@ import (
 // CreateOpts configures repository creation.
 type CreateOpts struct {
 	User string
+	// ProjectCode optionally sets the repo's project-code. Empty
+	// generates a fresh one (current behavior). When non-empty, must
+	// be 40-char lowercase hex (^[0-9a-f]{40}$) — matching the format
+	// of generated project-codes. Invalid values return an error
+	// before any file is written.
+	ProjectCode string
 	// Rand provides random bytes for project-code and server-code generation.
 	// Nil defaults to crypto/rand (production). Set to simio.NewSeededRand
 	// for deterministic simulation testing.
@@ -21,6 +27,9 @@ type CreateOpts struct {
 
 // Create creates a new Fossil repository at the given path.
 func Create(path string, opts CreateOpts) (*Repo, error) {
+	if opts.ProjectCode != "" && !isProjectCode40HexLower(opts.ProjectCode) {
+		return nil, fmt.Errorf("libfossil: invalid CreateOpts.ProjectCode %q: must be 40-char lowercase hex", opts.ProjectCode)
+	}
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("libfossil: repository already exists: %s", path)
 	}
@@ -32,11 +41,25 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 	if rng == nil {
 		rng = simio.CryptoRand{}
 	}
-	inner, err := repo.Create(path, user, rng)
+	inner, err := repo.Create(path, user, rng, opts.ProjectCode)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: create: %w", err)
 	}
 	return &Repo{inner: inner, path: path}, nil
+}
+
+func isProjectCode40HexLower(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // Open opens an existing Fossil repository.

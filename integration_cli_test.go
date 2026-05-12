@@ -74,7 +74,7 @@ func TestIntegrationStash(t *testing.T) {
 	repoPath := filepath.Join(dir, "stash-test.fossil")
 
 	// Create repo and checkin a file.
-	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create repo: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestIntegrationAnnotate(t *testing.T) {
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "annotate-test.fossil")
 
-	r, err := repo.Create(repoPath, "alice", simio.CryptoRand{})
+	r, err := repo.Create(repoPath, "alice", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create repo: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestIntegrationBisect(t *testing.T) {
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "bisect-test.fossil")
 
-	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create repo: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestIntegrationPath(t *testing.T) {
 	dir := t.TempDir()
 	repoPath := filepath.Join(dir, "path-test.fossil")
 
-	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(repoPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create repo: %v", err)
 	}

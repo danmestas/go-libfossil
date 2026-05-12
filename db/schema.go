@@ -232,16 +232,30 @@ func SeedNobody(d *DB, caps string) error {
 	return err
 }
 
-func SeedConfig(d *DB, rng simio.Rand) error {
+// SeedConfig seeds the config table with project-code, server-code, and
+// schema markers. If projectCode is empty, a fresh 40-char lowercase-hex
+// project-code is generated from rng. If non-empty, it must match
+// ^[0-9a-f]{40}$; otherwise an error is returned and no rows are written.
+// Server-code is always generated.
+func SeedConfig(d *DB, rng simio.Rand, projectCode string) error {
 	if d == nil {
 		panic("db.SeedConfig: d must not be nil")
 	}
 	if rng == nil {
 		panic("db.SeedConfig: rng must not be nil")
 	}
-	projCode, err := randomHex(20, rng)
-	if err != nil {
-		return fmt.Errorf("generating project-code: %w", err)
+	var projCode string
+	if projectCode != "" {
+		if !isProjectCodeHex(projectCode) {
+			return fmt.Errorf("db.SeedConfig: invalid project-code %q: must be 40-char lowercase hex", projectCode)
+		}
+		projCode = projectCode
+	} else {
+		var err error
+		projCode, err = randomHex(20, rng)
+		if err != nil {
+			return fmt.Errorf("generating project-code: %w", err)
+		}
 	}
 	serverCode, err := randomHex(20, rng)
 	if err != nil {
@@ -277,4 +291,21 @@ func randomHex(nBytes int, rng simio.Rand) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// isProjectCodeHex reports whether s matches ^[0-9a-f]{40}$ — the format
+// produced by randomHex(20, ...). Kept private; callers that need this
+// invariant should validate at their boundary.
+func isProjectCodeHex(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') {
+			continue
+		}
+		return false
+	}
+	return true
 }

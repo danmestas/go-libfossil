@@ -20,7 +20,7 @@ func newTestRepoWithTwoCheckins(t *testing.T) (*repo.Repo, libfossil.FslID, libf
 	t.Helper()
 	dir := t.TempDir()
 	path := dir + "/test.fossil"
-	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv())
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestUpdateWithFileRemoval(t *testing.T) {
 	// Create a repo where the second checkin removes a file.
 	dir := t.TempDir()
 	path := dir + "/test.fossil"
-	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv())
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

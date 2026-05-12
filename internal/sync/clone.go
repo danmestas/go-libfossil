@@ -62,7 +62,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	}
 
 	// Create the repository.
-	r, err = repo.CreateWithEnv(path, user, env)
+	r, err = repo.CreateWithEnv(path, user, env, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync.Clone: create repo: %w", err)
 	}

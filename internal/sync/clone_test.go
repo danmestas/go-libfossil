@@ -449,7 +449,7 @@ func TestCloneViaHandler(t *testing.T) {
 
 	// Create source repo with a real checkin.
 	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{})
+	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -526,7 +526,7 @@ func TestCloneViaHandlerMultipleCheckins(t *testing.T) {
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{})
+	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -626,7 +626,7 @@ func TestCloneAgainstWritingHub(t *testing.T) {
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{})
+	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -688,7 +688,7 @@ func TestCloneMultiRoundCursor(t *testing.T) {
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{})
+	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestCloneSnapshotBoundExcludesPostSnapshotWrites(t *testing.T) {
 	dir := t.TempDir()
 
 	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{})
+	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

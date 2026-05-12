@@ -21,7 +21,7 @@ import (
 func setupTestRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestCheckinWithCustomTags(t *testing.T) {
 
 func BenchmarkCheckin(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, _ := repo.Create(path, "bench", simio.CryptoRand{})
+	r, _ := repo.Create(path, "bench", simio.CryptoRand{}, "")
 	defer r.Close()
 	files := make([]File, 10)
 	for i := range files {
@@ -349,7 +349,7 @@ func BenchmarkCheckin(b *testing.B) {
 
 func BenchmarkListFiles(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, _ := repo.Create(path, "bench", simio.CryptoRand{})
+	r, _ := repo.Create(path, "bench", simio.CryptoRand{}, "")
 	defer r.Close()
 	files := make([]File, 50)
 	for i := range files {

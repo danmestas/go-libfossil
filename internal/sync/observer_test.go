@@ -99,13 +99,13 @@ func TestSyncCallsObserverHooks(t *testing.T) {
 	serverPath := filepath.Join(t.TempDir(), "server.fossil")
 	env := simio.RealEnv()
 
-	server, err := repo.Create(serverPath, "test", env.Rand)
+	server, err := repo.Create(serverPath, "test", env.Rand, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
 
-	client, err := repo.Create(clientPath, "test", env.Rand)
+	client, err := repo.Create(clientPath, "test", env.Rand, "")
 	if err != nil {
 		t.Fatal(err)
 	}

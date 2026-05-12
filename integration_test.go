@@ -25,7 +25,7 @@ func TestPhaseA_EndToEnd(t *testing.T) {
 
 	// 1. Create a repo with Go
 	path := filepath.Join(t.TempDir(), "phase-a.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestPhaseB_Integration(t *testing.T) {
 		t.Skip("fossil not in PATH")
 	}
 	path := filepath.Join(t.TempDir(), "integration-b.fossil")
-	r, err := repo.Create(path, "integration-user", simio.CryptoRand{})
+	r, err := repo.Create(path, "integration-user", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

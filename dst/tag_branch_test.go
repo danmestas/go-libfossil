@@ -191,7 +191,7 @@ func TestBranchCreateAndSync(t *testing.T) {
 // TestTagxrefIntegrityInvariant is a unit test for the invariant itself.
 func TestTagxrefIntegrityInvariant(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

@@ -24,7 +24,7 @@ import (
 // the server with an incomplete blob store.
 func TestPushOnly_DrainsServerGimmes(t *testing.T) {
 	clientPath := filepath.Join(t.TempDir(), "client.fossil")
-	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{})
+	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create client: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestPushOnly_DrainsServerGimmes(t *testing.T) {
 	}
 
 	serverPath := filepath.Join(t.TempDir(), "server.fossil")
-	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{})
+	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create server: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestPushOnly_DrainsServerGimmes(t *testing.T) {
 func TestClusterSync_RoundTrip(t *testing.T) {
 	// --- Setup: client repo with 200 blobs ---
 	clientPath := filepath.Join(t.TempDir(), "client.fossil")
-	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{})
+	clientRepo, err := repo.Create(clientPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create client: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestClusterSync_RoundTrip(t *testing.T) {
 
 	// --- Setup: empty server repo ---
 	serverPath := filepath.Join(t.TempDir(), "server.fossil")
-	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{})
+	serverRepo, err := repo.Create(serverPath, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create server: %v", err)
 	}

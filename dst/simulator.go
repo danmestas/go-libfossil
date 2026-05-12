@@ -109,7 +109,7 @@ func New(cfg SimConfig) (*Simulator, error) {
 		id := NodeID(fmt.Sprintf("leaf-%d", i))
 
 		repoPath := filepath.Join(cfg.TmpDir, fmt.Sprintf("%s.fossil", id))
-		r, err := repo.Create(repoPath, "simuser", simRand)
+		r, err := repo.Create(repoPath, "simuser", simRand, "")
 		if err != nil {
 			return nil, fmt.Errorf("dst: create repo for %s: %w", id, err)
 		}

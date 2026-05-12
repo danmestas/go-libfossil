@@ -13,7 +13,7 @@ import (
 func setupTestDB(t *testing.T) *db.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "admin", simio.CryptoRand{})
+	r, err := repo.Create(path, "admin", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

@@ -214,7 +214,7 @@ func TestCreateRepoSchema_FossilValidation(t *testing.T) {
 		t.Fatalf("CreateRepoSchema: %v", err)
 	}
 
-	err = db.SeedConfig(d, simio.CryptoRand{})
+	err = db.SeedConfig(d, simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("SeedConfig: %v", err)
 	}

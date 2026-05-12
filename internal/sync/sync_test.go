@@ -93,7 +93,7 @@ func TestAppendRandomComment(t *testing.T) {
 func setupSyncTestRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -542,7 +542,7 @@ func TestSyncMaxRoundsExceeded(t *testing.T) {
 // BenchmarkBuildRequest benchmarks buildRequest with 100 unclustered artifacts.
 func BenchmarkBuildRequest(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, err := repo.Create(path, "benchuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, "")
 	if err != nil {
 		b.Fatalf("repo.Create: %v", err)
 	}
@@ -578,7 +578,7 @@ func BenchmarkBuildRequest(b *testing.B) {
 // BenchmarkProcessResponse benchmarks processResponse with 50 file cards.
 func BenchmarkProcessResponse(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, err := repo.Create(path, "benchuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, "")
 	if err != nil {
 		b.Fatalf("repo.Create: %v", err)
 	}
@@ -598,7 +598,7 @@ func BenchmarkProcessResponse(b *testing.B) {
 		b.StopTimer()
 		// Each iteration needs a fresh session+repo because processResponse stores blobs
 		bpath := filepath.Join(b.TempDir(), fmt.Sprintf("bench-%d.fossil", i))
-		br, err := repo.Create(bpath, "benchuser", simio.CryptoRand{})
+		br, err := repo.Create(bpath, "benchuser", simio.CryptoRand{}, "")
 		if err != nil {
 			b.Fatalf("repo.Create: %v", err)
 		}

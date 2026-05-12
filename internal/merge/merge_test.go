@@ -30,7 +30,7 @@ func hasFossil() bool {
 func createDivergentRepo(t *testing.T, baseContent, localContent, remoteContent string) (*repo.Repo, libfossil.FslID, libfossil.FslID, libfossil.FslID) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestDetectForksFindsTwo(t *testing.T) {
 
 func TestDetectForksLinear(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "linear.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{})
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ func runCloneDST(t *testing.T, seed int64) {
 
 	// 1. Create and seed the server repo.
 	serverPath := filepath.Join(t.TempDir(), "server.fossil")
-	serverRepo, err := repo.Create(serverPath, "server", simio.CryptoRand{})
+	serverRepo, err := repo.Create(serverPath, "server", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("seed %d: repo.Create server: %v", seed, err)
 	}

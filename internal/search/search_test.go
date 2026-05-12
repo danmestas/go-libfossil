@@ -17,7 +17,7 @@ import (
 func newTestRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	dir := t.TempDir()
-	r, err := repo.Create(dir+"/test.fossil", "test", simio.CryptoRand{})
+	r, err := repo.Create(dir+"/test.fossil", "test", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

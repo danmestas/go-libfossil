@@ -22,13 +22,13 @@ func newPrivateTestPair(t *testing.T, nobodyCaps string) (server, client *repo.R
 	dir := t.TempDir()
 
 	sPath := filepath.Join(dir, "server.fossil")
-	s, err := repo.Create(sPath, "test", simio.CryptoRand{})
+	s, err := repo.Create(sPath, "test", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("server repo: %v", err)
 	}
 
 	cPath := filepath.Join(dir, "client.fossil")
-	c, err := repo.Create(cPath, "test", simio.CryptoRand{})
+	c, err := repo.Create(cPath, "test", simio.CryptoRand{}, "")
 	if err != nil {
 		t.Fatalf("client repo: %v", err)
 	}

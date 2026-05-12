@@ -1,7 +1,9 @@
 package libfossil
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -111,6 +113,41 @@ func TestCreate_ProjectCode_Invalid(t *testing.T) {
 				t.Error("repo file should not exist after rejected Create")
 			}
 		})
+	}
+}
+
+// TestCreate_ProjectCode_FossilValidation creates a Go-side repo with an
+// explicit ProjectCode, then runs vanilla `fossil rebuild` against it and
+// reads the project-code back via `fossil sql` to confirm vanilla Fossil
+// accepts the value and stores it as-is.
+func TestCreate_ProjectCode_FossilValidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping fossil validation")
+	}
+	const code = "0123456789abcdef0123456789abcdef01234567"
+	path := filepath.Join(t.TempDir(), "test.fossil")
+
+	r, err := Create(path, CreateOpts{User: "test", ProjectCode: code})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	out, err := exec.Command("fossil", "rebuild", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
+	}
+
+	out, err = exec.Command("fossil", "sql", "-R", path,
+		"SELECT value FROM config WHERE name='project-code';").Output()
+	if err != nil {
+		t.Fatalf("fossil sql: %v", err)
+	}
+	got := string(bytes.Trim(out, "'\n \t"))
+	if got != code {
+		t.Errorf("project-code via fossil sql = %q, want %q", got, code)
 	}
 }
 

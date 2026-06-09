@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/blob"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/manifest"
 )
@@ -191,7 +191,7 @@ func (c *Checkout) ScanChanges(flags ScanFlags) error {
 	}
 
 	rows, err := c.db.Query(`
-		SELECT id, pathname, rid, mhash, chnged, deleted FROM vfile WHERE vid = ?
+		SELECT id, pathname, rid, mhash, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER) FROM vfile WHERE vid = ?
 	`, int64(rid))
 	if err != nil {
 		return fmt.Errorf("checkout.ScanChanges: query vfile: %w", err)

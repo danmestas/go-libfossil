@@ -63,7 +63,8 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 
 	// Query all changed/deleted/renamed files
 	rows, err := c.db.Query(`
-		SELECT id, pathname, chnged, deleted, isexe, islink, origname, rid
+		SELECT id, pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
+		       CAST(isexe AS INTEGER), CAST(islink AS INTEGER), origname, rid
 		FROM vfile
 		WHERE vid = ? AND (chnged > 0 OR deleted > 0 OR origname IS NOT NULL)
 	`, int64(vid))

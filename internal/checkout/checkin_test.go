@@ -3,8 +3,12 @@ package checkout
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 
+	libdb "github.com/danmestas/libfossil/db"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/simio"
 )
 
@@ -68,6 +72,185 @@ func TestCommitFullCycle(t *testing.T) {
 	}
 	if parentRID != int64(rid1) {
 		t.Fatalf("parent = %d, want %d", parentRID, rid1)
+	}
+}
+func TestCommitFromUnbornCheckout(t *testing.T) {
+	r, cleanup := newTestEmptyRepo(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid, uuid, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rid != 0 || uuid != "" {
+		t.Fatalf("unborn version = (%d, %q), want (0, empty)", rid, uuid)
+	}
+	if err := co.ValidateFingerprint(); err != nil {
+		t.Fatalf("unborn fingerprint: %v", err)
+	}
+
+	mem := simio.NewMemStorage()
+	if err := mem.MkdirAll("/checkout", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteFile("/checkout/new.txt", []byte("first\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+
+	counts, err := co.Manage(ManageOpts{Paths: []string{"new.txt"}})
+	if err != nil {
+		t.Fatalf("Manage: %v", err)
+	}
+	if counts.Added != 1 {
+		t.Fatalf("Manage added = %d, want 1", counts.Added)
+	}
+	if err := co.ScanChanges(ScanHash); err != nil {
+		t.Fatalf("ScanChanges: %v", err)
+	}
+	newRID, newUUID, err := co.Commit(CommitOpts{Message: "initial", User: "test"})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if newRID <= 0 || newUUID == "" {
+		t.Fatalf("commit version = (%d, %q), want positive/non-empty", newRID, newUUID)
+	}
+	currentRID, currentUUID, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentRID != newRID || currentUUID != newUUID {
+		t.Fatalf("checkout version = (%d,%q), want (%d,%q)", currentRID, currentUUID, newRID, newUUID)
+	}
+	var plinkParents int
+	if err := r.DB().QueryRow("SELECT count(*) FROM plink WHERE cid=?", int64(newRID)).Scan(&plinkParents); err != nil {
+		t.Fatal(err)
+	}
+	if plinkParents != 0 {
+		t.Fatalf("initial checkin has %d plink parent rows, want 0", plinkParents)
+	}
+	var vfileVID int64
+	if err := co.db.QueryRow("SELECT DISTINCT vid FROM vfile").Scan(&vfileVID); err != nil {
+		t.Fatal(err)
+	}
+	if vfileVID != int64(newRID) {
+		t.Fatalf("vfile vid = %d, want %d", vfileVID, newRID)
+	}
+}
+
+func TestLegacyBooleanVFileFlagsCommitCompat(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	var parentRID int64
+	var parentUUID string
+	if err := r.DB().QueryRow(`
+		SELECT l.rid, b.uuid FROM leaf l
+		JOIN blob b ON b.rid = l.rid
+		LIMIT 1
+	`).Scan(&parentRID, &parentUUID); err != nil {
+		t.Fatal(err)
+	}
+	files, err := manifest.ListFiles(r, libfossil.FslID(parentRID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var helloUUID string
+	for _, f := range files {
+		if f.Name == "hello.txt" {
+			helloUUID = f.UUID
+			break
+		}
+	}
+	if helloUUID == "" {
+		t.Fatal("hello.txt not found in parent manifest")
+	}
+	var helloRID int64
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", helloUUID).Scan(&helloRID); err != nil {
+		t.Fatal(err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), ".fslckout")
+	ckdb, err := libdb.OpenSQL(dbPath, libdb.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ckdb.Close()
+	stmts := []string{
+		`CREATE TABLE vvar(name TEXT PRIMARY KEY, value CLOB) WITHOUT ROWID`,
+		`CREATE TABLE vfile(id INTEGER PRIMARY KEY, vid INTEGER, chnged INT DEFAULT 0,
+			deleted BOOLEAN DEFAULT 0, isexe BOOLEAN, islink BOOLEAN, rid INTEGER,
+			mrid INTEGER, mtime INTEGER, pathname TEXT, origname TEXT, mhash TEXT,
+			UNIQUE(pathname, vid))`,
+		`CREATE TABLE vmerge(id INTEGER, merge INTEGER, mhash TEXT)`,
+		`INSERT INTO vvar(name, value) VALUES('checkout', ?), ('checkout-hash', ?)`,
+		`INSERT INTO vfile(vid, pathname, rid, mrid, chnged, deleted, isexe, islink, mhash)
+			VALUES(?, 'hello.txt', ?, ?, TRUE, FALSE, TRUE, FALSE, ?)`,
+	}
+	for i, stmt := range stmts {
+		var execErr error
+		switch i {
+		case 3:
+			_, execErr = ckdb.Exec(stmt, parentRID, parentUUID)
+		case 4:
+			_, execErr = ckdb.Exec(stmt, parentRID, helloRID, helloRID, helloUUID)
+		default:
+			_, execErr = ckdb.Exec(stmt)
+		}
+		if execErr != nil {
+			t.Fatalf("stmt %d: %v", i, execErr)
+		}
+	}
+
+	mem := simio.NewMemStorage()
+	if err := mem.MkdirAll("/checkout", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteFile("/checkout/hello.txt", []byte("legacy boolean change\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	co := &Checkout{
+		db:   ckdb,
+		repo: r,
+		env:  &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}},
+		obs:  nopObserver{},
+		dir:  "/checkout",
+	}
+
+	var visited ChangeEntry
+	if err := co.VisitChanges(libfossil.FslID(parentRID), false, func(e ChangeEntry) error {
+		visited = e
+		return nil
+	}); err != nil {
+		t.Fatalf("VisitChanges: %v", err)
+	}
+	if visited.Name != "hello.txt" || visited.Change != ChangeModified || !visited.IsExec {
+		t.Fatalf("VisitChanges entry = %+v, want modified executable hello.txt", visited)
+	}
+
+	newRID, _, err := co.Commit(CommitOpts{Message: "legacy boolean", User: "test"})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	var committedUUID string
+	if err := r.DB().QueryRow(`
+		SELECT b.uuid FROM mlink m
+		JOIN filename f ON f.fnid = m.fnid
+		JOIN blob b ON b.rid = m.fid
+		WHERE m.mid = ? AND f.name = 'hello.txt'
+	`, int64(newRID)).Scan(&committedUUID); err != nil {
+		t.Fatal(err)
+	}
+	if committedUUID == helloUUID {
+		t.Fatal("commit kept old hello.txt UUID; BOOLEAN chnged flag was not honored")
 	}
 }
 

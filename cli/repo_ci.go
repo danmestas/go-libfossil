@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	libfossil "github.com/danmestas/libfossil"
@@ -35,14 +36,31 @@ func (c *RepoCiCmd) Run(g *Globals) error {
 		parentRid, _ = resolveRID(r, "") // ignore error for initial checkin
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
 	files := make([]libfossil.FileToCommit, len(c.Files))
 	for i, path := range c.Files {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("reading %s: %w", path, err)
 		}
+		absPath, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolving %s: %w", path, err)
+		}
+		name, err := filepath.Rel(cwd, absPath)
+		if err != nil {
+			return fmt.Errorf("resolving %s: %w", path, err)
+		}
+		name = filepath.Clean(name)
+		if name == "." || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("%s is outside current directory", path)
+		}
 		files[i] = libfossil.FileToCommit{
-			Name:    filepath.Base(path),
+			Name:    filepath.ToSlash(name),
 			Content: data,
 		}
 	}

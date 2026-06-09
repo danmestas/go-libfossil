@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	libfossil "github.com/danmestas/libfossil"
 )
 
 // RepoOpenCmd opens a checkout in a directory, creating the .fslckout database.
@@ -27,92 +28,25 @@ func (c *RepoOpenCmd) Run(g *Globals) error {
 		return fmt.Errorf("checkout already exists: %s", ckoutPath)
 	}
 
-	// Create checkout database with vfile, vvar, vmerge tables.
-	db, err := sql.Open("sqlite", ckoutPath)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	schema := `
-		CREATE TABLE vvar(
-			name TEXT PRIMARY KEY NOT NULL,
-			value CLOB,
-			CHECK(typeof(name)='text' AND length(name)>=1)
-		) WITHOUT ROWID;
-		CREATE TABLE vfile(
-			id INTEGER PRIMARY KEY,
-			vid INTEGER,
-			chnged INT DEFAULT 0,
-			deleted BOOLEAN DEFAULT 0,
-			isexe BOOLEAN,
-			islink BOOLEAN,
-			rid INTEGER,
-			mrid INTEGER,
-			mtime INTEGER,
-			pathname TEXT,
-			origname TEXT,
-			mhash TEXT,
-			UNIQUE(pathname,vid)
-		);
-		CREATE TABLE vmerge(
-			id INTEGER REFERENCES vfile,
-			merge INTEGER,
-			mhash TEXT
-		);
-	`
-	if _, err := db.Exec(schema); err != nil {
-		os.Remove(ckoutPath)
-		return fmt.Errorf("creating checkout schema: %w", err)
-	}
-
-	// Resolve tip checkin from repo.
+	g.Repo = absRepo
 	r, err := g.OpenRepo()
 	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	co, err := r.CreateCheckout(c.Dir, libfossil.CheckoutCreateOpts{})
+	if err != nil {
 		os.Remove(ckoutPath)
 		return err
 	}
+	defer co.Close()
 
-	tipRid, err := resolveRID(r, "tip")
+	tipRid, tipHash, err := co.Version()
 	if err != nil {
-		tipRid = 0
+		os.Remove(ckoutPath)
+		return err
 	}
-	var tipHash string
-	if tipRid > 0 {
-		r.Inner().DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", tipRid).Scan(&tipHash)
-	}
-
-	// Populate vvar with checkout metadata.
-	vvars := map[string]string{
-		"repository":     absRepo,
-		"checkout":       fmt.Sprintf("%d", tipRid),
-		"checkout-hash":  tipHash,
-		"undo_available": "0",
-		"undo_checkout":  "0",
-	}
-	for k, v := range vvars {
-		if _, err := db.Exec("INSERT INTO vvar(name,value) VALUES(?,?)", k, v); err != nil {
-			return fmt.Errorf("setting vvar %s: %w", k, err)
-		}
-	}
-
-	// Populate vfile from tip manifest.
-	if tipRid > 0 {
-		files, err := r.ListFiles(tipRid)
-		if err == nil {
-			idb := r.Inner().DB()
-			for _, f := range files {
-				isExe := f.Perm == "x"
-				var fileRid int64
-				idb.QueryRow("SELECT rid FROM blob WHERE uuid=?", f.UUID).Scan(&fileRid)
-				db.Exec(`INSERT INTO vfile(vid, chnged, deleted, isexe, islink, rid, mrid, pathname, mhash)
-					VALUES(?, 0, 0, ?, 0, ?, ?, ?, ?)`,
-					tipRid, isExe, fileRid, fileRid, f.Name, f.UUID)
-			}
-		}
-	}
-
-	r.Close()
 
 	fmt.Printf("opened checkout in %s (repo: %s)\n", c.Dir, absRepo)
 	if tipRid > 0 {

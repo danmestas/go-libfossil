@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/content"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
 // Revert restores files to their checkout version state.
@@ -90,7 +90,7 @@ func (c *Checkout) revertSinglePath(
 ) error {
 	var id, rid, chnged, deleted int64
 	err := c.db.QueryRow(`
-		SELECT id, rid, chnged, deleted
+		SELECT id, rid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER)
 		FROM vfile
 		WHERE vid = ? AND pathname = ?
 	`, int64(vid), pathname).Scan(&id, &rid, &chnged, &deleted)
@@ -153,7 +153,7 @@ func (c *Checkout) revertFile(
 
 	// Query file metadata for permissions
 	var isexe int64
-	err = c.db.QueryRow("SELECT isexe FROM vfile WHERE id = ?", id).Scan(&isexe)
+	err = c.db.QueryRow("SELECT CAST(isexe AS INTEGER) FROM vfile WHERE id = ?", id).Scan(&isexe)
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: query vfile metadata for %s: %w", pathname, err)
 	}

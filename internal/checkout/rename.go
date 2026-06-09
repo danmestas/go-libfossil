@@ -34,7 +34,7 @@ func (c *Checkout) moveFile(oldPath, newPath string, perm os.FileMode) error {
 // vfilePerm queries the isexe flag for a vfile row and returns the file mode.
 func (c *Checkout) vfilePerm(vfileID int64) (os.FileMode, error) {
 	var isexe int64
-	err := c.db.QueryRow("SELECT isexe FROM vfile WHERE id=?", vfileID).Scan(&isexe)
+	err := c.db.QueryRow("SELECT CAST(isexe AS INTEGER) FROM vfile WHERE id=?", vfileID).Scan(&isexe)
 	if err != nil {
 		return 0, fmt.Errorf("query vfile permissions: %w", err)
 	}

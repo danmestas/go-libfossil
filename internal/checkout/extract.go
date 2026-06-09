@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/libfossil/internal/content"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/hash"
 )
 
@@ -95,7 +95,7 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	var vfRows []vfileRow
 
 	rows, err := c.db.Query(
-		"SELECT id, pathname, rid, isexe FROM vfile WHERE vid = ?",
+		"SELECT id, pathname, rid, CAST(isexe AS INTEGER) FROM vfile WHERE vid = ?",
 		int64(rid),
 	)
 	if err != nil {

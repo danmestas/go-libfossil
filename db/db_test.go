@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/simio"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/libfossil/simio"
 )
 
 func TestOpenClose(t *testing.T) {
@@ -27,6 +27,40 @@ func TestOpenClose(t *testing.T) {
 	}
 	if result != 2 {
 		t.Fatalf("got %d, want 2", result)
+	}
+}
+func TestOpenSQLMergesURIParams(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	conn, err := db.OpenSQL(path, db.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatalf("OpenSQL create: %v", err)
+	}
+	if _, err := conn.Exec("CREATE TABLE t(v INTEGER)"); err != nil {
+		conn.Close()
+		t.Fatalf("create table: %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("close create conn: %v", err)
+	}
+
+	driver, dsn := db.SQLDriverAndDSN(path, db.OpenConfig{}, map[string]string{"mode": "ro"})
+	if driver == "" {
+		t.Fatal("empty driver")
+	}
+	if strings.Count(dsn, "?") != 1 {
+		t.Fatalf("DSN %q contains %d query delimiters, want 1", dsn, strings.Count(dsn, "?"))
+	}
+	if !strings.Contains(dsn, "mode=ro") {
+		t.Fatalf("DSN %q missing mode=ro", dsn)
+	}
+
+	ro, err := db.OpenSQL(path, db.OpenConfig{}, map[string]string{"mode": "ro"})
+	if err != nil {
+		t.Fatalf("OpenSQL read-only: %v", err)
+	}
+	defer ro.Close()
+	if _, err := ro.Exec("INSERT INTO t(v) VALUES(1)"); err == nil {
+		t.Fatal("read-only OpenSQL accepted a write")
 	}
 }
 

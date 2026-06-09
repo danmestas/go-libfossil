@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"strconv"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/db"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/simio"
 )
@@ -33,8 +33,8 @@ type Checkout struct {
 }
 
 // initCheckoutVersion finds the tip checkin from the repo and sets
-// vvar checkout/checkout-hash in the checkout DB. Returns an error
-// if no checkins exist in the repo.
+// vvar checkout/checkout-hash in the checkout DB. Empty repos use the
+// unborn checkout state: checkout=0 with empty checkout-hash.
 func initCheckoutVersion(ckdb *sql.DB, r *repo.Repo) error {
 	var tipRID int64
 	var tipUUID string
@@ -47,7 +47,7 @@ func initCheckoutVersion(ckdb *sql.DB, r *repo.Repo) error {
 	`).Scan(&tipRID, &tipUUID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("checkout.Create: no checkin found in repo")
+			return initUnbornCheckoutVersion(ckdb)
 		}
 		return fmt.Errorf("checkout.Create: query tip: %w", err)
 	}
@@ -56,6 +56,25 @@ func initCheckoutVersion(ckdb *sql.DB, r *repo.Repo) error {
 		return fmt.Errorf("checkout.Create: %w", err)
 	}
 	if err := setVVar(ckdb, "checkout-hash", tipUUID); err != nil {
+		return fmt.Errorf("checkout.Create: %w", err)
+	}
+	return nil
+}
+
+func initUnbornCheckoutVersion(ckdb *sql.DB) error {
+	if err := setVVar(ckdb, "checkout", "0"); err != nil {
+		return fmt.Errorf("checkout.Create: %w", err)
+	}
+	if err := setVVar(ckdb, "checkout-hash", ""); err != nil {
+		return fmt.Errorf("checkout.Create: %w", err)
+	}
+	return nil
+}
+func initUndoState(ckdb *sql.DB) error {
+	if err := setVVar(ckdb, "undo_available", "0"); err != nil {
+		return fmt.Errorf("checkout.Create: %w", err)
+	}
+	if err := setVVar(ckdb, "undo_checkout", "0"); err != nil {
 		return fmt.Errorf("checkout.Create: %w", err)
 	}
 	return nil
@@ -83,9 +102,8 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 
 	obs := resolveObserver(opts.Observer)
 
-	// Get the registered SQLite driver
-	drv := db.RegisteredDriver()
-	if drv == nil {
+	// Verify a SQLite driver is registered before creating the checkout DB.
+	if db.RegisteredDriver() == nil {
 		return nil, fmt.Errorf("checkout.Create: no SQLite driver registered")
 	}
 
@@ -98,7 +116,7 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 	}
 
 	// Open the checkout database
-	ckdb, err := sql.Open(drv.Name, dbPath)
+	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Create: sql.Open: %w", err)
 	}
@@ -114,6 +132,10 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		ckdb.Close()
 		return nil, err
 	}
+	if err := initUndoState(ckdb); err != nil {
+		ckdb.Close()
+		return nil, err
+	}
 
 	// Set the repository vvar so tools can find the repo.
 	if err := setVVar(ckdb, "repository", r.Path()); err != nil {
@@ -121,13 +143,25 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Create: %w", err)
 	}
 
-	return &Checkout{
+	c := &Checkout{
 		db:   ckdb,
 		repo: r,
 		env:  env,
 		obs:  obs,
 		dir:  dir,
-	}, nil
+	}
+	rid, _, err := c.Version()
+	if err != nil {
+		ckdb.Close()
+		return nil, err
+	}
+	if rid != 0 {
+		if _, err := c.LoadVFile(rid, true); err != nil {
+			ckdb.Close()
+			return nil, err
+		}
+	}
+	return c, nil
 }
 
 // Open opens an existing checkout database. If opts.SearchParents is true,
@@ -152,9 +186,8 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 
 	obs := resolveObserver(opts.Observer)
 
-	// Get the registered SQLite driver
-	drv := db.RegisteredDriver()
-	if drv == nil {
+	// Verify a SQLite driver is registered before opening the checkout DB.
+	if db.RegisteredDriver() == nil {
 		return nil, fmt.Errorf("checkout.Open: no SQLite driver registered")
 	}
 
@@ -165,7 +198,7 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 	}
 
 	// Open the checkout database
-	ckdb, err := sql.Open(drv.Name, dbPath)
+	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Open: sql.Open: %w", err)
 	}
@@ -187,13 +220,18 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: vvar checkout not found")
 	}
 
-	return &Checkout{
+	c := &Checkout{
 		db:   ckdb,
 		repo: r,
 		env:  env,
 		obs:  obs,
 		dir:  filepath.Dir(dbPath),
-	}, nil
+	}
+	if err := c.ValidateFingerprint(); err != nil {
+		ckdb.Close()
+		return nil, fmt.Errorf("checkout.Open: %w", err)
+	}
+	return c, nil
 }
 
 // Close closes the checkout database. Does NOT close the repo.
@@ -241,13 +279,19 @@ func (c *Checkout) Version() (libfossil.FslID, string, error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("checkout.Version: parse RID: %w", err)
 	}
+	if rid64 < 0 {
+		return 0, "", fmt.Errorf("checkout.Version: negative checkout RID %d", rid64)
+	}
 
 	uuid, err := getVVar(c.db, "checkout-hash")
 	if err != nil {
 		return 0, "", fmt.Errorf("checkout.Version: %w", err)
 	}
-	if uuid == "" {
+	if rid64 != 0 && uuid == "" {
 		return 0, "", fmt.Errorf("checkout.Version: vvar checkout-hash not set")
+	}
+	if rid64 == 0 && uuid != "" {
+		return 0, "", fmt.Errorf("checkout.Version: unborn checkout has non-empty checkout-hash")
 	}
 
 	return libfossil.FslID(rid64), uuid, nil
@@ -262,6 +306,13 @@ func (c *Checkout) ValidateFingerprint() error {
 	rid, uuid, err := c.Version()
 	if err != nil {
 		return fmt.Errorf("checkout.ValidateFingerprint: %w", err)
+	}
+
+	if rid == 0 {
+		if uuid != "" {
+			return fmt.Errorf("checkout.ValidateFingerprint: unborn checkout has non-empty checkout-hash")
+		}
+		return nil
 	}
 
 	// Query the repo for the blob uuid

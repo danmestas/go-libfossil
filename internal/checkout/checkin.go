@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strconv"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/deck"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/manifest"
 )
 
@@ -91,7 +91,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	err error,
 ) {
 	rows, err := c.db.Query(`
-		SELECT pathname, chnged, deleted, rid
+		SELECT pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid
 		FROM vfile
 		WHERE vid = ?
 	`, int64(vid))
@@ -141,10 +141,13 @@ func (c *Checkout) buildCommitFiles(
 	deletedFiles []string,
 	shouldInclude func(string) bool,
 ) ([]manifest.File, error) {
-	// Get parent manifest files
-	parentFiles, err := manifest.ListFiles(c.repo, parentRID)
-	if err != nil {
-		return nil, fmt.Errorf("checkout.Commit: list parent files: %w", err)
+	var parentFiles []manifest.FileEntry
+	if parentRID != 0 {
+		var err error
+		parentFiles, err = manifest.ListFiles(c.repo, parentRID)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Commit: list parent files: %w", err)
+		}
 	}
 
 	// Build a map of parent files (name → FileEntry for O(1) lookup)
@@ -326,9 +329,9 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 			UUID: "*", Value: opts.Branch,
 		})
 		tagCards = append(tagCards, deck.TagCard{
-			Type:  deck.TagSingleton,
-			Name:  "sym-" + opts.Branch,
-			UUID:  "*",
+			Type: deck.TagSingleton,
+			Name: "sym-" + opts.Branch,
+			UUID: "*",
 		})
 	}
 	for _, t := range opts.Tags {

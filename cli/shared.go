@@ -7,6 +7,8 @@ import (
 	"os/user"
 	"path/filepath"
 
+	libdb "github.com/danmestas/libfossil/db"
+
 	libfossil "github.com/danmestas/libfossil"
 )
 
@@ -76,7 +78,7 @@ func findRepo() (string, error) {
 
 // repoFromCheckout reads the repository path from a .fslckout database.
 func repoFromCheckout(ckoutPath string) (string, error) {
-	db, err := sql.Open("sqlite", ckoutPath+"?mode=ro")
+	db, err := libdb.OpenSQL(ckoutPath, libdb.OpenConfig{}, map[string]string{"mode": "ro"})
 	if err != nil {
 		return "", err
 	}
@@ -98,7 +100,7 @@ func openCheckout(dir string) (*sql.DB, error) {
 			return nil, fmt.Errorf("no checkout found in %s (run 'fossil repo open' first)", dir)
 		}
 	}
-	return sql.Open("sqlite", ckoutPath)
+	return libdb.OpenSQL(ckoutPath, libdb.OpenConfig{}, nil)
 }
 
 // checkoutVid returns the current checkout version ID from vvar.

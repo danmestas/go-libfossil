@@ -7,8 +7,8 @@ import (
 
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/libfossil/simio"
 )
 
 func newTestRepoWithCheckin(t *testing.T) (*repo.Repo, func()) {
@@ -32,6 +32,16 @@ func newTestRepoWithCheckin(t *testing.T) (*repo.Repo, func()) {
 	})
 	if err != nil {
 		r.Close()
+		t.Fatal(err)
+	}
+	return r, func() { r.Close() }
+}
+func newTestEmptyRepo(t *testing.T) (*repo.Repo, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	path := dir + "/empty.fossil"
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
+	if err != nil {
 		t.Fatal(err)
 	}
 	return r, func() { r.Close() }

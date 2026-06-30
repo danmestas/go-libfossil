@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="libfossil — pure-Go library and CLI for Fossil SCM repositories. Zero CGo, static binaries, WASM-ready.">
+<meta name="description" content="go-libfossil — pure-Go library and CLI for Fossil SCM repositories. Zero CGo, static binaries, WASM-ready.">
 <meta name="color-scheme" content="light dark">
-<title>libfossil — pure-Go Fossil SCM library</title>
+<title>go-libfossil — pure-Go Fossil SCM library</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -379,11 +379,11 @@ footer a { color: inherit; border-bottom-color: var(--mute); }
 <a href="#main" class="skip">skip to content</a>
 
 <header class="topbar">
-  <div class="name">libfossil</div>
+  <div class="name">go-libfossil</div>
   <div class="meta">
     <span>v <b>{{ .Site.Params.version | default "0.4.2" }}</b></span>
     <span>license <b>MIT</b></span>
-    <span><a href="https://github.com/danmestas/libfossil">github</a></span>
+    <span><a href="https://github.com/danmestas/go-libfossil">github</a></span>
     <span><a href="/docs/">docs</a></span>
   </div>
 </header>
@@ -391,11 +391,11 @@ footer a { color: inherit; border-bottom-color: var(--mute); }
 <main id="main">
 
 <section class="title">
-  <h1>libfossil</h1>
+  <h1>go-libfossil</h1>
   <p class="lead">A pure-Go library for Fossil SCM repositories. Zero CGo. Static binaries. WASM-ready.</p>
   <table class="spec">
     <tbody>
-      <tr><td>Project</td>      <td>libfossil — pure-Go Fossil SCM library</td></tr>
+      <tr><td>Project</td>      <td>go-libfossil — pure-Go Fossil SCM library</td></tr>
       <tr><td>Language</td>     <td>Go (module <code>github.com/danmestas/libfossil</code>)</td></tr>
       <tr><td>Runtime deps</td> <td>none · pluggable SQLite drivers (modernc · ncruces)</td></tr>
       <tr><td>Binaries</td>     <td>1 (libfossil CLI)</td></tr>
@@ -445,7 +445,7 @@ $ libfossil --help</pre>
   <h2>How it fits together <span class="anchor">architecture</span></h2>
   <div class="table-scroll">
     <svg class="diagram" viewBox="0 0 640 260" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet">
-      <title id="arch-title">libfossil architecture</title>
+      <title id="arch-title">go-libfossil architecture</title>
       <desc id="arch-desc">Callers (cli, library, wasm) invoke methods on the Repo handle. The Repo delegates to three pluggable axes: db driver, transport, observer. Repository state lives on disk in a .fossil SQLite file.</desc>
 
       <defs>
@@ -517,7 +517,7 @@ $ libfossil --help</pre>
     <thead>
       <tr>
         <th></th>
-        <th class="col-self">libfossil</th>
+        <th class="col-self">go-libfossil</th>
         <th>shell-out to fossil</th>
         <th>CGo libfossil bindings</th>
       </tr>
@@ -555,13 +555,13 @@ $ libfossil --help</pre>
 $ libfossil --help                            # CLI commands
 $ libfossil --version</pre>
   </div>
-  <p>Walkthrough: <a href="/docs/quickstart/">/docs/quickstart</a> · Architecture: <a href="/docs/architecture/">/docs/architecture</a> · SDK reference: <a href="/docs/reference/sdk/">/docs/reference/sdk</a> · Source: <a href="https://github.com/danmestas/libfossil">github.com/danmestas/libfossil</a>.</p>
+  <p>Walkthrough: <a href="/docs/quickstart/">/docs/quickstart</a> · Architecture: <a href="/docs/architecture/">/docs/architecture</a> · SDK reference: <a href="/docs/reference/sdk/">/docs/reference/sdk</a> · Source: <a href="https://github.com/danmestas/go-libfossil">github.com/danmestas/go-libfossil</a>.</p>
 </section>
 
 </main>
 
 <footer>
-  <div>libfossil &nbsp;·&nbsp; MIT &nbsp;·&nbsp; v{{ .Site.Params.version | default "0.4.2" }} &nbsp;·&nbsp; {{ now.Year }} &nbsp;·&nbsp; <a href="https://github.com/danmestas/libfossil">github.com/danmestas/libfossil</a></div>
+  <div>go-libfossil &nbsp;·&nbsp; MIT &nbsp;·&nbsp; v{{ .Site.Params.version | default "0.4.2" }} &nbsp;·&nbsp; {{ now.Year }} &nbsp;·&nbsp; <a href="https://github.com/danmestas/go-libfossil">github.com/danmestas/go-libfossil</a></div>
 </footer>
 
 <script>

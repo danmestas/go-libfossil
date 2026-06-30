@@ -1,13 +1,19 @@
-# libfossil
+<p align="center">
+  <img src="./assets/logo.png" alt="go-libfossil" width="260">
+</p>
+
+<h1 align="center">go-libfossil</h1>
 
 [![Docs](https://img.shields.io/badge/docs-online-c63a0f)](https://libfossil-docs.daniel-mestas.workers.dev/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/libfossil.svg)](https://pkg.go.dev/github.com/danmestas/libfossil)
 [![Go Report Card](https://goreportcard.com/badge/github.com/danmestas/libfossil)](https://goreportcard.com/report/github.com/danmestas/libfossil)
-[![Tests](https://github.com/danmestas/libfossil/actions/workflows/test.yml/badge.svg)](https://github.com/danmestas/libfossil/actions/workflows/test.yml)
+[![Tests](https://github.com/danmestas/go-libfossil/actions/workflows/test.yml/badge.svg)](https://github.com/danmestas/go-libfossil/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8.svg)](https://go.dev)
 
 Pure-Go library and CLI for [Fossil](https://fossil-scm.org) repositories. Drop-in compatible with Fossil's `.fossil` SQLite format, with no CGo and no upstream `fossil` binary required.
+
+> The repository is named **go-libfossil**, but the module is imported as `libfossil` (`go get github.com/danmestas/libfossil`) and the CLI installs as the `libfossil` command — the import path is unchanged.
 
 ## Why libfossil
 
@@ -206,6 +212,16 @@ Markdown sources: [`docs/site/content/`](./docs/site/content/).
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Acknowledgements
+
+This project stands on the work of others.
+
+- **[Stephan Beal](https://wanderinghorse.net)** — author of **[libfossil](https://fossil.wanderinghorse.net/r/libfossil)**, the C library that gives this project its name. This is an *indirect* Go port: it follows the shape and intent of Stephan's libfossil rather than transliterating it, and leans on the original as a reference for how a Fossil library ought to be organized.
+- **[Dr. D. Richard Hipp](https://www.hwaci.com/drh/)** and the **[Fossil SCM](https://fossil-scm.org)** project — the [Fossil source code](https://fossil-scm.org) was the implementation guide of record. Where this library and upstream Fossil had to agree on the bytes — SQLite schema, manifest format, delta and sync wire formats — Fossil's source was the authority.
+- **[TigerBeetle](https://tigerbeetle.com)** and **[TigerStyle](https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md)** — the testing philosophy: assertions everywhere, bounded everything, and treating tests as a first-class engineering surface.
+- **[John Ousterhout](https://web.stanford.edu/~ouster/)** and **[*A Philosophy of Software Design*](https://web.stanford.edu/~ouster/cgi-bin/aposd.php)** — the engineering principles for keeping modules deep and interfaces narrow as the codebase grew.
+- **[Antithesis](https://antithesis.com)** and **[deterministic simulation testing](https://antithesis.com/docs/resources/deterministic_simulation_testing/)** — the model behind this project's own DST harness, where time, randomness, and faults are controlled so that every failure is perfectly reproducible.
 
 ## License
 

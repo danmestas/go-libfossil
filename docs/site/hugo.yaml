@@ -1,4 +1,4 @@
-title: libfossil
+title: go-libfossil
 baseURL: "https://libfossil-docs.daniel-mestas.workers.dev/"
 
 module:
@@ -29,7 +29,7 @@ menu:
         type: search
     - name: GitHub
       weight: 5
-      url: "https://github.com/danmestas/libfossil"
+      url: "https://github.com/danmestas/go-libfossil"
       params:
         icon: github
 
@@ -57,7 +57,7 @@ params:
 
   editURL:
     enable: true
-    base: "https://github.com/danmestas/libfossil/edit/main/docs/site/content"
+    base: "https://github.com/danmestas/go-libfossil/edit/main/docs/site/content"
 
   page:
     width: wide

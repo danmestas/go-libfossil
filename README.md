@@ -1,4 +1,8 @@
-# go-libfossil
+<p align="center">
+  <img src="./assets/logo.png" alt="go-libfossil" width="260">
+</p>
+
+<h1 align="center">go-libfossil</h1>
 
 [![Docs](https://img.shields.io/badge/docs-online-c63a0f)](https://libfossil-docs.daniel-mestas.workers.dev/)
 [![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/libfossil.svg)](https://pkg.go.dev/github.com/danmestas/libfossil)

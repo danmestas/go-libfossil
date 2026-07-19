@@ -69,6 +69,11 @@ type LogEntry struct {
 // back as the next call's TimelineOpts.After to resume enumeration
 // immediately after this entry. Cursor is always valid
 // (Cursor.Valid() == true) on every TimelineEntry Timeline produces.
+//
+// TimelineEntry values should come from Timeline, not be hand-assembled.
+// A TimelineEntry built by embedding a LogEntry from Ancestry carries a
+// zero-value Cursor, which Timeline treats as "start from newest" rather
+// than as an error.
 type TimelineEntry struct {
 	LogEntry
 	Cursor Cursor

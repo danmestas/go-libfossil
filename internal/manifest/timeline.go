@@ -32,6 +32,11 @@ type TimelineOpts struct {
 // operation with pagination semantics, so its own result type — not the
 // shared LogEntry — is where the cursor belongs. Cursor is always valid
 // (fsltype.Cursor.Valid() == true) on every entry Timeline produces.
+//
+// TimelineEntry values should come from Timeline, not be hand-assembled.
+// A TimelineEntry built by embedding a LogEntry from Log/Ancestry carries
+// a zero-value Cursor, which Timeline treats as "start from newest" rather
+// than as an error.
 type TimelineEntry struct {
 	LogEntry
 	Cursor libfossil.Cursor

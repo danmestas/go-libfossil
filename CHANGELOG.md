@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `Checkout.Update` now returns `(UpdateResult, error)` instead
+  of a bare `error`. The internal 3-way merge already tracked which files
+  were written, removed, and left with conflict markers; the old signature
+  discarded all of it, so a caller could not tell a clean update from one
+  that silently wrote `<<<<<<<` conflict markers into working-tree files.
+  `UpdateResult.Conflicted` lists the paths that were merged but not
+  cleanly — this is a successful update (`err == nil`), not an error; a
+  genuine failure still returns a non-nil `error` with a zero-value
+  `UpdateResult`. `Checkout.Extract` is unchanged.
 - **Breaking:** `Repo.Timeline` now enumerates the repository's `event`
   table newest-first (every event kind by default, or a single kind via
   `TimelineOpts.Type`), matching canonical `fossil timeline`. The previous

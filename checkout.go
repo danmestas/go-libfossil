@@ -40,6 +40,29 @@ type UpdateOpts struct {
 	Force     bool
 }
 
+// UpdateResult reports what Update actually did. Paths, not counts: a
+// caller needs to know which files to show a user, not merely how many
+// changed.
+//
+// Outcome mapping (Update's error return is the other half of this):
+//
+//	clean       - err == nil, Conflicted empty
+//	conflicted  - err == nil, Conflicted non-empty
+//	failed      - err != nil, UpdateResult is the zero value
+//
+// A non-empty Conflicted means three-way merge could not resolve those
+// files cleanly and wrote "<<<<<<<"-style conflict markers directly into
+// them on disk. That is NOT an error — Update still returns a nil error,
+// because the update itself succeeded and the working tree is usable; it
+// just isn't clean. A caller that only checks the returned error gets
+// today's pre-conflict-detection behavior. A caller that needs to warn a
+// user about marker text in their files must check Conflicted.
+type UpdateResult struct {
+	FilesWritten []string // paths written (added, updated, or merged, clean or not)
+	FilesRemoved []string // paths deleted from the working tree
+	Conflicted   []string // paths that now contain conflict markers — not an error
+}
+
 // RevertOpts configures reverting file changes.
 type RevertOpts struct {
 	Files []string // empty = revert all
@@ -123,15 +146,21 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 }
 
 // Update updates the checkout to a new version, performing 3-way merge
-// where needed to preserve local modifications.
-func (c *Checkout) Update(opts UpdateOpts) error {
-	err := c.inner.Update(checkout.UpdateOpts{
+// where needed to preserve local modifications. See UpdateResult for how to
+// distinguish a clean update from one that wrote conflict markers into
+// working-tree files.
+func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
+	res, err := c.inner.Update(checkout.UpdateOpts{
 		TargetRID: fsltype.FslID(opts.TargetRID),
 	})
 	if err != nil {
-		return fmt.Errorf("libfossil: update: %w", err)
+		return UpdateResult{}, fmt.Errorf("libfossil: update: %w", err)
 	}
-	return nil
+	return UpdateResult{
+		FilesWritten: res.FilesWritten,
+		FilesRemoved: res.FilesRemoved,
+		Conflicted:   res.Conflicted,
+	}, nil
 }
 
 // HasChanges returns true if the checkout has any modified, deleted, or

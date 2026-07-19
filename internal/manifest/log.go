@@ -15,6 +15,11 @@ type LogOpts struct {
 	Limit int
 }
 
+// LogEntry represents a single event as returned by Log (the ancestry
+// walk). It carries no pagination cursor: Log paginates by Start/Limit,
+// not by cursor, so there is nothing valid to put in one. See
+// TimelineEntry, Timeline's result type, for the cursor-carrying
+// counterpart.
 type LogEntry struct {
 	RID     libfossil.FslID
 	UUID    string
@@ -23,10 +28,6 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    libfossil.EventKind
 	Parents []string
-	// Cursor is a Timeline pagination token for this entry; zero-value
-	// (invalid) for entries produced by Log/Ancestry, which paginates by
-	// Start/Limit instead and has no use for it.
-	Cursor libfossil.Cursor
 }
 
 // maxAncestryDepth bounds the first-parent walk in Log so that a cyclic or

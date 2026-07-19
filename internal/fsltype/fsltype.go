@@ -77,14 +77,14 @@ func JulianToTime(j float64) time.Time {
 }
 
 // Cursor is an opaque pagination token for a Timeline enumeration. Obtain
-// one from a returned LogEntry's Cursor field and hand it back as the next
-// page's cursor to resume immediately after that entry, in the same
+// one from a returned TimelineEntry's Cursor field and hand it back as the
+// next page's cursor to resume immediately after that entry, in the same
 // (mtime DESC, rid DESC) order Timeline itself produces. The zero Cursor
 // (Valid() == false) means "start from the newest event".
 //
 // The julian/rid pair is deliberately unexported. A cursor built from
-// parts — e.g. re-deriving mtime by round-tripping a LogEntry.Time back
-// through TimeToJulian — is not guaranteed to equal the row's actual
+// parts — e.g. re-deriving mtime by round-tripping a TimelineEntry.Time
+// back through TimeToJulian — is not guaranteed to equal the row's actual
 // stored mtime bit-for-bit, which silently reintroduces skipped or
 // duplicated rows at a page boundary (the exact defect this type exists
 // to make impossible to construct). Only NewCursor, called by Timeline's
@@ -98,7 +98,7 @@ type Cursor struct {
 
 // NewCursor builds a Cursor from a row's exact scanned mtime and rid.
 // Callers outside this package's Timeline implementation should not need
-// this — obtain a Cursor from a LogEntry instead.
+// this — obtain a Cursor from a TimelineEntry instead.
 func NewCursor(julian float64, rid FslID) Cursor {
 	return Cursor{julian: julian, rid: rid, valid: true}
 }

@@ -53,6 +53,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hand-built cursor derived from a rounded `time.Time` is not guaranteed
   to match its row exactly, which is what reintroduces skipped or
   duplicated rows at a page boundary in the first place.
+- **Breaking:** `LogEntry` no longer has a `Cursor` field, and
+  `Repo.Timeline` now returns `[]TimelineEntry` instead of `[]LogEntry`.
+  `LogEntry` is `Repo.Ancestry`'s result type; its cursor was always the
+  zero value, which is structurally identical to a legitimate Timeline
+  first-page call — so feeding an `Ancestry` entry's cursor into
+  `TimelineOpts.After` silently paginated from page one forever with no
+  error, and documenting the field as invalid on `Ancestry` entries did
+  nothing to stop it. `TimelineEntry` (which embeds `LogEntry` and adds
+  `Cursor Cursor`) is now `Repo.Timeline`'s result type, so the cursor
+  lives only on the type that has one to give. Callers that read
+  `entry.Cursor`, `entry.UUID`, `entry.User`, etc. off a `Repo.Timeline`
+  result need no source change — those fields are still reachable through
+  `TimelineEntry`'s embedded `LogEntry`. Callers that stored a
+  `Repo.Timeline` result as `[]LogEntry` (rather than letting `:=` infer
+  the type, or using `[]TimelineEntry`) will fail to compile.
 
 ## [0.1.0] - 2026-04-20
 

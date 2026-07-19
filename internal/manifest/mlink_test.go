@@ -16,6 +16,35 @@ type mlinkRow struct {
 	fid, pmid, pid, fnid int64
 }
 
+// TestPermToMperm_SubstringMatch pins permToMperm to canonical Fossil's
+// substring test (manifest_file_mperm, src/manifest.c:1482-1492), not an
+// exact-string match. "wx" is the case that matters in practice:
+// internal/deck/parse.go:194 assigns the F-card perm field verbatim from
+// remote xfer input, and canonical Fossil emits multi-character perm
+// fields (e.g. the " w" rename placeholder from #51). An exact match on
+// "wx" would silently drop the executable bit — the invariant #48
+// protects.
+func TestPermToMperm_SubstringMatch(t *testing.T) {
+	cases := []struct {
+		perm string
+		want int64
+	}{
+		{"", 0},
+		{"w", 0},
+		{"x", 1},
+		{"l", 2},
+		{"wx", 1}, // multi-character perm containing x: must still map to exec
+		{"xl", 1}, // x wins over l when both present, matching canonical's check order
+		{"lx", 1}, // order within the string must not matter
+		{" w", 0}, // #51's rename placeholder: no x or l present
+	}
+	for _, c := range cases {
+		if got := permToMperm(c.perm); got != c.want {
+			t.Errorf("permToMperm(%q) = %d, want %d", c.perm, got, c.want)
+		}
+	}
+}
+
 // TestInsertCheckinMlinks_ThreeCasePidRule exercises libfossil#29's
 // acceptance criteria directly against the Crosslink (xfer ingestion)
 // write path: a merge commit whose F-cards cover all three pid cases from
@@ -116,7 +145,12 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 		t.Fatalf("Crosslink linked = %d, want 1 (merge manifest only; trunk/feature already crosslinked by Checkin)", linked)
 	}
 
-	rowFor := func(name string) mlinkRow {
+	// rowFor takes the subtest's own *testing.T (not the parent's) so a
+	// Fatalf in one subtest's lookup cannot abort its siblings: t.Run
+	// subtests share the parent goroutine, and Fatalf unwinds via
+	// runtime.Goexit, which stops the entire enclosing test function if the
+	// closure captured the parent t instead of the subtest's.
+	rowFor := func(t *testing.T, name string) mlinkRow {
 		t.Helper()
 		var row mlinkRow
 		err := d.QueryRow(
@@ -131,7 +165,7 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 	}
 
 	t.Run("deleted_file_gets_fid_zero", func(t *testing.T) {
-		row := rowFor("root.txt")
+		row := rowFor(t, "root.txt")
 		if row.fid != 0 {
 			t.Errorf("root.txt fid = %d, want 0 (deleted)", row.fid)
 		}
@@ -151,7 +185,7 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 	})
 
 	t.Run("merge_added_file_gets_pid_negative_one", func(t *testing.T) {
-		row := rowFor("on-branch.txt")
+		row := rowFor(t, "on-branch.txt")
 		if row.pid != -1 {
 			t.Errorf("on-branch.txt pid = %d, want -1 (added by merge)", row.pid)
 		}
@@ -164,7 +198,7 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 	})
 
 	t.Run("normal_added_file_gets_pid_zero", func(t *testing.T) {
-		row := rowFor("merge-new.txt")
+		row := rowFor(t, "merge-new.txt")
 		if row.pid != 0 {
 			t.Errorf("merge-new.txt pid = %d, want 0 (new to this check-in, absent from every parent)", row.pid)
 		}
@@ -232,7 +266,10 @@ func TestInsertMlinks_MergeParentsGetPidNegativeOne(t *testing.T) {
 		t.Fatalf("merge Checkin: %v", err)
 	}
 
-	rowFor := func(name string) mlinkRow {
+	// rowFor takes the subtest's own *testing.T so a Fatalf in one
+	// subtest's lookup cannot abort its siblings (see the twin helper in
+	// TestInsertCheckinMlinks_ThreeCasePidRule for the mechanism).
+	rowFor := func(t *testing.T, name string) mlinkRow {
 		t.Helper()
 		var row mlinkRow
 		err := d.QueryRow(
@@ -247,7 +284,7 @@ func TestInsertMlinks_MergeParentsGetPidNegativeOne(t *testing.T) {
 	}
 
 	t.Run("merge_added_file_gets_pid_negative_one", func(t *testing.T) {
-		row := rowFor("on-branch.txt")
+		row := rowFor(t, "on-branch.txt")
 		if row.pid != -1 {
 			t.Errorf("on-branch.txt pid = %d, want -1 (added by merge)", row.pid)
 		}
@@ -257,16 +294,23 @@ func TestInsertMlinks_MergeParentsGetPidNegativeOne(t *testing.T) {
 	})
 
 	t.Run("normal_added_file_gets_pid_zero", func(t *testing.T) {
-		row := rowFor("brand-new.txt")
+		row := rowFor(t, "brand-new.txt")
 		if row.pid != 0 {
 			t.Errorf("brand-new.txt pid = %d, want 0", row.pid)
 		}
 	})
 
 	t.Run("carried_over_file_gets_parent_fid", func(t *testing.T) {
-		row := rowFor("root.txt")
-		if row.pid == 0 {
-			t.Errorf("root.txt pid = 0, want the primary parent's file rid (carried over unchanged)")
+		row := rowFor(t, "root.txt")
+		var trunkFid int64
+		if err := d.QueryRow(
+			`SELECT m.fid FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='root.txt'`,
+			trunkRid,
+		).Scan(&trunkFid); err != nil {
+			t.Fatalf("trunk root.txt fid lookup: %v", err)
+		}
+		if row.pid != trunkFid {
+			t.Errorf("root.txt pid = %d, want %d (the primary parent's file rid, carried over unchanged)", row.pid, trunkFid)
 		}
 		if row.pmid != int64(trunkRid) {
 			t.Errorf("root.txt pmid = %d, want %d", row.pmid, trunkRid)

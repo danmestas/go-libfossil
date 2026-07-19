@@ -4,9 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/db"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
 // maxMlinkMergeParents bounds the merge-parent lookup loop in
@@ -18,11 +19,20 @@ const maxMlinkMergeParents = 1024
 // permToMperm converts a Fossil F-card permission string to the mlink.mperm
 // encoding used by canonical Fossil (src/manifest.c add_one_mlink): 0 =
 // regular file, 1 = executable, 2 = symlink.
+//
+// Canonical manifest_file_mperm (src/manifest.c:1482-1492) does a substring
+// test (strstr), not an exact match: perm fields can carry more than one
+// character (e.g. Fossil's " w" rename placeholder — see #51), and
+// internal/deck/parse.go:194 assigns the F-card perm field verbatim from
+// remote input over xfer. An exact match would silently drop the
+// executable bit for any multi-character perm string containing "x", which
+// is the exact invariant PR #48 landed to protect. x is tested before l to
+// match canonical's check order.
 func permToMperm(perm string) int64 {
-	switch perm {
-	case "x":
+	switch {
+	case strings.Contains(perm, "x"):
 		return 1
-	case "l":
+	case strings.Contains(perm, "l"):
 		return 2
 	default:
 		return 0
@@ -72,6 +82,17 @@ func resolveMlinkParent(tx *db.Tx, fnid int64, primaryParentMid libfossil.FslID,
 	// Not present in the primary parent's file set. If a merge parent
 	// carried this filename, the file was added by the merge (pid=-1);
 	// otherwise it is genuinely new to this check-in (pid=0).
+	//
+	// Known divergence from canonical: real Fossil's rule is not "present
+	// in a merge parent" but count(*) < nLink over the per-fnid mlink rows
+	// it writes for every parent transition (src/manifest.c:1905-1915). For
+	// a file that exists in a merge parent with DIFFERENT content — i.e. a
+	// conflict resolved during the merge — canonical emits an auxiliary
+	// row and leaves pid=0, but this function returns pid=-1. Low blast
+	// radius: every mlink consumer in this package (finfo.go, dephantomize.go)
+	// filters on pid != fid, which holds either way. Left as-is rather than
+	// tracking per-parent content equality, which the single-row-per-file
+	// model this package uses does not otherwise need.
 	for _, mp := range mergeParentMids {
 		if mp <= 0 {
 			continue

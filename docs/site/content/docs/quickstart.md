@@ -59,7 +59,7 @@ func main() {
     }
     defer repo.Close()
 
-    entries, err := repo.Timeline(libfossil.LogOpts{Limit: 10})
+    entries, err := repo.Timeline(libfossil.TimelineOpts{Limit: 10})
     if err != nil {
         log.Fatal(err)
     }

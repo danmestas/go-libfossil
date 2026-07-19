@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `Repo.Timeline` now enumerates the repository's `event`
+  table newest-first (every event kind by default, or a single kind via
+  `TimelineOpts.Type`), matching canonical `fossil timeline`. The previous
+  behavior — a first-parent walk from a required start rid — is preserved
+  under a new, honestly-named method, `Repo.Ancestry(LogOpts)`. The old
+  `Repo.Timeline(LogOpts)` was actually an ancestry walk masquerading as an
+  enumeration: it never visited a second parent or a sibling branch head,
+  so it silently omitted any check-in that wasn't a first-parent ancestor
+  of the given start rid. There is no deprecated shim; callers of the old
+  `Timeline` should switch to `Ancestry` if they want the walk, or adopt
+  the new `Timeline(TimelineOpts)` if they want a full enumeration.
+- `LogEntry` gains a `Kind` field (`EventKind`) identifying which of
+  `event.type`'s six kinds (`ci`, `e`, `f`, `g`, `t`, `w`) an entry is.
+  `Parents` is only populated for `Kind == EventKindCheckin`.
+- `Repo.Timeline`'s pagination cursor (`TimelineOpts.Before`/`After`) orders
+  by `(mtime DESC, rid DESC)`, a deliberate improvement over canonical
+  fossil's bare `mtime DESC` with no tie-break, which can repeat or skip
+  rows at a page boundary.
+
 ## [0.1.0] - 2026-04-20
 
 Initial open-source release of `libfossil`, a pure-Go implementation of the

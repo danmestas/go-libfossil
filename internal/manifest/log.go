@@ -21,8 +21,17 @@ type LogEntry struct {
 	Comment string
 	User    string
 	Time    time.Time
+	Kind    libfossil.EventKind
 	Parents []string
 }
+
+// maxAncestryDepth bounds the first-parent walk in Log so that a cyclic or
+// otherwise corrupt plink table cannot hang the process (TigerStyle: every
+// loop needs an explicit, defensible bound). It is a var rather than a
+// const so tests can shrink it to exercise the bound deterministically
+// without walking a million rows. No real fossil repository's primary-parent
+// chain approaches this depth.
+var maxAncestryDepth = 1_000_000
 
 func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 	if r == nil {
@@ -33,7 +42,10 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 	}
 	var entries []LogEntry
 	current := opts.Start
-	for {
+	for depth := 0; ; depth++ {
+		if depth >= maxAncestryDepth {
+			return nil, fmt.Errorf("manifest.Log: exceeded max ancestry depth %d starting at rid=%d (possible plink cycle)", maxAncestryDepth, opts.Start)
+		}
 		if opts.Limit > 0 && len(entries) >= opts.Limit {
 			break
 		}
@@ -59,24 +71,10 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		if !ok {
 			return nil, fmt.Errorf("manifest.Log: rid=%d: unexpected mtime type %T", current, mtimeScanned)
 		}
-		var parents []string
-		rows, err := r.DB().Query(
-			"SELECT b.uuid FROM plink p JOIN blob b ON b.rid=p.pid WHERE p.cid=? ORDER BY p.isprim DESC",
-			current,
-		)
-		if err == nil {
-			for rows.Next() {
-				var puuid string
-				if err := rows.Scan(&puuid); err != nil {
-					continue
-				}
-				parents = append(parents, puuid)
-			}
-			rows.Close()
-		}
 		entries = append(entries, LogEntry{
 			RID: current, UUID: uuid, Comment: comment.String,
-			User: user.String, Time: libfossil.JulianToTime(mtime), Parents: parents,
+			User: user.String, Time: libfossil.JulianToTime(mtime),
+			Kind: libfossil.EventKindCheckin, Parents: parentUUIDs(r, current),
 		})
 		var parentRid int64
 		if err := r.DB().QueryRow(
@@ -87,4 +85,30 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		current = libfossil.FslID(parentRid)
 	}
 	return entries, nil
+}
+
+// parentUUIDs returns the UUIDs of cid's parents (primary parent first),
+// via the plink table. Best-effort: a query or scan failure yields a nil
+// (empty) result rather than aborting the caller's walk or enumeration —
+// matching the original manifest.Log behavior this was extracted from.
+// Shared by Log (ancestry walk) and Timeline (enumeration) so entry
+// construction is not duplicated between the two query paths.
+func parentUUIDs(r *repo.Repo, cid libfossil.FslID) []string {
+	var parents []string
+	rows, err := r.DB().Query(
+		"SELECT b.uuid FROM plink p JOIN blob b ON b.rid=p.pid WHERE p.cid=? ORDER BY p.isprim DESC",
+		cid,
+	)
+	if err != nil {
+		return parents
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var puuid string
+		if err := rows.Scan(&puuid); err != nil {
+			continue
+		}
+		parents = append(parents, puuid)
+	}
+	return parents
 }

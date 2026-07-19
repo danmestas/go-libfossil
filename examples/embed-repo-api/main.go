@@ -64,8 +64,8 @@ func main() {
 	}
 	log.Printf("project-code: %s", projectCode)
 
-	// 4c. Read the timeline starting at the tip we just committed.
-	entries, err := repo.Timeline(libfossil.LogOpts{Start: rid, Limit: 10})
+	// 4c. Read the repository-wide timeline (newest first).
+	entries, err := repo.Timeline(libfossil.TimelineOpts{Limit: 10})
 	if err != nil {
 		log.Fatalf("timeline: %v", err)
 	}

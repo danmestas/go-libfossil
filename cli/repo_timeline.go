@@ -18,12 +18,7 @@ func (c *RepoTimelineCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	tipRid, err := resolveRID(r, "")
-	if err != nil {
-		return err
-	}
-
-	entries, err := r.Timeline(libfossil.LogOpts{Start: tipRid, Limit: c.Limit})
+	entries, err := r.Timeline(libfossil.TimelineOpts{Limit: c.Limit})
 	if err != nil {
 		return err
 	}

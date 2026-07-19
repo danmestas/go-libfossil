@@ -57,7 +57,7 @@ func main() {
 	}
 	log.Printf("commit rid=%d uuid=%s", rid, uuid)
 
-	entries, err := repo.Timeline(libfossil.LogOpts{Start: rid, Limit: 10})
+	entries, err := repo.Timeline(libfossil.TimelineOpts{Limit: 10})
 	if err != nil {
 		log.Fatalf("timeline: %v", err)
 	}

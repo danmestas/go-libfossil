@@ -7,7 +7,7 @@ import (
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 )
 
-func TestCommitAndTimeline(t *testing.T) {
+func TestCommitAndAncestry(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.fossil")
 
@@ -37,7 +37,7 @@ func TestCommitAndTimeline(t *testing.T) {
 		t.Fatalf("Commit returned rid=%d, want > 0", rid1)
 	}
 
-	// Second commit to test timeline walking.
+	// Second commit to test the ancestry walk.
 	rid2, uuid2, err := r.Commit(CommitOpts{
 		ParentID: rid1,
 		Files: []FileToCommit{
@@ -50,12 +50,12 @@ func TestCommitAndTimeline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, err := r.Timeline(LogOpts{Start: rid2, Limit: 10})
+	entries, err := r.Ancestry(LogOpts{Start: rid2, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(entries) < 2 {
-		t.Fatalf("Timeline returned %d entries, want >= 2", len(entries))
+		t.Fatalf("Ancestry returned %d entries, want >= 2", len(entries))
 	}
 	if entries[0].UUID != uuid2 {
 		t.Errorf("first entry UUID = %q, want %q", entries[0].UUID, uuid2)

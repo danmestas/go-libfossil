@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/danmestas/libfossil/internal/content"
@@ -194,18 +195,10 @@ func (c *Checkout) buildCommitFiles(
 			perm = existing.Perm
 		}
 
-		// vfile.isexe (captured at Manage/Add time, or reloaded from the
-		// parent manifest) is authoritative for the executable marker on a
-		// changed or newly added file. Leave a symlink marker ("l") alone —
-		// symlink tracking is a separate concern this fix does not touch.
-		if ve, ok := vfEntries[name]; ok && perm != "l" {
-			if ve.isexe {
-				perm = "x"
-			} else {
-				perm = ""
-			}
-		}
-
+		// The executable marker is re-derived from the live on-disk mode by
+		// restatCommitPerms below, for every included non-symlink file (not
+		// only ones change scanning flagged) — so permission is decided
+		// later, from the filesystem, rather than from vfile.isexe here.
 		fileMap[name] = manifest.File{
 			Name:    name,
 			Content: fileData,
@@ -248,12 +241,96 @@ func (c *Checkout) buildCommitFiles(
 		}
 	}
 
+	// 4. Independently re-stat every included file's on-disk executable bit,
+	// belt-and-braces, regardless of whether change scanning flagged it.
+	if err := c.restatCommitPerms(fileMap, vfEntries, shouldInclude); err != nil {
+		return nil, err
+	}
+
 	// Convert to slice
 	commitFiles := make([]manifest.File, 0, len(fileMap))
 	for _, f := range fileMap {
 		commitFiles = append(commitFiles, f)
 	}
 	return commitFiles, nil
+}
+
+// restatCommitPerms re-derives each included file's executable permission
+// directly from its live on-disk mode, overriding whatever change scanning
+// captured earlier. This exists because change scanning compares content
+// hashes: a file whose only edit is a chmod has an unchanged hash, so
+// vfile.chnged/isexe can go stale and silently carry forward the wrong
+// permission. Manifest generation must consult the filesystem itself for
+// every file it is about to serialize — mirroring canonical Fossil's
+// belt-and-braces re-stat in src/checkin.c — rather than trust a cached
+// flag a second time.
+//
+// Only files that actually have a vfile row are considered — matching
+// canonical Fossil, whose manifest loop is driven by a query over vfile
+// (JOIN blob) rather than the union of parent-manifest and vfile names.
+// Files carried forward from the parent manifest but no longer present in
+// the local vfile (should not happen once LoadVFile has run, but is not an
+// invariant this function enforces) are left untouched, since there is no
+// live vfile row to justify a re-stat. Symlinks (Perm == "l") and files not
+// selected for this commit are also left untouched. On Windows,
+// os.FileMode never carries an owner-execute bit, so modeIsExecutable
+// always returns false and this is a no-op.
+//
+// A file that has gone missing from disk (deleted outside of Unmanage, or
+// otherwise untracked-but-not-told) is skipped, carrying its existing Perm
+// forward unchanged, exactly as it would have before this function existed.
+// This function's job is fixing missed mode changes, not detecting stale
+// tracking — a commit that never touched the missing file must still
+// succeed. Any other Stat error (permission denied, I/O fault, ...) is a
+// real problem and still fails the commit.
+func (c *Checkout) restatCommitPerms(
+	fileMap map[string]manifest.File,
+	vfEntries map[string]vfileCommitEntry,
+	shouldInclude func(string) bool,
+) error {
+	if fileMap == nil {
+		panic("checkout.restatCommitPerms: fileMap must not be nil")
+	}
+	if shouldInclude == nil {
+		panic("checkout.restatCommitPerms: shouldInclude must not be nil")
+	}
+
+	for name := range vfEntries {
+		entry, ok := fileMap[name]
+		if !ok {
+			continue // deleted, or otherwise dropped from this commit
+		}
+		if entry.Perm == "l" {
+			continue
+		}
+		if !shouldInclude(name) {
+			continue
+		}
+
+		fullPath, err := c.safePath(name)
+		if err != nil {
+			return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+		}
+		info, err := c.env.Storage.Stat(fullPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // missing on disk: carry the existing Perm forward unchanged
+			}
+			return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
+		}
+
+		if modeIsExecutable(info.Mode()) {
+			entry.Perm = "x"
+		} else {
+			entry.Perm = ""
+		}
+		if entry.Perm != "" && entry.Perm != "x" {
+			panic("checkout.restatCommitPerms: re-derived perm must be \"\" or \"x\"")
+		}
+		fileMap[name] = entry
+	}
+
+	return nil
 }
 
 // finalizeCommit updates vvar, reloads vfile, and clears the checkin queue

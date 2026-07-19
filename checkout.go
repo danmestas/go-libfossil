@@ -37,7 +37,6 @@ type ExtractOpts struct {
 // UpdateOpts configures updating to a new version with merge.
 type UpdateOpts struct {
 	TargetRID int64 // 0 = tip
-	Force     bool
 }
 
 // UpdateResult reports what Update actually did. Paths, not counts: a

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `UpdateOpts.Force` has been removed. It was never wired to
+  anything — `Checkout.Update` accepted the field but never forwarded it
+  to the internal update path, so setting it had no effect and gave no
+  error. Deleting it is honest about what the API actually does; real
+  forcing semantics for `Update` can be designed and added later as a
+  new, deliberately-wired field if a caller needs them. `ExtractOpts.Force`
+  is unrelated and unaffected — it is fully wired and unchanged.
 - **Breaking:** `Checkout.Update` now returns `(UpdateResult, error)` instead
   of a bare `error`. The internal 3-way merge already tracked which files
   were written, removed, and left with conflict markers; the old signature

@@ -145,8 +145,18 @@ func TestMCardOrdering(t *testing.T) {
 
 // TestTCardTwoLevelOrdering exercises the two-level (name, target hash)
 // rule of §4.5.2. The primary key is the full name token including its
-// leading sign character (§4.7.20), so "+x" and "*x" are distinct names.
+// leading sign character (§4.7.16), so "+x" and "*x" are distinct names.
+//
+// The prefix-name case is what distinguishes a two-level comparison from
+// a comparison of the concatenated name+target: under concatenation the
+// target's leading hex digit competes with the longer name's next
+// character, so "f0..." on "+sym-foo" would sort it after "+sym-foobar"
+// and the run would be rejected. Two-level accepts it.
 func TestTCardTwoLevelOrdering(t *testing.T) {
+	if _, err := parseBody("T +sym-foo f" + strings.Repeat("0", 39) +
+		"\nT +sym-foobar " + strings.Repeat("0", 40) + "\n"); err != nil {
+		t.Fatalf("prefix T names with a high target hash: Parse: %v", err)
+	}
 	if _, err := parseBody("T +alpha " + hashN('a') + "\nT +beta " + hashN('a') + "\n"); err != nil {
 		t.Fatalf("ascending T names: Parse: %v", err)
 	}
@@ -162,6 +172,71 @@ func TestTCardTwoLevelOrdering(t *testing.T) {
 	}
 	if _, err := parseBody("T +alpha " + hashN('a') + "\nT +alpha " + hashN('a') + "\n"); err == nil {
 		t.Error("equal T names with equal hash: Parse succeeded, want error")
+	}
+}
+
+// TestTCardOrderingUsesDecodedName pins that the T ordering key is the
+// escape-decoded name (§4.7.16), the same post-decode rule §4.5.2 states
+// for F. The two tag names below order oppositely in the two forms:
+// decoded, 0x20 sorts before 0x2D; on the wire, "\s" begins with 0x5C,
+// which sorts after 0x2D. Reachable in practice, because a branch name
+// may contain a space and so reaches the T card as "sym-my\sbranch".
+func TestTCardOrderingUsesDecodedName(t *testing.T) {
+	decodedAscending := `T *sym-a\sb ` + hashN('a') + "\nT *sym-a-c " + hashN('b') + "\n"
+	if _, err := parseBody(decodedAscending); err != nil {
+		t.Fatalf("decoded-ascending T run: Parse: %v", err)
+	}
+	decodedDescending := "T *sym-a-c " + hashN('a') + "\nT *sym-a\\sb " + hashN('b') + "\n"
+	if _, err := parseBody(decodedDescending); err == nil {
+		t.Error("decoded-descending T run: Parse succeeded, want error")
+	}
+}
+
+// TestTCardRejectsUnknownSign pins the sign-prefix check of §4.7.16: the
+// first character of the name token MUST be +, - or *. Without it a sign
+// byte >= 0x80 would expand to two bytes when the ordering key is
+// assembled, silently corrupting the comparison.
+func TestTCardRejectsUnknownSign(t *testing.T) {
+	if _, err := parseBody("T ?alpha " + hashN('a') + "\n"); err == nil {
+		t.Error("T card with sign '?': Parse succeeded, want error")
+	}
+	if _, err := parseBody("T \xc3alpha " + hashN('a') + "\n"); err == nil {
+		t.Error("T card with a non-ASCII sign byte: Parse succeeded, want error")
+	}
+	for _, sign := range []string{"+", "-", "*"} {
+		if _, err := parseBody("T " + sign + "alpha " + hashN('a') + "\n"); err != nil {
+			t.Errorf("T card with sign %q: Parse: %v", sign, err)
+		}
+	}
+}
+
+// TestZCardTokenValidation pins §4.7.19: the Z payload is a checksum token
+// of exactly 32 hexadecimal characters, never decoded. An early Z line is
+// legal content (§4.5.1) but it is still a typed card, not an
+// arbitrary-byte channel.
+func TestZCardTokenValidation(t *testing.T) {
+	prefix := "D 2024-01-15T10:30:00.000\n"
+	bad := []struct {
+		name  string
+		token string
+	}{
+		{"not hex", "not-a-checksum-at-all-whatever!!"},
+		{"too short", strings.Repeat("0", 31)},
+		{"too long", strings.Repeat("0", 33)},
+		{"empty", ""},
+	}
+	for _, tc := range bad {
+		if _, err := parseBody(prefix + "Z " + tc.token + "\n"); err == nil {
+			t.Errorf("early Z card (%s): Parse succeeded, want error", tc.name)
+		}
+	}
+	// Uppercase hex digits are accepted: the canonical writer form is
+	// lowercase, but "hexadecimal" in §4.7.19 is case-insensitive, so
+	// rejecting uppercase would refuse an artifact canonical accepts.
+	for _, good := range []string{strings.Repeat("0", 32), strings.Repeat("A", 32), strings.Repeat("f", 32)} {
+		if _, err := parseBody(prefix + "Z " + good + "\n"); err != nil {
+			t.Errorf("early Z card %q: Parse: %v", good, err)
+		}
 	}
 }
 
@@ -246,6 +321,30 @@ func TestMarshalEmitsParseableIntraRunOrder(t *testing.T) {
 	data, err := d.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatalf("Parse of marshalled deck: %v\n%s", err, data)
+	}
+}
+
+// TestMarshalSortsTagsByDecodedName pins that the marshaller orders T
+// cards by the same decoded key the parser checks (§4.7.16). TagCard.Name
+// holds the raw wire form, so a name carrying an escape orders one way
+// decoded and the other way raw; sorting on the raw form would emit a run
+// the parser rejects.
+func TestMarshalSortsTagsByDecodedName(t *testing.T) {
+	d := &Deck{
+		T: []TagCard{
+			{Type: TagPropagating, Name: "sym-a-c", UUID: hashN('b')},
+			{Type: TagPropagating, Name: `sym-a\sb`, UUID: hashN('a')},
+		},
+	}
+	data, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), "T *sym-a\\sb "+hashN('a')+"\nT *sym-a-c "+hashN('b')+"\n") {
+		t.Fatalf("T cards not emitted in decoded-name order:\n%s", data)
 	}
 	if _, err := Parse(data); err != nil {
 		t.Fatalf("Parse of marshalled deck: %v\n%s", err, data)

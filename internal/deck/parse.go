@@ -153,13 +153,7 @@ func parseCard(d *Deck, card byte, args string) error {
 	case 'U':
 		return parseUCard(d, args)
 	case 'Z':
-		// §4.5.1: the Z card belongs to neither occurrence class. The
-		// authoritative checksum is the trailing 35 bytes VerifyZ already
-		// checked; a Z line reached here is an earlier one, which the
-		// specification treats as ordinary content covered by that
-		// checksum. Accept it and carry no state, so no duplicate or
-		// last-card rule is imposed.
-		return nil
+		return parseZCard(args)
 	default:
 		return fmt.Errorf("unknown card '%c'", card)
 	}
@@ -274,6 +268,15 @@ func parseTCard(d *Deck, args string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("T-card too short")
 	}
+	// §4.7.16: the first character of the name token MUST be +, - or *.
+	// Rejecting anything else also keeps the sign a single byte, so the
+	// ordering key assembled from it cannot silently gain a second byte
+	// through UTF-8 expansion.
+	switch TagType(args[0]) {
+	case TagSingleton, TagPropagating, TagCancel:
+	default:
+		return fmt.Errorf("T-card name must begin with '+', '-' or '*', got %q", args[:1])
+	}
 	tc := TagCard{Type: TagType(args[0])}
 	parts := strings.SplitN(args[1:], " ", 3)
 	if len(parts) < 2 {
@@ -295,12 +298,11 @@ func parseTCard(d *Deck, args string) error {
 
 // requireTagAscending enforces the two-level T rule of §4.5.2: ascending by
 // tag name, then by target hash, with equal names requiring a strictly
-// increasing hash. Per §4.7.20 the primary key is the full name token
-// including its leading sign character, which parseTCard splits into
-// TagCard.Type and TagCard.Name.
+// increasing hash. Per §4.7.16 the primary key is the decoded full name
+// token including its leading sign character; tagOrderKey builds it.
 func requireTagAscending(previous, current TagCard) error {
-	previousName := string(previous.Type) + previous.Name
-	currentName := string(current.Type) + current.Name
+	previousName := tagOrderKey(previous)
+	currentName := tagOrderKey(current)
 	switch cmp := Compare(currentName, previousName); {
 	case cmp > 0:
 		return nil

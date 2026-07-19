@@ -149,15 +149,14 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if len(d.T) > 0 {
 		sorted := make([]TagCard, len(d.T))
 		copy(sorted, d.T)
-		// Two-level (name, target hash) per §4.5.2, not a comparison of
-		// the concatenated key: concatenating lets the target's leading
-		// characters compete with the tail of a longer name, which
-		// reorders tags whose names are prefixes of one another into a
-		// run the parser rejects.
+		// Two-level (decoded name, target hash) per §4.5.2 and §4.7.16,
+		// not a comparison of the concatenated key: concatenating lets the
+		// target's leading characters compete with the tail of a longer
+		// name, which reorders tags whose names are prefixes of one
+		// another into a run the parser rejects. tagOrderKey is the same
+		// key the parser's check uses, so the two cannot drift.
 		sort.Slice(sorted, func(i, j int) bool {
-			ni := string(sorted[i].Type) + sorted[i].Name
-			nj := string(sorted[j].Type) + sorted[j].Name
-			if cmp := Compare(ni, nj); cmp != 0 {
+			if cmp := Compare(tagOrderKey(sorted[i]), tagOrderKey(sorted[j])); cmp != 0 {
 				return cmp < 0
 			}
 			return Compare(sorted[i].UUID, sorted[j].UUID) < 0

@@ -61,6 +61,20 @@ func (s *seenCards) claim(card byte) error {
 	return nil
 }
 
+// tagOrderKey returns the primary ordering key for a T card: the full name
+// token including its leading sign character, escape-decoded (§4.7.16).
+// The decode is the same post-decode rule §4.5.2 spells out for F — a
+// name reaches the wire as "sym-my\sbranch" and orders as "sym-my branch",
+// so comparing raw tokens rejects runs canonical fossil accepts.
+//
+// TagCard splits the sign into Type and stores Name in raw wire form, so
+// the key is reassembled here rather than read off a single field. Both
+// the parser's ordering check and the marshaller's sort call this, so
+// neither can drift from the other.
+func tagOrderKey(t TagCard) string {
+	return FossilDecode(string(t.Type) + t.Name)
+}
+
 // requireAscending enforces the single-key strictly-ascending intra-run
 // rule of §4.5.2 for the F, J and M card lists: equal or descending
 // neighbours are rejected. The key is always the parser's decoded form,

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `CloneOpts.ProjectCode` and `CloneOpts.ServerCode` have been
+  removed. Neither was ever wired to anything — `Clone` accepted both fields
+  but never forwarded them to the internal clone path, so setting either had
+  no effect and gave no error. The internal clone options struct has no
+  matching fields at all, so wiring them would mean designing semantics
+  first (is a caller-supplied code a validation assertion or an identity
+  override?) and no caller has asked for that. `CloneResult.ProjectCode` and
+  `CloneResult.ServerCode` are unrelated and unaffected — they continue to
+  report both, populated from the remote via the clone protocol negotiation,
+  which is the only place they meaningfully originate.
 - **Breaking:** `UpdateOpts.Force` has been removed. It was never wired to
   anything — `Checkout.Update` accepted the field but never forwarded it
   to the internal update path, so setting it had no effect and gave no

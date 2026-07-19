@@ -1,6 +1,9 @@
 package content
 
 import (
+	"database/sql"
+	"errors"
+
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/db"
 )
@@ -45,7 +48,11 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 
 		var srcid int64
 		if err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", current).Scan(&srcid); err != nil {
-			return true // not a delta — chain is grounded here
+			// Only "no delta row" means the chain is grounded here. Any other
+			// failure — cancelled context, closed connection, NULL srcid — says
+			// nothing about groundedness, so report unavailable rather than
+			// claiming readable content we could not verify.
+			return errors.Is(err, sql.ErrNoRows)
 		}
 		if srcid == 0 {
 			return true

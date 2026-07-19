@@ -1,10 +1,13 @@
 package content
 
 import (
+	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/blob"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 )
@@ -167,5 +170,46 @@ func TestAvailableByUUID(t *testing.T) {
 
 	if _, ok := AvailableByUUID(d, "00000000000000000000000000000000deadbeef"); ok {
 		t.Fatalf("AvailableByUUID(unknown) = true, want false")
+	}
+}
+
+// deltaQueryFailer delegates every query to the wrapped Querier except the
+// delta-source lookup, which it rewrites into one that genuinely fails. That
+// yields a real non-ErrNoRows error on the exact path IsAvailable uses to
+// decide a chain is grounded.
+type deltaQueryFailer struct {
+	db.Querier
+}
+
+func (f deltaQueryFailer) QueryRow(query string, args ...any) *sql.Row {
+	if strings.Contains(query, "FROM delta") {
+		return f.Querier.QueryRow("SELECT no_such_column FROM no_such_table")
+	}
+	return f.Querier.QueryRow(query, args...)
+}
+
+// A delta-source lookup that fails for any reason other than "no such row"
+// tells us nothing about whether the chain is grounded. Reporting the content
+// available on that basis would resurrect the exact bug this predicate exists
+// to prevent — claiming readable content we never verified — under error
+// conditions, on data arriving over the wire during clone.
+func TestIsAvailable_DeltaLookupErrorFailsClosed(t *testing.T) {
+	d := setupTestDB(t)
+
+	// A perfectly ordinary full-text blob: no delta row, size >= 0. Against
+	// the real DB this is available, which is what makes the injected failure
+	// the only difference between the two assertions below.
+	rid, _, err := blob.Store(d, []byte("grounded full text"))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	if !IsAvailable(d, rid) {
+		t.Fatalf("IsAvailable(full-text rid=%d) = false, want true (test premise broken)", rid)
+	}
+
+	if IsAvailable(deltaQueryFailer{d}, rid) {
+		t.Fatalf("IsAvailable(rid=%d) = true when the delta lookup errored; "+
+			"must fail closed on anything but sql.ErrNoRows", rid)
 	}
 }

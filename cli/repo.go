@@ -41,4 +41,5 @@ type RepoCmd struct {
 	Schema       RepoSchemaCmd       `cmd:"" help:"Synced table schema operations"`
 	User         RepoUserCmd         `cmd:"" help:"User management"`
 	Invite       RepoInviteCmd       `cmd:"" help:"Generate invite token for a user"`
+	Serve        RepoServeCmd        `cmd:"" help:"Serve repository over HTTP for sync/clone"`
 }

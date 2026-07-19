@@ -396,7 +396,7 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 // storeDeltaAgainstPhantomBase), so uuid itself is never re-requested here
 // once stored — only a still-missing base might need another round.
 func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte) error {
-	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload, nil); err != nil {
+	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 

@@ -33,7 +33,7 @@ func findCards[T xfer.Card](msg *xfer.Message) []T {
 func storeTestBlob(t *testing.T, r *repo.Repo, data []byte) string {
 	t.Helper()
 	uuid := hash.SHA1(data)
-	if err := storeReceivedFile(r, uuid, "", data, nil); err != nil {
+	if err := storeReceivedFile(r, uuid, "", data); err != nil {
 		t.Fatalf("storeReceivedFile: %v", err)
 	}
 	return uuid
@@ -1029,7 +1029,7 @@ func TestHandlerPublicFileClearsPrivate(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	// Pre-store as private.
-	storeReceivedFile(r, uuid, "", data, nil)
+	storeReceivedFile(r, uuid, "", data)
 	rid, _ := blob.Exists(r.DB(), uuid)
 	content.MakePrivate(r.DB(), int64(rid))
 	if !content.IsPrivate(r.DB(), int64(rid)) {

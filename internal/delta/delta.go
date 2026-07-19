@@ -3,12 +3,20 @@ package delta
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 var (
 	ErrInvalidDelta = errors.New("delta: invalid format")
 	ErrChecksum     = errors.New("delta: checksum mismatch")
 )
+
+// maxDeltaTargetSize bounds the target length declared in a delta header.
+// It is far larger than any real Fossil artifact — its purpose is to
+// reject an obviously-hostile or malformed claim (wire data, never
+// trusted) before it reaches an allocation or a size column, not to
+// constrain legitimate content.
+const maxDeltaTargetSize = 1 << 32 // 4 GiB
 
 var digits = [128]int{
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -37,7 +45,16 @@ func (r *reader) getInt() (uint64, error) {
 		if c >= 128 || digits[c] < 0 {
 			break
 		}
-		v = v*64 + uint64(digits[c])
+		d := uint64(digits[c])
+		// Reject rather than wrap: v*64+d overflowing uint64 would wrap
+		// silently, and a wrapped value can land anywhere — including
+		// exactly math.MaxUint64, which casts to int64(-1), the phantom
+		// sentinel used throughout blob.size. Wire data gets no benefit
+		// of the doubt here.
+		if v > (math.MaxUint64-d)/64 {
+			return 0, fmt.Errorf("%w: integer overflow at pos %d", ErrInvalidDelta, r.pos)
+		}
+		v = v*64 + d
 		r.pos++
 		started = true
 	}
@@ -74,22 +91,24 @@ func parseTargetLen(r *reader) (uint64, error) {
 	if term != '\n' {
 		return 0, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
 	}
+	if targetLen > maxDeltaTargetSize {
+		return 0, fmt.Errorf("%w: target length %d exceeds maximum %d", ErrInvalidDelta, targetLen, uint64(maxDeltaTargetSize))
+	}
 	return targetLen, nil
 }
 
 // OutputSize returns the reconstructed size of a delta's target, read from
 // the delta header alone. It does not require or touch the source content,
 // so a delta's expanded size is known even when its base is not yet
-// available — mirrors Fossil's delta_output_size (src/delta.c).
-func OutputSize(deltaBytes []byte) (size uint64, err error) {
+// available — mirrors Fossil's delta_output_size (src/delta.c). Returns an
+// error (never panics) on malformed or empty input: deltaBytes is wire
+// data, not a programmer-controlled argument, so a malformed value is an
+// input-validation failure, not an assertion failure.
+func OutputSize(deltaBytes []byte) (uint64, error) {
 	if len(deltaBytes) == 0 {
-		panic("delta.OutputSize: deltaBytes must not be empty")
+		return 0, fmt.Errorf("%w: empty delta", ErrInvalidDelta)
 	}
-	size, err = parseTargetLen(&reader{data: deltaBytes})
-	if err != nil {
-		return 0, err
-	}
-	return size, nil
+	return parseTargetLen(&reader{data: deltaBytes})
 }
 
 // Apply reconstructs target data from source and delta.

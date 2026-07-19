@@ -266,6 +266,69 @@ func TestStoreDeltaRawExistingRealBlobIsNoOp(t *testing.T) {
 	}
 }
 
+// TestStoreDeltaRawOverflowHeaderRejected is the storage-layer counterpart
+// to delta.TestOutputSize_OverflowRejected: the corruption this guards
+// against lives in the DB row, not in a parser's return value, so this
+// asserts against the row directly. A crafted header that overflows the
+// integer parse must not reach the blob table at all -- if it did, and
+// the overflow wrapped to math.MaxUint64 (int64(-1)), the resulting row
+// would report size=-1 despite holding real content: indistinguishable
+// from a genuine phantom, and no phantom-table row to make it
+// re-requestable. Permanent, silent corruption from a crafted header.
+func TestStoreDeltaRawOverflowHeaderRejected(t *testing.T) {
+	d := setupTestDB(t)
+
+	baseUUID := "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	srcRid, err := StorePhantom(d, baseUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom base: %v", err)
+	}
+
+	targetUUID := "0000000000000000000000000000000000000001"
+	overflowHeader := []byte("~~~~~~~~~~~\n;0,")
+
+	if _, err := StoreDeltaRaw(d, targetUUID, overflowHeader, srcRid); err == nil {
+		t.Fatal("StoreDeltaRaw(overflow header) = nil error, want rejection")
+	}
+
+	rid, exists := Exists(d, targetUUID)
+	if !exists {
+		// Never having created a row at all is the correct outcome too.
+		return
+	}
+	var size int64
+	if err := d.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size); err != nil {
+		t.Fatalf("query size: %v", err)
+	}
+	if size < 0 {
+		t.Fatalf("target size = %d, want >= 0 or no row at all -- a rejected store must never "+
+			"leave behind a row whose size collides with the phantom sentinel", size)
+	}
+}
+
+// TestStoreDeltaRawEmptyPayloadReturnsError is a regression test for a
+// remote-triggerable panic: a peer sending a delta file card with
+// zero-length content must produce an error, not crash the process. This
+// asserts the returned error directly rather than relying on a
+// recover()-based probe, so a regression back to a panic fails the test
+// (and the process) instead of being masked by matching on panic text.
+func TestStoreDeltaRawEmptyPayloadReturnsError(t *testing.T) {
+	d := setupTestDB(t)
+
+	baseUUID := "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	srcRid, err := StorePhantom(d, baseUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom base: %v", err)
+	}
+
+	targetUUID := "0000000000000000000000000000000000000002"
+	_, err = StoreDeltaRaw(d, targetUUID, []byte{}, srcRid)
+	if err == nil {
+		t.Fatal("StoreDeltaRaw(empty payload) = nil error, want an error " +
+			"(wire-supplied empty content must not panic)")
+	}
+}
+
 func TestStoreExistingBlobSkipsUnclustered(t *testing.T) {
 	d := setupTestDB(t)
 	content := []byte("idempotent blob test")

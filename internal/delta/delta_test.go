@@ -82,6 +82,35 @@ func TestOutputSize_InvalidDelta(t *testing.T) {
 	}
 }
 
+// TestOutputSize_OverflowRejected is a regression test for wire data that
+// overflows the header's integer parse. Eleven base-64 digits at their
+// maximum value ('~' == 63) accumulate to exactly math.MaxUint64, which
+// casts to int64(-1) -- the same sentinel blob.size uses to mean
+// "phantom". A parser that silently wraps instead of rejecting would hand
+// StoreDeltaRaw a size that, once cast, makes a freshly-written row with
+// real content indistinguishable from a phantom: not re-requestable (no
+// phantom-table row), not readable (every "size != -1" check in the
+// codebase misclassifies it), permanent corruption from twelve bytes.
+//
+// This intentionally does not just assert err != nil: a "fix" that
+// clamped or saturated the value instead of rejecting it would return a
+// non-error result and still be able to produce a negative cast, so the
+// value itself is checked whenever no error is returned.
+func TestOutputSize_OverflowRejected(t *testing.T) {
+	header := []byte("~~~~~~~~~~~\n")
+
+	size, err := OutputSize(header)
+	if err == nil {
+		if int64(size) < 0 {
+			t.Fatalf("OutputSize(overflow header) succeeded with size=%d (int64 %d) -- "+
+				"a negative cast is indistinguishable from the phantom sentinel used by blob.size",
+				size, int64(size))
+		}
+		t.Fatalf("OutputSize(overflow header) = %d, want rejection (wire data must not be trusted "+
+			"to self-report a size this large)", size)
+	}
+}
+
 func TestChecksum(t *testing.T) {
 	data := []byte("hello")
 	c1 := Checksum(data)

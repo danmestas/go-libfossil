@@ -10,6 +10,26 @@ import (
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 )
 
+// TestStoreReceivedFileEmptyDeltaPayloadReturnsError is the end-to-end
+// regression test for the empty-payload panic: storeReceivedFile guarded
+// payload == nil, which an empty non-nil slice sails past, and nothing
+// between wire decode (xfer card Content) and blob.StoreDeltaRaw checked
+// for zero length. A peer sending a delta file card with empty content
+// must not crash the process on either the clone/pull receive path or the
+// server push path — both call storeReceivedFile.
+func TestStoreReceivedFileEmptyDeltaPayloadReturnsError(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	baseUUID := hash.SHA1([]byte("some base content, unrelated to this test"))
+	targetUUID := hash.SHA1([]byte("some target content, unrelated to this test"))
+
+	err := storeReceivedFile(r, targetUUID, baseUUID, []byte{})
+	if err == nil {
+		t.Fatal("storeReceivedFile(empty delta payload) = nil error, want an error " +
+			"(a peer-supplied empty delta must not panic the process)")
+	}
+}
+
 // TestStoreReceivedFileDeltaBeforeBase is the decisive storage-layer test
 // for the delta-before-base fix (see issue #53). It constructs the
 // ordering explicitly, rather than relying on a mock transport's round
@@ -31,7 +51,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	targetUUID := hash.SHA1(target)
 
 	// The delta arrives first. baseUUID has never been seen before.
-	if err := storeReceivedFile(r, targetUUID, baseUUID, deltaBytes, nil); err != nil {
+	if err := storeReceivedFile(r, targetUUID, baseUUID, deltaBytes); err != nil {
 		t.Fatalf("storeReceivedFile(delta before base) = %v, want nil: a delta "+
 			"arriving before its base must not be treated as an error", err)
 	}
@@ -81,7 +101,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	}
 
 	// Now the base arrives as ordinary full content, in a later round.
-	if err := storeReceivedFile(r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -123,10 +143,10 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 
 	// Deliver deepest-first: target's delta references mid, which itself
 	// doesn't exist yet either.
-	if err := storeReceivedFile(r, targetUUID, midUUID, targetDelta, nil); err != nil {
+	if err := storeReceivedFile(r, targetUUID, midUUID, targetDelta); err != nil {
 		t.Fatalf("storeReceivedFile(target delta) = %v, want nil", err)
 	}
-	if err := storeReceivedFile(r, midUUID, baseUUID, midDelta, nil); err != nil {
+	if err := storeReceivedFile(r, midUUID, baseUUID, midDelta); err != nil {
 		t.Fatalf("storeReceivedFile(mid delta) = %v, want nil", err)
 	}
 
@@ -135,7 +155,7 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 
 	// Finally the root arrives.
-	if err := storeReceivedFile(r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -149,5 +169,93 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 	if string(got) != string(target) {
 		t.Fatalf("expanded content = %q, want %q", got, target)
+	}
+}
+
+// TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID is the
+// integrity regression test for issue #53's raw-delta path: a hostile
+// peer can claim any UUID it likes for a delta card, since the base
+// needed to check that claim is exactly the thing the peer controls the
+// timing of. It ships a delta that expands to "evil" while claiming the
+// UUID of "real" (the good content), withholds the base until after the
+// delta is accepted, then delivers the base. Nothing may ever serve
+// "evil" under real's UUID.
+//
+// Four things can make this test pass for the wrong reason; each is
+// guarded explicitly:
+//
+//  1. If delta.Create degenerates to an all-literal encoding instead of a
+//     copy+insert delta, the raw-delta path never runs and this becomes a
+//     no-op test of the full-content path. Guarded by asserting evilDelta
+//     compressed relative to evil.
+//  2. If the base were already present when the delta arrives, the eager
+//     verify-on-receipt path (storeResolvedContent, reached indirectly)
+//     would catch the mismatch immediately, proving nothing about the
+//     raw-delta path. Guarded by asserting the base is absent first.
+//  3. The first store must succeed (delta-before-base is not an error).
+//     Fatal on any error there rather than silently falling through, so a
+//     future change moving rejection earlier gets noticed, not masked.
+//  4. The final check must be on an error from content.Expand, not merely
+//     on the returned bytes differing from "evil" -- a fix that served
+//     different-but-still-wrong bytes would pass a got != evil check.
+//
+// delta.Apply's own trailing checksum (see delta.go) is NOT a defense
+// here: delta.Create computed that checksum over "evil", so Apply's
+// internal consistency check passes even though the content is wrong.
+// Only a hash comparison against the claimed UUID (content.Expand) binds
+// content to name.
+func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	base := []byte("legitimate base content, padded out so a delta is worthwhile")
+	real := append(append([]byte{}, base...), []byte(", GOOD")...)
+	evil := append(append([]byte{}, base...), []byte(", EVIL")...)
+	if len(real) != len(evil) {
+		t.Fatalf("fixture bug: real and evil must be the same length (%d vs %d)", len(real), len(evil))
+	}
+
+	claimedUUID := hash.SHA1(real) // attacker claims the GOOD uuid
+	baseUUID := hash.SHA1(base)
+	evilDelta := delta.Create(base, evil) // but ships a delta expanding to EVIL
+
+	// Guard 1: the delta must actually compress relative to the full evil
+	// content, or this test exercises the wrong code path.
+	if len(evilDelta) >= len(evil) {
+		t.Fatalf("fixture bug: evilDelta (%d bytes) did not compress relative to evil (%d bytes) — "+
+			"delta.Create degenerated to an all-literal encoding, so this test would exercise the "+
+			"full-content path, not the raw-delta path", len(evilDelta), len(evil))
+	}
+
+	// Guard 2: the base must be genuinely absent before the first store.
+	if _, exists := blob.Exists(r.DB(), baseUUID); exists {
+		t.Fatal("fixture bug: base must be absent before the first store, or this test proves " +
+			"nothing about the raw-delta path")
+	}
+
+	// Guard 3: the delta arrives first, base absent, claiming the GOOD uuid.
+	if err := storeReceivedFile(r, claimedUUID, baseUUID, evilDelta); err != nil {
+		t.Fatalf("storeReceivedFile(evil delta, base absent) = %v, want nil: a delta arriving "+
+			"before its base must be stored, not rejected up front — rejection has to happen "+
+			"where the claim can actually be checked", err)
+	}
+
+	// The base is delivered afterward, as ordinary full content.
+	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
+		t.Fatalf("storeReceivedFile(base) = %v", err)
+	}
+
+	rid, available := content.AvailableByUUID(r.DB(), claimedUUID)
+	if !available {
+		t.Fatal("expected the chain to report available once the base arrived — " +
+			"if this changed, the test needs updating, not silently passing")
+	}
+
+	// Guard 4: the assertion is that Expand refuses to serve anything, not
+	// merely that it didn't return "evil" verbatim.
+	got, err := content.Expand(r.DB(), rid)
+	if err == nil {
+		t.Fatalf("content.Expand served %d bytes under uuid=%s, which hashes to a different "+
+			"UUID than claimed — a hostile peer planted content under a name it does not hash to",
+			len(got), claimedUUID)
 	}
 }

@@ -156,17 +156,24 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 // target is not phantomized just because its source might be — mirrors
 // Fossil's content_put_ex (src/content.c:557-620), which stores delta
 // content unconditionally and records REPLACE INTO delta(rid,srcid)
-// whether or not the source is currently available. Availability resolves
-// lazily elsewhere (content.IsAvailable, manifest.Crosslink).
+// whether or not the source is currently available. Availability is a
+// live, transitively-recomputed property (content.IsAvailable), not
+// something this function or any caller needs to update or be notified
+// about; content.Expand verifies the expanded result against its claimed
+// UUID on every read, since nothing here can verify a delta whose source
+// isn't readable yet.
+//
+// deltaBytes is wire data, not a programmer-controlled argument: malformed
+// or empty input (including from a hostile peer) is reported as an error,
+// never a panic. Argument shapes StoreDeltaRaw's own caller controls (q,
+// uuid, srcRid) are still asserted, matching this package's usual
+// nil/invalid-argument convention.
 func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossil.FslID) (rid libfossil.FslID, err error) {
 	if q == nil {
 		panic("blob.StoreDeltaRaw: q must not be nil")
 	}
 	if uuid == "" {
 		panic("blob.StoreDeltaRaw: uuid must not be empty")
-	}
-	if len(deltaBytes) == 0 {
-		panic("blob.StoreDeltaRaw: deltaBytes must not be empty")
 	}
 	if srcRid <= 0 {
 		panic("blob.StoreDeltaRaw: srcRid must be > 0")
@@ -188,6 +195,9 @@ func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossi
 		}
 	}
 
+	// delta.OutputSize rejects empty, malformed, and overflowing/oversized
+	// headers with an error — the boundary for wire-data validation lives
+	// there so this function doesn't duplicate it.
 	targetSize, err := delta.OutputSize(deltaBytes)
 	if err != nil {
 		return 0, fmt.Errorf("blob.StoreDeltaRaw: output size: %w", err)

@@ -33,7 +33,16 @@ func (c *RepoTimelineCmd) Run(g *Globals) error {
 		if len(uuid) > 10 {
 			uuid = uuid[:10]
 		}
-		fmt.Printf("%s  %s  %s  %s\n", uuid, e.Time.Format("2006-01-02 15:04"), e.User, e.Comment)
+		// A check-in with no recorded user (event.user IS NULL) comes back
+		// from the library as "" — LogEntry.User never leaks a nullable type.
+		// Canonical fossil renders that case as "?" on the TTY
+		// (coalesce(euser,user,'?') in timeline_query_for_tty()); match it
+		// here at the presentation boundary rather than in the library.
+		user := e.User
+		if user == "" {
+			user = "?"
+		}
+		fmt.Printf("%s  %s  %s  %s\n", uuid, e.Time.Format("2006-01-02 15:04"), user, e.Comment)
 	}
 	return nil
 }

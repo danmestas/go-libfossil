@@ -1,11 +1,12 @@
 package manifest
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/db"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/repo"
 )
 
@@ -36,7 +37,14 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		if opts.Limit > 0 && len(entries) >= opts.Limit {
 			break
 		}
-		var uuid, user, comment string
+		// event.user and event.comment are nullable in fossil's schema: the
+		// U-card and C-card are optional on a check-in manifest (the only
+		// required cards are "D" and "Z"). A NULL here is valid data, not
+		// malformed input, so scan through sql.NullString and let its zero
+		// value ("") stand in for "no value recorded" — the same substitution
+		// fossil itself makes when reading these columns.
+		var uuid string
+		var user, comment sql.NullString
 		var mtimeScanned any
 		err := r.DB().QueryRow(
 			"SELECT b.uuid, e.user, e.comment, e.mtime FROM blob b JOIN event e ON e.objid=b.rid WHERE b.rid=?",
@@ -67,8 +75,8 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 			rows.Close()
 		}
 		entries = append(entries, LogEntry{
-			RID: current, UUID: uuid, Comment: comment,
-			User: user, Time: libfossil.JulianToTime(mtime), Parents: parents,
+			RID: current, UUID: uuid, Comment: comment.String,
+			User: user.String, Time: libfossil.JulianToTime(mtime), Parents: parents,
 		})
 		var parentRid int64
 		if err := r.DB().QueryRow(

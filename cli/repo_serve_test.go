@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,20 @@ import (
 
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 )
+
+// NOTE: TestRepoServeCmdRun and TestRepoServeCmdCanonicalFossilClone below
+// send a real SIGINT to the test binary's own process (syscall.Kill) to
+// exercise RepoServeCmd's Ctrl-C shutdown path end-to-end, rather than
+// faking it by cancelling an injected context. That is only safe because
+// nothing else in package cli_test is listening for signals or running
+// concurrently with them at the same time: no test in this package calls
+// t.Parallel(), and no other test installs its own signal.Notify or
+// signal.NotifyContext. If a future test in this package adds either, the
+// SIGINT sent here can be delivered to (or race with) that unrelated
+// handler instead, producing flakiness that is hard to diagnose from the
+// failure alone. Keep both invariants true for this package, or convert
+// these tests to inject a cancellable context instead of signaling the
+// process.
 
 // serveTestCLI mirrors the wiring in cmd/libfossil/main.go closely enough to
 // exercise kong flag parsing for RepoServeCmd without depending on the main
@@ -129,6 +144,17 @@ func TestRepoServeCmdCanonicalFossilClone(t *testing.T) {
 	if !testutil.HasFossil() {
 		t.Skip("fossil not in PATH")
 	}
+	bin := testutil.FossilBinary()
+
+	// Log which binary and version actually did the cloning. A skip and a
+	// pass look identical in a non-verbose CI log; this line is the only
+	// evidence in the record that a real canonical fossil process -- not
+	// just this library's own transport -- exercised the served endpoint.
+	if out, err := exec.Command(bin, "version").CombinedOutput(); err == nil {
+		t.Logf("using canonical fossil binary %s: %s", bin, bytes.TrimSpace(out))
+	} else {
+		t.Logf("using canonical fossil binary %s (version check failed: %v)", bin, err)
+	}
 
 	tmp := t.TempDir()
 	repoPath := filepath.Join(tmp, "serve.fossil")
@@ -177,7 +203,6 @@ func TestRepoServeCmdCanonicalFossilClone(t *testing.T) {
 	}
 
 	clonePath := filepath.Join(tmp, "clone.fossil")
-	bin := testutil.FossilBinary()
 	cmd := exec.Command(bin, "clone", "http://"+addr, clonePath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

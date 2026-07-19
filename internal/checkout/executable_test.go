@@ -6,7 +6,10 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/danmestas/libfossil/internal/content"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/manifest"
+	"github.com/danmestas/libfossil/internal/repo"
 )
 
 // TestExecutableBitRoundTrip verifies that a file's owner-execute bit,
@@ -145,4 +148,134 @@ func TestExecutableBitRoundTrip(t *testing.T) {
 			)
 		}
 	}
+}
+
+// TestModeOnlyChangeRestatOnCommit is the decisive regression test for the
+// mode-change-without-content-change bug: chmod +x (or -x) on an
+// already-committed, content-unmodified tracked file, with Add never
+// re-run, must still be reflected in the next commit's F-card.
+//
+// Change scanning's hash comparison never flags this file — its content
+// hash is identical before and after the chmod — so vfile.chnged stays 0
+// and vfile.isexe still holds whatever was captured at the last Add/Commit.
+// Commit-time manifest generation must independently re-stat the on-disk
+// mode for every file it is about to serialize, not trust that cached
+// value, mirroring canonical Fossil's belt-and-braces re-stat in
+// src/checkin.c.
+func TestModeOnlyChangeRestatOnCommit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner-execute bit is never detected on Windows")
+	}
+
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Extract(rid, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	scriptPath := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Manage(ManageOpts{Paths: []string{"script.sh"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	firstRID, _, err := co.Commit(CommitOpts{Message: "add non-exec script", User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFilePerm(t, r, firstRID, "script.sh", "")
+
+	// The decisive case: chmod +x on disk WITHOUT re-running Add.
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	execRID, _, err := co.Commit(CommitOpts{Message: "chmod +x, no re-add", User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFilePerm(t, r, execRID, "script.sh", "x")
+
+	// Reverse: chmod -x, again without re-running Add.
+	if err := os.Chmod(scriptPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonExecRID, _, err := co.Commit(CommitOpts{Message: "chmod -x, no re-add", User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFilePerm(t, r, nonExecRID, "script.sh", "")
+
+	// Combined: a genuine content change AND a mode change land in the
+	// same commit — both must be reflected correctly.
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(scriptPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	combinedRID, _, err := co.Commit(CommitOpts{Message: "content + mode change", User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFilePerm(t, r, combinedRID, "script.sh", "x")
+
+	fileContent, err := content.Expand(r.DB(), fileRIDByName(t, r, combinedRID, "script.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fileContent) != "#!/bin/sh\necho updated\n" {
+		t.Errorf("script.sh content after combined change = %q, want updated content", fileContent)
+	}
+}
+
+// assertFilePerm looks up name in rid's manifest and asserts its Perm field.
+func assertFilePerm(t *testing.T, r *repo.Repo, rid libfossil.FslID, name, want string) {
+	t.Helper()
+	entries, err := manifest.ListFiles(r, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name == name {
+			if e.Perm != want {
+				t.Errorf("%s: Perm = %q, want %q", name, e.Perm, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("%s: not present in manifest for rid %d", name, rid)
+}
+
+// fileRIDByName resolves the blob RID for name within rid's manifest.
+func fileRIDByName(t *testing.T, r *repo.Repo, rid libfossil.FslID, name string) libfossil.FslID {
+	t.Helper()
+	entries, err := manifest.ListFiles(r, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name == name {
+			var fileRID int64
+			if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid = ?", e.UUID).Scan(&fileRID); err != nil {
+				t.Fatal(err)
+			}
+			return libfossil.FslID(fileRID)
+		}
+	}
+	t.Fatalf("%s: not present in manifest for rid %d", name, rid)
+	return 0
 }

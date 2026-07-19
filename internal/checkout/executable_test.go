@@ -242,6 +242,63 @@ func TestModeOnlyChangeRestatOnCommit(t *testing.T) {
 	}
 }
 
+// TestCommitSkipsMissingFileDuringRestat is a regression test for a bug
+// introduced by an earlier version of the mode-change re-stat fix: Stat-ing
+// every tracked file at commit time must not turn "a file went missing from
+// disk without Unmanage" into a hard commit failure. That behavior predates
+// this fix (a file deleted outside of Unmanage has always had its
+// last-committed content silently carried forward on commit) and detecting
+// stale tracking is a deliberate non-goal here — it is a separate feature
+// left to its own issue, not a side effect of a permission fix.
+//
+// Deletes README.md from disk without calling Unmanage, modifies an
+// unrelated tracked file, and commits: the commit must succeed, and
+// README.md's F-card entry must carry its prior permission forward
+// unchanged.
+func TestCommitSkipsMissingFileDuringRestat(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("owner-execute bit is never detected on Windows")
+	}
+
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Extract(rid, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// README.md's permission before it goes missing.
+	assertFilePerm(t, r, rid, "README.md", "")
+
+	// Delete README.md from disk directly — Unmanage is never called, so
+	// vfile still tracks it. Modify an unrelated file so the commit has
+	// something genuine to record.
+	if err := os.Remove(filepath.Join(dir, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	newRID, _, err := co.Commit(CommitOpts{Message: "modify hello.txt, README.md missing", User: "test"})
+	if err != nil {
+		t.Fatalf("Commit must succeed even though an untouched tracked file is missing from disk: %v", err)
+	}
+
+	assertFilePerm(t, r, newRID, "README.md", "")
+}
+
 // assertFilePerm looks up name in rid's manifest and asserts its Perm field.
 func assertFilePerm(t *testing.T, r *repo.Repo, rid libfossil.FslID, name, want string) {
 	t.Helper()

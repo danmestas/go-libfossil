@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/danmestas/libfossil/internal/content"
@@ -274,6 +275,14 @@ func (c *Checkout) buildCommitFiles(
 // selected for this commit are also left untouched. On Windows,
 // os.FileMode never carries an owner-execute bit, so modeIsExecutable
 // always returns false and this is a no-op.
+//
+// A file that has gone missing from disk (deleted outside of Unmanage, or
+// otherwise untracked-but-not-told) is skipped, carrying its existing Perm
+// forward unchanged, exactly as it would have before this function existed.
+// This function's job is fixing missed mode changes, not detecting stale
+// tracking — a commit that never touched the missing file must still
+// succeed. Any other Stat error (permission denied, I/O fault, ...) is a
+// real problem and still fails the commit.
 func (c *Checkout) restatCommitPerms(
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,
@@ -304,6 +313,9 @@ func (c *Checkout) restatCommitPerms(
 		}
 		info, err := c.env.Storage.Stat(fullPath)
 		if err != nil {
+			if os.IsNotExist(err) {
+				continue // missing on disk: carry the existing Perm forward unchanged
+			}
 			return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
 		}
 

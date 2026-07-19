@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `libfossil version` prints a single, stable, machine-parseable build
+  identifier -- module version (or a `-ldflags -X
+  github.com/danmestas/libfossil/cli.buildVersion=...` override for
+  release builds), Go toolchain version, and platform -- and exits 0.
+  Previously `version` was not a recognized command at all and fell
+  through to the unrecognized-argument path. There is no global
+  `--version` flag: `repo extract` already owns `--version` as a
+  command-scoped flag (the source version to extract), and kong's global
+  flags are visible in every subcommand's context, so a root-level
+  `--version` would collide with it.
 - `libfossil repo serve` CLI command wires the already-public
   `Repo.ServeHTTP` xfer HTTP server into the command surface. A repository
   created or cloned with this tool can now be served to a peer -- including

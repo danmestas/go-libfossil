@@ -233,16 +233,8 @@ func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) erro
 		}
 		fileUUID := hash.SHA1(f.Content)
 		fileRid, _ := blob.Exists(tx, fileUUID)
-		var pmid, pid int64
-		if opts.Parent > 0 {
-			pmid = int64(opts.Parent)
-			tx.QueryRow("SELECT fid FROM mlink WHERE mid=? AND fnid=?", opts.Parent, fnid).Scan(&pid)
-		}
-		if _, err := tx.Exec(
-			"INSERT INTO mlink(mid, fid, pmid, pid, fnid) VALUES(?, ?, ?, ?, ?)",
-			manifestRid, fileRid, pmid, pid, fnid,
-		); err != nil {
-			return fmt.Errorf("mlink: %w", err)
+		if err := insertMlinkRow(tx, manifestRid, int64(fileRid), fnid, "", f.Perm, opts.Parent, opts.MergeParents); err != nil {
+			return err
 		}
 	}
 	return nil

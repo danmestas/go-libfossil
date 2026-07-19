@@ -20,6 +20,7 @@ func Parse(data []byte) (*Deck, error) {
 	body := data[:len(data)-35]
 	d := &Deck{}
 	var lastCard byte
+	var seen seenCards
 	reader := bytes.NewReader(body)
 
 	for reader.Len() > 0 {
@@ -29,6 +30,14 @@ func Parse(data []byte) (*Deck, error) {
 		}
 
 		card := line[0]
+
+		// §4.5.1 occurrence classes. The card-type ordering check below
+		// permits equal consecutive letters, so the duplicate guard for
+		// single-occurrence types has to be separate from it. W is
+		// single-occurrence too, so the claim precedes the W branch.
+		if err := seen.claim(card); err != nil {
+			return nil, fmt.Errorf("deck.Parse: %w", err)
+		}
 
 		if card == 'W' {
 			if card < lastCard {
@@ -127,19 +136,24 @@ func parseCard(d *Deck, card byte, args string) error {
 		d.L = FossilDecode(args)
 		return nil
 	case 'M':
-		d.M = append(d.M, strings.TrimSpace(args))
-		return nil
+		return parseMCard(d, args)
 	case 'N':
 		d.N = strings.TrimSpace(args)
 		return nil
 	case 'P':
-		d.P = strings.Fields(args)
+		// Repeatable, and neither sorted nor deduplicated (§4.5.2): P
+		// order is semantic, primary parent first. Appending — not
+		// assigning — is what makes a second P card add parents rather
+		// than replace them (§4.5.1).
+		d.P = append(d.P, strings.Fields(args)...)
 		return nil
 	case 'R':
 		d.R = strings.TrimSpace(args)
 		return nil
 	case 'U':
 		return parseUCard(d, args)
+	case 'Z':
+		return parseZCard(args)
 	default:
 		return fmt.Errorf("unknown card '%c'", card)
 	}
@@ -195,7 +209,27 @@ func parseFCard(d *Deck, args string) error {
 	if len(parts) >= 4 {
 		fc.OldName = FossilDecode(parts[3])
 	}
+	// §4.5.2: strictly ascending by decoded filename. Decoding has already
+	// happened above, so the check sees the post-decode name the merge walk
+	// and baseline binary search of §8.2 will later rely on.
+	if n := len(d.F); n > 0 {
+		if err := requireAscending('F', d.F[n-1].Name, fc.Name); err != nil {
+			return err
+		}
+	}
 	d.F = append(d.F, fc)
+	return nil
+}
+
+func parseMCard(d *Deck, args string) error {
+	hash := strings.TrimSpace(args)
+	// §4.5.2: strictly ascending by hash.
+	if n := len(d.M); n > 0 {
+		if err := requireAscending('M', d.M[n-1], hash); err != nil {
+			return err
+		}
+	}
+	d.M = append(d.M, hash)
 	return nil
 }
 
@@ -204,6 +238,12 @@ func parseJCard(d *Deck, args string) error {
 	jf := TicketField{Name: FossilDecode(parts[0])}
 	if len(parts) == 2 {
 		jf.Value = parts[1]
+	}
+	// §4.5.2: strictly ascending by field name.
+	if n := len(d.J); n > 0 {
+		if err := requireAscending('J', d.J[n-1].Name, jf.Name); err != nil {
+			return err
+		}
 	}
 	d.J = append(d.J, jf)
 	return nil
@@ -228,6 +268,15 @@ func parseTCard(d *Deck, args string) error {
 	if len(args) < 2 {
 		return fmt.Errorf("T-card too short")
 	}
+	// §4.7.16: the first character of the name token MUST be +, - or *.
+	// Rejecting anything else also keeps the sign a single byte, so the
+	// ordering key assembled from it cannot silently gain a second byte
+	// through UTF-8 expansion.
+	switch TagType(args[0]) {
+	case TagSingleton, TagPropagating, TagCancel:
+	default:
+		return fmt.Errorf("T-card name must begin with '+', '-' or '*', got %q", args[:1])
+	}
 	tc := TagCard{Type: TagType(args[0])}
 	parts := strings.SplitN(args[1:], " ", 3)
 	if len(parts) < 2 {
@@ -238,8 +287,34 @@ func parseTCard(d *Deck, args string) error {
 	if len(parts) == 3 {
 		tc.Value = parts[2]
 	}
+	if n := len(d.T); n > 0 {
+		if err := requireTagAscending(d.T[n-1], tc); err != nil {
+			return err
+		}
+	}
 	d.T = append(d.T, tc)
 	return nil
+}
+
+// requireTagAscending enforces the two-level T rule of §4.5.2: ascending by
+// tag name, then by target hash, with equal names requiring a strictly
+// increasing hash. Per §4.7.16 the primary key is the decoded full name
+// token including its leading sign character; tagOrderKey builds it.
+func requireTagAscending(previous, current TagCard) error {
+	previousName := tagOrderKey(previous)
+	currentName := tagOrderKey(current)
+	switch cmp := Compare(currentName, previousName); {
+	case cmp > 0:
+		return nil
+	case cmp < 0:
+		return fmt.Errorf("T-card %q out of order after %q", currentName, previousName)
+	default:
+		if Compare(current.UUID, previous.UUID) > 0 {
+			return nil
+		}
+		return fmt.Errorf("T-card %q target %q out of order after %q",
+			currentName, current.UUID, previous.UUID)
+	}
 }
 
 // parseUCard resolves the U-card's decoded value the same way fossil's

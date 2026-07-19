@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
+	"unicode"
 )
 
 // buildVersion overrides the module version reported by Version, for
@@ -17,6 +19,33 @@ import (
 //
 //	go build -ldflags "-X github.com/danmestas/libfossil/cli.buildVersion=v0.6.3" ./cmd/libfossil
 var buildVersion = ""
+
+// init rejects a malformed buildVersion at program startup, before any
+// command runs -- not just when someone happens to run `version`. A
+// whitespace-containing override is a build-time operator mistake (a
+// broken -ldflags invocation), not a runtime condition: sanitizing it
+// would silently mangle the operator's intent, and falling back to
+// runtime/debug info would report a version that is confidently wrong.
+// Both hide the mistake in the one field whose entire job is to be
+// trustworthy for the benchmark harness that stamps it into every
+// emitted record. Failing the whole binary immediately surfaces the bad
+// build the first time it runs, rather than shipping a corrupted
+// identifier that only breaks downstream when someone parses it.
+func init() {
+	assertValidBuildVersion(buildVersion)
+}
+
+// assertValidBuildVersion panics if v would break Version()'s single-line,
+// four-field contract. Empty is valid -- it means no -ldflags override was
+// supplied and Version falls back to runtime/debug.ReadBuildInfo.
+func assertValidBuildVersion(v string) {
+	if v == "" {
+		return
+	}
+	if strings.ContainsFunc(v, unicode.IsSpace) {
+		panic(fmt.Sprintf("cli: buildVersion (set via -ldflags -X) must not contain whitespace, got %q", v))
+	}
+}
 
 // VersionCmd prints a single-line, stable, machine-parseable build
 // identifier and exits 0.
@@ -51,44 +80,22 @@ func moduleVersion() string {
 
 // versionFromBuildInfo derives a version identifier from the running
 // binary's embedded build info: the module version when the toolchain
-// recorded one, else a short VCS commit, else the literal "(devel)"
-// fallback -- never empty.
+// recorded one, else the literal "(devel)" fallback -- never empty.
 //
-// Main.Version alone is preferred over composing it with vcs.revision:
-// the toolchain already folds VCS state into it whenever that state is
-// known -- a `go install pkg@vX.Y.Z` reports the tag verbatim, and a
-// `go build` inside a version-controlled checkout reports a pseudo-version
-// that already embeds the commit and a dirty-tree marker. Appending
-// vcs.revision on top would duplicate the same commit hash in that second
-// case. The raw commit is only used as a fallback for the one case where
-// Main.Version carries no information at all: VCS stamping disabled
-// (`-buildvcs=false`) but a checkout was still available at build time.
+// Main.Version alone is used verbatim, with no separate vcs.revision
+// composition: empirically (verified against go1.26 with `go build .`
+// inside this repo's own checkout), Main.Version is only ever the
+// uninformative literal "(devel)" in exactly the cases where VCS
+// stamping produced nothing at all -- -buildvcs=false, or no VCS
+// checkout present -- and in both, bi.Settings carries no vcs.revision
+// either. Whenever a VCS revision *is* available, Go has already folded
+// it into Main.Version as a pseudo-version (e.g.
+// "v0.6.4-20260719231612-e972f9ffa769+dirty"), so a fallback loop over
+// vcs.revision would either never fire or double-report the same commit.
 func versionFromBuildInfo() string {
 	bi, ok := debug.ReadBuildInfo()
-	if !ok {
+	if !ok || bi.Main.Version == "" {
 		return "(devel)"
 	}
-
-	if bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-
-	for _, s := range bi.Settings {
-		if s.Key == "vcs.revision" {
-			return shortCommit(s.Value)
-		}
-	}
-
-	return "(devel)"
-}
-
-// shortCommit truncates a VCS revision to a stable display length,
-// matching the convention other Fossil-family tools use for commit
-// prefixes in version output.
-func shortCommit(rev string) string {
-	const shortLen = 12
-	if len(rev) > shortLen {
-		return rev[:shortLen]
-	}
-	return rev
+	return bi.Main.Version
 }

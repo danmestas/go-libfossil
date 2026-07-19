@@ -61,6 +61,44 @@ func TestVersionBuildVersionOverrideWins(t *testing.T) {
 	}
 }
 
+// TestAssertValidBuildVersionRejectsWhitespace is the regression test for
+// the defect where an unsanitized -ldflags override broke Version()'s
+// single-line, four-field contract: a space-containing value produced six
+// fields instead of four, and a newline-containing value broke the
+// single-line guarantee outright. Both must be rejected at the source
+// (buildVersion, checked in init) rather than reaching Version() at all --
+// see the comment on init for why this fails the whole binary rather than
+// sanitizing or falling back.
+func TestAssertValidBuildVersionRejectsWhitespace(t *testing.T) {
+	cases := []struct {
+		name string
+		v    string
+	}{
+		{"space", "v1.0 with spaces"},
+		{"newline", "v1.0\nwith a newline"},
+		{"tab", "v1.0\twith a tab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("assertValidBuildVersion(%q) did not panic, want panic", tc.v)
+				}
+			}()
+			assertValidBuildVersion(tc.v)
+		})
+	}
+}
+
+// TestAssertValidBuildVersionAcceptsCleanValues is the negative-space
+// counterpart: values with no whitespace -- including empty, meaning no
+// override was supplied -- must not panic.
+func TestAssertValidBuildVersionAcceptsCleanValues(t *testing.T) {
+	for _, v := range []string{"", "v0.6.3", "v0.6.3+a1b2c3d4e5f6"} {
+		assertValidBuildVersion(v) // must not panic
+	}
+}
+
 // TestVersionCmdRunPrintsExactlyOneLine verifies the version command's
 // stdout output is exactly Version() plus a trailing newline -- no extra
 // diagnostic output a downstream parser would need to filter.

@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -85,7 +84,7 @@ func rebuildPopulate(r *repo.Repo, d db.Querier, tip libfossil.FslID) error {
 	}
 
 	for _, f := range files {
-		rid, ok := blob.Exists(d, f.UUID)
+		rid, ok := content.AvailableByUUID(d, f.UUID)
 		if !ok {
 			continue // phantom — blob not yet received
 		}

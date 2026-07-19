@@ -5,7 +5,6 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/deck"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -53,7 +52,7 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 	}
 	var files []manifest.File
 	for _, e := range entries {
-		frid, ok := blob.Exists(r.DB(), e.UUID)
+		frid, ok := content.AvailableByUUID(r.DB(), e.UUID)
 		if !ok {
 			return 0, "", fmt.Errorf("branch.Create: file blob %s not found", e.UUID)
 		}

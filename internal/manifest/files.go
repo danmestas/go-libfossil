@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/deck"
 	"github.com/danmestas/libfossil/internal/repo"
@@ -25,7 +24,7 @@ func ListFiles(r *repo.Repo, rid libfossil.FslID) ([]FileEntry, error) {
 	if d.B == "" {
 		return fCardsToEntries(d.F), nil
 	}
-	baseRid, ok := blob.Exists(r.DB(), d.B)
+	baseRid, ok := content.AvailableByUUID(r.DB(), d.B)
 	if !ok {
 		return nil, fmt.Errorf("manifest.ListFiles: baseline %s not found", d.B)
 	}
@@ -88,7 +87,7 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 		if _, ok := suppliedNames[pf.Name]; ok {
 			continue
 		}
-		baseRid, ok := blob.Exists(r.DB(), pf.UUID)
+		baseRid, ok := content.AvailableByUUID(r.DB(), pf.UUID)
 		if !ok {
 			return nil, fmt.Errorf("manifest.MergeParentFiles: blob %s for %s not found", pf.UUID, pf.Name)
 		}

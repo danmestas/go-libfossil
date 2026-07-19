@@ -5,7 +5,6 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/tag"
@@ -118,7 +117,7 @@ func (c *RepoBranchNewCmd) Run(g *Globals) error {
 	db := r.Inner().DB()
 	files := make([]libfossil.FileToCommit, 0, len(entries))
 	for _, e := range entries {
-		fileRid, ok := blob.Exists(db, e.UUID)
+		fileRid, ok := content.AvailableByUUID(db, e.UUID)
 		if !ok {
 			return fmt.Errorf("blob %s not found for %s", e.UUID, e.Name)
 		}

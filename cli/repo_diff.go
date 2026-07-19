@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
@@ -51,7 +50,7 @@ func (c *RepoDiffCmd) Run(g *Globals) error {
 			return err
 		}
 
-		fileRid, ok := blob.Exists(db, f.UUID)
+		fileRid, ok := content.AvailableByUUID(db, f.UUID)
 		if !ok {
 			return fmt.Errorf("blob %s not found for %s", f.UUID, f.Name)
 		}

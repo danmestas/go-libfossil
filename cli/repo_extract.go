@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 )
 
@@ -62,7 +61,7 @@ func (c *RepoExtractCmd) Run(g *Globals) error {
 	}
 
 	for _, f := range files {
-		fileRid, ok := blob.Exists(db, f.UUID)
+		fileRid, ok := content.AvailableByUUID(db, f.UUID)
 		if !ok {
 			return fmt.Errorf("blob %s not found for %s", f.UUID, f.Name)
 		}

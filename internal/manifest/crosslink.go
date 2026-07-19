@@ -208,7 +208,7 @@ func missingCheckinRefs(r *repo.Repo, d *deck.Deck) []string {
 			return
 		}
 		seen[uuid] = struct{}{}
-		if !blobPresent(r, uuid) {
+		if _, ok := content.AvailableByUUID(r.DB(), uuid); !ok {
 			missing = append(missing, uuid)
 		}
 	}
@@ -217,25 +217,6 @@ func missingCheckinRefs(r *repo.Repo, d *deck.Deck) []string {
 		check(f.UUID) // skipped if "" (deleted file in delta manifest)
 	}
 	return missing
-}
-
-// blobPresent reports whether the named UUID corresponds to a non-phantom
-// blob locally. blob.Exists returns true for phantoms (size = -1), which
-// content.Expand rejects, so we filter those out — a phantom blob row is
-// not "present" for crosslink purposes.
-func blobPresent(r *repo.Repo, uuid string) bool {
-	if r == nil {
-		panic("manifest.blobPresent: r must not be nil")
-	}
-	if uuid == "" {
-		panic("manifest.blobPresent: uuid must not be empty")
-	}
-	var size int64
-	err := r.DB().QueryRow("SELECT size FROM blob WHERE uuid=?", uuid).Scan(&size)
-	if err != nil {
-		return false
-	}
-	return size >= 0
 }
 
 func crosslinkCheckin(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {

@@ -7,7 +7,6 @@ import (
 
 	libfossil "github.com/danmestas/libfossil"
 	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/merge"
@@ -170,7 +169,7 @@ func loadBlobByUUID(d *db.DB, uuid string) []byte {
 	if uuid == "" {
 		return nil
 	}
-	rid, ok := blob.Exists(d, uuid)
+	rid, ok := content.AvailableByUUID(d, uuid)
 	if !ok {
 		return nil
 	}

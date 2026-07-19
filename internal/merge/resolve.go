@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
@@ -42,7 +41,7 @@ func LoadResolver(r *repo.Repo, tipRid libfossil.FslID) *Resolver {
 		if err == nil {
 			for _, f := range files {
 				if f.Name == ".libfossil-merge" {
-					rid, ok := blob.Exists(r.DB(), f.UUID)
+					rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
 					if ok {
 						data, err := content.Expand(r.DB(), rid)
 						if err == nil {

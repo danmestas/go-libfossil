@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 )
 
@@ -82,7 +81,7 @@ func (c *RepoStatusCmd) Run(g *Globals) error {
 		diskHash := hex.EncodeToString(h[:])
 
 		if diskHash != uuid {
-			fileRid, ok := blob.Exists(db, uuid)
+			fileRid, ok := content.AvailableByUUID(db, uuid)
 			if ok {
 				blobData, err := content.Expand(db, fileRid)
 				if err == nil {

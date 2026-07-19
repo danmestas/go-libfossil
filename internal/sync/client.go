@@ -359,7 +359,7 @@ func (s *session) buildFileCards() ([]xfer.Card, error) {
 
 // loadFileCard loads a blob by UUID and returns a FileCard plus its payload size.
 func (s *session) loadFileCard(uuid string) (*xfer.FileCard, int, error) {
-	rid, ok := blob.Exists(s.repo.DB(), uuid)
+	rid, ok := content.AvailableByUUID(s.repo.DB(), uuid)
 	if !ok {
 		return nil, 0, fmt.Errorf("blob %s not found", uuid)
 	}
@@ -688,7 +688,7 @@ func resolveFileContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, cac
 	if deltaSrc == "" {
 		return payload, nil
 	}
-	srcRid, ok := blob.Exists(r.DB(), deltaSrc)
+	srcRid, ok := content.AvailableByUUID(r.DB(), deltaSrc)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrDeltaSourceMissing, deltaSrc)
 	}

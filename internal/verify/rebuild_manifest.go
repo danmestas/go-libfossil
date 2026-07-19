@@ -176,7 +176,7 @@ func buildParentFileMap(tx *db.Tx, d *deck.Deck) map[string]string {
 	if len(d.P) == 0 {
 		return nil // initial checkin — no parent
 	}
-	parentRID, ok := blob.Exists(tx, d.P[0]) // primary parent
+	parentRID, ok := content.AvailableByUUID(tx, d.P[0]) // primary parent
 	if !ok {
 		return nil
 	}

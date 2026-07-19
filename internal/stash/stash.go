@@ -13,7 +13,6 @@ import (
 	"strconv"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/delta"
@@ -335,7 +334,7 @@ func Apply(ckout *sql.DB, repoDB *sql.DB, dir string, stashID int64) error {
 			if !hashStr.Valid {
 				return fmt.Errorf("stash.Apply: missing baseline hash for %s", newname)
 			}
-			rid, ok := blob.Exists(repoDB, hashStr.String)
+			rid, ok := content.AvailableByUUID(repoDB, hashStr.String)
 			if !ok {
 				return fmt.Errorf("stash.Apply: baseline blob %s not found", hashStr.String)
 			}

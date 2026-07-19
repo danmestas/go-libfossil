@@ -23,17 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LogEntry` gains a `Kind` field (`EventKind`) identifying which of
   `event.type`'s six kinds (`ci`, `e`, `f`, `g`, `t`, `w`) an entry is.
   `Parents` is only populated for `Kind == EventKindCheckin`.
-- `Repo.Timeline` orders by `(mtime DESC, rid DESC)`, a total order with
-  rid as a true tie-break at exact mtime equality — a deliberate
-  improvement over canonical fossil's bare `mtime DESC` with no tie-break,
-  which can repeat or skip rows at a page boundary. Pagination uses a new
-  opaque `Cursor` type: take one from a returned `LogEntry.Cursor` and pass
-  it back as `TimelineOpts.After` to resume immediately after that entry.
-  `Cursor`'s representation is intentionally hidden — it can only be
-  obtained from a `LogEntry`, never built from a timestamp and a rid by
-  hand, because a hand-built cursor derived from a rounded `time.Time` is
-  not guaranteed to match its row exactly, which is what reintroduces
-  skipped or duplicated rows at a page boundary in the first place.
+- **Breaking:** `Repo.Timeline` orders by `(mtime DESC, rid DESC)`, a total
+  order with rid as a true tie-break at exact mtime equality — a
+  deliberate improvement over canonical fossil's bare `mtime DESC` with no
+  tie-break, which can repeat or skip rows at a page boundary. Pagination
+  uses a new opaque `Cursor` type: take one from a returned
+  `LogEntry.Cursor` and pass it back as `TimelineOpts.After` to resume
+  immediately after that entry. **`TimelineOpts.Before time.Time` and
+  `TimelineOpts.After FslID` are deleted, not deprecated** — callers
+  constructing either field will fail to compile. `Cursor`'s
+  representation is intentionally hidden — it can only be obtained from a
+  `LogEntry`, never built from a timestamp and a rid by hand, because a
+  hand-built cursor derived from a rounded `time.Time` is not guaranteed
+  to match its row exactly, which is what reintroduces skipped or
+  duplicated rows at a page boundary in the first place.
 
 ## [0.1.0] - 2026-04-20
 

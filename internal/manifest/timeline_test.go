@@ -237,6 +237,17 @@ func TestTimelinePagination(t *testing.T) {
 			t.Fatalf("event %s seen %d times across %d pages, want exactly 1", uuid, seen[uuid], maxPages)
 		}
 	}
+
+	// The defining symptom of a broken cursor is non-termination: every row
+	// enumerated correctly, but the cursor never signals exhaustion. One
+	// more call past the last real page must come back empty.
+	final, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
+	if err != nil {
+		t.Fatalf("final page: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("pagination did not terminate: page after the last expected page returned %d entries, want 0: %v", len(final), final)
+	}
 }
 
 // TestTimelinePaginationSubMillisecondBoundary is the regression test for
@@ -297,6 +308,17 @@ func TestTimelinePaginationSubMillisecondBoundary(t *testing.T) {
 		if seen[uuid] != 1 {
 			t.Fatalf("event %s seen %d times across %d pages (bound=ceil(%d/%d)), want exactly 1", uuid, seen[uuid], maxPages, n, pageSize)
 		}
+	}
+
+	// Non-termination is the actual user-facing failure mode: every row
+	// enumerated correctly but the cursor never signals exhaustion. Assert
+	// the page past the last expected one comes back empty.
+	final, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
+	if err != nil {
+		t.Fatalf("final page: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("pagination did not terminate: page after the last expected page returned %d entries, want 0: %v", len(final), final)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"time"
@@ -84,14 +85,20 @@ func buildFileMaps(currentFiles, targetFiles, ancestorFiles []manifest.FileEntry
 }
 
 // processFileUpdates iterates over all file names and applies update/merge
-// logic for each one. Returns stats for the observer.
+// logic for each one. Returns the paths actually written, removed, and
+// conflicted — not merely counts — so the caller can report exactly which
+// files a consumer needs to inspect.
+//
+// Bounded: the loop and the three returned slices are each bounded by
+// len(maps.allNames), the union of the current and target manifests for
+// this update — finite for any real checkin.
 func (c *Checkout) processFileUpdates(
 	ctx context.Context,
 	maps updateFileMaps,
 	strategy merge.Strategy,
 	opts UpdateOpts,
 	checkinTime time.Time,
-) (filesWritten, filesRemoved, conflicts int, err error) {
+) (filesWritten, filesRemoved, conflicted []string, err error) {
 	for name := range maps.allNames {
 		curUUID, inCurrent := maps.current[name]
 		tgtUUID, inTarget := maps.target[name]
@@ -102,7 +109,7 @@ func (c *Checkout) processFileUpdates(
 			inCurrent, inTarget, strategy, opts.DryRun,
 		)
 		if ferr != nil {
-			return filesWritten, filesRemoved, conflicts, fmt.Errorf("checkout.Update: %w", ferr)
+			return filesWritten, filesRemoved, conflicted, fmt.Errorf("checkout.Update: %w", ferr)
 		}
 
 		if change == UpdateNone {
@@ -119,28 +126,28 @@ func (c *Checkout) processFileUpdates(
 
 		switch change {
 		case UpdateAdded, UpdateUpdated, UpdateMerged:
-			filesWritten++
+			filesWritten = append(filesWritten, name)
 		case UpdateConflictMerged:
-			filesWritten++
-			conflicts++
+			filesWritten = append(filesWritten, name)
+			conflicted = append(conflicted, name)
 			c.obs.Error(ctx, fmt.Errorf(
 				"checkout.Update: merge conflict in %s", name,
 			))
 		case UpdateRemoved:
-			filesRemoved++
+			filesRemoved = append(filesRemoved, name)
 		}
 
 		c.obs.ExtractFileCompleted(ctx, name, change)
 
 		if opts.Callback != nil {
 			if cerr := opts.Callback(name, change); cerr != nil {
-				return filesWritten, filesRemoved, conflicts, fmt.Errorf(
+				return filesWritten, filesRemoved, conflicted, fmt.Errorf(
 					"checkout.Update: callback for %s: %w", name, cerr,
 				)
 			}
 		}
 	}
-	return filesWritten, filesRemoved, conflicts, nil
+	return filesWritten, filesRemoved, conflicted, nil
 }
 
 // buildUpdateMaps gathers file lists for current, target, and their common
@@ -177,10 +184,17 @@ func (c *Checkout) buildUpdateMaps(currentRID, target libfossil.FslID) (updateFi
 // needed to preserve local modifications.
 //
 // If opts.TargetRID is 0, CalcUpdateVersion is used to find the target.
-// If the target equals the current version, Update returns nil (nothing to do).
+// If the target equals the current version, Update returns a zero-value
+// UpdateResult and a nil error (nothing to do).
+//
+// A non-nil error means the update genuinely failed; the returned
+// UpdateResult's contents are not meaningful in that case (see UpdateResult
+// for the outcome mapping). Update never returns a non-nil error together
+// with a non-empty UpdateResult.Conflicted — a conflicted merge is a
+// success, not a failure.
 //
 // Panics if c is nil (TigerStyle precondition).
-func (c *Checkout) Update(opts UpdateOpts) error {
+func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	if c == nil {
 		panic("checkout.Update: nil *Checkout")
 	}
@@ -191,20 +205,20 @@ func (c *Checkout) Update(opts UpdateOpts) error {
 		var err error
 		target, err = c.CalcUpdateVersion()
 		if err != nil {
-			return fmt.Errorf("checkout.Update: %w", err)
+			return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
 		}
 		if target == 0 {
-			return nil // nothing to update
+			return UpdateResult{}, nil // nothing to update
 		}
 	}
 
 	// Get current version
 	currentRID, _, err := c.Version()
 	if err != nil {
-		return fmt.Errorf("checkout.Update: %w", err)
+		return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
 	}
 	if currentRID == target {
-		return nil // already at target
+		return UpdateResult{}, nil // already at target
 	}
 
 	// Start observer
@@ -213,16 +227,16 @@ func (c *Checkout) Update(opts UpdateOpts) error {
 		TargetRID: target,
 	})
 
-	var filesWritten, filesRemoved, conflicts int
+	var filesWritten, filesRemoved, conflicted []string
 	var updateErr error
 
 	defer func() {
 		c.obs.ExtractCompleted(ctx, ExtractEnd{
 			Operation:    "update",
 			TargetRID:    target,
-			FilesWritten: filesWritten,
-			FilesRemoved: filesRemoved,
-			Conflicts:    conflicts,
+			FilesWritten: len(filesWritten),
+			FilesRemoved: len(filesRemoved),
+			Conflicts:    len(conflicted),
 			Err:          updateErr,
 		})
 	}()
@@ -231,13 +245,13 @@ func (c *Checkout) Update(opts UpdateOpts) error {
 	maps, err := c.buildUpdateMaps(currentRID, target)
 	if err != nil {
 		updateErr = err
-		return updateErr
+		return UpdateResult{}, updateErr
 	}
 
 	strategy, ok := merge.StrategyByName("three-way")
 	if !ok {
 		updateErr = fmt.Errorf("checkout.Update: three-way merge strategy not registered")
-		return updateErr
+		return UpdateResult{}, updateErr
 	}
 
 	// Look up checkin timestamp for SetMTime.
@@ -253,14 +267,30 @@ func (c *Checkout) Update(opts UpdateOpts) error {
 	}
 
 	// Process each file
-	filesWritten, filesRemoved, conflicts, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
+	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
 	if updateErr != nil {
-		return updateErr
+		return UpdateResult{}, updateErr
 	}
 
 	// Finalize: reload vfile and update vvar
-	updateErr = c.finalizeUpdate(target)
-	return updateErr
+	if updateErr = c.finalizeUpdate(target); updateErr != nil {
+		return UpdateResult{}, updateErr
+	}
+
+	// maps.allNames is a map, so processFileUpdates' iteration order (and
+	// hence the order these slices were built in) is randomized by the Go
+	// runtime. Sort so the result is deterministic: golden-file and
+	// reflect.DeepEqual assertions against these paths are only meaningful
+	// if the same input produces the same order every run.
+	sort.Strings(filesWritten)
+	sort.Strings(filesRemoved)
+	sort.Strings(conflicted)
+
+	return UpdateResult{
+		FilesWritten: filesWritten,
+		FilesRemoved: filesRemoved,
+		Conflicted:   conflicted,
+	}, nil
 }
 
 // finalizeUpdate reloads vfile for the target version, looks up its UUID,

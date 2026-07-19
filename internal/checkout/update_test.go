@@ -2,7 +2,10 @@ package checkout
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -151,7 +154,7 @@ func TestUpdateLinear(t *testing.T) {
 		name   string
 		change UpdateChange
 	}
-	err = co.Update(UpdateOpts{
+	result, err := co.Update(UpdateOpts{
 		TargetRID: rid2,
 		Callback: func(name string, change UpdateChange) error {
 			changes = append(changes, struct {
@@ -163,6 +166,18 @@ func TestUpdateLinear(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal("Update:", err)
+	}
+
+	// A clean update must report no conflicted paths, and must report the
+	// paths it actually touched — not merely how many.
+	if len(result.Conflicted) != 0 {
+		t.Fatalf("expected no conflicts, got %v", result.Conflicted)
+	}
+	if !containsPath(result.FilesWritten, "hello.txt") {
+		t.Fatalf("expected FilesWritten to contain hello.txt, got %v", result.FilesWritten)
+	}
+	if !containsPath(result.FilesWritten, "new.txt") {
+		t.Fatalf("expected FilesWritten to contain new.txt, got %v", result.FilesWritten)
 	}
 
 	// Verify hello.txt was updated
@@ -237,9 +252,12 @@ func TestUpdateNoChanges(t *testing.T) {
 	defer co.Close()
 
 	// Checkout is already at tip — Update should be a no-op
-	err = co.Update(UpdateOpts{})
+	result, err := co.Update(UpdateOpts{})
 	if err != nil {
 		t.Fatal("Update at tip should succeed:", err)
+	}
+	if len(result.Conflicted) != 0 || len(result.FilesWritten) != 0 || len(result.FilesRemoved) != 0 {
+		t.Fatalf("expected empty result for no-op update, got %+v", result)
 	}
 }
 
@@ -301,7 +319,7 @@ func TestUpdateObserver(t *testing.T) {
 	}
 	co.obs = obs
 
-	if err := co.Update(UpdateOpts{TargetRID: rid2}); err != nil {
+	if _, err := co.Update(UpdateOpts{TargetRID: rid2}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -350,7 +368,7 @@ func TestUpdateDryRun(t *testing.T) {
 
 	// DryRun update — should NOT modify files on disk
 	var callbackCount int
-	err = co.Update(UpdateOpts{
+	_, err = co.Update(UpdateOpts{
 		TargetRID: rid2,
 		DryRun:    true,
 		Callback: func(name string, change UpdateChange) error {
@@ -456,8 +474,12 @@ func TestUpdateWithFileRemoval(t *testing.T) {
 	}
 
 	// Update to rid2.
-	if err := co.Update(UpdateOpts{TargetRID: rid2}); err != nil {
+	result, err := co.Update(UpdateOpts{TargetRID: rid2})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !containsPath(result.FilesRemoved, "remove.txt") {
+		t.Fatalf("expected FilesRemoved to contain remove.txt, got %v", result.FilesRemoved)
 	}
 
 	// remove.txt should be deleted from Storage.
@@ -507,7 +529,7 @@ func TestUpdateSetMTime(t *testing.T) {
 	}
 
 	// Update to rid2 with SetMTime.
-	if err := co.Update(UpdateOpts{TargetRID: rid2, SetMTime: true}); err != nil {
+	if _, err := co.Update(UpdateOpts{TargetRID: rid2, SetMTime: true}); err != nil {
 		t.Fatal("update:", err)
 	}
 
@@ -561,7 +583,7 @@ func TestUpdateSetMTimeFalse(t *testing.T) {
 	co.Extract(rid1, ExtractOpts{})
 
 	// Update WITHOUT SetMTime.
-	if err := co.Update(UpdateOpts{TargetRID: rid2, SetMTime: false}); err != nil {
+	if _, err := co.Update(UpdateOpts{TargetRID: rid2, SetMTime: false}); err != nil {
 		t.Fatal("update:", err)
 	}
 
@@ -577,4 +599,270 @@ func TestUpdateSetMTimeFalse(t *testing.T) {
 // itoa is a helper to avoid importing strconv in tests.
 func itoa(n int64) string {
 	return strconv.FormatInt(n, 10)
+}
+
+// containsPath reports whether paths contains name.
+func containsPath(paths []string, name string) bool {
+	for _, p := range paths {
+		if p == name {
+			return true
+		}
+	}
+	return false
+}
+
+// TestUpdateResultPathsAreSorted builds an update touching four files whose
+// names are deliberately not in the order the underlying map would build
+// them (allNames is a map[string]bool; Go randomizes iteration over it).
+// Two files conflict (alpha.txt, zeta.txt) and two are clean additions
+// (new_a.txt, new_z.txt). Every returned slice must come back sorted
+// regardless of iteration order, so a caller can use reflect.DeepEqual or a
+// golden file against the result instead of getting an intermittently
+// ordered list.
+func TestUpdateResultPathsAreSorted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/test.fossil"
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	ridBase, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("original\n")},
+			{Name: "alpha.txt", Content: []byte("original\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "base",
+		User:    "test",
+		Parent:  0,
+		Time:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ridA, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("local version\n")},
+			{Name: "alpha.txt", Content: []byte("local version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "branch A",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Branch B: conflicting edits to zeta.txt/alpha.txt, plus two brand-new
+	// files that will be clean UpdateAdded entries in FilesWritten.
+	ridB, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("remote version\n")},
+			{Name: "alpha.txt", Content: []byte("remote version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+			{Name: "new_z.txt", Content: []byte("new\n")},
+			{Name: "new_a.txt", Content: []byte("new\n")},
+		},
+		Comment: "branch B",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ckDir := t.TempDir()
+	co, err := Create(r, ckDir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	if err := setVVar(co.db, "checkout", itoa(int64(ridA))); err != nil {
+		t.Fatal(err)
+	}
+	var uuidA string
+	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", ridA).Scan(&uuidA); err != nil {
+		t.Fatal(err)
+	}
+	if err := setVVar(co.db, "checkout-hash", uuidA); err != nil {
+		t.Fatal(err)
+	}
+
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(ridA, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := co.Update(UpdateOpts{TargetRID: ridB})
+	if err != nil {
+		t.Fatalf("Update with conflicts should still succeed (err==nil): %v", err)
+	}
+
+	wantConflicted := []string{"alpha.txt", "zeta.txt"}
+	if !reflect.DeepEqual(result.Conflicted, wantConflicted) {
+		t.Fatalf("Conflicted = %v, want sorted %v", result.Conflicted, wantConflicted)
+	}
+
+	wantWritten := []string{"alpha.txt", "new_a.txt", "new_z.txt", "zeta.txt"}
+	if !reflect.DeepEqual(result.FilesWritten, wantWritten) {
+		t.Fatalf("FilesWritten = %v, want sorted %v", result.FilesWritten, wantWritten)
+	}
+
+	if !sort.StringsAreSorted(result.FilesWritten) {
+		t.Fatalf("FilesWritten not sorted: %v", result.FilesWritten)
+	}
+	if !sort.StringsAreSorted(result.Conflicted) {
+		t.Fatalf("Conflicted not sorted: %v", result.Conflicted)
+	}
+}
+
+// TestUpdateConflictSurfacesPaths builds a genuine fork — two checkins with
+// the same parent, both editing the same line of the same file — and updates
+// across it. The three-way merge cannot resolve the overlapping edit cleanly,
+// so it writes conflict markers into conflict.txt. The update must still
+// report err == nil (this is a successful update — the working tree is
+// usable, just not clean) and must list conflict.txt in Conflicted.
+func TestUpdateConflictSurfacesPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/test.fossil"
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	// Ancestor: base content both sides will diverge from.
+	ridBase, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "conflict.txt", Content: []byte("original\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "base",
+		User:    "test",
+		Parent:  0,
+		Time:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Leaf A ("current"): edits conflict.txt one way.
+	ridA, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "conflict.txt", Content: []byte("local version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "branch A",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Leaf B ("target"): edits conflict.txt a different, incompatible way.
+	ridB, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "conflict.txt", Content: []byte("remote version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "branch B",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ckDir := t.TempDir()
+	co, err := Create(r, ckDir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	// Point the checkout at leaf A.
+	if err := setVVar(co.db, "checkout", itoa(int64(ridA))); err != nil {
+		t.Fatal(err)
+	}
+	var uuidA string
+	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", ridA).Scan(&uuidA); err != nil {
+		t.Fatal(err)
+	}
+	if err := setVVar(co.db, "checkout-hash", uuidA); err != nil {
+		t.Fatal(err)
+	}
+
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(ridA, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update from leaf A to leaf B — this must 3-way merge conflict.txt
+	// against the common ancestor (ridBase) and fail to merge cleanly.
+	result, err := co.Update(UpdateOpts{TargetRID: ridB})
+	if err != nil {
+		t.Fatalf("Update with conflict should still succeed (err==nil): %v", err)
+	}
+
+	if len(result.Conflicted) != 1 || result.Conflicted[0] != "conflict.txt" {
+		t.Fatalf("expected Conflicted=[conflict.txt], got %v", result.Conflicted)
+	}
+	if !containsPath(result.FilesWritten, "conflict.txt") {
+		t.Fatalf("expected FilesWritten to contain conflict.txt, got %v", result.FilesWritten)
+	}
+
+	// The conflicted file must actually contain conflict markers on disk —
+	// that's the entire point of the Conflicted field.
+	data, err := mem.ReadFile("/checkout/conflict.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "<<<<<<<") {
+		t.Fatalf("expected conflict markers in conflict.txt, got %q", data)
+	}
+}
+
+// TestUpdateFailureIsDistinguishableFromConflict confirms a genuine failure
+// (target checkin does not exist) returns a non-nil error, distinct from the
+// conflicted-but-successful case above.
+func TestUpdateFailureIsDistinguishableFromConflict(t *testing.T) {
+	r, rid1, _, cleanup := newTestRepoWithTwoCheckins(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	if err := setVVar(co.db, "checkout", itoa(int64(rid1))); err != nil {
+		t.Fatal(err)
+	}
+	var uuid1 string
+	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", rid1).Scan(&uuid1); err != nil {
+		t.Fatal(err)
+	}
+	if err := setVVar(co.db, "checkout-hash", uuid1); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = co.Update(UpdateOpts{TargetRID: 999999})
+	if err == nil {
+		t.Fatal("expected error for nonexistent target RID, got nil")
+	}
 }

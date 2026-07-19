@@ -113,7 +113,7 @@ type handler struct {
 	pushOK        bool // client sent a valid push card
 	pullOK        bool // client sent a valid pull card
 	cloneMode     bool // client sent a clone card
-	cloneSeq      int  // clone_seqno cursor from client
+	cloneSeq      int  // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int  // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent bool // true after sending UV catalog
 	reqClusters   bool // client sent pragma req-clusters
@@ -324,13 +324,19 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	case *xfer.CloneCard:
 		if auth.CanClone(h.caps) {
 			h.cloneMode = true
+			// The pagination cursor rides on the clone card and nowhere else
+			// (canonical xfer.c:1553 reads token 2 of `clone VERSION SEQNO`).
+			// A clone card without a sequence number means "start from the
+			// beginning", which is rid 1.
+			h.cloneSeq = c.SeqNo
+			if h.cloneSeq <= 0 {
+				h.cloneSeq = 1
+			}
 		} else {
 			h.resp = append(h.resp, &xfer.ErrorCard{
 				Message: "clone denied: insufficient capabilities",
 			})
 		}
-	case *xfer.CloneSeqNoCard:
-		h.cloneSeq = c.SeqNo
 	case *xfer.CookieCard:
 		// Clone clients echo the cap cookie on every round. Sync sessions also
 		// use cookies opaquely; non-matching values leave cloneSnapMax at zero.
@@ -643,8 +649,8 @@ func (h *handler) sendAllClusters() error {
 
 func (h *handler) emitCloneBatch() error {
 	// Capture the snapshot bound on the first round of a clone session.
-	// Without this, the open-ended "rid > cursor" query keeps picking up
-	// blobs that other writers commit between rounds, the completion sentinel
+	// Without an upper bound the batch query keeps picking up blobs that other
+	// writers commit between rounds, the completion sentinel
 	// CloneSeqNoCard{SeqNo:0} never fires, and the client loops to MaxRounds
 	// (issue #17). The bound rides back to the client via CookieCard and
 	// gets echoed on every subsequent round.
@@ -664,8 +670,13 @@ func (h *handler) emitCloneBatch() error {
 	}
 	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
 
+	// cloneSeq is the rid of the next blob to send and is inclusive, matching
+	// canonical's `while( seqno<=max )` loop in page_xfer().
+	if h.cloneSeq <= 0 {
+		panic("sync.handler.emitCloneBatch: cloneSeq must be positive")
+	}
 	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid FROM blob WHERE rid > ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		"SELECT rid, uuid FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -675,7 +686,9 @@ func (h *handler) emitCloneBatch() error {
 
 	count := 0
 	var lastSentRID int
-	more := false
+	// nextRID is the cursor reported back to the client: the rid of the first
+	// blob this batch did not send, or 0 once the snapshot is exhausted.
+	nextRID := 0
 	for rows.Next() {
 		var rid int
 		var uuid string
@@ -689,7 +702,7 @@ func (h *handler) emitCloneBatch() error {
 		}
 
 		if count >= batchSize {
-			more = true
+			nextRID = rid
 			break
 		}
 
@@ -715,16 +728,14 @@ func (h *handler) emitCloneBatch() error {
 				h.resp = append(h.resp[:i], h.resp[i+1:]...)
 				h.filesSent--
 				count--
-				more = true
+				// The dropped card held lastSentRID, so that rid becomes the
+				// next one owed to the client rather than being skipped.
+				nextRID = lastSentRID
 				break
 			}
 		}
 	}
-	if more {
-		h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: lastSentRID})
-	} else {
-		// All blobs sent — signal completion so the client stops requesting.
-		h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: 0})
-	}
+	// SeqNo 0 signals completion so the client stops requesting.
+	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: nextRID})
 	return nil
 }

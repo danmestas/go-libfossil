@@ -296,9 +296,10 @@ func TestHandleClonePagination(t *testing.T) {
 	}
 
 	// Page 2
+	// The client echoes the server's cursor back on the clone card itself;
+	// clone_seqno is server-to-client only (issue #74).
 	req2 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.CloneCard{Version: 1},
-		&xfer.CloneSeqNoCard{SeqNo: seqnos[0].SeqNo},
+		&xfer.CloneCard{Version: 1, SeqNo: seqnos[0].SeqNo},
 	}}
 	resp2, err := HandleSync(context.Background(), r, req2)
 	if err != nil {
@@ -494,8 +495,7 @@ func TestHandleCloneSeqNo(t *testing.T) {
 
 	// Now clone with seqno past all blobs — should get nothing
 	req2 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.CloneCard{Version: 1},
-		&xfer.CloneSeqNoCard{SeqNo: 9999},
+		&xfer.CloneCard{Version: 1, SeqNo: 9999},
 	}}
 	resp2, err := HandleSync(context.Background(), r, req2)
 	if err != nil {

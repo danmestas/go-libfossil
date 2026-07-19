@@ -677,13 +677,11 @@ func TestCloneAgainstWritingHub(t *testing.T) {
 }
 
 // TestCloneMultiRoundCursor independently exercises the rid-cursor advance
-// across multiple clone rounds. Pre-fix the libfossil clone client only
-// emitted CloneCard (which signals clone mode) and never CloneSeqNoCard
-// (which carries the actual pagination cursor server-side, per the
-// pagination protocol exercised by TestHandleClonePagination). The bug was
-// masked by every existing clone-client test fitting in one batch
-// (DefaultCloneBatchSize=200); smallBatch=1 forces multi-round and would
-// otherwise loop on the same rid prefix until MaxRounds.
+// across multiple clone rounds against our own handler. The cursor travels
+// on the clone card in both directions of the round trip: the client sends
+// `clone VERSION SEQNO` and the server answers with clone_seqno. Every other
+// clone-client test fits in one batch (DefaultCloneBatchSize=200), so
+// smallBatch=1 is what forces the pagination path to run at all.
 func TestCloneMultiRoundCursor(t *testing.T) {
 	dir := t.TempDir()
 
@@ -807,5 +805,179 @@ func TestCloneSnapshotBoundExcludesPostSnapshotWrites(t *testing.T) {
 	}
 	if found != 0 {
 		t.Errorf("clone received post-snapshot blob (uuid %s); snapshot bound not enforced", postSnapUUID)
+	}
+}
+
+// canonicalCloneServer is a minimal stand-in for a real `fossil server`,
+// implementing the clone half of canonical xfer.c faithfully enough to
+// catch protocol-direction errors:
+//
+//   - The request cursor arrives ONLY on the `clone VERSION SEQNO` card,
+//     where SEQNO is the rid of the next blob to send (1-based, inclusive) —
+//     xfer.c:1553.
+//   - `clone_seqno` is server-to-client only. Canonical's page_xfer() has no
+//     parser for it, so a client that sends one lands in the unknown-card
+//     branch and gets `bad command`. We reproduce that rejection exactly,
+//     because it is the observed failure against fossil 2.28 (issue #74).
+//   - The response carries `clone_seqno N` where N is the next unsent rid,
+//     or 0 once everything has been sent — xfer.c:1570.
+type canonicalCloneServer struct {
+	t         *testing.T
+	blobs     [][]byte // index i holds rid i+1
+	batchSize int
+
+	rounds       int
+	cloneSeqnoRx int // count of clone_seqno cards illegally received from the client
+	cursorsSeen  []int
+}
+
+func (s *canonicalCloneServer) Exchange(_ context.Context, req *xfer.Message) (*xfer.Message, error) {
+	s.rounds++
+
+	resp := []xfer.Card{&xfer.PushCard{
+		ServerCode:  "canonical-server-code",
+		ProjectCode: "canonical-project-code",
+	}}
+
+	cursor := 0
+	for _, card := range req.Cards {
+		switch c := card.(type) {
+		case *xfer.CloneSeqNoCard:
+			s.cloneSeqnoRx++
+			return &xfer.Message{Cards: []xfer.Card{
+				&xfer.ErrorCard{Message: fmt.Sprintf("bad command: clone_seqno %d", c.SeqNo)},
+			}}, nil
+		case *xfer.CloneCard:
+			cursor = c.SeqNo
+		}
+	}
+
+	if cursor == 0 {
+		// No clone card: the client has finished sequential delivery.
+		return &xfer.Message{Cards: resp}, nil
+	}
+	s.cursorsSeen = append(s.cursorsSeen, cursor)
+	if cursor < 0 {
+		s.t.Fatalf("client sent negative clone cursor %d", cursor)
+	}
+
+	sent := 0
+	rid := cursor
+	for ; rid <= len(s.blobs) && sent < s.batchSize; rid++ {
+		payload := s.blobs[rid-1]
+		resp = append(resp, &xfer.FileCard{UUID: hash.SHA1(payload), Content: payload})
+		sent++
+	}
+	next := rid
+	if next > len(s.blobs) {
+		next = 0
+	}
+	resp = append(resp, &xfer.CloneSeqNoCard{SeqNo: next})
+	return &xfer.Message{Cards: resp}, nil
+}
+
+// TestCloneMultiBatchAgainstCanonicalServer pins the direction of the
+// clone_seqno card (issue #74). The client must carry its pagination cursor
+// on the `clone` card and never transmit a clone_seqno card, because a real
+// fossil server rejects that card outright. Single-batch clones never reach
+// this path, which is why small repositories cloned while fossil (67,578
+// artifacts) and sqlite (131,020) failed on round two.
+func TestCloneMultiBatchAgainstCanonicalServer(t *testing.T) {
+	const blobCount = 7
+	const batchSize = 2
+
+	blobs := make([][]byte, blobCount)
+	for i := range blobs {
+		blobs[i] = []byte(fmt.Sprintf("canonical clone payload %d", i))
+	}
+
+	server := &canonicalCloneServer{t: t, blobs: blobs, batchSize: batchSize}
+
+	clonePath := filepath.Join(t.TempDir(), "clone.fossil")
+	cloneRepo, result, err := sync.Clone(context.Background(), clonePath, server, sync.CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	defer cloneRepo.Close()
+
+	if server.cloneSeqnoRx != 0 {
+		t.Errorf("client transmitted %d clone_seqno card(s); the card is server-to-client only", server.cloneSeqnoRx)
+	}
+
+	// The cursor must be the next rid to send: 1, 3, 5, 7 at batchSize=2.
+	want := []int{1, 3, 5, 7}
+	if len(server.cursorsSeen) != len(want) {
+		t.Fatalf("clone cursors = %v, want %v", server.cursorsSeen, want)
+	}
+	for i, c := range want {
+		if server.cursorsSeen[i] != c {
+			t.Fatalf("clone cursors = %v, want %v", server.cursorsSeen, want)
+		}
+	}
+
+	if result.BlobsRecvd != blobCount {
+		t.Errorf("BlobsRecvd = %d, want %d", result.BlobsRecvd, blobCount)
+	}
+	for i, payload := range blobs {
+		var n int
+		if err := cloneRepo.DB().QueryRow(
+			"SELECT COUNT(*) FROM blob WHERE uuid = ? AND size >= 0", hash.SHA1(payload),
+		).Scan(&n); err != nil {
+			t.Fatalf("query blob %d: %v", i, err)
+		}
+		if n != 1 {
+			t.Errorf("blob %d (rid %d) missing from clone", i, i+1)
+		}
+	}
+}
+
+// TestHandleCloneCursorFromCloneCard pins the server half: our handler must
+// read the pagination cursor from the `clone` card alone, since canonical
+// clients never send a clone_seqno card. The cursor is the next rid to send,
+// inclusive, so `clone 3 N` must re-send rid N.
+func TestHandleCloneCursorFromCloneCard(t *testing.T) {
+	dir := t.TempDir()
+	srcRepo, err := repo.Create(filepath.Join(dir, "source.fossil"), "testuser", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	defer srcRepo.Close()
+
+	for i := 0; i < 5; i++ {
+		if _, _, err := blob.Store(srcRepo.DB(), []byte(fmt.Sprintf("cursor payload %d", i))); err != nil {
+			t.Fatalf("blob.Store: %v", err)
+		}
+	}
+
+	bug := siteAlways("handler.emitCloneBatch.smallBatch")
+
+	resp, err := sync.HandleSyncWithOpts(context.Background(), srcRepo,
+		&xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 3}}},
+		sync.HandleOpts{Buggify: bug})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	var uuid3 string
+	if err := srcRepo.DB().QueryRow("SELECT uuid FROM blob WHERE rid = 3").Scan(&uuid3); err != nil {
+		t.Fatalf("lookup rid 3: %v", err)
+	}
+
+	var gotUUIDs []string
+	var gotSeqNo int
+	for _, card := range resp.Cards {
+		switch c := card.(type) {
+		case *xfer.FileCard:
+			gotUUIDs = append(gotUUIDs, c.UUID)
+		case *xfer.CloneSeqNoCard:
+			gotSeqNo = c.SeqNo
+		}
+	}
+
+	if len(gotUUIDs) != 1 || gotUUIDs[0] != uuid3 {
+		t.Errorf("sent uuids = %v, want [%s] (cursor is inclusive: clone 3 3 must send rid 3)", gotUUIDs, uuid3)
+	}
+	if gotSeqNo != 4 {
+		t.Errorf("clone_seqno = %d, want 4 (next unsent rid)", gotSeqNo)
 	}
 }

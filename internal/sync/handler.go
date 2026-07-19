@@ -113,6 +113,7 @@ type handler struct {
 	pushOK        bool // client sent a valid push card
 	pullOK        bool // client sent a valid pull card
 	cloneMode     bool // client sent a clone card
+	fatal         bool // a card rule ended the request; resp holds only its error
 	cloneSeq      int  // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int  // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent bool // true after sending UV catalog
@@ -182,6 +183,9 @@ func (h *handler) process(_ context.Context, req *xfer.Message) (*xfer.Message, 
 			continue // Already processed.
 		}
 		h.handleControlCard(card)
+		if h.fatal {
+			return &xfer.Message{Cards: h.resp}, nil
+		}
 	}
 
 	// Emit PushCard with project-code/server-code so the clone client can
@@ -322,21 +326,37 @@ func (h *handler) handleControlCard(card xfer.Card) {
 			})
 		}
 	case *xfer.CloneCard:
-		if auth.CanClone(h.caps) {
-			h.cloneMode = true
-			// The pagination cursor rides on the clone card and nowhere else
-			// (canonical xfer.c:1553 reads token 2 of `clone VERSION SEQNO`).
-			// A clone card without a sequence number means "start from the
-			// beginning", which is rid 1.
-			h.cloneSeq = c.SeqNo
-			if h.cloneSeq <= 0 {
-				h.cloneSeq = 1
-			}
-		} else {
+		if !auth.CanClone(h.caps) {
 			h.resp = append(h.resp, &xfer.ErrorCard{
 				Message: "clone denied: insufficient capabilities",
 			})
+			return
 		}
+		// §8.1: an otherwise authorized three-token clone with VERSION >= 2
+		// and a digit-only SEQNO of zero or less clears accumulated output,
+		// rolls back, emits this error, and parses no later request card.
+		// Nothing is written before processDataCards, so discarding the
+		// response and returning early is what the rollback amounts to here.
+		if c.HasSeqNo && c.Version >= 2 && c.SeqNo <= 0 {
+			h.resp = []xfer.Card{&xfer.ErrorCard{Message: "invalid clone sequence number"}}
+			h.fatal = true
+			return
+		}
+		h.cloneMode = true
+		// The pagination cursor rides on the clone card and nowhere else
+		// (§8.1; canonical xfer.c:1553 reads token 2 of `clone VERSION
+		// SEQNO`). A request carrying no usable cursor — a bare `clone`, or
+		// a SEQNO that fails digit-only recognition — starts from the first
+		// rid. §8.1 withholds the fatal above from both of those cases.
+		h.cloneSeq = c.SeqNo
+		if h.cloneSeq <= 0 {
+			h.cloneSeq = 1
+		}
+	case *xfer.CloneSeqNoCard:
+		// Deliberately ignored. clone_seqno is a reply-only card, so no
+		// conforming client sends one; canonical answers `bad command`. We
+		// stay tolerant rather than strict, which is why the model server in
+		// TestCloneMultiBatchAgainstCanonicalServer rejects it and we do not.
 	case *xfer.CookieCard:
 		// Clone clients echo the cap cookie on every round. Sync sessions also
 		// use cookies opaquely; non-matching values leave cloneSnapMax at zero.
@@ -671,9 +691,14 @@ func (h *handler) emitCloneBatch() error {
 	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
 
 	// cloneSeq is the rid of the next blob to send and is inclusive, matching
-	// canonical's `while( seqno<=max )` loop in page_xfer().
-	if h.cloneSeq <= 0 {
-		panic("sync.handler.emitCloneBatch: cloneSeq must be positive")
+	// §8.2's "iterate from supplied RID through current maximum" and
+	// canonical's `while( seqno<=max )` loop in page_xfer(). handleControlCard
+	// is the sole writer and floors it at 1, but that is enforced far from
+	// here with nothing compile-time behind it, so this stays a check rather
+	// than an assumption.
+	cursorAtEntry := h.cloneSeq
+	if cursorAtEntry <= 0 {
+		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
 	rows, err := h.repo.DB().Query(
 		"SELECT rid, uuid FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
@@ -722,6 +747,11 @@ func (h *handler) emitCloneBatch() error {
 		return err
 	}
 	// BUGGIFY: truncate — remove last file card to simulate incomplete batch.
+	// `count > 1` is a liveness constraint, not just a chaos-injection guard.
+	// Dropping the only card in a batch would set nextRID to lastSentRID,
+	// which equals the cursor we entered with, and the client would re-request
+	// the same batch until MaxRounds. Under the old exclusive `rid > cursor`
+	// semantics `count > 0` was safe here; it no longer is.
 	if truncate && count > 1 {
 		for i := len(h.resp) - 1; i >= 0; i-- {
 			if _, ok := h.resp[i].(*xfer.FileCard); ok {
@@ -734,6 +764,13 @@ func (h *handler) emitCloneBatch() error {
 				break
 			}
 		}
+	}
+	// The cursor must strictly advance or signal exhaustion. Catching a stall
+	// here names the round that caused it; letting it through only surfaces
+	// later as an opaque MaxRounds failure on the client.
+	if nextRID != 0 && nextRID <= cursorAtEntry {
+		return fmt.Errorf(
+			"handler: clone cursor did not advance: next %d, cursor %d", nextRID, cursorAtEntry)
 	}
 	// SeqNo 0 signals completion so the client stops requesting.
 	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: nextRID})

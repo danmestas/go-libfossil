@@ -106,11 +106,14 @@ type CookieCard struct {
 
 func (c *CookieCard) Type() CardType { return CardCookie }
 
-// CloneCard represents a "clone" card. Version and SeqNo may be zero
-// for legacy clone requests.
+// CloneCard represents a "clone" card. Version and SeqNo are zero for a
+// bare "clone" request. HasSeqNo distinguishes that case from an explicit
+// "clone VERSION 0", which the spec makes a fatal request (§8.1); the
+// parsed value alone cannot tell them apart.
 type CloneCard struct {
-	Version int
-	SeqNo   int
+	Version  int
+	SeqNo    int
+	HasSeqNo bool
 }
 
 func (c *CloneCard) Type() CardType { return CardClone }

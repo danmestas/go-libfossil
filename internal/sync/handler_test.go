@@ -480,7 +480,10 @@ func TestHandleLoginAndPragma(t *testing.T) {
 	}
 }
 
-func TestHandleCloneSeqNo(t *testing.T) {
+// TestHandleCloneCursorPastEnd checks that a cursor beyond the last rid
+// yields no files. It no longer sends a clone_seqno card — the cursor rides
+// on the clone card — so the old name no longer described it.
+func TestHandleCloneCursorPastEnd(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	// Store blobs, then clone with a seqno that skips them
 	for i := range 3 {
@@ -1536,4 +1539,135 @@ func TestHandlerIGotFiltersPrivateEmit(t *testing.T) {
 	if !found {
 		t.Errorf("server should emit private igot for %s — client doesn't have it", uuid2)
 	}
+}
+
+// TestHandleCloneZeroSeqNoIsFatal pins §8.1: an otherwise authorized clone
+// request with exactly three tokens, VERSION >= 2, and a digit-only SEQNO of
+// zero or less clears accumulated output, emits `invalid clone sequence
+// number`, and parses no later request card. Before the presence flag existed
+// the server could not see this case at all — `clone` and `clone 3 0` both
+// decoded to SeqNo 0 — and it silently clamped the cursor to 1 instead.
+func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	for i := range 3 {
+		storeTestBlob(t, r, []byte(fmt.Sprintf("fatal seqno %d", i)))
+	}
+
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+		&xfer.CloneCard{Version: 3, SeqNo: 0, HasSeqNo: true},
+		&xfer.ReqConfigCard{Name: "project-code"}, // must not be parsed
+	}})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "invalid clone sequence number" {
+		t.Fatalf("error cards = %v, want exactly [invalid clone sequence number]", errs)
+	}
+	// Accumulated output is cleared: nothing but the error survives.
+	if len(resp.Cards) != 1 {
+		t.Errorf("resp has %d cards, want 1 (output must be cleared)", len(resp.Cards))
+	}
+	if n := len(findCards[*xfer.FileCard](resp)); n != 0 {
+		t.Errorf("sent %d file cards on a fatal clone request, want 0", n)
+	}
+	if n := len(findCards[*xfer.ConfigCard](resp)); n != 0 {
+		t.Errorf("later reqconfig card was parsed; §8.1 forbids it")
+	}
+}
+
+// TestHandleCloneNonFatalSeqNoForms pins the cases §8.1 explicitly withholds
+// the fatal from: wrong arity, a VERSION below 2, and a SEQNO that fails
+// digit-only recognition. Each must clone normally from the first rid.
+func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
+	tests := []struct {
+		name string
+		card *xfer.CloneCard
+	}{
+		{"bare clone", &xfer.CloneCard{}},
+		{"version below 2", &xfer.CloneCard{Version: 1, SeqNo: 0, HasSeqNo: true}},
+		{"non-digit seqno", &xfer.CloneCard{Version: 3, SeqNo: -1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := setupSyncTestRepo(t)
+			storeTestBlob(t, r, []byte("non-fatal clone form "+tt.name))
+
+			resp, err := HandleSync(context.Background(), r, &xfer.Message{
+				Cards: []xfer.Card{tt.card},
+			})
+			if err != nil {
+				t.Fatalf("HandleSync: %v", err)
+			}
+			for _, e := range findCards[*xfer.ErrorCard](resp) {
+				if e.Message == "invalid clone sequence number" {
+					t.Fatalf("§8.1 fatal applied to a case it excludes")
+				}
+			}
+			if n := len(findCards[*xfer.FileCard](resp)); n == 0 {
+				t.Errorf("no files sent; request should clone from the first rid")
+			}
+		})
+	}
+}
+
+// alwaysAtSites is a BuggifyChecker that fires for any of several named sites.
+type alwaysAtSites []string
+
+func (s alwaysAtSites) Check(site string, _ float64) bool {
+	for _, want := range s {
+		if want == site {
+			return true
+		}
+	}
+	return false
+}
+
+// TestEmitCloneBatchCursorAlwaysAdvances pins the liveness invariant behind
+// emitCloneBatch's `count > 1` truncate guard. The cursor is inclusive now
+// (`rid >= cursor`), so dropping the only card in a batch would report
+// nextRID == lastSentRID == the cursor we entered with, and the client would
+// re-request the same batch until MaxRounds. Under the old exclusive
+// semantics `count > 0` was safe, which is why this is a constraint rather
+// than a chaos-injection detail.
+//
+// smallBatch forces batchSize 1 so every batch is the count == 1 case, and
+// truncate is forced alongside it so the guard is the only thing preventing
+// a non-advancing cursor. Each round must strictly advance or report 0.
+func TestEmitCloneBatchCursorAlwaysAdvances(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	for i := range 5 {
+		storeTestBlob(t, r, []byte(fmt.Sprintf("advance %d", i)))
+	}
+
+	bug := alwaysAtSites{
+		"handler.emitCloneBatch.smallBatch",
+		"clone.emitCloneBatch.truncate",
+	}
+
+	cursor := 1
+	for round := 0; round < 50; round++ {
+		resp, err := HandleSyncWithOpts(context.Background(), r, &xfer.Message{
+			Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: cursor, HasSeqNo: true}},
+		}, HandleOpts{Buggify: bug})
+		if err != nil {
+			t.Fatalf("round %d (cursor %d): %v", round, cursor, err)
+		}
+
+		seqnos := findCards[*xfer.CloneSeqNoCard](resp)
+		if len(seqnos) != 1 {
+			t.Fatalf("round %d: got %d clone_seqno cards, want 1", round, len(seqnos))
+		}
+		next := seqnos[0].SeqNo
+		if next == 0 {
+			return // Exhausted, as expected.
+		}
+		if next <= cursor {
+			t.Fatalf("round %d: cursor did not advance (%d -> %d); clone would stall to MaxRounds",
+				round, cursor, next)
+		}
+		cursor = next
+	}
+	t.Fatalf("cursor never reached exhaustion in 50 rounds (last %d)", cursor)
 }

@@ -231,8 +231,9 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		// server's unknown-card branch as `bad command: clone_seqno N`
 		// (issue #74).
 		cards = append(cards, &xfer.CloneCard{
-			Version: version,
-			SeqNo:   cs.seqno,
+			Version:  version,
+			SeqNo:    cs.seqno,
+			HasSeqNo: true,
 		})
 	} else {
 		// Pull mode for phantom resolution after sequential delivery completes.
@@ -370,11 +371,10 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 			if c.SeqNo == 0 && cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropSeqNo", 0.05) {
 				continue
 			}
-			// The server owns this cursor; the client only reads it.
-			// Canonical treats a negative value as fatal (xfer.c:2769).
-			if c.SeqNo < 0 {
-				return false, fmt.Errorf("sync.Clone: invalid clone_seqno %d", c.SeqNo)
-			}
+			// The server owns this cursor; the client only reads it. A
+			// non-decimal NEXT never reaches here — the decoder withholds it
+			// per §8.2 so the recorded sequence stays unchanged — and §8.2
+			// bars the client from validating that a positive value advances.
 			cs.seqno = c.SeqNo
 
 		case *xfer.ErrorCard:

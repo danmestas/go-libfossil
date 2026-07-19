@@ -1,6 +1,7 @@
 package sync_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -979,5 +980,69 @@ func TestHandleCloneCursorFromCloneCard(t *testing.T) {
 	}
 	if gotSeqNo != 4 {
 		t.Errorf("clone_seqno = %d, want 4 (next unsent rid)", gotSeqNo)
+	}
+}
+
+// TestCloneToleratesNonDecimalCloneSeqNo pins §8.2's receiver-tolerance
+// exception across the real wire path: a visible but non-decimal NEXT leaves
+// the recorded sequence unchanged and does not stop parsing later reply
+// cards, so the clone continues rather than aborting.
+//
+// The reply is built as bytes and run through the decoder, because the rule
+// lives in the decoder — constructing a CloneSeqNoCard directly would test a
+// state the decoder can no longer produce.
+func TestCloneToleratesNonDecimalCloneSeqNo(t *testing.T) {
+	payload := []byte("tolerated non-decimal next")
+	uuid := hash.SHA1(payload)
+
+	wire := func(t *testing.T, cards []xfer.Card, trailer string) *xfer.Message {
+		t.Helper()
+		var buf bytes.Buffer
+		for _, c := range cards {
+			if err := xfer.EncodeCard(&buf, c); err != nil {
+				t.Fatalf("EncodeCard: %v", err)
+			}
+		}
+		buf.WriteString(trailer)
+		msg, err := xfer.DecodeUncompressed(buf.Bytes())
+		if err != nil {
+			t.Fatalf("DecodeUncompressed: %v", err)
+		}
+		return msg
+	}
+
+	var sawCursor []int
+	transport := &sync.MockTransport{
+		Handler: func(req *xfer.Message) *xfer.Message {
+			for _, c := range req.Cards {
+				if cc, ok := c.(*xfer.CloneCard); ok {
+					sawCursor = append(sawCursor, cc.SeqNo)
+				}
+			}
+			push := &xfer.PushCard{ServerCode: "s", ProjectCode: "p"}
+			if len(sawCursor) == 1 {
+				// Round 0: one blob, then a NEXT that must be ignored.
+				return wire(t, []xfer.Card{
+					push,
+					&xfer.FileCard{UUID: uuid, Content: payload},
+				}, "clone_seqno -1\n")
+			}
+			return wire(t, []xfer.Card{push, &xfer.CloneSeqNoCard{SeqNo: 0}}, "")
+		},
+	}
+
+	clonePath := filepath.Join(t.TempDir(), "clone.fossil")
+	cloneRepo, result, err := sync.Clone(context.Background(), clonePath, transport, sync.CloneOpts{})
+	if err != nil {
+		t.Fatalf("clone aborted on a non-decimal clone_seqno; §8.2 requires tolerance: %v", err)
+	}
+	defer cloneRepo.Close()
+
+	// The recorded sequence was left unchanged, so the next request reused it.
+	if len(sawCursor) < 2 || sawCursor[1] != sawCursor[0] {
+		t.Errorf("clone cursors = %v, want the round-0 cursor repeated (sequence unchanged)", sawCursor)
+	}
+	if result.BlobsRecvd != 1 {
+		t.Errorf("BlobsRecvd = %d, want 1 (cards after the bad NEXT must still parse)", result.BlobsRecvd)
 	}
 }

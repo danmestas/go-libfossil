@@ -227,6 +227,22 @@ func parsePrivate(args []string) (Card, error) {
 	return &PrivateCard{}, nil
 }
 
+// isDecimal reports whether s matches the spec's `decimal = 1*DIGIT`
+// production (Appendix B). Tokens such as "-1" parse as integers but are
+// not decimal, and several card rules turn on that distinction rather than
+// on the parsed value.
+func isDecimal(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func parseClone(args []string) (Card, error) {
 	if len(args) != 0 && len(args) != 2 {
 		return nil, fmt.Errorf("xfer: clone requires 0 or 2 args, got %d", len(args))
@@ -243,6 +259,10 @@ func parseClone(args []string) (Card, error) {
 		}
 		c.Version = v
 		c.SeqNo = s
+		// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds
+		// it from one that fails digit-only recognition, so record whether
+		// this token qualifies rather than only what it parsed to.
+		c.HasSeqNo = isDecimal(args[1])
 	}
 	return c, nil
 }
@@ -250,6 +270,14 @@ func parseClone(args []string) (Card, error) {
 func parseCloneSeqNo(args []string) (Card, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("xfer: clone_seqno requires 1 arg, got %d", len(args))
+	}
+	if !isDecimal(args[0]) {
+		// §3.2 records NEXT only when it is decimal, and §8.2 makes a visible
+		// but non-decimal NEXT a receiver-tolerance exception that leaves the
+		// recorded sequence unchanged without stopping later reply cards.
+		// Surfacing it as an unknown card keeps the token while denying it any
+		// effect on the cursor — a CloneSeqNoCard here would be recorded.
+		return &UnknownCard{Command: "clone_seqno", Args: args}, nil
 	}
 	s, err := strconv.Atoi(args[0])
 	if err != nil {

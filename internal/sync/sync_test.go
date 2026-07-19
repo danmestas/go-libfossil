@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/danmestas/libfossil/internal/blob"
+	"github.com/danmestas/libfossil/internal/content"
+	"github.com/danmestas/libfossil/internal/delta"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/simio"
@@ -303,6 +305,49 @@ func TestProcessResponseStoresFileCard(t *testing.T) {
 	}
 	if s.result.FilesRecvd != 1 {
 		t.Fatalf("FilesRecvd = %d, want 1", s.result.FilesRecvd)
+	}
+}
+
+// TestProcessResponseDeltaBeforeBaseDoesNotError is the sync-pull acceptance
+// test for issue #57 (folded into #53): a delta arriving before its base is
+// normal transfer steady state, not a fault. processResponse must succeed
+// and (via storeReceivedFile's loadDBPhantoms call) discover the newly
+// phantomized base so it gets gimme'd on a later round, rather than
+// failing the pull outright.
+func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+
+	base := []byte("pull delta-before-base test, content long enough to compress well")
+	target := []byte("pull delta-before-base test, content long enough to compress well, v2")
+	deltaBytes := delta.Create(base, target)
+	baseUUID := hash.SHA1(base)
+	targetUUID := hash.SHA1(target)
+
+	resp := &xfer.Message{Cards: []xfer.Card{
+		&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
+	}}
+	if _, err := s.processResponse(resp); err != nil {
+		t.Fatalf("processResponse(delta before base) = %v, want nil", err)
+	}
+
+	targetRid, ok := blob.Exists(r.DB(), targetUUID)
+	if !ok {
+		t.Fatal("target blob missing after processResponse")
+	}
+	var size int64
+	r.DB().QueryRow("SELECT size FROM blob WHERE rid=?", targetRid).Scan(&size)
+	if size < 0 {
+		t.Fatalf("target size = %d, want >= 0 (must not be phantomized)", size)
+	}
+	if _, available := content.AvailableByUUID(r.DB(), targetUUID); available {
+		t.Fatal("target reported available before its base ever arrived")
+	}
+
+	// loadDBPhantoms (already called unconditionally from handleFileCard)
+	// must have discovered the newly phantomized base and queued it for a
+	// gimme card on a later round.
+	if !s.phantoms[baseUUID] {
+		t.Fatal("base UUID not queued for re-request after being phantomized")
 	}
 }
 

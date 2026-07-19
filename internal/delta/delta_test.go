@@ -57,6 +57,31 @@ func TestApply_InvalidDelta(t *testing.T) {
 	}
 }
 
+// TestOutputSize verifies that OutputSize reads the target length straight
+// out of a delta's header, without touching the source it was created
+// against — this is what lets a receiver learn how large a delta will
+// expand to before the base is available to apply it.
+func TestOutputSize(t *testing.T) {
+	source := []byte("original content here")
+	target := []byte("original content modified further")
+	d := Create(source, target)
+
+	got, err := OutputSize(d)
+	if err != nil {
+		t.Fatalf("OutputSize: %v", err)
+	}
+	if got != uint64(len(target)) {
+		t.Fatalf("OutputSize = %d, want %d", got, len(target))
+	}
+}
+
+func TestOutputSize_InvalidDelta(t *testing.T) {
+	_, err := OutputSize([]byte("not a delta"))
+	if err == nil {
+		t.Fatal("expected error for malformed delta header")
+	}
+}
+
 func TestChecksum(t *testing.T) {
 	data := []byte("hello")
 	c1 := Checksum(data)

@@ -21,9 +21,14 @@ import (
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
-// ErrDeltaSourceMissing is returned by storeReceivedFile when the delta source
-// blob is not present in the repository. Clone uses this to create phantoms.
-var ErrDeltaSourceMissing = errors.New("delta source not found")
+// errDeltaSourceMissing signals that resolveFileContent could not expand a
+// delta because its base is not currently available. This is not a fault —
+// Fossil deltas can legitimately arrive before their base during a
+// transfer (see src/content.c:content_put_ex). storeReceivedFile reacts to
+// this signal by storing the delta unresolved, against a phantomized base,
+// rather than treating it as an error; the signal never escapes
+// storeReceivedFile to its own callers.
+var errDeltaSourceMissing = errors.New("delta source not found")
 
 // buildRequest assembles one outbound xfer message for the given cycle.
 func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
@@ -676,21 +681,20 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 	return true, nil
 }
 
-// storeReceivedFile validates, resolves deltas, verifies hashes, and stores
-// a received file (or delta-file) into the repo. It is used by both Sync and Clone.
-// When the delta source is missing, it returns ErrDeltaSourceMissing so callers
-// can handle the case (e.g., Clone creates a phantom).
 // resolveFileContent resolves the full content of a received file card.
 // For non-delta files, returns the payload directly. For deltas, expands
-// the base and applies the delta. Returns ErrDeltaSourceMissing if the
-// delta source is not in the repo.
+// the base and applies the delta. Returns errDeltaSourceMissing if the
+// delta source is not currently available — this is the normal steady
+// state for a delta arriving before its base during a transfer, not a
+// fault; storeReceivedFile reacts to it by storing the delta unresolved
+// instead of treating it as an error.
 func resolveFileContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, cache *content.Cache) ([]byte, error) {
 	if deltaSrc == "" {
 		return payload, nil
 	}
 	srcRid, ok := content.AvailableByUUID(r.DB(), deltaSrc)
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrDeltaSourceMissing, deltaSrc)
+		return nil, fmt.Errorf("%w: %s", errDeltaSourceMissing, deltaSrc)
 	}
 	baseContent, err := cache.Expand(r.DB(), srcRid)
 	if err != nil {
@@ -703,8 +707,17 @@ func resolveFileContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, cac
 	return applied, nil
 }
 
-// storeReceivedFile validates and stores a received file/cfile blob.
-// Returns ErrDeltaSourceMissing if the delta source is not found.
+// storeReceivedFile validates and stores a received file/cfile blob. It is
+// used by the clone, sync-pull, and server-push receive paths alike — the
+// single place where "how do we react to a delta whose base isn't here
+// yet" is decided, so the three callers can't drift out of sync with each
+// other the way they previously did (issue #57).
+//
+// A delta whose base is not yet available is not an error: it is the
+// normal steady state of an in-flight Fossil transfer (see Fossil's
+// content_put_ex, src/content.c:557-620). That case is delegated to
+// storeDeltaAgainstPhantomBase, which persists the delta unresolved rather
+// than discarding it.
 func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, cache *content.Cache) error {
 	if r == nil { panic("storeReceivedFile: r must not be nil") }
 	if uuid == "" { panic("storeReceivedFile: uuid must not be empty") }
@@ -715,10 +728,43 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, cach
 
 	fullContent, err := resolveFileContent(r, uuid, deltaSrc, payload, cache)
 	if err != nil {
+		if errors.Is(err, errDeltaSourceMissing) {
+			return storeDeltaAgainstPhantomBase(r, uuid, deltaSrc, payload)
+		}
 		return err
 	}
 
-	// Verify hash matches UUID.
+	return storeResolvedContent(r, uuid, fullContent)
+}
+
+// storeDeltaAgainstPhantomBase persists a delta whose base has not yet
+// arrived. The base is resolved via a create-phantom-if-missing lookup
+// (mirrors Fossil's rid_from_uuid(&src, 1, ...) in src/xfer.c), and the
+// delta bytes are stored unconditionally, linked to that base through the
+// delta table — matching content_put_ex's REPLACE INTO delta(rid,srcid),
+// which fires whether or not the source is currently available.
+//
+// Availability resolves lazily once the base fills in: manifest.Crosslink,
+// already invoked after every clone/sync/push round, retries artifacts it
+// could not yet resolve on the round the missing content finally arrives.
+func storeDeltaAgainstPhantomBase(r *repo.Repo, uuid, deltaSrc string, payload []byte) error {
+	return r.WithTx(func(tx *db.Tx) error {
+		srcRid, err := blob.StorePhantom(tx, deltaSrc)
+		if err != nil {
+			return fmt.Errorf("storeDeltaAgainstPhantomBase: phantomize base %s: %w", deltaSrc, err)
+		}
+		if _, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid); err != nil {
+			return fmt.Errorf("storeDeltaAgainstPhantomBase: %w", err)
+		}
+		return nil
+	})
+}
+
+// storeResolvedContent verifies fullContent hashes to uuid and stores it,
+// filling a phantom row in place if one already exists for uuid. Split out
+// of storeReceivedFile to keep each function within a screen's worth of
+// lines.
+func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)

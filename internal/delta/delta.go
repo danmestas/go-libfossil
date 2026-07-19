@@ -59,6 +59,39 @@ func (r *reader) getChar() (byte, error) {
 	return c, nil
 }
 
+// parseTargetLen reads the "<len>\n" header that begins every delta,
+// without touching anything past it. Apply continues on into the command
+// stream from the returned reader position; OutputSize stops here.
+func parseTargetLen(r *reader) (uint64, error) {
+	targetLen, err := r.getInt()
+	if err != nil {
+		return 0, err
+	}
+	term, err := r.getChar()
+	if err != nil {
+		return 0, err
+	}
+	if term != '\n' {
+		return 0, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
+	}
+	return targetLen, nil
+}
+
+// OutputSize returns the reconstructed size of a delta's target, read from
+// the delta header alone. It does not require or touch the source content,
+// so a delta's expanded size is known even when its base is not yet
+// available — mirrors Fossil's delta_output_size (src/delta.c).
+func OutputSize(deltaBytes []byte) (size uint64, err error) {
+	if len(deltaBytes) == 0 {
+		panic("delta.OutputSize: deltaBytes must not be empty")
+	}
+	size, err = parseTargetLen(&reader{data: deltaBytes})
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
 // Apply reconstructs target data from source and delta.
 // Variable naming follows fossil/src/delta.c for cross-reference:
 //   cnt = count, offset = source offset, cmd = command byte
@@ -78,16 +111,9 @@ func Apply(source, delta []byte) (result []byte, err error) {
 
 	r := &reader{data: delta}
 
-	targetLen, err := r.getInt()
+	targetLen, err := parseTargetLen(r)
 	if err != nil {
 		return nil, err
-	}
-	term, err := r.getChar()
-	if err != nil {
-		return nil, err
-	}
-	if term != '\n' {
-		return nil, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
 	}
 
 	output := make([]byte, 0, targetLen)
@@ -109,7 +135,7 @@ func Apply(source, delta []byte) (result []byte, err error) {
 			if err != nil {
 				return nil, err
 			}
-			term, err = r.getChar()
+			term, err := r.getChar()
 			if err != nil {
 				return nil, err
 			}

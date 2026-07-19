@@ -3,11 +3,9 @@ package sync
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
@@ -393,31 +391,23 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 	return filesRecvd == 0, nil
 }
 
-// handleFile stores a received file, creating a phantom on delta source miss.
+// handleFile stores a received file. storeReceivedFile now persists a
+// delta whose base hasn't arrived yet rather than discarding it (see
+// storeDeltaAgainstPhantomBase), so uuid itself is never re-requested here
+// once stored — only a still-missing base might need another round.
 func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte) error {
-	err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload, nil)
-	if err == nil {
-		delete(cs.phantoms, uuid)
-		return nil
+	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload, nil); err != nil {
+		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 
-	if errors.Is(err, ErrDeltaSourceMissing) {
-		// Delta source not yet received — store phantom for the target,
-		// and track the delta source as a phantom to request later.
-		if _, phantomErr := blob.StorePhantom(cs.repo.DB(), uuid); phantomErr != nil {
-			return fmt.Errorf("sync.Clone: store phantom for %s: %w", uuid, phantomErr)
+	delete(cs.phantoms, uuid)
+	if deltaSrc != "" {
+		// Availability, not existence: a phantom row for deltaSrc still
+		// needs requesting, and so does a delta whose own base is a
+		// phantom.
+		if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
+			cs.phantoms[deltaSrc] = true
 		}
-		cs.phantoms[uuid] = true
-		if deltaSrc != "" {
-			// Availability, not existence: a phantom row for deltaSrc still
-			// needs requesting, and so does a delta whose own base is a
-			// phantom.
-			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
-				cs.phantoms[deltaSrc] = true
-			}
-		}
-		return nil
 	}
-
-	return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
+	return nil
 }

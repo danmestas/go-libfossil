@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/libfossil/internal/delta"
+	"github.com/danmestas/libfossil/internal/hash"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 	"github.com/danmestas/libfossil/simio"
 )
@@ -159,6 +161,108 @@ func TestStoreDeltaMarksUnclustered(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("unclustered count for rid %d = %d, want 1", rid, count)
 		}
+	}
+}
+
+// TestStoreDeltaRawAgainstPhantomBase is the storage-layer test for the
+// core of the delta-before-base fix: a delta whose base has not arrived
+// yet must be persisted immediately, linked to a phantomized base — not
+// discarded, and not stored by phantomizing the target instead (the
+// inversion the bug used to make). This constructs the delta-before-base
+// ordering explicitly: the base is phantomized (never given real content)
+// before the delta referencing it is ever stored.
+func TestStoreDeltaRawAgainstPhantomBase(t *testing.T) {
+	d := setupTestDB(t)
+
+	source := []byte("original content here, long enough to compress well")
+	target := []byte("original content here, long enough to compress well, and modified")
+	deltaBytes := delta.Create(source, target)
+	targetUUID := hash.SHA1(target)
+	baseUUID := hash.SHA1(source)
+
+	// Base arrives nowhere in this test — only its UUID is known, via the
+	// delta card that references it. Resolve-or-create-phantom, mirroring
+	// Fossil's rid_from_uuid(&src, 1, ...) in src/xfer.c.
+	srcRid, err := StorePhantom(d, baseUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom base: %v", err)
+	}
+
+	rid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid)
+	if err != nil {
+		t.Fatalf("StoreDeltaRaw: %v", err)
+	}
+	if rid <= 0 {
+		t.Fatalf("rid = %d, want > 0", rid)
+	}
+
+	// The target must be a real row, not a phantom: the delta bytes were
+	// persisted, not discarded. A size of -1 here would mean we fell back
+	// to the old (buggy) behavior of phantomizing the target instead.
+	var size int64
+	if err := d.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size); err != nil {
+		t.Fatalf("query target size: %v", err)
+	}
+	if size != int64(len(target)) {
+		t.Fatalf("target size = %d, want %d (target must not be phantomized)", size, len(target))
+	}
+	var targetPhantomCount int
+	d.QueryRow("SELECT count(*) FROM phantom WHERE rid=?", rid).Scan(&targetPhantomCount)
+	if targetPhantomCount != 0 {
+		t.Fatalf("target rid %d found in phantom table, want absent", rid)
+	}
+
+	// The delta-to-source link must exist immediately, even though the
+	// source is still unresolved.
+	var srcid int64
+	if err := d.QueryRow("SELECT srcid FROM delta WHERE rid=?", rid).Scan(&srcid); err != nil {
+		t.Fatalf("delta row missing for rid=%d: %v", rid, err)
+	}
+	if srcid != int64(srcRid) {
+		t.Fatalf("delta.srcid = %d, want %d", srcid, srcRid)
+	}
+
+	// The base is the one left phantomized — the direction the fix
+	// inverts relative to the old behavior.
+	var baseSize int64
+	d.QueryRow("SELECT size FROM blob WHERE rid=?", srcRid).Scan(&baseSize)
+	if baseSize != -1 {
+		t.Fatalf("base size = %d, want -1 (base must remain phantom until it arrives)", baseSize)
+	}
+}
+
+// TestStoreDeltaRawExistingRealBlobIsNoOp mirrors StoreDelta/Store's
+// idempotency: if a real (non-phantom) blob already exists for uuid,
+// StoreDeltaRaw must not touch it.
+func TestStoreDeltaRawExistingRealBlobIsNoOp(t *testing.T) {
+	d := setupTestDB(t)
+
+	source := []byte("source content for no-op test, long enough to compress")
+	target := []byte("target content for no-op test, long enough to compress")
+	rid, _, err := Store(d, target)
+	if err != nil {
+		t.Fatalf("Store target: %v", err)
+	}
+	srcRid, _, err := Store(d, source)
+	if err != nil {
+		t.Fatalf("Store source: %v", err)
+	}
+
+	deltaBytes := delta.Create(source, target)
+	targetUUID := hash.SHA1(target)
+
+	gotRid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid)
+	if err != nil {
+		t.Fatalf("StoreDeltaRaw: %v", err)
+	}
+	if gotRid != rid {
+		t.Fatalf("rid = %d, want %d (existing real blob)", gotRid, rid)
+	}
+
+	var deltaCount int
+	d.QueryRow("SELECT count(*) FROM delta WHERE rid=?", rid).Scan(&deltaCount)
+	if deltaCount != 0 {
+		t.Fatalf("delta row count = %d, want 0 (already-real blob must not gain a delta link)", deltaCount)
 	}
 }
 

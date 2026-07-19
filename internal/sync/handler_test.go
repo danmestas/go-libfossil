@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/libfossil/internal/delta"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/internal/xfer"
@@ -353,6 +354,48 @@ func TestHandlePushFileStoreFails(t *testing.T) {
 	errs := findCards[*xfer.ErrorCard](resp)
 	if len(errs) == 0 {
 		t.Fatal("expected error card for bad hash")
+	}
+}
+
+// TestHandlePushDeltaBeforeBaseDoesNotErrorCard is the push-path acceptance
+// test for issue #57 (folded into #53): a client pushing a delta whose base
+// the server has never seen is normal transfer steady state, not a fault.
+// The server must store it (see storeDeltaAgainstPhantomBase) and continue,
+// rather than emitting an ErrorCard.
+func TestHandlePushDeltaBeforeBaseDoesNotErrorCard(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	base := []byte("push delta-before-base test, base content long enough to compress")
+	target := []byte("push delta-before-base test, base content long enough to compress, v2")
+	deltaBytes := delta.Create(base, target)
+	baseUUID := hash.SHA1(base)
+	targetUUID := hash.SHA1(target)
+
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	if errs := findCards[*xfer.ErrorCard](resp); len(errs) != 0 {
+		t.Fatalf("unexpected error card(s) for delta-before-base push: %v", errs)
+	}
+
+	targetRid, ok := blob.Exists(r.DB(), targetUUID)
+	if !ok {
+		t.Fatal("target blob missing after push")
+	}
+	var size int64
+	r.DB().QueryRow("SELECT size FROM blob WHERE rid=?", targetRid).Scan(&size)
+	if size < 0 {
+		t.Fatalf("target size = %d, want >= 0 (target must not be phantomized)", size)
+	}
+
+	if _, available := content.AvailableByUUID(r.DB(), targetUUID); available {
+		t.Fatal("target reported available before its base ever arrived")
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 // the delta-baseline merge walk (§8.2) and single-name search (§8.4). A
 // second copy anywhere is a correctness hazard, not a style issue: F
 // ordering is what the baseline binary search and the delta-manifest merge
-// walk rely on, so two comparators that disagree resolve a delta manifest
+// walk will rely on, so two comparators that disagree resolve a delta manifest
 // wrongly rather than merely failing validation. Route every such
 // comparison through here.
 func Compare(a, b string) int {

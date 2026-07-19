@@ -46,9 +46,13 @@ func parseZCard(args string) error {
 	return nil
 }
 
-// isHexDigit reports whether c is a base-16 digit in either case. Canonical
-// writer form is lowercase, but "hexadecimal" is case-insensitive here, so
-// rejecting uppercase would refuse artifacts canonical fossil accepts.
+// isHexDigit reports whether c is a base-16 digit in either case. §6.1
+// defines the Z payload's grammar as md5-token = 32hexdig-ci, a
+// parse-accept grammar that is explicitly case-insensitive, so rejecting
+// uppercase would refuse artifacts canonical fossil accepts. The
+// case-insensitivity is structural only: §6.2 still requires an uppercase
+// token to fail verification, which VerifyZ enforces by comparing
+// byte-exact against the lowercase computeZ.
 func isHexDigit(c byte) bool {
 	switch {
 	case c >= '0' && c <= '9':

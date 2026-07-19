@@ -230,9 +230,10 @@ func TestZCardTokenValidation(t *testing.T) {
 			t.Errorf("early Z card (%s): Parse succeeded, want error", tc.name)
 		}
 	}
-	// Uppercase hex digits are accepted: the canonical writer form is
-	// lowercase, but "hexadecimal" in §4.7.19 is case-insensitive, so
-	// rejecting uppercase would refuse an artifact canonical accepts.
+	// Uppercase hex digits are accepted: §6.1 defines the token as
+	// md5-token = 32hexdig-ci, a parse-accept grammar that is explicitly
+	// case-insensitive. Verification stays byte-exact against the
+	// lowercase form (§6.2), which VerifyZ handles separately.
 	for _, good := range []string{strings.Repeat("0", 32), strings.Repeat("A", 32), strings.Repeat("f", 32)} {
 		if _, err := parseBody(prefix + "Z " + good + "\n"); err != nil {
 			t.Errorf("early Z card %q: Parse: %v", good, err)

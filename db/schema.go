@@ -172,6 +172,33 @@ CREATE TABLE attachment(
 );
 CREATE INDEX attachment_idx1 ON attachment(target, filename, mtime);
 CREATE INDEX attachment_idx2 ON attachment(src);
+CREATE TABLE ticket(
+  tkt_id INTEGER PRIMARY KEY,
+  tkt_uuid TEXT UNIQUE,
+  tkt_mtime DATE,
+  tkt_ctime DATE,
+  type TEXT,
+  status TEXT,
+  subsystem TEXT,
+  priority TEXT,
+  severity TEXT,
+  foundin TEXT,
+  private_contact TEXT,
+  resolution TEXT,
+  title TEXT,
+  comment TEXT
+);
+CREATE TABLE ticketchng(
+  tkt_id INTEGER REFERENCES ticket,
+  tkt_rid INTEGER REFERENCES blob,
+  tkt_mtime DATE,
+  tkt_user TEXT,
+  login TEXT,
+  username TEXT,
+  mimetype TEXT,
+  icomment TEXT
+);
+CREATE INDEX ticketchng_idx1 ON ticketchng(tkt_id, tkt_mtime);
 CREATE TABLE cherrypick(
   parentid INT,
   childid INT,

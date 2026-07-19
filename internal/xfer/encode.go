@@ -154,7 +154,7 @@ func encodePrivate(w *bytes.Buffer) error {
 }
 
 func encodeClone(w *bytes.Buffer, c *CloneCard) error {
-	if c.Version == 0 && c.SeqNo == 0 {
+	if !c.SeqNoIsDecimal && c.Version == 0 && c.SeqNo == 0 {
 		w.WriteString("clone\n")
 	} else {
 		fmt.Fprintf(w, "clone %d %d\n", c.Version, c.SeqNo)

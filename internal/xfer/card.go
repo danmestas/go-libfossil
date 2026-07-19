@@ -106,11 +106,18 @@ type CookieCard struct {
 
 func (c *CookieCard) Type() CardType { return CardCookie }
 
-// CloneCard represents a "clone" card. Version and SeqNo may be zero
-// for legacy clone requests.
+// CloneCard represents a "clone" card. Version and SeqNo are zero for a
+// bare "clone" request.
+//
+// SeqNoIsDecimal records the SHAPE of the SEQNO token, not its presence:
+// §8.1 keys its fatal on a digit-only SEQNO (`decimal = 1*DIGIT`) and a
+// parsed int cannot carry that. "clone 3 -1" therefore has a SEQNO token
+// but is not decimal, and "clone" and "clone 3 0" both parse to SeqNo 0
+// while only the latter is fatal.
 type CloneCard struct {
-	Version int
-	SeqNo   int
+	Version        int
+	SeqNo          int
+	SeqNoIsDecimal bool
 }
 
 func (c *CloneCard) Type() CardType { return CardClone }

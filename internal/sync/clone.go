@@ -224,20 +224,17 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		if version <= 0 {
 			version = 3
 		}
+		// The clone card carries the pagination cursor itself — `clone
+		// VERSION SEQNO`, canonical xfer.c:1553. A clone_seqno card must
+		// never go out from here: it is server-to-client only, canonical's
+		// page_xfer() has no parser for it, and sending one lands in the
+		// server's unknown-card branch as `bad command: clone_seqno N`
+		// (issue #74).
 		cards = append(cards, &xfer.CloneCard{
-			Version: version,
-			SeqNo:   cs.seqno,
+			Version:  version,
+			SeqNo:    cs.seqno,
+			SeqNoIsDecimal: true,
 		})
-		// CloneSeqNoCard carries the actual pagination cursor server-side
-		// (see TestHandleClonePagination). The CloneCard alone only signals
-		// clone mode; without this card the server's cloneSeq stays 0 every
-		// round and the same blob prefix is re-emitted forever — fine when
-		// a repo fits in one batch, fatal under writing-hub or smallBatch
-		// conditions. Skip on round 0 so the server treats it as a fresh
-		// session (any starting cursor would skip rid <= cs.seqno).
-		if cycle > 0 {
-			cards = append(cards, &xfer.CloneSeqNoCard{SeqNo: cs.seqno})
-		}
 	} else {
 		// Pull mode for phantom resolution after sequential delivery completes.
 		if cs.projectCode != "" && cs.serverCode != "" {
@@ -374,6 +371,10 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 			if c.SeqNo == 0 && cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropSeqNo", 0.05) {
 				continue
 			}
+			// The server owns this cursor; the client only reads it. A
+			// non-decimal NEXT never reaches here — the decoder withholds it
+			// per §8.2 so the recorded sequence stays unchanged — and §8.2
+			// bars the client from validating that a positive value advances.
 			cs.seqno = c.SeqNo
 
 		case *xfer.ErrorCard:

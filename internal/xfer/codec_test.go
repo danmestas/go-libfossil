@@ -436,11 +436,80 @@ func TestDecode_CloneBadArgCount(t *testing.T) {
 	}
 }
 
-func TestDecode_CloneSeqNoBadValue(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("clone_seqno notanumber\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for clone_seqno with non-numeric arg")
+// TestDecode_CloneSeqNoNonDecimal pins §3.2 and §8.2: NEXT is recorded only
+// when it is decimal (`decimal = 1*DIGIT`), and a visible but non-decimal
+// NEXT is a receiver-tolerance exception that leaves the recorded sequence
+// unchanged without stopping later reply cards. Erroring here would abort a
+// clone the spec expects to continue, so the card must decode to something
+// no consumer will record — never a CloneSeqNoCard.
+func TestDecode_CloneSeqNoNonDecimal(t *testing.T) {
+	for _, arg := range []string{"notanumber", "-1", "+3", "3x"} {
+		r := bufio.NewReader(strings.NewReader("clone_seqno " + arg + "\nprivate\n"))
+		card, err := DecodeCard(r)
+		if err != nil {
+			t.Fatalf("clone_seqno %q: unexpected error %v", arg, err)
+		}
+		if _, isSeq := card.(*CloneSeqNoCard); isSeq {
+			t.Errorf("clone_seqno %q decoded to CloneSeqNoCard; must not be recorded", arg)
+		}
+
+		// Parsing must continue into the following card.
+		next, err := DecodeCard(r)
+		if err != nil {
+			t.Fatalf("clone_seqno %q: parsing stopped after non-decimal NEXT: %v", arg, err)
+		}
+		if _, ok := next.(*PrivateCard); !ok {
+			t.Errorf("clone_seqno %q: next card = %T, want *PrivateCard", arg, next)
+		}
+	}
+}
+
+// TestDecode_CloneSeqNoDecimalRecorded is the positive half: a digit-only
+// NEXT is recorded.
+func TestDecode_CloneSeqNoDecimalRecorded(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("clone_seqno 0\n"))
+	card, err := DecodeCard(r)
+	if err != nil {
+		t.Fatalf("DecodeCard: %v", err)
+	}
+	seq, ok := card.(*CloneSeqNoCard)
+	if !ok {
+		t.Fatalf("card = %T, want *CloneSeqNoCard", card)
+	}
+	if seq.SeqNo != 0 {
+		t.Errorf("SeqNo = %d, want 0", seq.SeqNo)
+	}
+}
+
+// TestDecode_CloneSeqNoPresence pins that the decoder distinguishes a bare
+// `clone` from `clone VERSION SEQNO`, which §8.1 treats differently: the
+// parsed SeqNo is 0 either way, so only the presence flag separates the
+// non-fatal case from the fatal one.
+func TestDecode_CloneSeqNoPresence(t *testing.T) {
+	tests := []struct {
+		line     string
+		wantHas  bool
+		wantSeq  int
+		wantVers int
+	}{
+		{"clone\n", false, 0, 0},
+		{"clone 3 0\n", true, 0, 3},
+		{"clone 3 5\n", true, 5, 3},
+		{"clone 3 -1\n", false, -1, 3}, // not digit-only: §8.1 fatal withheld
+	}
+	for _, tt := range tests {
+		card, err := DecodeCard(bufio.NewReader(strings.NewReader(tt.line)))
+		if err != nil {
+			t.Fatalf("%q: %v", tt.line, err)
+		}
+		c, ok := card.(*CloneCard)
+		if !ok {
+			t.Fatalf("%q: card = %T, want *CloneCard", tt.line, card)
+		}
+		if c.SeqNoIsDecimal != tt.wantHas || c.SeqNo != tt.wantSeq || c.Version != tt.wantVers {
+			t.Errorf("%q: got SeqNoIsDecimal=%v SeqNo=%d Version=%d, want %v/%d/%d",
+				tt.line, c.SeqNoIsDecimal, c.SeqNo, c.Version, tt.wantHas, tt.wantSeq, tt.wantVers)
+		}
 	}
 }
 
@@ -1027,5 +1096,34 @@ func TestCkinLockPragma_RoundTrip(t *testing.T) {
 	if fail.Name != "ci-lock-fail" || len(fail.Values) != 2 ||
 		fail.Values[0] != "alice" || fail.Values[1] != "1712000000" {
 		t.Fatalf("ci-lock-fail = %+v", fail)
+	}
+}
+
+// TestCloneCardWireRoundTrip pins that every clone wire form re-encodes to
+// the bytes it was decoded from. The bare `clone` and `clone 0 0` are
+// distinct on the wire but both parse to Version 0 / SeqNo 0, so only
+// SeqNoIsDecimal separates them — consuming that field as mere presence
+// would collapse `clone 0 0` back into a bare `clone`.
+func TestCloneCardWireRoundTrip(t *testing.T) {
+	for _, line := range []string{
+		"clone\n",
+		"clone 0 0\n",
+		"clone 3 0\n",
+		"clone 3 1\n",
+		"clone 3 4096\n",
+		"clone 3 -1\n",
+		"clone 1 7\n",
+	} {
+		card, err := DecodeCard(bufio.NewReader(strings.NewReader(line)))
+		if err != nil {
+			t.Fatalf("decode %q: %v", line, err)
+		}
+		var buf bytes.Buffer
+		if err := EncodeCard(&buf, card); err != nil {
+			t.Fatalf("encode %q: %v", line, err)
+		}
+		if buf.String() != line {
+			t.Errorf("round trip %q -> %q", line, buf.String())
+		}
 	}
 }

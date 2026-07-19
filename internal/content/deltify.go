@@ -97,6 +97,16 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 	}
 
 	// Phantoms have no content to delta (content.c:874).
+	//
+	// The srcRid half of this check is OURS, not canonical's: content.c
+	// guards only content_is_available(rid) and then calls
+	// content_get(srcid) unguarded. It is load-bearing beyond phantoms.
+	// IsAvailable follows the same delta.srcid links as the ancestor walk
+	// below, under its own maxAvailabilityChainDepth bound, and returns
+	// false on a cycle -- so a cyclic srcRid is declined here and never
+	// reaches deltifyBreaksLoop. Weakening or reordering this guard exposes
+	// that walk to a delta graph a sync peer can shape; see the walk's own
+	// bound, which exists so that exposure is survivable rather than a hang.
 	if !IsAvailable(tx, rid) || !IsAvailable(tx, srcRid) {
 		return 0, nil
 	}
@@ -151,6 +161,17 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 // srcRid would be safe, but diverging here would make our storage layout
 // differ from canonical's for the same input. A later revision offers the
 // pair again.
+//
+// Before reordering Deltify's prologue: this walk is currently unreachable
+// with a cyclic srcRid, because the IsAvailable(srcRid) guard above screens
+// one out first. That is why the seen-set below never fires in practice, and
+// it is not an argument for removing it -- IsAvailable is answering
+// groundedness, not loop safety, and the delta graph is peer-shaped
+// (blob.StoreDeltaRaw records links from the wire without a cycle check).
+// The ordering is asserted, not just documented:
+// TestDeltifyDeclinesUngroundedSource forges A->B->A and pins that Deltify
+// declines it with no error, so a reorder that exposes this walk turns that
+// decline into an error and fails the test.
 func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
 	seen := make(map[libfossil.FslID]bool)
 	cur := srcRid

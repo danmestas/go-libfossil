@@ -59,7 +59,7 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if len(d.F) > 0 {
 		sorted := make([]FileCard, len(d.F))
 		copy(sorted, d.F)
-		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
 		for _, f := range sorted {
 			b.WriteString("F ")
 			b.WriteString(FossilEncode(f.Name))
@@ -89,11 +89,20 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		fmt.Fprintf(b, "I %s\n", d.I)
 	}
 
-	for _, j := range d.J {
-		if j.Value != "" {
-			fmt.Fprintf(b, "J %s %s\n", FossilEncode(j.Name), j.Value)
-		} else {
-			fmt.Fprintf(b, "J %s\n", FossilEncode(j.Name))
+	if len(d.J) > 0 {
+		// §4.5.2 requires a strictly ascending J run, which the parser
+		// enforces. Callers build TicketField slices in whatever order
+		// suits them, so wire order is the marshaller's to impose — the
+		// same responsibility it already takes for F, M and T.
+		sorted := make([]TicketField, len(d.J))
+		copy(sorted, d.J)
+		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
+		for _, j := range sorted {
+			if j.Value != "" {
+				fmt.Fprintf(b, "J %s %s\n", FossilEncode(j.Name), j.Value)
+			} else {
+				fmt.Fprintf(b, "J %s\n", FossilEncode(j.Name))
+			}
 		}
 	}
 
@@ -107,7 +116,7 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if len(d.M) > 0 {
 		sorted := make([]string, len(d.M))
 		copy(sorted, d.M)
-		sort.Strings(sorted)
+		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i], sorted[j]) < 0 })
 		for _, m := range sorted {
 			fmt.Fprintf(b, "M %s\n", m)
 		}
@@ -140,10 +149,18 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if len(d.T) > 0 {
 		sorted := make([]TagCard, len(d.T))
 		copy(sorted, d.T)
+		// Two-level (name, target hash) per §4.5.2, not a comparison of
+		// the concatenated key: concatenating lets the target's leading
+		// characters compete with the tail of a longer name, which
+		// reorders tags whose names are prefixes of one another into a
+		// run the parser rejects.
 		sort.Slice(sorted, func(i, j int) bool {
-			ki := string(sorted[i].Type) + sorted[i].Name + sorted[i].UUID
-			kj := string(sorted[j].Type) + sorted[j].Name + sorted[j].UUID
-			return ki < kj
+			ni := string(sorted[i].Type) + sorted[i].Name
+			nj := string(sorted[j].Type) + sorted[j].Name
+			if cmp := Compare(ni, nj); cmp != 0 {
+				return cmp < 0
+			}
+			return Compare(sorted[i].UUID, sorted[j].UUID) < 0
 		})
 		for _, tag := range sorted {
 			fmt.Fprintf(b, "T %c%s %s", tag.Type, tag.Name, tag.UUID)

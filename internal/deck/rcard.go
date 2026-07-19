@@ -13,7 +13,9 @@ func (d *Deck) ComputeR(getContent func(uuid string) ([]byte, error)) (string, e
 	}
 	sorted := make([]FileCard, len(d.F))
 	copy(sorted, d.F)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	// "Filename order" in the R computation means the file-enumeration
+	// order under the canonical comparator of §4.5.3 (§6.3).
+	sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
 
 	h := md5.New()
 	for _, f := range sorted {

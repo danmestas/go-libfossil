@@ -105,7 +105,7 @@ func TestTimelineFiltersByType(t *testing.T) {
 	d := &deck.Deck{
 		Type: deck.Wiki,
 		L:    "TestPage",
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		W:    []byte("wiki content"),
 		D:    wikiTime,
 	}

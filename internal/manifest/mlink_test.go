@@ -112,7 +112,7 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 			{Name: "on-branch.txt", UUID: onBranchUUID},
 			{Name: "merge-new.txt", UUID: mergeNewUUID},
 		},
-		U: deck.Str("tester"),
+		U: deck.User("tester"),
 	}
 	rHash, err := mergeDeck.ComputeR(func(uuid string) ([]byte, error) {
 		switch uuid {

@@ -40,7 +40,7 @@ func TestCrosslink_DefersCheckinWithMissingFileBlob(t *testing.T) {
 		C:    "merge across forks",
 		D:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "race/file.txt", UUID: fileUUID}},
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -107,7 +107,7 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 		C:    "baseline",
 		D:    time.Date(2026, 4, 26, 11, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "f.txt", UUID: baselineFileUUID}},
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -136,7 +136,7 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 		B:    baselineUUID,
 		C:    "delta atop missing baseline",
 		D:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -208,7 +208,7 @@ func TestCrosslink_LinksWhenAllBlobsPresent(t *testing.T) {
 		C:    "synchronous",
 		D:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "syn.txt", UUID: fileUUID}},
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -265,7 +265,7 @@ func TestCrosslink_DefersMultipleCheckinsSharingMissingBlob(t *testing.T) {
 			C:    comment,
 			D:    when,
 			F:    []deck.FileCard{{Name: "shared.txt", UUID: fileUUID}},
-			U:    deck.Str("tester"),
+			U:    deck.User("tester"),
 			T: []deck.TagCard{
 				{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 				{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -351,7 +351,7 @@ func TestCrosslink_DoesNotDeferOnMissingParent(t *testing.T) {
 		D:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
 		P:    []string{missingParent},
 		F:    []deck.FileCard{{Name: "p.txt", UUID: fileUUID}},
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -411,7 +411,7 @@ func TestCrosslink_DedupesDuplicateFCardUUIDs(t *testing.T) {
 			{Name: "alpha.txt", UUID: fileUUID},
 			{Name: "beta.txt", UUID: fileUUID},
 		},
-		U: deck.Str("tester"),
+		U: deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},

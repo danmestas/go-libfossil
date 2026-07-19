@@ -155,7 +155,7 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 		C:    opts.Comment,
 		D:    opts.Time,
 		F:    fCards,
-		U:    deck.Str(opts.User),
+		U:    deck.User(opts.User),
 	}
 
 	// Parents: primary parent first, then any merge parents. Fossil renders

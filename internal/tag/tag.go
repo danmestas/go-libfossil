@@ -50,6 +50,9 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if opts.TargetRID <= 0 {
 		panic("tag.AddTag: opts.TargetRID must be positive")
 	}
+	if opts.User == "" {
+		panic("tag.AddTag: opts.User must not be empty")
+	}
 	if opts.Time.IsZero() {
 		opts.Time = time.Now().UTC()
 	}
@@ -88,7 +91,7 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 					Value: opts.Value,
 				},
 			},
-			U: deck.Str(opts.User),
+			U: deck.User(opts.User),
 		}
 
 		// Marshal and store as blob

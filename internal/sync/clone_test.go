@@ -356,7 +356,7 @@ func TestCloneCrosslinksManifests(t *testing.T) {
 		C:    "test checkin",
 		D:    time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
-		U:    deck.Str("tester"),
+		U:    deck.User("tester"),
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},

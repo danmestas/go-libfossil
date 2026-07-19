@@ -249,8 +249,14 @@ func parseTCard(d *Deck, args string) error {
 // field cannot represent. Resolving here, once, means every downstream
 // crosslink call site can bind d.U directly and get the right SQL value
 // (NULL, "anonymous", or the login) without repeating this logic.
+//
+// args is trimmed before the emptiness check, matching canonical fossil's
+// next_token() (which skips leading whitespace) and every sibling card
+// parser in this file (B/G/I/K/M/N/R all TrimSpace); otherwise a
+// whitespace-only U-card ("U   \n") would store literal whitespace instead
+// of resolving to "anonymous".
 func parseUCard(d *Deck, args string) error {
-	user := FossilDecode(args)
+	user := FossilDecode(strings.TrimSpace(args))
 	if user == "" {
 		user = "anonymous"
 	}

@@ -659,7 +659,7 @@ func TestCrosslinkCherrypick(t *testing.T) {
 		Type: deck.Checkin,
 		C:    "cherrypick commit",
 		D:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		P:    []string{uuid1}, // parent is rid1
 		Q: []deck.CherryPick{
 			{Target: uuid2, IsBackout: false}, // cherrypick rid2
@@ -718,7 +718,7 @@ func TestCrosslinkWiki(t *testing.T) {
 	d := &deck.Deck{
 		Type: deck.Wiki,
 		L:    "TestPage",
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		W:    wikiContent,
 		D:    wikiTime,
 	}
@@ -783,7 +783,7 @@ func TestCrosslinkTicket(t *testing.T) {
 	d := &deck.Deck{
 		Type: deck.Ticket,
 		K:    ticketUUID,
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		D:    ticketTime,
 		J: []deck.TicketField{
 			{Name: "title", Value: "Test ticket"},
@@ -839,7 +839,7 @@ func TestCrosslinkEvent(t *testing.T) {
 			Date: eventTime,
 			UUID: eventUUID,
 		},
-		U: deck.Str("testuser"),
+		U: deck.User("testuser"),
 		D: eventTime,
 		W: eventBody,
 		C: "Test technote",
@@ -908,7 +908,7 @@ func TestCrosslinkAttachment(t *testing.T) {
 			Target:   "TestPage",
 			Source:   "abc123",
 		},
-		U: deck.Str("testuser"),
+		U: deck.User("testuser"),
 		D: attachTime,
 		C: "Attach test file",
 	}
@@ -1065,7 +1065,7 @@ func TestCrosslinkForum(t *testing.T) {
 	d := &deck.Deck{
 		Type: deck.ForumPost,
 		H:    "Discussion about sync",
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		W:    forumContent,
 		D:    forumTime,
 	}
@@ -1139,7 +1139,7 @@ func TestCrosslinkTwoPass(t *testing.T) {
 	wikiDeck := &deck.Deck{
 		Type: deck.Wiki,
 		L:    "TwoPassPage",
-		U:    deck.Str("testuser"),
+		U:    deck.User("testuser"),
 		W:    wikiContent,
 		D:    wikiTime,
 	}

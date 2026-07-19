@@ -43,7 +43,7 @@ type Deck struct {
 	//   - non-nil, non-empty: U-card present with a login name
 	// Deliberately *string rather than string: a bare "" cannot represent
 	// "absent" and "present-but-empty" at once, which previously collapsed
-	// both into the same stored value. See Str for constructing literals.
+	// both into the same stored value. See User for constructing literals.
 	U    *string
 	W    []byte
 	Z    string
@@ -93,9 +93,12 @@ type TicketField struct {
 	Value string
 }
 
-// Str returns a pointer to s. Go forbids taking the address of a string
-// literal directly, so composite literals that populate Deck.U (a *string,
-// see Deck) go through this instead of Deck{U: &s}.
-func Str(s string) *string {
+// User returns a pointer to s for constructing Deck.U. Go forbids taking
+// the address of a string literal directly, so composite literals go
+// through this instead of Deck{U: &s}. Deliberately *string rather than a
+// named struct type: passing *string straight to database/sql lets a nil
+// argument bind SQL NULL and a non-nil one deref to its value automatically
+// (see Deck.U), so crosslink/rebuild call sites need no special-casing.
+func User(s string) *string {
 	return &s
 }

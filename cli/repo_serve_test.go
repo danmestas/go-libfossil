@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"math/rand"
 	"net"
@@ -9,8 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -18,7 +19,9 @@ import (
 	"github.com/alecthomas/kong"
 	libfossil "github.com/danmestas/libfossil"
 	"github.com/danmestas/libfossil/cli"
+	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/internal/sync"
+	"github.com/danmestas/libfossil/internal/xfer"
 	"github.com/danmestas/libfossil/testutil"
 
 	_ "github.com/danmestas/libfossil/internal/testdriver"
@@ -290,21 +293,61 @@ func writeCorpus(t *testing.T, r *libfossil.Repo, payloadBytes, fileBytes, files
 	flush(files / filesPerCommit)
 }
 
-// cloneRoundTrips parses the "Round-trips: N" line canonical fossil prints at
-// the end of a clone. It is the only externally observable count of server
-// pagination rounds, and therefore the only way this test can tell a
-// multi-batch clone from a single-batch one.
-func cloneRoundTrips(t *testing.T, out []byte) int {
+// serveCountingClones starts the same server stack `repo serve` runs --
+// sync.ServeHTTP over sync.HandleSync -- with a wrapper that counts the clone
+// batches the server emits, and returns the address and that counter.
+//
+// The count is taken on the server because no client-side number is portable.
+// fossil prints "Round-trips: N" once per round, carriage-return separated, so
+// on 2.23 the first occurrence is always 1 regardless of how many rounds ran;
+// 2.28 added a TTY guard that collapses it to a single final line. Parsing that
+// output made the assertion mean different things on different clients, and CI
+// (2.23) disagreed with this machine (2.28) on an identical server. Counting
+// batches the server actually emitted is the property under test anyway.
+//
+// This bypasses cli.RepoServeCmd, whose Run is a five-line wrapper around the
+// same ServeHTTP call. TestRepoServeCmdCanonicalFossilClone still drives the
+// command itself end to end.
+func serveCountingClones(t *testing.T, repoPath string) (addr string, batches *atomic.Int64) {
 	t.Helper()
-	m := regexp.MustCompile(`Round-trips:\s+(\d+)`).FindSubmatch(out)
-	if m == nil {
-		t.Fatalf("no Round-trips line in clone output:\n%s", out)
-	}
-	n, err := strconv.Atoi(string(m[1]))
+	src, err := repo.Open(repoPath)
 	if err != nil {
-		t.Fatalf("unparseable round-trip count %q: %v", m[1], err)
+		t.Fatalf("repo.Open: %v", err)
 	}
-	return n
+	t.Cleanup(func() { src.Close() })
+
+	batches = &atomic.Int64{}
+	h := func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Message, error) {
+		for _, c := range req.Cards {
+			if _, ok := c.(*xfer.CloneCard); ok {
+				batches.Add(1)
+				break
+			}
+		}
+		return sync.HandleSync(ctx, r, req)
+	}
+
+	addr = freeAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- sync.ServeHTTP(ctx, addr, src, h) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		conn, dialErr := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if dialErr == nil {
+			conn.Close()
+			return addr, batches
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server never came up: %v", dialErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // artifactCount reports the public artifacts a repository holds, as canonical
@@ -329,10 +372,10 @@ func artifactCount(t *testing.T, bin, repoPath string) int {
 //
 // Method: build a corpus whose content exceeds sync.DefaultCloneBatchBytes
 // several times over, serve it, clone with the canonical binary, then assert
-// on three independent things -- that the clone took more than one round
-// (otherwise the pagination path was never reached and the rest proves
-// nothing), that the clone holds every artifact the source held, and that
-// canonical's own `test-integrity` accepts the result.
+// on three independent things -- how many clone batches the server emitted
+// (counted server-side; otherwise the pagination path may never have been
+// reached and the rest proves nothing), that the clone holds every artifact
+// the source held, and that canonical's own `test-integrity` accepts it.
 //
 // Corpus size is a parameter because the interesting behavior is at the batch
 // boundary, not at any particular size.
@@ -343,18 +386,18 @@ func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 		name         string
 		payloadBytes int
 		fileBytes    int
-		// roundsMax is the discriminating assertion for #88. The corpus of
+		// batchesMax is the discriminating assertion for #88. The corpus of
 		// many small artifacts is a fraction of one round's byte budget, so a
-		// size-bounded server drains it in a single clone round no matter how
-		// many artifacts it holds. A count-bounded server needs one round per
+		// size-bounded server drains it in a single clone batch no matter how
+		// many artifacts it holds. A count-bounded server needs one batch per
 		// 200 artifacts, which is the ceiling #88 describes. Zero means no
 		// upper bound is asserted.
-		roundsMax int
-		roundsMin int
+		batchesMax int
+		batchesMin int
 	}{
 		{"single-batch", sync.DefaultCloneBatchBytes / 4, 64 * 1024, 0, 1},
 		{"multi-batch", sync.DefaultCloneBatchBytes * 3, 64 * 1024, 0, 3},
-		{"many-small-artifacts", 1 << 20, 512, 6, 1},
+		{"many-small-artifacts", 1 << 20, 512, 2, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tmp := t.TempDir()
@@ -368,7 +411,7 @@ func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 			r.Close()
 
 			sourceArtifacts := artifactCount(t, bin, repoPath)
-			addr := serveRepo(t, repoPath)
+			addr, batches := serveCountingClones(t, repoPath)
 
 			clonePath := filepath.Join(tmp, "clone.fossil")
 			out, err := exec.Command(bin, "clone", "http://"+addr, clonePath).CombinedOutput()
@@ -376,17 +419,17 @@ func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 				t.Fatalf("canonical fossil clone failed: %v\n%s", err, out)
 			}
 
-			got := cloneRoundTrips(t, out)
-			t.Logf("corpus %d bytes, %d artifacts, clone took %d round-trips",
+			got := int(batches.Load())
+			t.Logf("corpus %d bytes, %d artifacts, server emitted %d clone batches",
 				tc.payloadBytes, sourceArtifacts, got)
-			if got < tc.roundsMin {
-				t.Errorf("clone took %d round-trips, want >= %d; the %s path was not exercised",
-					got, tc.roundsMin, tc.name)
+			if got < tc.batchesMin {
+				t.Errorf("server emitted %d clone batches, want >= %d; the %s path was not exercised",
+					got, tc.batchesMin, tc.name)
 			}
-			if tc.roundsMax > 0 && got > tc.roundsMax {
-				t.Errorf("clone of %d artifacts took %d round-trips, want <= %d; "+
-					"the server is paginating by artifact count, not output size (#88)",
-					sourceArtifacts, got, tc.roundsMax)
+			if tc.batchesMax > 0 && got > tc.batchesMax {
+				t.Errorf("server emitted %d clone batches for %d artifacts, want <= %d; "+
+					"it is paginating by artifact count, not output size (#88)",
+					got, sourceArtifacts, tc.batchesMax)
 			}
 
 			if got := artifactCount(t, bin, clonePath); got != sourceArtifacts {

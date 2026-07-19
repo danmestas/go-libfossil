@@ -12,12 +12,6 @@ import (
 	"github.com/danmestas/libfossil/internal/merge"
 )
 
-// MergeOpts configures a merge operation.
-type MergeOpts struct {
-	Strategy string
-	Dir      string
-}
-
 // MergeResult describes the outcome of a merge.
 type MergeResult struct {
 	Clean     bool

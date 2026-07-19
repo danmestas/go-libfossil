@@ -207,39 +207,118 @@ func TestTimelinePagination(t *testing.T) {
 	}
 
 	const pageSize = 2
+	// Exactly ceil(n/pageSize) pages: a fixed bound, not a "while non-empty"
+	// loop, so a cursor that fails to advance fails this test immediately
+	// instead of hanging it.
+	maxPages := (len(allUUIDs) + pageSize - 1) / pageSize
 	seen := make(map[string]int)
 	var order []string
-	var before time.Time
-	var after libfossil.FslID
-	for page := 0; page < 10; page++ { // explicit bound on the pagination loop itself
-		entries, err := Timeline(r, TimelineOpts{Limit: pageSize, Before: before, After: after})
+	var after libfossil.Cursor
+	for page := 0; page < maxPages; page++ {
+		entries, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
 		if err != nil {
 			t.Fatalf("Timeline page %d: %v", page, err)
 		}
 		if len(entries) == 0 {
-			break
+			t.Fatalf("page %d returned 0 entries after only %d of %d events seen — cursor did not advance", page, len(order), len(allUUIDs))
 		}
 		for _, e := range entries {
 			seen[e.UUID]++
 			order = append(order, e.UUID)
 		}
-		last := entries[len(entries)-1]
-		before = last.Time
-		after = last.RID
+		after = entries[len(entries)-1].Cursor
 	}
 
 	if len(order) != len(allUUIDs) {
-		t.Fatalf("paginated total = %d entries, want %d: %v", len(order), len(allUUIDs), order)
-	}
-	for uuid, n := range seen {
-		if n != 1 {
-			t.Fatalf("event %s seen %d times across pages, want exactly 1", uuid, n)
-		}
+		t.Fatalf("paginated total = %d entries across exactly %d pages, want %d: %v", len(order), maxPages, len(allUUIDs), order)
 	}
 	for _, uuid := range allUUIDs {
 		if seen[uuid] != 1 {
-			t.Fatalf("event %s missing from paginated output", uuid)
+			t.Fatalf("event %s seen %d times across %d pages, want exactly 1", uuid, seen[uuid], maxPages)
 		}
+	}
+
+	// The defining symptom of a broken cursor is non-termination: every row
+	// enumerated correctly, but the cursor never signals exhaustion. One
+	// more call past the last real page must come back empty.
+	final, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
+	if err != nil {
+		t.Fatalf("final page: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("pagination did not terminate: page after the last expected page returned %d entries, want 0: %v", len(final), final)
+	}
+}
+
+// TestTimelinePaginationSubMillisecondBoundary is the regression test for
+// a cursor predicate that only distinguishes rows several milliseconds
+// apart via a tolerance window: rid stops being a true tie-break at exact
+// mtime equality and becomes a filter applied to rows that are not ties,
+// which can skip a row entirely, duplicate another, or fail to advance
+// the cursor at all. rid assignment order (checkin/insertion order) is
+// deliberately decoupled from mtime order here — the two need not agree
+// in general (backdated commits, imports) — because a predicate bug that
+// only manifests when they disagree would pass unnoticed against a
+// fixture where they happen to move together.
+func TestTimelinePaginationSubMillisecondBoundary(t *testing.T) {
+	r := setupTestRepo(t)
+
+	const n = 6
+	const pageSize = 2
+	base := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	var parent libfossil.FslID
+	var allUUIDs []string
+	for i := 0; i < n; i++ {
+		ts := base.Add(time.Duration(n-1-i) * 3 * time.Millisecond) // 3ms apart, descending as rid ascends
+		rid, uuid, err := Checkin(r, CheckinOpts{
+			Files:   []File{{Name: "a.txt", Content: []byte(fmt.Sprintf("v%d", i))}},
+			Comment: fmt.Sprintf("commit %d", i), User: "testuser",
+			Parent: parent, Time: ts,
+		})
+		if err != nil {
+			t.Fatalf("Checkin %d: %v", i, err)
+		}
+		parent = rid
+		allUUIDs = append(allUUIDs, uuid)
+	}
+
+	maxPages := (n + pageSize - 1) / pageSize // exactly ceil(n/pageSize) = 3
+	seen := make(map[string]int)
+	var order []string
+	var after libfossil.Cursor
+	for page := 0; page < maxPages; page++ {
+		entries, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		if len(entries) == 0 {
+			t.Fatalf("page %d returned 0 entries after only %d of %d events seen (order so far: %v) — cursor did not advance", page, len(order), n, order)
+		}
+		for _, e := range entries {
+			seen[e.UUID]++
+			order = append(order, e.UUID)
+		}
+		after = entries[len(entries)-1].Cursor
+	}
+
+	if len(order) != n {
+		t.Fatalf("paginated total = %d entries across exactly %d pages, want %d: order=%v", len(order), maxPages, n, order)
+	}
+	for _, uuid := range allUUIDs {
+		if seen[uuid] != 1 {
+			t.Fatalf("event %s seen %d times across %d pages (bound=ceil(%d/%d)), want exactly 1", uuid, seen[uuid], maxPages, n, pageSize)
+		}
+	}
+
+	// Non-termination is the actual user-facing failure mode: every row
+	// enumerated correctly but the cursor never signals exhaustion. Assert
+	// the page past the last expected one comes back empty.
+	final, err := Timeline(r, TimelineOpts{Limit: pageSize, After: after})
+	if err != nil {
+		t.Fatalf("final page: %v", err)
+	}
+	if len(final) != 0 {
+		t.Fatalf("pagination did not terminate: page after the last expected page returned %d entries, want 0: %v", len(final), final)
 	}
 }
 

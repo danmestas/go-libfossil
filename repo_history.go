@@ -31,14 +31,13 @@ type TimelineOpts struct {
 	// Type restricts the enumeration to a single event kind. The zero
 	// value means "all kinds" — the canonical `fossil timeline` default.
 	Type EventKind
-	// Before, when non-zero, restricts results to events strictly earlier
-	// than the (Before, After) cursor pair. Zero means "start from the
-	// newest event". See Repo.Timeline's doc comment for the pagination
-	// contract this pair forms.
-	Before time.Time
-	// After is the cursor's tie-break companion, used alongside Before
-	// when paginating; meaningful only when Before is also set.
-	After FslID
+	// After, when valid, resumes enumeration immediately following this
+	// cursor — the next page after whatever LogEntry produced it. The zero
+	// Cursor means "start from the newest event". See Repo.Timeline's doc
+	// comment for the pagination contract this forms, and Cursor's doc
+	// comment for why it must come from a LogEntry rather than be built by
+	// hand.
+	After Cursor
 	// Limit caps the number of entries returned. Zero or negative means
 	// unbounded.
 	Limit int
@@ -47,7 +46,10 @@ type TimelineOpts struct {
 // LogEntry represents a single event in the timeline or ancestry chain.
 // Parents is populated for Kind == EventKindCheckin and empty for every
 // other kind — plink, which Parents is derived from, only relates
-// check-in artifacts, so that is correct, not a gap.
+// check-in artifacts, so that is correct, not a gap. Cursor is populated
+// on entries returned by Timeline and is the token to pass back as the
+// next page's TimelineOpts.After; it is the zero value (unusable) on
+// entries returned by Ancestry, which paginates by Start/Limit instead.
 type LogEntry struct {
 	RID     int64
 	UUID    string
@@ -56,6 +58,7 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    EventKind
 	Parents []string
+	Cursor  Cursor
 }
 
 // DiffEntry describes a unified diff for a single file.

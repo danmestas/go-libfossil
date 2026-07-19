@@ -23,6 +23,10 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    libfossil.EventKind
 	Parents []string
+	// Cursor is a Timeline pagination token for this entry; zero-value
+	// (invalid) for entries produced by Log/Ancestry, which paginates by
+	// Start/Limit instead and has no use for it.
+	Cursor libfossil.Cursor
 }
 
 // maxAncestryDepth bounds the first-parent walk in Log so that a cyclic or

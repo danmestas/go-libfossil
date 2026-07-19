@@ -23,13 +23,24 @@ func TestJulianToTime(t *testing.T) {
 	}
 }
 
+// TestJulianRoundTrip asserts the exact property JulianToTime's doc
+// comment claims: for any m produced by TimeToJulian, JulianToTime(m)
+// recovers the same instant exactly, and TimeToJulian(JulianToTime(m))
+// reproduces m bit-for-bit. A ±1ms tolerance here would pass under both
+// the old truncating JulianToTime and the current rounding one — it
+// would not have caught the truncation bug, so it is not a regression
+// guard for it. Timeline's pagination cursor depends on this exactness:
+// it compares a cursor's mtime against event.mtime for equality, not
+// within a tolerance.
 func TestJulianRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	julian := TimeToJulian(now)
 	back := JulianToTime(julian)
-	diff := now.Sub(back)
-	if diff < -time.Millisecond || diff > time.Millisecond {
-		t.Fatalf("Round-trip failed: %v -> %f -> %v (diff=%v)", now, julian, back, diff)
+	if !back.Equal(now) {
+		t.Fatalf("JulianToTime(TimeToJulian(now)) = %v, want exactly %v (diff=%v)", back, now, now.Sub(back))
+	}
+	if roundTripped := TimeToJulian(back); roundTripped != julian {
+		t.Fatalf("TimeToJulian(JulianToTime(m)) = %.20f, want exactly m = %.20f", roundTripped, julian)
 	}
 }
 

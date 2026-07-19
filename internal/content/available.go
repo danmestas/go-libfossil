@@ -2,7 +2,6 @@ package content
 
 import (
 	"database/sql"
-	"errors"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/db"
@@ -36,28 +35,39 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 		return false
 	}
 
+	// One statement per chain node, not two. Every SQL round trip here pays
+	// a WAL read-lock acquisition, and this walk runs once per F-card of
+	// every check-in being crosslinked, over chains that are thousands of
+	// nodes deep in a real repository — the round trips, not the work they
+	// do, are the cost.
+	const step = `SELECT b.size, d.rid IS NOT NULL, d.srcid
+	                FROM blob b LEFT JOIN delta d ON d.rid = b.rid
+	               WHERE b.rid = ?`
+
 	current := rid
 	for depth := 0; depth < maxAvailabilityChainDepth; depth++ {
 		var size int64
-		if err := q.QueryRow("SELECT size FROM blob WHERE rid=?", current).Scan(&size); err != nil {
+		var hasDelta bool
+		var srcid sql.NullInt64
+		if err := q.QueryRow(step, current).Scan(&size, &hasDelta, &srcid); err != nil {
 			return false // unknown rid
 		}
 		if size < 0 {
 			return false // phantom
 		}
-
-		var srcid int64
-		if err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", current).Scan(&srcid); err != nil {
-			// Only "no delta row" means the chain is grounded here. Any other
-			// failure — cancelled context, closed connection, NULL srcid — says
-			// nothing about groundedness, so report unavailable rather than
-			// claiming readable content we could not verify.
-			return errors.Is(err, sql.ErrNoRows)
+		if !hasDelta {
+			return true // chain is grounded in full-text content
 		}
-		if srcid == 0 {
+		if !srcid.Valid {
+			// A delta row whose srcid is NULL says nothing about
+			// groundedness, so report unavailable rather than claiming
+			// readable content we could not verify.
+			return false
+		}
+		if srcid.Int64 == 0 {
 			return true
 		}
-		current = libfossil.FslID(srcid)
+		current = libfossil.FslID(srcid.Int64)
 	}
 	return false // bound exceeded — cyclic or pathological chain
 }

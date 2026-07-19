@@ -22,6 +22,22 @@ var attachTargetTypeName = map[byte]string{
 	'e': "tech note",
 }
 
+// crosslinkCacheBytes bounds the expanded content one Crosslink sweep keeps
+// live. A miss costs throughput, not correctness: the walk simply continues
+// further back toward the chain root.
+//
+// It cannot be sized to eliminate misses. A chain runs from a high-rid root
+// down to low-rid ancestors, and the sweep visits rids ascending, so the
+// first candidate of a chain materializes all of it and the rest are consumed
+// arbitrarily far in the future — the working set of a whole-repository sweep
+// in rid order is the whole repository expanded, 8 GiB for the Fossil SCM
+// repository. This budget buys the locally-coherent runs, which is most of
+// the win available without changing the order the sweep visits candidates
+// in. Measured on that repository: 22.9 blobs/sec with no cache, 50.1 at this
+// budget, 414 at 1 GiB — where the process needs 2.9 GB resident, which is
+// why that is not the number here.
+const crosslinkCacheBytes = 256 << 20
+
 type pendingItem struct {
 	Type byte   // 'w' = wiki backlink, 't' = ticket rebuild
 	ID   string
@@ -71,12 +87,26 @@ func Crosslink(r *repo.Repo) (int, error) {
 		return 0, fmt.Errorf("manifest.Crosslink rows: %w", err)
 	}
 
+	// One cache for the sweep. Candidate rids were snapshotted above and
+	// blob content is immutable once written, so nothing this loop does can
+	// invalidate an entry; the cache is dropped when the sweep returns.
+	//
+	// It exists for the delta chains, not for repeated lookups of the same
+	// rid — each candidate is expanded exactly once. A repository that has
+	// been through content_deltify stores a file's older versions as deltas
+	// against its newer ones, so one file's history is a single chain
+	// thousands of nodes deep, and expanding every node of it from the chain
+	// root is quadratic in the length of the chain. Keeping what the walk
+	// materialized turns the repeats into hits wherever the budget reaches.
+	// See internal/content.Cache.Expand and crosslinkCacheBytes.
+	cache := content.NewCache(crosslinkCacheBytes)
+
 	linked := 0
 	var deferredRids []libfossil.FslID
 	missingBlobs := make(map[string]struct{})
 	var pending []pendingItem
 	for _, c := range candidates {
-		data, err := content.Expand(r.DB(), c.rid)
+		data, err := cache.Expand(r.DB(), c.rid)
 		if err != nil {
 			continue // not expandable, skip
 		}

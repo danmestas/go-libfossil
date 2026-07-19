@@ -50,11 +50,23 @@ func NewCache(maxBytes int64) *Cache {
 }
 
 // Expand returns the expanded content for rid, serving from cache when possible.
-// On a cache miss, it delegates to the package-level [Expand] and caches the result.
+//
+// On a miss it walks rid's delta chain only as far back as the deepest
+// ancestor the cache already holds, and caches every node it materializes on
+// the way forward. That is what makes a sweep over a whole repository — every
+// blob of a chain expanded once, in some order — cost one delta application
+// per blob rather than one per (blob, chain-depth) pair.
+//
 // A nil receiver falls through to [Expand] directly.
 func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 	if c == nil {
 		return Expand(q, rid)
+	}
+	if q == nil {
+		panic("content.Cache.Expand: q must not be nil")
+	}
+	if rid <= 0 {
+		panic("content.Cache.Expand: rid must be > 0")
 	}
 
 	c.mu.Lock()
@@ -70,32 +82,47 @@ func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 	c.misses++
 	c.mu.Unlock()
 
-	data, err := Expand(q, rid)
+	// have hands out the cache's own buffer; expandChain never writes
+	// through it, and the copy below is what the caller gets.
+	have := func(id libfossil.FslID) ([]byte, bool) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		elem, ok := c.items[id]
+		if !ok {
+			return nil, false
+		}
+		c.order.MoveToFront(elem)
+		return elem.Value.(*cacheEntry).data, true
+	}
+
+	data, err := expandChain(q, rid, have, c.store)
 	if err != nil {
 		return nil, err
 	}
 
+	out := make([]byte, len(data))
+	copy(out, data)
+	return out, nil
+}
+
+// store takes ownership of data as the cached content for rid. expandChain
+// hands over buffers it will not touch again.
+func (c *Cache) store(rid libfossil.FslID, data []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Another goroutine may have cached it while we were expanding.
 	if elem, ok := c.items[rid]; ok {
 		c.order.MoveToFront(elem)
-		return data, nil
+		return
 	}
 
-	cached := make([]byte, len(data))
-	copy(cached, data)
-
-	elem := c.order.PushFront(&cacheEntry{rid: rid, data: cached})
+	elem := c.order.PushFront(&cacheEntry{rid: rid, data: data})
 	c.items[rid] = elem
-	c.curSize += int64(len(cached))
+	c.curSize += int64(len(data))
 
 	for c.curSize > c.maxSize && c.order.Len() > 0 {
 		c.evictOldest()
 	}
-
-	return data, nil
 }
 
 func (c *Cache) evictOldest() {

@@ -44,6 +44,21 @@ func (c *Checkout) vfilePerm(vfileID int64) (os.FileMode, error) {
 	return 0o644, nil
 }
 
+// modeIsExecutable is the inverse of vfilePerm: given an on-disk file mode,
+// it reports whether the file should be recorded as executable.
+//
+// Matches Fossil's file_perm() predicate (src/file.c:316):
+// S_ISREG(st_mode) && (S_IXUSR & st_mode) != 0 — owner-execute on a regular
+// file. Directories, symlinks, and other non-regular files are never
+// executable, and group- or other-only execute bits (e.g. 0645) do not
+// qualify without the owner bit.
+//
+// On Windows, os.FileMode never carries an owner-execute bit, so this always
+// returns false — matching Fossil's PERM_REG-only behavior on that platform.
+func modeIsExecutable(mode os.FileMode) bool {
+	return mode.IsRegular() && mode&0o100 != 0
+}
+
 // Rename marks a file as renamed in vfile by updating pathname and origname.
 // Sets chnged=1 to indicate the file has been modified.
 //

@@ -57,6 +57,16 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 			return counts, fmt.Errorf("checkout.Manage: read %s: %w", path, err)
 		}
 
+		// Stat the on-disk file to capture its executable bit at add time.
+		info, err := c.env.Storage.Stat(fullPath)
+		if err != nil {
+			return counts, fmt.Errorf("checkout.Manage: stat %s: %w", path, err)
+		}
+		isexe := 0
+		if modeIsExecutable(info.Mode()) {
+			isexe = 1
+		}
+
 		// Detect repo hash mode (SHA3 for 64-char UUIDs, SHA1 otherwise).
 		mhash := hash.SHA1(data)
 		var sampleUUID string
@@ -69,8 +79,8 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 
 		// Insert into vfile with rid=0 (newly added), chnged=1 (modified)
 		_, err = c.db.Exec(
-			"INSERT INTO vfile(vid, pathname, rid, mrid, mhash, chnged) VALUES(?, ?, 0, 0, ?, 1)",
-			int64(vid), path, mhash,
+			"INSERT INTO vfile(vid, pathname, rid, mrid, mhash, isexe, chnged) VALUES(?, ?, 0, 0, ?, ?, 1)",
+			int64(vid), path, mhash, isexe,
 		)
 		if err != nil {
 			return counts, fmt.Errorf("checkout.Manage: insert vfile: %w", err)

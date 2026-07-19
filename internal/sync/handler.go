@@ -467,7 +467,7 @@ func (h *handler) handleFile(uuid, deltaSrc string, payload []byte) error {
 		})
 		return nil
 	}
-	if err := storeReceivedFile(h.repo, uuid, deltaSrc, payload, h.cache); err != nil {
+	if err := storeReceivedFile(h.repo, uuid, deltaSrc, payload); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("storing %s: %v", uuid, err),
 		})

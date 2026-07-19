@@ -45,12 +45,38 @@ func Expand(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 		}
 	}
 
-	// BUGGIFY: flip a byte in expanded content to exercise UUID-mismatch detection.
+	// BUGGIFY: flip a byte in expanded content to exercise the hash check
+	// below under DST.
 	if simio.Buggify(0.01) && len(content) > 0 {
 		corrupted := make([]byte, len(content))
 		copy(corrupted, content)
 		corrupted[0] ^= 0xFF
-		return corrupted, nil
+		content = corrupted
+	}
+
+	// Bind content to name. A delta's own trailing checksum (see
+	// delta.Apply) only proves the bytes are self-consistent with what the
+	// sender transmitted -- it says nothing about whether those bytes
+	// match the UUID this row is stored under. blob.StoreDeltaRaw persists
+	// a delta, and phantomizes its base, before that base ever arrives;
+	// nothing upstream of this point has checked the claim, and nothing
+	// notifies this function when a base fills in -- IsAvailable and this
+	// walk are both recomputed live on every call. Verifying here, the
+	// single choke point every expansion path goes through (Cache.Expand,
+	// crosslinking, checkout, diff, merge, ...), catches a mismatch
+	// regardless of which caller reached it or how the chain assembled.
+	var uuid string
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+		return nil, fmt.Errorf("content.Expand: query uuid for rid=%d: %w", rid, err)
+	}
+	var computed string
+	if len(uuid) == 64 {
+		computed = hash.SHA3(content)
+	} else {
+		computed = hash.SHA1(content)
+	}
+	if computed != uuid {
+		return nil, fmt.Errorf("content.Expand: hash mismatch for rid=%d: stored=%s computed=%s", rid, uuid, computed)
 	}
 
 	return content, nil
@@ -93,6 +119,11 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID) (chain []libfossil.FslID,
 	return chain, nil
 }
 
+// Verify confirms that rid's stored content hashes to its declared UUID.
+// Expand performs this same check internally on every expansion now, so
+// Verify is a thin, explicitly-named wrapper for callers (repo rebuild,
+// integration tests) that want to state their intent as verification
+// rather than retrieval.
 func Verify(q db.Querier, rid libfossil.FslID) error {
 	if q == nil {
 		panic("content.Verify: q must not be nil")
@@ -100,27 +131,8 @@ func Verify(q db.Querier, rid libfossil.FslID) error {
 	if rid <= 0 {
 		panic("content.Verify: rid must be > 0")
 	}
-
-	var uuid string
-	err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid)
-	if err != nil {
-		return fmt.Errorf("content.Verify query uuid: %w", err)
-	}
-
-	content, err := Expand(q, rid)
-	if err != nil {
-		return fmt.Errorf("content.Verify expand: %w", err)
-	}
-
-	var computed string
-	if len(uuid) == 64 {
-		computed = hash.SHA3(content)
-	} else {
-		computed = hash.SHA1(content)
-	}
-
-	if computed != uuid {
-		return fmt.Errorf("content.Verify: hash mismatch for rid=%d: stored=%s computed=%s", rid, uuid, computed)
+	if _, err := Expand(q, rid); err != nil {
+		return fmt.Errorf("content.Verify: %w", err)
 	}
 	return nil
 }

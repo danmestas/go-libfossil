@@ -141,6 +141,110 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 	return rid, uuid, nil
 }
 
+// StoreDeltaRaw stores delta-encoded content exactly as given — without
+// expanding it against its source — and records the delta-to-source link.
+// Unlike StoreDelta, which computes a delta from full target content and
+// verifies the round-trip against an already-readable source, StoreDeltaRaw
+// accepts content that arrived already delta-encoded (e.g. over the wire
+// during a transfer) whose source may itself still be a phantom. The
+// target's size is read from the delta's own header (delta.OutputSize), so
+// no source content is needed to store it.
+//
+// If a real (non-phantom) blob already exists for uuid, this is a no-op.
+// If a phantom row exists, it is filled in place. Otherwise a new row is
+// created. In every case the row's declared size is real, never -1: the
+// target is not phantomized just because its source might be — mirrors
+// Fossil's content_put_ex (src/content.c:557-620), which stores delta
+// content unconditionally and records REPLACE INTO delta(rid,srcid)
+// whether or not the source is currently available. Availability is a
+// live, transitively-recomputed property (content.IsAvailable), not
+// something this function or any caller needs to update or be notified
+// about; content.Expand verifies the expanded result against its claimed
+// UUID on every read, since nothing here can verify a delta whose source
+// isn't readable yet.
+//
+// deltaBytes is wire data, not a programmer-controlled argument: malformed
+// or empty input (including from a hostile peer) is reported as an error,
+// never a panic. Argument shapes StoreDeltaRaw's own caller controls (q,
+// uuid, srcRid) are still asserted, matching this package's usual
+// nil/invalid-argument convention.
+func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossil.FslID) (rid libfossil.FslID, err error) {
+	if q == nil {
+		panic("blob.StoreDeltaRaw: q must not be nil")
+	}
+	if uuid == "" {
+		panic("blob.StoreDeltaRaw: uuid must not be empty")
+	}
+	if srcRid <= 0 {
+		panic("blob.StoreDeltaRaw: srcRid must be > 0")
+	}
+	defer func() {
+		if err == nil && rid <= 0 {
+			panic("blob.StoreDeltaRaw: postcondition violated: rid <= 0 with no error")
+		}
+	}()
+
+	existingRid, exists := Exists(q, uuid)
+	if exists {
+		var size int64
+		if err := q.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size); err != nil {
+			return 0, fmt.Errorf("blob.StoreDeltaRaw: check existing: %w", err)
+		}
+		if size != -1 {
+			return existingRid, nil // real blob already exists; nothing to do
+		}
+	}
+
+	// delta.OutputSize rejects empty, malformed, and overflowing/oversized
+	// headers with an error — the boundary for wire-data validation lives
+	// there so this function doesn't duplicate it.
+	targetSize, err := delta.OutputSize(deltaBytes)
+	if err != nil {
+		return 0, fmt.Errorf("blob.StoreDeltaRaw: output size: %w", err)
+	}
+	compressed, err := Compress(deltaBytes)
+	if err != nil {
+		return 0, fmt.Errorf("blob.StoreDeltaRaw: compress: %w", err)
+	}
+
+	if exists {
+		// Filling a phantom.
+		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
+			int64(targetSize), compressed, existingRid); err != nil {
+			return 0, fmt.Errorf("blob.StoreDeltaRaw: fill phantom: %w", err)
+		}
+		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
+			return 0, fmt.Errorf("blob.StoreDeltaRaw: clear phantom: %w", err)
+		}
+		rid = existingRid
+	} else {
+		result, err := q.Exec(
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+			uuid, int64(targetSize), compressed,
+		)
+		if err != nil {
+			return 0, fmt.Errorf("blob.StoreDeltaRaw: insert: %w", err)
+		}
+		ridInt, err := result.LastInsertId()
+		if err != nil {
+			return 0, fmt.Errorf("blob.StoreDeltaRaw: lastid: %w", err)
+		}
+		rid = libfossil.FslID(ridInt)
+	}
+
+	// Record the delta-to-source link unconditionally — matches
+	// content_put_ex's REPLACE INTO delta(rid,srcid), which fires
+	// regardless of whether srcRid is itself currently available.
+	if _, err := q.Exec("REPLACE INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid); err != nil {
+		return 0, fmt.Errorf("blob.StoreDeltaRaw: delta link: %w", err)
+	}
+	if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
+		return 0, fmt.Errorf("blob.StoreDeltaRaw: unclustered: %w", err)
+	}
+
+	return rid, nil
+}
+
 func StorePhantom(q db.Querier, uuid string) (rid libfossil.FslID, err error) {
 	if q == nil {
 		panic("blob.StorePhantom: q must not be nil")

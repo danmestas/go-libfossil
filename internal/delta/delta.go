@@ -3,12 +3,20 @@ package delta
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 var (
 	ErrInvalidDelta = errors.New("delta: invalid format")
 	ErrChecksum     = errors.New("delta: checksum mismatch")
 )
+
+// maxDeltaTargetSize bounds the target length declared in a delta header.
+// It is far larger than any real Fossil artifact — its purpose is to
+// reject an obviously-hostile or malformed claim (wire data, never
+// trusted) before it reaches an allocation or a size column, not to
+// constrain legitimate content.
+const maxDeltaTargetSize = 1 << 32 // 4 GiB
 
 var digits = [128]int{
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -37,7 +45,16 @@ func (r *reader) getInt() (uint64, error) {
 		if c >= 128 || digits[c] < 0 {
 			break
 		}
-		v = v*64 + uint64(digits[c])
+		d := uint64(digits[c])
+		// Reject rather than wrap: v*64+d overflowing uint64 would wrap
+		// silently, and a wrapped value can land anywhere — including
+		// exactly math.MaxUint64, which casts to int64(-1), the phantom
+		// sentinel used throughout blob.size. Wire data gets no benefit
+		// of the doubt here.
+		if v > (math.MaxUint64-d)/64 {
+			return 0, fmt.Errorf("%w: integer overflow at pos %d", ErrInvalidDelta, r.pos)
+		}
+		v = v*64 + d
 		r.pos++
 		started = true
 	}
@@ -59,6 +76,41 @@ func (r *reader) getChar() (byte, error) {
 	return c, nil
 }
 
+// parseTargetLen reads the "<len>\n" header that begins every delta,
+// without touching anything past it. Apply continues on into the command
+// stream from the returned reader position; OutputSize stops here.
+func parseTargetLen(r *reader) (uint64, error) {
+	targetLen, err := r.getInt()
+	if err != nil {
+		return 0, err
+	}
+	term, err := r.getChar()
+	if err != nil {
+		return 0, err
+	}
+	if term != '\n' {
+		return 0, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
+	}
+	if targetLen > maxDeltaTargetSize {
+		return 0, fmt.Errorf("%w: target length %d exceeds maximum %d", ErrInvalidDelta, targetLen, uint64(maxDeltaTargetSize))
+	}
+	return targetLen, nil
+}
+
+// OutputSize returns the reconstructed size of a delta's target, read from
+// the delta header alone. It does not require or touch the source content,
+// so a delta's expanded size is known even when its base is not yet
+// available — mirrors Fossil's delta_output_size (src/delta.c). Returns an
+// error (never panics) on malformed or empty input: deltaBytes is wire
+// data, not a programmer-controlled argument, so a malformed value is an
+// input-validation failure, not an assertion failure.
+func OutputSize(deltaBytes []byte) (uint64, error) {
+	if len(deltaBytes) == 0 {
+		return 0, fmt.Errorf("%w: empty delta", ErrInvalidDelta)
+	}
+	return parseTargetLen(&reader{data: deltaBytes})
+}
+
 // Apply reconstructs target data from source and delta.
 // Variable naming follows fossil/src/delta.c for cross-reference:
 //   cnt = count, offset = source offset, cmd = command byte
@@ -78,19 +130,27 @@ func Apply(source, delta []byte) (result []byte, err error) {
 
 	r := &reader{data: delta}
 
-	targetLen, err := r.getInt()
+	targetLen, err := parseTargetLen(r)
 	if err != nil {
 		return nil, err
-	}
-	term, err := r.getChar()
-	if err != nil {
-		return nil, err
-	}
-	if term != '\n' {
-		return nil, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
 	}
 
-	output := make([]byte, 0, targetLen)
+	// The initial capacity is deliberately NOT targetLen: targetLen is a
+	// claim read from the delta's own header, and maxDeltaTargetSize
+	// (which parseTargetLen already bounds it to) exists to reject
+	// obviously-hostile claims, not to size a safe allocation from — a
+	// handful of wire bytes can declare a target near that bound. Once a
+	// delta can be stored unverified (see blob.StoreDeltaRaw), a peer
+	// plants one such delta and every later Expand of that row repeats
+	// the attempt: a durable, remotely-planted allocation, not a one-off
+	// parse spike. Starting small and growing via append tracks actual
+	// work performed instead of trusting the claim.
+	const deltaInitialCap = 64 * 1024 // 64 KiB; append grows normally past this
+	initialCap := targetLen
+	if initialCap > deltaInitialCap {
+		initialCap = deltaInitialCap
+	}
+	output := make([]byte, 0, initialCap)
 
 	for r.pos < len(r.data) {
 		cnt, err := r.getInt()
@@ -109,7 +169,7 @@ func Apply(source, delta []byte) (result []byte, err error) {
 			if err != nil {
 				return nil, err
 			}
-			term, err = r.getChar()
+			term, err := r.getChar()
 			if err != nil {
 				return nil, err
 			}

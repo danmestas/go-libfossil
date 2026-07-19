@@ -2,7 +2,6 @@ package sync
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -11,7 +10,6 @@ import (
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/delta"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
@@ -20,10 +18,6 @@ import (
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
-
-// ErrDeltaSourceMissing is returned by storeReceivedFile when the delta source
-// blob is not present in the repository. Clone uses this to create phantoms.
-var ErrDeltaSourceMissing = errors.New("delta source not found")
 
 // buildRequest assembles one outbound xfer message for the given cycle.
 func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
@@ -676,36 +670,28 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 	return true, nil
 }
 
-// storeReceivedFile validates, resolves deltas, verifies hashes, and stores
-// a received file (or delta-file) into the repo. It is used by both Sync and Clone.
-// When the delta source is missing, it returns ErrDeltaSourceMissing so callers
-// can handle the case (e.g., Clone creates a phantom).
-// resolveFileContent resolves the full content of a received file card.
-// For non-delta files, returns the payload directly. For deltas, expands
-// the base and applies the delta. Returns ErrDeltaSourceMissing if the
-// delta source is not in the repo.
-func resolveFileContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, cache *content.Cache) ([]byte, error) {
-	if deltaSrc == "" {
-		return payload, nil
-	}
-	srcRid, ok := content.AvailableByUUID(r.DB(), deltaSrc)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrDeltaSourceMissing, deltaSrc)
-	}
-	baseContent, err := cache.Expand(r.DB(), srcRid)
-	if err != nil {
-		return nil, fmt.Errorf("expanding delta source %s: %w", deltaSrc, err)
-	}
-	applied, err := delta.Apply(baseContent, payload)
-	if err != nil {
-		return nil, fmt.Errorf("applying delta for %s: %w", uuid, err)
-	}
-	return applied, nil
-}
-
-// storeReceivedFile validates and stores a received file/cfile blob.
-// Returns ErrDeltaSourceMissing if the delta source is not found.
-func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, cache *content.Cache) error {
+// storeReceivedFile validates and stores a received file/cfile blob. It is
+// used by the clone, sync-pull, and server-push receive paths alike — the
+// single place that decides how a received card becomes a stored row, so
+// the three callers can't drift out of sync with each other the way they
+// previously did (issue #57).
+//
+// A delta is always stored as delta bytes, linked to its source via a
+// create-phantom-if-missing lookup, regardless of whether that source is
+// currently available: Fossil's steady state during a transfer is a delta
+// arriving before its base (see content_put_ex, src/content.c:557-620),
+// so receive time never has to decide whether the content can be expanded
+// yet. Availability is a live, transitively-recomputed property —
+// content.IsAvailable/AvailableByUUID walk the delta chain fresh on every
+// call — so nothing here needs to notify anything when a base fills in.
+//
+// Because the raw bytes are trusted at receive time and not everyone who
+// can construct a delta card also controls the base it claims, content.Expand
+// verifies the expanded result hashes to its claimed UUID on every
+// expansion: a delta's own internal checksum only proves the bytes are
+// self-consistent with what the sender transmitted, not that they match
+// the name they were received under.
+func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) error {
 	if r == nil { panic("storeReceivedFile: r must not be nil") }
 	if uuid == "" { panic("storeReceivedFile: uuid must not be empty") }
 	if payload == nil { panic("storeReceivedFile: payload must not be nil") }
@@ -713,12 +699,48 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, cach
 		return fmt.Errorf("sync: invalid UUID format: %s", uuid)
 	}
 
-	fullContent, err := resolveFileContent(r, uuid, deltaSrc, payload, cache)
-	if err != nil {
-		return err
+	if deltaSrc != "" {
+		// deltaSrc becomes a blob.StorePhantom row under whatever string
+		// arrives on the wire. The blob table's own CHECK constraint only
+		// bounds uuid length, not hex-ness, so a non-hex value of valid
+		// length (e.g. 40 'z' characters) passes it and would otherwise
+		// create a permanent, unfillable phantom row that loadDBPhantoms
+		// re-requests every sync round forever.
+		if !hash.IsValidHash(deltaSrc) {
+			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
+		}
+		return storeDeltaContent(r, uuid, deltaSrc, payload)
 	}
 
-	// Verify hash matches UUID.
+	return storeResolvedContent(r, uuid, payload)
+}
+
+// storeDeltaContent persists a received delta exactly as given — never
+// expanded, never verified at receive time — linked to its source via a
+// create-phantom-if-missing lookup (mirrors Fossil's rid_from_uuid(&src,
+// 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
+// unconditionally, matching content_put_ex's REPLACE INTO delta, whether
+// or not srcRid is itself currently available.
+func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte) error {
+	return r.WithTx(func(tx *db.Tx) error {
+		srcRid, err := blob.StorePhantom(tx, deltaSrc)
+		if err != nil {
+			return fmt.Errorf("storeDeltaContent: resolve base %s: %w", deltaSrc, err)
+		}
+		if _, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid); err != nil {
+			return fmt.Errorf("storeDeltaContent: %w", err)
+		}
+		return nil
+	})
+}
+
+// storeResolvedContent verifies that fullContent hashes to uuid and stores
+// it. "Verify, then store resolved content" is a single cohesive unit —
+// full (non-delta) file cards always carry content that can be hashed
+// immediately, so this stays eager rather than deferring to content.Expand's
+// check the way storeDeltaContent's delta bytes must. Fills a phantom row
+// in place if one already exists for uuid.
+func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)
@@ -818,7 +840,7 @@ func (s *session) loadDBPhantoms() error {
 // phantoms for referenced blobs; we promote those to session phantoms so
 // gimme cards are emitted in the next round.
 func (s *session) handleFileCard(uuid, deltaSrc string, payload []byte) error {
-	if err := storeReceivedFile(s.repo, uuid, deltaSrc, payload, s.cache); err != nil {
+	if err := storeReceivedFile(s.repo, uuid, deltaSrc, payload); err != nil {
 		return err
 	}
 

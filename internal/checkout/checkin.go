@@ -80,6 +80,7 @@ type vfileCommitEntry struct {
 	changed  bool
 	deleted  bool
 	rid      int64
+	isexe    bool
 }
 
 // collectVFileEntries queries vfile for all entries of the given version and
@@ -91,7 +92,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	err error,
 ) {
 	rows, err := c.db.Query(`
-		SELECT pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid
+		SELECT pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid, CAST(isexe AS INTEGER)
 		FROM vfile
 		WHERE vid = ?
 	`, int64(vid))
@@ -104,9 +105,9 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 
 	for rows.Next() {
 		var pathname string
-		var chnged, deleted int
+		var chnged, deleted, isexe int
 		var rid sql.NullInt64
-		if err := rows.Scan(&pathname, &chnged, &deleted, &rid); err != nil {
+		if err := rows.Scan(&pathname, &chnged, &deleted, &rid, &isexe); err != nil {
 			return nil, nil, nil, fmt.Errorf("checkout.Commit: scan vfile: %w", err)
 		}
 		entries[pathname] = vfileCommitEntry{
@@ -114,6 +115,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 			changed:  chnged > 0,
 			deleted:  deleted > 0,
 			rid:      rid.Int64,
+			isexe:    isexe > 0,
 		}
 
 		if deleted > 0 {
@@ -190,6 +192,18 @@ func (c *Checkout) buildCommitFiles(
 		perm := ""
 		if existing, ok := fileMap[name]; ok {
 			perm = existing.Perm
+		}
+
+		// vfile.isexe (captured at Manage/Add time, or reloaded from the
+		// parent manifest) is authoritative for the executable marker on a
+		// changed or newly added file. Leave a symlink marker ("l") alone —
+		// symlink tracking is a separate concern this fix does not touch.
+		if ve, ok := vfEntries[name]; ok && perm != "l" {
+			if ve.isexe {
+				perm = "x"
+			} else {
+				perm = ""
+			}
 		}
 
 		fileMap[name] = manifest.File{

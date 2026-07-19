@@ -52,12 +52,6 @@ type TagSpec struct {
 	Value string
 }
 
-// CheckoutOpts configures a checkout extraction.
-type CheckoutOpts struct {
-	Dir   string
-	Force bool
-}
-
 // FileEntry describes a file in a manifest.
 type FileEntry struct {
 	Name string

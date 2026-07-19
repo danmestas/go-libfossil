@@ -99,11 +99,6 @@ type AnnotateOpts struct {
 	StartRID int64
 }
 
-// StatusOpts configures a working-tree status query.
-type StatusOpts struct {
-	Dir string
-}
-
 // BisectSession holds state for a binary-search bisect operation.
 type BisectSession struct {
 	inner interface{}

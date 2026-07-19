@@ -47,12 +47,10 @@ type HandleOpts struct {
 
 // CloneOpts configures a clone operation.
 type CloneOpts struct {
-	User        string
-	Password    string
-	ProjectCode string
-	ServerCode  string
-	Observer    SyncObserver
-	Buggify     BuggifyChecker // fault injection for DST (nil = no faults)
+	User     string
+	Password string
+	Observer SyncObserver
+	Buggify  BuggifyChecker // fault injection for DST (nil = no faults)
 }
 
 // transportAdapter bridges the public byte-level Transport to the internal

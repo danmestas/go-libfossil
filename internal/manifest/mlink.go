@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/libfossil/internal/content"
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
@@ -145,6 +146,18 @@ func insertMlinkRow(tx *db.Tx, mid libfossil.FslID, fid int64, fnid int64, oldNa
 		mid, fid, pmid, pid, fnid, pfnid, permToMperm(perm), 0,
 	); err != nil {
 		return fmt.Errorf("mlink: %w", err)
+	}
+
+	// Store the file's previous version as a delta against this one. Both
+	// write paths in this package funnel through here, so this is the only
+	// place file content is deltified. Mirrors add_mlink's tail in canonical
+	// Fossil (src/manifest.c:1562, `if( pid && fid ) content_deltify(pid,
+	// &fid, 1, 0)`); content.Deltify holds the policy and declines on its
+	// own when the pair is not worth encoding.
+	if pid > 0 && fid > 0 {
+		if _, err := content.Deltify(tx, libfossil.FslID(pid), libfossil.FslID(fid)); err != nil {
+			return fmt.Errorf("deltify prior file version: %w", err)
+		}
 	}
 	return nil
 }

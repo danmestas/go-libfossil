@@ -30,6 +30,43 @@ func TestStoreReceivedFileEmptyDeltaPayloadReturnsError(t *testing.T) {
 	}
 }
 
+// TestStoreReceivedFileNonHexDeltaSrcReturnsError is a regression test for
+// a permanent-storage-pollution hole: the blob table's own CHECK
+// constraint only bounds uuid length (>=40), not hex-ness, so a non-hex
+// string of valid length -- e.g. 40 'z' characters -- passed it and would
+// otherwise become a permanent, unfillable blob.StorePhantom row. Worse
+// on the pull path specifically: loadDBPhantoms re-requests every DB
+// phantom row every sync round forever, so one hostile delta card bought
+// perpetual gimme traffic for content that could never arrive. The target
+// uuid gets this same check via hash.IsValidHash; deltaSrc needs it too.
+func TestStoreReceivedFileNonHexDeltaSrcReturnsError(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	target := []byte("target content for the non-hex delta source test, padded a bit")
+	targetUUID := hash.SHA1(target)
+	base := []byte("base content for the non-hex delta source test, padded a bit")
+	deltaBytes := delta.Create(base, target)
+
+	nonHexDeltaSrc := ""
+	for i := 0; i < 40; i++ {
+		nonHexDeltaSrc += "z" // valid length, not a hex digit
+	}
+
+	if err := storeReceivedFile(r, targetUUID, nonHexDeltaSrc, deltaBytes); err == nil {
+		t.Fatal("storeReceivedFile(non-hex deltaSrc) = nil error, want rejection")
+	}
+
+	// No phantom row -- and no target row -- should have been created for
+	// the rejected delta source.
+	if _, exists := blob.Exists(r.DB(), nonHexDeltaSrc); exists {
+		t.Fatal("a blob row was created for a non-hex deltaSrc -- rejection must happen " +
+			"before any row is written, not after")
+	}
+	if _, exists := blob.Exists(r.DB(), targetUUID); exists {
+		t.Fatal("a blob row was created for the target despite its delta source being rejected")
+	}
+}
+
 // TestStoreReceivedFileDeltaBeforeBase is the decisive storage-layer test
 // for the delta-before-base fix (see issue #53). It constructs the
 // ordering explicitly, rather than relying on a mock transport's round

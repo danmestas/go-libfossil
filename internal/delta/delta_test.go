@@ -2,6 +2,7 @@ package delta
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
 )
 
@@ -35,6 +36,63 @@ func TestApply_CopyFromSource(t *testing.T) {
 	}
 	if !bytes.Equal(got, target) {
 		t.Fatalf("Apply = %q, want %q", got, target)
+	}
+}
+
+// TestApply_TinyPayloadHugeHeaderBoundsAllocation is a regression test for
+// a durable, remotely-planted memory-exhaustion landmine. A malicious
+// delta can declare an enormous target length in its header while
+// supplying almost no actual delta bytes. Before this fix, output was
+// preallocated directly from that claim (make([]byte, 0, targetLen)), so
+// a handful of wire bytes could trigger an allocation scaled to whatever
+// the header claimed, up to maxDeltaTargetSize (4 GiB). Because a delta
+// can now be stored unverified (see blob.StoreDeltaRaw), a hostile peer
+// plants this once and every later Expand of that row repeats the
+// attempt -- not a one-off parse spike.
+//
+// This claims a 100 MiB target from a payload with no command bytes
+// after the header (so Apply must still fail with "missing terminator" --
+// correctness is unchanged), and asserts the actual allocation growth
+// stays orders of magnitude below the claim: proof the allocation is
+// bounded by a fixed cap, not by the wire-supplied number.
+func TestApply_TinyPayloadHugeHeaderBoundsAllocation(t *testing.T) {
+	const hugeTarget = 100 << 20 // 100 MiB, comfortably under maxDeltaTargetSize
+	// The header's integer is encoded in Fossil's own base-64 alphabet
+	// (see appendInt), not decimal -- fmt.Sprintf("%d", ...) would
+	// produce a string that happens to still parse (digits '0'-'9' are
+	// valid base-64 digits in this scheme) but as a wildly different,
+	// much larger value, which would be rejected by parseTargetLen's
+	// maxDeltaTargetSize bound before ever reaching the allocation this
+	// test targets. appendInt is the same encoder Create uses.
+	header := appendInt(nil, hugeTarget)
+	header = append(header, '\n')
+
+	// Sanity: confirm the header round-trips to the value this test
+	// actually intends to claim, so a future encoding change can't
+	// silently turn this back into a no-op the way the decimal version did.
+	got, err := OutputSize(header)
+	if err != nil || got != hugeTarget {
+		t.Fatalf("fixture bug: header round-trips to (%d, %v), want (%d, nil)", got, err, uint64(hugeTarget))
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	_, err = Apply([]byte{}, header)
+
+	runtime.ReadMemStats(&after)
+
+	if err == nil {
+		t.Fatal("expected an error (missing terminator): header has no command bytes")
+	}
+
+	grown := after.TotalAlloc - before.TotalAlloc
+	const maxSaneGrowth = 4 << 20 // 4 MiB: generous headroom over the 64 KiB cap
+	if grown > maxSaneGrowth {
+		t.Fatalf("Apply allocated %d bytes for a %d-byte header claiming a %d-byte target -- "+
+			"want the allocation bounded by actual work performed, not by the wire-supplied claim",
+			grown, len(header), hugeTarget)
 	}
 }
 

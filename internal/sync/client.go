@@ -670,7 +670,6 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 	return true, nil
 }
 
-// resolveFileContent resolves the full content of a received file card.
 // storeReceivedFile validates and stores a received file/cfile blob. It is
 // used by the clone, sync-pull, and server-push receive paths alike — the
 // single place that decides how a received card becomes a stored row, so
@@ -701,6 +700,15 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 	}
 
 	if deltaSrc != "" {
+		// deltaSrc becomes a blob.StorePhantom row under whatever string
+		// arrives on the wire. The blob table's own CHECK constraint only
+		// bounds uuid length, not hex-ness, so a non-hex value of valid
+		// length (e.g. 40 'z' characters) passes it and would otherwise
+		// create a permanent, unfillable phantom row that loadDBPhantoms
+		// re-requests every sync round forever.
+		if !hash.IsValidHash(deltaSrc) {
+			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
+		}
 		return storeDeltaContent(r, uuid, deltaSrc, payload)
 	}
 

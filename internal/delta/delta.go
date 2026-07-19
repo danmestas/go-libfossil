@@ -135,7 +135,22 @@ func Apply(source, delta []byte) (result []byte, err error) {
 		return nil, err
 	}
 
-	output := make([]byte, 0, targetLen)
+	// The initial capacity is deliberately NOT targetLen: targetLen is a
+	// claim read from the delta's own header, and maxDeltaTargetSize
+	// (which parseTargetLen already bounds it to) exists to reject
+	// obviously-hostile claims, not to size a safe allocation from — a
+	// handful of wire bytes can declare a target near that bound. Once a
+	// delta can be stored unverified (see blob.StoreDeltaRaw), a peer
+	// plants one such delta and every later Expand of that row repeats
+	// the attempt: a durable, remotely-planted allocation, not a one-off
+	// parse spike. Starting small and growing via append tracks actual
+	// work performed instead of trusting the claim.
+	const deltaInitialCap = 64 * 1024 // 64 KiB; append grows normally past this
+	initialCap := targetLen
+	if initialCap > deltaInitialCap {
+		initialCap = deltaInitialCap
+	}
+	output := make([]byte, 0, initialCap)
 
 	for r.pos < len(r.data) {
 		cnt, err := r.getInt()

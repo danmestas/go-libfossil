@@ -11,7 +11,6 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -420,7 +419,7 @@ func (c *Checkout) writeFileFromUUID(name, uuid string) error {
 
 // expandUUID resolves a UUID to its expanded blob content.
 func (c *Checkout) expandUUID(uuid string) ([]byte, error) {
-	rid, ok := blob.Exists(c.repo.DB(), uuid)
+	rid, ok := content.AvailableByUUID(c.repo.DB(), uuid)
 	if !ok {
 		return nil, fmt.Errorf("blob not found for uuid %s", uuid)
 	}

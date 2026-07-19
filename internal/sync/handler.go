@@ -423,7 +423,7 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if h.buggify != nil && h.buggify.Check("handler.handleGimme.skip", 0.05) {
 		return nil
 	}
-	rid, ok := blob.Exists(h.repo.DB(), c.UUID)
+	rid, ok := content.AvailableByUUID(h.repo.DB(), c.UUID)
 	if !ok {
 		return nil // blob not found — not fatal, skip.
 	}

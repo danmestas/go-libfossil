@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/blob"
+	"github.com/danmestas/libfossil/internal/content"
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -38,10 +38,10 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) (missing uint32, e
 
 	// Insert each file into vfile
 	for _, file := range files {
-		// Look up blob RID
-		blobRID, exists := blob.Exists(c.repo.DB(), file.UUID)
-		if !exists {
-			// Blob not found - increment missing count
+		// Look up blob RID. A phantom, or a delta whose base is a phantom,
+		// counts as missing: the checkout cannot materialize its content.
+		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
+		if !available {
 			missing++
 			// Insert with rid=0 to mark as missing
 			blobRID = 0

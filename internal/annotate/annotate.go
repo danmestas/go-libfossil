@@ -6,7 +6,6 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -145,7 +144,7 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string) ([]byte, err
 	}
 	for _, f := range files {
 		if f.Name == filePath {
-			fileRID, ok := blob.Exists(r.DB(), f.UUID)
+			fileRID, ok := content.AvailableByUUID(r.DB(), f.UUID)
 			if !ok {
 				return nil, fmt.Errorf("blob %s not found", f.UUID)
 			}

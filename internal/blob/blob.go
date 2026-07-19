@@ -228,6 +228,16 @@ func Load(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 	return Decompress(content)
 }
 
+// Exists reports whether a blob row with the given uuid is present, and
+// returns its rid. It answers existence only.
+//
+// It returns true for a phantom — a real blob row with size = -1 and NULL
+// content, standing in for an artifact we know of but have not received.
+// A phantom's content cannot be read, and neither can that of a delta whose
+// chain bottoms out in one. Callers that are about to read content must use
+// content.AvailableByUUID instead, which is transitive over the delta chain.
+//
+// Mirrors Fossil's rid_from_uuid (src/xfer.c:70).
 func Exists(q db.Querier, uuid string) (libfossil.FslID, bool) {
 	if q == nil {
 		panic("blob.Exists: q must not be nil")

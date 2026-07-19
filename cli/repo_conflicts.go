@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/merge"
@@ -128,7 +127,7 @@ func expandForkFile(r *repo.Repo, checkinRid int64, filename string) ([]byte, er
 	if rows.Next() {
 		var uuid string
 		rows.Scan(&uuid)
-		frid, ok := blob.Exists(r.DB(), uuid)
+		frid, ok := content.AvailableByUUID(r.DB(), uuid)
 		if !ok {
 			return nil, fmt.Errorf("blob %s not found", uuid)
 		}

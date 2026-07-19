@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/danmestas/libfossil/internal/blob"
+	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/simio"
@@ -408,7 +409,10 @@ func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte) error 
 		}
 		cs.phantoms[uuid] = true
 		if deltaSrc != "" {
-			if _, exists := blob.Exists(cs.repo.DB(), deltaSrc); !exists {
+			// Availability, not existence: a phantom row for deltaSrc still
+			// needs requesting, and so does a delta whose own base is a
+			// phantom.
+			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
 				cs.phantoms[deltaSrc] = true
 			}
 		}

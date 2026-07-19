@@ -198,7 +198,7 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 	// R-card (always over full file set)
 	rDeck := &deck.Deck{F: fCards}
 	getContent := func(uuid string) ([]byte, error) {
-		rid, ok := blob.Exists(tx, uuid)
+		rid, ok := content.AvailableByUUID(tx, uuid)
 		if !ok {
 			return nil, fmt.Errorf("blob not found: %s", uuid)
 		}
@@ -368,7 +368,7 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 		baselineUUID = puuid
 	}
 
-	baseRid, ok := blob.Exists(tx, baselineUUID)
+	baseRid, ok := content.AvailableByUUID(tx, baselineUUID)
 	if !ok {
 		return fmt.Errorf("baseline %s not found", baselineUUID)
 	}

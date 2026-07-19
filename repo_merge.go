@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/manifest"
@@ -281,7 +280,7 @@ func loadFileset(r *Repo, rid int64) (map[string]mergeFileEntry, error) {
 	}
 	out := make(map[string]mergeFileEntry, len(entries))
 	for _, e := range entries {
-		brid, ok := blob.Exists(r.DB(), e.UUID)
+		brid, ok := content.AvailableByUUID(r.DB(), e.UUID)
 		if !ok {
 			return nil, fmt.Errorf("blob not found for uuid %s", e.UUID)
 		}

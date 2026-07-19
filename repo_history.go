@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/danmestas/libfossil/internal/annotate"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
 	"github.com/danmestas/libfossil/internal/diff"
 	"github.com/danmestas/libfossil/internal/fsltype"
@@ -336,7 +335,7 @@ func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
 		if f.Name != filePath {
 			continue
 		}
-		rid, ok := blob.Exists(r.DB(), f.UUID)
+		rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
 		if !ok {
 			return nil, fmt.Errorf("blob not found for uuid %s", f.UUID)
 		}

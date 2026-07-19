@@ -43,6 +43,15 @@ const (
 	// be worth the extra indirection on every read. content.c:917
 	// (blob_size(&delta) < blob_size(&data)*0.75).
 	deltifyMinRatio = 0.75
+
+	// Upper bound on how far the ancestor walk will follow delta links
+	// before declaring the graph malformed. A well-formed chain is at most
+	// as long as the repository has artifacts, but this walk runs on a
+	// graph a sync peer can shape: blob.StoreDeltaRaw records
+	// delta(rid,srcid) links from the wire without a cycle check, so an
+	// A->B->A graph is reachable and must terminate the walk rather than
+	// spin inside the write transaction. TigerStyle: every loop bounded.
+	deltifyMaxChainWalk = 1 << 20
 )
 
 // Deltify tries to rewrite the artifact rid, currently stored whole, as a
@@ -52,9 +61,17 @@ const (
 //
 // The rewrite changes only how rid is stored, never what it expands to, so
 // callers need not tell anyone the representation changed.
-func Deltify(q db.Querier, rid, srcRid libfossil.FslID) (saved int, err error) {
-	if q == nil {
-		panic("content.Deltify: q must not be nil")
+//
+// Deltify takes a *db.Tx rather than a db.Querier because rewriting an
+// artifact is two statements -- the blob content and the delta link -- that
+// must land together. A blob holding delta bytes with no delta row expands as
+// though it were full content, which is silent corruption rather than a
+// detectable error. Canonical wraps the same pair in db_begin_transaction /
+// db_end_transaction (content.c:938-941); requiring the transaction in the
+// signature makes that non-negotiable at compile time.
+func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
+	if tx == nil {
+		panic("content.Deltify: tx must not be nil")
 	}
 	defer func() {
 		if err == nil && saved < 0 {
@@ -69,19 +86,48 @@ func Deltify(q db.Querier, rid, srcRid libfossil.FslID) (saved int, err error) {
 		return 0, nil
 	}
 
-	ok, err := deltifyEligible(q, rid, srcRid)
-	if err != nil || !ok {
+	// Already a delta: leave it. This is the rule that keeps chain depth
+	// linear in revision count instead of compounding (content.c:869).
+	source, err := deltaSource(tx, rid)
+	if err != nil {
 		return 0, err
 	}
+	if source > 0 {
+		return 0, nil
+	}
 
-	data, err := Expand(q, rid)
+	// Phantoms have no content to delta (content.c:874).
+	if !IsAvailable(tx, rid) || !IsAvailable(tx, srcRid) {
+		return 0, nil
+	}
+
+	// The target-size check comes before anything destructive, matching
+	// canonical: content.c:877-885 returns on a sub-50-byte target *before*
+	// entering the candidate loop, so it never reaches the content_undelta
+	// on :902. Running the ancestor walk first would inflate srcRid to full
+	// content and then decline anyway -- a pure storage regression, and a
+	// divergence from canonical's layout for identical input.
+	data, err := Expand(tx, rid)
 	if err != nil {
 		return 0, fmt.Errorf("content.Deltify: expand rid=%d: %w", rid, err)
 	}
 	if len(data) < deltifyMinBytes {
 		return 0, nil
 	}
-	src, err := Expand(q, srcRid)
+
+	// Never carry a private artifact into a public one: the far side of a
+	// sync would receive the public artifact but never be allowed the
+	// source it deltas against (content.c:895).
+	if IsPrivate(tx, int64(srcRid)) && !IsPrivate(tx, int64(rid)) {
+		return 0, nil
+	}
+
+	loops, err := deltifyBreaksLoop(tx, rid, srcRid)
+	if err != nil || loops {
+		return 0, err
+	}
+
+	src, err := Expand(tx, srcRid)
 	if err != nil {
 		return 0, fmt.Errorf("content.Deltify: expand srcid=%d: %w", srcRid, err)
 	}
@@ -93,61 +139,50 @@ func Deltify(q db.Querier, rid, srcRid libfossil.FslID) (saved int, err error) {
 	if float64(len(deltaBytes)) >= float64(len(data))*deltifyMinRatio {
 		return 0, nil
 	}
-	return deltifyWrite(q, rid, srcRid, deltaBytes)
+	return deltifyWrite(tx, rid, srcRid, deltaBytes)
 }
 
-// deltifyEligible answers the questions that can be settled without reading
-// content: is rid already a delta, is it real, and would the link leak a
-// private artifact into a public one.
-func deltifyEligible(q db.Querier, rid, srcRid libfossil.FslID) (bool, error) {
-	// Already a delta: leave it. This is the rule that keeps chain depth
-	// linear in revision count instead of compounding (content.c:869).
-	source, err := deltaSource(q, rid)
-	if err != nil {
-		return false, err
-	}
-	if source > 0 {
-		return false, nil
-	}
+// deltifyBreaksLoop reports whether rid is already an ancestor of srcRid, in
+// which case storing rid as a delta of srcRid would close a loop. When it is,
+// srcRid is undeltaed to break the existing dependency and true is returned:
+// canonical undeltas and then still declines this pairing, because after its
+// `break` the loop variable holds rid rather than 0, so `if( s!=0 ) continue`
+// on content.c:907 skips the candidate. Deltifying rid against the now-whole
+// srcRid would be safe, but diverging here would make our storage layout
+// differ from canonical's for the same input. A later revision offers the
+// pair again.
+func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
+	seen := make(map[libfossil.FslID]bool)
+	cur := srcRid
+	for steps := 0; ; steps++ {
+		// Two independent bounds. The seen set catches a cycle that does
+		// not pass through rid -- StoreDeltaRaw can record one from the
+		// wire -- and the step cap catches any walk that escapes it.
+		if seen[cur] {
+			return false, fmt.Errorf("content.Deltify: delta chain cycle detected at rid=%d", cur)
+		}
+		if steps > deltifyMaxChainWalk {
+			return false, fmt.Errorf("content.Deltify: delta chain from rid=%d exceeds %d links", srcRid, deltifyMaxChainWalk)
+		}
+		seen[cur] = true
 
-	// Phantoms have no content to delta (content.c:874).
-	if !IsAvailable(q, rid) || !IsAvailable(q, srcRid) {
-		return false, nil
-	}
-
-	// Never carry a private artifact into a public one: the far side of a
-	// sync would receive the public artifact but never be allowed the
-	// source it deltas against (content.c:832-836).
-	if IsPrivate(q, int64(srcRid)) && !IsPrivate(q, int64(rid)) {
-		return false, nil
-	}
-
-	// If srcRid already depends on rid, making rid depend on srcRid would
-	// close a loop. Canonical undeltas srcRid to break the existing
-	// dependency and then still declines this pairing for now: after the
-	// `break`, its loop variable holds rid rather than 0, so the `if( s!=0 )
-	// continue` on content.c:907 skips the candidate. Deltifying rid against
-	// the now-whole srcRid would be safe, but diverging here would make our
-	// storage layout differ from canonical's for the same input, so we
-	// decline too. A later revision offers the pair again.
-	for cur := srcRid; ; {
-		next, err := deltaSource(q, cur)
+		next, err := deltaSource(tx, cur)
 		if err != nil {
 			return false, err
 		}
 		if next <= 0 {
-			return true, nil
+			return false, nil
 		}
 		if next == rid {
-			return false, Undelta(q, srcRid)
+			return true, Undelta(tx, srcRid)
 		}
 		cur = next
 	}
 }
 
-func deltifyWrite(q db.Querier, rid, srcRid libfossil.FslID, deltaBytes []byte) (int, error) {
+func deltifyWrite(tx *db.Tx, rid, srcRid libfossil.FslID, deltaBytes []byte) (int, error) {
 	var before int
-	if err := q.QueryRow("SELECT length(content) FROM blob WHERE rid=?", rid).Scan(&before); err != nil {
+	if err := tx.QueryRow("SELECT length(content) FROM blob WHERE rid=?", rid).Scan(&before); err != nil {
 		return 0, fmt.Errorf("content.Deltify: size rid=%d: %w", rid, err)
 	}
 	compressed, err := blob.Compress(deltaBytes)
@@ -156,18 +191,20 @@ func deltifyWrite(q db.Querier, rid, srcRid libfossil.FslID, deltaBytes []byte) 
 	}
 
 	// blob.size stays the target's uncompressed length: it describes what
-	// the artifact expands to, not how many bytes the row holds.
-	if _, err := q.Exec("UPDATE blob SET content=? WHERE rid=?", compressed, rid); err != nil {
+	// the artifact expands to, not how many bytes the row holds. Canonical
+	// deliberately leaves size alone here (content.c:935) even though
+	// content_undelta does update it (content.c:761).
+	if _, err := tx.Exec("UPDATE blob SET content=? WHERE rid=?", compressed, rid); err != nil {
 		return 0, fmt.Errorf("content.Deltify: update rid=%d: %w", rid, err)
 	}
-	if _, err := q.Exec("REPLACE INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid); err != nil {
+	if _, err := tx.Exec("REPLACE INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid); err != nil {
 		return 0, fmt.Errorf("content.Deltify: link rid=%d: %w", rid, err)
 	}
 
 	// Canonical calls verify_before_commit here (content.c:940). Expand
 	// re-hashes the expanded result against the row's declared UUID, so a
 	// bad delta cannot survive this call.
-	if _, err := Expand(q, rid); err != nil {
+	if _, err := Expand(tx, rid); err != nil {
 		return 0, fmt.Errorf("content.Deltify: verify rid=%d: %w", rid, err)
 	}
 
@@ -179,16 +216,17 @@ func deltifyWrite(q db.Querier, rid, srcRid libfossil.FslID, deltaBytes []byte) 
 }
 
 // Undelta rewrites rid as full content, dropping its delta link. Mirrors
-// content_undelta (src/content.c:745-769).
-func Undelta(q db.Querier, rid libfossil.FslID) error {
-	if q == nil {
-		panic("content.Undelta: q must not be nil")
+// content_undelta (src/content.c:745-769), including its update of blob.size,
+// which content_deltify deliberately does not touch.
+func Undelta(tx *db.Tx, rid libfossil.FslID) error {
+	if tx == nil {
+		panic("content.Undelta: tx must not be nil")
 	}
 	if rid <= 0 {
 		panic("content.Undelta: rid must be > 0")
 	}
 
-	source, err := deltaSource(q, rid)
+	source, err := deltaSource(tx, rid)
 	if err != nil {
 		return err
 	}
@@ -196,7 +234,7 @@ func Undelta(q db.Querier, rid libfossil.FslID) error {
 		return nil
 	}
 
-	full, err := Expand(q, rid)
+	full, err := Expand(tx, rid)
 	if err != nil {
 		return fmt.Errorf("content.Undelta: expand rid=%d: %w", rid, err)
 	}
@@ -204,11 +242,11 @@ func Undelta(q db.Querier, rid libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("content.Undelta: compress rid=%d: %w", rid, err)
 	}
-	if _, err := q.Exec("UPDATE blob SET content=?, size=? WHERE rid=?",
+	if _, err := tx.Exec("UPDATE blob SET content=?, size=? WHERE rid=?",
 		compressed, len(full), rid); err != nil {
 		return fmt.Errorf("content.Undelta: update rid=%d: %w", rid, err)
 	}
-	if _, err := q.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
+	if _, err := tx.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
 		return fmt.Errorf("content.Undelta: unlink rid=%d: %w", rid, err)
 	}
 	return nil

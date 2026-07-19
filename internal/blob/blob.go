@@ -67,6 +67,12 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 	return rid, uuid, nil
 }
 
+// StoreDelta inserts a NEW row holding content delta-encoded against
+// srcRid. It has no callers outside tests and is not what the commit path
+// uses: deltifying an already-stored artifact rewrites an existing row
+// rather than inserting one, and the decision of what to deltify is
+// content.Deltify's, which holds the whole policy in one place. Kept for
+// the delta-chain fixtures several packages build with it.
 func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfossil.FslID, uuid string, err error) {
 	if q == nil {
 		panic("blob.StoreDelta: q must not be nil")

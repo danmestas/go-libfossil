@@ -210,12 +210,27 @@ func TestCheckinDeltifiesParentManifest(t *testing.T) {
 		parent = rid
 	}
 
-	// Every manifest but the tip should now be a delta against its child.
+	// Every manifest but the tip must be a delta against its immediate
+	// child, and the tip must be whole. Check each index on its own rather
+	// than counting, so a regression from 11-of-12 to 1-of-12 names the
+	// manifest that stopped being encoded. The last index is handled
+	// separately: indexing manifestRids[i+1] there would be out of range,
+	// and treating that as the tip assertion rather than a guard keeps the
+	// loop from depending on the property it exists to verify.
+	last := len(manifestRids) - 1
 	deltified := 0
 	for i, rid := range manifestRids {
 		var srcid libfossil.FslID
 		err := r.DB().QueryRow("SELECT srcid FROM delta WHERE rid=?", rid).Scan(&srcid)
+
+		if i == last {
+			if err == nil {
+				t.Errorf("tip manifest rid=%d was stored as a delta against %d", rid, srcid)
+			}
+			continue
+		}
 		if err != nil {
+			t.Errorf("manifest %d (rid=%d) was not deltified", i, rid)
 			continue
 		}
 		deltified++
@@ -223,17 +238,8 @@ func TestCheckinDeltifiesParentManifest(t *testing.T) {
 			t.Errorf("manifest %d deltified against rid %d, want its child %d", i, srcid, want)
 		}
 	}
-	if deltified == 0 {
-		t.Fatal("no check-in manifest was deltified: the manifest call site is not wired up")
-	}
-	t.Logf("deltified %d of %d check-in manifests", deltified, len(manifestRids))
-
-	// The tip manifest must stay whole so reading the newest check-in costs
-	// one blob load.
-	tip := manifestRids[len(manifestRids)-1]
-	var srcid libfossil.FslID
-	if err := r.DB().QueryRow("SELECT srcid FROM delta WHERE rid=?", tip).Scan(&srcid); err == nil {
-		t.Errorf("tip manifest rid=%d was stored as a delta against %d", tip, srcid)
+	if want := len(manifestRids) - 1; deltified != want {
+		t.Errorf("deltified %d of %d non-tip manifests, want all %d", deltified, want, want)
 	}
 }
 

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,8 +18,15 @@ import (
 // and re-verifies each against its UUID -- if any delta we wrote were
 // malformed or linked wrongly, it fails there.
 func TestFossilBinaryReadsDeltifiedRepo(t *testing.T) {
+	// A skip is invisible without -v, so a run with no fossil binary would
+	// otherwise be byte-identical to a passing one -- for the single
+	// criterion our own tests cannot substitute for. CI sets
+	// REQUIRE_FOSSIL_BIN=1 to turn a missing binary into a failure.
 	bin, err := exec.LookPath("fossil")
 	if err != nil {
+		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
+			t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH: %v", err)
+		}
 		t.Skip("fossil binary not on PATH; cannot verify canonical readability")
 	}
 

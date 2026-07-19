@@ -17,6 +17,11 @@ jobs:
       - name: Install Fossil
         run: sudo apt-get update && sudo apt-get install -y fossil
       - name: Unit tests
+        # REQUIRE_FOSSIL_BIN turns "fossil is missing" into a failure rather
+        # than an invisible skip. Verifying a real fossil reads what we write
+        # is the one thing our own tests cannot substitute for.
+        env:
+          REQUIRE_FOSSIL_BIN: "1"
         run: GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=120s
       - name: DST
         run: GOWORK=off go test ./dst/... -count=1 -timeout=300s
@@ -38,6 +43,8 @@ jobs:
       - name: Install Fossil
         run: sudo apt-get update && sudo apt-get install -y fossil
       - name: Unit tests (ncruces)
+        env:
+          REQUIRE_FOSSIL_BIN: "1"
         run: GOWORK=off go test -tags test_ncruces $(GOWORK=off go list ./... | grep -v '/dst' | grep -v 'cmd/libfossil') -count=1 -timeout=120s
       - name: DST (ncruces)
         run: GOWORK=off go test -tags test_ncruces ./dst/... -count=1 -timeout=300s

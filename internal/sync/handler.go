@@ -18,8 +18,37 @@ import (
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
-// DefaultCloneBatchSize is the number of blobs sent per clone round.
-const DefaultCloneBatchSize = 200
+// DefaultCloneBatchBytes bounds the wire bytes a single clone round emits.
+//
+// A clone batch is bounded by output size, never by artifact count. A count
+// cannot adapt to artifact size: 200 tiny control artifacts and 200 large
+// blobs produce wildly different messages, and neither corresponds to what
+// the transport can carry. §8.2 leaves the bound entirely to the server
+// ("clients MUST NOT infer count or size from range"), so the only real
+// constraint is that the response stays a size a server can hold and that a
+// repository drains in rounds proportional to its bytes, not its artifacts.
+//
+// The value is deliberately larger than canonical's 5,000,000 max-download.
+// Canonical's clone retransmits each artifact's stored compressed form
+// (§7.2), so its 5 MB covers 5 MB of repository. This clone path emits fully
+// expanded artifacts instead, which for real repositories runs 80x to 220x
+// the stored bytes -- libfossil's own repository is 13.3 MB stored and 1.08 GB
+// expanded. Applying canonical's constant to that quantity would need 184
+// rounds where the old 200-artifact bound needed 87, breaking clones that
+// work today. 16 MB drains the same repository in 65 rounds with a 24.7 MB
+// worst-case response, better than the count bound on both counts.
+//
+// Once the clone path retransmits stored content per §7.2, wire bytes and
+// repository bytes become the same quantity and this drops to canonical's
+// 5,000,000.
+const DefaultCloneBatchBytes = 16_000_000
+
+// cloneCardOverheadBytes is an upper approximation of the non-payload bytes
+// of an encoded file card: keyword, hash, decimal length, and newline. It is
+// charged against the round budget so that a repository of zero-length
+// artifacts still paginates instead of emitting the whole blob table into a
+// single response.
+const cloneCardOverheadBytes = 96
 
 // cloneCapPrefix tags a CookieCard value that carries the upper rid bound
 // of a clone session. The handler captures max(rid) on the first clone round
@@ -688,10 +717,12 @@ func (h *handler) emitCloneBatch() error {
 		h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
 	}
 
-	batchSize := DefaultCloneBatchSize
-	// BUGGIFY: 10% chance reduce batch size to 1 to stress pagination.
+	budget := DefaultCloneBatchBytes
+	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
+	// The budget is consulted before each artifact and never suppresses the
+	// first one, so this yields exactly one artifact per round.
 	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
-		batchSize = 1
+		budget = 1
 	}
 	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
 
@@ -715,6 +746,13 @@ func (h *handler) emitCloneBatch() error {
 	defer rows.Close()
 
 	count := 0
+	// bytesSent accumulates the wire cost of the file cards emitted this
+	// round, mirroring canonical's `while( mxSend > blob_size(pOut) )`: the
+	// budget is tested before each artifact and the artifact that crosses it
+	// is still sent whole. That ordering is what guarantees forward progress
+	// when a single artifact is larger than the entire budget — a post-send
+	// test would emit nothing and stall the cursor.
+	bytesSent := 0
 	var lastSentRID int
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
@@ -731,7 +769,7 @@ func (h *handler) emitCloneBatch() error {
 			continue // skip private blob, don't count toward batch
 		}
 
-		if count >= batchSize {
+		if bytesSent >= budget {
 			nextRID = rid
 			break
 		}
@@ -747,6 +785,7 @@ func (h *handler) emitCloneBatch() error {
 		h.filesSent++
 		lastSentRID = rid
 		count++
+		bytesSent += cloneCardOverheadBytes + len(uuid) + len(data)
 	}
 	if err := rows.Err(); err != nil {
 		return err

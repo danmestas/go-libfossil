@@ -681,7 +681,7 @@ func TestCloneAgainstWritingHub(t *testing.T) {
 // across multiple clone rounds against our own handler. The cursor travels
 // on the clone card in both directions of the round trip: the client sends
 // `clone VERSION SEQNO` and the server answers with clone_seqno. Every other
-// clone-client test fits in one batch (DefaultCloneBatchSize=200), so
+// clone-client test fits in one batch (DefaultCloneBatchBytes), so
 // smallBatch=1 is what forces the pagination path to run at all.
 func TestCloneMultiRoundCursor(t *testing.T) {
 	dir := t.TempDir()

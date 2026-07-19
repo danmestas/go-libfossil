@@ -34,15 +34,18 @@ const (
 )
 
 // Cursor is an opaque pagination token for Timeline. Obtain one from a
-// returned LogEntry's Cursor field and pass it back as the next
+// returned TimelineEntry's Cursor field and pass it back as the next
 // TimelineOpts.After to resume enumeration immediately after that entry.
 // The zero Cursor means "start from the newest event".
 //
 // Cursor's representation is deliberately hidden: it cannot be
 // constructed from a timestamp and a rid by calling code, only obtained
-// from a LogEntry the library already produced. See fsltype.Cursor's doc
-// comment for why — a hand-built cursor derived from a rounded time.Time
-// is not guaranteed to match the row it claims to follow exactly, which
-// is what silently reintroduces skipped or duplicated rows at a page
-// boundary.
+// from a TimelineEntry the library already produced. See fsltype.Cursor's
+// doc comment for why — a hand-built cursor derived from a rounded
+// time.Time is not guaranteed to match the row it claims to follow
+// exactly, which is what silently reintroduces skipped or duplicated rows
+// at a page boundary. LogEntry, Ancestry's result type, has no Cursor
+// field at all: Ancestry's pagination is by Start/Limit, so there is no
+// valid cursor to obtain from it, and the type reflects that instead of
+// documenting it as a hazard.
 type Cursor = fsltype.Cursor

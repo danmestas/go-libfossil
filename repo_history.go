@@ -32,24 +32,28 @@ type TimelineOpts struct {
 	// value means "all kinds" — the canonical `fossil timeline` default.
 	Type EventKind
 	// After, when valid, resumes enumeration immediately following this
-	// cursor — the next page after whatever LogEntry produced it. The zero
-	// Cursor means "start from the newest event". See Repo.Timeline's doc
-	// comment for the pagination contract this forms, and Cursor's doc
-	// comment for why it must come from a LogEntry rather than be built by
-	// hand.
+	// cursor — the next page after whatever TimelineEntry produced it. The
+	// zero Cursor means "start from the newest event". See Repo.Timeline's
+	// doc comment for the pagination contract this forms, and Cursor's doc
+	// comment for why it must come from a TimelineEntry rather than be
+	// built by hand.
 	After Cursor
 	// Limit caps the number of entries returned. Zero or negative means
 	// unbounded.
 	Limit int
 }
 
-// LogEntry represents a single event in the timeline or ancestry chain.
-// Parents is populated for Kind == EventKindCheckin and empty for every
-// other kind — plink, which Parents is derived from, only relates
-// check-in artifacts, so that is correct, not a gap. Cursor is populated
-// on entries returned by Timeline and is the token to pass back as the
-// next page's TimelineOpts.After; it is the zero value (unusable) on
-// entries returned by Ancestry, which paginates by Start/Limit instead.
+// LogEntry represents a single event, as returned by Ancestry. Parents is
+// populated for Kind == EventKindCheckin and empty for every other kind —
+// plink, which Parents is derived from, only relates check-in artifacts,
+// so that is correct, not a gap.
+//
+// LogEntry carries no pagination cursor: Ancestry paginates by
+// LogOpts.Start/Limit, not by cursor, so there would be nothing valid to
+// put in one. See TimelineEntry, Timeline's result type, for the
+// cursor-carrying counterpart — this split means an Ancestry entry's
+// (necessarily invalid) cursor can no longer be obtained at all, let alone
+// passed to Timeline by mistake.
 type LogEntry struct {
 	RID     int64
 	UUID    string
@@ -58,7 +62,21 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    EventKind
 	Parents []string
-	Cursor  Cursor
+}
+
+// TimelineEntry represents a single event as returned by Timeline. It
+// extends LogEntry with Cursor, the pagination token for this row: pass it
+// back as the next call's TimelineOpts.After to resume enumeration
+// immediately after this entry. Cursor is always valid
+// (Cursor.Valid() == true) on every TimelineEntry Timeline produces.
+//
+// TimelineEntry values should come from Timeline, not be hand-assembled.
+// A TimelineEntry built by embedding a LogEntry from Ancestry carries a
+// zero-value Cursor, which Timeline treats as "start from newest" rather
+// than as an error.
+type TimelineEntry struct {
+	LogEntry
+	Cursor Cursor
 }
 
 // DiffEntry describes a unified diff for a single file.

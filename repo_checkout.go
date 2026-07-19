@@ -167,9 +167,9 @@ func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error) {
 // slop, so rows at a page boundary there can repeat or be skipped. Do not
 // "fix" this back to canonical: it is intentional. To page through the
 // full result set, pass the last entry's Cursor back as the next call's
-// TimelineOpts.After — never construct a cursor from a LogEntry's Time by
-// hand; see Cursor's doc comment for why that round trip is lossy.
-func (r *Repo) Timeline(opts TimelineOpts) ([]LogEntry, error) {
+// TimelineOpts.After — never construct a cursor from a TimelineEntry's
+// Time by hand; see Cursor's doc comment for why that round trip is lossy.
+func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 	entries, err := manifest.Timeline(r.inner, manifest.TimelineOpts{
 		Type:  opts.Type,
 		After: opts.After,
@@ -178,17 +178,19 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]LogEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline: %w", err)
 	}
-	result := make([]LogEntry, len(entries))
+	result := make([]TimelineEntry, len(entries))
 	for i, e := range entries {
-		result[i] = LogEntry{
-			RID:     int64(e.RID),
-			UUID:    e.UUID,
-			Comment: e.Comment,
-			User:    e.User,
-			Time:    e.Time,
-			Kind:    e.Kind,
-			Parents: e.Parents,
-			Cursor:  e.Cursor,
+		result[i] = TimelineEntry{
+			LogEntry: LogEntry{
+				RID:     int64(e.RID),
+				UUID:    e.UUID,
+				Comment: e.Comment,
+				User:    e.User,
+				Time:    e.Time,
+				Kind:    e.Kind,
+				Parents: e.Parents,
+			},
+			Cursor: e.Cursor,
 		}
 	}
 	return result, nil

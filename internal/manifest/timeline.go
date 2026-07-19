@@ -17,13 +17,29 @@ type TimelineOpts struct {
 	Type libfossil.EventKind
 	// After, when valid, restricts results to events strictly after this
 	// cursor in Timeline's (mtime DESC, rid DESC) order — i.e. the next
-	// page following whatever LogEntry produced it. The zero Cursor means
-	// "start from the newest event". Obtain a Cursor from a LogEntry's
-	// Cursor field; do not construct one by hand (see fsltype.Cursor).
+	// page following whatever TimelineEntry produced it. The zero Cursor
+	// means "start from the newest event". Obtain a Cursor from a
+	// TimelineEntry's Cursor field; do not construct one by hand (see
+	// fsltype.Cursor).
 	After libfossil.Cursor
 	// Limit caps the number of rows returned. Zero or negative means
 	// unbounded (matches LogOpts.Limit's convention).
 	Limit int
+}
+
+// TimelineEntry is a single event as returned by Timeline. It extends
+// LogEntry with Cursor, the pagination token for this row: Timeline is the
+// operation with pagination semantics, so its own result type — not the
+// shared LogEntry — is where the cursor belongs. Cursor is always valid
+// (fsltype.Cursor.Valid() == true) on every entry Timeline produces.
+//
+// TimelineEntry values should come from Timeline, not be hand-assembled.
+// A TimelineEntry built by embedding a LogEntry from Log/Ancestry carries
+// a zero-value Cursor, which Timeline treats as "start from newest" rather
+// than as an error.
+type TimelineEntry struct {
+	LogEntry
+	Cursor libfossil.Cursor
 }
 
 // maxTimelineRows bounds the enumeration's row loop so that an unbounded
@@ -48,7 +64,7 @@ var maxTimelineRows = 10_000_000
 // hazard. The predicate depends on the cursor's mtime component being the
 // exact float64 read off the row — see fsltype.Cursor's doc comment for
 // why that value must never be reconstructed from a time.Time.
-func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
+func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 	if r == nil {
 		panic("manifest.Timeline: r must not be nil")
 	}
@@ -85,7 +101,7 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
 	}
 	defer rows.Close()
 
-	var entries []LogEntry
+	var entries []TimelineEntry
 	for rows.Next() {
 		if len(entries) >= maxTimelineRows {
 			return nil, fmt.Errorf("manifest.Timeline: exceeded max row bound %d", maxTimelineRows)
@@ -105,10 +121,12 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
 		if !ok {
 			return nil, fmt.Errorf("manifest.Timeline: rid=%d: unexpected mtime type %T", rid, mtimeScanned)
 		}
-		entry := LogEntry{
-			RID: libfossil.FslID(rid), UUID: uuid, Comment: comment.String,
-			User: user.String, Time: libfossil.JulianToTime(mtime),
-			Kind: libfossil.EventKind(kind),
+		entry := TimelineEntry{
+			LogEntry: LogEntry{
+				RID: libfossil.FslID(rid), UUID: uuid, Comment: comment.String,
+				User: user.String, Time: libfossil.JulianToTime(mtime),
+				Kind: libfossil.EventKind(kind),
+			},
 			// Cursor carries mtime as the exact float64 just read off this
 			// row — not a value re-derived from the Time field above — so
 			// handing it back as the next page's After compares equal to

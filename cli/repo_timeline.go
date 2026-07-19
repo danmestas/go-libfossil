@@ -29,7 +29,7 @@ func (c *RepoTimelineCmd) Run(g *Globals) error {
 			uuid = uuid[:10]
 		}
 		// A check-in with no recorded user (event.user IS NULL) comes back
-		// from the library as "" — LogEntry.User never leaks a nullable type.
+		// from the library as "" — TimelineEntry.User never leaks a nullable type.
 		// Canonical fossil renders that case as "?" on the TTY
 		// (coalesce(euser,user,'?') in timeline_query_for_tty()); match it
 		// here at the presentation boundary rather than in the library.

@@ -160,19 +160,20 @@ func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error) {
 // one is given). Unlike Ancestry, this does not start from or require any
 // particular check-in — it is a repository-wide view, not a walk.
 //
-// Ordering is (mtime DESC, rid DESC) — a deliberate improvement over
+// Ordering is (mtime DESC, rid DESC), a total order with rid as a true
+// tie-break at exact mtime equality — a deliberate improvement over
 // canonical fossil, which orders by mtime DESC alone with no tie-break,
 // and paginates with a bare-timestamp web cursor carrying a one-second
 // slop, so rows at a page boundary there can repeat or be skipped. Do not
 // "fix" this back to canonical: it is intentional. To page through the
-// full result set, pass the last entry's Time and RID back as the next
-// call's Before and After.
+// full result set, pass the last entry's Cursor back as the next call's
+// TimelineOpts.After — never construct a cursor from a LogEntry's Time by
+// hand; see Cursor's doc comment for why that round trip is lossy.
 func (r *Repo) Timeline(opts TimelineOpts) ([]LogEntry, error) {
 	entries, err := manifest.Timeline(r.inner, manifest.TimelineOpts{
-		Type:   opts.Type,
-		Before: opts.Before,
-		After:  fsltype.FslID(opts.After),
-		Limit:  opts.Limit,
+		Type:  opts.Type,
+		After: opts.After,
+		Limit: opts.Limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline: %w", err)
@@ -187,6 +188,7 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]LogEntry, error) {
 			Time:    e.Time,
 			Kind:    e.Kind,
 			Parents: e.Parents,
+			Cursor:  e.Cursor,
 		}
 	}
 	return result, nil

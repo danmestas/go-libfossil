@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/danmestas/libfossil/db"
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
@@ -16,13 +15,12 @@ type TimelineOpts struct {
 	// Type restricts the enumeration to a single event.type code. The zero
 	// value means "all kinds" — the canonical `fossil timeline` default.
 	Type libfossil.EventKind
-	// Before, when non-zero, restricts results to events strictly earlier
-	// than the (Before, After) cursor pair: mtime < Before, or mtime ==
-	// Before and rid < After. Zero means "start from the newest event".
-	Before time.Time
-	// After is the cursor's rid tie-break companion; meaningful only
-	// alongside a non-zero Before.
-	After libfossil.FslID
+	// After, when valid, restricts results to events strictly after this
+	// cursor in Timeline's (mtime DESC, rid DESC) order — i.e. the next
+	// page following whatever LogEntry produced it. The zero Cursor means
+	// "start from the newest event". Obtain a Cursor from a LogEntry's
+	// Cursor field; do not construct one by hand (see fsltype.Cursor).
+	After libfossil.Cursor
 	// Limit caps the number of rows returned. Zero or negative means
 	// unbounded (matches LogOpts.Limit's convention).
 	Limit int
@@ -35,32 +33,21 @@ type TimelineOpts struct {
 // anywhere near this many events.
 var maxTimelineRows = 10_000_000
 
-// cursorEpsilonJulian is the tolerance used when comparing a caller-supplied
-// Before cursor against the stored e.mtime. A page's Before is built from a
-// previously returned LogEntry.Time, which has already been round-tripped
-// through at least one lossy float64<->time.Time conversion — and, under
-// the ncruces/WASM sqlite driver, a second one: SQLite hands back
-// event.mtime as a time.Time via the driver's own REAL conversion, which
-// carries its own sub-millisecond noise (observed ~13us) that Go's
-// UnixMilli() truncates into a full missed millisecond. A bit-exact cursor
-// round trip cannot be guaranteed across drivers, so treat mtimes within
-// this window as the same instant for pagination purposes and let the rid
-// tie-break do the rest. 10ms comfortably covers the observed drift while
-// staying far below any realistic distinct-event time gap.
-const cursorEpsilonJulian = 0.010 / 86400.0
-
 // Timeline enumerates the event table newest-first: every event by
 // default, or just the events matching opts.Type when set. This is the
 // repository-wide enumeration fossil's own `timeline` command performs —
 // it does not follow plink at all, so it is not limited to first-parent
 // ancestors of any single check-in the way Log (the ancestry walk) is.
 //
-// Ordering is (mtime DESC, rid DESC) — a deliberate improvement over
+// Ordering is (mtime DESC, rid DESC), a total order with rid as a true
+// tie-break at exact mtime equality — a deliberate improvement over
 // canonical fossil, which orders by mtime DESC alone with no tie-break and
 // pages using a bare timestamp cursor with a one-second slop, so rows at a
 // page boundary can repeat or be skipped there. Pass the last returned
-// entry's Time and RID back as Before/After to fetch the next page without
-// that hazard.
+// entry's Cursor back as opts.After to fetch the next page without that
+// hazard. The predicate depends on the cursor's mtime component being the
+// exact float64 read off the row — see fsltype.Cursor's doc comment for
+// why that value must never be reconstructed from a time.Time.
 func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
 	if r == nil {
 		panic("manifest.Timeline: r must not be nil")
@@ -79,10 +66,9 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
 		conds = append(conds, "e.type = ?")
 		args = append(args, string(opts.Type))
 	}
-	if !opts.Before.IsZero() {
-		conds = append(conds, "(e.mtime < ? OR (e.mtime <= ? AND b.rid < ?))")
-		cursor := libfossil.TimeToJulian(opts.Before)
-		args = append(args, cursor-cursorEpsilonJulian, cursor+cursorEpsilonJulian, int64(opts.After))
+	if opts.After.Valid() {
+		conds = append(conds, "(e.mtime < ? OR (e.mtime = ? AND b.rid < ?))")
+		args = append(args, opts.After.Julian(), opts.After.Julian(), int64(opts.After.RID()))
 	}
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
@@ -123,6 +109,11 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]LogEntry, error) {
 			RID: libfossil.FslID(rid), UUID: uuid, Comment: comment.String,
 			User: user.String, Time: libfossil.JulianToTime(mtime),
 			Kind: libfossil.EventKind(kind),
+			// Cursor carries mtime as the exact float64 just read off this
+			// row — not a value re-derived from the Time field above — so
+			// handing it back as the next page's After compares equal to
+			// this row bit-for-bit. See fsltype.Cursor's doc comment.
+			Cursor: libfossil.NewCursor(mtime, libfossil.FslID(rid)),
 		}
 		// Parents come from plink, which only relates check-in artifacts —
 		// leaving Parents empty for every other kind is correct, not a gap.

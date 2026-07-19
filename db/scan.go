@@ -63,6 +63,18 @@ func julianToTime(jd float64) time.Time {
 	return time.UnixMilli(millis).UTC()
 }
 
+// timeToJulian converts a driver-scanned time.Time back to a julian day
+// float64. Rounds to the nearest millisecond rather than truncating: the
+// ncruces/WASM sqlite driver hands back DATETIME columns as a time.Time
+// via its own internal REAL conversion, which carries sub-millisecond
+// noise (observed ~13us) around the true millisecond-aligned instant every
+// mtime in this codebase is written as. A plain UnixMilli() truncates that
+// noise into a full missed millisecond when it lands just below the true
+// value; rounding recovers the exact intended millisecond, which is what
+// makes ScanJulianDay(scannedTime) reproduce the same float64 bit-for-bit
+// as the value TimeToJulian originally wrote, across both drivers. This
+// matters beyond cosmetics: Timeline's pagination cursor is built from
+// exactly this value and depends on it matching the stored row exactly.
 func timeToJulian(t time.Time) float64 {
-	return julianEpoch + float64(t.UTC().UnixMilli())/(86400.0*1000.0)
+	return julianEpoch + float64(t.Round(time.Millisecond).UTC().UnixMilli())/(86400.0*1000.0)
 }

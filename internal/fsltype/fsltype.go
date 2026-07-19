@@ -75,3 +75,40 @@ func JulianToTime(j float64) time.Time {
 	millis := int64(math.Round((j - julianEpoch) * 86400.0 * 1000.0))
 	return time.UnixMilli(millis).UTC()
 }
+
+// Cursor is an opaque pagination token for a Timeline enumeration. Obtain
+// one from a returned LogEntry's Cursor field and hand it back as the next
+// page's cursor to resume immediately after that entry, in the same
+// (mtime DESC, rid DESC) order Timeline itself produces. The zero Cursor
+// (Valid() == false) means "start from the newest event".
+//
+// The julian/rid pair is deliberately unexported. A cursor built from
+// parts — e.g. re-deriving mtime by round-tripping a LogEntry.Time back
+// through TimeToJulian — is not guaranteed to equal the row's actual
+// stored mtime bit-for-bit, which silently reintroduces skipped or
+// duplicated rows at a page boundary (the exact defect this type exists
+// to make impossible to construct). Only NewCursor, called by Timeline's
+// own row-scanning code with the float64 read directly off the row, may
+// produce a valid one.
+type Cursor struct {
+	julian float64
+	rid    FslID
+	valid  bool
+}
+
+// NewCursor builds a Cursor from a row's exact scanned mtime and rid.
+// Callers outside this package's Timeline implementation should not need
+// this — obtain a Cursor from a LogEntry instead.
+func NewCursor(julian float64, rid FslID) Cursor {
+	return Cursor{julian: julian, rid: rid, valid: true}
+}
+
+// Julian returns the cursor's julian-day mtime component.
+func (c Cursor) Julian() float64 { return c.julian }
+
+// RID returns the cursor's rid component.
+func (c Cursor) RID() FslID { return c.rid }
+
+// Valid reports whether c was produced by NewCursor (as opposed to being
+// a zero-value Cursor{}, which means "no cursor").
+func (c Cursor) Valid() bool { return c.valid }

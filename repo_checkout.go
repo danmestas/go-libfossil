@@ -125,11 +125,54 @@ func (r *Repo) Commit(opts CommitOpts) (int64, string, error) {
 	return int64(rid), uuid, nil
 }
 
-// Timeline returns checkin log entries starting from the given RID.
-func (r *Repo) Timeline(opts LogOpts) ([]LogEntry, error) {
+// Ancestry walks the primary-parent chain starting from opts.Start: it
+// emits that check-in, follows plink where isprim=1 to its parent, and
+// repeats until the chain ends or opts.Limit is reached. This only ever
+// sees first-parent ancestors of opts.Start — a merge's second parent, a
+// sibling branch head, or any check-in outside that one chain will never
+// appear. Use Timeline for a repository-wide view.
+func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error) {
 	entries, err := manifest.Log(r.inner, manifest.LogOpts{
 		Start: fsltype.FslID(opts.Start),
 		Limit: opts.Limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: ancestry: %w", err)
+	}
+	result := make([]LogEntry, len(entries))
+	for i, e := range entries {
+		result[i] = LogEntry{
+			RID:     int64(e.RID),
+			UUID:    e.UUID,
+			Comment: e.Comment,
+			User:    e.User,
+			Time:    e.Time,
+			Kind:    e.Kind,
+			Parents: e.Parents,
+		}
+	}
+	return result, nil
+}
+
+// Timeline enumerates the repository's events newest-first: every row of
+// the event table by default, or just the rows matching opts.Type when
+// set (canonical `fossil timeline`'s -t/--type default: no filter unless
+// one is given). Unlike Ancestry, this does not start from or require any
+// particular check-in — it is a repository-wide view, not a walk.
+//
+// Ordering is (mtime DESC, rid DESC) — a deliberate improvement over
+// canonical fossil, which orders by mtime DESC alone with no tie-break,
+// and paginates with a bare-timestamp web cursor carrying a one-second
+// slop, so rows at a page boundary there can repeat or be skipped. Do not
+// "fix" this back to canonical: it is intentional. To page through the
+// full result set, pass the last entry's Time and RID back as the next
+// call's Before and After.
+func (r *Repo) Timeline(opts TimelineOpts) ([]LogEntry, error) {
+	entries, err := manifest.Timeline(r.inner, manifest.TimelineOpts{
+		Type:   opts.Type,
+		Before: opts.Before,
+		After:  fsltype.FslID(opts.After),
+		Limit:  opts.Limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline: %w", err)
@@ -142,6 +185,7 @@ func (r *Repo) Timeline(opts LogOpts) ([]LogEntry, error) {
 			Comment: e.Comment,
 			User:    e.User,
 			Time:    e.Time,
+			Kind:    e.Kind,
 			Parents: e.Parents,
 		}
 	}

@@ -18,19 +18,43 @@ import (
 // not tracked in the given checkin. Callers can match with errors.Is.
 var ErrFileNotFound = errors.New("libfossil: file not found in checkin")
 
-// LogOpts configures a log/timeline query.
+// LogOpts configures an Ancestry query: a first-parent walk starting from
+// a specific check-in.
 type LogOpts struct {
 	Start int64
 	Limit int
 }
 
-// LogEntry represents a single checkin in the timeline.
+// TimelineOpts configures a Timeline query: a repository-wide enumeration
+// of the event table.
+type TimelineOpts struct {
+	// Type restricts the enumeration to a single event kind. The zero
+	// value means "all kinds" — the canonical `fossil timeline` default.
+	Type EventKind
+	// Before, when non-zero, restricts results to events strictly earlier
+	// than the (Before, After) cursor pair. Zero means "start from the
+	// newest event". See Repo.Timeline's doc comment for the pagination
+	// contract this pair forms.
+	Before time.Time
+	// After is the cursor's tie-break companion, used alongside Before
+	// when paginating; meaningful only when Before is also set.
+	After FslID
+	// Limit caps the number of entries returned. Zero or negative means
+	// unbounded.
+	Limit int
+}
+
+// LogEntry represents a single event in the timeline or ancestry chain.
+// Parents is populated for Kind == EventKindCheckin and empty for every
+// other kind — plink, which Parents is derived from, only relates
+// check-in artifacts, so that is correct, not a gap.
 type LogEntry struct {
 	RID     int64
 	UUID    string
 	Comment string
 	User    string
 	Time    time.Time
+	Kind    EventKind
 	Parents []string
 }
 

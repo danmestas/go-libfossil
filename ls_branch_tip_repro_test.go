@@ -262,7 +262,7 @@ func TestLsBranchTipReturnsEmpty(t *testing.T) {
 			C:    "first checkin via xfer",
 			D:    time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
 			F:    []deck.FileCard{{Name: "ingested.txt", UUID: fileUUID}},
-			U:    "test-user",
+			U:    deck.User("test-user"),
 			T: []deck.TagCard{
 				{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 				{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
@@ -346,7 +346,7 @@ func TestLsBranchTipReturnsEmpty(t *testing.T) {
 			D:    time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC),
 			P:    []string{trunkUUID},
 			F:    []deck.FileCard{{Name: "ingested.txt", UUID: fileUUID}},
-			U:    "test-user",
+			U:    deck.User("test-user"),
 			T: []deck.TagCard{
 				{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "feature-xfer"},
 				{Type: deck.TagPropagating, Name: "sym-feature-xfer", UUID: "*"},

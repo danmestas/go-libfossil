@@ -22,7 +22,7 @@ func buildCheckinManifest(t *testing.T, comment string, when time.Time, fileUUID
 		C:    comment,
 		D:    when,
 		F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
-		U:    "tester",
+		U:    deck.User("tester"),
 		P:    parents,
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},

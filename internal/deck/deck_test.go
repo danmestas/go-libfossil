@@ -120,7 +120,7 @@ func TestMarshalMinimalCheckin(t *testing.T) {
 			{Type: TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: TagSingleton, Name: "sym-trunk", UUID: "*"},
 		},
-		U: "testuser",
+		U: User("testuser"),
 	}
 	data, err := d.Marshal()
 	if err != nil {
@@ -136,7 +136,7 @@ func TestMarshalMinimalCheckin(t *testing.T) {
 }
 
 func TestMarshalDCardFormat(t *testing.T) {
-	d := &Deck{Type: Checkin, D: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC), U: "test"}
+	d := &Deck{Type: Checkin, D: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC), U: User("test")}
 	data, _ := d.Marshal()
 	if !strings.Contains(string(data), "D 2024-01-15T10:30:00.000\n") {
 		t.Fatalf("D-card format wrong in:\n%s", data)
@@ -148,7 +148,7 @@ func TestMarshalFossilEncoding(t *testing.T) {
 		Type: Checkin,
 		C:    "fix the space bug",
 		D:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-		U:    "test user",
+		U:    User("test user"),
 	}
 	data, _ := d.Marshal()
 	s := string(data)
@@ -165,7 +165,7 @@ func TestMarshalWCard(t *testing.T) {
 		Type: Wiki,
 		D:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
 		L:    "TestPage",
-		U:    "test",
+		U:    User("test"),
 		W:    []byte("Hello wiki world"),
 	}
 	data, _ := d.Marshal()
@@ -187,7 +187,7 @@ func TestParseMinimalCheckin(t *testing.T) {
 			{Type: TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: TagSingleton, Name: "sym-trunk", UUID: "*"},
 		},
-		U: "testuser",
+		U: User("testuser"),
 	}
 	data, _ := d.Marshal()
 	parsed, err := Parse(data)
@@ -210,15 +210,66 @@ func TestParseFossilEncodedFields(t *testing.T) {
 		Type: Checkin,
 		C:    "fix the space bug",
 		D:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
-		U:    "test user",
+		U:    User("test user"),
 	}
 	data, _ := d.Marshal()
 	parsed, _ := Parse(data)
 	if parsed.C != "fix the space bug" {
 		t.Fatalf("C = %q, want decoded", parsed.C)
 	}
-	if parsed.U != "test user" {
-		t.Fatalf("U = %q, want decoded", parsed.U)
+	if parsed.U == nil || *parsed.U != "test user" {
+		t.Fatalf("U = %v, want decoded", parsed.U)
+	}
+}
+
+// TestParseUCardStates exercises the three U-card presence states a
+// manifest can carry: wholly absent, present-but-empty, and present with
+// a value. Canonical fossil resolves the empty case to "anonymous" at
+// parse time (src/manifest.c:1008-1016); a wholly absent U-card must stay
+// distinguishable (nil) so crosslink can bind SQL NULL instead of a bare
+// empty string. Regression coverage for issue #50.
+func TestParseUCardStates(t *testing.T) {
+	body := "D 2024-01-15T10:30:00.000\n"
+	h := md5.Sum([]byte(body))
+	absent, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", body, h)))
+	if err != nil {
+		t.Fatalf("Parse (absent U-card): %v", err)
+	}
+	if absent.U != nil {
+		t.Fatalf("absent U-card: U = %v, want nil", *absent.U)
+	}
+
+	emptyBody := "D 2024-01-15T10:30:00.000\nU \n"
+	h = md5.Sum([]byte(emptyBody))
+	present, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", emptyBody, h)))
+	if err != nil {
+		t.Fatalf("Parse (empty U-card): %v", err)
+	}
+	if present.U == nil || *present.U != "anonymous" {
+		t.Fatalf("empty U-card: U = %v, want \"anonymous\"", present.U)
+	}
+
+	valueBody := "D 2024-01-15T10:30:00.000\nU alice\n"
+	h = md5.Sum([]byte(valueBody))
+	valued, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", valueBody, h)))
+	if err != nil {
+		t.Fatalf("Parse (valued U-card): %v", err)
+	}
+	if valued.U == nil || *valued.U != "alice" {
+		t.Fatalf("valued U-card: U = %v, want \"alice\"", valued.U)
+	}
+
+	// Whitespace-only U-card: canonical fossil's next_token() skips leading
+	// whitespace, so "U   " yields zUser==NULL and resolves to "anonymous"
+	// the same as a truly empty U-card — not literal whitespace.
+	wsBody := "D 2024-01-15T10:30:00.000\nU   \n"
+	h = md5.Sum([]byte(wsBody))
+	whitespace, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", wsBody, h)))
+	if err != nil {
+		t.Fatalf("Parse (whitespace-only U-card): %v", err)
+	}
+	if whitespace.U == nil || *whitespace.U != "anonymous" {
+		t.Fatalf("whitespace-only U-card: U = %v, want \"anonymous\"", whitespace.U)
 	}
 }
 
@@ -227,7 +278,7 @@ func TestParseWikiManifest(t *testing.T) {
 		Type: Wiki,
 		D:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
 		L:    "TestPage",
-		U:    "admin",
+		U:    User("admin"),
 		W:    []byte("Hello wiki content"),
 	}
 	data, _ := d.Marshal()
@@ -336,7 +387,7 @@ func TestRoundTripCheckin(t *testing.T) {
 		P: []string{"1234567890123456789012345678901234567890"},
 		R: "d41d8cd98f00b204e9800998ecf8427e",
 		T: []TagCard{{Type: TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}},
-		U: "developer",
+		U: User("developer"),
 	}
 	data1, _ := d.Marshal()
 	parsed, err := Parse(data1)
@@ -355,7 +406,7 @@ func TestRoundTripWiki(t *testing.T) {
 		D:    time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		L:    "Test Page",
 		N:    "text/x-markdown",
-		U:    "admin",
+		U:    User("admin"),
 		W:    []byte("# Hello\n\nWiki content."),
 	}
 	data1, _ := d.Marshal()
@@ -374,7 +425,7 @@ func BenchmarkMarshal(b *testing.B) {
 		P:    []string{"1234567890123456789012345678901234567890"},
 		R:    "d41d8cd98f00b204e9800998ecf8427e",
 		T:    []TagCard{{Type: TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}},
-		U:    "benchuser",
+		U:    User("benchuser"),
 	}
 	for i := 0; i < 50; i++ {
 		d.F = append(d.F, FileCard{
@@ -396,7 +447,7 @@ func BenchmarkParse(b *testing.B) {
 		P:    []string{"1234567890123456789012345678901234567890"},
 		R:    "d41d8cd98f00b204e9800998ecf8427e",
 		T:    []TagCard{{Type: TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}},
-		U:    "benchuser",
+		U:    User("benchuser"),
 	}
 	for i := 0; i < 50; i++ {
 		d.F = append(d.F, FileCard{

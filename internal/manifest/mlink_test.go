@@ -138,8 +138,15 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 		if row.pmid != int64(trunkRid) {
 			t.Errorf("root.txt pmid = %d, want %d (primary parent)", row.pmid, trunkRid)
 		}
-		if row.pid == 0 {
-			t.Errorf("root.txt pid = 0, want the primary parent's file rid (root.txt existed in trunk)")
+		var trunkFid int64
+		if err := d.QueryRow(
+			`SELECT m.fid FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='root.txt'`,
+			trunkRid,
+		).Scan(&trunkFid); err != nil {
+			t.Fatalf("trunk root.txt fid lookup: %v", err)
+		}
+		if row.pid != trunkFid {
+			t.Errorf("root.txt pid = %d, want %d (the primary parent's file rid)", row.pid, trunkFid)
 		}
 	})
 

@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/db"
 	"github.com/danmestas/libfossil/internal/deck"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/hash"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/internal/tag"
@@ -72,6 +72,17 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 
 		if txErr := insertMlinks(tx, opts, manifestRid); txErr != nil {
 			return txErr
+		}
+
+		// Store the parent check-in manifest as a delta against this one,
+		// the same backwards direction used for file content. Canonical does
+		// this at the end of commit (src/checkin.c:3234,
+		// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
+		// insertMlinks above; this covers the manifests themselves.
+		if opts.Parent > 0 {
+			if _, txErr := content.Deltify(tx, opts.Parent, manifestRid); txErr != nil {
+				return fmt.Errorf("deltify parent manifest: %w", txErr)
+			}
 		}
 
 		if txErr := markLeafAndEvent(tx, opts, manifestRid); txErr != nil {

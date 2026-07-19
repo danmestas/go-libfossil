@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `libfossil repo serve` CLI command wires the already-public
+  `Repo.ServeHTTP` xfer HTTP server into the command surface. A repository
+  created or cloned with this tool can now be served to a peer -- including
+  a stock `fossil clone` -- without writing Go. Binds to `127.0.0.1:8080`
+  by default; override with `--addr host:port`. Process interrupt
+  (Ctrl-C/SIGTERM) cancels the same context `ServeHTTP` already shuts down
+  on; no new shutdown mechanism was introduced.
+
 ### Changed
 
 - **Breaking:** `CloneOpts.ProjectCode` and `CloneOpts.ServerCode` have been

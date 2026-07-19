@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 
 	"time"
@@ -275,6 +276,15 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	if updateErr = c.finalizeUpdate(target); updateErr != nil {
 		return UpdateResult{}, updateErr
 	}
+
+	// maps.allNames is a map, so processFileUpdates' iteration order (and
+	// hence the order these slices were built in) is randomized by the Go
+	// runtime. Sort so the result is deterministic: golden-file and
+	// reflect.DeepEqual assertions against these paths are only meaningful
+	// if the same input produces the same order every run.
+	sort.Strings(filesWritten)
+	sort.Strings(filesRemoved)
+	sort.Strings(conflicted)
 
 	return UpdateResult{
 		FilesWritten: filesWritten,

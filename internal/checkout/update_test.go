@@ -2,6 +2,8 @@ package checkout
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -607,6 +609,120 @@ func containsPath(paths []string, name string) bool {
 		}
 	}
 	return false
+}
+
+// TestUpdateResultPathsAreSorted builds an update touching four files whose
+// names are deliberately not in the order the underlying map would build
+// them (allNames is a map[string]bool; Go randomizes iteration over it).
+// Two files conflict (alpha.txt, zeta.txt) and two are clean additions
+// (new_a.txt, new_z.txt). Every returned slice must come back sorted
+// regardless of iteration order, so a caller can use reflect.DeepEqual or a
+// golden file against the result instead of getting an intermittently
+// ordered list.
+func TestUpdateResultPathsAreSorted(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/test.fossil"
+	r, err := repo.CreateWithEnv(path, "test", simio.RealEnv(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	ridBase, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("original\n")},
+			{Name: "alpha.txt", Content: []byte("original\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "base",
+		User:    "test",
+		Parent:  0,
+		Time:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ridA, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("local version\n")},
+			{Name: "alpha.txt", Content: []byte("local version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+		},
+		Comment: "branch A",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Branch B: conflicting edits to zeta.txt/alpha.txt, plus two brand-new
+	// files that will be clean UpdateAdded entries in FilesWritten.
+	ridB, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{
+			{Name: "zeta.txt", Content: []byte("remote version\n")},
+			{Name: "alpha.txt", Content: []byte("remote version\n")},
+			{Name: "stable.txt", Content: []byte("stable\n")},
+			{Name: "new_z.txt", Content: []byte("new\n")},
+			{Name: "new_a.txt", Content: []byte("new\n")},
+		},
+		Comment: "branch B",
+		User:    "test",
+		Parent:  ridBase,
+		Time:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ckDir := t.TempDir()
+	co, err := Create(r, ckDir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	if err := setVVar(co.db, "checkout", itoa(int64(ridA))); err != nil {
+		t.Fatal(err)
+	}
+	var uuidA string
+	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", ridA).Scan(&uuidA); err != nil {
+		t.Fatal(err)
+	}
+	if err := setVVar(co.db, "checkout-hash", uuidA); err != nil {
+		t.Fatal(err)
+	}
+
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(ridA, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := co.Update(UpdateOpts{TargetRID: ridB})
+	if err != nil {
+		t.Fatalf("Update with conflicts should still succeed (err==nil): %v", err)
+	}
+
+	wantConflicted := []string{"alpha.txt", "zeta.txt"}
+	if !reflect.DeepEqual(result.Conflicted, wantConflicted) {
+		t.Fatalf("Conflicted = %v, want sorted %v", result.Conflicted, wantConflicted)
+	}
+
+	wantWritten := []string{"alpha.txt", "new_a.txt", "new_z.txt", "zeta.txt"}
+	if !reflect.DeepEqual(result.FilesWritten, wantWritten) {
+		t.Fatalf("FilesWritten = %v, want sorted %v", result.FilesWritten, wantWritten)
+	}
+
+	if !sort.StringsAreSorted(result.FilesWritten) {
+		t.Fatalf("FilesWritten not sorted: %v", result.FilesWritten)
+	}
+	if !sort.StringsAreSorted(result.Conflicted) {
+		t.Fatalf("Conflicted not sorted: %v", result.Conflicted)
+	}
 }
 
 // TestUpdateConflictSurfacesPaths builds a genuine fork — two checkins with

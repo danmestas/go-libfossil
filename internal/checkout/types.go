@@ -118,18 +118,21 @@ type UpdateOpts struct {
 
 // UpdateResult reports what Update actually did. Paths, not counts: a
 // caller needs to know which files to show a user, not merely how many
-// changed.
+// changed. All three slices are sorted (sort.Strings) before Update
+// returns, so the order is deterministic and safe to compare with
+// reflect.DeepEqual — it does not depend on Go's randomized map iteration.
 //
 // Conflicted is non-empty when three-way merge could not resolve a file
 // cleanly and wrote "<<<<<<<"-style conflict markers into it on disk. That
 // is a successful update, not a failure — Update still returns a nil error
 // in that case. A caller that only checks the error gets today's behavior;
 // a caller that wants to detect marker text in the working tree must
-// inspect Conflicted.
+// inspect Conflicted. Every path in Conflicted also appears in
+// FilesWritten: the marker text is what was written there.
 type UpdateResult struct {
-	FilesWritten []string // paths written (added, updated, or merged, clean or not)
+	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
-	Conflicted   []string // paths that now contain conflict markers
+	Conflicted   []string // paths that now contain conflict markers; also present in FilesWritten
 }
 
 // ManageOpts configures adding files to tracking.

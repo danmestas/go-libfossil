@@ -42,7 +42,10 @@ type UpdateOpts struct {
 
 // UpdateResult reports what Update actually did. Paths, not counts: a
 // caller needs to know which files to show a user, not merely how many
-// changed.
+// changed. All three slices are sorted (sort.Strings) before Update
+// returns, so the order is deterministic — safe for golden-file tests or
+// reflect.DeepEqual — rather than depending on Go's randomized map
+// iteration order.
 //
 // Outcome mapping (Update's error return is the other half of this):
 //
@@ -56,11 +59,13 @@ type UpdateOpts struct {
 // because the update itself succeeded and the working tree is usable; it
 // just isn't clean. A caller that only checks the returned error gets
 // today's pre-conflict-detection behavior. A caller that needs to warn a
-// user about marker text in their files must check Conflicted.
+// user about marker text in their files must check Conflicted. Every path
+// in Conflicted also appears in FilesWritten: the marker text is what was
+// written there.
 type UpdateResult struct {
-	FilesWritten []string // paths written (added, updated, or merged, clean or not)
+	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
-	Conflicted   []string // paths that now contain conflict markers — not an error
+	Conflicted   []string // paths that now contain conflict markers — not an error; also present in FilesWritten
 }
 
 // RevertOpts configures reverting file changes.

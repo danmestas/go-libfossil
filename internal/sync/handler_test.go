@@ -1726,7 +1726,8 @@ func (s alwaysAtSites) Check(site string, _ float64) bool {
 // semantics `count > 0` was safe, which is why this is a constraint rather
 // than a chaos-injection detail.
 //
-// smallBatch forces batchSize 1 so every batch is the count == 1 case, and
+// smallBatch shrinks the round budget to one byte, which yields exactly
+// one artifact per round, so every batch is the count == 1 case, and
 // truncate is forced alongside it so the guard is the only thing preventing
 // a non-advancing cursor. Each round must strictly advance or report 0.
 func TestEmitCloneBatchCursorAlwaysAdvances(t *testing.T) {

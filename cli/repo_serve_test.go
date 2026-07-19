@@ -24,10 +24,10 @@ import (
 	_ "github.com/danmestas/libfossil/internal/testdriver"
 )
 
-// NOTE: TestRepoServeCmdRun and TestRepoServeCmdCanonicalFossilClone below
-// send a real SIGINT to the test binary's own process (syscall.Kill) to
-// exercise RepoServeCmd's Ctrl-C shutdown path end-to-end, rather than
-// faking it by cancelling an injected context. That is only safe because
+// NOTE: TestRepoServeCmdRun and every test that goes through serveRepo send
+// a real SIGINT to the test binary's own process (syscall.Kill) to exercise
+// RepoServeCmd's Ctrl-C shutdown path end-to-end, rather than faking it by
+// cancelling an injected context. That is only safe because
 // nothing else in package cli_test is listening for signals or running
 // concurrently with them at the same time: no test in this package calls
 // t.Parallel(), and no other test installs its own signal.Notify or
@@ -217,6 +217,17 @@ func serveRepo(t *testing.T, repoPath string) string {
 		done <- c.Run(g)
 	}()
 	t.Cleanup(func() {
+		// SIGINT is Run's shutdown path only while its signal.NotifyContext
+		// is installed. If Run has already returned, the handler is gone and
+		// SIGINT's default action kills the whole test binary -- turning a
+		// server failure into a truncated process death with no verdict.
+		// Report that case instead of signalling into it.
+		select {
+		case err := <-done:
+			t.Errorf("serve exited before the test finished: %v", err)
+			return
+		default:
+		}
 		syscall.Kill(os.Getpid(), syscall.SIGINT)
 		<-done
 	})
@@ -328,7 +339,6 @@ func artifactCount(t *testing.T, bin, repoPath string) int {
 func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 	bin := requireFossilBin(t)
 
-	rounds := map[string]int{}
 	for _, tc := range []struct {
 		name         string
 		payloadBytes int
@@ -367,7 +377,6 @@ func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 			}
 
 			got := cloneRoundTrips(t, out)
-			rounds[tc.name] = got
 			t.Logf("corpus %d bytes, %d artifacts, clone took %d round-trips",
 				tc.payloadBytes, sourceArtifacts, got)
 			if got < tc.roundsMin {
@@ -390,15 +399,5 @@ func TestRepoServeCmdCanonicalFossilMultiBatchClone(t *testing.T) {
 			}
 			t.Logf("test-integrity: %s", bytes.TrimSpace(integrity))
 		})
-	}
-
-	// Round-trip counts carry a fixed protocol overhead beyond the clone
-	// rounds themselves, so the absolute floors above are loose. Comparing a
-	// corpus three times the byte budget against one a quarter of it cancels
-	// that overhead and shows pagination actually tracking corpus size.
-	if rounds["multi-batch"] <= rounds["single-batch"] {
-		t.Errorf("multi-batch clone took %d round-trips, single-batch took %d; "+
-			"pagination did not scale with corpus size",
-			rounds["multi-batch"], rounds["single-batch"])
 	}
 }

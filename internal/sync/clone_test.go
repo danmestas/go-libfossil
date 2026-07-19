@@ -619,7 +619,7 @@ func (s siteAlways) Check(site string, _ float64) bool { return string(s) == sit
 //
 // We squeeze the per-round batch via the smallBatch Buggify hook so the
 // bug fires deterministically with a single new blob per round; the
-// production trigger is the same shape with a 200-blob default batch.
+// production trigger is the same shape under the default byte budget.
 //
 // After the fix, the server snapshots max(rid) at the start of the clone
 // session and bounds subsequent batches by it, so the clone converges.
@@ -682,7 +682,7 @@ func TestCloneAgainstWritingHub(t *testing.T) {
 // on the clone card in both directions of the round trip: the client sends
 // `clone VERSION SEQNO` and the server answers with clone_seqno. Every other
 // clone-client test fits in one batch (DefaultCloneBatchBytes), so
-// smallBatch=1 is what forces the pagination path to run at all.
+// smallBatch is what forces the pagination path to run at all.
 func TestCloneMultiRoundCursor(t *testing.T) {
 	dir := t.TempDir()
 
@@ -693,7 +693,7 @@ func TestCloneMultiRoundCursor(t *testing.T) {
 	}
 	defer srcRepo.Close()
 
-	// Three checkins → enough blobs to require several rounds at batchSize=1.
+	// Three checkins → enough blobs to require several rounds at one per round.
 	for i := 0; i < 3; i++ {
 		if _, _, err := manifest.Checkin(srcRepo, manifest.CheckinOpts{
 			Comment: fmt.Sprintf("checkin %d", i),

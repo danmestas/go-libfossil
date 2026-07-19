@@ -262,7 +262,7 @@ func parseClone(args []string) (Card, error) {
 		// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds
 		// it from one that fails digit-only recognition, so record whether
 		// this token qualifies rather than only what it parsed to.
-		c.HasSeqNo = isDecimal(args[1])
+		c.SeqNoIsDecimal = isDecimal(args[1])
 	}
 	return c, nil
 }

@@ -335,9 +335,14 @@ func (h *handler) handleControlCard(card xfer.Card) {
 		// §8.1: an otherwise authorized three-token clone with VERSION >= 2
 		// and a digit-only SEQNO of zero or less clears accumulated output,
 		// rolls back, emits this error, and parses no later request card.
-		// Nothing is written before processDataCards, so discarding the
-		// response and returning early is what the rollback amounts to here.
-		if c.HasSeqNo && c.Version >= 2 && c.SeqNo <= 0 {
+		//
+		// The mandated rollback is satisfied vacuously: no card handled
+		// before processDataCards writes anything, so returning here leaves
+		// nothing to undo. That depends on an ordering nothing enforces —
+		// the day a control card starts writing (§3.5's ci-lock is the
+		// obvious candidate, since a lock taken ahead of this card would
+		// survive the abort), this needs a real transaction instead.
+		if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
 			h.resp = []xfer.Card{&xfer.ErrorCard{Message: "invalid clone sequence number"}}
 			h.fatal = true
 			return

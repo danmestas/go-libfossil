@@ -233,7 +233,7 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		cards = append(cards, &xfer.CloneCard{
 			Version:  version,
 			SeqNo:    cs.seqno,
-			HasSeqNo: true,
+			SeqNoIsDecimal: true,
 		})
 	} else {
 		// Pull mode for phantom resolution after sequential delivery completes.

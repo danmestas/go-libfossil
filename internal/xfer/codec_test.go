@@ -506,9 +506,9 @@ func TestDecode_CloneSeqNoPresence(t *testing.T) {
 		if !ok {
 			t.Fatalf("%q: card = %T, want *CloneCard", tt.line, card)
 		}
-		if c.HasSeqNo != tt.wantHas || c.SeqNo != tt.wantSeq || c.Version != tt.wantVers {
-			t.Errorf("%q: got HasSeqNo=%v SeqNo=%d Version=%d, want %v/%d/%d",
-				tt.line, c.HasSeqNo, c.SeqNo, c.Version, tt.wantHas, tt.wantSeq, tt.wantVers)
+		if c.SeqNoIsDecimal != tt.wantHas || c.SeqNo != tt.wantSeq || c.Version != tt.wantVers {
+			t.Errorf("%q: got SeqNoIsDecimal=%v SeqNo=%d Version=%d, want %v/%d/%d",
+				tt.line, c.SeqNoIsDecimal, c.SeqNo, c.Version, tt.wantHas, tt.wantSeq, tt.wantVers)
 		}
 	}
 }
@@ -1096,5 +1096,34 @@ func TestCkinLockPragma_RoundTrip(t *testing.T) {
 	if fail.Name != "ci-lock-fail" || len(fail.Values) != 2 ||
 		fail.Values[0] != "alice" || fail.Values[1] != "1712000000" {
 		t.Fatalf("ci-lock-fail = %+v", fail)
+	}
+}
+
+// TestCloneCardWireRoundTrip pins that every clone wire form re-encodes to
+// the bytes it was decoded from. The bare `clone` and `clone 0 0` are
+// distinct on the wire but both parse to Version 0 / SeqNo 0, so only
+// SeqNoIsDecimal separates them — consuming that field as mere presence
+// would collapse `clone 0 0` back into a bare `clone`.
+func TestCloneCardWireRoundTrip(t *testing.T) {
+	for _, line := range []string{
+		"clone\n",
+		"clone 0 0\n",
+		"clone 3 0\n",
+		"clone 3 1\n",
+		"clone 3 4096\n",
+		"clone 3 -1\n",
+		"clone 1 7\n",
+	} {
+		card, err := DecodeCard(bufio.NewReader(strings.NewReader(line)))
+		if err != nil {
+			t.Fatalf("decode %q: %v", line, err)
+		}
+		var buf bytes.Buffer
+		if err := EncodeCard(&buf, card); err != nil {
+			t.Fatalf("encode %q: %v", line, err)
+		}
+		if buf.String() != line {
+			t.Errorf("round trip %q -> %q", line, buf.String())
+		}
 	}
 }

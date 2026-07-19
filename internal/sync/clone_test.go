@@ -985,8 +985,7 @@ func TestHandleCloneCursorFromCloneCard(t *testing.T) {
 
 // TestCloneToleratesNonDecimalCloneSeqNo pins §8.2's receiver-tolerance
 // exception across the real wire path: a visible but non-decimal NEXT leaves
-// the recorded sequence unchanged and does not stop parsing later reply
-// cards, so the clone continues rather than aborting.
+// the recorded sequence unchanged and does not abort the clone.
 //
 // The reply is built as bytes and run through the decoder, because the rule
 // lives in the decoder — constructing a CloneSeqNoCard directly would test a
@@ -1042,7 +1041,11 @@ func TestCloneToleratesNonDecimalCloneSeqNo(t *testing.T) {
 	if len(sawCursor) < 2 || sawCursor[1] != sawCursor[0] {
 		t.Errorf("clone cursors = %v, want the round-0 cursor repeated (sequence unchanged)", sawCursor)
 	}
+	// The bad NEXT is the trailer here, so this asserts the cards *before* it
+	// survived the reply rather than anything about continuation. The
+	// continuation half of §8.2 is covered a layer down by the follow-on card
+	// in TestDecode_CloneSeqNoNonDecimal.
 	if result.BlobsRecvd != 1 {
-		t.Errorf("BlobsRecvd = %d, want 1 (cards after the bad NEXT must still parse)", result.BlobsRecvd)
+		t.Errorf("BlobsRecvd = %d, want 1 (reply prefix must still be processed)", result.BlobsRecvd)
 	}
 }

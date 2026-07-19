@@ -1554,7 +1554,7 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 	}
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
-		&xfer.CloneCard{Version: 3, SeqNo: 0, HasSeqNo: true},
+		&xfer.CloneCard{Version: 3, SeqNo: 0, SeqNoIsDecimal: true},
 		&xfer.ReqConfigCard{Name: "project-code"}, // must not be parsed
 	}})
 	if err != nil {
@@ -1586,7 +1586,7 @@ func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
 		card *xfer.CloneCard
 	}{
 		{"bare clone", &xfer.CloneCard{}},
-		{"version below 2", &xfer.CloneCard{Version: 1, SeqNo: 0, HasSeqNo: true}},
+		{"version below 2", &xfer.CloneCard{Version: 1, SeqNo: 0, SeqNoIsDecimal: true}},
 		{"non-digit seqno", &xfer.CloneCard{Version: 3, SeqNo: -1}},
 	}
 	for _, tt := range tests {
@@ -1649,7 +1649,7 @@ func TestEmitCloneBatchCursorAlwaysAdvances(t *testing.T) {
 	cursor := 1
 	for round := 0; round < 50; round++ {
 		resp, err := HandleSyncWithOpts(context.Background(), r, &xfer.Message{
-			Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: cursor, HasSeqNo: true}},
+			Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: cursor, SeqNoIsDecimal: true}},
 		}, HandleOpts{Buggify: bug})
 		if err != nil {
 			t.Fatalf("round %d (cursor %d): %v", round, cursor, err)

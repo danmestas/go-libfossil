@@ -107,13 +107,17 @@ type CookieCard struct {
 func (c *CookieCard) Type() CardType { return CardCookie }
 
 // CloneCard represents a "clone" card. Version and SeqNo are zero for a
-// bare "clone" request. HasSeqNo distinguishes that case from an explicit
-// "clone VERSION 0", which the spec makes a fatal request (§8.1); the
-// parsed value alone cannot tell them apart.
+// bare "clone" request.
+//
+// SeqNoIsDecimal records the SHAPE of the SEQNO token, not its presence:
+// §8.1 keys its fatal on a digit-only SEQNO (`decimal = 1*DIGIT`) and a
+// parsed int cannot carry that. "clone 3 -1" therefore has a SEQNO token
+// but is not decimal, and "clone" and "clone 3 0" both parse to SeqNo 0
+// while only the latter is fatal.
 type CloneCard struct {
-	Version  int
-	SeqNo    int
-	HasSeqNo bool
+	Version        int
+	SeqNo          int
+	SeqNoIsDecimal bool
 }
 
 func (c *CloneCard) Type() CardType { return CardClone }

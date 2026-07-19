@@ -35,7 +35,16 @@ type Deck struct {
 	Q    []CherryPick
 	R    string
 	T    []TagCard
-	U    string
+	// U tracks the check-in user with three distinct states, mirroring
+	// fossil's src/manifest.c:1008-1016 U-card handling:
+	//   - nil: no U-card in the manifest at all (SQL NULL at crosslink time)
+	//   - non-nil, "anonymous": U-card present but empty (resolved at parse
+	//     time, matching canonical fossil's own substitution)
+	//   - non-nil, non-empty: U-card present with a login name
+	// Deliberately *string rather than string: a bare "" cannot represent
+	// "absent" and "present-but-empty" at once, which previously collapsed
+	// both into the same stored value. See Str for constructing literals.
+	U    *string
 	W    []byte
 	Z    string
 }
@@ -82,4 +91,11 @@ type EventCard struct {
 type TicketField struct {
 	Name  string
 	Value string
+}
+
+// Str returns a pointer to s. Go forbids taking the address of a string
+// literal directly, so composite literals that populate Deck.U (a *string,
+// see Deck) go through this instead of Deck{U: &s}.
+func Str(s string) *string {
+	return &s
 }

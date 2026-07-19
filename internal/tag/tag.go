@@ -88,7 +88,7 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 					Value: opts.Value,
 				},
 			},
-			U: opts.User,
+			U: deck.Str(opts.User),
 		}
 
 		// Marshal and store as blob

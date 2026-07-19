@@ -154,8 +154,8 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		}
 	}
 
-	if d.U != "" {
-		fmt.Fprintf(b, "U %s\n", FossilEncode(d.U))
+	if d.U != nil && *d.U != "" {
+		fmt.Fprintf(b, "U %s\n", FossilEncode(*d.U))
 	}
 
 	if len(d.W) > 0 {

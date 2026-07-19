@@ -139,8 +139,7 @@ func parseCard(d *Deck, card byte, args string) error {
 		d.R = strings.TrimSpace(args)
 		return nil
 	case 'U':
-		d.U = FossilDecode(args)
-		return nil
+		return parseUCard(d, args)
 	default:
 		return fmt.Errorf("unknown card '%c'", card)
 	}
@@ -240,6 +239,22 @@ func parseTCard(d *Deck, args string) error {
 		tc.Value = parts[2]
 	}
 	d.T = append(d.T, tc)
+	return nil
+}
+
+// parseUCard resolves the U-card's decoded value the same way fossil's
+// own parser does (src/manifest.c:1008-1016): a present-but-empty U-card
+// becomes the literal "anonymous". A wholly absent U-card never calls
+// this function at all, so d.U stays nil — the third state a bare string
+// field cannot represent. Resolving here, once, means every downstream
+// crosslink call site can bind d.U directly and get the right SQL value
+// (NULL, "anonymous", or the login) without repeating this logic.
+func parseUCard(d *Deck, args string) error {
+	user := FossilDecode(args)
+	if user == "" {
+		user = "anonymous"
+	}
+	d.U = &user
 	return nil
 }
 

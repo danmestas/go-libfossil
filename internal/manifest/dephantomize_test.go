@@ -23,7 +23,7 @@ func TestAfterDephantomizeCheckin(t *testing.T) {
 	d := &deck.Deck{
 		Type: deck.Checkin,
 		C:    "dephantomize commit",
-		U:    "testuser",
+		U:    deck.Str("testuser"),
 		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
 	}
@@ -86,7 +86,7 @@ func TestAfterDephantomizeOrphan(t *testing.T) {
 	baselineDeck := &deck.Deck{
 		Type: deck.Checkin,
 		C:    "baseline",
-		U:    "testuser",
+		U:    deck.Str("testuser"),
 		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "file.txt", UUID: fileUUID}},
 	}
@@ -109,7 +109,7 @@ func TestAfterDephantomizeOrphan(t *testing.T) {
 	orphanDeck := &deck.Deck{
 		Type: deck.Checkin,
 		C:    "orphan commit",
-		U:    "testuser",
+		U:    deck.Str("testuser"),
 		D:    time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "file2.txt", UUID: fileUUID2}},
 	}

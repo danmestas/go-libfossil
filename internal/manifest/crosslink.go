@@ -306,27 +306,56 @@ func updateLeafTable(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 }
 
 // insertCheckinMlinks inserts mlink rows for each file mapping (F-card).
+// An F-card with an empty UUID is an explicit deletion (delta-manifest
+// convention); it still gets a row, with fid=0, so `fossil ls -r` and
+// compute_fileage's ancestry walk see it — see insertMlinkRow for the
+// parent-column convention shared with the direct check-in path.
 func insertCheckinMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+	primaryParentMid, mergeParentMids := resolveParentMids(tx, d)
 	for _, f := range d.F {
-		if f.UUID == "" {
-			continue // deleted file in delta manifest
-		}
 		fnid, err := ensureFilename(tx, f.Name)
 		if err != nil {
 			return fmt.Errorf("filename %q: %w", f.Name, err)
 		}
 		var fileRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", f.UUID).Scan(&fileRid); err != nil {
-			continue // file blob missing
+		if f.UUID != "" {
+			if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", f.UUID).Scan(&fileRid); err != nil {
+				continue // file blob missing
+			}
 		}
-		if _, err := tx.Exec(
-			"INSERT OR IGNORE INTO mlink(mid, fid, fnid) VALUES(?, ?, ?)",
-			rid, fileRid, fnid,
-		); err != nil {
-			return fmt.Errorf("mlink: %w", err)
+		if err := insertMlinkRow(tx, rid, fileRid, fnid, f.OldName, f.Perm, primaryParentMid, mergeParentMids); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// resolveParentMids resolves a checkin manifest's P-card UUIDs to blob
+// rids: the first is the primary parent, any remaining are merge parents.
+// A parent UUID whose blob has not arrived locally is skipped, mirroring
+// insertCheckinPlinks' existing tolerance for missing parent blobs.
+func resolveParentMids(tx *db.Tx, d *deck.Deck) (primaryParentMid libfossil.FslID, mergeParentMids []libfossil.FslID) {
+	if tx == nil {
+		panic("manifest.resolveParentMids: tx must not be nil")
+	}
+	if d == nil {
+		panic("manifest.resolveParentMids: d must not be nil")
+	}
+	if len(d.P) > maxMlinkMergeParents {
+		panic("manifest.resolveParentMids: d.P exceeds bound")
+	}
+	for i, parentUUID := range d.P {
+		var parentRid int64
+		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", parentUUID).Scan(&parentRid); err != nil {
+			continue // parent blob missing, skip
+		}
+		if i == 0 {
+			primaryParentMid = libfossil.FslID(parentRid)
+		} else {
+			mergeParentMids = append(mergeParentMids, libfossil.FslID(parentRid))
+		}
+	}
+	return primaryParentMid, mergeParentMids
 }
 
 // insertCherrypicks inserts cherrypick rows for Q-cards (cherrypick/backout).

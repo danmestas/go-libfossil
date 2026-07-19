@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/deck"
+	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
 	"github.com/danmestas/libfossil/internal/tag"
-	"github.com/danmestas/libfossil/testutil"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/libfossil/testutil"
 )
 
 func setupTestRepo(t *testing.T) *repo.Repo {
@@ -199,6 +199,72 @@ func TestLogWithLimit(t *testing.T) {
 	entries, _ := Log(r, LogOpts{Start: rid2, Limit: 1})
 	if len(entries) != 1 {
 		t.Fatalf("count = %d", len(entries))
+	}
+}
+
+// TestLogNullUser covers fossil's optional U-card: a check-in manifest with
+// no recorded user stores event.user as SQL NULL (the required cards for a
+// check-in are only "DZ" — see manifest.c:130). Log must tolerate this and
+// report an empty string, not fail the whole walk.
+func TestLogNullUser(t *testing.T) {
+	r := setupTestRepo(t)
+	rid1, _, _ := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v1")}},
+		Comment: "first", User: "testuser",
+		Time: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	rid2, _, _ := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v2")}},
+		Comment: "second", User: "testuser", Parent: rid1,
+		Time: time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	})
+	if _, err := r.DB().Exec("UPDATE event SET user=NULL WHERE objid=?", rid2); err != nil {
+		t.Fatalf("UPDATE event SET user=NULL: %v", err)
+	}
+
+	entries, err := Log(r, LogOpts{Start: rid2})
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("count = %d, want 2", len(entries))
+	}
+	if entries[0].User != "" {
+		t.Fatalf("entries[0].User = %q, want empty string for NULL event.user", entries[0].User)
+	}
+	if entries[0].Comment != "second" {
+		t.Fatalf("entries[0].Comment = %q, want %q", entries[0].Comment, "second")
+	}
+	if entries[1].User != "testuser" {
+		t.Fatalf("entries[1].User = %q, want %q (non-NULL users unchanged)", entries[1].User, "testuser")
+	}
+}
+
+// TestLogNullComment covers fossil's optional C-card, the other realistic
+// NULL candidate on the same event row (required cards remain only "DZ").
+func TestLogNullComment(t *testing.T) {
+	r := setupTestRepo(t)
+	rid1, _, _ := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v1")}},
+		Comment: "first", User: "testuser",
+		Time: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if _, err := r.DB().Exec("UPDATE event SET comment=NULL WHERE objid=?", rid1); err != nil {
+		t.Fatalf("UPDATE event SET comment=NULL: %v", err)
+	}
+
+	entries, err := Log(r, LogOpts{Start: rid1})
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("count = %d, want 1", len(entries))
+	}
+	if entries[0].Comment != "" {
+		t.Fatalf("entries[0].Comment = %q, want empty string for NULL event.comment", entries[0].Comment)
+	}
+	if entries[0].User != "testuser" {
+		t.Fatalf("entries[0].User = %q, want %q", entries[0].User, "testuser")
 	}
 }
 

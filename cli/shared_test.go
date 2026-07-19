@@ -1,8 +1,11 @@
 package cli_test
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	libfossil "github.com/danmestas/libfossil"
@@ -185,5 +188,81 @@ func TestRepoCiRejectsOutsideCurrentDirectory(t *testing.T) {
 	}
 	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
 		t.Fatal("RepoCiCmd.Run accepted path outside current directory")
+	}
+}
+
+// TestRepoTimelineRendersQuestionMarkForNullUser matches canonical fossil's
+// TTY rendering (coalesce(euser,user,'?') in timeline_query_for_tty()): a
+// check-in with no recorded user displays as "?", not blank. The library
+// itself must still return "" (see internal/manifest.TestLogNullUser) — the
+// substitution belongs at this presentation boundary only.
+func TestRepoTimelineRendersQuestionMarkForNullUser(t *testing.T) {
+	tmp := t.TempDir()
+	repoPath := filepath.Join(tmp, "test.fossil")
+
+	r, err := libfossil.Create(repoPath, libfossil.CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	rid1, _, err := r.Commit(libfossil.CommitOpts{
+		Files:   []libfossil.FileToCommit{{Name: "a.txt", Content: []byte("v1")}},
+		Comment: "first",
+		User:    "testuser",
+	})
+	if err != nil {
+		t.Fatalf("Commit rid1: %v", err)
+	}
+	rid2, _, err := r.Commit(libfossil.CommitOpts{
+		Files:    []libfossil.FileToCommit{{Name: "a.txt", Content: []byte("v2")}},
+		Comment:  "second",
+		User:     "testuser",
+		ParentID: rid1,
+	})
+	if err != nil {
+		t.Fatalf("Commit rid2: %v", err)
+	}
+	r.Close()
+
+	ckdb, err := libdb.OpenSQL(repoPath, libdb.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatalf("open repo db: %v", err)
+	}
+	if _, err := ckdb.Exec("UPDATE event SET user=NULL WHERE objid=?", rid2); err != nil {
+		ckdb.Close()
+		t.Fatalf("UPDATE event SET user=NULL: %v", err)
+	}
+	ckdb.Close()
+
+	stdout := os.Stdout
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = pw
+
+	cmd := &cli.RepoTimelineCmd{}
+	runErr := cmd.Run(&cli.Globals{Repo: repoPath})
+
+	pw.Close()
+	os.Stdout = stdout
+	var buf bytes.Buffer
+	io.Copy(&buf, pr)
+
+	if runErr != nil {
+		t.Fatalf("RepoTimelineCmd.Run: %v", runErr)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("output lines = %d, want 2:\n%s", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[0], "  ?  second") {
+		t.Fatalf("NULL-user entry line = %q, want it to render user as %q", lines[0], "?")
+	}
+	if strings.Contains(lines[1], "  ?  ") {
+		t.Fatalf("non-NULL-user entry line = %q, should not render %q", lines[1], "?")
+	}
+	if !strings.Contains(lines[1], "testuser") {
+		t.Fatalf("non-NULL-user entry line = %q, want it to still show %q", lines[1], "testuser")
 	}
 }

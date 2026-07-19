@@ -272,48 +272,142 @@ func TestHandleClone(t *testing.T) {
 	}
 }
 
-func TestHandleClonePagination(t *testing.T) {
+// cloneRound runs one clone round at the given cursor and returns the file
+// cards it produced, their total payload size, and the cursor the server
+// reported back. A zero cursor back means the snapshot is exhausted.
+func cloneRound(t *testing.T, r *repo.Repo, seqno int) (files []*xfer.FileCard, payload int, next int) {
+	t.Helper()
+	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: seqno}}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("clone round at seqno %d: %v", seqno, err)
+	}
+	files = findCards[*xfer.FileCard](resp)
+	for _, f := range files {
+		payload += len(f.Content)
+	}
+	seqnos := findCards[*xfer.CloneSeqNoCard](resp)
+	if len(seqnos) != 1 {
+		t.Fatalf("clone round at seqno %d: got %d clone_seqno cards, want 1", seqno, len(seqnos))
+	}
+	return files, payload, seqnos[0].SeqNo
+}
+
+// TestHandleClonePaginationBoundedByBytes proves the clone batch is bounded
+// by output size and not by artifact count (issue #88). Method: store enough
+// large artifacts that one round's payload must exceed the byte budget if the
+// bound were a count, then check the first round stopped near the budget
+// instead of at any fixed number of artifacts.
+func TestHandleClonePaginationBoundedByBytes(t *testing.T) {
 	r := setupSyncTestRepo(t)
-	for i := range DefaultCloneBatchSize + 5 {
-		data := []byte(fmt.Sprintf("page blob %d", i))
+
+	// Each artifact is a fixed 1/8 of the budget, so a byte bound admits
+	// 8 of them per round and a count bound would admit all 40.
+	const artifactSize = DefaultCloneBatchBytes / 8
+	const artifacts = 40
+	for i := range artifacts {
+		data := make([]byte, artifactSize)
+		copy(data, fmt.Sprintf("large blob %d", i))
 		storeTestBlob(t, r, data)
 	}
 
-	// Page 1
-	req1 := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
-	resp1, err := HandleSync(context.Background(), r, req1)
-	if err != nil {
-		t.Fatalf("page 1: %v", err)
+	files, payload, next := cloneRound(t, r, 1)
+	if next == 0 {
+		t.Fatalf("round 1 drained the whole snapshot: %d files, %d payload bytes", len(files), payload)
+	}
+	// The artifact that crosses the budget is still sent whole, so one
+	// artifact of overshoot is the contract, not a tolerance.
+	if payload > DefaultCloneBatchBytes+artifactSize {
+		t.Errorf("round 1 payload = %d bytes, want <= %d",
+			payload, DefaultCloneBatchBytes+artifactSize)
+	}
+	if len(files) >= artifacts {
+		t.Errorf("round 1 sent %d of %d artifacts; batch was not size-bounded", len(files), artifacts)
+	}
+}
+
+// TestHandleClonePaginationNotCappedByCount proves a corpus of small
+// artifacts is not chopped at a fixed count. 2,000 tiny artifacts are far
+// below the byte budget, so the whole snapshot must drain in one round.
+// Under the old 200-artifact bound this needed ten rounds, which is the
+// arithmetic behind #88's ~20,000-artifact ceiling.
+func TestHandleClonePaginationNotCappedByCount(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	const artifacts = 2000
+	for i := range artifacts {
+		storeTestBlob(t, r, []byte(fmt.Sprintf("page blob %d", i)))
 	}
 
-	files1 := findCards[*xfer.FileCard](resp1)
-	seqnos := findCards[*xfer.CloneSeqNoCard](resp1)
-	if len(seqnos) == 0 {
-		t.Fatal("page 1: expected clone_seqno card for continuation")
+	files, payload, next := cloneRound(t, r, 1)
+	if payload >= DefaultCloneBatchBytes {
+		t.Fatalf("test corpus is not below the budget: %d payload bytes", payload)
 	}
-	if len(files1) != DefaultCloneBatchSize {
-		t.Fatalf("page 1: got %d files, want %d", len(files1), DefaultCloneBatchSize)
+	if next != 0 {
+		t.Errorf("round 1 returned cursor %d after %d files; want 0 (exhausted)", next, len(files))
+	}
+	if len(files) < artifacts {
+		t.Errorf("round 1 sent %d files, want all %d", len(files), artifacts)
+	}
+}
+
+// TestHandleClonePaginationOversizedArtifact pins the liveness edge: a single
+// artifact larger than the entire round budget must still be sent, or the
+// cursor never advances past it and the clone stalls to MaxRounds.
+func TestHandleClonePaginationOversizedArtifact(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	oversized := make([]byte, DefaultCloneBatchBytes+1024)
+	copy(oversized, "oversized blob")
+	storeTestBlob(t, r, oversized)
+	storeTestBlob(t, r, []byte("trailing blob"))
+
+	files, payload, next := cloneRound(t, r, 1)
+	if len(files) != 1 {
+		t.Fatalf("round 1 sent %d files, want exactly the one oversized artifact", len(files))
+	}
+	if payload != len(oversized) {
+		t.Errorf("round 1 payload = %d bytes, want %d", payload, len(oversized))
+	}
+	if next == 0 {
+		t.Fatal("round 1 reported exhaustion but the trailing artifact was never sent")
 	}
 
-	// Page 2
-	// The client echoes the server's cursor back on the clone card itself;
-	// clone_seqno is server-to-client only (issue #74).
-	req2 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.CloneCard{Version: 1, SeqNo: seqnos[0].SeqNo},
-	}}
-	resp2, err := HandleSync(context.Background(), r, req2)
-	if err != nil {
-		t.Fatalf("page 2: %v", err)
+	files2, _, next2 := cloneRound(t, r, next)
+	if len(files2) != 1 || next2 != 0 {
+		t.Fatalf("round 2: %d files, cursor %d; want 1 file and exhaustion", len(files2), next2)
+	}
+}
+
+// TestHandleClonePagination walks a two-round clone to completion, pinning
+// the cursor round trip. The client echoes the server's cursor back on the
+// clone card itself; clone_seqno is server-to-client only (issue #74).
+func TestHandleClonePagination(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	// Two artifacts, each the size of the whole budget: the first fills it
+	// and the second is owed to a following round.
+	const artifactSize = DefaultCloneBatchBytes
+	for i := range 2 {
+		data := make([]byte, artifactSize)
+		copy(data, fmt.Sprintf("paged blob %d", i))
+		storeTestBlob(t, r, data)
 	}
 
-	files2 := findCards[*xfer.FileCard](resp2)
-	if len(files2) < 5 {
-		t.Fatalf("page 2: got %d files, want >= 5", len(files2))
+	files1, _, next := cloneRound(t, r, 1)
+	if len(files1) != 1 {
+		t.Fatalf("page 1: got %d files, want 1", len(files1))
+	}
+	if next == 0 {
+		t.Fatal("page 1: expected a continuation cursor, got exhaustion")
 	}
 
-	seqnos2 := findCards[*xfer.CloneSeqNoCard](resp2)
-	if len(seqnos2) != 1 || seqnos2[0].SeqNo != 0 {
-		t.Fatalf("page 2: expected clone_seqno 0 (completion), got %v", seqnos2)
+	files2, _, next2 := cloneRound(t, r, next)
+	if len(files2) != 1 {
+		t.Fatalf("page 2: got %d files, want 1", len(files2))
+	}
+	if next2 != 0 {
+		t.Fatalf("page 2: expected clone_seqno 0 (completion), got %d", next2)
 	}
 }
 
@@ -1632,7 +1726,8 @@ func (s alwaysAtSites) Check(site string, _ float64) bool {
 // semantics `count > 0` was safe, which is why this is a constraint rather
 // than a chaos-injection detail.
 //
-// smallBatch forces batchSize 1 so every batch is the count == 1 case, and
+// smallBatch shrinks the round budget to one byte, which yields exactly
+// one artifact per round, so every batch is the count == 1 case, and
 // truncate is forced alongside it so the guard is the only thing preventing
 // a non-advancing cursor. Each round must strictly advance or report 0.
 func TestEmitCloneBatchCursorAlwaysAdvances(t *testing.T) {

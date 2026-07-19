@@ -18,8 +18,58 @@ import (
 	libfossil "github.com/danmestas/libfossil/internal/fsltype"
 )
 
-// DefaultCloneBatchSize is the number of blobs sent per clone round.
-const DefaultCloneBatchSize = 200
+// DefaultCloneBatchBytes bounds the wire bytes a single clone round emits.
+//
+// A clone batch is bounded by output size, never by artifact count. A count
+// cannot adapt to artifact size: 200 tiny control artifacts and 200 large
+// blobs produce wildly different messages, and neither corresponds to what
+// the transport can carry. §8.2 leaves the bound entirely to the server
+// ("clients MUST NOT infer count or size from range"), so the only real
+// constraint is that the response stays a size a server can hold and that a
+// repository drains in rounds proportional to its bytes, not its artifacts.
+//
+// The value is tuned, not principled, and is deliberately larger than
+// canonical's 5,000,000 max-download. Canonical's clone retransmits each
+// artifact's stored compressed form (§7.2), so its 5 MB covers 5 MB of
+// repository. This clone path emits fully expanded artifacts instead, which
+// on real repositories runs 80x to 220x the stored bytes -- libfossil's own
+// repository is 13.3 MB stored and 1.08 GB expanded. Applying canonical's
+// constant to that quantity is a dimensional error: it needs 184 rounds
+// where the old 200-artifact bound needed 87, breaking clones that work
+// today. Rounds to drain, against the client's MaxRounds of 100:
+//
+//	repo       artifacts  expanded  count-200   5 MB   16 MB
+//	libfossil     17.2k    1.08 GB         87    184      65
+//	fossil        67.5k    8.66 GB        338   1125     473
+//	sqlite         131k    13.1 GB        655   2502     809
+//
+// So this replaces an artifact-count ceiling with an expanded-bytes ceiling.
+// It is a better ceiling -- it tracks the quantity the transport actually
+// carries, and it beats the count bound on every corpus measured -- but
+// fossil- and sqlite-sized repositories still cannot be cloned from a
+// libfossil server within MaxRounds. They could not before either. Only
+// retransmitting stored content per §7.2 removes the ceiling rather than
+// moving it; at that point wire bytes and repository bytes become the same
+// quantity and this drops to canonical's 5,000,000.
+//
+// Note this bounds a round at budget plus one artifact, not at budget: the
+// artifact that crosses the budget is sent whole (see emitCloneBatch), so a
+// repository holding one 2 GB artifact still emits a 2 GB round. Measured
+// worst case is ~25 MB across the three repositories above, since the
+// largest single artifacts are 9.4 MB (libfossil) and 17.0 MB (sqlite).
+// Against the count bound's unbounded 44.9 MB that is a large reduction, but
+// it is a reduction and not a cap, and concurrent clones multiply it.
+const DefaultCloneBatchBytes = 16_000_000
+
+// cloneCardOverheadBytes over-approximates the non-payload bytes of an
+// encoded file card -- keyword, hash, decimal length, and newline come to
+// about 58 -- so that a repository of zero-length artifacts still paginates
+// instead of emitting the whole blob table into a single response. The slack
+// also absorbs the PrivateCard that may precede a card, which is not charged
+// separately. Over-charging is the safe direction and cannot be defeated: a
+// corpus of nothing but zero-length artifacts caps at ~167,000 cards per
+// round, about 9.7 MB of actual output, still inside the budget.
+const cloneCardOverheadBytes = 96
 
 // cloneCapPrefix tags a CookieCard value that carries the upper rid bound
 // of a clone session. The handler captures max(rid) on the first clone round
@@ -688,10 +738,12 @@ func (h *handler) emitCloneBatch() error {
 		h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
 	}
 
-	batchSize := DefaultCloneBatchSize
-	// BUGGIFY: 10% chance reduce batch size to 1 to stress pagination.
+	budget := DefaultCloneBatchBytes
+	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
+	// The budget is consulted before each artifact and never suppresses the
+	// first one, so this yields exactly one artifact per round.
 	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
-		batchSize = 1
+		budget = 1
 	}
 	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
 
@@ -715,6 +767,13 @@ func (h *handler) emitCloneBatch() error {
 	defer rows.Close()
 
 	count := 0
+	// bytesSent accumulates the wire cost of the file cards emitted this
+	// round, mirroring canonical's `while( mxSend > blob_size(pOut) )`: the
+	// budget is tested before each artifact and the artifact that crosses it
+	// is still sent whole. That ordering is what guarantees forward progress
+	// when a single artifact is larger than the entire budget — a post-send
+	// test would emit nothing and stall the cursor.
+	bytesSent := 0
 	var lastSentRID int
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
@@ -731,7 +790,7 @@ func (h *handler) emitCloneBatch() error {
 			continue // skip private blob, don't count toward batch
 		}
 
-		if count >= batchSize {
+		if bytesSent >= budget {
 			nextRID = rid
 			break
 		}
@@ -747,6 +806,7 @@ func (h *handler) emitCloneBatch() error {
 		h.filesSent++
 		lastSentRID = rid
 		count++
+		bytesSent += cloneCardOverheadBytes + len(data)
 	}
 	if err := rows.Err(); err != nil {
 		return err

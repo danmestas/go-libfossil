@@ -24,10 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constructed one: `Checkout.Status()` takes zero arguments, `Repo.Merge`
   takes positional string arguments, and `CheckoutOpts` had no construction
   site at all. A public type with no call site documents a capability that
-  does not exist -- a consumer reading `MergeOpts{Strategy: ...}` in the
+  does not exist — a consumer reading `MergeOpts{Strategy: ...}` in the
   docs could reasonably conclude a strategy-selecting merge API exists; it
   never did. `Repo.Merge` and `Checkout.Status` keep their current
-  signatures -- an options-struct refactor for `Merge` was considered and
+  signatures — an options-struct refactor for `Merge` was considered and
   declined. `CheckoutOpts.Force` was also a third same-named `Force` field
   in this package, alongside the already-removed `UpdateOpts.Force` and the
   real, fully-wired `ExtractOpts.Force`; removing it also removes that

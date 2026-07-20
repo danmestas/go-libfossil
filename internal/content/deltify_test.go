@@ -255,11 +255,12 @@ func TestDeltifyBreaksLoopAndDeclines(t *testing.T) {
 // This exercises deltifyBreaksLoop directly rather than going through
 // Deltify, because Deltify cannot currently reach the walk with a cyclic
 // source: IsAvailable runs first on both rids and follows the same delta
-// links under its own maxAvailabilityChainDepth bound, so it returns false
-// and Deltify declines before the walk begins. That protection is
-// incidental -- IsAvailable is answering a different question
-// (groundedness), and reordering or relaxing it would expose the walk. The
-// bound belongs to the loop that has it, so the test does too.
+// links under maxDeltaChainDepth, so it returns false and Deltify declines
+// before the walk begins. That protection is incidental -- IsAvailable is
+// answering a different question (groundedness), and reordering or relaxing
+// it would expose the walk. Every walk over the peer-shaped delta graph
+// carries its own visited set and its own step cap for that reason, so the
+// test drives this walk rather than relying on another one's guard.
 func TestDeltifyBreaksLoopTerminatesOnCycle(t *testing.T) {
 	inTx(t, func(tx *db.Tx) {
 		v1, v2 := similarPair()

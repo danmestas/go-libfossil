@@ -174,25 +174,31 @@ func TestAvailableByUUID(t *testing.T) {
 }
 
 // deltaQueryFailer delegates every query to the wrapped Querier except the
-// delta-source lookup, which it rewrites into one that genuinely fails. That
-// yields a real non-ErrNoRows error on the exact path IsAvailable uses to
-// decide a chain is grounded.
+// chain-step lookup that reads a blob's delta linkage, which it rewrites into
+// one that genuinely fails. That yields a real error on the exact path
+// IsAvailable uses to decide a chain is grounded.
+//
+// IsAvailable reads size and delta linkage in one statement now, so this can
+// no longer fail the delta half alone: what it proves is that a failing
+// chain-step query reports unavailable rather than grounded, which is the
+// property that matters. The match is on the join specifically, so an
+// unrelated statement that happens to mention delta is not caught by it.
 type deltaQueryFailer struct {
 	db.Querier
 }
 
 func (f deltaQueryFailer) QueryRow(query string, args ...any) *sql.Row {
-	if strings.Contains(query, "FROM delta") {
+	if strings.Contains(query, "LEFT JOIN delta") || strings.Contains(query, "FROM delta") {
 		return f.Querier.QueryRow("SELECT no_such_column FROM no_such_table")
 	}
 	return f.Querier.QueryRow(query, args...)
 }
 
-// A delta-source lookup that fails for any reason other than "no such row"
-// tells us nothing about whether the chain is grounded. Reporting the content
-// available on that basis would resurrect the exact bug this predicate exists
-// to prevent — claiming readable content we never verified — under error
-// conditions, on data arriving over the wire during clone.
+// A chain-step lookup that fails tells us nothing about whether the chain is
+// grounded. Reporting the content available on that basis would resurrect the
+// exact bug this predicate exists to prevent — claiming readable content we
+// never verified — under error conditions, on data arriving over the wire
+// during clone.
 func TestIsAvailable_DeltaLookupErrorFailsClosed(t *testing.T) {
 	d := setupTestDB(t)
 
@@ -212,4 +218,63 @@ func TestIsAvailable_DeltaLookupErrorFailsClosed(t *testing.T) {
 		t.Fatalf("IsAvailable(rid=%d) = true when the delta lookup errored; "+
 			"must fail closed on anything but sql.ErrNoRows", rid)
 	}
+}
+
+// A cycle must cost a number of queries proportional to the cycle, not to
+// maxDeltaChainDepth. IsAvailable is reachable from the wire -- sync's clone
+// and handler paths, and once per F-card of every check-in Crosslink
+// processes -- so a peer that plants a two-node delta cycle must not be able
+// to buy a bounded-but-huge query loop on every call.
+func TestIsAvailable_CycleCostsCycleLengthNotBound(t *testing.T) {
+	d := setupTestDB(t)
+
+	var rids []libfossil.FslID
+	for i := 0; i < 2; i++ {
+		res, err := d.Exec(
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, 42, x'00', 1)",
+			[]string{
+				"00000000000000000000000000000000000000d1",
+				"00000000000000000000000000000000000000d2",
+			}[i],
+		)
+		if err != nil {
+			t.Fatalf("insert blob %d: %v", i, err)
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("LastInsertId: %v", err)
+		}
+		rids = append(rids, libfossil.FslID(id))
+	}
+	for i := range rids {
+		src := rids[(i+1)%len(rids)]
+		if _, err := d.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[i], src); err != nil {
+			t.Fatalf("insert delta: %v", err)
+		}
+	}
+
+	counter := &chainStepCounter{Querier: d}
+	if IsAvailable(counter, rids[0]) {
+		t.Fatal("IsAvailable(cyclic chain) = true, want false")
+	}
+
+	// Two nodes in the cycle, so the walk revisits on its third step.
+	if counter.steps > 8 {
+		t.Fatalf("cyclic chain cost %d chain-step queries for a 2-node cycle; "+
+			"a cycle must stop at the first repeat, not run to maxDeltaChainDepth (%d)",
+			counter.steps, maxDeltaChainDepth)
+	}
+}
+
+// chainStepCounter counts the per-node chain-step queries a walk issues.
+type chainStepCounter struct {
+	db.Querier
+	steps int
+}
+
+func (c *chainStepCounter) QueryRow(query string, args ...any) *sql.Row {
+	if strings.Contains(query, "LEFT JOIN delta") || strings.Contains(query, "FROM delta") {
+		c.steps++
+	}
+	return c.Querier.QueryRow(query, args...)
 }

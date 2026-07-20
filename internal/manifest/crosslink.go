@@ -22,6 +22,35 @@ var attachTargetTypeName = map[byte]string{
 	'e': "tech note",
 }
 
+// crosslinkCacheBytes bounds the expanded content one Crosslink sweep keeps
+// live. A miss costs throughput, not correctness: the walk simply continues
+// further back toward the chain root.
+//
+// It cannot be sized to eliminate misses. A chain runs from a high-rid root
+// down to low-rid ancestors, and the sweep visits rids ascending, so the
+// first candidate of a chain materializes all of it and the rest are consumed
+// arbitrarily far in the future — the working set of a whole-repository sweep
+// in rid order is the whole repository expanded, 8 GiB for the Fossil SCM
+// repository. This budget buys the locally-coherent runs, which is most of
+// the win available without changing the order the sweep visits candidates in.
+//
+// Measured against that repository, expanding its first 4,000 blobs:
+//
+//	budget     throughput      peak RSS
+//	none        22.1 blobs/s     169 MB
+//	256 MiB     52.0 blobs/s    1036 MB
+//	1 GiB      468.3 blobs/s    2278 MB
+//
+// Raising the budget is the one lever that moves this a lot, and it is not
+// cheap: peak RSS grows faster than the budget does, because the cache is live
+// data and the collector sizes the heap against it. The measurements above
+// bound that badly -- three points do not fit a curve, and resident memory at
+// 256 MiB is four times the budget where at 1 GiB it is only twice -- but the
+// direction is not in doubt. A gigabyte of cache costs over two gigabytes
+// resident to clone a 72 MB repository, which is why 1 GiB is not the number
+// here.
+const crosslinkCacheBytes = 256 << 20
+
 type pendingItem struct {
 	Type byte   // 'w' = wiki backlink, 't' = ticket rebuild
 	ID   string
@@ -71,12 +100,26 @@ func Crosslink(r *repo.Repo) (int, error) {
 		return 0, fmt.Errorf("manifest.Crosslink rows: %w", err)
 	}
 
+	// One cache for the sweep. Candidate rids were snapshotted above and
+	// blob content is immutable once written, so nothing this loop does can
+	// invalidate an entry; the cache is dropped when the sweep returns.
+	//
+	// It exists for the delta chains, not for repeated lookups of the same
+	// rid — each candidate is expanded exactly once. A repository that has
+	// been through content_deltify stores a file's older versions as deltas
+	// against its newer ones, so one file's history is a single chain
+	// thousands of nodes deep, and expanding every node of it from the chain
+	// root is quadratic in the length of the chain. Keeping what the walk
+	// materialized turns the repeats into hits wherever the budget reaches.
+	// See internal/content.Cache.Expand and crosslinkCacheBytes.
+	cache := content.NewCache(crosslinkCacheBytes)
+
 	linked := 0
 	var deferredRids []libfossil.FslID
 	missingBlobs := make(map[string]struct{})
 	var pending []pendingItem
 	for _, c := range candidates {
-		data, err := content.Expand(r.DB(), c.rid)
+		data, err := cache.Expand(r.DB(), c.rid)
 		if err != nil {
 			continue // not expandable, skip
 		}

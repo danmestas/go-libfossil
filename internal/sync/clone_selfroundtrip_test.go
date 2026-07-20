@@ -185,11 +185,17 @@ func TestCloneSelfRoundTrip(t *testing.T) {
 // the artifact that crosses it is sent whole, so a round carries up to the
 // budget plus one entire artifact of unbounded size. A corpus of many small
 // artifacts therefore cannot reach the bound however large the corpus grows,
-// because pagination keeps every round near the budget; only a single artifact
-// larger than bound-minus-budget can. That single artifact is also the one
-// remaining path by which a round can exceed the current bound, so this
-// fixture guards the live risk with the same bytes that reproduce the
-// historical one.
+// because pagination keeps every round near the budget; only a single large
+// artifact can.
+//
+// What this fixture covers, exactly: a large artifact that LEADS its round, so
+// the round has accumulated nothing before it. That is the easy case. An
+// artifact of this size riding behind ordinary filler still exceeds the bound
+// -- 8, 12, and 15 MB of filler ahead of it all fail on this fixed branch,
+// while 17 MB passes because it exhausts the budget and pushes the artifact
+// into a round of its own. That ordering dependence is issue #109, a defect
+// this fix exposes rather than one it introduces or resolves. This test is
+// deliberately not a guard on it.
 //
 // The size is expressed against MaxDecompressedBytes rather than as a literal
 // so it tracks the bound: 7/8ths clears any bound an eighth below the current

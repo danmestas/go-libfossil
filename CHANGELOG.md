@@ -42,9 +42,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or reported, never reparsed. The bound is also raised to 64 MiB, since it sat
   below what this implementation's own server emits in a single clone round —
   two libfossil peers could not reliably clone from each other even though each
-  could clone from fossil. Compile-time guards now pin the bound from both
-  sides: above the server's clone batch budget, and below the size at which a
-  message's length prefix could itself be read as a zlib header. (#104)
+  could clone from fossil. Two compile-time guards constrain the bound: it must
+  clear the server's clone *batch budget* twice over, and it must stay below the
+  size at which a length prefix this implementation writes could itself be read
+  as a zlib header. Neither guard certifies a whole round — the budget bounds
+  what precedes an artifact, not the artifact, so a large artifact that does not
+  lead its round can still overrun the bound (#109). (#104)
 
 ### Changed
 

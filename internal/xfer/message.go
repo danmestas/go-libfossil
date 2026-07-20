@@ -38,27 +38,57 @@ type Message struct {
 //     content plus the whole artifact that crossed that budget, so the bound
 //     must clear the budget twice over. Enforced at compile time in
 //     internal/sync.
-//   - Below: it must stay under zlibCMFAliasBytes, or the §4.1 length prefix
-//     of a legitimate container starts to present as a zlib header. Enforced
-//     at compile time immediately below.
+//   - Below: it must stay under zlibCMFAliasBytes, so that no length prefix
+//     this implementation writes can present as a zlib header. Enforced at
+//     compile time immediately below. Read that constant's comment before
+//     trusting the guard: it bounds what we emit, not what we accept.
 //
-// Consequence worth naming: a single artifact larger than this bound cannot be
-// cloned, because the server has to send it whole to make progress.
+// Consequence worth naming, and it is not the simple one. An artifact larger
+// than this bound can never be cloned, because the server must send it whole
+// to make progress. But the real threshold is lower and is not a property of
+// the artifact alone: a round already holding bytes has that much less room,
+// so the ceiling is this bound minus whatever the round accumulated before the
+// artifact. With a 16 MB budget an artifact much above 48 MiB clones only when
+// it happens to lead its round, and fails when ordinary artifacts precede it.
+// That ordering dependence is issue #109; it is a defect this fix exposes
+// rather than one this fix introduces or resolves.
 const MaxDecompressedBytes = 64 << 20 // 64 MiB
 
-// zlibCMFAliasBytes is the decompressed length at which the first byte of a
-// §4.1 container's big-endian length prefix can itself be a valid zlib CMF
-// byte. RFC 1950 requires CM == 8 in the low nibble, so the lowest aliasing
-// prefix byte is 0x08, reached when the declared length is 0x08000000.
+// zlibCMFAliasBytes is the declared length at which the first byte of a §4.1
+// container's big-endian length prefix can itself be a valid zlib CMF byte.
+// RFC 1950 requires CM == 8 in the low nibble, so the lowest aliasing prefix
+// byte is 0x08, reached at a declared length of 0x08000000.
 //
-// This matters because Decode attempts unprefixed zlib before the prefixed
-// container. That ordering is safe for two reasons and the second one is the
-// one that decays: decompressContainer prefers whichever framing actually
-// decodes, so a spurious header match still loses to a real container; and
-// below this threshold the prefix cannot present as a CMF at all, so the
-// spurious match never even starts. Raising MaxDecompressedBytes past this
-// point keeps the first reason and loses the second, which is a narrower
-// safety margin than the code was written against.
+// It matters because Decode attempts unprefixed zlib before the prefixed
+// container, and format 1 returns immediately if it succeeds -- format 2 is
+// consulted only when format 1 fails. A prefix that presents as a zlib header
+// therefore gets first refusal on a legitimate container.
+//
+// Be precise about what the guard below is worth, because it is less than it
+// looks:
+//
+//   - It does NOT bound aliasing on input. The aliasing byte comes from the
+//     length the *peer* declared, and this decoder never reads that field --
+//     it slices past it and counts bytes actually inflated. No value of
+//     MaxDecompressedBytes constrains what a peer declares. A peer declaring
+//     0x081D0000 while sending 46 bytes produces a parsing header at offset 0,
+//     confirmed by probe.
+//   - What actually protects a real container in that case is the rest of the
+//     stream, not arithmetic: after consuming two prefix bytes as a header,
+//     inflate must still parse the remaining two prefix bytes plus the real
+//     zlib stream as DEFLATE and match its Adler-32. It does not -- measured
+//     `flate: corrupt input` on all three aliasing lengths probed -- so format
+//     1 fails, format 2 runs, and the container decodes correctly. The
+//     residual risk is a stream that both parses as DEFLATE and hits a 32-bit
+//     checksum by chance.
+//   - What the guard DOES buy is narrow and real: this implementation's own
+//     Encode writes uint32(len(raw)) as the prefix, so holding the bound below
+//     this threshold means a body libfossil emits can never carry an aliasing
+//     prefix. It is an invariant on our output, not a defence of our input.
+//
+// The airtight fix is to stop guessing the framing -- select on Content-Type
+// per §4, or reject a declared length above the bound before attempting format
+// 1. Both are redesigns of framing selection and neither belongs in #104.
 const zlibCMFAliasBytes = 0x0800_0000 // 128 MiB
 
 // Compile-time guards on MaxDecompressedBytes. Each subtraction underflows and
@@ -146,8 +176,11 @@ func Decode(data []byte) (*Message, error) {
 }
 
 // decompressContainer decompresses a message body under either compressed
-// framing, preferring whichever one decodes. It returns errNotZlib only when
-// neither framing is a zlib stream at all.
+// framing. Format 1 wins outright if it decodes; format 2 is tried only when
+// format 1 fails. The error comparison at the end therefore decides nothing
+// about which framing is used -- it only selects which failure to report when
+// both have already failed. It returns errNotZlib only when neither framing is
+// a zlib stream at all.
 func decompressContainer(data []byte) ([]byte, error) {
 	// Format 1: unprefixed zlib. See Decode; a tolerance, not a Fossil format.
 	rawDirect, errDirect := decompressBounded(data)

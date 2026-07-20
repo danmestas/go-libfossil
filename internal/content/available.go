@@ -7,7 +7,14 @@ import (
 	"github.com/danmestas/libfossil/db"
 )
 
-// maxDeltaChainDepth bounds every delta-chain walk in this package.
+// maxDeltaChainDepth bounds the two read-path delta-chain walks: IsAvailable
+// here and walkDeltaChain in content.go. Each stops after visiting this many
+// nodes.
+//
+// It is not the only such bound in the package. deltifyBreaksLoop runs a third
+// walk under deltifyMaxChainWalk, which is 64 times larger; the rationale below
+// applies to it just as well, but changing it would change shipped deltify
+// behaviour and belongs with that walk, not here.
 //
 // A chain cannot be longer than the number of stored versions of one file.
 // The deepest chain in the Fossil SCM repository, the largest corpus this

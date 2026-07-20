@@ -102,11 +102,11 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 	// guards only content_is_available(rid) and then calls
 	// content_get(srcid) unguarded. It is load-bearing beyond phantoms.
 	// IsAvailable follows the same delta.srcid links as the ancestor walk
-	// below, under its own maxAvailabilityChainDepth bound, and returns
-	// false on a cycle -- so a cyclic srcRid is declined here and never
-	// reaches deltifyBreaksLoop. Weakening or reordering this guard exposes
-	// that walk to a delta graph a sync peer can shape; see the walk's own
-	// bound, which exists so that exposure is survivable rather than a hang.
+	// below, under maxDeltaChainDepth, and returns false on a cycle -- so a
+	// cyclic srcRid is declined here and never reaches deltifyBreaksLoop.
+	// Weakening or reordering this guard exposes that walk to a delta graph a
+	// sync peer can shape; it carries its own visited set and its own step
+	// cap so that exposure is survivable rather than a hang.
 	if !IsAvailable(tx, rid) || !IsAvailable(tx, srcRid) {
 		return 0, nil
 	}
@@ -176,9 +176,12 @@ func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
 	seen := make(map[libfossil.FslID]bool)
 	cur := srcRid
 	for steps := 0; ; steps++ {
-		// Two independent bounds. The seen set catches a cycle that does
-		// not pass through rid -- StoreDeltaRaw can record one from the
-		// wire -- and the step cap catches any walk that escapes it.
+		// Two independent bounds, the same pairing the read-path walks
+		// use. The seen set catches a cycle that does not pass through rid
+		// -- StoreDeltaRaw can record one from the wire -- and the step cap
+		// catches any walk that escapes it. The cap here is
+		// deltifyMaxChainWalk, not maxDeltaChainDepth; see the note on that
+		// constant for why the two differ.
 		if seen[cur] {
 			return false, fmt.Errorf("content.Deltify: delta chain cycle detected at rid=%d", cur)
 		}

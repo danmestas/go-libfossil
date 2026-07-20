@@ -42,10 +42,13 @@ var attachTargetTypeName = map[byte]string{
 //	1 GiB      468.3 blobs/s    2278 MB
 //
 // Raising the budget is the one lever that moves this a lot, and it is not
-// cheap: peak RSS runs at roughly the no-cache baseline plus twice the budget,
-// because the cache is live data and the collector sizes the heap against it.
-// A gigabyte of cache costs well over two of resident memory to clone a 72 MB
-// repository, which is why 1 GiB is not the number here.
+// cheap: peak RSS grows faster than the budget does, because the cache is live
+// data and the collector sizes the heap against it. The measurements above
+// bound that badly -- three points do not fit a curve, and resident memory at
+// 256 MiB is four times the budget where at 1 GiB it is only twice -- but the
+// direction is not in doubt. A gigabyte of cache costs over two gigabytes
+// resident to clone a 72 MB repository, which is why 1 GiB is not the number
+// here.
 const crosslinkCacheBytes = 256 << 20
 
 type pendingItem struct {

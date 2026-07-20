@@ -186,8 +186,9 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 
 	// The visited set stops a cycle at its first repeat; the depth bound is
 	// the backstop for a chain that is acyclic but longer than any real one.
-	// See maxDeltaChainDepth.
-	for depth := 0; depth <= maxDeltaChainDepth; depth++ {
+	// The bound counts nodes visited, so that it bites at the same length
+	// here as it does in IsAvailable. See maxDeltaChainDepth.
+	for {
 		if seen[current] {
 			return nil, nil, fmt.Errorf("delta chain cycle detected at rid=%d", current)
 		}
@@ -204,14 +205,14 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 		var sourceID int64
 		err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", current).Scan(&sourceID)
 		if err != nil {
-			break
+			break // no delta row: this is the chain root
 		}
-		current = libfossil.FslID(sourceID)
 
-		if depth == maxDeltaChainDepth {
+		if len(chain) >= maxDeltaChainDepth {
 			return nil, nil, fmt.Errorf(
 				"delta chain from rid=%d exceeds %d nodes", rid, maxDeltaChainDepth)
 		}
+		current = libfossil.FslID(sourceID)
 	}
 
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {

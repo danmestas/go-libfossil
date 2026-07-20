@@ -119,7 +119,6 @@ func TestCorpusCrosslinkThroughput(t *testing.T) {
 		done <- err
 	}()
 
-	last := 0
 	lastLog := start
 	for {
 		select {
@@ -151,8 +150,6 @@ func TestCorpusCrosslinkThroughput(t *testing.T) {
 			t.Logf("progress: %d events after %s (%.1f events/sec)",
 				n, time.Since(start).Round(time.Second), float64(n)/time.Since(start).Seconds())
 			lastLog = time.Now()
-			last = n
-			_ = last
 		}
 	}
 }

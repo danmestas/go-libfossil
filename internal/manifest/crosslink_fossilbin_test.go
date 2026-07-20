@@ -116,8 +116,15 @@ func TestFossilBinaryReadsCrosslinkedRepo(t *testing.T) {
 		t.Fatalf("fossil rebuild produced no statistics")
 	}
 
-	// Fossil has now re-derived the same tables from the same blobs. Row for
-	// row, on the columns Crosslink writes, the two derivations must agree.
+	// Fossil has now re-derived the same tables from the same blobs. The two
+	// derivations must agree row for row on the columns compared below.
+	//
+	// That is narrower than full-table equivalence: the event digest covers
+	// objid, type, user and comment but not mtime or tagid, and tagxref,
+	// backlink, attachment, cherrypick and forumpost are emptied above but
+	// never compared. tagxref is the notable gap -- it holds the
+	// order-sensitive state that visiting candidates in delta-chain order
+	// would disturb.
 	reference := snapshotDerived(t, path)
 	for _, key := range []string{"event", "plink", "leaf", "mlink"} {
 		if got[key] != reference[key] {
@@ -157,9 +164,15 @@ func snapshotDerived(t *testing.T, path string) map[string]string {
 		if err := d.QueryRow(q).Scan(&v); err != nil {
 			t.Fatalf("snapshotDerived %s: %v", name, err)
 		}
-		if s, ok := v.(string); ok {
-			out[name] = s
+		s, ok := v.(string)
+		if !ok || s == "" {
+			// A NULL digest means the table is empty. Left unset, an empty
+			// table would compare equal to another empty table and the
+			// comparison would pass without having examined a single row.
+			t.Fatalf("snapshotDerived %s: empty digest; the table has no rows "+
+				"and the comparison would be vacuous", name)
 		}
+		out[name] = s
 	}
 	return out
 }

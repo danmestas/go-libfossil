@@ -86,8 +86,11 @@ func TestCorpusCrosslinkThroughput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open repo: %v", err)
 	}
-	defer r.Close()
-
+	// No deferred r.Close here. Reaching the event target returns while the
+	// sweep is still running, and closing the handle underneath it is a
+	// use-after-close on a connection Crosslink is mid-query on. The sweep
+	// goroutine owns r and closes it when Crosslink returns; nothing else
+	// touches that handle. watch is a separate connection the test owns.
 	watch, err := db.Open(work)
 	if err != nil {
 		t.Fatalf("open watcher: %v", err)
@@ -111,6 +114,7 @@ func TestCorpusCrosslinkThroughput(t *testing.T) {
 	done := make(chan error, 1)
 	start := time.Now()
 	go func() {
+		defer r.Close()
 		_, err := Crosslink(r)
 		done <- err
 	}()
@@ -139,6 +143,8 @@ func TestCorpusCrosslinkThroughput(t *testing.T) {
 			elapsed := time.Since(start)
 			t.Logf("RESULT: %d events in %s (%.1f events/sec)",
 				n, elapsed.Round(time.Millisecond), float64(n)/elapsed.Seconds())
+			t.Log("sweep abandoned at the target and left running in the " +
+				"background until the process exits; run this test on its own")
 			return
 		}
 		if time.Since(lastLog) > 10*time.Second {

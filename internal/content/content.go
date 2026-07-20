@@ -48,7 +48,7 @@ func expandChain(
 	have func(libfossil.FslID) ([]byte, bool),
 	put func(libfossil.FslID, []byte),
 ) ([]byte, error) {
-	chain, err := walkDeltaChain(q, rid, have)
+	chain, base, err := walkDeltaChain(q, rid, have)
 	if err != nil {
 		return nil, fmt.Errorf("content.Expand: %w", err)
 	}
@@ -63,12 +63,16 @@ func expandChain(
 	// its own right, so it has to have earned the same guarantee. A plain
 	// Expand (put == nil) materializes nothing for anyone else and so still
 	// verifies exactly one blob, the one it was asked for.
-	var content []byte
-	if have != nil {
-		if cached, ok := have(chain[0]); ok {
-			content = cached
-		}
-	}
+	//
+	// base is the content the walk stopped on, carried out of the walk
+	// rather than re-read from have. Re-reading would be a second decision:
+	// between the walk truncating at a node the store held and this point,
+	// a concurrent eviction could remove it, and chain[0] would then be
+	// loaded with blob.Load -- which for a delta row hands raw delta bytes
+	// to the replay as if they were full text. bindToName catches that, but
+	// the caller sees a hash mismatch on an artifact that is not corrupt,
+	// and Crosslink's error path drops such artifacts silently.
+	content := base
 	if content == nil {
 		content, err = blob.Load(q, chain[0])
 		if err != nil {
@@ -156,10 +160,15 @@ func bindToName(q db.Querier, rid libfossil.FslID, content []byte) error {
 
 // walkDeltaChain returns the delta chain ending at rid, root first.
 //
-// have, when non-nil, truncates the walk at the deepest ancestor whose
-// content the caller already holds; that ancestor becomes chain[0] in place
-// of the true chain root.
-func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID) ([]byte, bool)) (chain []libfossil.FslID, err error) {
+// have, when non-nil, truncates the walk at the deepest ancestor whose content
+// the caller already holds; that ancestor becomes chain[0] in place of the true
+// chain root, and its content is returned as base. base is nil when the walk
+// reached a real chain root, which the caller must then load itself.
+//
+// Returning the content, rather than leaving the caller to ask have a second
+// time, is what makes the truncation decision and the use of it one step: a
+// store that can evict concurrently could otherwise drop the node in between.
+func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID) ([]byte, bool)) (chain []libfossil.FslID, base []byte, err error) {
 	if q == nil {
 		panic("content.walkDeltaChain: q must not be nil")
 	}
@@ -175,15 +184,19 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 	current := rid
 	seen := make(map[libfossil.FslID]bool)
 
-	for {
+	// The visited set stops a cycle at its first repeat; the depth bound is
+	// the backstop for a chain that is acyclic but longer than any real one.
+	// See maxDeltaChainDepth.
+	for depth := 0; depth <= maxDeltaChainDepth; depth++ {
 		if seen[current] {
-			return nil, fmt.Errorf("delta chain cycle detected at rid=%d", current)
+			return nil, nil, fmt.Errorf("delta chain cycle detected at rid=%d", current)
 		}
 		seen[current] = true
 		chain = append(chain, current)
 
 		if have != nil {
-			if _, ok := have(current); ok {
+			if cached, ok := have(current); ok {
+				base = cached
 				break
 			}
 		}
@@ -194,12 +207,17 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 			break
 		}
 		current = libfossil.FslID(sourceID)
+
+		if depth == maxDeltaChainDepth {
+			return nil, nil, fmt.Errorf(
+				"delta chain from rid=%d exceeds %d nodes", rid, maxDeltaChainDepth)
+		}
 	}
 
 	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 		chain[i], chain[j] = chain[j], chain[i]
 	}
-	return chain, nil
+	return chain, base, nil
 }
 
 // Verify confirms that rid's stored content hashes to its declared UUID.

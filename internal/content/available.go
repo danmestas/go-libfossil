@@ -7,14 +7,23 @@ import (
 	"github.com/danmestas/libfossil/db"
 )
 
-// maxAvailabilityChainDepth bounds the delta-chain walk in IsAvailable.
+// maxDeltaChainDepth bounds every delta-chain walk in this package.
 //
-// Real delta chains are orders of magnitude shorter than this; the bound
-// exists so that a cyclic delta table — reachable from a corrupt repository
-// or from hostile input arriving over the wire during clone — terminates
-// instead of hanging the process. Exceeding the bound means the chain cannot
-// be expanded, so the artifact is reported unavailable.
-const maxAvailabilityChainDepth = 100_000
+// A chain cannot be longer than the number of stored versions of one file.
+// The deepest chain in the Fossil SCM repository, the largest corpus this
+// package is measured against, is 2,546 nodes; the average is 469. This bound
+// is roughly six times the observed maximum, so a chain that reaches it is
+// corrupt or hostile rather than merely large. Reaching it is a safe failure:
+// IsAvailable reports the content unavailable, which defers the artifact, and
+// walkDeltaChain returns an error rather than a partial chain.
+//
+// The bound is a backstop, not the defence. Termination on a cyclic delta
+// table — reachable from a corrupt repository, or from a peer that plants one
+// during clone — comes from the visited-set check in each walk, which stops at
+// the first repeat. Without that, this constant is the number of queries an
+// attacker buys per call, and both walks are wire-reachable: IsAvailable runs
+// once per F-card of every check-in being crosslinked.
+const maxDeltaChainDepth = 16_384
 
 // IsAvailable reports whether the content of rid can actually be read.
 //
@@ -44,8 +53,18 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 	                FROM blob b LEFT JOIN delta d ON d.rid = b.rid
 	               WHERE b.rid = ?`
 
+	// A cycle ends the walk at the first repeat rather than at
+	// maxDeltaChainDepth. The difference is what a peer who plants a
+	// two-node cycle costs us: two queries instead of the bound.
+	seen := make(map[libfossil.FslID]struct{})
+
 	current := rid
-	for depth := 0; depth < maxAvailabilityChainDepth; depth++ {
+	for depth := 0; depth < maxDeltaChainDepth; depth++ {
+		if _, repeat := seen[current]; repeat {
+			return false // cycle — the chain is not grounded in anything
+		}
+		seen[current] = struct{}{}
+
 		var size int64
 		var hasDelta bool
 		var srcid sql.NullInt64
@@ -58,10 +77,10 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 		if !hasDelta {
 			return true // chain is grounded in full-text content
 		}
+		// delta.srcid is NOT NULL in the schema, so Valid is always true
+		// here. Checking it costs nothing and keeps a schema change from
+		// turning into a NULL scanned as zero, which reads as "grounded".
 		if !srcid.Valid {
-			// A delta row whose srcid is NULL says nothing about
-			// groundedness, so report unavailable rather than claiming
-			// readable content we could not verify.
 			return false
 		}
 		if srcid.Int64 == 0 {
@@ -69,7 +88,7 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 		}
 		current = libfossil.FslID(srcid.Int64)
 	}
-	return false // bound exceeded — cyclic or pathological chain
+	return false // bound exceeded — pathological chain
 }
 
 // AvailableByUUID resolves uuid to its rid and reports whether that

@@ -55,6 +55,9 @@ func compressedContainer(t *testing.T, n int) []byte {
 // until one of them split into no fields, and reported a card-syntax error
 // roughly sixteen thousand cards into a body that held none.
 func TestDecodeOversizeCompressedMessageIsReported(t *testing.T) {
+	if testing.Short() {
+		t.Skip("inflates past MaxDecompressedBytes")
+	}
 	data := compressedContainer(t, MaxDecompressedBytes+1024)
 
 	_, err := Decode(data)
@@ -93,6 +96,9 @@ func TestDecodeCorruptZlibIsNotParsedAsCards(t *testing.T) {
 // everything large. Method: encode enough igot cards to pass 32 MiB and
 // decode the result.
 func TestDecodeRoundTripsLargeMessageUnderBound(t *testing.T) {
+	if testing.Short() {
+		t.Skip("encodes a 32 MiB message")
+	}
 	const target = 32 << 20
 	msg := &Message{}
 	for size := 0; size < target; size += 46 {
@@ -135,6 +141,9 @@ func TestDecodeUncompressedBodyStillWorks(t *testing.T) {
 // what a zlib stream can actually deliver here. Method: decompress a container
 // sized exactly at the bound.
 func TestMaxDecompressedBytesIsReachable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("inflates MaxDecompressedBytes")
+	}
 	data := compressedContainer(t, MaxDecompressedBytes)
 
 	raw, err := decompressContainer(data)

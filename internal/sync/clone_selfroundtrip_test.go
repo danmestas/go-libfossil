@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/libfossil/internal/manifest"
 	"github.com/danmestas/libfossil/internal/repo"
 	"github.com/danmestas/libfossil/internal/sync"
+	"github.com/danmestas/libfossil/internal/xfer"
 	"github.com/danmestas/libfossil/simio"
 )
 
@@ -41,112 +42,72 @@ func blobUUIDs(t *testing.T, r *repo.Repo) map[string]bool {
 
 // incompressibleBytes returns n bytes that zlib cannot shrink, from a fixed
 // seed so the corpus is identical on every run. Compressible filler would make
-// the wire message far smaller than the artifacts it carries, which is exactly
-// the property under test.
+// the wire body far smaller than the artifact it carries, and the size of the
+// wire body is the whole point of the fixtures below.
 func incompressibleBytes(seed int64, n int) []byte {
 	if n <= 0 {
 		panic("incompressibleBytes: n must be positive")
 	}
 	buf := make([]byte, n)
-	rng := rand.New(rand.NewSource(seed))
-	for i := range buf {
-		buf[i] = byte(rng.Intn(256))
+	if _, err := rand.New(rand.NewSource(seed)).Read(buf); err != nil {
+		panic("incompressibleBytes: " + err.Error())
 	}
 	return buf
 }
 
-// listenAddr reserves a loopback address and releases it for the server to
-// bind. Racy in principle, contained to a test in practice.
-func listenAddr(t *testing.T) string {
+// serveRepo starts an xfer HTTP server for r on a loopback port and returns
+// its base URL. It waits for the listener to accept a connection rather than
+// sleeping, and fails the test if the server returns before then.
+func serveRepo(ctx context.Context, t *testing.T, r *repo.Repo) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatalf("reserve port: %v", err)
 	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
-		t.Fatalf("close probe listener: %v", err)
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatalf("release port: %v", err)
 	}
-	return addr
+
+	errc := make(chan error, 1)
+	go func() { errc <- sync.ServeHTTP(ctx, addr, r, sync.HandleSync) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		conn, dialErr := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if dialErr == nil {
+			conn.Close()
+			return "http://" + addr
+		}
+		select {
+		case serveErr := <-errc:
+			t.Fatalf("ServeHTTP returned before accepting on %s: %v", addr, serveErr)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not accept on %s within 10s: %v", addr, dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
-// TestCloneSelfRoundTripLargeArtifacts clones a repository this implementation
-// is serving, with this implementation's client, over the real HTTP transport,
-// and requires the clone to hold every artifact the source holds.
-//
-// Method: build a corpus of multi-megabyte incompressible artifacts totalling
-// more than sync.DefaultCloneBatchBytes, serve it with ServeHTTP, clone it with
-// Clone over HTTPTransport, and compare blob-hash sets.
-//
-// Why the corpus looks like this. Every other clone test here is either served
-// by real fossil or wired through MockTransport, which hands *xfer.Message
-// values straight across and never encodes or decodes a wire body -- so no
-// existing test could see a serialization defect at all. This one puts
-// libfossil on both ends of a real encode/decode. The artifact sizes are the
-// other half: issue #104 reproduced on the wapp corpus, whose artifacts are
-// large enough that one clone round's expanded content ran past the bound the
-// client applied when decompressing a message, and did not reproduce on
-// pikchr, whose artifacts are small. A corpus of small artifacts round-trips
-// cleanly under the defect and proves nothing, so this one is sized in
-// megabytes and crosses the server's per-round budget, forcing multi-round
-// pagination with large bodies on every round.
-func TestCloneSelfRoundTripLargeArtifacts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("builds a multi-megabyte corpus")
-	}
-	dir := t.TempDir()
-
-	srcPath := filepath.Join(dir, "source.fossil")
-	srcRepo, err := repo.Create(srcPath, "testuser", simio.CryptoRand{}, "")
-	if err != nil {
-		t.Fatalf("repo.Create: %v", err)
-	}
-	defer srcRepo.Close()
-
-	// 6 checkins x 2 files x 1.8 MB = 21.6 MB expanded, against a
-	// DefaultCloneBatchBytes of 16 MB: at least two rounds, each carrying
-	// megabytes of expanded content.
-	const (
-		checkinCount  = 6
-		filesPerCkin  = 2
-		artifactBytes = 1_800_000
-	)
-	if checkinCount*filesPerCkin*artifactBytes <= sync.DefaultCloneBatchBytes {
-		t.Fatalf("corpus does not cross the clone batch budget of %d bytes",
-			sync.DefaultCloneBatchBytes)
-	}
-	for c := 0; c < checkinCount; c++ {
-		files := make([]manifest.File, 0, filesPerCkin)
-		for f := 0; f < filesPerCkin; f++ {
-			seed := int64(c*filesPerCkin + f)
-			files = append(files, manifest.File{
-				Name:    fmt.Sprintf("blob%02d.bin", seed),
-				Content: incompressibleBytes(seed, artifactBytes),
-			})
-		}
-		if _, _, err := manifest.Checkin(srcRepo, manifest.CheckinOpts{
-			Comment: fmt.Sprintf("checkin %d", c),
-			User:    "testuser",
-			Files:   files,
-		}); err != nil {
-			t.Fatalf("Checkin %d: %v", c, err)
-		}
-	}
-
+// cloneSelfAndCompare serves srcRepo with this implementation's server, clones
+// it with this implementation's client over HTTP, and requires the clone to
+// hold every artifact the source holds.
+func cloneSelfAndCompare(t *testing.T, srcRepo *repo.Repo, dir string) *sync.CloneResult {
+	t.Helper()
 	want := blobUUIDs(t, srcRepo)
 	if len(want) == 0 {
 		t.Fatal("source repository holds no blobs")
 	}
 
-	addr := listenAddr(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go sync.ServeHTTP(ctx, addr, srcRepo, sync.HandleSync)
-	time.Sleep(200 * time.Millisecond)
+	url := serveRepo(ctx, t, srcRepo)
 
 	clonePath := filepath.Join(dir, "clone.fossil")
-	transport := &sync.HTTPTransport{URL: "http://" + addr}
-	cloneRepo, result, err := sync.Clone(ctx, clonePath, transport, sync.CloneOpts{})
+	cloneRepo, result, err := sync.Clone(
+		ctx, clonePath, &sync.HTTPTransport{URL: url}, sync.CloneOpts{})
 	if err != nil {
 		t.Fatalf("Clone: %v", err)
 	}
@@ -160,11 +121,110 @@ func TestCloneSelfRoundTripLargeArtifacts(t *testing.T) {
 		}
 	}
 	if len(missing) > 0 {
-		t.Errorf("clone is missing %d of %d artifacts: %v",
-			len(missing), len(want), missing)
+		t.Fatalf("clone is missing %d of %d artifacts: %v", len(missing), len(want), missing)
 	}
-	if result.Rounds < 2 {
-		t.Errorf("Rounds = %d, want >= 2: the corpus should not fit in one round",
-			result.Rounds)
+	return result
+}
+
+// newSelfRoundTripRepo creates an empty source repository under dir.
+func newSelfRoundTripRepo(t *testing.T, dir string) *repo.Repo {
+	t.Helper()
+	r, err := repo.Create(filepath.Join(dir, "source.fossil"), "testuser", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	return r
+}
+
+// TestCloneSelfRoundTrip clones a repository this implementation is serving,
+// with this implementation's client, over the real HTTP transport, and
+// requires artifact parity.
+//
+// Method: a small corpus, served and cloned, compared by blob-hash set.
+//
+// This is a coverage plank, not a guard on any particular defect. It exists
+// because every other clone test here is either driven by real fossil or wired
+// through MockTransport, which hands *xfer.Message values straight across and
+// never encodes a wire body at all. Nothing covered a body this implementation
+// produced being decoded by this implementation's decoder, which is the only
+// configuration in which a serialization defect meets a decoder that disagrees
+// with it. TestCloneSelfRoundTripOversizeArtifact is the actual #104
+// regression test; this one is cheap and runs everywhere, including -short.
+func TestCloneSelfRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	srcRepo := newSelfRoundTripRepo(t, dir)
+	defer srcRepo.Close()
+
+	for c := 0; c < 3; c++ {
+		if _, _, err := manifest.Checkin(srcRepo, manifest.CheckinOpts{
+			Comment: fmt.Sprintf("checkin %d", c),
+			User:    "testuser",
+			Files: []manifest.File{
+				{Name: fmt.Sprintf("text%d.txt", c), Content: []byte(fmt.Sprintf("checkin %d\n", c))},
+				{Name: fmt.Sprintf("data%d.bin", c), Content: incompressibleBytes(int64(c), 64<<10)},
+			},
+		}); err != nil {
+			t.Fatalf("Checkin %d: %v", c, err)
+		}
+	}
+
+	cloneSelfAndCompare(t, srcRepo, dir)
+}
+
+// TestCloneSelfRoundTripOversizeArtifact is the #104 regression test: it
+// requires a clone to survive a round whose body is larger than the decoder's
+// bound used to be.
+//
+// Method: one incompressible artifact of 7/8ths of xfer.MaxDecompressedBytes,
+// served and cloned by this implementation, compared by blob-hash set.
+//
+// Why that size, precisely. The defect was never about artifact count or total
+// corpus size. It was that the decoder's bound on one decompressed message sat
+// below what one round can emit -- and a round is not bounded by
+// sync.DefaultCloneBatchBytes. The budget is charged before each artifact and
+// the artifact that crosses it is sent whole, so a round carries up to the
+// budget plus one entire artifact of unbounded size. A corpus of many small
+// artifacts therefore cannot reach the bound however large the corpus grows,
+// because pagination keeps every round near the budget; only a single artifact
+// larger than bound-minus-budget can. That single artifact is also the one
+// remaining path by which a round can exceed the current bound, so this
+// fixture guards the live risk with the same bytes that reproduce the
+// historical one.
+//
+// The size is expressed against MaxDecompressedBytes rather than as a literal
+// so it tracks the bound: 7/8ths clears any bound an eighth below the current
+// one -- which the bound this replaced was -- while leaving an eighth of
+// headroom beneath the current one.
+func TestCloneSelfRoundTripOversizeArtifact(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates an artifact of 7/8ths of xfer.MaxDecompressedBytes")
+	}
+	const artifactBytes = xfer.MaxDecompressedBytes / 8 * 7
+	if artifactBytes <= 2*sync.DefaultCloneBatchBytes {
+		t.Fatalf("artifact of %d bytes does not exceed twice the clone batch budget of %d",
+			artifactBytes, sync.DefaultCloneBatchBytes)
+	}
+	if artifactBytes >= xfer.MaxDecompressedBytes {
+		t.Fatalf("artifact of %d bytes cannot fit under the decode bound of %d",
+			artifactBytes, xfer.MaxDecompressedBytes)
+	}
+
+	dir := t.TempDir()
+	srcRepo := newSelfRoundTripRepo(t, dir)
+	defer srcRepo.Close()
+
+	if _, _, err := manifest.Checkin(srcRepo, manifest.CheckinOpts{
+		Comment: "one oversize artifact",
+		User:    "testuser",
+		Files: []manifest.File{
+			{Name: "oversize.bin", Content: incompressibleBytes(1, artifactBytes)},
+		},
+	}); err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+
+	result := cloneSelfAndCompare(t, srcRepo, dir)
+	if result.BlobsRecvd < 2 {
+		t.Errorf("BlobsRecvd = %d, want >= 2 (artifact and manifest)", result.BlobsRecvd)
 	}
 }

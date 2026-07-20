@@ -15,22 +15,59 @@ type Message struct {
 	Cards []Card
 }
 
-// MaxDecompressedBytes caps the decompressed payload of one message so that a
-// small compressed body cannot expand to exhaust the memory of an embedding
-// process. It is a local resource guard, not a protocol rule: §4.1 places no
-// limit on the decompressed size of the compressed container.
+// MaxDecompressedBytes caps how far one message may expand during
+// decompression. It bounds the expansion only. The compressed body itself
+// arrives through the transport, which reads it whole before calling Decode
+// (sync.HTTPTransport.Exchange), so this is not a bound on the memory a
+// hostile peer can cost the process -- it stops a small body from inflating
+// without limit, nothing more. Bounding the body on the way in belongs to the
+// transport and is not done today.
+//
+// It is a local resource guard, not a protocol rule: §4.1 places no limit on
+// the decompressed size of the compressed container. This implementation is
+// deliberately stricter than canonical here, which sizes its output buffer
+// from the attacker-supplied length prefix (blob.c blob_uncompress); the bound
+// below counts bytes actually inflated and ignores the advertised length.
 //
 // Because it is a guard and not a rule, it has to sit above anything a
-// conforming peer will send, or a legitimate exchange fails. The binding
-// constraint is a clone round: this implementation's server emits at most
-// sync.DefaultCloneBatchBytes of expanded content plus the one artifact that
-// crossed that budget, so the bound must clear the budget twice over. A
-// compile-time guard in internal/sync keeps the two constants from drifting
-// apart (issue #104).
+// conforming peer will send, or a legitimate exchange fails -- which is how
+// issue #104 arose, with the bound below what this implementation's own server
+// emitted in one clone round. Two constraints fix the range:
+//
+//   - Above: a clone round carries sync.DefaultCloneBatchBytes of expanded
+//     content plus the whole artifact that crossed that budget, so the bound
+//     must clear the budget twice over. Enforced at compile time in
+//     internal/sync.
+//   - Below: it must stay under zlibCMFAliasBytes, or the §4.1 length prefix
+//     of a legitimate container starts to present as a zlib header. Enforced
+//     at compile time immediately below.
 //
 // Consequence worth naming: a single artifact larger than this bound cannot be
 // cloned, because the server has to send it whole to make progress.
 const MaxDecompressedBytes = 64 << 20 // 64 MiB
+
+// zlibCMFAliasBytes is the decompressed length at which the first byte of a
+// §4.1 container's big-endian length prefix can itself be a valid zlib CMF
+// byte. RFC 1950 requires CM == 8 in the low nibble, so the lowest aliasing
+// prefix byte is 0x08, reached when the declared length is 0x08000000.
+//
+// This matters because Decode attempts unprefixed zlib before the prefixed
+// container. That ordering is safe for two reasons and the second one is the
+// one that decays: decompressContainer prefers whichever framing actually
+// decodes, so a spurious header match still loses to a real container; and
+// below this threshold the prefix cannot present as a CMF at all, so the
+// spurious match never even starts. Raising MaxDecompressedBytes past this
+// point keeps the first reason and loses the second, which is a narrower
+// safety margin than the code was written against.
+const zlibCMFAliasBytes = 0x0800_0000 // 128 MiB
+
+// Compile-time guards on MaxDecompressedBytes. Each subtraction underflows and
+// fails the build if the bound leaves its valid range, rather than letting a
+// clone fail at runtime on a message this implementation itself produced.
+const (
+	_ = uint(zlibCMFAliasBytes - 1 - MaxDecompressedBytes)
+	_ = uint(MaxDecompressedBytes - 1) // must be positive.
+)
 
 // errNotZlib marks a payload whose first two bytes are not a zlib header
 // (RFC 1950). It is the only decompression outcome that licenses the caller to
@@ -76,9 +113,13 @@ func (m *Message) EncodeUncompressed() ([]byte, error) {
 }
 
 // Decode decodes an xfer message. It tries three formats in order:
-//  1. Raw zlib (Fossil HTTP sync wire format — no size prefix).
-//  2. 4-byte BE size prefix + zlib (the §4.1 compressed container, which is
-//     also what Encode produces).
+//  1. Unprefixed zlib. No Fossil wire format produces this: every
+//     application/x-fossil body carries the §4.1 length prefix, on both the
+//     request side (http.c) and the reply side (cgi.c), both through
+//     blob_compress. It is kept as a tolerance for a peer that omits the
+//     prefix, not because canonical emits it.
+//  2. 4-byte BE length prefix + zlib (the §4.1 compressed container, which is
+//     also what Encode produces, and what every Fossil peer sends).
 //  3. Uncompressed card data (clone protocol v3, x-fossil-uncompressed).
 //
 // Compressed bytes are never handed to the card parser. A payload that is
@@ -108,7 +149,7 @@ func Decode(data []byte) (*Message, error) {
 // framing, preferring whichever one decodes. It returns errNotZlib only when
 // neither framing is a zlib stream at all.
 func decompressContainer(data []byte) ([]byte, error) {
-	// Format 1: raw zlib (Fossil HTTP /xfer wire format).
+	// Format 1: unprefixed zlib. See Decode; a tolerance, not a Fossil format.
 	rawDirect, errDirect := decompressBounded(data)
 	if errDirect == nil {
 		return rawDirect, nil

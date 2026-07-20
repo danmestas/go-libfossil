@@ -35,13 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   treated any decompression failure as "not this framing", so a well-formed
   compressed body that exceeded the decoder's own size bound fell through to
   the uncompressed branch and the still-compressed bytes were parsed as card
-  text — thousands of nonsense cards until one split into no fields. A body
-  recognizable as zlib is now decompressed or reported, never reparsed, so a
-  transport-level failure names itself. The bound is also raised to 64 MiB and
-  tied to the server's clone batch budget by a compile-time guard, since it was
+  text — thousands of nonsense cards until one split into no fields. Worse than
+  the misleading error, an oversize or truncated compressed body was *accepted*:
+  the garbage cards decoded without error and the artifacts they carried failed
+  their hash check downstream. A body recognizable as zlib is now decompressed
+  or reported, never reparsed. The bound is also raised to 64 MiB, since it sat
   below what this implementation's own server emits in a single clone round —
   two libfossil peers could not reliably clone from each other even though each
-  could clone from fossil. (#104)
+  could clone from fossil. Compile-time guards now pin the bound from both
+  sides: above the server's clone batch budget, and below the size at which a
+  message's length prefix could itself be read as a zlib header. (#104)
 
 ### Changed
 

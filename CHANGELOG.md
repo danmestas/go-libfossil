@@ -27,6 +27,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Ctrl-C/SIGTERM) cancels the same context `ServeHTTP` already shuts down
   on; no new shutdown mechanism was introduced.
 
+### Fixed
+
+- A clone from a libfossil server could fail with a card-syntax error
+  (`decode card 16303: empty line after split`) naming a card the response
+  never contained. The message decoder tried three body framings in order and
+  treated any decompression failure as "not this framing", so a well-formed
+  compressed body that exceeded the decoder's own size bound fell through to
+  the uncompressed branch and the still-compressed bytes were parsed as card
+  text — thousands of nonsense cards until one split into no fields. A body
+  recognizable as zlib is now decompressed or reported, never reparsed, so a
+  transport-level failure names itself. The bound is also raised to 64 MiB and
+  tied to the server's clone batch budget by a compile-time guard, since it was
+  below what this implementation's own server emits in a single clone round —
+  two libfossil peers could not reliably clone from each other even though each
+  could clone from fossil. (#104)
+
 ### Changed
 
 - **Breaking:** `StatusOpts`, `MergeOpts`, and `CheckoutOpts` have been

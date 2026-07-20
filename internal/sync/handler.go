@@ -61,6 +61,16 @@ import (
 // it is a reduction and not a cap, and concurrent clones multiply it.
 const DefaultCloneBatchBytes = 16_000_000
 
+// A round this server emits must stay inside the bound the client applies when
+// it decompresses one, or a clone between two libfossil peers fails on a
+// message this same code produced (issue #104). The budget is charged before
+// each artifact and the artifact that crosses it is sent whole, so a round can
+// reach the budget plus one artifact; requiring two budgets of room reserves an
+// artifact allowance equal to the budget itself. Raising DefaultCloneBatchBytes
+// past half of xfer.MaxDecompressedBytes underflows this unsigned expression
+// and fails the build rather than the clone.
+const _ = uint(xfer.MaxDecompressedBytes - 2*DefaultCloneBatchBytes)
+
 // cloneCardOverheadBytes over-approximates the non-payload bytes of an
 // encoded file card -- keyword, hash, decimal length, and newline come to
 // about 58 -- so that a repository of zero-length artifacts still paginates

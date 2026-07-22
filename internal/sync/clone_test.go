@@ -3,6 +3,7 @@ package sync_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -342,6 +343,66 @@ func TestCloneWithPhantoms(t *testing.T) {
 	}
 
 	t.Logf("Clone with phantoms: rounds=%d blobs=%d", result.Rounds, result.BlobsRecvd)
+}
+
+// TestCloneStallReturnsError verifies that a clone which stops making
+// progress with phantoms still outstanding — a peer that delivers a delta,
+// then stops serving its base entirely — returns an error rather than
+// reporting success on an incomplete repository (issue #64).
+func TestCloneStallReturnsError(t *testing.T) {
+	baseContent := []byte("base content the peer never actually serves")
+	baseUUID := hash.SHA1(baseContent)
+
+	targetContent := []byte("target content delivered as a delta against base")
+	targetUUID := hash.SHA1(targetContent)
+	deltaBytes := delta.Create(baseContent, targetContent)
+
+	transport := &mockCloneTransport{
+		handler: func(round int, req *xfer.Message) *xfer.Message {
+			if round == 0 {
+				// Round 0: deliver the delta before its base — creates a
+				// phantom for baseUUID.
+				return &xfer.Message{Cards: []xfer.Card{
+					&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
+					&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
+					&xfer.CloneSeqNoCard{SeqNo: 0},
+				}}
+			}
+			// Round 1+: the peer stops serving mid-transfer — it never
+			// sends baseUUID no matter how many gimme cards ask for it.
+			return &xfer.Message{Cards: []xfer.Card{
+				&xfer.CloneSeqNoCard{SeqNo: 0},
+			}}
+		},
+	}
+
+	tmpDir := t.TempDir()
+	repoPath := filepath.Join(tmpDir, "stall.fossil")
+
+	r, result, err := sync.Clone(context.Background(), repoPath, transport, sync.CloneOpts{})
+	if err == nil {
+		r.Close()
+		t.Fatal("Clone succeeded, want stall error with phantom outstanding")
+	}
+	if result == nil {
+		t.Fatal("Clone returned nil result alongside error, want a partial result")
+	}
+
+	var stallErr *sync.PhantomStallError
+	if !errors.As(err, &stallErr) {
+		t.Fatalf("Clone error = %v, want *sync.PhantomStallError", err)
+	}
+	if stallErr.Count != 1 {
+		t.Errorf("PhantomStallError.Count = %d, want 1", stallErr.Count)
+	}
+	if len(stallErr.Sample) != 1 || stallErr.Sample[0] != baseUUID {
+		t.Errorf("PhantomStallError.Sample = %v, want [%s]", stallErr.Sample, baseUUID)
+	}
+
+	// Repo file must not survive a failed clone.
+	if _, statErr := os.Stat(repoPath); !os.IsNotExist(statErr) {
+		t.Error("repo file should be deleted after a stalled clone, but still exists")
+	}
 }
 
 // TestCloneCrosslinksManifests verifies that Clone automatically populates the

@@ -176,6 +176,7 @@ func (c *Checkout) buildCommitFiles(
 	}
 
 	// 2. Update changed files with new content from disk
+	loadedFromDisk := make(map[string]bool, len(changedFiles))
 	for _, name := range changedFiles {
 		if !shouldInclude(name) {
 			continue
@@ -204,12 +205,48 @@ func (c *Checkout) buildCommitFiles(
 			Content: fileData,
 			Perm:    perm,
 		}
+		loadedFromDisk[name] = true
 	}
 
-	// 3. For unchanged files, load content from the repo
+	// 3. For unchanged files, load content from the repo.
+	//
+	// loadedFromDisk (not len(entry.Content) > 0) is the sentinel for
+	// "already handled in step 2" — a legitimately empty file's Content is
+	// indistinguishable from "not yet loaded" by length alone, and using
+	// length here mistook a newly-added zero-length file for one still
+	// needing a blob lookup it doesn't have (issue #68).
 	for name, entry := range fileMap {
-		if len(entry.Content) > 0 {
-			continue // already have content (was changed)
+		if loadedFromDisk[name] {
+			continue
+		}
+
+		// A tracked file this commit is scoped to (shouldInclude) but that
+		// is missing from disk cannot be silently carried forward with its
+		// stale content — that would record a commit claiming content that
+		// no longer exists (issue #79). A file outside this commit's scope
+		// (relevant only for an explicit Enqueue) is left untouched exactly
+		// as before: canonical Fossil only fails on a missing file that is
+		// actually part of the commit being made.
+		//
+		// Only files with a live vfile row are checked — matching
+		// restatCommitPerms and canonical Fossil's own vfile-driven manifest
+		// loop. A name present only in the parent manifest (no vfEntries
+		// row) isn't tracked by this checkout's vfile at all; there is
+		// nothing to have "gone missing" from a local scan that never
+		// covered it.
+		if _, hasVFileRow := vfEntries[name]; hasVFileRow && shouldInclude(name) {
+			fullPath, err := c.safePath(name)
+			if err != nil {
+				return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+			}
+			if _, err := c.env.Storage.Stat(fullPath); err != nil {
+				if os.IsNotExist(err) {
+					return nil, fmt.Errorf(
+						"checkout.Commit: tracked file missing from disk: %s", name,
+					)
+				}
+				return nil, fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
+			}
 		}
 
 		var fileRID int64
@@ -278,11 +315,14 @@ func (c *Checkout) buildCommitFiles(
 //
 // A file that has gone missing from disk (deleted outside of Unmanage, or
 // otherwise untracked-but-not-told) is skipped, carrying its existing Perm
-// forward unchanged, exactly as it would have before this function existed.
-// This function's job is fixing missed mode changes, not detecting stale
-// tracking — a commit that never touched the missing file must still
-// succeed. Any other Stat error (permission denied, I/O fault, ...) is a
-// real problem and still fails the commit.
+// forward unchanged. This function's job is fixing missed mode changes, not
+// detecting stale tracking, so it stays lenient here — but that leniency is
+// safe because buildCommitFiles already rejected any in-scope missing file
+// before this function ever runs (issue #79); a missing file only reaches
+// here at all when it was out of scope (shouldInclude false), in which case
+// carrying its Perm forward unchanged is correct. Any other Stat error
+// (permission denied, I/O fault, ...) is a real problem and still fails
+// the commit.
 func (c *Checkout) restatCommitPerms(
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,

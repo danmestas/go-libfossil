@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/libfossil/internal/content"
@@ -242,20 +243,20 @@ func TestModeOnlyChangeRestatOnCommit(t *testing.T) {
 	}
 }
 
-// TestCommitSkipsMissingFileDuringRestat is a regression test for a bug
-// introduced by an earlier version of the mode-change re-stat fix: Stat-ing
-// every tracked file at commit time must not turn "a file went missing from
-// disk without Unmanage" into a hard commit failure. That behavior predates
-// this fix (a file deleted outside of Unmanage has always had its
-// last-committed content silently carried forward on commit) and detecting
-// stale tracking is a deliberate non-goal here — it is a separate feature
-// left to its own issue, not a side effect of a permission fix.
+// TestCommitFailsOnMissingFileDuringRestat is a regression test covering
+// the intersection of the mode-change re-stat fix and issue #79: Stat-ing
+// every in-scope tracked file at commit time (to catch a missed chmod) must
+// surface a file that has gone missing from disk without Unmanage as a
+// clear commit failure, not silently carry its last-committed content
+// forward. An earlier version of this codebase treated the missing file as
+// something to skip past here — that was the documented, deliberately
+// deferred behavior issue #79 exists to resolve; this test now asserts the
+// resolved behavior instead.
 //
 // Deletes README.md from disk without calling Unmanage, modifies an
-// unrelated tracked file, and commits: the commit must succeed, and
-// README.md's F-card entry must carry its prior permission forward
-// unchanged.
-func TestCommitSkipsMissingFileDuringRestat(t *testing.T) {
+// unrelated tracked file, and commits with the default implicit "commit
+// everything" scope: the commit must fail, naming README.md.
+func TestCommitFailsOnMissingFileDuringRestat(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("owner-execute bit is never detected on Windows")
 	}
@@ -291,12 +292,13 @@ func TestCommitSkipsMissingFileDuringRestat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newRID, _, err := co.Commit(CommitOpts{Message: "modify hello.txt, README.md missing", User: "test"})
-	if err != nil {
-		t.Fatalf("Commit must succeed even though an untouched tracked file is missing from disk: %v", err)
+	_, _, err = co.Commit(CommitOpts{Message: "modify hello.txt, README.md missing", User: "test"})
+	if err == nil {
+		t.Fatal("Commit succeeded despite a missing tracked file in scope, want error naming README.md")
 	}
-
-	assertFilePerm(t, r, newRID, "README.md", "")
+	if !strings.Contains(err.Error(), "README.md") {
+		t.Fatalf("err = %v, want it to name the missing file README.md", err)
+	}
 }
 
 // assertFilePerm looks up name in rid's manifest and asserts its Perm field.

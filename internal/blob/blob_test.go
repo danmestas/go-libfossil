@@ -52,6 +52,57 @@ func TestStoreAndLoad(t *testing.T) {
 	}
 }
 
+// TestStoreEmptyContent is a regression test for issue #68: committing a
+// zero-length file panicked with "content length must be > 0" instead of
+// storing the well-known empty artifact. An empty file is legal input —
+// Fossil repositories routinely contain it (e.g. da39a3ee... under SHA1) —
+// so Store must accept it like any other content.
+func TestStoreEmptyContent(t *testing.T) {
+	d := setupTestDB(t)
+
+	rid, uuid, err := Store(d, []byte{})
+	if err != nil {
+		t.Fatalf("Store(empty): %v", err)
+	}
+	if rid <= 0 {
+		t.Fatalf("rid = %d, want > 0", rid)
+	}
+
+	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	if uuid != emptySHA1 {
+		t.Fatalf("uuid = %q, want well-known empty-content hash %q", uuid, emptySHA1)
+	}
+
+	got, err := Load(d, rid)
+	if err != nil {
+		t.Fatalf("Load(empty): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Load(empty) = %q, want zero-length", got)
+	}
+}
+
+// TestStoreNilContentTreatedAsEmpty verifies nil content (as distinct from
+// a zero-length but non-nil slice) is stored the same way as empty — a
+// caller building manifest.File{Content: nil} for an empty file should not
+// need to remember to substitute []byte{}.
+func TestStoreNilContentTreatedAsEmpty(t *testing.T) {
+	d := setupTestDB(t)
+
+	rid, uuid, err := Store(d, nil)
+	if err != nil {
+		t.Fatalf("Store(nil): %v", err)
+	}
+	if rid <= 0 {
+		t.Fatalf("rid = %d, want > 0", rid)
+	}
+
+	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	if uuid != emptySHA1 {
+		t.Fatalf("uuid = %q, want well-known empty-content hash %q", uuid, emptySHA1)
+	}
+}
+
 func TestExists(t *testing.T) {
 	d := setupTestDB(t)
 	content := []byte("existence test")

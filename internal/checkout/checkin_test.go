@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	libdb "github.com/danmestas/libfossil/db"
@@ -577,5 +578,187 @@ func TestPreCommitCheck_Nil(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Commit with nil PreCommitCheck failed: %v", err)
+	}
+}
+
+// TestCommitZeroLengthFile is the checkout-level regression test for
+// issue #68: adding and committing a zero-length file used to double-panic
+// (blob.Store's own panic, then masked by manifest.Checkin's postcondition
+// defer firing during unwind). A zero-length file is legal input and must
+// commit cleanly.
+func TestCommitZeroLengthFile(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid1, _, _ := co.Version()
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mem.WriteFile("/checkout/empty.txt", []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Manage(ManageOpts{Paths: []string{"empty.txt"}}); err != nil {
+		t.Fatalf("Manage: %v", err)
+	}
+	if err := co.ScanChanges(ScanHash); err != nil {
+		t.Fatal(err)
+	}
+
+	rid2, _, err := co.Commit(CommitOpts{Message: "add empty file", User: "test"})
+	if err != nil {
+		t.Fatalf("Commit(empty file): %v", err)
+	}
+	if rid2 == rid1 {
+		t.Fatal("new RID should differ from old")
+	}
+
+	var uuid string
+	err = r.DB().QueryRow(`
+		SELECT b.uuid FROM mlink m
+		JOIN filename f ON f.fnid = m.fnid
+		JOIN blob b ON b.rid = m.fid
+		WHERE m.mid = ? AND f.name = 'empty.txt'
+	`, rid2).Scan(&uuid)
+	if err != nil {
+		t.Fatalf("query empty.txt uuid: %v", err)
+	}
+	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	if uuid != emptySHA1 {
+		t.Fatalf("empty.txt uuid = %q, want %q", uuid, emptySHA1)
+	}
+}
+
+// TestCommitMissingTrackedFileFailsImplicit is a regression test for issue
+// #79: a tracked file deleted from disk without Unmanage/Remove used to be
+// silently carried forward into the new manifest with its stale content.
+// For an implicit "commit everything" commit (no explicit Enqueue), every
+// tracked file is in scope, so a missing one must fail the commit clearly —
+// this matches canonical Fossil's behavior (verified against fossil 2.28:
+// `fossil commit` with a missing tracked file in scope reports "no such
+// file: <path>" and refuses to commit).
+func TestCommitMissingTrackedFileFailsImplicit(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid1, _, _ := co.Version()
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete a tracked file from disk WITHOUT Unmanage/Remove, and modify
+	// a different tracked file — mirroring the issue's repro.
+	if err := mem.Remove("/checkout/README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteFile("/checkout/hello.txt", []byte("changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.ScanChanges(ScanHash); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = co.Commit(CommitOpts{Message: "modify hello.txt", User: "test"})
+	if err == nil {
+		t.Fatal("Commit succeeded despite a missing tracked file in scope, want error")
+	}
+	if !strings.Contains(err.Error(), "README.md") {
+		t.Fatalf("err = %v, want it to name the missing file README.md", err)
+	}
+}
+
+// TestCommitMissingTrackedFileOutOfScopeSucceeds is the companion case to
+// TestCommitMissingTrackedFileFailsImplicit: when the caller explicitly
+// scopes the commit via Enqueue to files that do NOT include the missing
+// one, the commit must still succeed and carry the missing file's prior
+// content forward untouched — matching canonical Fossil, which only fails
+// on missing files that are actually in scope of the commit (verified
+// against fossil 2.28: `fossil commit <explicit-path>` succeeds and leaves
+// an unrelated missing tracked file alone, reported separately as MISSING).
+func TestCommitMissingTrackedFileOutOfScopeSucceeds(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	dir := t.TempDir()
+	co, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid1, _, _ := co.Version()
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mem.Remove("/checkout/README.md"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteFile("/checkout/hello.txt", []byte("changed\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.ScanChanges(ScanHash); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicitly scope the commit to hello.txt only — README.md, though
+	// missing, was never named and stays out of scope.
+	if err := co.Enqueue(EnqueueOpts{Paths: []string{"hello.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	rid2, _, err := co.Commit(CommitOpts{Message: "modify hello.txt only", User: "test"})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	var readmeUUID string
+	err = r.DB().QueryRow(`
+		SELECT b.uuid FROM mlink m
+		JOIN filename f ON f.fnid = m.fnid
+		JOIN blob b ON b.rid = m.fid
+		WHERE m.mid = ? AND f.name = 'README.md'
+	`, rid2).Scan(&readmeUUID)
+	if err != nil {
+		t.Fatalf("query README.md uuid in new checkin: %v", err)
+	}
+
+	var originalReadmeUUID string
+	err = r.DB().QueryRow(`
+		SELECT b.uuid FROM mlink m
+		JOIN filename f ON f.fnid = m.fnid
+		JOIN blob b ON b.rid = m.fid
+		WHERE m.mid = ? AND f.name = 'README.md'
+	`, rid1).Scan(&originalReadmeUUID)
+	if err != nil {
+		t.Fatalf("query original README.md uuid: %v", err)
+	}
+
+	if readmeUUID != originalReadmeUUID {
+		t.Fatalf("README.md content should be carried forward unchanged, got %s, want %s",
+			readmeUUID, originalReadmeUUID)
 	}
 }

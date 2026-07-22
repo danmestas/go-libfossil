@@ -164,7 +164,9 @@ func marshalCards(b *strings.Builder, d *Deck) {
 			return Compare(sorted[i].UUID, sorted[j].UUID) < 0
 		})
 		for _, tag := range sorted {
-			fmt.Fprintf(b, "T %c%s %s", tag.Type, tag.Name, tag.UUID)
+			// §4.7.16: the name is escape-encoded (a branch name may hold a
+			// space); the target token is written verbatim, never encoded.
+			fmt.Fprintf(b, "T %c%s %s", tag.Type, FossilEncode(tag.Name), tag.UUID)
 			if tag.Value != "" {
 				fmt.Fprintf(b, " %s", tag.Value)
 			}

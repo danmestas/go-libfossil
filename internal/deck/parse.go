@@ -285,7 +285,10 @@ func parseTCard(d *Deck, args string) error {
 	if len(parts) < 2 {
 		return fmt.Errorf("T-card needs name and uuid")
 	}
-	tc.Name = parts[0]
+	// §4.7.16: the name token is escape-decoded (canonical defossilizes it),
+	// while the target token is stored verbatim -- never decoded on the way
+	// in, so it is never encoded on the way out.
+	tc.Name = FossilDecode(parts[0])
 	tc.UUID = parts[1]
 	if len(parts) == 3 {
 		tc.Value = parts[2]

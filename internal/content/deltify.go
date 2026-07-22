@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/delta"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // Deltification policy, ported from canonical Fossil's content_deltify()

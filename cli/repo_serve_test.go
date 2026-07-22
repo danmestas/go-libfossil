@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/cli"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
-	"github.com/danmestas/libfossil/testutil"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/cli"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/testutil"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // NOTE: TestRepoServeCmdRun and every test that goes through serveRepo send

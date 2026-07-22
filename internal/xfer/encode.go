@@ -5,7 +5,7 @@ import (
 	"compress/zlib"
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
 // EncodeCard writes the wire-format representation of a Card to w.

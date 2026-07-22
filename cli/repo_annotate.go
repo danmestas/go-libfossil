@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoAnnotateCmd annotates file lines with version history.

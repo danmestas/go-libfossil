@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/content"
 )
 
 // FileContent reads a file from the checkout working directory via Storage.

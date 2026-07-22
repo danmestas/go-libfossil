@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/deck"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/tag"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
-	"github.com/danmestas/libfossil/simio"
-	"github.com/danmestas/libfossil/testutil"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/tag"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func setupTestRepo(t *testing.T) *repo.Repo {

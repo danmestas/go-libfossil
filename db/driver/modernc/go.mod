@@ -1,9 +1,9 @@
-module github.com/danmestas/libfossil/db/driver/modernc
+module github.com/danmestas/go-libfossil/db/driver/modernc
 
 go 1.26.0
 
 require (
-	github.com/danmestas/libfossil v0.1.0
+	github.com/danmestas/go-libfossil v0.1.0
 	modernc.org/sqlite v1.46.1
 )
 
@@ -19,4 +19,15 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+)
+
+// Resolve in-repo modules from local directories; they are not yet published
+// under the go-libfossil path. Ignored by downstream consumers.
+//
+// Temporary; the Release workflow refuses to cut a tag while any replace
+// directive is present. When these are dropped, also clear the stale
+// old-path (libfossil) lines still carried in go.sum.
+replace (
+	github.com/danmestas/go-libfossil => ../../..
+	github.com/danmestas/go-libfossil/db/driver/ncruces => ../ncruces
 )

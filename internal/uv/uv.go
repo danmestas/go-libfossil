@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Entry represents a row in the unversioned table.

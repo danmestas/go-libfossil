@@ -9,12 +9,12 @@ WASI P1 host.
 
 The default `modernc.org/sqlite` driver pulls in syscalls (`pthread`,
 `signal`, `stdio`, `sys/types`, `unistd`, ...) that have no Go files
-under `GOOS=wasip1`, so `_ "github.com/danmestas/libfossil/db/driver/modernc"`
+under `GOOS=wasip1`, so `_ "github.com/danmestas/go-libfossil/db/driver/modernc"`
 will not compile for wasip1. This example blank-imports the
 `ncruces` driver instead:
 
 ```go
-_ "github.com/danmestas/libfossil/db/driver/ncruces"
+_ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 ```
 
 `ncruces/go-sqlite3` ships SQLite itself as WebAssembly and is the

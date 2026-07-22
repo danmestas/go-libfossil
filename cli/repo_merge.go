@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/merge"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/merge"
 )
 
 // RepoMergeCmd merges a divergent version into the current checkout.

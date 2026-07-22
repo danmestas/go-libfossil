@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestRename(t *testing.T) {

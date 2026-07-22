@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	libfossil "github.com/danmestas/libfossil"
-	otelobserver "github.com/danmestas/libfossil/observer/otel"
+	libfossil "github.com/danmestas/go-libfossil"
+	otelobserver "github.com/danmestas/go-libfossil/observer/otel"
 )
 
 func TestSyncObserverImplementsInterface(t *testing.T) {

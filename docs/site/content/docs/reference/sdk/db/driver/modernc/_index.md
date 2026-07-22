@@ -6,7 +6,7 @@ weight: 10
 Pure-Go SQLite driver, the libfossil default.
 
 ```go
-import _ "github.com/danmestas/libfossil/db/driver/modernc"
+import _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 ```
 
 Importing this package registers a `modernc.org/sqlite` driver (driver name `"sqlite"`) with libfossil's `db` registry. The package exports no public API of its own — register-on-import is the contract.

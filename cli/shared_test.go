@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/cli"
-	libdb "github.com/danmestas/libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/cli"
+	libdb "github.com/danmestas/go-libfossil/db"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestGlobalsOpenRepo(t *testing.T) {

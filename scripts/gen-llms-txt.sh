@@ -21,7 +21,7 @@ cat > "$STATIC_DIR/llms.txt" << 'HEADER'
 - DST — deterministic simulation harness for fault injection
 
 ## Quick Start
-1. go install github.com/danmestas/libfossil/cmd/libfossil@latest
+1. go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 2. libfossil clone <url> repo.fossil
 3. Open from Go: repo, err := libfossil.Open("repo.fossil")
 4. Sync: repo.Sync(ctx, transport)
@@ -36,7 +36,7 @@ cat > "$STATIC_DIR/llms.txt" << 'HEADER'
 - dst/ — deterministic simulation harness
 
 ## Documentation
-Full docs: https://github.com/danmestas/libfossil/tree/main/docs/site
+Full docs: https://github.com/danmestas/go-libfossil/tree/main/docs/site
 HEADER
 
 # llms-full.txt: all content concatenated, frontmatter stripped

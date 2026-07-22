@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func newTestRepoWithCheckin(t *testing.T) (*repo.Repo, func()) {

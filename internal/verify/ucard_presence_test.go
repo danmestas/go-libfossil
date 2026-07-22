@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/verify"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/verify"
 )
 
 // rawCheckinManifest hand-builds a minimal, valid Checkin manifest so the

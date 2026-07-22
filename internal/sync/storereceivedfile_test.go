@@ -3,11 +3,11 @@ package sync
 import (
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // TestStoreReceivedFileEmptyDeltaPayloadReturnsError is the end-to-end

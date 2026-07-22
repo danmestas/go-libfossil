@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
 // readPayload reads exactly size bytes from the reader.

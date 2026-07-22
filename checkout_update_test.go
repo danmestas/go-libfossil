@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil"
+	"github.com/danmestas/go-libfossil"
 )
 
 // updateFixture creates a repo, commits two revs via Repo.Commit, then

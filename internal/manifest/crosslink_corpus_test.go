@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/repo"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // derivedTables are the tables Crosslink is responsible for populating.

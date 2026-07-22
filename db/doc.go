@@ -4,7 +4,7 @@
 // and ncruces (WASM-capable). Select one at build time by importing
 // its driver package:
 //
-//	import _ "github.com/danmestas/libfossil/db/driver/modernc"
+//	import _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 //
 // [Open] and [OpenWith] handle DSN construction, WAL/pragma setup, and
 // WASM-specific workarounds. Use [DB.WithTx] for transaction scoping

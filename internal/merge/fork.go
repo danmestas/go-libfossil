@@ -1,6 +1,6 @@
 package merge
 
-import "github.com/danmestas/libfossil/internal/repo"
+import "github.com/danmestas/go-libfossil/internal/repo"
 
 func init() { Register(&ConflictFork{}) }
 

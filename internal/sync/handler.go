@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/auth"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // DefaultCloneBatchBytes bounds the wire bytes a single clone round emits.

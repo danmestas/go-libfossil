@@ -15,6 +15,23 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The go-libfossil rename left temporary `replace` directives bridging the
+      # in-repo modules to local paths. A tag carrying them breaks
+      # `go install github.com/danmestas/go-libfossil/cmd/libfossil@<tag>` and any
+      # `@version` fetch of the driver submodules, because Go refuses a main module
+      # that contains replace directives. Unblock a release by cutting new tags for
+      # the submodules with the corrected module paths, bumping the root module's
+      # requires to those versions, then deleting the replace blocks (and the stale
+      # old-path lines they leave behind in the go.sum files).
+      - name: Guard against replace directives
+        run: |
+          offenders=$(git ls-files '*go.mod' | xargs -r grep -l '^replace' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::refusing to release: go.mod replace directives present in:"
+            echo "$offenders"
+            exit 1
+          fi
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -27,7 +44,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_PAT }}
           DOWNSTREAM: EdgeSync
-          MODULE_PATH: github.com/danmestas/libfossil
+          MODULE_PATH: github.com/danmestas/go-libfossil
         run: |
           gh api -X POST "repos/danmestas/${DOWNSTREAM}/dispatches" \
             -f event_type=upstream-bump \

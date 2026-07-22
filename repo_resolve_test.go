@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // commitBranch creates a commit on a named branch by attaching a sym-<branch>

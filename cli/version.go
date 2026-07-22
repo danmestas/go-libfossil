@@ -17,7 +17,7 @@ import (
 // identifier (tag, commit, or both), so Version does not also append a
 // separately-detected commit on top of it. Set at build time:
 //
-//	go build -ldflags "-X github.com/danmestas/libfossil/cli.buildVersion=v0.6.3" ./cmd/libfossil
+//	go build -ldflags "-X github.com/danmestas/go-libfossil/cli.buildVersion=v0.6.3" ./cmd/libfossil
 var buildVersion = ""
 
 // init rejects a malformed buildVersion at program startup, before any

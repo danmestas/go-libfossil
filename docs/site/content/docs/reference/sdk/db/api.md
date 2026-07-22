@@ -7,7 +7,7 @@ title: db
 # db
 
 ```go
-import "github.com/danmestas/libfossil/db"
+import "github.com/danmestas/go-libfossil/db"
 ```
 
 Package db provides a SQLite database layer with pluggable drivers.
@@ -15,7 +15,7 @@ Package db provides a SQLite database layer with pluggable drivers.
 Two SQLite drivers ship with libfossil — modernc \(pure Go, default\) and ncruces \(WASM\-capable\). Select one at build time by importing its driver package:
 
 ```
-import _ "github.com/danmestas/libfossil/db/driver/modernc"
+import _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 ```
 
 [Open](<#Open>) and [OpenWith](<#OpenWith>) handle DSN construction, WAL/pragma setup, and WASM\-specific workarounds. Use [DB.WithTx](<#DB.WithTx>) for transaction scoping with automatic rollback on error.
@@ -26,17 +26,22 @@ The [Querier](<#Querier>) interface \(Exec, QueryRow, Query\) is satisfied by bo
 
 - [func CreateRepoSchema\(d \*DB\) error](<#CreateRepoSchema>)
 - [func DefaultPragmas\(\) map\[string\]string](<#DefaultPragmas>)
+- [func OpenSQL\(path string, cfg OpenConfig, params map\[string\]string\) \(\*sql.DB, error\)](<#OpenSQL>)
 - [func Register\(cfg DriverConfig\)](<#Register>)
+- [func SQLDriverAndDSN\(path string, cfg OpenConfig, params map\[string\]string\) \(string, string\)](<#SQLDriverAndDSN>)
 - [func ScanInt\(v any\) \(int, bool\)](<#ScanInt>)
 - [func ScanJulianDay\(v any\) \(float64, bool\)](<#ScanJulianDay>)
 - [func ScanTime\(v any\) \(time.Time, bool\)](<#ScanTime>)
-- [func SeedConfig\(d \*DB, rng simio.Rand\) error](<#SeedConfig>)
+- [func SeedConfig\(d \*DB, rng simio.Rand, projectCode string\) error](<#SeedConfig>)
 - [func SeedNobody\(d \*DB, caps string\) error](<#SeedNobody>)
 - [func SeedUser\(d \*DB, login string\) error](<#SeedUser>)
+- [type CheckpointMode](<#CheckpointMode>)
+  - [func \(m CheckpointMode\) String\(\) string](<#CheckpointMode.String>)
 - [type DB](<#DB>)
   - [func Open\(path string\) \(\*DB, error\)](<#Open>)
   - [func OpenWith\(path string, cfg OpenConfig\) \(\*DB, error\)](<#OpenWith>)
   - [func \(d \*DB\) ApplicationID\(\) \(int32, error\)](<#DB.ApplicationID>)
+  - [func \(d \*DB\) Checkpoint\(mode CheckpointMode\) error](<#DB.Checkpoint>)
   - [func \(d \*DB\) Close\(\) error](<#DB.Close>)
   - [func \(d \*DB\) Driver\(\) string](<#DB.Driver>)
   - [func \(d \*DB\) Exec\(query string, args ...any\) \(sql.Result, error\)](<#DB.Exec>)
@@ -57,7 +62,7 @@ The [Querier](<#Querier>) interface \(Exec, QueryRow, Query\) is satisfied by bo
 
 
 <a name="CreateRepoSchema"></a>
-## func [CreateRepoSchema](<https://github.com/danmestas/libfossil/blob/main/db/schema.go#L193>)
+## func [CreateRepoSchema](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L220>)
 
 ```go
 func CreateRepoSchema(d *DB) error
@@ -66,7 +71,7 @@ func CreateRepoSchema(d *DB) error
 
 
 <a name="DefaultPragmas"></a>
-## func [DefaultPragmas](<https://github.com/danmestas/libfossil/blob/main/db/config.go#L10>)
+## func [DefaultPragmas](<https://github.com/danmestas/go-libfossil/blob/main/db/config.go#L10>)
 
 ```go
 func DefaultPragmas() map[string]string
@@ -74,8 +79,17 @@ func DefaultPragmas() map[string]string
 
 DefaultPragmas returns the default pragma settings.
 
+<a name="OpenSQL"></a>
+## func [OpenSQL](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L60>)
+
+```go
+func OpenSQL(path string, cfg OpenConfig, params map[string]string) (*sql.DB, error)
+```
+
+OpenSQL opens a raw \*sql.DB using the registered driver and the same DSN construction as OpenWith. params are appended as URI query parameters after driver pragmas, so callers can request options such as mode=ro without constructing driver\-specific DSNs.
+
 <a name="Register"></a>
-## func [Register](<https://github.com/danmestas/libfossil/blob/main/db/register.go#L14>)
+## func [Register](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L14>)
 
 ```go
 func Register(cfg DriverConfig)
@@ -83,8 +97,17 @@ func Register(cfg DriverConfig)
 
 Register registers a SQLite driver for use by Open/OpenWith. Must be called exactly once \(typically from a driver package's init\(\)\). Panics if called more than once.
 
+<a name="SQLDriverAndDSN"></a>
+## func [SQLDriverAndDSN](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L75>)
+
+```go
+func SQLDriverAndDSN(path string, cfg OpenConfig, params map[string]string) (string, string)
+```
+
+SQLDriverAndDSN returns the driver name and DSN OpenWith would use, with optional URI query params appended after driver\-specific options.
+
 <a name="ScanInt"></a>
-## func [ScanInt](<https://github.com/danmestas/libfossil/blob/main/db/scan.go#L43>)
+## func [ScanInt](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L43>)
 
 ```go
 func ScanInt(v any) (int, bool)
@@ -93,7 +116,7 @@ func ScanInt(v any) (int, bool)
 ScanInt converts a scanned value to int. SQLite drivers differ on BOOLEAN columns: modernc returns int64, ncruces returns bool. Scan the column into an \`any\` variable, then pass it here.
 
 <a name="ScanJulianDay"></a>
-## func [ScanJulianDay](<https://github.com/danmestas/libfossil/blob/main/db/scan.go#L12>)
+## func [ScanJulianDay](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L12>)
 
 ```go
 func ScanJulianDay(v any) (float64, bool)
@@ -102,7 +125,7 @@ func ScanJulianDay(v any) (float64, bool)
 ScanJulianDay converts a scanned mtime value to a float64 Julian Day Number. SQLite drivers return mtime differently: modernc returns float64, ncruces returns time.Time for DATETIME/TIMESTAMP/DATE columns. Scan the column into an \`any\` variable, then pass it here.
 
 <a name="ScanTime"></a>
-## func [ScanTime](<https://github.com/danmestas/libfossil/blob/main/db/scan.go#L27>)
+## func [ScanTime](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L27>)
 
 ```go
 func ScanTime(v any) (time.Time, bool)
@@ -111,16 +134,16 @@ func ScanTime(v any) (time.Time, bool)
 ScanTime converts a scanned mtime value to time.Time. Same driver\-compatibility rationale as ScanJulianDay.
 
 <a name="SeedConfig"></a>
-## func [SeedConfig](<https://github.com/danmestas/libfossil/blob/main/db/schema.go#L235>)
+## func [SeedConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L267>)
 
 ```go
-func SeedConfig(d *DB, rng simio.Rand) error
+func SeedConfig(d *DB, rng simio.Rand, projectCode string) error
 ```
 
-
+SeedConfig seeds the config table with project\-code, server\-code, and schema markers. If projectCode is empty, a fresh 40\-char lowercase\-hex project\-code is generated from rng. If non\-empty, it must match ^\[0\-9a\-f\]\{40\}$; otherwise an error is returned and no rows are written. Server\-code is always generated.
 
 <a name="SeedNobody"></a>
-## func [SeedNobody](<https://github.com/danmestas/libfossil/blob/main/db/schema.go#L224>)
+## func [SeedNobody](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L251>)
 
 ```go
 func SeedNobody(d *DB, caps string) error
@@ -129,7 +152,7 @@ func SeedNobody(d *DB, caps string) error
 SeedNobody inserts a "nobody" user with the given capabilities. This controls anonymous access policy for the repo.
 
 <a name="SeedUser"></a>
-## func [SeedUser](<https://github.com/danmestas/libfossil/blob/main/db/schema.go#L208>)
+## func [SeedUser](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L235>)
 
 ```go
 func SeedUser(d *DB, login string) error
@@ -137,8 +160,43 @@ func SeedUser(d *DB, login string) error
 
 
 
+<a name="CheckpointMode"></a>
+## type [CheckpointMode](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L14>)
+
+CheckpointMode mirrors SQLite's PRAGMA wal\_checkpoint\(\<mode\>\) argument.
+
+```go
+type CheckpointMode int
+```
+
+<a name="CheckpointPassive"></a>
+
+```go
+const (
+    // CheckpointPassive checkpoints frames not held by readers; never blocks.
+    // Appropriate for periodic background checkpoints.
+    CheckpointPassive CheckpointMode = iota
+    // CheckpointFull blocks new writers until all frames are checkpointed.
+    CheckpointFull
+    // CheckpointRestart is FULL plus restarts the WAL file.
+    CheckpointRestart
+    // CheckpointTruncate is RESTART plus truncates the WAL file to zero bytes.
+    // Produces the most compact on-disk file and is what Close uses.
+    CheckpointTruncate
+)
+```
+
+<a name="CheckpointMode.String"></a>
+### func \(CheckpointMode\) [String](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L29>)
+
+```go
+func (m CheckpointMode) String() string
+```
+
+
+
 <a name="DB"></a>
-## type [DB](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L10-L14>)
+## type [DB](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L45-L49>)
 
 DB wraps a SQLite database connection.
 
@@ -149,7 +207,7 @@ type DB struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L17>)
+### func [Open](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L52>)
 
 ```go
 func Open(path string) (*DB, error)
@@ -158,7 +216,7 @@ func Open(path string) (*DB, error)
 Open opens a SQLite database with the registered driver and default pragmas.
 
 <a name="OpenWith"></a>
-### func [OpenWith](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L22>)
+### func [OpenWith](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L178>)
 
 ```go
 func OpenWith(path string, cfg OpenConfig) (*DB, error)
@@ -167,7 +225,7 @@ func OpenWith(path string, cfg OpenConfig) (*DB, error)
 OpenWith opens a SQLite database with explicit configuration.
 
 <a name="DB.ApplicationID"></a>
-### func \(\*DB\) [ApplicationID](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L115>)
+### func \(\*DB\) [ApplicationID](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L263>)
 
 ```go
 func (d *DB) ApplicationID() (int32, error)
@@ -175,17 +233,26 @@ func (d *DB) ApplicationID() (int32, error)
 
 
 
+<a name="DB.Checkpoint"></a>
+### func \(\*DB\) [Checkpoint](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L223>)
+
+```go
+func (d *DB) Checkpoint(mode CheckpointMode) error
+```
+
+Checkpoint runs PRAGMA wal\_checkpoint\(\<mode\>\) against the database. Safe to call on a live database. PASSIVE never blocks; TRUNCATE produces the most compact on\-disk layout. On a non\-WAL database the underlying PRAGMA is a no\-op and returns nil.
+
 <a name="DB.Close"></a>
-### func \(\*DB\) [Close](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L86>)
+### func \(\*DB\) [Close](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L210>)
 
 ```go
 func (d *DB) Close() error
 ```
 
-
+Close runs PRAGMA wal\_checkpoint\(TRUNCATE\) before closing the underlying connection so the on\-disk file is readable by external SQLite/fossil tooling. The WASM/WASI build path does not use WAL, so the checkpoint is skipped there. Checkpoint errors are joined with the close error so the connection is always closed regardless of checkpoint outcome.
 
 <a name="DB.Driver"></a>
-### func \(\*DB\) [Driver](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L94>)
+### func \(\*DB\) [Driver](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L242>)
 
 ```go
 func (d *DB) Driver() string
@@ -194,7 +261,7 @@ func (d *DB) Driver() string
 
 
 <a name="DB.Exec"></a>
-### func \(\*DB\) [Exec](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L98>)
+### func \(\*DB\) [Exec](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L246>)
 
 ```go
 func (d *DB) Exec(query string, args ...any) (sql.Result, error)
@@ -203,7 +270,7 @@ func (d *DB) Exec(query string, args ...any) (sql.Result, error)
 
 
 <a name="DB.Path"></a>
-### func \(\*DB\) [Path](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L90>)
+### func \(\*DB\) [Path](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L238>)
 
 ```go
 func (d *DB) Path() string
@@ -212,7 +279,7 @@ func (d *DB) Path() string
 
 
 <a name="DB.Query"></a>
-### func \(\*DB\) [Query](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L106>)
+### func \(\*DB\) [Query](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L254>)
 
 ```go
 func (d *DB) Query(query string, args ...any) (*sql.Rows, error)
@@ -221,7 +288,7 @@ func (d *DB) Query(query string, args ...any) (*sql.Rows, error)
 
 
 <a name="DB.QueryRow"></a>
-### func \(\*DB\) [QueryRow](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L102>)
+### func \(\*DB\) [QueryRow](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L250>)
 
 ```go
 func (d *DB) QueryRow(query string, args ...any) *sql.Row
@@ -230,7 +297,7 @@ func (d *DB) QueryRow(query string, args ...any) *sql.Row
 
 
 <a name="DB.SetApplicationID"></a>
-### func \(\*DB\) [SetApplicationID](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L110>)
+### func \(\*DB\) [SetApplicationID](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L258>)
 
 ```go
 func (d *DB) SetApplicationID(id int32) error
@@ -239,7 +306,7 @@ func (d *DB) SetApplicationID(id int32) error
 
 
 <a name="DB.SqlDB"></a>
-### func \(\*DB\) [SqlDB](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L79>)
+### func \(\*DB\) [SqlDB](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L198>)
 
 ```go
 func (d *DB) SqlDB() *sql.DB
@@ -248,7 +315,7 @@ func (d *DB) SqlDB() *sql.DB
 SqlDB returns the underlying \*sql.DB connection.
 
 <a name="DB.WithTx"></a>
-### func \(\*DB\) [WithTx](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L137>)
+### func \(\*DB\) [WithTx](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L285>)
 
 ```go
 func (d *DB) WithTx(fn func(tx *Tx) error) error
@@ -257,7 +324,7 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error
 
 
 <a name="DriverConfig"></a>
-## type [DriverConfig](<https://github.com/danmestas/libfossil/blob/main/db/register.go#L4-L7>)
+## type [DriverConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L4-L7>)
 
 DriverConfig defines a SQLite driver's name and DSN builder.
 
@@ -269,7 +336,7 @@ type DriverConfig struct {
 ```
 
 <a name="RegisteredDriver"></a>
-### func [RegisteredDriver](<https://github.com/danmestas/libfossil/blob/main/db/register.go#L31>)
+### func [RegisteredDriver](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L31>)
 
 ```go
 func RegisteredDriver() *DriverConfig
@@ -278,7 +345,7 @@ func RegisteredDriver() *DriverConfig
 RegisteredDriver returns a copy of the currently registered driver config, or nil if none.
 
 <a name="OpenConfig"></a>
-## type [OpenConfig](<https://github.com/danmestas/libfossil/blob/main/db/config.go#L4-L7>)
+## type [OpenConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/config.go#L4-L7>)
 
 OpenConfig allows callers to customize driver selection and pragmas.
 
@@ -290,7 +357,7 @@ type OpenConfig struct {
 ```
 
 <a name="Querier"></a>
-## type [Querier](<https://github.com/danmestas/libfossil/blob/main/db/querier.go#L8-L12>)
+## type [Querier](<https://github.com/danmestas/go-libfossil/blob/main/db/querier.go#L8-L12>)
 
 Querier is the common interface satisfied by both \*DB and \*Tx. Functions that need to work inside transactions accept Querier instead of \*DB.
 
@@ -303,7 +370,7 @@ type Querier interface {
 ```
 
 <a name="Tx"></a>
-## type [Tx](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L121-L123>)
+## type [Tx](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L269-L271>)
 
 
 
@@ -314,7 +381,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Exec"></a>
-### func \(\*Tx\) [Exec](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L125>)
+### func \(\*Tx\) [Exec](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L273>)
 
 ```go
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error)
@@ -323,7 +390,7 @@ func (t *Tx) Exec(query string, args ...any) (sql.Result, error)
 
 
 <a name="Tx.Query"></a>
-### func \(\*Tx\) [Query](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L133>)
+### func \(\*Tx\) [Query](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L281>)
 
 ```go
 func (t *Tx) Query(query string, args ...any) (*sql.Rows, error)
@@ -332,7 +399,7 @@ func (t *Tx) Query(query string, args ...any) (*sql.Rows, error)
 
 
 <a name="Tx.QueryRow"></a>
-### func \(\*Tx\) [QueryRow](<https://github.com/danmestas/libfossil/blob/main/db/db.go#L129>)
+### func \(\*Tx\) [QueryRow](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L277>)
 
 ```go
 func (t *Tx) QueryRow(query string, args ...any) *sql.Row

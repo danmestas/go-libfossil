@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
 )
 
 // TestBuildDSN_TxlockImmediate verifies the registered DSN builder always

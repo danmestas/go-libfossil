@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // TestFossilBinaryReadsDeltifiedRepo is the acceptance check that our own

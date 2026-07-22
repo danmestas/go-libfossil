@@ -3,7 +3,7 @@ package checkout
 import (
 	"testing"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestBranchLeaves_SingleLeaf(t *testing.T) {

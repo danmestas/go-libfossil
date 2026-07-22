@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // crosslinkDerivedTables are the tables a Crosslink sweep is responsible for.

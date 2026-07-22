@@ -3,10 +3,10 @@ package sync
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/auth"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/uv"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 func (h *handler) handlePragmaUVHash(clientHash string) error {

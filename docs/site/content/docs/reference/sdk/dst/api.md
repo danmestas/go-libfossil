@@ -7,7 +7,7 @@ title: dst
 # dst
 
 ```go
-import "github.com/danmestas/libfossil/dst"
+import "github.com/danmestas/go-libfossil/dst"
 ```
 
 ## Index
@@ -98,7 +98,7 @@ import "github.com/danmestas/libfossil/dst"
 
 
 <a name="AllBlobUUIDsSorted"></a>
-## func [AllBlobUUIDsSorted](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L564>)
+## func [AllBlobUUIDsSorted](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L564>)
 
 ```go
 func AllBlobUUIDsSorted(r *repo.Repo) ([]string, error)
@@ -107,7 +107,7 @@ func AllBlobUUIDsSorted(r *repo.Repo) ([]string, error)
 AllBlobUUIDsSorted returns a sorted slice of UUIDs for deterministic comparison.
 
 <a name="CheckBlobIntegrity"></a>
-## func [CheckBlobIntegrity](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L33>)
+## func [CheckBlobIntegrity](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L33>)
 
 ```go
 func CheckBlobIntegrity(nodeID string, r *repo.Repo) error
@@ -116,7 +116,7 @@ func CheckBlobIntegrity(nodeID string, r *repo.Repo) error
 CheckBlobIntegrity verifies that every blob in the repo has a UUID matching the hash of its expanded content. This catches corruption from buggify \(content.Expand byte\-flip\) or storage bugs.
 
 <a name="CheckConvergence"></a>
-## func [CheckConvergence](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L102>)
+## func [CheckConvergence](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L102>)
 
 ```go
 func CheckConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
@@ -125,7 +125,7 @@ func CheckConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
 CheckConvergence verifies that every leaf repo contains the same set of artifact UUIDs as the master repo.
 
 <a name="CheckDeltaChains"></a>
-## func [CheckDeltaChains](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L52>)
+## func [CheckDeltaChains](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L52>)
 
 ```go
 func CheckDeltaChains(nodeID string, r *repo.Repo) error
@@ -134,7 +134,7 @@ func CheckDeltaChains(nodeID string, r *repo.Repo) error
 CheckDeltaChains verifies that every delta's srcid points to an existing blob \(no dangling references\).
 
 <a name="CheckNoOrphanPhantoms"></a>
-## func [CheckNoOrphanPhantoms](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L79>)
+## func [CheckNoOrphanPhantoms](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L79>)
 
 ```go
 func CheckNoOrphanPhantoms(nodeID string, r *repo.Repo) error
@@ -143,7 +143,7 @@ func CheckNoOrphanPhantoms(nodeID string, r *repo.Repo) error
 CheckNoOrphanPhantoms verifies that phantom entries reference blobs that actually exist in the blob table \(they're just missing content\).
 
 <a name="CheckSubsetOf"></a>
-## func [CheckSubsetOf](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L142>)
+## func [CheckSubsetOf](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L142>)
 
 ```go
 func CheckSubsetOf(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
@@ -152,7 +152,7 @@ func CheckSubsetOf(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
 CheckSubsetOf verifies that all artifacts in the master are present in every leaf. Unlike CheckConvergence, this allows leaves to have extra artifacts \(useful when only pull is being tested\).
 
 <a name="CheckTableSyncConvergence"></a>
-## func [CheckTableSyncConvergence](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L412>)
+## func [CheckTableSyncConvergence](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L412>)
 
 ```go
 func CheckTableSyncConvergence(repos map[string]*repo.Repo) error
@@ -161,7 +161,7 @@ func CheckTableSyncConvergence(repos map[string]*repo.Repo) error
 CheckTableSyncConvergence verifies that all repos have identical rows for every shared synced table. Tables present in some repos but not others are skipped \(schema may still be propagating\).
 
 <a name="CheckTableSyncIntegrity"></a>
-## func [CheckTableSyncIntegrity](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L355>)
+## func [CheckTableSyncIntegrity](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L355>)
 
 ```go
 func CheckTableSyncIntegrity(nodeID string, r *repo.Repo) error
@@ -170,7 +170,7 @@ func CheckTableSyncIntegrity(nodeID string, r *repo.Repo) error
 CheckTableSyncIntegrity verifies that: 1. Every row in every synced table has a valid PK hash. 2. Every row's mtime is positive. 3. The computed catalog hash is 40 hex chars.
 
 <a name="CheckTagxrefIntegrity"></a>
-## func [CheckTagxrefIntegrity](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L296>)
+## func [CheckTagxrefIntegrity](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L296>)
 
 ```go
 func CheckTagxrefIntegrity(nodeID string, r *repo.Repo) error
@@ -179,7 +179,7 @@ func CheckTagxrefIntegrity(nodeID string, r *repo.Repo) error
 CheckTagxrefIntegrity verifies that: 1. Every tagxref.rid references a valid blob 2. Every tagxref.tagid references a valid tag 3. Propagated entries \(srcid=0\) have tagtype=2 4. No tagxref.rid references a phantom blob
 
 <a name="CheckUVConvergence"></a>
-## func [CheckUVConvergence](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L209>)
+## func [CheckUVConvergence](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L209>)
 
 ```go
 func CheckUVConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
@@ -188,7 +188,7 @@ func CheckUVConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error
 CheckUVConvergence verifies that all repos have identical UV content hashes.
 
 <a name="CheckUVIntegrity"></a>
-## func [CheckUVIntegrity](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L171>)
+## func [CheckUVIntegrity](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L171>)
 
 ```go
 func CheckUVIntegrity(nodeID string, r *repo.Repo) error
@@ -197,7 +197,7 @@ func CheckUVIntegrity(nodeID string, r *repo.Repo) error
 CheckUVIntegrity verifies that every non\-tombstone entry in the unversioned table has a hash matching the SHA1 of its decompressed content, and sz matches the content length.
 
 <a name="CountBlobs"></a>
-## func [CountBlobs](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L578>)
+## func [CountBlobs](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L578>)
 
 ```go
 func CountBlobs(r *repo.Repo) (int, error)
@@ -206,7 +206,7 @@ func CountBlobs(r *repo.Repo) (int, error)
 CountBlobs returns the number of non\-phantom blobs in the repo.
 
 <a name="HasBlob"></a>
-## func [HasBlob](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L585>)
+## func [HasBlob](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L585>)
 
 ```go
 func HasBlob(r *repo.Repo, uuid string) bool
@@ -215,7 +215,7 @@ func HasBlob(r *repo.Repo, uuid string) bool
 HasBlob checks if a specific artifact exists in the repo.
 
 <a name="Action"></a>
-## type [Action](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L19-L23>)
+## type [Action](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L19-L23>)
 
 Action is the result of processing a single event via Tick.
 
@@ -228,7 +228,7 @@ type Action struct {
 ```
 
 <a name="ActionType"></a>
-## type [ActionType](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L11>)
+## type [ActionType](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L11>)
 
 ActionType classifies the result of processing an event.
 
@@ -246,7 +246,7 @@ const (
 ```
 
 <a name="DefaultNode"></a>
-## type [DefaultNode](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L36-L43>)
+## type [DefaultNode](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L36-L43>)
 
 DefaultNode is a simple Node that calls sync.Sync directly. No NATS, no HTTP — just a repo \+ transport.
 
@@ -257,7 +257,7 @@ type DefaultNode struct {
 ```
 
 <a name="NewDefaultNode"></a>
-### func [NewDefaultNode](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L56>)
+### func [NewDefaultNode](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L56>)
 
 ```go
 func NewDefaultNode(r *repo.Repo, t sync.Transport, projectCode, serverCode string, opts DefaultNodeOpts) *DefaultNode
@@ -266,7 +266,7 @@ func NewDefaultNode(r *repo.Repo, t sync.Transport, projectCode, serverCode stri
 NewDefaultNode creates a Node backed by sync.Sync.
 
 <a name="DefaultNode.Repo"></a>
-### func \(\*DefaultNode\) [Repo](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L91>)
+### func \(\*DefaultNode\) [Repo](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L91>)
 
 ```go
 func (n *DefaultNode) Repo() *repo.Repo
@@ -275,7 +275,7 @@ func (n *DefaultNode) Repo() *repo.Repo
 Repo returns the node's Fossil repository.
 
 <a name="DefaultNode.Tick"></a>
-### func \(\*DefaultNode\) [Tick](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L73>)
+### func \(\*DefaultNode\) [Tick](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L73>)
 
 ```go
 func (n *DefaultNode) Tick(ctx context.Context, event EventType) Action
@@ -284,7 +284,7 @@ func (n *DefaultNode) Tick(ctx context.Context, event EventType) Action
 Tick executes a sync cycle for the given event.
 
 <a name="DefaultNodeOpts"></a>
-## type [DefaultNodeOpts](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L46-L53>)
+## type [DefaultNodeOpts](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L46-L53>)
 
 DefaultNodeOpts configures a DefaultNode.
 
@@ -300,7 +300,7 @@ type DefaultNodeOpts struct {
 ```
 
 <a name="Event"></a>
-## type [Event](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L22-L29>)
+## type [Event](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L22-L29>)
 
 Event is a scheduled occurrence in the simulation.
 
@@ -316,7 +316,7 @@ type Event struct {
 ```
 
 <a name="EventQueue"></a>
-## type [EventQueue](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L32>)
+## type [EventQueue](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L32>)
 
 EventQueue is a min\-heap of events ordered by time.
 
@@ -325,7 +325,7 @@ type EventQueue []*Event
 ```
 
 <a name="EventQueue.Len"></a>
-### func \(EventQueue\) [Len](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L34>)
+### func \(EventQueue\) [Len](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L34>)
 
 ```go
 func (q EventQueue) Len() int
@@ -334,7 +334,7 @@ func (q EventQueue) Len() int
 
 
 <a name="EventQueue.Less"></a>
-### func \(EventQueue\) [Less](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L35>)
+### func \(EventQueue\) [Less](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L35>)
 
 ```go
 func (q EventQueue) Less(i, j int) bool
@@ -343,7 +343,7 @@ func (q EventQueue) Less(i, j int) bool
 
 
 <a name="EventQueue.Pop"></a>
-### func \(\*EventQueue\) [Pop](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L38>)
+### func \(\*EventQueue\) [Pop](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L38>)
 
 ```go
 func (q *EventQueue) Pop() any
@@ -352,7 +352,7 @@ func (q *EventQueue) Pop() any
 
 
 <a name="EventQueue.PopEvent"></a>
-### func \(\*EventQueue\) [PopEvent](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L53>)
+### func \(\*EventQueue\) [PopEvent](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L53>)
 
 ```go
 func (q *EventQueue) PopEvent() *Event
@@ -361,7 +361,7 @@ func (q *EventQueue) PopEvent() *Event
 PopEvent removes and returns the earliest event.
 
 <a name="EventQueue.Push"></a>
-### func \(\*EventQueue\) [Push](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L37>)
+### func \(\*EventQueue\) [Push](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L37>)
 
 ```go
 func (q *EventQueue) Push(x any)
@@ -370,7 +370,7 @@ func (q *EventQueue) Push(x any)
 
 
 <a name="EventQueue.PushEvent"></a>
-### func \(\*EventQueue\) [PushEvent](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L48>)
+### func \(\*EventQueue\) [PushEvent](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L48>)
 
 ```go
 func (q *EventQueue) PushEvent(e *Event)
@@ -379,7 +379,7 @@ func (q *EventQueue) PushEvent(e *Event)
 PushEvent adds an event to the queue.
 
 <a name="EventQueue.Swap"></a>
-### func \(EventQueue\) [Swap](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L36>)
+### func \(EventQueue\) [Swap](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L36>)
 
 ```go
 func (q EventQueue) Swap(i, j int)
@@ -388,7 +388,7 @@ func (q EventQueue) Swap(i, j int)
 
 
 <a name="EventType"></a>
-## type [EventType](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L12>)
+## type [EventType](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L12>)
 
 EventType classifies simulation events.
 
@@ -408,7 +408,7 @@ const (
 ```
 
 <a name="InvariantError"></a>
-## type [InvariantError](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L18-L22>)
+## type [InvariantError](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L18-L22>)
 
 InvariantError records which invariant failed, on which node, and why.
 
@@ -421,7 +421,7 @@ type InvariantError struct {
 ```
 
 <a name="InvariantError.Error"></a>
-### func \(\*InvariantError\) [Error](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L24>)
+### func \(\*InvariantError\) [Error](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L24>)
 
 ```go
 func (e *InvariantError) Error() string
@@ -430,7 +430,7 @@ func (e *InvariantError) Error() string
 
 
 <a name="MockFossil"></a>
-## type [MockFossil](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L16-L19>)
+## type [MockFossil](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L16-L19>)
 
 MockFossil simulates a Fossil master server using the real HandleSync handler. It manages its own repo and implements sync.Transport by dispatching xfer messages to HandleSyncWithOpts.
 
@@ -441,7 +441,7 @@ type MockFossil struct {
 ```
 
 <a name="NewMockFossil"></a>
-### func [NewMockFossil](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L25>)
+### func [NewMockFossil](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L25>)
 
 ```go
 func NewMockFossil(r *repo.Repo) *MockFossil
@@ -450,7 +450,7 @@ func NewMockFossil(r *repo.Repo) *MockFossil
 NewMockFossil creates a MockFossil backed by the given repo.
 
 <a name="MockFossil.Exchange"></a>
-### func \(\*MockFossil\) [Exchange](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L45>)
+### func \(\*MockFossil\) [Exchange](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L45>)
 
 ```go
 func (f *MockFossil) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error)
@@ -459,7 +459,7 @@ func (f *MockFossil) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Mes
 Exchange handles one xfer request/response round by delegating to the real HandleSyncWithOpts. This ensures the DST tests exercise the same code path as production servers.
 
 <a name="MockFossil.Repo"></a>
-### func \(\*MockFossil\) [Repo](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L38>)
+### func \(\*MockFossil\) [Repo](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L38>)
 
 ```go
 func (f *MockFossil) Repo() *repo.Repo
@@ -468,7 +468,7 @@ func (f *MockFossil) Repo() *repo.Repo
 Repo returns the mock fossil's repository \(for seeding and invariants\).
 
 <a name="MockFossil.SetBuggify"></a>
-### func \(\*MockFossil\) [SetBuggify](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L33>)
+### func \(\*MockFossil\) [SetBuggify](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L33>)
 
 ```go
 func (f *MockFossil) SetBuggify(b libsync.BuggifyChecker)
@@ -477,7 +477,7 @@ func (f *MockFossil) SetBuggify(b libsync.BuggifyChecker)
 SetBuggify configures fault injection for the handler.
 
 <a name="MockFossil.StoreArtifact"></a>
-### func \(\*MockFossil\) [StoreArtifact](<https://github.com/danmestas/libfossil/blob/main/dst/mock_fossil.go#L56>)
+### func \(\*MockFossil\) [StoreArtifact](<https://github.com/danmestas/go-libfossil/blob/main/dst/mock_fossil.go#L56>)
 
 ```go
 func (f *MockFossil) StoreArtifact(data []byte) (string, error)
@@ -486,7 +486,7 @@ func (f *MockFossil) StoreArtifact(data []byte) (string, error)
 StoreArtifact adds a raw artifact to the mock fossil's repo. Returns the UUID. Used by tests to seed the master with content.
 
 <a name="Node"></a>
-## type [Node](<https://github.com/danmestas/libfossil/blob/main/dst/node.go#L29-L32>)
+## type [Node](<https://github.com/danmestas/go-libfossil/blob/main/dst/node.go#L29-L32>)
 
 Node represents a sync participant in the simulation. The simulator drives events by calling Tick; the Node executes a sync cycle and reports the result. EdgeSync can implement this by wrapping its agent.Agent; the DST provides a DefaultNode for in\-module testing.
 
@@ -498,7 +498,7 @@ type Node interface {
 ```
 
 <a name="NodeID"></a>
-## type [NodeID](<https://github.com/danmestas/libfossil/blob/main/dst/event.go#L9>)
+## type [NodeID](<https://github.com/danmestas/go-libfossil/blob/main/dst/event.go#L9>)
 
 NodeID identifies a node in the simulation.
 
@@ -507,7 +507,7 @@ type NodeID string
 ```
 
 <a name="PeerNetwork"></a>
-## type [PeerNetwork](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L16-L22>)
+## type [PeerNetwork](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L16-L22>)
 
 PeerNetwork simulates a peer\-to\-peer network where each leaf's Exchange calls HandleSync on the designated peer's repo. No bridge, no central server — pure leaf\-to\-leaf sync under DST control.
 
@@ -518,7 +518,7 @@ type PeerNetwork struct {
 ```
 
 <a name="NewPeerNetwork"></a>
-### func [NewPeerNetwork](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L25>)
+### func [NewPeerNetwork](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L25>)
 
 ```go
 func NewPeerNetwork(rng *rand.Rand) *PeerNetwork
@@ -527,7 +527,7 @@ func NewPeerNetwork(rng *rand.Rand) *PeerNetwork
 NewPeerNetwork creates a simulated peer network.
 
 <a name="PeerNetwork.AddPeer"></a>
-### func \(\*PeerNetwork\) [AddPeer](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L37>)
+### func \(\*PeerNetwork\) [AddPeer](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L37>)
 
 ```go
 func (n *PeerNetwork) AddPeer(id NodeID, r *repo.Repo)
@@ -536,7 +536,7 @@ func (n *PeerNetwork) AddPeer(id NodeID, r *repo.Repo)
 AddPeer registers a leaf's repo as a sync target for other leaves.
 
 <a name="PeerNetwork.Heal"></a>
-### func \(\*PeerNetwork\) [Heal](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L60>)
+### func \(\*PeerNetwork\) [Heal](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L60>)
 
 ```go
 func (n *PeerNetwork) Heal(id NodeID)
@@ -545,7 +545,7 @@ func (n *PeerNetwork) Heal(id NodeID)
 Heal removes a node from the partition set.
 
 <a name="PeerNetwork.HealAll"></a>
-### func \(\*PeerNetwork\) [HealAll](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L65>)
+### func \(\*PeerNetwork\) [HealAll](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L65>)
 
 ```go
 func (n *PeerNetwork) HealAll()
@@ -554,7 +554,7 @@ func (n *PeerNetwork) HealAll()
 HealAll removes all partitions.
 
 <a name="PeerNetwork.Partition"></a>
-### func \(\*PeerNetwork\) [Partition](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L55>)
+### func \(\*PeerNetwork\) [Partition](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L55>)
 
 ```go
 func (n *PeerNetwork) Partition(id NodeID)
@@ -563,7 +563,7 @@ func (n *PeerNetwork) Partition(id NodeID)
 Partition isolates a node — all messages to/from it are dropped.
 
 <a name="PeerNetwork.SetBuggify"></a>
-### func \(\*PeerNetwork\) [SetBuggify](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L50>)
+### func \(\*PeerNetwork\) [SetBuggify](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L50>)
 
 ```go
 func (n *PeerNetwork) SetBuggify(b libsync.BuggifyChecker)
@@ -572,7 +572,7 @@ func (n *PeerNetwork) SetBuggify(b libsync.BuggifyChecker)
 SetBuggify configures fault injection for the handler.
 
 <a name="PeerNetwork.SetDropRate"></a>
-### func \(\*PeerNetwork\) [SetDropRate](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L45>)
+### func \(\*PeerNetwork\) [SetDropRate](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L45>)
 
 ```go
 func (n *PeerNetwork) SetDropRate(rate float64)
@@ -581,7 +581,7 @@ func (n *PeerNetwork) SetDropRate(rate float64)
 SetDropRate sets the probability that any message is dropped.
 
 <a name="PeerNetwork.Transport"></a>
-### func \(\*PeerNetwork\) [Transport](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L71>)
+### func \(\*PeerNetwork\) [Transport](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L71>)
 
 ```go
 func (n *PeerNetwork) Transport(source, target NodeID) *PeerTransport
@@ -590,7 +590,7 @@ func (n *PeerNetwork) Transport(source, target NodeID) *PeerTransport
 Transport returns a sync.Transport for the given source node that routes to a specific target peer's HandleSync.
 
 <a name="PeerTransport"></a>
-## type [PeerTransport](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L103-L107>)
+## type [PeerTransport](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L103-L107>)
 
 PeerTransport implements sync.Transport by routing through the PeerNetwork to a specific target peer.
 
@@ -601,7 +601,7 @@ type PeerTransport struct {
 ```
 
 <a name="PeerTransport.Exchange"></a>
-### func \(\*PeerTransport\) [Exchange](<https://github.com/danmestas/libfossil/blob/main/dst/peer_network.go#L110>)
+### func \(\*PeerTransport\) [Exchange](<https://github.com/danmestas/go-libfossil/blob/main/dst/peer_network.go#L110>)
 
 ```go
 func (t *PeerTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error)
@@ -610,7 +610,7 @@ func (t *PeerTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 Exchange sends a request through the peer network to the target's HandleSync.
 
 <a name="SeededBuggify"></a>
-## type [SeededBuggify](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L18-L20>)
+## type [SeededBuggify](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L18-L20>)
 
 SeededBuggify implements sync.BuggifyChecker with a deterministic PRNG.
 
@@ -621,7 +621,7 @@ type SeededBuggify struct {
 ```
 
 <a name="SeededBuggify.Check"></a>
-### func \(\*SeededBuggify\) [Check](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L23>)
+### func \(\*SeededBuggify\) [Check](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L23>)
 
 ```go
 func (b *SeededBuggify) Check(_ string, probability float64) bool
@@ -630,7 +630,7 @@ func (b *SeededBuggify) Check(_ string, probability float64) bool
 Check returns true with the given probability, using the seeded PRNG.
 
 <a name="SimConfig"></a>
-## type [SimConfig](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L54-L64>)
+## type [SimConfig](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L54-L64>)
 
 SimConfig configures a simulation run.
 
@@ -649,7 +649,7 @@ type SimConfig struct {
 ```
 
 <a name="SimNetwork"></a>
-## type [SimNetwork](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L20-L26>)
+## type [SimNetwork](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L20-L26>)
 
 SimNetwork simulates the network between leaf agents and the upstream transport \(mock Fossil master\). It supports message dropping, response truncation, and network partitions, controlled by a seeded PRNG for deterministic behavior.
 
@@ -662,7 +662,7 @@ type SimNetwork struct {
 ```
 
 <a name="NewSimNetwork"></a>
-### func [NewSimNetwork](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L29>)
+### func [NewSimNetwork](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L29>)
 
 ```go
 func NewSimNetwork(rng *rand.Rand, upstream libsync.Transport) *SimNetwork
@@ -671,7 +671,7 @@ func NewSimNetwork(rng *rand.Rand, upstream libsync.Transport) *SimNetwork
 NewSimNetwork creates a simulated network connected to the given upstream transport.
 
 <a name="SimNetwork.Heal"></a>
-### func \(\*SimNetwork\) [Heal](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L54>)
+### func \(\*SimNetwork\) [Heal](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L54>)
 
 ```go
 func (n *SimNetwork) Heal(id NodeID)
@@ -680,7 +680,7 @@ func (n *SimNetwork) Heal(id NodeID)
 Heal removes a node from the partition set.
 
 <a name="SimNetwork.HealAll"></a>
-### func \(\*SimNetwork\) [HealAll](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L59>)
+### func \(\*SimNetwork\) [HealAll](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L59>)
 
 ```go
 func (n *SimNetwork) HealAll()
@@ -689,7 +689,7 @@ func (n *SimNetwork) HealAll()
 HealAll removes all partitions.
 
 <a name="SimNetwork.Partition"></a>
-### func \(\*SimNetwork\) [Partition](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L49>)
+### func \(\*SimNetwork\) [Partition](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L49>)
 
 ```go
 func (n *SimNetwork) Partition(id NodeID)
@@ -698,7 +698,7 @@ func (n *SimNetwork) Partition(id NodeID)
 Partition isolates a node — all messages to/from it are dropped.
 
 <a name="SimNetwork.SetDropRate"></a>
-### func \(\*SimNetwork\) [SetDropRate](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L38>)
+### func \(\*SimNetwork\) [SetDropRate](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L38>)
 
 ```go
 func (n *SimNetwork) SetDropRate(rate float64)
@@ -707,7 +707,7 @@ func (n *SimNetwork) SetDropRate(rate float64)
 SetDropRate sets the probability that any message is dropped entirely.
 
 <a name="SimNetwork.SetTruncateRate"></a>
-### func \(\*SimNetwork\) [SetTruncateRate](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L44>)
+### func \(\*SimNetwork\) [SetTruncateRate](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L44>)
 
 ```go
 func (n *SimNetwork) SetTruncateRate(rate float64)
@@ -716,7 +716,7 @@ func (n *SimNetwork) SetTruncateRate(rate float64)
 SetTruncateRate sets the probability that a response is truncated \(random suffix of cards dropped\). Simulates partial delivery.
 
 <a name="SimNetwork.Transport"></a>
-### func \(\*SimNetwork\) [Transport](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L65>)
+### func \(\*SimNetwork\) [Transport](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L65>)
 
 ```go
 func (n *SimNetwork) Transport(nodeID NodeID) *SimTransport
@@ -725,7 +725,7 @@ func (n *SimNetwork) Transport(nodeID NodeID) *SimTransport
 Transport returns a sync.Transport for the given node that routes messages through this simulated network to the upstream.
 
 <a name="SimTransport"></a>
-## type [SimTransport](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L90-L93>)
+## type [SimTransport](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L90-L93>)
 
 SimTransport implements sync.Transport by routing through the SimNetwork.
 
@@ -736,7 +736,7 @@ type SimTransport struct {
 ```
 
 <a name="SimTransport.Exchange"></a>
-### func \(\*SimTransport\) [Exchange](<https://github.com/danmestas/libfossil/blob/main/dst/network.go#L96>)
+### func \(\*SimTransport\) [Exchange](<https://github.com/danmestas/go-libfossil/blob/main/dst/network.go#L96>)
 
 ```go
 func (t *SimTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error)
@@ -745,7 +745,7 @@ func (t *SimTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.M
 Exchange sends a request through the simulated network to the upstream.
 
 <a name="Simulator"></a>
-## type [Simulator](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L29-L51>)
+## type [Simulator](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L29-L51>)
 
 Simulator drives a deterministic simulation of multiple leaf nodes syncing through a simulated network to an upstream transport \(mock Fossil master\).
 
@@ -765,7 +765,7 @@ type Simulator struct {
 ```
 
 <a name="New"></a>
-### func [New](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L69>)
+### func [New](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L69>)
 
 ```go
 func New(cfg SimConfig) (*Simulator, error)
@@ -774,7 +774,7 @@ func New(cfg SimConfig) (*Simulator, error)
 New creates a Simulator with the given configuration. It creates leaf repos, nodes, and the simulated network. All I/O is local SQLite — no NATS or HTTP connections are made.
 
 <a name="Simulator.CheckAllConverged"></a>
-### func \(\*Simulator\) [CheckAllConverged](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L260>)
+### func \(\*Simulator\) [CheckAllConverged](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L260>)
 
 ```go
 func (s *Simulator) CheckAllConverged(master *repo.Repo) error
@@ -783,7 +783,7 @@ func (s *Simulator) CheckAllConverged(master *repo.Repo) error
 CheckAllConverged checks convergence between master and all leaves. Only meaningful after a fault\-free sync period.
 
 <a name="Simulator.CheckAllTableSyncConverged"></a>
-### func \(\*Simulator\) [CheckAllTableSyncConverged](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L269>)
+### func \(\*Simulator\) [CheckAllTableSyncConverged](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L269>)
 
 ```go
 func (s *Simulator) CheckAllTableSyncConverged() error
@@ -792,7 +792,7 @@ func (s *Simulator) CheckAllTableSyncConverged() error
 CheckAllTableSyncConverged checks table sync convergence across all nodes.
 
 <a name="Simulator.CheckAllUVConverged"></a>
-### func \(\*Simulator\) [CheckAllUVConverged](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L281>)
+### func \(\*Simulator\) [CheckAllUVConverged](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L281>)
 
 ```go
 func (s *Simulator) CheckAllUVConverged(master *repo.Repo) error
@@ -801,7 +801,7 @@ func (s *Simulator) CheckAllUVConverged(master *repo.Repo) error
 CheckAllUVConverged checks UV convergence between master and all leaves.
 
 <a name="Simulator.CheckSafety"></a>
-### func \(\*Simulator\) [CheckSafety](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L236>)
+### func \(\*Simulator\) [CheckSafety](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L236>)
 
 ```go
 func (s *Simulator) CheckSafety() error
@@ -810,7 +810,7 @@ func (s *Simulator) CheckSafety() error
 CheckSafety runs all safety invariants on every node in the simulation.
 
 <a name="Simulator.CheckTombstoneConvergence"></a>
-### func \(\*Simulator\) [CheckTombstoneConvergence](<https://github.com/danmestas/libfossil/blob/main/dst/invariants.go#L468>)
+### func \(\*Simulator\) [CheckTombstoneConvergence](<https://github.com/danmestas/go-libfossil/blob/main/dst/invariants.go#L468>)
 
 ```go
 func (s *Simulator) CheckTombstoneConvergence(t *testing.T, masterRepo *repo.Repo, tableName string, def repo.TableDef)
@@ -819,7 +819,7 @@ func (s *Simulator) CheckTombstoneConvergence(t *testing.T, masterRepo *repo.Rep
 CheckTombstoneConvergence verifies that all nodes agree on which rows are tombstones for each synced table. Two nodes may have different catalog hashes during convergence, but once converged, their tombstone sets must match.
 
 <a name="Simulator.Clock"></a>
-### func \(\*Simulator\) [Clock](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L148>)
+### func \(\*Simulator\) [Clock](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L148>)
 
 ```go
 func (s *Simulator) Clock() *simio.SimClock
@@ -828,7 +828,7 @@ func (s *Simulator) Clock() *simio.SimClock
 Clock returns the simulator's virtual clock.
 
 <a name="Simulator.Close"></a>
-### func \(\*Simulator\) [Close](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L335>)
+### func \(\*Simulator\) [Close](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L335>)
 
 ```go
 func (s *Simulator) Close() error
@@ -837,7 +837,7 @@ func (s *Simulator) Close() error
 Close cleans up all leaf node repos and disables buggify. Iterates leafIDs \(not map\) for deterministic error reporting.
 
 <a name="Simulator.Leaf"></a>
-### func \(\*Simulator\) [Leaf](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L158>)
+### func \(\*Simulator\) [Leaf](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L158>)
 
 ```go
 func (s *Simulator) Leaf(id NodeID) Node
@@ -846,7 +846,7 @@ func (s *Simulator) Leaf(id NodeID) Node
 Leaf returns the node for the given node ID.
 
 <a name="Simulator.LeafIDs"></a>
-### func \(\*Simulator\) [LeafIDs](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L163>)
+### func \(\*Simulator\) [LeafIDs](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L163>)
 
 ```go
 func (s *Simulator) LeafIDs() []NodeID
@@ -855,7 +855,7 @@ func (s *Simulator) LeafIDs() []NodeID
 LeafIDs returns the ordered list of leaf node IDs.
 
 <a name="Simulator.Network"></a>
-### func \(\*Simulator\) [Network](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L153>)
+### func \(\*Simulator\) [Network](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L153>)
 
 ```go
 func (s *Simulator) Network() *SimNetwork
@@ -864,7 +864,7 @@ func (s *Simulator) Network() *SimNetwork
 Network returns the simulated network for fault injection.
 
 <a name="Simulator.Run"></a>
-### func \(\*Simulator\) [Run](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L303>)
+### func \(\*Simulator\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L303>)
 
 ```go
 func (s *Simulator) Run(maxSteps int) error
@@ -873,7 +873,7 @@ func (s *Simulator) Run(maxSteps int) error
 Run processes up to maxSteps events. Returns nil on success or the first invariant/error encountered.
 
 <a name="Simulator.RunUntil"></a>
-### func \(\*Simulator\) [RunUntil](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L317>)
+### func \(\*Simulator\) [RunUntil](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L317>)
 
 ```go
 func (s *Simulator) RunUntil(deadline time.Time) error
@@ -882,7 +882,7 @@ func (s *Simulator) RunUntil(deadline time.Time) error
 RunUntil processes events until the clock reaches the given time.
 
 <a name="Simulator.ScheduleSyncNow"></a>
-### func \(\*Simulator\) [ScheduleSyncNow](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L173>)
+### func \(\*Simulator\) [ScheduleSyncNow](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L173>)
 
 ```go
 func (s *Simulator) ScheduleSyncNow(id NodeID)
@@ -891,7 +891,7 @@ func (s *Simulator) ScheduleSyncNow(id NodeID)
 ScheduleSyncNow injects a SyncNow event for the given leaf at the current time.
 
 <a name="Simulator.ScheduleUVDelete"></a>
-### func \(\*Simulator\) [ScheduleUVDelete](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L194>)
+### func \(\*Simulator\) [ScheduleUVDelete](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L194>)
 
 ```go
 func (s *Simulator) ScheduleUVDelete(id NodeID, at time.Time, name string, mtime int64)
@@ -900,7 +900,7 @@ func (s *Simulator) ScheduleUVDelete(id NodeID, at time.Time, name string, mtime
 ScheduleUVDelete injects a UV delete event for the given node at the specified time.
 
 <a name="Simulator.ScheduleUVWrite"></a>
-### func \(\*Simulator\) [ScheduleUVWrite](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L182>)
+### func \(\*Simulator\) [ScheduleUVWrite](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L182>)
 
 ```go
 func (s *Simulator) ScheduleUVWrite(id NodeID, at time.Time, name string, data []byte, mtime int64)
@@ -909,7 +909,7 @@ func (s *Simulator) ScheduleUVWrite(id NodeID, at time.Time, name string, data [
 ScheduleUVWrite injects a UV write event for the given node at the specified time.
 
 <a name="Simulator.SetMasterRepo"></a>
-### func \(\*Simulator\) [SetMasterRepo](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L168>)
+### func \(\*Simulator\) [SetMasterRepo](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L168>)
 
 ```go
 func (s *Simulator) SetMasterRepo(r *repo.Repo)
@@ -918,7 +918,7 @@ func (s *Simulator) SetMasterRepo(r *repo.Repo)
 SetMasterRepo registers the master repo for UV events targeting "master".
 
 <a name="Simulator.Step"></a>
-### func \(\*Simulator\) [Step](<https://github.com/danmestas/libfossil/blob/main/dst/simulator.go#L205>)
+### func \(\*Simulator\) [Step](<https://github.com/danmestas/go-libfossil/blob/main/dst/simulator.go#L205>)
 
 ```go
 func (s *Simulator) Step() (bool, error)

@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/auth"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // findCards returns all cards of type T from a message.

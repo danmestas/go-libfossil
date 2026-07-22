@@ -42,8 +42,8 @@ Wire an observer to your Repo's operations to surface sync rounds, checkout even
 
 ```go
 import (
-    libfossil "github.com/danmestas/libfossil"
-    otelobs "github.com/danmestas/libfossil/observer/otel"
+    libfossil "github.com/danmestas/go-libfossil"
+    otelobs "github.com/danmestas/go-libfossil/observer/otel"
 )
 
 obs := otelobs.NewSyncObserver()
@@ -84,9 +84,9 @@ Concurrent reads through one Repo are safe — SQLite handles the locking. Write
 For services targeting Linux/macOS/Windows, the default `modernc` driver is the right choice — pure Go, static binaries, no surprises. Switch to `ncruces` only when you're shipping a WASI/browser binary or when you need ncruces-specific behavior:
 
 ```go
-import _ "github.com/danmestas/libfossil/db/driver/ncruces"
+import _ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 // instead of:
-// import _ "github.com/danmestas/libfossil/db/driver/modernc"
+// import _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 ```
 
 Drivers are mutually exclusive — a process can register exactly one. See [`db`](./reference/sdk/db/api/) for the registry contract.

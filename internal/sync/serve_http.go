@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // maxRequestBodyBytes caps the size of incoming xfer request bodies.

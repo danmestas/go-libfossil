@@ -3,8 +3,8 @@ package content
 import (
 	"database/sql"
 
-	"github.com/danmestas/libfossil/db"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // maxDeltaChainDepth bounds every delta-chain walk in the package: the two

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	libdb "github.com/danmestas/libfossil/db"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libdb "github.com/danmestas/go-libfossil/db"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // setupCheckoutDB creates a minimal .fslckout DB with vvar, vfile, vmerge tables

@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	libsync "github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/uv"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	libsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // SeededBuggify implements sync.BuggifyChecker with a deterministic PRNG.

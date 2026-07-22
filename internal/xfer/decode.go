@@ -247,24 +247,29 @@ func parseClone(args []string) (Card, error) {
 	if len(args) != 0 && len(args) != 2 {
 		return nil, fmt.Errorf("xfer: clone requires 0 or 2 args, got %d", len(args))
 	}
-	c := &CloneCard{}
-	if len(args) == 2 {
-		v, err := strconv.Atoi(args[0])
-		if err != nil {
-			return nil, fmt.Errorf("xfer: clone version: %w", err)
-		}
-		s, err := strconv.Atoi(args[1])
-		if err != nil {
-			return nil, fmt.Errorf("xfer: clone seqno: %w", err)
-		}
-		c.Version = v
-		c.SeqNo = s
+	if len(args) == 0 {
+		return &CloneCard{}, nil
+	}
+	// §8.1 withholds its fatal from a SEQNO that fails the digit-only rule
+	// (isDecimal below) but a token strconv.Atoi cannot parse at all -- e.g.
+	// "abc" or "3x" -- is rarer still and outside anything §8.1 discusses.
+	// Erroring the whole message for it is harsher than the fatal the spec
+	// was careful to withhold, so degrade the same way parseCloneSeqNo does
+	// for clone_seqno: carry the raw tokens forward as an UnknownCard rather
+	// than failing every later card in the message.
+	v, vErr := strconv.Atoi(args[0])
+	s, sErr := strconv.Atoi(args[1])
+	if vErr != nil || sErr != nil {
+		return &UnknownCard{Command: "clone", Args: args}, nil
+	}
+	return &CloneCard{
+		Version: v,
+		SeqNo:   s,
 		// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds
 		// it from one that fails digit-only recognition, so record whether
 		// this token qualifies rather than only what it parsed to.
-		c.SeqNoIsDecimal = isDecimal(args[1])
-	}
-	return c, nil
+		SeqNoIsDecimal: isDecimal(args[1]),
+	}, nil
 }
 
 func parseCloneSeqNo(args []string) (Card, error) {

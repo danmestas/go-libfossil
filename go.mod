@@ -34,6 +34,11 @@ require (
 // the go-libfossil path, so resolve them from their local directories for
 // non-workspace (GOWORK=off) builds. Replace directives are ignored by
 // downstream consumers, which resolve the published modules.
+//
+// Temporary. The Release workflow refuses to cut a tag while any replace
+// directive is present, because a tagged module carrying them breaks
+// `go install ...@<tag>`. When these are dropped, also clear the stale
+// old-path (libfossil) lines still carried in the go.sum files.
 replace (
 	github.com/danmestas/go-libfossil/db/driver/modernc => ./db/driver/modernc
 	github.com/danmestas/go-libfossil/db/driver/ncruces => ./db/driver/ncruces

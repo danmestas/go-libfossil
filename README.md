@@ -13,7 +13,7 @@
 
 Pure-Go library and CLI for [Fossil](https://fossil-scm.org) repositories. Drop-in compatible with Fossil's `.fossil` SQLite format, with no CGo and no upstream `fossil` binary required.
 
-> The repository is named **go-libfossil**, but the module is imported as `libfossil` (`go get github.com/danmestas/go-libfossil`) and the CLI installs as the `libfossil` command — the import path is unchanged.
+> The repository and module path are **go-libfossil** (`go get github.com/danmestas/go-libfossil`), but the Go package is still imported as `libfossil` and the CLI installs as the `libfossil` command. Only the path moved; the package and binary names are unchanged.
 
 ## Why libfossil
 

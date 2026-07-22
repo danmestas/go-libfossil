@@ -23,6 +23,10 @@ require (
 
 // Resolve in-repo modules from local directories; they are not yet published
 // under the go-libfossil path. Ignored by downstream consumers.
+//
+// Temporary; the Release workflow refuses to cut a tag while any replace
+// directive is present. When these are dropped, also clear the stale
+// old-path (libfossil) lines still carried in go.sum.
 replace (
 	github.com/danmestas/go-libfossil => ../../..
 	github.com/danmestas/go-libfossil/db/driver/ncruces => ../ncruces

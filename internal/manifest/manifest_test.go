@@ -59,9 +59,7 @@ func TestCheckinBasic(t *testing.T) {
 }
 
 func TestCheckinFossilRebuild(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
+	testutil.RequireFossilBin(t)
 	r := setupTestRepo(t)
 	_, _, err := Checkin(r, CheckinOpts{
 		Files: []File{
@@ -303,9 +301,7 @@ func TestCheckinDelta(t *testing.T) {
 }
 
 func TestCheckinDeltaFossilRebuild(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
+	testutil.RequireFossilBin(t)
 	r := setupTestRepo(t)
 	rid1, _, _ := Checkin(r, CheckinOpts{
 		Files: []File{

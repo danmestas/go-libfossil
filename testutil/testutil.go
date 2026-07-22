@@ -14,9 +14,17 @@ type TestRepo struct {
 	Dir  string
 }
 
+// FossilBinary resolves the canonical fossil binary: the FOSSIL_BIN override
+// first, then PATH. An override that does not resolve to an executable is
+// treated as no binary at all, so the caller reports "fossil not found" rather
+// than letting a stale path surface later as a raw fork/exec error.
 func FossilBinary() string {
 	if bin := os.Getenv("FOSSIL_BIN"); bin != "" {
-		return bin
+		path, err := exec.LookPath(bin)
+		if err != nil {
+			return ""
+		}
+		return path
 	}
 	path, err := exec.LookPath("fossil")
 	if err != nil {
@@ -37,10 +45,14 @@ func RequireFossilBin(t *testing.T) string {
 	if bin := FossilBinary(); bin != "" {
 		return bin
 	}
-	if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
-		t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary found (set FOSSIL_BIN or install fossil on PATH)")
+	where := "set FOSSIL_BIN or install fossil on PATH"
+	if bin := os.Getenv("FOSSIL_BIN"); bin != "" {
+		where = fmt.Sprintf("FOSSIL_BIN=%q is not an executable", bin)
 	}
-	t.Skip("fossil binary not found; set REQUIRE_FOSSIL_BIN=1 to require it")
+	if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
+		t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary found (%s)", where)
+	}
+	t.Skipf("fossil binary not found (%s); set REQUIRE_FOSSIL_BIN=1 to require it", where)
 	return ""
 }
 
@@ -84,10 +96,6 @@ func (r *TestRepo) FossilArtifact(t *testing.T, uuid string) []byte {
 		t.Fatalf("fossil artifact %s failed: %v", uuid, err)
 	}
 	return out
-}
-
-func HasFossil() bool {
-	return FossilBinary() != ""
 }
 
 func FossilRebuild(repoPath string) error {

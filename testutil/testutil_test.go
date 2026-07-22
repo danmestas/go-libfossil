@@ -26,10 +26,7 @@ func TestFossilSQL(t *testing.T) {
 }
 
 func TestFossilBinary(t *testing.T) {
-	path := FossilBinary()
-	if path == "" {
-		t.Skip("fossil binary not found in PATH")
-	}
+	path := RequireFossilBin(t)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("fossil binary not found at %q: %v", path, err)
 	}
@@ -43,7 +40,8 @@ func TestFossilBinary(t *testing.T) {
 func TestRequireFossilBin(t *testing.T) {
 	want := FossilBinary()
 	if want == "" {
-		t.Skip("fossil binary not resolvable; cannot exercise the found path")
+		// Fails under REQUIRE_FOSSIL_BIN=1, skips otherwise.
+		RequireFossilBin(t)
 	}
 	got := RequireFossilBin(t)
 	if got != want {

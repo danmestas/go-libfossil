@@ -24,10 +24,7 @@ import (
 func startFossilServer(t *testing.T, repoPath string) string {
 	t.Helper()
 
-	bin := testutil.FossilBinary()
-	if bin == "" {
-		t.Skip("fossil not in PATH")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	// Find a free port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -115,10 +112,7 @@ func getServerCode(t *testing.T, repoPath string) string {
 }
 
 func TestIntegrationPushToFossilServer(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
-	bin := testutil.FossilBinary()
+	bin := testutil.RequireFossilBin(t)
 
 	dir, err := os.MkdirTemp("", "TestIntegrationPush*")
 	if err != nil {
@@ -187,8 +181,8 @@ func TestIntegrationPushToFossilServer(t *testing.T) {
 		Pull:        false,
 		ProjectCode: projCode,
 		ServerCode:  srvCode,
-		User:     "",
-		Password: "",
+		User:        "",
+		Password:    "",
 	})
 
 	// Log results regardless of error — this is informational since fossil
@@ -209,10 +203,7 @@ func TestIntegrationPushToFossilServer(t *testing.T) {
 }
 
 func TestIntegrationPullFromFossilServer(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
-	bin := testutil.FossilBinary()
+	bin := testutil.RequireFossilBin(t)
 
 	dir, err := os.MkdirTemp("", "TestIntegrationPull*")
 	if err != nil {
@@ -262,8 +253,8 @@ func TestIntegrationPullFromFossilServer(t *testing.T) {
 		Pull:        true,
 		ProjectCode: projCode,
 		ServerCode:  srvCode,
-		User:     "",
-		Password: "",
+		User:        "",
+		Password:    "",
 	})
 
 	t.Logf("Pull result: rounds=%d filesSent=%d filesRecvd=%d errors=%v err=%v",

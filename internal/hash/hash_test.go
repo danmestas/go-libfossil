@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/danmestas/libfossil/testutil"
 )
 
 func TestSHA1(t *testing.T) {
@@ -51,10 +53,10 @@ func TestSHA1_FossilValidation(t *testing.T) {
 	tmpFile := filepath.Join(t.TempDir(), "testfile")
 	os.WriteFile(tmpFile, input, 0644)
 
-	cmd := exec.Command("fossil", "sha1sum", tmpFile)
-	out, err := cmd.Output()
+	bin := testutil.RequireFossilBin(t)
+	out, err := exec.Command(bin, "sha1sum", tmpFile).Output()
 	if err != nil {
-		t.Skipf("fossil sha1sum not available: %v", err)
+		t.Fatalf("fossil sha1sum: %v", err)
 	}
 	fossilHash := strings.Fields(string(out))[0]
 	if goHash != fossilHash {

@@ -148,9 +148,7 @@ func TestPhaseA_FossilCreatedRepo(t *testing.T) {
 }
 
 func TestPhaseB_Integration(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
+	testutil.RequireFossilBin(t)
 	path := filepath.Join(t.TempDir(), "integration-b.fossil")
 	r, err := repo.Create(path, "integration-user", simio.CryptoRand{}, "")
 	if err != nil {

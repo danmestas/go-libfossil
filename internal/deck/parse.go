@@ -6,7 +6,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/danmestas/libfossil/internal/hash"
 )
+
+// isHexToken reports whether s is non-empty and consists solely of the
+// lowercase hex digits an artifact hash is built from. §4.7.16 rejects a
+// T-card name that is entirely hex because it is indistinguishable from a
+// hash target.
+func isHexToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isHexDigit := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+		if !isHexDigit {
+			return false
+		}
+	}
+	return true
+}
 
 func Parse(data []byte) (*Deck, error) {
 	if data == nil {
@@ -235,9 +255,12 @@ func parseMCard(d *Deck, args string) error {
 
 func parseJCard(d *Deck, args string) error {
 	parts := strings.SplitN(args, " ", 2)
-	jf := TicketField{Name: FossilDecode(parts[0])}
+	// §4.7.8: the value is escape-decoded, the field name is stored
+	// verbatim (canonical manifest.c defossilizes only zValue and compares
+	// the raw zName).
+	jf := TicketField{Name: parts[0]}
 	if len(parts) == 2 {
-		jf.Value = parts[1]
+		jf.Value = FossilDecode(parts[1])
 	}
 	// §4.5.2: strictly ascending by field name.
 	if n := len(d.J); n > 0 {
@@ -282,10 +305,32 @@ func parseTCard(d *Deck, args string) error {
 	if len(parts) < 2 {
 		return fmt.Errorf("T-card needs name and uuid")
 	}
-	tc.Name = parts[0]
+	// §4.7.16: the name and value tokens are escape-decoded (canonical
+	// defossilizes both), while the target token is stored verbatim -- never
+	// decoded on the way in, so it is never encoded on the way out. Decoding
+	// the value matters on ordinary input: `fossil branch new 'my branch'`
+	// writes `T *branch * my\sbranch`, and leaving that raw names the branch
+	// literally "my\sbranch" all the way through crosslink.
+	tc.Name = FossilDecode(parts[0])
 	tc.UUID = parts[1]
 	if len(parts) == 3 {
-		tc.Value = parts[2]
+		tc.Value = FossilDecode(parts[2])
+	}
+	// §4.7.16: a name that after the sign is entirely hex digits is
+	// ambiguous with a hash, so reject it. The escape-decoded name is used;
+	// an all-hex token carries no escapes, so decoding leaves it unchanged.
+	if isHexToken(tc.Name) {
+		return fmt.Errorf("T-card name %q must not be entirely hexadecimal", tc.Name)
+	}
+	// §4.7.16: the target must be a valid artifact hash or the literal '*'.
+	// hash.IsValidHash panics on an empty string, so the '*' and non-empty
+	// checks come first.
+	validTarget := tc.UUID == "*"
+	if !validTarget && tc.UUID != "" {
+		validTarget = hash.IsValidHash(tc.UUID)
+	}
+	if !validTarget {
+		return fmt.Errorf("T-card target %q is neither a valid artifact hash nor '*'", tc.UUID)
 	}
 	if n := len(d.T); n > 0 {
 		if err := requireTagAscending(d.T[n-1], tc); err != nil {

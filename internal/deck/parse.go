@@ -6,7 +6,27 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/danmestas/libfossil/internal/hash"
 )
+
+// isHexToken reports whether s is non-empty and consists solely of the
+// lowercase hex digits an artifact hash is built from. §4.7.16 rejects a
+// T-card name that is entirely hex because it is indistinguishable from a
+// hash target.
+func isHexToken(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isHexDigit := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+		if !isHexDigit {
+			return false
+		}
+	}
+	return true
+}
 
 func Parse(data []byte) (*Deck, error) {
 	if data == nil {
@@ -292,6 +312,22 @@ func parseTCard(d *Deck, args string) error {
 	tc.UUID = parts[1]
 	if len(parts) == 3 {
 		tc.Value = parts[2]
+	}
+	// §4.7.16: a name that after the sign is entirely hex digits is
+	// ambiguous with a hash, so reject it. The escape-decoded name is used;
+	// an all-hex token carries no escapes, so decoding leaves it unchanged.
+	if isHexToken(tc.Name) {
+		return fmt.Errorf("T-card name %q must not be entirely hexadecimal", tc.Name)
+	}
+	// §4.7.16: the target must be a valid artifact hash or the literal '*'.
+	// hash.IsValidHash panics on an empty string, so the '*' and non-empty
+	// checks come first.
+	validTarget := tc.UUID == "*"
+	if !validTarget && tc.UUID != "" {
+		validTarget = hash.IsValidHash(tc.UUID)
+	}
+	if !validTarget {
+		return fmt.Errorf("T-card target %q is neither a valid artifact hash nor '*'", tc.UUID)
 	}
 	if n := len(d.T); n > 0 {
 		if err := requireTagAscending(d.T[n-1], tc); err != nil {

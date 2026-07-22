@@ -28,7 +28,7 @@ const phantomStallSampleSize = 10
 // parsing the message.
 type PhantomStallError struct {
 	Count  int      // phantom UUIDs still outstanding when the clone stopped
-	Sample []string // up to phantomStallSampleSize of those UUIDs, sorted, for diagnosis
+	Sample []string // up to phantomStallSampleSize lexicographically-smallest of those UUIDs, for diagnosis
 }
 
 func (e *PhantomStallError) Error() string {
@@ -42,15 +42,15 @@ func newPhantomStallError(phantoms map[string]bool) *PhantomStallError {
 	if len(phantoms) == 0 {
 		panic("sync.newPhantomStallError: phantoms must not be empty")
 	}
-	sample := make([]string, 0, phantomStallSampleSize)
+	all := make([]string, 0, len(phantoms))
 	for uuid := range phantoms {
-		if len(sample) >= phantomStallSampleSize {
-			break
-		}
-		sample = append(sample, uuid)
+		all = append(all, uuid)
 	}
-	sort.Strings(sample)
-	return &PhantomStallError{Count: len(phantoms), Sample: sample}
+	sort.Strings(all)
+	if len(all) > phantomStallSampleSize {
+		all = all[:phantomStallSampleSize]
+	}
+	return &PhantomStallError{Count: len(phantoms), Sample: all}
 }
 
 // cloneSession holds the mutable state of a running clone.

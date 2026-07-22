@@ -235,9 +235,12 @@ func parseMCard(d *Deck, args string) error {
 
 func parseJCard(d *Deck, args string) error {
 	parts := strings.SplitN(args, " ", 2)
-	jf := TicketField{Name: FossilDecode(parts[0])}
+	// §4.7.8: the value is escape-decoded, the field name is stored
+	// verbatim (canonical manifest.c defossilizes only zValue and compares
+	// the raw zName).
+	jf := TicketField{Name: parts[0]}
 	if len(parts) == 2 {
-		jf.Value = parts[1]
+		jf.Value = FossilDecode(parts[1])
 	}
 	// §4.5.2: strictly ascending by field name.
 	if n := len(d.J); n > 0 {

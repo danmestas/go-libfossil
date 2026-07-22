@@ -98,10 +98,12 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		copy(sorted, d.J)
 		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
 		for _, j := range sorted {
+			// §4.7.8 mirror of the parse direction: the name is written
+			// verbatim, the value is escape-encoded.
 			if j.Value != "" {
-				fmt.Fprintf(b, "J %s %s\n", FossilEncode(j.Name), j.Value)
+				fmt.Fprintf(b, "J %s %s\n", j.Name, FossilEncode(j.Value))
 			} else {
-				fmt.Fprintf(b, "J %s\n", FossilEncode(j.Name))
+				fmt.Fprintf(b, "J %s\n", j.Name)
 			}
 		}
 	}

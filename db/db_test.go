@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func TestOpenClose(t *testing.T) {
@@ -236,6 +237,7 @@ func TestCreateRepoSchema_FossilValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping fossil CLI validation in short mode")
 	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	path := filepath.Join(t.TempDir(), "test.fossil")
 	d, err := db.Open(path)
@@ -261,7 +263,7 @@ func TestCreateRepoSchema_FossilValidation(t *testing.T) {
 	d.Close()
 
 	// fossil rebuild should pass on Go-created schema
-	cmd := exec.Command("fossil", "rebuild", path)
+	cmd := exec.Command(fossilBin, "rebuild", path)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)

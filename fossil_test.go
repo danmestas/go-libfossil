@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func TestCreateAndOpen(t *testing.T) {
@@ -124,6 +125,7 @@ func TestCreate_ProjectCode_FossilValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping fossil validation")
 	}
+	fossilBin := testutil.RequireFossilBin(t)
 	const code = "0123456789abcdef0123456789abcdef01234567"
 	path := filepath.Join(t.TempDir(), "test.fossil")
 
@@ -135,12 +137,12 @@ func TestCreate_ProjectCode_FossilValidation(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	out, err := exec.Command("fossil", "rebuild", path).CombinedOutput()
+	out, err := exec.Command(fossilBin, "rebuild", path).CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
 	}
 
-	out, err = exec.Command("fossil", "sql", "-R", path,
+	out, err = exec.Command(fossilBin, "sql", "-R", path,
 		"SELECT value FROM config WHERE name='project-code';").Output()
 	if err != nil {
 		t.Fatalf("fossil sql: %v", err)

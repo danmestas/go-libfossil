@@ -23,6 +23,8 @@ func TestPhaseA_EndToEnd(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
+	fossilBin := testutil.RequireFossilBin(t)
+
 	// 1. Create a repo with Go
 	path := filepath.Join(t.TempDir(), "phase-a.fossil")
 	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
@@ -103,7 +105,7 @@ func TestPhaseA_EndToEnd(t *testing.T) {
 
 	// Verify blob exists via SQL query
 	query := fmt.Sprintf("SELECT uuid, size FROM blob WHERE uuid = '%s'", uuid1)
-	cmd := exec.Command("fossil", "sql", "-R", path, query)
+	cmd := exec.Command(fossilBin, "sql", "-R", path, query)
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("fossil sql: %v", err)
@@ -115,7 +117,7 @@ func TestPhaseA_EndToEnd(t *testing.T) {
 	// 9. fossil rebuild should process the repository
 	// Note: Fossil 2.28 may segfault on repos with deltas created via direct DB writes
 	// This is a known limitation - fossil rebuild works on fossil-generated repos
-	cmd = exec.Command("fossil", "rebuild", path)
+	cmd = exec.Command(fossilBin, "rebuild", path)
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		// Log the error but don't fail - the important validation is that:
@@ -133,8 +135,9 @@ func TestPhaseA_FossilCreatedRepo(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 
+	fossilBin := testutil.RequireFossilBin(t)
 	path := filepath.Join(t.TempDir(), "fossil-created.fossil")
-	exec.Command("fossil", "new", path).CombinedOutput()
+	exec.Command(fossilBin, "new", path).CombinedOutput()
 
 	r, err := repo.Open(path)
 	if err != nil {

@@ -109,6 +109,55 @@ func TestTCardTargetHashStaysUnencoded(t *testing.T) {
 	}
 }
 
+// TestTCardValueWithSpaceRoundTrips pins §4.7.16 for the third T-card token:
+// the value is escape-decoded on parse and escape-encoded on marshal, the
+// same rule the name follows. The wire bytes asserted here are the bytes
+// real fossil writes for `fossil branch new 'my branch'`:
+//
+//	T *branch * my\sbranch
+//	T *sym-my\sbranch *
+//
+// Leaving the value raw made an imported branch literally named
+// "my\sbranch" all the way through crosslink.
+func TestTCardValueWithSpaceRoundTrips(t *testing.T) {
+	wire := withZCard("D 2024-01-15T10:30:00.000\nT *branch * my\\sbranch\n")
+	d, err := Parse(wire)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := d.T[0].Value; got != "my branch" {
+		t.Fatalf("Value = %q, want decoded %q", got, "my branch")
+	}
+	out, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(out), "T *branch * my\\sbranch\n") {
+		t.Fatalf("T value not escape-encoded on marshal:\n%s", out)
+	}
+}
+
+// TestTCardEmptyValueOmitted guards the optional-value case: a T-card with no
+// value token must not gain one, and decoding must not turn an absent value
+// into a present-but-empty one.
+func TestTCardEmptyValueOmitted(t *testing.T) {
+	d := &Deck{T: []TagCard{{Type: TagPropagating, Name: "sym-x", UUID: "*"}}}
+	out, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(out), "T *sym-x *\n") {
+		t.Fatalf("valueless T-card not reproduced:\n%s", out)
+	}
+	parsed, err := Parse(out)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got := parsed.T[0].Value; got != "" {
+		t.Errorf("Value = %q, want empty", got)
+	}
+}
+
 // --- #93: parseTCard §4.7.16 validation ---
 
 // TestParseTCardRejectsHexOnlyName pins that a T-card name which after the
@@ -119,6 +168,17 @@ func TestParseTCardRejectsHexOnlyName(t *testing.T) {
 	wire := withZCard("D 2024-01-15T10:30:00.000\nT +" + hexName + " *\n")
 	if _, err := Parse(wire); err == nil {
 		t.Fatalf("Parse accepted a hex-only tag name %q, want error", hexName)
+	}
+}
+
+// TestMarshalTCardRejectsHexOnlyName is the write-side mirror: Marshal must
+// refuse to emit a tag name the parser rejects, otherwise a caller can store
+// an artifact this repository can never read back. Canonical fossil never
+// produces one either -- it prefixes branch and user tags with "sym-".
+func TestMarshalTCardRejectsHexOnlyName(t *testing.T) {
+	d := &Deck{T: []TagCard{{Type: TagSingleton, Name: "cafe", UUID: "*"}}}
+	if _, err := d.Marshal(); err == nil {
+		t.Fatalf("Marshal accepted a hex-only tag name, want error")
 	}
 }
 

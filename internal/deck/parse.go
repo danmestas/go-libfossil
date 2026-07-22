@@ -305,13 +305,16 @@ func parseTCard(d *Deck, args string) error {
 	if len(parts) < 2 {
 		return fmt.Errorf("T-card needs name and uuid")
 	}
-	// §4.7.16: the name token is escape-decoded (canonical defossilizes it),
-	// while the target token is stored verbatim -- never decoded on the way
-	// in, so it is never encoded on the way out.
+	// §4.7.16: the name and value tokens are escape-decoded (canonical
+	// defossilizes both), while the target token is stored verbatim -- never
+	// decoded on the way in, so it is never encoded on the way out. Decoding
+	// the value matters on ordinary input: `fossil branch new 'my branch'`
+	// writes `T *branch * my\sbranch`, and leaving that raw names the branch
+	// literally "my\sbranch" all the way through crosslink.
 	tc.Name = FossilDecode(parts[0])
 	tc.UUID = parts[1]
 	if len(parts) == 3 {
-		tc.Value = parts[2]
+		tc.Value = FossilDecode(parts[2])
 	}
 	// §4.7.16: a name that after the sign is entirely hex digits is
 	// ambiguous with a hash, so reject it. The escape-decoded name is used;

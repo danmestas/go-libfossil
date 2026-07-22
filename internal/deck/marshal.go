@@ -89,10 +89,13 @@ func marshalCards(b *strings.Builder, d *Deck) {
 					b.WriteString(" ")
 					b.WriteString(perm)
 				}
-			}
-			if f.OldName != "" {
-				b.WriteString(" ")
-				b.WriteString(FossilEncode(f.OldName))
+				// The prior name is positional and only meaningful after a
+				// UUID; a deletion card (no UUID) must never carry one, or
+				// the old name would be misread as the hash.
+				if f.OldName != "" {
+					b.WriteString(" ")
+					b.WriteString(FossilEncode(f.OldName))
+				}
 			}
 			b.WriteString("\n")
 		}

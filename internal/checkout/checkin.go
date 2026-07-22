@@ -323,6 +323,10 @@ func (c *Checkout) buildCommitFiles(
 // The retired old name is deleted from fileMap unless it has independently
 // reappeared as its own live vfile pathname (a rename that reuses a freed
 // name), in which case that entry is left for the normal passes to handle.
+//
+// A renamed row that is also marked deleted retires both names and emits
+// nothing, matching canonical Fossil's exclusion of deleted rows from the
+// manifest query.
 func (c *Checkout) applyRenames(
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,
@@ -340,6 +344,19 @@ func (c *Checkout) applyRenames(
 			continue
 		}
 		if !shouldInclude(name) {
+			continue
+		}
+
+		// A renamed file that was subsequently deleted must not be emitted at
+		// all — under either name. Canonical Fossil's manifest query excludes
+		// such rows outright (WHERE NOT deleted OR NOT is_selected), and the
+		// deleted-files pass above cannot retire the old name, since it only
+		// knows the file's current pathname.
+		if ve.deleted {
+			if _, reAdded := vfEntries[ve.origname]; !reAdded {
+				delete(fileMap, ve.origname)
+			}
+			delete(fileMap, name)
 			continue
 		}
 

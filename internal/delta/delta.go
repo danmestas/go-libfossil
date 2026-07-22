@@ -143,14 +143,28 @@ func Apply(source, delta []byte) (result []byte, err error) {
 	// delta can be stored unverified (see blob.StoreDeltaRaw), a peer
 	// plants one such delta and every later Expand of that row repeats
 	// the attempt: a durable, remotely-planted allocation, not a one-off
-	// parse spike. Starting small and growing via append tracks actual
-	// work performed instead of trusting the claim.
-	const deltaInitialCap = 64 * 1024 // 64 KiB; append grows normally past this
+	// parse spike. Starting small and growing tracks actual work
+	// performed instead of trusting the claim.
+	const deltaInitialCap = 64 * 1024 // 64 KiB; upgraded once real work is proven (see growOutputCap)
 	initialCap := targetLen
+	capped := false
 	if initialCap > deltaInitialCap {
 		initialCap = deltaInitialCap
+		capped = true
 	}
 	output := make([]byte, 0, initialCap)
+
+	// grownPastInitialCap upgrades output's capacity exactly once, the
+	// first time a command actually executes. Go's growth factor for
+	// large slices is ~1.25x, not 2x, so climbing from a 64 KiB cap to a
+	// multi-megabyte target purely via append's own doubling lands near
+	// 5x the final size in cumulative allocation, not ~1x. A single
+	// upgrade sized off len(delta) — bytes the peer actually had to send,
+	// not the unverified targetLen header — restores near-exact sizing
+	// for honest deltas without reopening the tiny-payload-huge-header
+	// attack: a hostile delta with no real commands never reaches this
+	// upgrade at all (see TestApply_TinyPayloadHugeHeaderBoundsAllocation).
+	grownPastInitialCap := false
 
 	for r.pos < len(r.data) {
 		cnt, err := r.getInt()
@@ -185,6 +199,14 @@ func Apply(source, delta []byte) (result []byte, err error) {
 					ErrInvalidDelta, offset, cnt, len(source))
 			}
 			output = append(output, source[offset:offset+cnt]...)
+			if uint64(len(output)) > targetLen {
+				return nil, fmt.Errorf("%w: output size %d exceeds declared target size %d during copy command",
+					ErrInvalidDelta, len(output), targetLen)
+			}
+			if capped && !grownPastInitialCap {
+				output = growOutputCap(output, targetLen, len(delta))
+				grownPastInitialCap = true
+			}
 
 		case ':':
 			// Bounds check before casting to int
@@ -196,6 +218,14 @@ func Apply(source, delta []byte) (result []byte, err error) {
 			}
 			output = append(output, r.data[r.pos:r.pos+int(cnt)]...)
 			r.pos += int(cnt)
+			if uint64(len(output)) > targetLen {
+				return nil, fmt.Errorf("%w: output size %d exceeds declared target size %d during insert command",
+					ErrInvalidDelta, len(output), targetLen)
+			}
+			if capped && !grownPastInitialCap {
+				output = growOutputCap(output, targetLen, len(delta))
+				grownPastInitialCap = true
+			}
 
 		case ';':
 			if uint64(len(output)) != targetLen {
@@ -215,6 +245,33 @@ func Apply(source, delta []byte) (result []byte, err error) {
 	}
 
 	return nil, fmt.Errorf("%w: missing terminator", ErrInvalidDelta)
+}
+
+// deltaGrowthFactor bounds the one-time capacity upgrade growOutputCap
+// performs against len(delta): the multiple is generous enough to reach
+// most legitimate targets in a single reallocation, while still scaling
+// with bytes the peer actually transmitted rather than with an unverified
+// header claim.
+const deltaGrowthFactor = 64
+
+// growOutputCap upgrades output's capacity once a command has proven the
+// delta contains real work, from the conservative 64 KiB initial cap to
+// min(targetLen, deltaGrowthFactor*len(delta)). targetLen is already
+// bounded by maxDeltaTargetSize and, from this point in Apply, output can
+// never be allowed past it either (see the per-command bound checks
+// above) — so this upgrade can only reduce the number of later appends,
+// never let output outgrow what was already going to be permitted.
+func growOutputCap(output []byte, targetLen uint64, deltaLen int) []byte {
+	next := uint64(deltaLen) * deltaGrowthFactor
+	if next > targetLen {
+		next = targetLen
+	}
+	if next <= uint64(cap(output)) {
+		return output
+	}
+	grown := make([]byte, len(output), next)
+	copy(grown, output)
+	return grown
 }
 
 // Checksum computes Fossil's delta checksum, matching delta.c's checksum().

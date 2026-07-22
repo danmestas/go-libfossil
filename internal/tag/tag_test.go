@@ -334,6 +334,100 @@ func TestApplyTag(t *testing.T) {
 	}
 }
 
+// TestPropagateAllOrderingAdjacentMillisecond exercises the `tagxref.mtime < ?`
+// ordering comparison in propagate() — the one confirmed ScanJulianDay consumer
+// that makes an ordering decision — driven through PropagateAll, where the
+// bound `?` value is produced by db.ScanJulianDay from the origin row's mtime.
+//
+// Goal: prove the "overwrite a child's propagated tag only if it is strictly
+// older" decision survives a scanned mtime that is only one millisecond away
+// from the child's stored mtime. Under the ncruces driver the origin mtime is
+// scanned from a time.Time carrying sub-millisecond conversion noise; if that
+// noise collapsed the one-millisecond gap (as a prior truncation bug did), the
+// strict `<` would flip and the overwrite would silently not happen.
+//
+// Methodology: A is the ancestor of two children, B and C. B carries an older
+// propagated tag (base), C a newer one (base+2ms), and A's own tag sits between
+// them at base+1ms. Re-propagating from A must overwrite B (base < base+1ms) and
+// leave C untouched (base+2ms is not < base+1ms). Adjacent-millisecond deltas
+// are the point: a one-millisecond truncation is exactly what flips the B
+// decision, and only sub-10ms intervals can express that — timestamps hours
+// apart pass regardless of the bug. This test runs under whichever driver the
+// testdriver import selects, so `-tags test_ncruces` runs it where the noise
+// lives.
+func TestPropagateAllOrderingAdjacentMillisecond(t *testing.T) {
+	r := setupTestRepo(t)
+
+	// A is the common ancestor; B and C are both primary children of A.
+	ridA := makeCheckin(t, r, 0, "a.txt", "content A", "commit A")
+	ridB := makeCheckin(t, r, ridA, "b.txt", "content B", "commit B")
+	ridC := makeCheckin(t, r, ridA, "c.txt", "content C", "commit C")
+
+	base := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	mtimeChildOld := libfossil.TimeToJulian(base)                           // B: older than A
+	mtimeOrigin := libfossil.TimeToJulian(base.Add(1 * time.Millisecond))   // A: one ms newer than B
+	mtimeChildNew := libfossil.TimeToJulian(base.Add(2 * time.Millisecond)) // C: newer than A
+
+	// Apply the propagating tag at A. This creates the tag and, via propagate,
+	// seeds srcid=0 tagxref rows on B and C that we overwrite below to set exact
+	// mtimes for the comparison.
+	if err := tag.ApplyTag(r, tag.ApplyOpts{
+		TargetRID: libfossil.FslID(ridA),
+		SrcRID:    libfossil.FslID(ridA), // non-zero: an origin, not a propagated row
+		TagName:   "branch",
+		TagType:   tag.TagPropagating,
+		Value:     "new",
+		MTime:     mtimeOrigin,
+	}); err != nil {
+		t.Fatalf("tag.ApplyTag: %v", err)
+	}
+
+	// Pin the children's existing propagated tags to exact mtimes a single
+	// millisecond on either side of the origin.
+	setChildTag := func(rid int64, value string, mtime float64) {
+		t.Helper()
+		if _, err := r.DB().Exec(
+			`UPDATE tagxref SET value=?, mtime=?, srcid=0
+			 WHERE tagid=(SELECT tagid FROM tag WHERE tagname='branch') AND rid=?`,
+			value, mtime, rid,
+		); err != nil {
+			t.Fatalf("pin child tag for rid=%d: %v", rid, err)
+		}
+	}
+	setChildTag(ridB, "old", mtimeChildOld)
+	setChildTag(ridC, "newer", mtimeChildNew)
+
+	// Re-propagate from A. The `?` in `tagxref.mtime < ?` now comes from
+	// ScanJulianDay(A.mtime).
+	if err := tag.PropagateAll(r.DB(), libfossil.FslID(ridA)); err != nil {
+		t.Fatalf("tag.PropagateAll: %v", err)
+	}
+
+	readChildValue := func(rid int64) string {
+		t.Helper()
+		var value string
+		if err := r.DB().QueryRow(
+			`SELECT value FROM tagxref
+			 WHERE tagid=(SELECT tagid FROM tag WHERE tagname='branch') AND rid=?`,
+			rid,
+		).Scan(&value); err != nil {
+			t.Fatalf("read child tag for rid=%d: %v", rid, err)
+		}
+		return value
+	}
+
+	// B was strictly older than the origin (base < base+1ms) → overwritten.
+	if got := readChildValue(ridB); got != "new" {
+		t.Fatalf("B tag value = %q, want %q: base < origin (one ms) did not overwrite — a lost millisecond collapsed the strict ordering", got, "new")
+	}
+	// C was newer than the origin (base+2ms not < base+1ms) → preserved. This
+	// negative control confirms the comparison actually gates rather than always
+	// overwriting.
+	if got := readChildValue(ridC); got != "newer" {
+		t.Fatalf("C tag value = %q, want %q: newer child was overwritten — the `<` guard did not hold", got, "newer")
+	}
+}
+
 func TestPropagateAll(t *testing.T) {
 	r := setupTestRepo(t)
 

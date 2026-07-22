@@ -198,11 +198,11 @@ func Apply(source, delta []byte) (result []byte, err error) {
 				return nil, fmt.Errorf("%w: copy exceeds source bounds (offset=%d, cnt=%d, srclen=%d)",
 					ErrInvalidDelta, offset, cnt, len(source))
 			}
-			output = append(output, source[offset:offset+cnt]...)
-			if uint64(len(output)) > targetLen {
+			if uint64(len(output))+cnt > targetLen {
 				return nil, fmt.Errorf("%w: output size %d exceeds declared target size %d during copy command",
-					ErrInvalidDelta, len(output), targetLen)
+					ErrInvalidDelta, uint64(len(output))+cnt, targetLen)
 			}
+			output = append(output, source[offset:offset+cnt]...)
 			if capped && !grownPastInitialCap {
 				output = growOutputCap(output, targetLen, len(delta))
 				grownPastInitialCap = true
@@ -216,12 +216,12 @@ func Apply(source, delta []byte) (result []byte, err error) {
 			if r.pos+int(cnt) > len(r.data) {
 				return nil, fmt.Errorf("%w: insert exceeds delta bounds", ErrInvalidDelta)
 			}
+			if uint64(len(output))+cnt > targetLen {
+				return nil, fmt.Errorf("%w: output size %d exceeds declared target size %d during insert command",
+					ErrInvalidDelta, uint64(len(output))+cnt, targetLen)
+			}
 			output = append(output, r.data[r.pos:r.pos+int(cnt)]...)
 			r.pos += int(cnt)
-			if uint64(len(output)) > targetLen {
-				return nil, fmt.Errorf("%w: output size %d exceeds declared target size %d during insert command",
-					ErrInvalidDelta, len(output), targetLen)
-			}
 			if capped && !grownPastInitialCap {
 				output = growOutputCap(output, targetLen, len(delta))
 				grownPastInitialCap = true

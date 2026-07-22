@@ -96,26 +96,50 @@ func TestApply_TinyPayloadHugeHeaderBoundsAllocation(t *testing.T) {
 	}
 }
 
+// largeTargetManyCopiesDelta builds a delta for a 1 MiB target made of
+// numChunks small copy commands, each pulling chunkSize bytes straight back
+// out of source at the matching offset (source and target share content, so
+// the copies reconstruct target exactly). This is the shape that actually
+// exercises the #81 regression: many small commands means many small
+// append growth steps, which is where append's own ~1.25x large-slice
+// growth factor compounds into ~5x cumulative allocation. A single big
+// insert/copy command (e.g. what Create emits for two nearly-disjoint
+// buffers) grows in one step and allocates ~1x on both the buggy and fixed
+// code -- it does not exercise this bug at all.
+func largeTargetManyCopiesDelta(t testing.TB) (source, target, d []byte) {
+	t.Helper()
+	const targetSize = 1 << 20 // 1 MiB, comfortably past the 64 KiB initial cap
+	const chunkSize = 256
+	const numChunks = targetSize / chunkSize // 4096 copy commands
+
+	target = make([]byte, targetSize)
+	for i := range target {
+		target[i] = byte('a' + i%26)
+	}
+	source = target // copies read back the same bytes at the same offsets
+
+	ops := make([]deltaOp, 0, numChunks)
+	for i := 0; i < numChunks; i++ {
+		ops = append(ops, deltaOp{opType: '@', offset: uint64(i * chunkSize), length: chunkSize})
+	}
+	d = manualDelta(targetSize, ops, Checksum(target))
+	return source, target, d
+}
+
 // TestApply_LargeTargetAllocationBounded is a regression test for #81: for
 // targets over the 64 KiB initial cap, Apply used to climb to the target
 // size purely via append's own ~1.25x large-slice growth factor, which
 // lands near 5x the final output size in cumulative allocation rather than
-// the ~1x an exact preallocation would give. This constructs a realistic
-// delta (via Create, so the command mix is representative rather than
-// hand-picked) for a target well past the initial cap and asserts total
-// allocation growth stays within a small constant factor of the target
-// size -- proof the two-stage cap (64 KiB, then a len(delta)-informed
-// upgrade) is actually restoring near-exact sizing, not just not-regressing
-// further.
+// the ~1x an exact preallocation would give. This builds a delta made of
+// many small copy commands (see largeTargetManyCopiesDelta) -- the shape
+// that actually compounds append's growth factor -- for a target well past
+// the initial cap, and asserts total allocation growth stays within a
+// small constant factor of the target size -- proof the two-stage cap
+// (64 KiB, then a len(delta)-informed upgrade) is actually restoring
+// near-exact sizing, not just not-regressing further.
 func TestApply_LargeTargetAllocationBounded(t *testing.T) {
-	const targetSize = 1 << 20 // 1 MiB, comfortably past the 64 KiB initial cap
-
-	source := []byte("seed content that shares almost nothing with the target below")
-	target := make([]byte, targetSize)
-	for i := range target {
-		target[i] = byte('a' + i%26)
-	}
-	d := Create(source, target)
+	const targetSize = 1 << 20 // 1 MiB
+	source, target, d := largeTargetManyCopiesDelta(t)
 
 	runtime.GC()
 	var before, after runtime.MemStats
@@ -133,29 +157,27 @@ func TestApply_LargeTargetAllocationBounded(t *testing.T) {
 	}
 
 	grown := after.TotalAlloc - before.TotalAlloc
-	// Generous headroom over 1x: covers the delta buffer itself, Create's
-	// own working set, and Apply's own single capacity upgrade, while
-	// remaining well under the ~5x the unbounded append-growth climb used
-	// to produce.
+	// Generous headroom over 1x: covers the delta buffer itself and
+	// Apply's own bounded capacity upgrades, while remaining well under
+	// the ~5x the unbounded append-growth climb used to produce.
 	const maxSaneGrowth = 3 * targetSize
 	if grown > maxSaneGrowth {
-		t.Fatalf("Apply allocated %d bytes reconstructing a %d-byte target -- want growth bounded near 1x, not the ~5x append-growth-climb regression",
+		t.Fatalf("Apply allocated %d bytes reconstructing a %d-byte target from many small copies -- "+
+			"want growth bounded near 1x, not the ~5x append-growth-climb regression",
 			grown, targetSize)
 	}
 }
 
 // BenchmarkApply_LargeTarget measures Apply's allocation behavior for a
-// target past the 64 KiB initial cap -- the #81 measurement the issue asks
+// target past the 64 KiB initial cap, built from many small copy commands
+// (see largeTargetManyCopiesDelta) -- the #81 measurement the issue asks
 // for. Run with -benchmem; b.AllocsPerOp/bytes-per-op are the numbers to
-// compare across changes to the growth strategy.
+// compare across changes to the growth strategy. A single-big-command
+// delta (e.g. via Create on disjoint buffers) allocates ~1x on both buggy
+// and fixed code and would not show the regression this benchmark exists
+// to catch.
 func BenchmarkApply_LargeTarget(b *testing.B) {
-	const targetSize = 1 << 20 // 1 MiB
-	source := []byte("seed content that shares almost nothing with the target below")
-	target := make([]byte, targetSize)
-	for i := range target {
-		target[i] = byte('a' + i%26)
-	}
-	d := Create(source, target)
+	source, _, d := largeTargetManyCopiesDelta(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()

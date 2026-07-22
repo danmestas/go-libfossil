@@ -134,6 +134,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 
 	cloneResult, cloneErr := cs.run(ctx, t)
 	if cloneErr != nil {
+		// cloneResult is still meaningful on a stall or round-limit error —
+		// callers inspecting the returned result (e.g. BlobsRecvd) alongside
+		// a *PhantomStallError shouldn't see it silently dropped to nil.
+		result = cloneResult
 		err = cloneErr
 		return
 	}
@@ -141,6 +145,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	// Crosslink: parse received manifests into event/plink/leaf/mlink tables.
 	linked, xlinkErr := manifest.Crosslink(r)
 	if xlinkErr != nil {
+		result = cloneResult
 		err = fmt.Errorf("sync.Clone: crosslink: %w", xlinkErr)
 		return
 	}

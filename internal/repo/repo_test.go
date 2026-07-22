@@ -8,6 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func TestCreate(t *testing.T) {
@@ -27,6 +28,7 @@ func TestCreate_FossilValidation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping fossil validation")
 	}
+	fossilBin := testutil.RequireFossilBin(t)
 	path := filepath.Join(t.TempDir(), "test.fossil")
 	r, err := Create(path, "testuser", simio.CryptoRand{}, "")
 	if err != nil {
@@ -35,7 +37,7 @@ func TestCreate_FossilValidation(t *testing.T) {
 	r.Close()
 
 	// fossil rebuild must pass (no --verify flag in Fossil 2.28)
-	cmd := exec.Command("fossil", "rebuild", path)
+	cmd := exec.Command(fossilBin, "rebuild", path)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
@@ -46,8 +48,9 @@ func TestOpenFossilCreated(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping fossil validation")
 	}
+	fossilBin := testutil.RequireFossilBin(t)
 	path := filepath.Join(t.TempDir(), "fossil-created.fossil")
-	cmd := exec.Command("fossil", "new", path)
+	cmd := exec.Command(fossilBin, "new", path)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil new: %v\n%s", err, out)
@@ -115,9 +118,11 @@ func TestRoundTrip_FossilValidation(t *testing.T) {
 		t.Skip("skipping fossil validation")
 	}
 
+	fossilBin := testutil.RequireFossilBin(t)
+
 	// 1. fossil creates repo
 	fossilPath := filepath.Join(t.TempDir(), "fossil-created.fossil")
-	exec.Command("fossil", "new", fossilPath).CombinedOutput()
+	exec.Command(fossilBin, "new", fossilPath).CombinedOutput()
 
 	// 2. Go opens it
 	r1, err := Open(fossilPath)
@@ -135,14 +140,14 @@ func TestRoundTrip_FossilValidation(t *testing.T) {
 	r2.Close()
 
 	// 4. fossil validates Go-created repo
-	cmd := exec.Command("fossil", "rebuild", goPath)
+	cmd := exec.Command(fossilBin, "rebuild", goPath)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild go-created failed: %v\n%s", err, out)
 	}
 
 	// 5. fossil queries Go-created repo
-	cmd = exec.Command("fossil", "sql", "-R", goPath, "SELECT count(*) FROM blob;")
+	cmd = exec.Command(fossilBin, "sql", "-R", goPath, "SELECT count(*) FROM blob;")
 	out, err = cmd.Output()
 	if err != nil {
 		t.Fatalf("fossil sql go-created: %v", err)

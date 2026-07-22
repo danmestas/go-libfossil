@@ -314,6 +314,61 @@ func TestDeltifyDeclinesUngroundedSource(t *testing.T) {
 	})
 }
 
+// TestDeltifyBreaksLoopBoundsAtChainDepth pins deltifyBreaksLoop's step cap to
+// maxDeltaChainDepth, the same bound the read-path walks use. An acyclic,
+// grounded chain one longer than the bound has no cycle for the seen set to
+// catch, so only the step cap can stop the walk; if the cap regresses to a
+// larger value, this chain runs past maxDeltaChainDepth without erroring.
+func TestDeltifyBreaksLoopBoundsAtChainDepth(t *testing.T) {
+	inTx(t, func(tx *db.Tx) {
+		// One node past the bound: the walk from chain[0] visits
+		// maxDeltaChainDepth+1 nodes, which the cap must reject.
+		n := maxDeltaChainDepth + 2
+
+		rids := make([]libfossil.FslID, n)
+		for i := 0; i < n; i++ {
+			res, err := tx.Exec(
+				"INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040d', ?), 42, x'00', 1)", i)
+			if err != nil {
+				t.Fatalf("insert blob %d: %v", i, err)
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				t.Fatalf("LastInsertId: %v", err)
+			}
+			rids[i] = libfossil.FslID(id)
+		}
+		// Acyclic chain grounded at its far end: chain[i] deltas against
+		// chain[i+1], so deltaSource walks chain[0] -> chain[n-1] and stops.
+		for i := 0; i < n-1; i++ {
+			if _, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[i], rids[i+1]); err != nil {
+				t.Fatalf("insert delta %d: %v", i, err)
+			}
+		}
+
+		// A target rid that is not on the chain, so the walk cannot short
+		// out via the next == rid loop check and must run to the cap.
+		res, err := tx.Exec(
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040d', ?), 42, x'00', 1)", n)
+		if err != nil {
+			t.Fatalf("insert target blob: %v", err)
+		}
+		targetID, err := res.LastInsertId()
+		if err != nil {
+			t.Fatalf("LastInsertId: %v", err)
+		}
+
+		_, err = deltifyBreaksLoop(tx, libfossil.FslID(targetID), rids[0])
+		if err == nil {
+			t.Fatalf("chain of %d nodes was accepted; the step cap must reject "+
+				"a chain longer than maxDeltaChainDepth (%d)", n, maxDeltaChainDepth)
+		}
+		if !strings.Contains(err.Error(), "exceeds") {
+			t.Errorf("expected an exceeds-bound error, got: %v", err)
+		}
+	})
+}
+
 func TestUndeltaRestoresFullContent(t *testing.T) {
 	inTx(t, func(tx *db.Tx) {
 		v1, v2 := similarPair()

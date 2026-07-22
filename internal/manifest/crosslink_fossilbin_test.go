@@ -32,10 +32,11 @@ var crosslinkDerivedTables = []string{
 // result to the fossil binary, and finally let `fossil rebuild` re-derive the
 // same tables from the same blobs so the two derivations can be compared.
 //
-// The rebuild comes last on purpose: it drops the tables fossil creates on
-// demand, and Crosslink's candidate query names forumpost, so Crosslink
-// cannot currently run against a repository straight out of a canonical
-// rebuild. That is a separate gap, not something this test should paper over.
+// The rebuild runs last here so its output can be diffed against what
+// Crosslink already wrote -- not because ordering matters anymore.
+// TestCrosslinkAfterFossilRebuild below exercises the opposite order,
+// where rebuild drops the on-demand tables (forumpost) before Crosslink
+// ever runs.
 func TestFossilBinaryReadsCrosslinkedRepo(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 
@@ -125,6 +126,75 @@ func TestFossilBinaryReadsCrosslinkedRepo(t *testing.T) {
 			t.Errorf("%s differs from what fossil derived\n fossil:    %s\n crosslink: %s",
 				key, reference[key], got[key])
 		}
+	}
+}
+
+// TestCrosslinkAfterFossilRebuild is the #103 regression: a repository
+// straight out of a canonical `fossil rebuild` has forumpost dropped (this
+// history has no forum posts, so canonical never recreates it), and
+// Crosslink's candidate query names that table unconditionally. It must
+// still succeed, recreating the table the way canonical would if a forum
+// artifact showed up.
+func TestCrosslinkAfterFossilRebuild(t *testing.T) {
+	bin, err := exec.LookPath("fossil")
+	if err != nil {
+		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
+			t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH: %v", err)
+		}
+		t.Skip("fossil binary not on PATH; cannot verify against canonical rebuild")
+	}
+
+	path := filepath.Join(t.TempDir(), "rebuilt.fossil")
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	incrementalHistory(t, r, 2, 10, 200)
+	if err := r.Close(); err != nil {
+		t.Fatalf("repo.Close: %v", err)
+	}
+
+	// Canonical rebuild runs before Crosslink here -- the order Crosslink
+	// could not previously tolerate, since rebuild drops forumpost for a
+	// history that never populated it.
+	if out, err := exec.Command(bin, "rebuild", path).CombinedOutput(); err != nil {
+		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
+	}
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	var forumpostExists int
+	if err := d.QueryRow("SELECT count(*) FROM sqlite_master WHERE name='forumpost'").Scan(&forumpostExists); err != nil {
+		t.Fatalf("check forumpost: %v", err)
+	}
+	if forumpostExists != 0 {
+		t.Fatal("forumpost survived fossil rebuild; this test proves nothing without it gone")
+	}
+	for _, tbl := range crosslinkDerivedTables {
+		if tbl == "forumpost" {
+			continue // rebuild dropped it; nothing to clear
+		}
+		if _, err := d.Exec("DELETE FROM " + tbl); err != nil {
+			t.Fatalf("clear %s: %v", tbl, err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	r2, err := repo.Open(path)
+	if err != nil {
+		t.Fatalf("repo.Open: %v", err)
+	}
+	defer r2.Close()
+	linked, err := Crosslink(r2)
+	if err != nil {
+		t.Fatalf("Crosslink after fossil rebuild: %v", err)
+	}
+	if linked == 0 {
+		t.Fatal("Crosslink linked nothing")
 	}
 }
 

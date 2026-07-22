@@ -51,6 +51,33 @@ var attachTargetTypeName = map[byte]string{
 // here.
 const crosslinkCacheBytes = 256 << 20
 
+// ensureForumPostTable creates forumpost if a prior `fossil rebuild` (or a
+// repository that never had one) left it absent. Canonical fossil creates
+// this table lazily -- only once a forum artifact needs it -- and drops it
+// during rebuild along with the rest of the on-demand schema when nothing
+// populated it. Schema matches db.schemaRepo2's forumpost definition
+// exactly, since the two must produce byte-identical tables whichever one
+// creates it.
+func ensureForumPostTable(q db.Querier) error {
+	if q == nil {
+		panic("manifest.ensureForumPostTable: q must not be nil")
+	}
+	_, err := q.Exec(`
+		CREATE TABLE IF NOT EXISTS forumpost(
+		  fpid INTEGER PRIMARY KEY,
+		  froot INT,
+		  fprev INT,
+		  firt INT,
+		  fmtime REAL
+		);
+		CREATE INDEX IF NOT EXISTS forumpost_froot ON forumpost(froot);
+	`)
+	if err != nil {
+		return fmt.Errorf("ensure forumpost table: %w", err)
+	}
+	return nil
+}
+
 type pendingItem struct {
 	Type byte   // 'w' = wiki backlink, 't' = ticket rebuild
 	ID   string
@@ -62,6 +89,15 @@ type pendingItem struct {
 func Crosslink(r *repo.Repo) (int, error) {
 	if r == nil {
 		panic("manifest.Crosslink: r must not be nil")
+	}
+
+	// Canonical fossil creates forumpost on demand -- only when a forum
+	// artifact first requires it -- which is why `fossil rebuild` can drop
+	// it for a repository that never had one. The candidate query below
+	// names the table unconditionally, so a repository straight out of a
+	// canonical rebuild needs it recreated before the sweep can run.
+	if err := ensureForumPostTable(r.DB()); err != nil {
+		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
 	}
 
 	// Pass 1: Discover and crosslink all uncrosslinked artifacts.

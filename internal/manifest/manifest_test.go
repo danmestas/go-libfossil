@@ -1126,6 +1126,54 @@ func TestCrosslinkForum(t *testing.T) {
 	}
 }
 
+// TestCrosslinkForumPostTableDropped reproduces #103: canonical `fossil
+// rebuild` drops on-demand tables it did not populate, including forumpost,
+// so a repository handed to us straight out of a rebuild may not have the
+// table at all. Crosslink must create it on demand the way canonical does,
+// rather than erroring with "no such table: forumpost".
+func TestCrosslinkForumPostTableDropped(t *testing.T) {
+	r := setupTestRepo(t)
+
+	// Simulate a repository straight out of a canonical rebuild that never
+	// saw a forum post: the table does not exist at all.
+	if _, err := r.DB().Exec("DROP TABLE forumpost"); err != nil {
+		t.Fatalf("drop forumpost: %v", err)
+	}
+
+	forumTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	d := &deck.Deck{
+		Type: deck.ForumPost,
+		H:    "Discussion about sync",
+		U:    deck.User("testuser"),
+		W:    []byte("This is a test forum post"),
+		D:    forumTime,
+	}
+	manifestBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	rid, _, err := blob.Store(r.DB(), manifestBytes)
+	if err != nil {
+		t.Fatalf("Store manifest: %v", err)
+	}
+
+	n, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("expected at least 1 artifact crosslinked, got %d", n)
+	}
+
+	var froot int64
+	if err := r.DB().QueryRow("SELECT froot FROM forumpost WHERE fpid=?", rid).Scan(&froot); err != nil {
+		t.Fatalf("forumpost query: %v", err)
+	}
+	if froot != int64(rid) {
+		t.Errorf("froot=%d, want %d (self)", froot, rid)
+	}
+}
+
 func TestCrosslinkTwoPass(t *testing.T) {
 	r := setupTestRepo(t)
 

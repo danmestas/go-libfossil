@@ -43,15 +43,6 @@ const (
 	// be worth the extra indirection on every read. content.c:917
 	// (blob_size(&delta) < blob_size(&data)*0.75).
 	deltifyMinRatio = 0.75
-
-	// Upper bound on how far the ancestor walk will follow delta links
-	// before declaring the graph malformed. A well-formed chain is at most
-	// as long as the repository has artifacts, but this walk runs on a
-	// graph a sync peer can shape: blob.StoreDeltaRaw records
-	// delta(rid,srcid) links from the wire without a cycle check, so an
-	// A->B->A graph is reachable and must terminate the walk rather than
-	// spin inside the write transaction. TigerStyle: every loop bounded.
-	deltifyMaxChainWalk = 1 << 20
 )
 
 // Deltify tries to rewrite the artifact rid, currently stored whole, as a
@@ -179,14 +170,13 @@ func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
 		// Two independent bounds, the same pairing the read-path walks
 		// use. The seen set catches a cycle that does not pass through rid
 		// -- StoreDeltaRaw can record one from the wire -- and the step cap
-		// catches any walk that escapes it. The cap here is
-		// deltifyMaxChainWalk, not maxDeltaChainDepth; see the note on that
-		// constant for why the two differ.
+		// catches any walk that escapes it. The cap is maxDeltaChainDepth,
+		// shared with the read-path walks; see the note on that constant.
 		if seen[cur] {
 			return false, fmt.Errorf("content.Deltify: delta chain cycle detected at rid=%d", cur)
 		}
-		if steps > deltifyMaxChainWalk {
-			return false, fmt.Errorf("content.Deltify: delta chain from rid=%d exceeds %d links", srcRid, deltifyMaxChainWalk)
+		if steps > maxDeltaChainDepth {
+			return false, fmt.Errorf("content.Deltify: delta chain from rid=%d exceeds %d links", srcRid, maxDeltaChainDepth)
 		}
 		seen[cur] = true
 

@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // blobUUIDs returns every content-bearing blob hash in r. Phantoms (size < 0)

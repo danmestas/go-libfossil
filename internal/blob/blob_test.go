@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func setupTestDB(t *testing.T) *db.DB {

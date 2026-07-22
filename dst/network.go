@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 
-	libsync "github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
+	libsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // SimNetwork simulates the network between leaf agents and the upstream

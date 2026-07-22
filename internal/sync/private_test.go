@@ -6,13 +6,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	"github.com/danmestas/libfossil/internal/xfer"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // newPrivateTestPair creates a server and client repo with matching project code.

@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 const schemaRepo1 = `

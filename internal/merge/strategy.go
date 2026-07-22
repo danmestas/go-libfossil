@@ -1,6 +1,6 @@
 package merge
 
-import libfossil "github.com/danmestas/libfossil/internal/fsltype"
+import libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 
 // Strategy merges three versions of content.
 type Strategy interface {

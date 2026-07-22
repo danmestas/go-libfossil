@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestIsAvailable_Phantom(t *testing.T) {

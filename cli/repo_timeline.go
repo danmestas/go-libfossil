@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoTimelineCmd shows repository timeline/history.

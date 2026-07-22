@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
 )
 
 // DefaultCkinLockTimeout is the default duration after which a ci-lock expires.

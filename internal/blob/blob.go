@@ -3,10 +3,10 @@ package blob
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err error) {

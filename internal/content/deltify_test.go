@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // inTx runs fn against a *db.Tx, which Deltify and Undelta require. All

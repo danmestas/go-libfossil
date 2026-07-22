@@ -6,17 +6,17 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/uv"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // buildRequest assembles one outbound xfer message for the given cycle.

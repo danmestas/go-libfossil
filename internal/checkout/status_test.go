@@ -3,7 +3,7 @@ package checkout
 import (
 	"testing"
 
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestHasChangesClean(t *testing.T) {

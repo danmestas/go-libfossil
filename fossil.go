@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	internalsync "github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	internalsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // CreateOpts configures repository creation.

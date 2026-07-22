@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/simio"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/db"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestCreate(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/merge"
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/merge"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // RepoConflictsCmd groups conflict management operations.

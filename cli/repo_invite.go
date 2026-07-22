@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/auth"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/auth"
 )
 
 // RepoInviteCmd generates an invite token for a new user.

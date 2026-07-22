@@ -1528,7 +1528,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPECTED_REPO: libfossil
-      EXPECTED_MODULE: github.com/danmestas/libfossil
+      EXPECTED_MODULE: github.com/danmestas/go-libfossil
     steps:
       - name: Resolve inputs
         id: in
@@ -1818,9 +1818,9 @@ After merge, smoke-test the receiver:
 gh api -X POST repos/danmestas/EdgeSync/dispatches \
   -f event_type=upstream-bump \
   -f client_payload[repo]=libfossil \
-  -f client_payload[module_path]=github.com/danmestas/libfossil \
+  -f client_payload[module_path]=github.com/danmestas/go-libfossil \
   -f client_payload[version]=v0.4.5 \
-  -f client_payload[release_url]=https://github.com/danmestas/libfossil/releases/tag/v0.4.5 \
+  -f client_payload[release_url]=https://github.com/danmestas/go-libfossil/releases/tag/v0.4.5 \
   -f client_payload[tag_sha]=$(gh api repos/danmestas/libfossil/git/refs/tags/v0.4.5 -q .object.sha) \
   -f client_payload[actor]=danmestas
 ```
@@ -1859,9 +1859,9 @@ git push origin --delete feat/upstream-bump-and-dispatch
 gh api -X POST repos/danmestas/EdgeSync/dispatches \
   -f event_type=upstream-bump \
   -f client_payload[repo]=libfossil \
-  -f client_payload[module_path]=github.com/danmestas/libfossil \
+  -f client_payload[module_path]=github.com/danmestas/go-libfossil \
   -f client_payload[version]=v0.4.5 \
-  -f client_payload[release_url]=https://github.com/danmestas/libfossil/releases/tag/v0.4.5 \
+  -f client_payload[release_url]=https://github.com/danmestas/go-libfossil/releases/tag/v0.4.5 \
   -f client_payload[tag_sha]=$(gh api repos/danmestas/libfossil/git/refs/tags/v0.4.5 -q .object.sha) \
   -f client_payload[actor]=danmestas
 ```
@@ -1993,7 +1993,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_PAT }}
           DOWNSTREAM: EdgeSync
-          MODULE_PATH: github.com/danmestas/libfossil
+          MODULE_PATH: github.com/danmestas/go-libfossil
         run: |
           gh api -X POST "repos/danmestas/${DOWNSTREAM}/dispatches" \
             -f event_type=upstream-bump \

@@ -6,7 +6,7 @@ weight: 20
 Wasm-friendly SQLite driver based on `ncruces/go-sqlite3`.
 
 ```go
-import _ "github.com/danmestas/libfossil/db/driver/ncruces"
+import _ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 ```
 
 Importing this package registers an `ncruces` driver (driver name `"sqlite3"`) with libfossil's `db` registry. The package exports no public API of its own — register-on-import is the contract.

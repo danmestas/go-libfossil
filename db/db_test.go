@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/db"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestOpenClose(t *testing.T) {

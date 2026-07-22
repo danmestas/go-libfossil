@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/content"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // maxMlinkMergeParents bounds the merge-parent lookup loop in

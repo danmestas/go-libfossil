@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 const (

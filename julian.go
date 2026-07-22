@@ -3,7 +3,7 @@ package libfossil
 import (
 	"time"
 
-	"github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // TimeToJulian converts a time.Time to a Fossil Julian day number.

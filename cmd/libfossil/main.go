@@ -2,8 +2,8 @@ package main
 
 import (
 	"github.com/alecthomas/kong"
-	"github.com/danmestas/libfossil/cli"
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
+	"github.com/danmestas/go-libfossil/cli"
+	_ "github.com/danmestas/go-libfossil/db/driver/modernc"
 )
 
 // CLI is the top-level command structure.

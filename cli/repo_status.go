@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/content"
 )
 
 // RepoStatusCmd shows working directory changes vs the tip version.

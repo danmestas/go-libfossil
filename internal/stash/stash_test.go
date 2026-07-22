@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	libdb "github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/hash"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libdb "github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // testEnv sets up a repo DB with one blob ("hello" in a.txt), a checkout DB

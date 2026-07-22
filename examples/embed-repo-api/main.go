@@ -9,10 +9,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil"
+	"github.com/danmestas/go-libfossil"
 	// Blank-import the default pure-Go SQLite driver. libfossil requires
 	// at least one driver to be registered; this one uses modernc.org/sqlite.
-	_ "github.com/danmestas/libfossil/db/driver/modernc"
+	_ "github.com/danmestas/go-libfossil/db/driver/modernc"
 )
 
 func main() {

@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
 type CreateOpts struct {

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/deck"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestCrosslinkCluster_RemovesFromUnclustered(t *testing.T) {

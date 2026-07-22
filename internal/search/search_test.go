@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/search"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/search"
+	"github.com/danmestas/go-libfossil/simio"
 
-	_ "github.com/danmestas/libfossil/db/driver/ncruces"
+	_ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 )
 
 func newTestRepo(t *testing.T) *repo.Repo {

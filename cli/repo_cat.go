@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // RepoCatCmd outputs the content of an artifact.

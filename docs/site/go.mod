@@ -1,4 +1,4 @@
-module github.com/danmestas/libfossil/docs/site
+module github.com/danmestas/go-libfossil/docs/site
 
 go 1.26.2
 

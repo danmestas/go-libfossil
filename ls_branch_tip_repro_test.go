@@ -25,15 +25,15 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/branch"
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/branch"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func fossilBin(t *testing.T) string {

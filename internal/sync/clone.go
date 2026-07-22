@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // cloneSession holds the mutable state of a running clone.

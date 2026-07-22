@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestUUIDFromRID_HappyPath(t *testing.T) {

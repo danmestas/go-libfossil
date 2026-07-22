@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // propagate walks the plink DAG from a target artifact to all descendants,

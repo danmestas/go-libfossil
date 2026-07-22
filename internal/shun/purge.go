@@ -3,10 +3,10 @@ package shun
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // PurgeResult summarizes what Purge deleted.

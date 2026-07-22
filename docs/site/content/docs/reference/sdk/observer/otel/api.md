@@ -7,7 +7,7 @@ title: observer/otel
 # otel
 
 ```go
-import "github.com/danmestas/libfossil/observer/otel"
+import "github.com/danmestas/go-libfossil/observer/otel"
 ```
 
 Package otel provides OpenTelemetry implementations of the libfossil SyncObserver and CheckoutObserver interfaces. Import this package only when you want OTel instrumentation — it pulls in the OTel SDK dependency.
@@ -40,7 +40,7 @@ Package otel provides OpenTelemetry implementations of the libfossil SyncObserve
 
 
 <a name="CheckoutObserver"></a>
-## type [CheckoutObserver](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L208-L223>)
+## type [CheckoutObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L208-L223>)
 
 CheckoutObserver implements libfossil.CheckoutObserver using OpenTelemetry spans and metrics.
 
@@ -51,7 +51,7 @@ type CheckoutObserver struct {
 ```
 
 <a name="NewCheckoutObserver"></a>
-### func [NewCheckoutObserver](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L227>)
+### func [NewCheckoutObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L227>)
 
 ```go
 func NewCheckoutObserver() *CheckoutObserver
@@ -60,7 +60,7 @@ func NewCheckoutObserver() *CheckoutObserver
 NewCheckoutObserver returns a CheckoutObserver that records spans and metrics using the OTel global tracer and meter providers.
 
 <a name="CheckoutObserver.CommitCompleted"></a>
-### func \(\*CheckoutObserver\) [CommitCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L328>)
+### func \(\*CheckoutObserver\) [CommitCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L328>)
 
 ```go
 func (o *CheckoutObserver) CommitCompleted(info libfossil.CommitEnd)
@@ -69,7 +69,7 @@ func (o *CheckoutObserver) CommitCompleted(info libfossil.CommitEnd)
 
 
 <a name="CheckoutObserver.CommitStarted"></a>
-### func \(\*CheckoutObserver\) [CommitStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L314>)
+### func \(\*CheckoutObserver\) [CommitStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L314>)
 
 ```go
 func (o *CheckoutObserver) CommitStarted(info libfossil.CommitStart)
@@ -78,7 +78,7 @@ func (o *CheckoutObserver) CommitStarted(info libfossil.CommitStart)
 
 
 <a name="CheckoutObserver.Error"></a>
-### func \(\*CheckoutObserver\) [Error](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L347>)
+### func \(\*CheckoutObserver\) [Error](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L347>)
 
 ```go
 func (o *CheckoutObserver) Error(err error)
@@ -87,7 +87,7 @@ func (o *CheckoutObserver) Error(err error)
 
 
 <a name="CheckoutObserver.ExtractCompleted"></a>
-### func \(\*CheckoutObserver\) [ExtractCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L277>)
+### func \(\*CheckoutObserver\) [ExtractCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L277>)
 
 ```go
 func (o *CheckoutObserver) ExtractCompleted(info libfossil.ExtractEnd)
@@ -96,7 +96,7 @@ func (o *CheckoutObserver) ExtractCompleted(info libfossil.ExtractEnd)
 
 
 <a name="CheckoutObserver.ExtractFileCompleted"></a>
-### func \(\*CheckoutObserver\) [ExtractFileCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L264>)
+### func \(\*CheckoutObserver\) [ExtractFileCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L264>)
 
 ```go
 func (o *CheckoutObserver) ExtractFileCompleted(name string, change libfossil.UpdateChange)
@@ -105,7 +105,7 @@ func (o *CheckoutObserver) ExtractFileCompleted(name string, change libfossil.Up
 
 
 <a name="CheckoutObserver.ExtractStarted"></a>
-### func \(\*CheckoutObserver\) [ExtractStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L250>)
+### func \(\*CheckoutObserver\) [ExtractStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L250>)
 
 ```go
 func (o *CheckoutObserver) ExtractStarted(info libfossil.ExtractStart)
@@ -114,7 +114,7 @@ func (o *CheckoutObserver) ExtractStarted(info libfossil.ExtractStart)
 
 
 <a name="CheckoutObserver.ScanCompleted"></a>
-### func \(\*CheckoutObserver\) [ScanCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L301>)
+### func \(\*CheckoutObserver\) [ScanCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L301>)
 
 ```go
 func (o *CheckoutObserver) ScanCompleted(info libfossil.ScanEnd)
@@ -123,7 +123,7 @@ func (o *CheckoutObserver) ScanCompleted(info libfossil.ScanEnd)
 
 
 <a name="CheckoutObserver.ScanStarted"></a>
-### func \(\*CheckoutObserver\) [ScanStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L291>)
+### func \(\*CheckoutObserver\) [ScanStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L291>)
 
 ```go
 func (o *CheckoutObserver) ScanStarted(dir string)
@@ -132,7 +132,7 @@ func (o *CheckoutObserver) ScanStarted(dir string)
 
 
 <a name="CheckoutObserver.String"></a>
-### func \(\*CheckoutObserver\) [String](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L369>)
+### func \(\*CheckoutObserver\) [String](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L369>)
 
 ```go
 func (o *CheckoutObserver) String() string
@@ -141,7 +141,7 @@ func (o *CheckoutObserver) String() string
 
 
 <a name="SyncObserver"></a>
-## type [SyncObserver](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L23-L39>)
+## type [SyncObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L23-L39>)
 
 SyncObserver implements libfossil.SyncObserver using OpenTelemetry spans and metrics.
 
@@ -152,7 +152,7 @@ type SyncObserver struct {
 ```
 
 <a name="NewSyncObserver"></a>
-### func [NewSyncObserver](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L43>)
+### func [NewSyncObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L43>)
 
 ```go
 func NewSyncObserver() *SyncObserver
@@ -161,7 +161,7 @@ func NewSyncObserver() *SyncObserver
 NewSyncObserver returns a SyncObserver that records spans and metrics using the OTel global tracer and meter providers.
 
 <a name="SyncObserver.Completed"></a>
-### func \(\*SyncObserver\) [Completed](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L126>)
+### func \(\*SyncObserver\) [Completed](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L126>)
 
 ```go
 func (o *SyncObserver) Completed(info libfossil.SessionEnd)
@@ -170,7 +170,7 @@ func (o *SyncObserver) Completed(info libfossil.SessionEnd)
 
 
 <a name="SyncObserver.Error"></a>
-### func \(\*SyncObserver\) [Error](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L142>)
+### func \(\*SyncObserver\) [Error](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L142>)
 
 ```go
 func (o *SyncObserver) Error(err error)
@@ -179,7 +179,7 @@ func (o *SyncObserver) Error(err error)
 
 
 <a name="SyncObserver.HandleCompleted"></a>
-### func \(\*SyncObserver\) [HandleCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L166>)
+### func \(\*SyncObserver\) [HandleCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L166>)
 
 ```go
 func (o *SyncObserver) HandleCompleted(info libfossil.HandleEnd)
@@ -188,7 +188,7 @@ func (o *SyncObserver) HandleCompleted(info libfossil.HandleEnd)
 
 
 <a name="SyncObserver.HandleStarted"></a>
-### func \(\*SyncObserver\) [HandleStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L155>)
+### func \(\*SyncObserver\) [HandleStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L155>)
 
 ```go
 func (o *SyncObserver) HandleStarted(info libfossil.HandleStart)
@@ -197,7 +197,7 @@ func (o *SyncObserver) HandleStarted(info libfossil.HandleStart)
 
 
 <a name="SyncObserver.RoundCompleted"></a>
-### func \(\*SyncObserver\) [RoundCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L100>)
+### func \(\*SyncObserver\) [RoundCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L100>)
 
 ```go
 func (o *SyncObserver) RoundCompleted(round int, stats libfossil.RoundStats)
@@ -206,7 +206,7 @@ func (o *SyncObserver) RoundCompleted(round int, stats libfossil.RoundStats)
 
 
 <a name="SyncObserver.RoundStarted"></a>
-### func \(\*SyncObserver\) [RoundStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L85>)
+### func \(\*SyncObserver\) [RoundStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L85>)
 
 ```go
 func (o *SyncObserver) RoundStarted(round int)
@@ -215,7 +215,7 @@ func (o *SyncObserver) RoundStarted(round int)
 
 
 <a name="SyncObserver.Started"></a>
-### func \(\*SyncObserver\) [Started](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L69>)
+### func \(\*SyncObserver\) [Started](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L69>)
 
 ```go
 func (o *SyncObserver) Started(info libfossil.SessionStart)
@@ -224,7 +224,7 @@ func (o *SyncObserver) Started(info libfossil.SessionStart)
 
 
 <a name="SyncObserver.String"></a>
-### func \(\*SyncObserver\) [String](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L368>)
+### func \(\*SyncObserver\) [String](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L368>)
 
 ```go
 func (o *SyncObserver) String() string
@@ -233,7 +233,7 @@ func (o *SyncObserver) String() string
 String returns a human\-readable description.
 
 <a name="SyncObserver.TableSyncCompleted"></a>
-### func \(\*SyncObserver\) [TableSyncCompleted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L191>)
+### func \(\*SyncObserver\) [TableSyncCompleted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L191>)
 
 ```go
 func (o *SyncObserver) TableSyncCompleted(info libfossil.TableSyncEnd)
@@ -242,7 +242,7 @@ func (o *SyncObserver) TableSyncCompleted(info libfossil.TableSyncEnd)
 
 
 <a name="SyncObserver.TableSyncStarted"></a>
-### func \(\*SyncObserver\) [TableSyncStarted](<https://github.com/danmestas/libfossil/blob/main/observer/otel/otel.go#L180>)
+### func \(\*SyncObserver\) [TableSyncStarted](<https://github.com/danmestas/go-libfossil/blob/main/observer/otel/otel.go#L180>)
 
 ```go
 func (o *SyncObserver) TableSyncStarted(info libfossil.TableSyncStart)

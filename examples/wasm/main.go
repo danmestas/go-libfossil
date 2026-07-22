@@ -11,8 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil"
-	_ "github.com/danmestas/libfossil/db/driver/ncruces"
+	"github.com/danmestas/go-libfossil"
+	_ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 )
 
 func main() {

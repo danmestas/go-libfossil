@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_PAT }}
           DOWNSTREAM: EdgeSync
-          MODULE_PATH: github.com/danmestas/libfossil
+          MODULE_PATH: github.com/danmestas/go-libfossil
         run: |
           gh api -X POST "repos/danmestas/${DOWNSTREAM}/dispatches" \
             -f event_type=upstream-bump \

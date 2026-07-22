@@ -3,7 +3,7 @@ package xfer_test
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 func ExampleMessage_Encode() {

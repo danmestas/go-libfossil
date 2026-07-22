@@ -141,9 +141,9 @@ Each repo additionally gains:
 | Field | Example | Purpose |
 |-------|---------|---------|
 | `repo` | `libfossil` | Short name; receiver checks against `EXPECTED_REPO` env var |
-| `module_path` | `github.com/danmestas/libfossil` | Full Go module path used by `go get` |
+| `module_path` | `github.com/danmestas/go-libfossil` | Full Go module path used by `go get` |
 | `version` | `v0.4.6` | Tag string with leading `v`; validated against `^v\d+\.\d+\.\d+(-.+)?$` |
-| `release_url` | `https://github.com/danmestas/libfossil/releases/tag/v0.4.6` | Embedded in PR body for one-click reviewer access |
+| `release_url` | `https://github.com/danmestas/go-libfossil/releases/tag/v0.4.6` | Embedded in PR body for one-click reviewer access |
 | `tag_sha` | `2baaced...` | Audit trail in case of force-moved tags |
 | `actor` | `danmestas` | Who pushed the tag |
 
@@ -159,7 +159,7 @@ Each repo additionally gains:
   env:
     GH_TOKEN: ${{ secrets.DISPATCH_PAT }}
     DOWNSTREAM: EdgeSync                            # in libfossil; "bones" in edgesync
-    MODULE_PATH: github.com/danmestas/libfossil    # the upstream's own module path; in edgesync: github.com/danmestas/EdgeSync
+    MODULE_PATH: github.com/danmestas/go-libfossil    # the upstream's own module path; in edgesync: github.com/danmestas/EdgeSync
   run: |
     gh api -X POST "repos/danmestas/${DOWNSTREAM}/dispatches" \
       -f event_type=upstream-bump \
@@ -172,7 +172,7 @@ Each repo additionally gains:
 ```
 
 `DOWNSTREAM` and `MODULE_PATH` are hard-coded per repo:
-- libfossil's release.yml: `DOWNSTREAM=EdgeSync`, `MODULE_PATH=github.com/danmestas/libfossil`
+- libfossil's release.yml: `DOWNSTREAM=EdgeSync`, `MODULE_PATH=github.com/danmestas/go-libfossil`
 - edgesync's release.yml: `DOWNSTREAM=bones`, `MODULE_PATH=github.com/danmestas/EdgeSync`
 
 **Idempotency**: Receiver checks for an existing open PR on branch `chore/bump-${repo}-${version}` before doing work. Re-firing the same dispatch is a no-op.
@@ -213,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPECTED_REPO: libfossil          # bones uses "EdgeSync"
-      EXPECTED_MODULE: github.com/danmestas/libfossil  # bones: github.com/danmestas/EdgeSync
+      EXPECTED_MODULE: github.com/danmestas/go-libfossil  # bones: github.com/danmestas/EdgeSync
     steps:
       - name: Resolve inputs
         id: in

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/branch"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/branch"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // makeBranch forks off parent into a new named branch and returns the

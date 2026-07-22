@@ -2,9 +2,11 @@ package sync
 
 import (
 	"testing"
+	"time"
 
 	"github.com/danmestas/libfossil/internal/blob"
 	"github.com/danmestas/libfossil/internal/content"
+	"github.com/danmestas/libfossil/internal/deck"
 	"github.com/danmestas/libfossil/internal/delta"
 	"github.com/danmestas/libfossil/internal/hash"
 	_ "github.com/danmestas/libfossil/internal/testdriver"
@@ -294,5 +296,89 @@ func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
 		t.Fatalf("content.Expand served %d bytes under uuid=%s, which hashes to a different "+
 			"UUID than claimed — a hostile peer planted content under a name it does not hash to",
 			len(got), claimedUUID)
+	}
+}
+
+// TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild is the end-to-end
+// regression test for issue #75: manifest.AfterDephantomize was ported,
+// tested in isolation, and never wired into the real fill path. This test
+// proves it now fires from storeReceivedFile itself -- not merely from a
+// later manifest.Crosslink() sweep -- by checking crosslink side effects
+// (the 'event' row a checkin manifest produces) immediately after the base
+// arrives, with no intervening call to manifest.Crosslink anywhere in the
+// test.
+//
+// A checkin manifest is delivered first, as a raw delta against a base
+// blob that hasn't arrived yet (base becomes a phantom via
+// create-phantom-if-missing, mirroring how a real sync round can deliver a
+// delta child before its source). Because the base is unavailable, the
+// manifest cannot be expanded or crosslinked yet, so no event row exists.
+// Once the base's real content arrives and fills the phantom, the fix
+// under test crosslinks the manifest immediately as part of storing that
+// fill -- proving AfterDephantomize runs on the production fill path, not
+// only under go test via its own unit tests.
+func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	fileContent := []byte("hello dephantomize e2e")
+	_, fileUUID, err := blob.Store(r.DB(), fileContent)
+	if err != nil {
+		t.Fatalf("Store file blob: %v", err)
+	}
+
+	d := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "dephantomize e2e commit",
+		U:    deck.User("testuser"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
+	}
+	manifestBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	manifestUUID := hash.SHA1(manifestBytes)
+
+	base := []byte("root content for the dephantomize e2e crosslink test, unrelated to the manifest")
+	baseUUID := hash.SHA1(base)
+	manifestDelta := delta.Create(base, manifestBytes)
+
+	// The checkin manifest arrives first, as a delta against a base that
+	// has never been seen -- create-phantom-if-missing phantomizes the
+	// base, mirroring the client.go:storeDeltaContent doc comment.
+	if err := storeReceivedFile(r, manifestUUID, baseUUID, manifestDelta); err != nil {
+		t.Fatalf("storeReceivedFile(manifest delta, base absent) = %v, want nil", err)
+	}
+
+	manifestRid, ok := blob.Exists(r.DB(), manifestUUID)
+	if !ok {
+		t.Fatal("manifest blob row missing after storing its delta")
+	}
+
+	var eventCountBefore int
+	r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", manifestRid).Scan(&eventCountBefore)
+	if eventCountBefore != 0 {
+		t.Fatalf("event count before base arrives = %d, want 0 (manifest not yet expandable)", eventCountBefore)
+	}
+
+	// The base arrives as ordinary full content, filling the phantom.
+	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
+		t.Fatalf("storeReceivedFile(base) = %v, want nil", err)
+	}
+
+	// No manifest.Crosslink() call anywhere above: this must be
+	// AfterDephantomize firing on the fill path itself.
+	var eventCountAfter int
+	var eventType string
+	r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", manifestRid).Scan(&eventCountAfter)
+	r.DB().QueryRow("SELECT type FROM event WHERE objid=?", manifestRid).Scan(&eventType)
+	if eventCountAfter != 1 {
+		t.Fatalf("event count after base fills the phantom = %d, want 1 -- "+
+			"AfterDephantomize must crosslink delta children of a filled phantom "+
+			"as part of storeReceivedFile, not only when go test calls it directly",
+			eventCountAfter)
+	}
+	if eventType != "ci" {
+		t.Errorf("event type = %q, want 'ci'", eventType)
 	}
 }

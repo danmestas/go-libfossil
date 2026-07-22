@@ -712,7 +712,20 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 		return storeDeltaContent(r, uuid, deltaSrc, payload)
 	}
 
-	return storeResolvedContent(r, uuid, payload)
+	dephantomizedRid, err := storeResolvedContent(r, uuid, payload)
+	if err != nil {
+		return err
+	}
+	// A phantom filled: crosslink it and any delta children of it that
+	// were waiting on this content, mirroring Fossil's after_dephantomize
+	// call from content_put_ex (content.c:626) once a phantom's real bytes
+	// land. Runs outside storeResolvedContent's transaction -- r.DB() opens
+	// its own connection, and calling it from inside that transaction's
+	// closure would contend with the still-open write lock.
+	if dephantomizedRid > 0 {
+		manifest.AfterDephantomize(r, dephantomizedRid)
+	}
+	return nil
 }
 
 // storeDeltaContent persists a received delta exactly as given — never
@@ -740,7 +753,11 @@ func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 // immediately, so this stays eager rather than deferring to content.Expand's
 // check the way storeDeltaContent's delta bytes must. Fills a phantom row
 // in place if one already exists for uuid.
-func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
+//
+// Returns the rid of a phantom that was just filled, so the caller can run
+// AfterDephantomize on it once this transaction has committed; returns 0
+// when no phantom was filled (blob already real, or newly inserted).
+func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) (libfossil.FslID, error) {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)
@@ -748,10 +765,11 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 		computedUUID = hash.SHA1(fullContent)
 	}
 	if computedUUID != uuid {
-		return fmt.Errorf("UUID mismatch for received file: expected %s, got %s", uuid, computedUUID)
+		return 0, fmt.Errorf("UUID mismatch for received file: expected %s, got %s", uuid, computedUUID)
 	}
 
-	return r.WithTx(func(tx *db.Tx) error {
+	var dephantomizedRid libfossil.FslID
+	err := r.WithTx(func(tx *db.Tx) error {
 		existingRid, exists := blob.Exists(tx, uuid)
 		if exists {
 			var size int64
@@ -774,6 +792,7 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 			if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", existingRid); err != nil {
 				return fmt.Errorf("unclustered rid=%d: %w", existingRid, err)
 			}
+			dephantomizedRid = libfossil.FslID(existingRid)
 			return nil
 		}
 		compressed, err := blob.Compress(fullContent)
@@ -807,6 +826,10 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 
 		return nil
 	})
+	if err != nil {
+		return 0, err
+	}
+	return dephantomizedRid, nil
 }
 
 // loadDBPhantoms promotes phantom-table entries into the session's phantom

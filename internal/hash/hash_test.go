@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/testutil"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func TestSHA1(t *testing.T) {

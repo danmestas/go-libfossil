@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/testutil"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // bufioReaderFromBytes is a helper for benchmarks that creates a bufio.Reader from a byte slice.

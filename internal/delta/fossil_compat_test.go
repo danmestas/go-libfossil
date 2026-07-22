@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil/testutil"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // TestFossilDeltaFormat_CopyCommand verifies count@offset order (was swapped).

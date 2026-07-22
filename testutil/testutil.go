@@ -25,12 +25,28 @@ func FossilBinary() string {
 	return path
 }
 
+// RequireFossilBin resolves the fossil binary for tests that need canonical
+// Fossil to run. It resolves the same way FossilBinary does (the FOSSIL_BIN
+// override, then PATH). When no binary is found it skips the test, unless
+// REQUIRE_FOSSIL_BIN=1 is set -- then it fails. That makes CI turn a missing
+// binary into a loud failure (verifying real Fossil reads what we write is the
+// one thing our own tests cannot substitute for) while local runs without
+// fossil installed stay an opt-in skip.
+func RequireFossilBin(t *testing.T) string {
+	t.Helper()
+	if bin := FossilBinary(); bin != "" {
+		return bin
+	}
+	if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
+		t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary found (set FOSSIL_BIN or install fossil on PATH)")
+	}
+	t.Skip("fossil binary not found; set REQUIRE_FOSSIL_BIN=1 to require it")
+	return ""
+}
+
 func NewTestRepo(t *testing.T) *TestRepo {
 	t.Helper()
-	bin := FossilBinary()
-	if bin == "" {
-		t.Skip("fossil binary not found")
-	}
+	bin := RequireFossilBin(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.fossil")
 	cmd := exec.Command(bin, "new", path)

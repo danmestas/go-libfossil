@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/danmestas/libfossil/testutil"
 )
 
 // TestFossilDeltaFormat_CopyCommand verifies count@offset order (was swapped).
@@ -112,9 +114,7 @@ func TestFossilDeltaFormat_Asymmetric(t *testing.T) {
 // `fossil test-delta-apply` to generate a ground-truth delta, then
 // verifies our Apply produces identical output.
 func TestFossilCLI_DeltaRoundTrip(t *testing.T) {
-	if _, err := exec.LookPath("fossil"); err != nil {
-		t.Skip("fossil binary not in PATH")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	source := bytes.Repeat([]byte("The quick brown fox jumps over the lazy dog. "), 100)
 	target := make([]byte, len(source))
@@ -135,7 +135,7 @@ func TestFossilCLI_DeltaRoundTrip(t *testing.T) {
 	}
 
 	// Create delta with fossil CLI
-	if out, err := exec.Command("fossil", "test-delta-create", srcFile, tgtFile, deltaFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(fossilBin, "test-delta-create", srcFile, tgtFile, deltaFile).CombinedOutput(); err != nil {
 		t.Fatalf("fossil test-delta-create: %v\n%s", err, out)
 	}
 
@@ -155,7 +155,7 @@ func TestFossilCLI_DeltaRoundTrip(t *testing.T) {
 	}
 
 	// Also verify fossil's own apply produces same result
-	if out, err := exec.Command("fossil", "test-delta-apply", srcFile, deltaFile, resultFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(fossilBin, "test-delta-apply", srcFile, deltaFile, resultFile).CombinedOutput(); err != nil {
 		t.Fatalf("fossil test-delta-apply: %v\n%s", err, out)
 	}
 	fossilResult, err := readFile(resultFile)
@@ -170,9 +170,7 @@ func TestFossilCLI_DeltaRoundTrip(t *testing.T) {
 // TestFossilCLI_CreateRoundTrip verifies that deltas we Create can be
 // applied by the fossil CLI.
 func TestFossilCLI_CreateRoundTrip(t *testing.T) {
-	if _, err := exec.LookPath("fossil"); err != nil {
-		t.Skip("fossil binary not in PATH")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	source := bytes.Repeat([]byte("abcdefghijklmnop"), 500)
 	target := make([]byte, len(source))
@@ -196,7 +194,7 @@ func TestFossilCLI_CreateRoundTrip(t *testing.T) {
 	t.Logf("Our delta: %d bytes (source=%d, target=%d)", len(d), len(source), len(target))
 
 	// Apply with fossil CLI
-	if out, err := exec.Command("fossil", "test-delta-apply", srcFile, deltaFile, resultFile).CombinedOutput(); err != nil {
+	if out, err := exec.Command(fossilBin, "test-delta-apply", srcFile, deltaFile, resultFile).CombinedOutput(); err != nil {
 		t.Fatalf("fossil test-delta-apply: %v\n%s", err, out)
 	}
 

@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/danmestas/libfossil/testutil"
 )
 
 // bufioReaderFromBytes is a helper for benchmarks that creates a bufio.Reader from a byte slice.
@@ -321,10 +323,7 @@ func TestMessage_RealisticSyncTraffic(t *testing.T) {
 func TestMessage_FossilSanityCheck(t *testing.T) {
 	// If fossil is available, create two repos and clone one from the other
 	// to verify the fossil binary is working on this system.
-	fossilPath, err := exec.LookPath("fossil")
-	if err != nil {
-		t.Skip("fossil not found in PATH, skipping sanity check")
-	}
+	fossilPath := testutil.RequireFossilBin(t)
 
 	dir := t.TempDir()
 	repoA := dir + "/repo-a.fossil"

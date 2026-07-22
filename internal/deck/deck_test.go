@@ -174,6 +174,48 @@ func TestMarshalWCard(t *testing.T) {
 	}
 }
 
+// TestMarshalRenameFCardPlaceholder pins the F-card serialization for a
+// rename (#51). Canonical Fossil forces a " w" permission placeholder when a
+// renamed file's perm would otherwise be empty, so the prior-name field stays
+// in its 4th positional slot (src/checkin.c:1999). An executable rename keeps
+// its real perm instead of the placeholder.
+func TestMarshalRenameFCardPlaceholder(t *testing.T) {
+	const uuid = "a8009a7a528d87778c356da3a55d964719e818666a04e4f960c9e2439e35f138"
+	cases := []struct {
+		name string
+		card FileCard
+		want string
+	}{
+		{
+			name: "empty-perm-forces-w",
+			card: FileCard{Name: "greet.txt", UUID: uuid, OldName: "hello.txt"},
+			want: "F greet.txt " + uuid + " w hello.txt\n",
+		},
+		{
+			name: "executable-rename-keeps-x",
+			card: FileCard{Name: "run.sh", UUID: uuid, Perm: "x", OldName: "old.sh"},
+			want: "F run.sh " + uuid + " x old.sh\n",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &Deck{
+				Type: Checkin,
+				D:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+				F:    []FileCard{c.card},
+				U:    User("test"),
+			}
+			data, err := d.Marshal()
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if !strings.Contains(string(data), c.want) {
+				t.Fatalf("F-card wrong: want %q in:\n%s", c.want, data)
+			}
+		})
+	}
+}
+
 // --- Task 8: Parse tests ---
 
 func TestParseMinimalCheckin(t *testing.T) {

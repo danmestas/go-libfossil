@@ -29,6 +29,7 @@ type File struct {
 	Name    string
 	Content []byte
 	Perm    string
+	OldName string // prior pathname when this file card records a rename
 }
 
 func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manifestUUID string, err error) {
@@ -168,7 +169,7 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
 		}
-		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm}
+		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm, OldName: f.OldName}
 		rids = append(rids, rid)
 	}
 	return fCards, rids, nil

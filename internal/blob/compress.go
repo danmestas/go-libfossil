@@ -38,6 +38,30 @@ func Compress(data []byte) (result []byte, err error) {
 	return buf.Bytes(), nil
 }
 
+// EncodeForStorage returns the bytes to write into blob.content for data.
+// When verbatim is non-nil, it is already data re-expressed in Fossil's
+// on-disk blob format (e.g. bytes received over the wire that were already
+// encoded that way) and is returned as-is, with no zlib pass of our own.
+// When verbatim is nil, data is compressed fresh via Compress.
+//
+// Centralizing the choice here -- rather than in each receive-path caller --
+// means a caller with wire-verbatim bytes on hand never has to decide
+// whether re-encoding is safe to skip; it just offers the bytes and this
+// function decides. Locally authored content, which never has verbatim
+// bytes to offer, is unaffected: it always takes the Compress path.
+func EncodeForStorage(data []byte, verbatim []byte) ([]byte, error) {
+	if data == nil {
+		panic("blob.EncodeForStorage: data must not be nil")
+	}
+	if verbatim != nil {
+		if len(verbatim) == 0 {
+			panic("blob.EncodeForStorage: verbatim must not be empty when non-nil")
+		}
+		return verbatim, nil
+	}
+	return Compress(data)
+}
+
 // Decompress handles Fossil's compressed blob format:
 // [4-byte big-endian uncompressed size][zlib-compressed data].
 // The 4-byte prefix is skipped before decompressing.

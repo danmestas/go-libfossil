@@ -339,15 +339,21 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 				filesRecvd++
 				continue
 			}
-			if err := cs.handleFile(c.UUID, c.DeltaSrc, content); err != nil {
+			if err := cs.handleFile(c.UUID, c.DeltaSrc, content, nil); err != nil {
 				return false, err
 			}
 			filesRecvd++
 
 		case *xfer.CFileCard:
 			content := c.Content
+			storedBlob := c.StoredBlob
 			// BUGGIFY: 2% chance corrupt file content to test hash verification.
 			// Relies on blob.Store verify-before-commit to catch corruption.
+			// storedBlob must be dropped alongside content: it decodes to
+			// the *original* bytes, so keeping it would let verbatim
+			// storage quietly mask the corruption this path exists to
+			// exercise, instead of the corrupted content being what gets
+			// hash-checked and stored.
 			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.corruptHash", 0.02) {
 				corrupted := make([]byte, len(content))
 				copy(corrupted, content)
@@ -355,13 +361,14 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 					corrupted[0] ^= 0xff
 				}
 				content = corrupted
+				storedBlob = nil
 			}
 			// BUGGIFY: 5% chance skip storing a received file, creating a phantom.
 			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
 				filesRecvd++
 				continue
 			}
-			if err := cs.handleFile(c.UUID, c.DeltaSrc, content); err != nil {
+			if err := cs.handleFile(c.UUID, c.DeltaSrc, content, storedBlob); err != nil {
 				return false, err
 			}
 			filesRecvd++
@@ -396,8 +403,13 @@ func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
 // delta whose base hasn't arrived yet rather than discarding it (see
 // storeDeltaAgainstPhantomBase), so uuid itself is never re-requested here
 // once stored — only a still-missing base might need another round.
-func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte) error {
-	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload); err != nil {
+//
+// storedBlob, when non-nil, is payload already re-expressed in Fossil's
+// on-disk blob format (see xfer.CFileCard.StoredBlob) and is persisted
+// verbatim rather than recompressed — this is what makes a clone
+// byte-identical to its source's blob table, not merely content-identical.
+func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 

@@ -485,7 +485,9 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 			s.nextIsPrivate = true
 
 		case *xfer.FileCard:
-			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content); err != nil {
+			// Uncompressed cards never carry a wire-encoded frame to
+			// preserve — storage always compresses payload itself.
+			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
 				return false, err
 			}
 			if err := s.applyPrivateStatus(c.UUID); err != nil {
@@ -496,7 +498,7 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 			delete(s.phantoms, c.UUID)
 
 		case *xfer.CFileCard:
-			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content); err != nil {
+			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content, c.StoredBlob); err != nil {
 				return false, err
 			}
 			if err := s.applyPrivateStatus(c.UUID); err != nil {
@@ -691,7 +693,16 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 // expansion: a delta's own internal checksum only proves the bytes are
 // self-consistent with what the sender transmitted, not that they match
 // the name they were received under.
-func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) error {
+//
+// storedBlob, when non-nil, is payload already re-expressed in Fossil's
+// on-disk blob format by the xfer decoder (see xfer.CFileCard.StoredBlob):
+// bytes the sender itself would have stored, handed to us intact. Passing
+// it through to storage instead of recompressing payload is what makes a
+// clone byte-identical to its source rather than merely content-identical.
+// Callers with no such bytes on hand (payload built locally, or a bare
+// "file" card that never carried a compressed wire frame) pass nil, and
+// storage falls back to compressing payload itself.
+func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if r == nil { panic("storeReceivedFile: r must not be nil") }
 	if uuid == "" { panic("storeReceivedFile: uuid must not be empty") }
 	if payload == nil { panic("storeReceivedFile: payload must not be nil") }
@@ -709,10 +720,10 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 		if !hash.IsValidHash(deltaSrc) {
 			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
 		}
-		return storeDeltaContent(r, uuid, deltaSrc, payload)
+		return storeDeltaContent(r, uuid, deltaSrc, payload, storedBlob)
 	}
 
-	return storeResolvedContent(r, uuid, payload)
+	return storeResolvedContent(r, uuid, payload, storedBlob)
 }
 
 // storeDeltaContent persists a received delta exactly as given — never
@@ -721,13 +732,13 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 // 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
 // unconditionally, matching content_put_ex's REPLACE INTO delta, whether
 // or not srcRid is itself currently available.
-func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte) error {
+func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	return r.WithTx(func(tx *db.Tx) error {
 		srcRid, err := blob.StorePhantom(tx, deltaSrc)
 		if err != nil {
 			return fmt.Errorf("storeDeltaContent: resolve base %s: %w", deltaSrc, err)
 		}
-		if _, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid); err != nil {
+		if _, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid, storedBlob); err != nil {
 			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
 		return nil
@@ -740,7 +751,7 @@ func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte) erro
 // immediately, so this stays eager rather than deferring to content.Expand's
 // check the way storeDeltaContent's delta bytes must. Fills a phantom row
 // in place if one already exists for uuid.
-func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
+func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte) error {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)
@@ -760,7 +771,7 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 				return nil // real blob already exists
 			}
 			// Fill phantom: update blob content, remove from phantom table.
-			compressed, err := blob.Compress(fullContent)
+			compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
 			if err != nil {
 				return err
 			}
@@ -776,7 +787,7 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte) error {
 			}
 			return nil
 		}
-		compressed, err := blob.Compress(fullContent)
+		compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
 		if err != nil {
 			return err
 		}
@@ -839,8 +850,12 @@ func (s *session) loadDBPhantoms() error {
 // If the stored artifact is a cluster manifest, crosslinking creates DB
 // phantoms for referenced blobs; we promote those to session phantoms so
 // gimme cards are emitted in the next round.
-func (s *session) handleFileCard(uuid, deltaSrc string, payload []byte) error {
-	if err := storeReceivedFile(s.repo, uuid, deltaSrc, payload); err != nil {
+//
+// storedBlob carries a cfile card's already wire-encoded bytes through to
+// storage (see storeReceivedFile); it is nil for uncompressed "file" cards,
+// which never carry a compressed frame to preserve.
+func (s *session) handleFileCard(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+	if err := storeReceivedFile(s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		return err
 	}
 

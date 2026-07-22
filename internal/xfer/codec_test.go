@@ -513,6 +513,48 @@ func TestDecode_CloneSeqNoPresence(t *testing.T) {
 	}
 }
 
+// TestDecode_CloneUnparseableToken pins issue #95: a VERSION or SEQNO token
+// that strconv.Atoi cannot parse at all (not just one that fails the §8.1
+// digit-only rule) must not fail the whole message. parseClone degrades the
+// same way parseCloneSeqNo does for clone_seqno -- carrying the raw tokens
+// forward as an UnknownCard -- so a later card in the same message still
+// decodes rather than the whole message erroring out on the first Atoi call.
+func TestDecode_CloneUnparseableToken(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+	}{
+		{"non-numeric version", "clone abc 5\n"},
+		{"non-numeric seqno", "clone 3 abc\n"},
+		{"both non-numeric", "clone abc xyz\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := bufio.NewReader(strings.NewReader(tt.line + "private\n"))
+			card, err := DecodeCard(r)
+			if err != nil {
+				t.Fatalf("%q: unexpected error %v", tt.line, err)
+			}
+			uc, ok := card.(*UnknownCard)
+			if !ok {
+				t.Fatalf("%q: card = %T, want *UnknownCard", tt.line, card)
+			}
+			if uc.Command != "clone" {
+				t.Errorf("%q: Command = %q, want %q", tt.line, uc.Command, "clone")
+			}
+
+			// Parsing must continue into the following card.
+			next, err := DecodeCard(r)
+			if err != nil {
+				t.Fatalf("%q: parsing stopped after unparseable clone card: %v", tt.line, err)
+			}
+			if _, ok := next.(*PrivateCard); !ok {
+				t.Errorf("%q: next card = %T, want *PrivateCard", tt.line, next)
+			}
+		})
+	}
+}
+
 // --- Wire format verification ---
 
 func TestEncode_WireFormat_IGot(t *testing.T) {

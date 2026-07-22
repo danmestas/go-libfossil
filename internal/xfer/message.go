@@ -105,6 +105,23 @@ const (
 // decode it is a real failure and must be reported, never reinterpreted.
 var errNotZlib = errors.New("xfer: not a zlib stream")
 
+// isZlibHeader reports whether data begins with a structurally valid RFC 1950
+// zlib header: CM (the low nibble of the first byte) must be 8, and the
+// header word must be a multiple of 31. It is a pure structural check with no
+// I/O, used only to decide whether the first four bytes of data could also be
+// read as a §4.1 declared length worth checking against the bound -- it does
+// not attempt to decompress anything.
+func isZlibHeader(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	cmf, flg := data[0], data[1]
+	if cmf&0x0f != 8 {
+		return false
+	}
+	return (uint16(cmf)*256+uint16(flg))%31 == 0
+}
+
 // Encode serializes all cards and zlib-compresses the result.
 // Uses Fossil's compression format: 4-byte big-endian uncompressed size prefix
 // followed by standard zlib data.
@@ -182,6 +199,22 @@ func Decode(data []byte) (*Message, error) {
 // both have already failed. It returns errNotZlib only when neither framing is
 // a zlib stream at all.
 func decompressContainer(data []byte) ([]byte, error) {
+	// If this body presents a valid zlib header at offset 0, it is exactly
+	// the case zlibCMFAliasBytes describes: the first four bytes double as
+	// both a would-be zlib header (what format 1 is about to try) and a
+	// §4.1 declared length (what format 2 would read from the same bytes).
+	// Read that declared length now and reject it if it is over the bound,
+	// before format 1 gets a chance to settle the ambiguity by however the
+	// rest of the stream happens to inflate. A body that does not present a
+	// valid header here was never ambiguous with the container format, so it
+	// is left to the existing format 1 / format 2 / format 3 fallback below.
+	if len(data) >= 4 && isZlibHeader(data) {
+		declared := binary.BigEndian.Uint32(data[:4])
+		if declared > MaxDecompressedBytes {
+			return nil, fmt.Errorf(
+				"xfer: declared container length %d exceeds %d bytes", declared, MaxDecompressedBytes)
+		}
+	}
 	// Format 1: unprefixed zlib. See Decode; a tolerance, not a Fossil format.
 	rawDirect, errDirect := decompressBounded(data)
 	if errDirect == nil {

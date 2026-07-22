@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // isHexToken reports whether s is non-empty and consists solely of the

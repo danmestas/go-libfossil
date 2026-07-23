@@ -20,6 +20,13 @@ import (
 // unreadable error message.
 const phantomStallSampleSize = 10
 
+// processResponseCancelCheckStride is how many cards processResponse handles
+// between context-cancellation checks. One clone batch is processed card by
+// card with no network wait in between, so without an inner check a cancelled
+// context would not be observed until the next round begins; the check is
+// batched to avoid a channel read per card.
+const processResponseCancelCheckStride = 256
+
 // PhantomStallError reports a clone that stopped making progress while
 // phantom blobs — content referenced but never received — were still
 // outstanding. Terminating a stalled clone is correct; reporting it as
@@ -143,7 +150,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	}
 
 	// Crosslink: parse received manifests into event/plink/leaf/mlink tables.
-	linked, xlinkErr := manifest.Crosslink(r)
+	// Use the ctx-aware variant so a clone deadline can interrupt this
+	// whole-repository sweep, which runs after the round loop and so has no
+	// round boundary of its own to observe cancellation at.
+	linked, xlinkErr := manifest.CrosslinkContext(ctx, r)
 	if xlinkErr != nil {
 		result = cloneResult
 		err = fmt.Errorf("sync.Clone: crosslink: %w", xlinkErr)
@@ -194,7 +204,7 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 
 		recvdBefore := cs.result.BlobsRecvd
 
-		done, err := cs.processResponse(resp)
+		done, err := cs.processResponse(ctx, resp)
 		if err != nil {
 			cs.obs.RoundCompleted(roundCtx, cycle, RoundStats{FilesReceived: cs.result.BlobsRecvd - recvdBefore})
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)
@@ -298,8 +308,8 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		// server's unknown-card branch as `bad command: clone_seqno N`
 		// (issue #74).
 		cards = append(cards, &xfer.CloneCard{
-			Version:  version,
-			SeqNo:    cs.seqno,
+			Version:        version,
+			SeqNo:          cs.seqno,
 			SeqNoIsDecimal: true,
 		})
 	} else {
@@ -359,14 +369,22 @@ func (cs *cloneSession) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, erro
 
 // processResponse handles all cards in a server response for a clone round.
 // Returns true when the round produced no new file content.
-func (cs *cloneSession) processResponse(msg *xfer.Message) (bool, error) {
+func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) (bool, error) {
 	if msg == nil {
 		panic("sync.Clone.processResponse: msg must not be nil")
 	}
 
 	filesRecvd := 0
 
-	for _, card := range msg.Cards {
+	for i, card := range msg.Cards {
+		if i%processResponseCancelCheckStride == 0 {
+			select {
+			case <-ctx.Done():
+				cs.result.BlobsRecvd += filesRecvd
+				return false, ctx.Err()
+			default:
+			}
+		}
 		switch c := card.(type) {
 		case *xfer.PushCard:
 			// Server sends push card with project-code and server-code.

@@ -11,11 +11,23 @@ import (
 
 // RepoCloneCmd clones a remote Fossil repository.
 type RepoCloneCmd struct {
-	URL    string `arg:"" optional:"" help:"Remote Fossil server URL"`
-	Path   string `arg:"" optional:"" help:"Local path for new repository file"`
-	User   string `short:"u" help:"Username for clone auth"`
-	Pass   string `short:"p" help:"Password for clone auth"`
-	Invite string `help:"Invite token (from fossil invite)"`
+	URL     string        `arg:"" optional:"" help:"Remote Fossil server URL"`
+	Path    string        `arg:"" optional:"" help:"Local path for new repository file"`
+	User    string        `short:"u" help:"Username for clone auth"`
+	Pass    string        `short:"p" help:"Password for clone auth"`
+	Invite  string        `help:"Invite token (from fossil invite)"`
+	Timeout time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+}
+
+// cloneContext builds the context that bounds a clone. A positive timeout caps
+// the whole operation; zero (or negative) disables the deadline for a very
+// large repository, returning a plain cancellable context so the caller still
+// gets uniform cleanup through the returned cancel.
+func cloneContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(parent, timeout)
+	}
+	return context.WithCancel(parent)
 }
 
 func (c *RepoCloneCmd) Run(g *Globals) error {
@@ -41,7 +53,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("path required")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := cloneContext(context.Background(), c.Timeout)
 	defer cancel()
 
 	transport := libfossil.NewHTTPTransport(c.URL)

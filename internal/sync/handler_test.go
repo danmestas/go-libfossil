@@ -263,7 +263,11 @@ func TestHandleClone(t *testing.T) {
 		t.Fatalf("HandleSync: %v", err)
 	}
 
-	files := findCards[*xfer.FileCard](resp)
+	// §7.2: clone sends cfile, not file — no plain file cards should appear.
+	if plain := findCards[*xfer.FileCard](resp); len(plain) > 0 {
+		t.Fatalf("clone response carried %d 'file' cards; §7.2 requires 'cfile'", len(plain))
+	}
+	files := findCards[*xfer.CFileCard](resp)
 	for _, f := range files {
 		delete(stored, f.UUID)
 	}
@@ -272,17 +276,103 @@ func TestHandleClone(t *testing.T) {
 	}
 }
 
-// cloneRound runs one clone round at the given cursor and returns the file
+// similarCloneArtifacts returns two bodies sharing almost all their text, so
+// a delta between them is well under content.Deltify's policy threshold and
+// far smaller than either full body.
+func similarCloneArtifacts() ([]byte, []byte) {
+	var a, b strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&a, "line %04d: the quick brown fox jumps over the lazy dog\n", i)
+		if i == 100 {
+			fmt.Fprintf(&b, "line %04d: CHANGED FOR THE DELTA TEST\n", i)
+		} else {
+			fmt.Fprintf(&b, "line %04d: the quick brown fox jumps over the lazy dog\n", i)
+		}
+	}
+	return []byte(a.String()), []byte(b.String())
+}
+
+// TestEmitCloneBatchExpandsDeltifiedRows pins the fix for the interop
+// regression a code review caught on issue #98's first attempt: that attempt
+// retransmitted a stored delta's bytes verbatim with DeltaSrc set, per §7.2's
+// letter. But emitCloneBatch sends cards in ascending-rid order, and
+// content.Deltify always deltifies the OLDER artifact against the NEWER one,
+// so a delta's source almost always has a *greater* rid than the delta card
+// itself -- meaning the delta card routinely reached the client before the
+// source card it names. libfossil's own client tolerates that (phantom the
+// unseen source, resolve later), but real fossil 2.28 does not: verified
+// against a real fossil 2.28 client, that ordering crashed the client's
+// post-clone rebuild pass (assertion in blob_copy, blob.c:397) on a
+// repository holding a delta chain. See TestCloneRealFossilWithDeltaChain for
+// the end-to-end repro against a real binary.
+//
+// So a deltified row is expanded to full content before sending: still a
+// zlib-compressed cfile card (the wire-size win over the old FileCard/Expand
+// path survives), just no longer a delta forward-referencing a card that
+// hasn't gone out yet. This test requires exactly that: no DeltaSrc, and a
+// payload at least as large as the un-deltified original.
+func TestEmitCloneBatchExpandsDeltifiedRows(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	predecessor, successor := similarCloneArtifacts()
+	var oldUUID string
+	if err := r.WithTx(func(tx *db.Tx) error {
+		oldRid, u1, err := blob.Store(tx, predecessor)
+		if err != nil {
+			return err
+		}
+		newRid, _, err := blob.Store(tx, successor)
+		if err != nil {
+			return err
+		}
+		oldUUID = u1
+		saved, err := content.Deltify(tx, oldRid, newRid)
+		if err != nil {
+			return err
+		}
+		if saved <= 0 {
+			t.Fatalf("test setup: Deltify saved %d bytes, want > 0", saved)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("deltify setup: %v", err)
+	}
+
+	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	var card *xfer.CFileCard
+	for _, c := range findCards[*xfer.CFileCard](resp) {
+		if c.UUID == oldUUID {
+			card = c
+		}
+	}
+	if card == nil {
+		t.Fatal("expected a cfile card for the deltified predecessor")
+	}
+	if card.DeltaSrc != "" {
+		t.Errorf("DeltaSrc = %q, want empty -- a deltified row must be expanded, not sent as a delta, "+
+			"to avoid forward-referencing a source card that hasn't been sent yet", card.DeltaSrc)
+	}
+	if len(card.Content) != len(predecessor) {
+		t.Errorf("cfile payload = %d bytes, want %d (full expanded content)", len(card.Content), len(predecessor))
+	}
+}
+
+// cloneRound runs one clone round at the given cursor and returns the cfile
 // cards it produced, their total payload size, and the cursor the server
 // reported back. A zero cursor back means the snapshot is exhausted.
-func cloneRound(t *testing.T, r *repo.Repo, seqno int) (files []*xfer.FileCard, payload int, next int) {
+func cloneRound(t *testing.T, r *repo.Repo, seqno int) (files []*xfer.CFileCard, payload int, next int) {
 	t.Helper()
 	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: seqno}}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("clone round at seqno %d: %v", seqno, err)
 	}
-	files = findCards[*xfer.FileCard](resp)
+	files = findCards[*xfer.CFileCard](resp)
 	for _, f := range files {
 		payload += len(f.Content)
 	}
@@ -588,7 +678,7 @@ func TestHandleCloneCursorPastEnd(t *testing.T) {
 	// Get all blobs to find the max rid
 	req1 := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
 	resp1, _ := HandleSync(context.Background(), r, req1)
-	files1 := findCards[*xfer.FileCard](resp1)
+	files1 := findCards[*xfer.CFileCard](resp1)
 
 	// Now clone with seqno past all blobs — should get nothing
 	req2 := &xfer.Message{Cards: []xfer.Card{
@@ -598,7 +688,7 @@ func TestHandleCloneCursorPastEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
-	files2 := findCards[*xfer.FileCard](resp2)
+	files2 := findCards[*xfer.CFileCard](resp2)
 	if len(files2) > 0 {
 		t.Fatalf("expected no files with high seqno, got %d", len(files2))
 	}
@@ -1345,7 +1435,7 @@ func TestEmitCloneBatchSkipsPrivate(t *testing.T) {
 		&xfer.CloneCard{Version: 1},
 	)
 
-	files := findCards[*xfer.FileCard](resp)
+	files := findCards[*xfer.CFileCard](resp)
 	fileUUIDs := make(map[string]bool)
 	for _, f := range files {
 		fileUUIDs[f.UUID] = true
@@ -1373,7 +1463,7 @@ func TestEmitCloneBatchIncludesPrivateWhenAuthorized(t *testing.T) {
 		&xfer.PragmaCard{Name: "send-private"},
 	)
 
-	files := findCards[*xfer.FileCard](resp)
+	files := findCards[*xfer.CFileCard](resp)
 	fileUUIDs := make(map[string]bool)
 	for _, f := range files {
 		fileUUIDs[f.UUID] = true
@@ -1663,8 +1753,8 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 	if len(resp.Cards) != 1 {
 		t.Errorf("resp has %d cards, want 1 (output must be cleared)", len(resp.Cards))
 	}
-	if n := len(findCards[*xfer.FileCard](resp)); n != 0 {
-		t.Errorf("sent %d file cards on a fatal clone request, want 0", n)
+	if n := len(findCards[*xfer.CFileCard](resp)); n != 0 {
+		t.Errorf("sent %d cfile cards on a fatal clone request, want 0", n)
 	}
 	if n := len(findCards[*xfer.ConfigCard](resp)); n != 0 {
 		t.Errorf("later reqconfig card was parsed; §8.1 forbids it")
@@ -1699,7 +1789,7 @@ func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
 					t.Fatalf("§8.1 fatal applied to a case it excludes")
 				}
 			}
-			if n := len(findCards[*xfer.FileCard](resp)); n == 0 {
+			if n := len(findCards[*xfer.CFileCard](resp)); n == 0 {
 				t.Errorf("no files sent; request should clone from the first rid")
 			}
 		})

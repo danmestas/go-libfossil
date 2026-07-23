@@ -28,37 +28,23 @@ import (
 // constraint is that the response stays a size a server can hold and that a
 // repository drains in rounds proportional to its bytes, not its artifacts.
 //
-// The value is tuned, not principled, and is deliberately larger than
-// canonical's 5,000,000 max-download. Canonical's clone retransmits each
-// artifact's stored compressed form (§7.2), so its 5 MB covers 5 MB of
-// repository. This clone path emits fully expanded artifacts instead, which
-// on real repositories runs 80x to 220x the stored bytes -- libfossil's own
-// repository is 13.3 MB stored and 1.08 GB expanded. Applying canonical's
-// constant to that quantity is a dimensional error: it needs 184 rounds
-// where the old 200-artifact bound needed 87, breaking clones that work
-// today. Rounds to drain, against the client's MaxRounds of 100:
-//
-//	repo       artifacts  expanded  count-200   5 MB   16 MB
-//	libfossil     17.2k    1.08 GB         87    184      65
-//	fossil        67.5k    8.66 GB        338   1125     473
-//	sqlite         131k    13.1 GB        655   2502     809
-//
-// So this replaces an artifact-count ceiling with an expanded-bytes ceiling.
-// It is a better ceiling -- it tracks the quantity the transport actually
-// carries, and it beats the count bound on every corpus measured -- but
-// fossil- and sqlite-sized repositories still cannot be cloned from a
-// libfossil server within MaxRounds. They could not before either. Only
-// retransmitting stored content per §7.2 removes the ceiling rather than
-// moving it; at that point wire bytes and repository bytes become the same
-// quantity and this drops to canonical's 5,000,000.
+// emitCloneBatch now retransmits stored content per §7.2 (issue #98) rather
+// than the fully expanded artifacts it used to send, so bytesSent tracks the
+// same quantity canonical's 5,000,000 max-download bounds: repository bytes,
+// not the 80x-220x-larger expanded form. This constant was chosen before that
+// fix, against the expanded-bytes regime documented in issue #88 where a
+// smaller value pushed fossil- and sqlite-sized corpora past MaxRounds --
+// that constraint is gone now that wire bytes and repository bytes are the
+// same quantity. Retuning this value toward canonical's constant is issue
+// #109's territory (server pagination/budget accounting), not this fix's; it
+// is left at its prior value here to avoid colliding with that work in
+// flight. 16,000,000 stays a safe, if generous, upper bound either way: it
+// only widens how much stored content one round may carry.
 //
 // Note this bounds a round at budget plus one artifact, not at budget: the
 // artifact that crosses the budget is sent whole (see emitCloneBatch), so a
-// repository holding one 2 GB artifact still emits a 2 GB round. Measured
-// worst case is ~25 MB across the three repositories above, since the
-// largest single artifacts are 9.4 MB (libfossil) and 17.0 MB (sqlite).
-// Against the count bound's unbounded 44.9 MB that is a large reduction, but
-// it is a reduction and not a cap, and concurrent clones multiply it.
+// repository holding one large stored artifact still emits a round at least
+// that big.
 const DefaultCloneBatchBytes = 16_000_000
 
 // A round this server emits must stay inside the bound the client applies when
@@ -72,13 +58,17 @@ const DefaultCloneBatchBytes = 16_000_000
 const _ = uint(xfer.MaxDecompressedBytes - 2*DefaultCloneBatchBytes)
 
 // cloneCardOverheadBytes over-approximates the non-payload bytes of an
-// encoded file card -- keyword, hash, decimal length, and newline come to
-// about 58 -- so that a repository of zero-length artifacts still paginates
+// encoded cfile card -- keyword, hash, delta-source hash, two decimal
+// lengths, and newline come to somewhat more than the plain "file" card's
+// ~58 -- so that a repository of zero-length artifacts still paginates
 // instead of emitting the whole blob table into a single response. The slack
 // also absorbs the PrivateCard that may precede a card, which is not charged
-// separately. Over-charging is the safe direction and cannot be defeated: a
-// corpus of nothing but zero-length artifacts caps at ~167,000 cards per
-// round, about 9.7 MB of actual output, still inside the budget.
+// separately. This is charged against data before encodeCFile's zlib
+// compression runs, so it is already conservative in the same direction as
+// the framing overhead it approximates. Over-charging is the safe direction
+// and cannot be defeated: a corpus of nothing but zero-length artifacts caps
+// at ~167,000 cards per round, about 9.7 MB of actual output, still inside
+// the budget.
 const cloneCardOverheadBytes = 96
 
 // cloneCapPrefix tags a CookieCard value that carries the upper rid bound
@@ -768,7 +758,7 @@ func (h *handler) emitCloneBatch() error {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
 	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -791,7 +781,8 @@ func (h *handler) emitCloneBatch() error {
 	for rows.Next() {
 		var rid int
 		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
+		var fullSize int
+		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
 			return err
 		}
 
@@ -805,14 +796,58 @@ func (h *handler) emitCloneBatch() error {
 			break
 		}
 
-		data, err := h.cache.Expand(h.repo.DB(), libfossil.FslID(rid))
+		// §7.2: clone retransmits the repository's stored compressed content
+		// verbatim rather than the fully expanded form cache.Expand produces
+		// for a whole artifact -- blob.Load returns exactly that, and using
+		// it here (instead of Expand) is most of this fix's wire-size win
+		// (issue #98): a whole artifact goes out compressed instead of
+		// expanded and uncompressed.
+		//
+		// A row stored as a delta is the one case blob.Load's bytes cannot
+		// be forwarded as-is: content.Deltify always deltifies the OLDER
+		// artifact against the NEWER one (see deltify.go's doc comment), so
+		// DeltaSource almost always names a rid greater than rid itself. This
+		// loop sends cards in ascending-rid order for cursor/pagination
+		// reasons unrelated to delta direction, which means a delta card is
+		// routinely emitted before the very source card it names. libfossil's
+		// own client tolerates that forward reference (storeDeltaContent
+		// creates a phantom for an unseen source and resolves it later), but
+		// real fossil 2.28 does not: the source stays a genuine, unfilled
+		// phantom, and content_get() on it during the client's post-clone
+		// rebuild pass returns without initializing its output blob, which
+		// trips an assertion in blob_copy (blob.c:397) and aborts the
+		// client mid-rebuild. Verified against a real fossil 2.28 client
+		// cloning a libfossil server holding a delta chain.
+		//
+		// So a deltified row is expanded and sent as a plain (non-delta)
+		// cfile instead of forwarding the stored delta bytes -- still
+		// zlib-compressed over the wire, just not chain-dependent on send
+		// order. That gives up the delta win specifically (retransmitting a
+		// delta chain's savings, not just this fix's compression win) for
+		// deltified rows; re-enabling delta retransmission needs either a
+		// source-before-dependent send order or confirmation that a newer
+		// canonical tolerates the forward reference, and is left as a
+		// follow-up rather than blocking the non-delta win here.
+		srcRid, err := content.DeltaSource(h.repo.DB(), libfossil.FslID(rid))
 		if err != nil {
-			return fmt.Errorf("handler: expanding rid %d: %w", rid, err)
+			return fmt.Errorf("handler: delta source for rid %d: %w", rid, err)
+		}
+		var data []byte
+		if srcRid != 0 {
+			data, err = content.Expand(h.repo.DB(), libfossil.FslID(rid))
+			if err != nil {
+				return fmt.Errorf("handler: expanding deltified rid %d: %w", rid, err)
+			}
+		} else {
+			data, err = blob.Load(h.repo.DB(), libfossil.FslID(rid))
+			if err != nil {
+				return fmt.Errorf("handler: loading stored content for rid %d: %w", rid, err)
+			}
 		}
 		if isPriv {
 			h.resp = append(h.resp, &xfer.PrivateCard{})
 		}
-		h.resp = append(h.resp, &xfer.FileCard{UUID: uuid, Content: data})
+		h.resp = append(h.resp, &xfer.CFileCard{UUID: uuid, USize: fullSize, Content: data})
 		h.filesSent++
 		lastSentRID = rid
 		count++
@@ -821,7 +856,7 @@ func (h *handler) emitCloneBatch() error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// BUGGIFY: truncate — remove last file card to simulate incomplete batch.
+	// BUGGIFY: truncate — remove last cfile card to simulate incomplete batch.
 	// `count > 1` is a liveness constraint, not just a chaos-injection guard.
 	// Dropping the only card in a batch would set nextRID to lastSentRID,
 	// which equals the cursor we entered with, and the client would re-request
@@ -829,7 +864,7 @@ func (h *handler) emitCloneBatch() error {
 	// semantics `count > 0` was safe here; it no longer is.
 	if truncate && count > 1 {
 		for i := len(h.resp) - 1; i >= 0; i-- {
-			if _, ok := h.resp[i].(*xfer.FileCard); ok {
+			if _, ok := h.resp[i].(*xfer.CFileCard); ok {
 				h.resp = append(h.resp[:i], h.resp[i+1:]...)
 				h.filesSent--
 				count--

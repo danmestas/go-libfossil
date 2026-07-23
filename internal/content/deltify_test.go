@@ -42,9 +42,9 @@ func similarPair() ([]byte, []byte) {
 
 func isDelta(t *testing.T, q db.Querier, rid libfossil.FslID) bool {
 	t.Helper()
-	src, err := deltaSource(q, rid)
+	src, err := DeltaSource(q, rid)
 	if err != nil {
-		t.Fatalf("deltaSource(%d): %v", rid, err)
+		t.Fatalf("DeltaSource(%d): %v", rid, err)
 	}
 	return src > 0
 }
@@ -107,7 +107,7 @@ func TestDeltifyLeavesAlreadyDeltaAlone(t *testing.T) {
 		if saved != 0 {
 			t.Errorf("expected an already-delta artifact to be declined, saved=%d", saved)
 		}
-		src, _ := deltaSource(tx, r1)
+		src, _ := DeltaSource(tx, r1)
 		if src != r2 {
 			t.Errorf("delta source moved from %d to %d", r2, src)
 		}

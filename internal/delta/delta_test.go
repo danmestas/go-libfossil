@@ -96,6 +96,154 @@ func TestApply_TinyPayloadHugeHeaderBoundsAllocation(t *testing.T) {
 	}
 }
 
+// largeTargetManyCopiesDelta builds a delta for a 1 MiB target made of
+// numChunks small copy commands, each pulling chunkSize bytes straight back
+// out of source at the matching offset (source and target share content, so
+// the copies reconstruct target exactly). This is the shape that actually
+// exercises the #81 regression: many small commands means many small
+// append growth steps, which is where append's own ~1.25x large-slice
+// growth factor compounds into ~5x cumulative allocation. A single big
+// insert/copy command (e.g. what Create emits for two nearly-disjoint
+// buffers) grows in one step and allocates ~1x on both the buggy and fixed
+// code -- it does not exercise this bug at all.
+func largeTargetManyCopiesDelta(t testing.TB) (source, target, d []byte) {
+	t.Helper()
+	const targetSize = 1 << 20 // 1 MiB, comfortably past the 64 KiB initial cap
+	const chunkSize = 256
+	const numChunks = targetSize / chunkSize // 4096 copy commands
+
+	target = make([]byte, targetSize)
+	for i := range target {
+		target[i] = byte('a' + i%26)
+	}
+	source = target // copies read back the same bytes at the same offsets
+
+	ops := make([]deltaOp, 0, numChunks)
+	for i := 0; i < numChunks; i++ {
+		ops = append(ops, deltaOp{opType: '@', offset: uint64(i * chunkSize), length: chunkSize})
+	}
+	d = manualDelta(targetSize, ops, Checksum(target))
+	return source, target, d
+}
+
+// TestApply_LargeTargetAllocationBounded is a regression test for #81: for
+// targets over the 64 KiB initial cap, Apply used to climb to the target
+// size purely via append's own ~1.25x large-slice growth factor, which
+// lands near 5x the final output size in cumulative allocation rather than
+// the ~1x an exact preallocation would give. This builds a delta made of
+// many small copy commands (see largeTargetManyCopiesDelta) -- the shape
+// that actually compounds append's growth factor -- for a target well past
+// the initial cap, and asserts total allocation growth stays within a
+// small constant factor of the target size -- proof the two-stage cap
+// (64 KiB, then a len(delta)-informed upgrade) is actually restoring
+// near-exact sizing, not just not-regressing further.
+func TestApply_LargeTargetAllocationBounded(t *testing.T) {
+	const targetSize = 1 << 20 // 1 MiB
+	source, target, d := largeTargetManyCopiesDelta(t)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	got, err := Apply(source, d)
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !bytes.Equal(got, target) {
+		t.Fatal("round-trip failed")
+	}
+
+	grown := after.TotalAlloc - before.TotalAlloc
+	// Generous headroom over 1x: covers the delta buffer itself and
+	// Apply's own bounded capacity upgrades, while remaining well under
+	// the ~5x the unbounded append-growth climb used to produce.
+	const maxSaneGrowth = 3 * targetSize
+	if grown > maxSaneGrowth {
+		t.Fatalf("Apply allocated %d bytes reconstructing a %d-byte target from many small copies -- "+
+			"want growth bounded near 1x, not the ~5x append-growth-climb regression",
+			grown, targetSize)
+	}
+}
+
+// BenchmarkApply_LargeTarget measures Apply's allocation behavior for a
+// target past the 64 KiB initial cap, built from many small copy commands
+// (see largeTargetManyCopiesDelta) -- the #81 measurement the issue asks
+// for. Run with -benchmem; b.AllocsPerOp/bytes-per-op are the numbers to
+// compare across changes to the growth strategy. A single-big-command
+// delta (e.g. via Create on disjoint buffers) allocates ~1x on both buggy
+// and fixed code and would not show the regression this benchmark exists
+// to catch.
+func BenchmarkApply_LargeTarget(b *testing.B) {
+	source, _, d := largeTargetManyCopiesDelta(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := Apply(source, d); err != nil {
+			b.Fatalf("Apply: %v", err)
+		}
+	}
+}
+
+// TestApply_LoopBoundsAgainstTargetDuringCommands is a regression test for
+// #82: the command loop used to only compare len(output) against targetLen
+// at the ';' terminator, so a delta with enough copy commands could grow
+// output well past targetLen before anything noticed. This builds a source
+// large enough to serve several sizable copies, declares a small targetLen,
+// and supplies far more copy commands than that targetLen could ever
+// satisfy -- if the bound were only checked at the terminator (which is
+// never reached here), Apply would have to materialize all of them first.
+// The test asserts both that Apply rejects the delta and that the actual
+// allocation growth stays near the small declared target, not near the
+// much larger amount the full command sequence would have produced --
+// proof the bound is enforced during the loop, not after it.
+func TestApply_LoopBoundsAgainstTargetDuringCommands(t *testing.T) {
+	const copySize = 64 * 1024 // 64 KiB per copy command
+	const numCopies = 200      // 200 * 64 KiB = 12.5 MiB if left unbounded
+	const declaredTarget = 100 * 1024 // 100 KiB: two copies' worth
+
+	source := bytes.Repeat([]byte("x"), copySize)
+
+	var ops []deltaOp
+	for i := 0; i < numCopies; i++ {
+		ops = append(ops, deltaOp{opType: '@', offset: 0, length: copySize})
+	}
+	// No terminator: a well-formed delta would fail long before reaching
+	// one this large, and this test cares whether the loop stops early,
+	// not what error text a terminator mismatch produces.
+	delta := manualDelta(declaredTarget, ops, 0)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	_, err := Apply(source, delta)
+
+	runtime.ReadMemStats(&after)
+
+	if err == nil {
+		t.Fatal("expected rejection: copy commands exceed the declared target size")
+	}
+
+	grown := after.TotalAlloc - before.TotalAlloc
+	// The bound must fire within a small number of commands past
+	// declaredTarget, not after all numCopies have been materialized
+	// (which would allocate ~numCopies*copySize == 12.5 MiB). A handful
+	// of copySize-sized reallocations around the declared target is the
+	// expected cost of catching the overrun early; that is a small
+	// constant multiple of declaredTarget, not of the full command
+	// sequence.
+	const growthCeiling = 4 * declaredTarget
+	if grown > growthCeiling {
+		t.Fatalf("Apply allocated %d bytes before rejecting an over-target delta (declared target %d, %d copy commands of %d bytes each) -- "+
+			"want the bound enforced within the loop, not only after materializing everything",
+			grown, declaredTarget, numCopies, copySize)
+	}
+}
+
 func TestApply_ChecksumMismatch(t *testing.T) {
 	source := []byte{}
 	target := []byte("hello")

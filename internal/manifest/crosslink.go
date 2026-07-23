@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"container/heap"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -26,50 +27,205 @@ var attachTargetTypeName = map[byte]string{
 // live. A miss costs throughput, not correctness: the walk simply continues
 // further back toward the chain root.
 //
-// It cannot be sized to eliminate misses. A chain runs from a high-rid root
-// down to low-rid ancestors, and the sweep visits rids ascending, so the
-// first candidate of a chain materializes all of it and the rest are consumed
-// arbitrarily far in the future — the working set of a whole-repository sweep
-// in rid order is the whole repository expanded, 8 GiB for the Fossil SCM
-// repository. This budget buys the locally-coherent runs, which is most of
-// the win available without changing the order the sweep visits candidates in.
-//
-// Measured against that repository, expanding its first 4,000 blobs:
-//
-//	budget     throughput      peak RSS
-//	none        22.1 blobs/s     169 MB
-//	256 MiB     52.0 blobs/s    1036 MB
-//	1 GiB      468.3 blobs/s    2278 MB
-//
-// Raising the budget is the one lever that moves this a lot, and it is not
-// cheap: peak RSS grows faster than the budget does, because the cache is live
-// data and the collector sizes the heap against it. The measurements above
-// bound that badly -- three points do not fit a curve, and resident memory at
-// 256 MiB is four times the budget where at 1 GiB it is only twice -- but the
-// direction is not in doubt. A gigabyte of cache costs over two gigabytes
-// resident to clone a 72 MB repository, which is why 1 GiB is not the number
-// here.
+// Candidates are visited in delta-chain order (see deltaChainOrder), not
+// ascending rid: every base a candidate needs is expanded at most one
+// candidate-visit earlier, never arbitrarily far in the future. That bounds
+// the working set by how many chains are in flight at once -- how many
+// distinct files or manifests are being interleaved -- rather than by
+// repository size, so this budget only has to cover that concurrency, not
+// the whole repository expanded (8 GiB for the Fossil SCM repository under
+// the old ascending-rid order this replaced).
 const crosslinkCacheBytes = 256 << 20
 
+// ensureForumPostTable creates forumpost if a prior `fossil rebuild` (or a
+// repository that never had one) left it absent. Canonical fossil creates
+// this table lazily -- only once a forum artifact needs it -- and drops it
+// during rebuild along with the rest of the on-demand schema when nothing
+// populated it. Schema matches db.schemaRepo2's forumpost definition
+// exactly, since the two must produce byte-identical tables whichever one
+// creates it.
+func ensureForumPostTable(q db.Querier) error {
+	if q == nil {
+		panic("manifest.ensureForumPostTable: q must not be nil")
+	}
+	_, err := q.Exec(`
+		CREATE TABLE IF NOT EXISTS forumpost(
+		  fpid INTEGER PRIMARY KEY,
+		  froot INT,
+		  fprev INT,
+		  firt INT,
+		  fmtime REAL
+		);
+		CREATE INDEX IF NOT EXISTS forumpost_froot ON forumpost(froot);
+	`)
+	if err != nil {
+		return fmt.Errorf("ensure forumpost table: %w", err)
+	}
+	return nil
+}
+
 type pendingItem struct {
-	Type byte   // 'w' = wiki backlink, 't' = ticket rebuild
+	Type byte // 'w' = wiki backlink, 't' = ticket rebuild
 	ID   string
+}
+
+// candidate is one not-yet-crosslinked blob discovered by Crosslink's
+// candidate query.
+type candidate struct {
+	rid  libfossil.FslID
+	uuid string
+}
+
+// deltaChainOrder reorders candidates so that, for any two candidates linked
+// by a delta edge within this sweep, the base is visited before the
+// dependent -- root first, each descendant exactly one delta application
+// after the base it needs, matching Fossil's own rebuild_step shape.
+//
+// content_deltify stores a blob's older versions as deltas against its
+// newer ones, so a candidate's base (delta.srcid) usually has a higher rid
+// than the candidate itself: visiting candidates ascending by rid, as the
+// query that produced this slice does, visits dependents before their
+// bases and forces every chain to materialize in full on its first
+// candidate, however far ahead that base is never touched again. Visiting
+// bases first means Cache.Expand never has to keep more than the chains
+// currently in flight, instead of the whole repository expanded.
+//
+// This is a topological sort of the candidate set under the "depends on
+// its delta base" relation (Kahn's algorithm), computed once per sweep and
+// bounded by the candidate count -- it does not walk chain interiors, that
+// is Cache.Expand's job on the reordered candidates. Ties -- candidates with
+// no unresolved base, ready to visit at the same point -- break by
+// ascending rid, preserving the same determinism guarantee the old ORDER BY
+// b.rid gave: two syncs that deliver the same blobs in different arrival
+// orders still crosslink them in the same relative order.
+func deltaChainOrder(q db.Querier, candidates []candidate) ([]candidate, error) {
+	if q == nil {
+		panic("manifest.deltaChainOrder: q must not be nil")
+	}
+	if len(candidates) <= 1 {
+		return candidates, nil
+	}
+
+	inSet := make(map[libfossil.FslID]bool, len(candidates))
+	byRid := make(map[libfossil.FslID]candidate, len(candidates))
+	for _, c := range candidates {
+		inSet[c.rid] = true
+		byRid[c.rid] = c
+	}
+
+	// children[base] holds every candidate whose delta is stored relative
+	// to base, restricted to edges where both ends are candidates in this
+	// sweep -- a base outside the candidate set is already expandable on
+	// its own and imposes no ordering constraint here.
+	children := make(map[libfossil.FslID][]libfossil.FslID)
+	hasBase := make(map[libfossil.FslID]bool, len(candidates))
+
+	rows, err := q.Query("SELECT rid, srcid FROM delta")
+	if err != nil {
+		return nil, fmt.Errorf("manifest.deltaChainOrder query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rid, srcid int64
+		if err := rows.Scan(&rid, &srcid); err != nil {
+			return nil, fmt.Errorf("manifest.deltaChainOrder scan: %w", err)
+		}
+		r, s := libfossil.FslID(rid), libfossil.FslID(srcid)
+		if inSet[r] && inSet[s] {
+			children[s] = append(children[s], r)
+			hasBase[r] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("manifest.deltaChainOrder rows: %w", err)
+	}
+
+	indegree := make(map[libfossil.FslID]int, len(candidates))
+	ready := &ridHeap{}
+	heap.Init(ready)
+	for _, c := range candidates {
+		if hasBase[c.rid] {
+			indegree[c.rid] = 1
+		} else {
+			heap.Push(ready, c.rid)
+		}
+	}
+
+	ordered := make([]candidate, 0, len(candidates))
+	for ready.Len() > 0 {
+		rid := heap.Pop(ready).(libfossil.FslID)
+		ordered = append(ordered, byRid[rid])
+		for _, child := range children[rid] {
+			indegree[child]--
+			if indegree[child] == 0 {
+				heap.Push(ready, child)
+			}
+		}
+	}
+
+	// A candidate's delta chain terminates within maxDeltaChainDepth
+	// (content.walkDeltaChain enforces that on every expansion), so it
+	// should not cycle back on itself and every candidate should drain
+	// from the queue exactly once. The `delta` table is on-disk data --
+	// possibly hostile or corrupt, arriving over sync from a remote peer --
+	// so a graph that fails to drain is reported as an error rather than
+	// treated as a programmer-contract violation.
+	if len(ordered) != len(candidates) {
+		return nil, fmt.Errorf("manifest.deltaChainOrder: candidate delta graph did not fully drain (%d of %d candidates ordered); delta table may contain a cycle", len(ordered), len(candidates))
+	}
+	return ordered, nil
+}
+
+// ridHeap is a min-heap of rids, used to break deltaChainOrder ties by
+// ascending rid.
+type ridHeap []libfossil.FslID
+
+func (h ridHeap) Len() int           { return len(h) }
+func (h ridHeap) Less(i, j int) bool { return h[i] < h[j] }
+func (h ridHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *ridHeap) Push(x any)        { *h = append(*h, x.(libfossil.FslID)) }
+func (h *ridHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
 }
 
 // Crosslink scans all blobs not yet crosslinked in event/tagxref/forumpost/attachment tables,
 // parses them as manifests, and populates cross-reference tables (event/plink/leaf/mlink/tagxref).
 // This is the Go equivalent of Fossil's manifest_crosslink.
+//
+// Candidates are content-expanded in delta-chain order (deltaChainOrder),
+// not the ascending-rid order the discovery query returns them in, so a
+// whole-repository sweep's working set is bounded by how many delta chains
+// are in flight rather than by repository size. Writing event/plink/mlink/
+// tagxref-origin rows during that reordered pass is safe because each row
+// is a pure function of its own artifact; leaf and tag-propagation state,
+// which depend on the whole plink graph rather than any one artifact, are
+// deferred to repairLeafTable and repairTagPropagation at the end.
 func Crosslink(r *repo.Repo) (int, error) {
 	if r == nil {
 		panic("manifest.Crosslink: r must not be nil")
 	}
 
+	// Canonical fossil creates forumpost on demand -- only when a forum
+	// artifact first requires it -- which is why `fossil rebuild` can drop
+	// it for a repository that never had one. The candidate query below
+	// names the table unconditionally, so a repository straight out of a
+	// canonical rebuild needs it recreated before the sweep can run.
+	if err := ensureForumPostTable(r.DB()); err != nil {
+		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
+	}
+
 	// Pass 1: Discover and crosslink all uncrosslinked artifacts.
-	// ORDER BY b.rid: deferred manifests re-discovered across sweeps must
-	// be processed in stable order. Without it, two syncs delivering the
-	// same blobs in different arrival orders could produce divergent
-	// per-defer slog streams and pending-item processing orders, masking
-	// determinism bugs in downstream code.
+	// ORDER BY b.rid here only seeds deltaChainOrder's tie-break, not the
+	// final visiting order -- but it must still be deterministic input:
+	// deferred manifests re-discovered across sweeps need a stable order
+	// downstream of it. Without it, two syncs delivering the same blobs in
+	// different arrival orders could produce divergent per-defer slog
+	// streams and pending-item processing orders, masking determinism bugs
+	// in downstream code.
 	rows, err := r.DB().Query(`
 		SELECT b.rid, b.uuid FROM blob b
 		WHERE b.size >= 0
@@ -84,10 +240,6 @@ func Crosslink(r *repo.Repo) (int, error) {
 	}
 	defer rows.Close()
 
-	type candidate struct {
-		rid  libfossil.FslID
-		uuid string
-	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
@@ -100,17 +252,23 @@ func Crosslink(r *repo.Repo) (int, error) {
 		return 0, fmt.Errorf("manifest.Crosslink rows: %w", err)
 	}
 
+	// Reorder for the content-expansion pass: base before dependent, so
+	// Cache.Expand below never has to materialize a chain further ahead
+	// than the candidates currently in flight. See deltaChainOrder.
+	candidates, err = deltaChainOrder(r.DB(), candidates)
+	if err != nil {
+		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
+	}
+
 	// One cache for the sweep. Candidate rids were snapshotted above and
 	// blob content is immutable once written, so nothing this loop does can
 	// invalidate an entry; the cache is dropped when the sweep returns.
 	//
 	// It exists for the delta chains, not for repeated lookups of the same
-	// rid — each candidate is expanded exactly once. A repository that has
-	// been through content_deltify stores a file's older versions as deltas
-	// against its newer ones, so one file's history is a single chain
-	// thousands of nodes deep, and expanding every node of it from the chain
-	// root is quadratic in the length of the chain. Keeping what the walk
-	// materialized turns the repeats into hits wherever the budget reaches.
+	// rid — each candidate is expanded exactly once. Visiting candidates in
+	// delta-chain order (deltaChainOrder, above) keeps a chain's working set
+	// to the handful of nodes currently in flight; this budget covers
+	// however many chains are interleaved at once, not the whole repository.
 	// See internal/content.Cache.Expand and crosslinkCacheBytes.
 	cache := content.NewCache(crosslinkCacheBytes)
 
@@ -214,7 +372,95 @@ func Crosslink(r *repo.Repo) (int, error) {
 		_ = item // Stubs return nil, nothing to process yet.
 	}
 
+	// Repair pass: recompute the state that depends on every plink edge and
+	// tagxref origin this sweep wrote being present, none of which can be
+	// guaranteed mid-sweep once candidates are visited in delta-chain order
+	// instead of ancestors-before-descendants. Skipped when nothing was
+	// linked, since both repairs are full recomputes and a no-op sweep
+	// cannot have changed their inputs. Mirrors Fossil's own
+	// manifest_crosslink_end + leaf_rebuild() shape: defer the
+	// order-sensitive work and repair it once, rather than trying to
+	// preserve order through the sweep itself.
+	if linked > 0 {
+		if err := repairLeafTable(r.DB()); err != nil {
+			return linked, fmt.Errorf("manifest.Crosslink: %w", err)
+		}
+		if err := repairTagPropagation(r.DB()); err != nil {
+			return linked, fmt.Errorf("manifest.Crosslink: %w", err)
+		}
+	}
+
 	return linked, nil
+}
+
+// repairLeafTable recomputes leaf from scratch: a checkin is a leaf iff no
+// other checkin names it as a parent. Crosslink no longer maintains leaf
+// incrementally as each checkin is linked -- inserting the new checkin and
+// deleting its parent only produces the right answer when parents are
+// always linked before their children, which delta-chain order does not
+// guarantee. A full recompute is Fossil's own leaf_rebuild() shape and,
+// unlike the incremental version, is correct regardless of visiting order.
+func repairLeafTable(q db.Querier) error {
+	if q == nil {
+		panic("manifest.repairLeafTable: q must not be nil")
+	}
+	if _, err := q.Exec("DELETE FROM leaf"); err != nil {
+		return fmt.Errorf("repairLeafTable clear: %w", err)
+	}
+	if _, err := q.Exec(`
+		INSERT INTO leaf(rid)
+		SELECT objid FROM event
+		WHERE type='ci' AND objid NOT IN (SELECT pid FROM plink)
+	`); err != nil {
+		return fmt.Errorf("repairLeafTable insert: %w", err)
+	}
+	return nil
+}
+
+// repairTagPropagation re-runs tag propagation from every self-declared tag
+// origin in tagxref, once, now that the whole sweep's plink edges are in
+// place.
+//
+// tag.propagate is mtime-gated: it only overwrites a descendant's copy of a
+// tag when the descendant has no declaration of its own and the incoming
+// value is newer than whatever is already there, and it walks the plink
+// table live at call time rather than a snapshot. That makes replaying
+// every origin exactly once, in any order, converge on the same tagxref
+// state regardless of which order the origins are replayed in -- an origin
+// visited before its descendants exist yet contributes nothing for them,
+// but every origin still gets replayed here after every plink edge exists,
+// so nothing is lost the way it was when propagation ran once per checkin,
+// from the immediate parent only, at the moment each checkin was linked
+// (see applyInlineTags and addFWTPlink).
+func repairTagPropagation(q db.Querier) error {
+	if q == nil {
+		panic("manifest.repairTagPropagation: q must not be nil")
+	}
+
+	rows, err := q.Query("SELECT DISTINCT rid FROM tagxref WHERE origid = rid")
+	if err != nil {
+		return fmt.Errorf("repairTagPropagation query: %w", err)
+	}
+	var origins []libfossil.FslID
+	for rows.Next() {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			rows.Close()
+			return fmt.Errorf("repairTagPropagation scan: %w", err)
+		}
+		origins = append(origins, libfossil.FslID(rid))
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("repairTagPropagation rows: %w", err)
+	}
+
+	for _, rid := range origins {
+		if err := tag.PropagateAll(q, rid); err != nil {
+			return fmt.Errorf("repairTagPropagation propagate rid=%d: %w", rid, err)
+		}
+	}
+	return nil
 }
 
 // missingCheckinRefs returns the list of UUIDs referenced by a Checkin
@@ -276,7 +522,8 @@ func crosslinkCheckin(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 	return applyInlineTags(r, rid, d)
 }
 
-// crosslinkCheckinTables populates event/plink/leaf/mlink/cherrypick in a single transaction.
+// crosslinkCheckinTables populates event/plink/mlink/cherrypick in a single
+// transaction. leaf is deliberately not touched here -- see repairLeafTable.
 func crosslinkCheckinTables(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 	return r.WithTx(func(tx *db.Tx) error {
 		// event
@@ -297,9 +544,6 @@ func crosslinkCheckinTables(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) err
 		}
 
 		if err := insertCheckinPlinks(tx, rid, d, baseid); err != nil {
-			return err
-		}
-		if err := updateLeafTable(tx, rid, d); err != nil {
 			return err
 		}
 		if err := insertCheckinMlinks(tx, rid, d); err != nil {
@@ -325,24 +569,6 @@ func insertCheckinPlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, baseid an
 			parentRid, rid, isPrim, libfossil.TimeToJulian(d.D), baseid,
 		); err != nil {
 			return fmt.Errorf("plink: %w", err)
-		}
-	}
-	return nil
-}
-
-// updateLeafTable marks this checkin as a leaf and removes parents from the leaf table.
-func updateLeafTable(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
-	if _, err := tx.Exec("INSERT OR IGNORE INTO leaf(rid) VALUES(?)", rid); err != nil {
-		return fmt.Errorf("leaf insert: %w", err)
-	}
-	// Remove parent from leaf table (it now has a child)
-	for _, parentUUID := range d.P {
-		var parentRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", parentUUID).Scan(&parentRid); err != nil {
-			continue
-		}
-		if _, err := tx.Exec("DELETE FROM leaf WHERE rid=?", parentRid); err != nil {
-			return fmt.Errorf("leaf delete parent %d: %w", parentRid, err)
 		}
 	}
 	return nil
@@ -423,7 +649,17 @@ func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	return nil
 }
 
-// applyInlineTags processes T-cards with UUID="*" (self-referencing tags) and propagates from parent.
+// applyInlineTags records T-cards with UUID="*" (self-referencing tags) as
+// tagxref origin rows.
+//
+// It used to also re-run tag.PropagateAll from the primary parent here, to
+// pull down whatever the parent's ancestry carried onto this checkin the
+// moment it was linked. That only reached children already present in
+// plink, which made it depend on ancestors being crosslinked before their
+// descendants -- true for an ascending-rid sweep, false for delta-chain
+// order. repairTagPropagation now does this once, for every self-declared
+// tag origin, after the whole sweep's plink edges are in place; see there
+// for why running it once per origin in any order still converges.
 func applyInlineTags(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 	mtime := libfossil.TimeToJulian(d.D)
 	for _, tc := range d.T {
@@ -451,16 +687,6 @@ func applyInlineTags(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 			MTime:     mtime,
 		}); err != nil {
 			return fmt.Errorf("inline tag %q: %w", tc.Name, err)
-		}
-	}
-
-	// PropagateAll from primary parent (if checkin has parents)
-	if len(d.P) > 0 {
-		var primaryParentRid int64
-		if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", d.P[0]).Scan(&primaryParentRid); err == nil {
-			if err := tag.PropagateAll(r.DB(), libfossil.FslID(primaryParentRid)); err != nil {
-				return fmt.Errorf("propagate from parent: %w", err)
-			}
 		}
 	}
 
@@ -559,8 +785,13 @@ func buildControlComment(d *deck.Deck) string {
 	return comment
 }
 
-// addFWTPlink handles plink insertion and tag propagation for wiki/forum/technote/ticket.
-// Shared helper for artifact types that use P-cards (parents) but not the full checkin flow.
+// addFWTPlink inserts plink rows for wiki/forum/technote/ticket P-cards.
+// Shared helper for artifact types that use P-cards (parents) but not the
+// full checkin flow.
+//
+// It used to also call tag.PropagateAll from the primary parent here, for
+// the same reason applyInlineTags did (see its comment): repairTagPropagation
+// now owns that, once, after the sweep.
 func addFWTPlink(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 	if r == nil {
 		panic("manifest.addFWTPlink: r must not be nil")
@@ -570,7 +801,6 @@ func addFWTPlink(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 	}
 
 	mtime := libfossil.TimeToJulian(d.D)
-	var primaryParentRid libfossil.FslID
 
 	for i, parentUUID := range d.P {
 		var parentRid int64
@@ -580,20 +810,12 @@ func addFWTPlink(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
 		isPrim := 0
 		if i == 0 {
 			isPrim = 1
-			primaryParentRid = libfossil.FslID(parentRid)
 		}
 		if _, err := r.DB().Exec(
 			"INSERT OR IGNORE INTO plink(pid, cid, isprim, mtime) VALUES(?, ?, ?, ?)",
 			parentRid, rid, isPrim, mtime,
 		); err != nil {
 			return fmt.Errorf("addFWTPlink: %w", err)
-		}
-	}
-
-	// Propagate tags from primary parent
-	if primaryParentRid > 0 {
-		if err := tag.PropagateAll(r.DB(), primaryParentRid); err != nil {
-			return fmt.Errorf("addFWTPlink propagate: %w", err)
 		}
 	}
 
@@ -718,6 +940,15 @@ func crosslinkEvent(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) ([]pendingI
 	// Fossil deletes stale event rows when a newer version of this tech note exists
 	// but no subsequent version has been crosslinked yet. This ensures only the latest
 	// version's event row survives, preventing duplicate timeline entries.
+	//
+	// This stays correct however the sweep orders candidates, delta-chain
+	// order included: ApplyTag above always records this revision's own
+	// tagxref row before the check runs, so "subsequent" accumulates every
+	// revision seen so far regardless of visiting order. Whichever revision
+	// is the true global-mtime-max always finds subsequent==0 when its own
+	// turn comes -- nothing else can have a mtime >= a maximum -- and does
+	// the delete+insert then, even if some earlier-visited, lower-mtime
+	// revision inserted a since-stale event row first.
 	if len(d.P) > 0 && subsequent == 0 {
 		r.DB().Exec("DELETE FROM event WHERE type='e' AND tagid=? AND objid IN (SELECT rid FROM tagxref WHERE tagid=?)", tagid, tagid)
 	}
@@ -911,7 +1142,13 @@ func crosslinkForumStarter(r *repo.Repo, rid libfossil.FslID, d *deck.Deck, froo
 	); err != nil {
 		return fmt.Errorf("forum event: %w", err)
 	}
-	// Update thread title if most recent
+	// Update thread title if most recent. Confluent the same way the
+	// tech-note event replacement above is: the REPLACE into forumpost just
+	// above always records this post's own fmtime first, so hasNewer
+	// accumulates over whatever thread members have been visited so far
+	// regardless of order, and the true latest post always finds hasNewer==0
+	// on its own turn, overwriting anything an earlier-visited, older post
+	// wrote first.
 	var hasNewer int
 	r.DB().QueryRow("SELECT count(*) FROM forumpost WHERE froot=? AND firt=0 AND fpid!=? AND fmtime>?",
 		froot, rid, mtime).Scan(&hasNewer)

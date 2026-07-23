@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoCiCmd creates a new checkin (commit).

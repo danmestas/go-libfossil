@@ -10,6 +10,17 @@ func (d *Deck) Marshal() ([]byte, error) {
 	if d == nil {
 		panic("deck.Marshal: d must not be nil")
 	}
+	// §4.7.16: a tag name that is entirely hexadecimal after the sign is
+	// ambiguous with an artifact hash, so the parser rejects it. Refusing to
+	// emit one keeps the codec symmetric -- without this check a caller can
+	// build and store an artifact this repository can no longer read back.
+	// Canonical fossil never produces one either: it prefixes branch and
+	// user tags with "sym-".
+	for _, tag := range d.T {
+		if isHexToken(tag.Name) {
+			return nil, fmt.Errorf("T-card name %q must not be entirely hexadecimal", tag.Name)
+		}
+	}
 	var b strings.Builder
 	marshalCards(&b, d)
 	body := b.String()
@@ -98,10 +109,12 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		copy(sorted, d.J)
 		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
 		for _, j := range sorted {
+			// §4.7.8 mirror of the parse direction: the name is written
+			// verbatim, the value is escape-encoded.
 			if j.Value != "" {
-				fmt.Fprintf(b, "J %s %s\n", FossilEncode(j.Name), j.Value)
+				fmt.Fprintf(b, "J %s %s\n", j.Name, FossilEncode(j.Value))
 			} else {
-				fmt.Fprintf(b, "J %s\n", FossilEncode(j.Name))
+				fmt.Fprintf(b, "J %s\n", j.Name)
 			}
 		}
 	}
@@ -162,9 +175,13 @@ func marshalCards(b *strings.Builder, d *Deck) {
 			return Compare(sorted[i].UUID, sorted[j].UUID) < 0
 		})
 		for _, tag := range sorted {
-			fmt.Fprintf(b, "T %c%s %s", tag.Type, tag.Name, tag.UUID)
+			// §4.7.16: the name and value are escape-encoded (a branch name
+			// may hold a space, and the value carries that same name on a
+			// `T *branch` card); the target token is written verbatim, never
+			// encoded.
+			fmt.Fprintf(b, "T %c%s %s", tag.Type, FossilEncode(tag.Name), tag.UUID)
 			if tag.Value != "" {
-				fmt.Fprintf(b, " %s", tag.Value)
+				fmt.Fprintf(b, " %s", FossilEncode(tag.Value))
 			}
 			b.WriteString("\n")
 		}

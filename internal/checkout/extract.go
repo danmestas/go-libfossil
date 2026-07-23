@@ -8,10 +8,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/content"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // extractSingleFile expands a blob and writes it to the checkout directory.

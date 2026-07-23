@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/checkout"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/checkout"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // Checkout represents a working directory linked to a Fossil repository.

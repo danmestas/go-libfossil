@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // PathNode represents a single node in a path through the plink DAG.

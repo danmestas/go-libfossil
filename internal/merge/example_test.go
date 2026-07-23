@@ -3,7 +3,7 @@ package merge_test
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/merge"
+	"github.com/danmestas/go-libfossil/internal/merge"
 )
 
 func ExampleThreeWayText() {

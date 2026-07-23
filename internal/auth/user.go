@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
 )
 
 // hashPassword computes SHA1(projectCode/login/password) matching Fossil's convention.

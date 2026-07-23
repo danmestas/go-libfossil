@@ -3,7 +3,7 @@ package checkout
 import (
 	"context"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // ExtractStart describes the beginning of an extract or update operation.

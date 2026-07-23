@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestUVWriteReadList(t *testing.T) {

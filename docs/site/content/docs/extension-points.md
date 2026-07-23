@@ -11,7 +11,7 @@ libfossil exposes three surfaces for consumers that want to instrument, extend, 
 
 ## Observer interfaces
 
-Observers are the supported way to attach telemetry, logging, or metrics to a `Repo` without forking or wrapping the public API. Both interfaces are defined in the root `github.com/danmestas/libfossil` package and are context-free by design so that they can be reused across synchronous and asynchronous callers.
+Observers are the supported way to attach telemetry, logging, or metrics to a `Repo` without forking or wrapping the public API. Both interfaces are defined in the root `github.com/danmestas/go-libfossil` package and are context-free by design so that they can be reused across synchronous and asynchronous callers.
 
 ### `SyncObserver`
 
@@ -81,7 +81,7 @@ package main
 import (
     "log"
 
-    libfossil "github.com/danmestas/libfossil"
+    libfossil "github.com/danmestas/go-libfossil"
 )
 
 type logSync struct{ libfossil.SyncObserver } // embed nop for defaults
@@ -109,8 +109,8 @@ For a full real-world observer that emits spans and counters, see `observer/otel
 
 ```go
 import (
-    libfossil "github.com/danmestas/libfossil"
-    "github.com/danmestas/libfossil/observer/otel"
+    libfossil "github.com/danmestas/go-libfossil"
+    "github.com/danmestas/go-libfossil/observer/otel"
 )
 
 obs := otel.NewSyncObserver() // implements libfossil.SyncObserver
@@ -149,8 +149,8 @@ The driver contract is intentionally small:
 
 | Driver | Import | When to use |
 |---|---|---|
-| `modernc` | `_ "github.com/danmestas/libfossil/db/driver/modernc"` | Default. Pure Go, no cgo, works on every `GOOS`/`GOARCH` libfossil supports. |
-| `ncruces` | `_ "github.com/danmestas/libfossil/db/driver/ncruces"` | Uses `github.com/ncruces/go-sqlite3` (WASM-based SQLite). Pick this for WASM builds or environments where you need the ncruces feature set. |
+| `modernc` | `_ "github.com/danmestas/go-libfossil/db/driver/modernc"` | Default. Pure Go, no cgo, works on every `GOOS`/`GOARCH` libfossil supports. |
+| `ncruces` | `_ "github.com/danmestas/go-libfossil/db/driver/ncruces"` | Uses `github.com/ncruces/go-sqlite3` (WASM-based SQLite). Pick this for WASM builds or environments where you need the ncruces feature set. |
 
 ### Registering a custom driver
 
@@ -163,7 +163,7 @@ import (
     "fmt"
     "strings"
 
-    "github.com/danmestas/libfossil/db"
+    "github.com/danmestas/go-libfossil/db"
     _ "example.com/my/sqlite" // registers "mysqlite" with database/sql
 )
 
@@ -190,4 +190,4 @@ Consumers then blank-import your package (`_ "example.com/mydriver"`) exactly li
 
 ## The `DB` abstraction
 
-`github.com/danmestas/libfossil/db` wraps `*sql.DB` with Fossil-aware helpers: DSN construction, default-pragma setup, WAL/nolock handling for WASM, transaction scoping via `DB.WithTx`, and the `Querier` interface (satisfied by both `DB` and `Tx`) so repository code can be written transaction-agnostic. The exported surface is stable for reading — `SqlDB()`, `Path()`, `Driver()`, `Exec`/`Query*` — but the struct itself is treated as internal: the public `Repo` API is the intended extension point. Prefer writing a custom driver (above) over implementing `DB` yourself. See `db/db.go`, `db/config.go`, and `db/scan.go` for the source of truth.
+`github.com/danmestas/go-libfossil/db` wraps `*sql.DB` with Fossil-aware helpers: DSN construction, default-pragma setup, WAL/nolock handling for WASM, transaction scoping via `DB.WithTx`, and the `Querier` interface (satisfied by both `DB` and `Tx`) so repository code can be written transaction-agnostic. The exported surface is stable for reading — `SqlDB()`, `Path()`, `Driver()`, `Exec`/`Query*` — but the struct itself is treated as internal: the public `Repo` API is the intended extension point. Prefer writing a custom driver (above) over implementing `DB` yourself. See `db/db.go`, `db/config.go`, and `db/scan.go` for the source of truth.

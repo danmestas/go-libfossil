@@ -8,7 +8,9 @@
 // [Store] compresses content, computes its SHA1 hash, and inserts it
 // into the blob table. [Load] retrieves and decompresses a blob by RID.
 // [StoreDeltaRaw] stores content that arrived over the wire already
-// delta-encoded, without expanding it.
+// delta-encoded, without expanding it. [EncodeForStorage] is the shared
+// decision point for whether a receive path can skip [Compress] entirely
+// and write already-encoded wire bytes straight to blob.content.
 //
 // This package does not decide what gets delta-encoded. Deltifying an
 // artifact that is already stored means rewriting an existing row, not

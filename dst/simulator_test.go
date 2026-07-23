@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	libsync "github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
+	libsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // echoUpstream returns an empty response (immediate convergence).

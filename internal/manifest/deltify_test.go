@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/content"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // incrementalHistory commits nRev revisions of nFile files into r, editing

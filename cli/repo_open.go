@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoOpenCmd opens a checkout in a directory, creating the .fslckout database.

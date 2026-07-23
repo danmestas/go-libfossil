@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/db"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // TestCorpusExpandSweep isolates the expansion half of a crosslink sweep: it

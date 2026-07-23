@@ -1,8 +1,8 @@
 package merge
 
 import (
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // DetectForks finds divergent branches by querying the leaf table

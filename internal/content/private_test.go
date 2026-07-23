@@ -3,8 +3,8 @@ package content
 import (
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestIsPrivate_NotPrivate(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoUserCmd groups user management operations.

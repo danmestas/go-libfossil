@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	libdb "github.com/danmestas/libfossil/db"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/simio"
+	libdb "github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestCommitFullCycle(t *testing.T) {

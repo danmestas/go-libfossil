@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // RepoHashCmd hashes files using SHA1 or SHA3-256.

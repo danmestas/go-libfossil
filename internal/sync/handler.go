@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/auth"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // DefaultCloneBatchBytes bounds the wire bytes a single clone round emits.
@@ -440,9 +440,9 @@ func (h *handler) handleDataCard(card xfer.Card) error {
 	case *xfer.GimmeCard:
 		return h.handleGimme(c)
 	case *xfer.FileCard:
-		return h.handleFile(c.UUID, c.DeltaSrc, c.Content)
+		return h.handleFile(c.UUID, c.DeltaSrc, c.Content, nil)
 	case *xfer.CFileCard:
-		return h.handleFile(c.UUID, c.DeltaSrc, c.Content)
+		return h.handleFile(c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
 	case *xfer.PrivateCard:
 		if !auth.CanSyncPrivate(h.caps) {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -541,7 +541,7 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	return nil
 }
 
-func (h *handler) handleFile(uuid, deltaSrc string, payload []byte) error {
+func (h *handler) handleFile(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if uuid == "" {
 		panic("handler.handleFile: uuid must not be empty")
 	}
@@ -558,7 +558,7 @@ func (h *handler) handleFile(uuid, deltaSrc string, payload []byte) error {
 		})
 		return nil
 	}
-	if err := storeReceivedFile(h.repo, uuid, deltaSrc, payload); err != nil {
+	if err := storeReceivedFile(h.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("storing %s: %v", uuid, err),
 		})

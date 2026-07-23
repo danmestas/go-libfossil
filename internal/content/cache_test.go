@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/db"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 func TestCache_HitMiss(t *testing.T) {

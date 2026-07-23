@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil"
+	"github.com/danmestas/go-libfossil"
 )
 
 // serverRepo provisions a fossil repo populated with one commit and an

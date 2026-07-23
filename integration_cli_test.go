@@ -8,17 +8,17 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/annotate"
-	"github.com/danmestas/libfossil/internal/bisect"
-	libdb "github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/path"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	"github.com/danmestas/libfossil/internal/stash"
-	"github.com/danmestas/libfossil/internal/undo"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libfossil "github.com/danmestas/go-libfossil"
+	libdb "github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/annotate"
+	"github.com/danmestas/go-libfossil/internal/bisect"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/path"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/stash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/undo"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // setupCheckoutDB creates a .fslckout database with vvar, vfile, and vmerge tables.

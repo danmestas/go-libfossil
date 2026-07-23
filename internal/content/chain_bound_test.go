@@ -3,8 +3,8 @@ package content
 import (
 	"testing"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // maxDeltaChainDepth's doc says both read-path walks stop after visiting that

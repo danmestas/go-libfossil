@@ -3,7 +3,7 @@ package search
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // Index manages the FTS5 trigram index in a repo DB.

@@ -3,8 +3,8 @@ package dst
 import (
 	"context"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
 )
 
 // ActionType classifies the result of processing an event.

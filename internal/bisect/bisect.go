@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/path"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/path"
 )
 
 // ErrBisectComplete is returned by Next when the search has converged.

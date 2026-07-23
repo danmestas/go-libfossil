@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // TestTimelineEnumeratesEveryEvent is the acceptance criterion for the bug

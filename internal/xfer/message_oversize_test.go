@@ -154,3 +154,47 @@ func TestMaxDecompressedBytesIsReachable(t *testing.T) {
 		t.Errorf("decompressed %d bytes, want %d", len(raw), MaxDecompressedBytes)
 	}
 }
+
+// TestDecodeRejectsAliasingDeclaredLength pins issue #110: a §4.1 container
+// whose declared length's top byte presents as a valid zlib CMF byte (i.e. it
+// would alias as a format-1 header) must be rejected on the declared length
+// alone, before format 1 ever gets a chance to (mis)parse it. Method: build a
+// genuine container -- 4-byte declared length plus a real zlib payload -- but
+// give it a declared length at 0x081D0000 (>= zlibCMFAliasBytes, and known
+// from the issue's own probe to present a valid header at offset 0) and
+// assert Decode rejects it rather than returning whatever format 1 produces.
+func TestDecodeRejectsAliasingDeclaredLength(t *testing.T) {
+	real := compressedContainer(t, 64) // small, genuine §4.1 container
+	// Overwrite the genuine declared-length prefix with an aliasing one; the
+	// zlib payload after it is untouched and still real.
+	aliasing := append([]byte{0x08, 0x1D, 0x00, 0x00}, real[4:]...)
+
+	_, err := decompressContainer(aliasing)
+	if err == nil {
+		t.Fatal("decompressContainer accepted a container with an aliasing declared length")
+	}
+	if !strings.Contains(err.Error(), "declared") {
+		t.Errorf("error does not name the declared-length rejection: %v", err)
+	}
+
+	if _, err := Decode(aliasing); err == nil {
+		t.Fatal("Decode accepted a container with an aliasing declared length")
+	}
+}
+
+// TestDecodeUncompressedBodyWithLargeLeadingBytesStillWorks guards the fix for
+// #110 against over-rejecting: plain uncompressed card text whose first four
+// bytes happen to read as a large integer (ordinary ASCII often does) must
+// still fall through to format 3, since it never presented a zlib header at
+// all and so was never actually ambiguous with the §4.1 container.
+func TestDecodeUncompressedBodyWithLargeLeadingBytesStillWorks(t *testing.T) {
+	body := []byte("igot " + strings.Repeat("c", 40) + "\nclone_seqno 7\n")
+
+	msg, err := Decode(body)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(msg.Cards) != 2 {
+		t.Fatalf("decoded %d cards, want 2", len(msg.Cards))
+	}
+}

@@ -1,15 +1,15 @@
 package manifest
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // crosslinkDerivedTables are the tables a Crosslink sweep is responsible for.
@@ -37,13 +37,7 @@ var crosslinkDerivedTables = []string{
 // cannot currently run against a repository straight out of a canonical
 // rebuild. That is a separate gap, not something this test should paper over.
 func TestFossilBinaryReadsCrosslinkedRepo(t *testing.T) {
-	bin, err := exec.LookPath("fossil")
-	if err != nil {
-		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
-			t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH: %v", err)
-		}
-		t.Skip("fossil binary not on PATH; cannot verify canonical readability")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	run := func(args ...string) string {
 		t.Helper()

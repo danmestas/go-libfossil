@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -124,14 +125,37 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 }
 
 // writeXferResponse encodes an xfer message and writes it as the HTTP response.
+//
+// The full response is already materialised by Encode before any write, so the
+// exact body length is known for free. Setting Content-Length explicitly keeps
+// net/http from falling back to Transfer-Encoding: chunked once the buffered
+// body exceeds its internal ~2KB flush threshold. Release-tagged fossil <=2.23
+// reads the reply length only from Content-Length (src/http.c) and aborts with
+// "server did not reply" on a chunked reply above ~256KB (issue #101).
+// Buffering is not introduced here -- Encode already holds the whole slice, so
+// #88's per-clone bound (DefaultCloneBatchBytes) still caps the response.
 func writeXferResponse(w http.ResponseWriter, msg *xfer.Message) {
+	if w == nil {
+		panic("writeXferResponse: w must not be nil")
+	}
+	if msg == nil {
+		panic("writeXferResponse: msg must not be nil")
+	}
+
 	respBytes, err := msg.Encode()
 	if err != nil {
 		http.Error(w, "encode response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", xfer.ContentTypeCompressed)
-	if _, err := w.Write(respBytes); err != nil {
+	w.Header().Set("Content-Length", strconv.Itoa(len(respBytes)))
+
+	n, err := w.Write(respBytes)
+	if err != nil {
 		slog.Error("serve-http: write response failed", "err", err)
+		return
+	}
+	if n != len(respBytes) {
+		panic(fmt.Sprintf("writeXferResponse: short write %d of %d bytes", n, len(respBytes)))
 	}
 }

@@ -29,6 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The xfer HTTP server now sends an explicit `Content-Length` on every clone
+  and sync reply. The full response is already materialised by `Encode` before
+  the first byte is written, so its exact length is known for free; setting the
+  header keeps `net/http` from silently switching to `Transfer-Encoding:
+  chunked` once the buffered body passes its internal flush threshold.
+  Release-tagged fossil ≤2.23 reads the reply length only from `Content-Length`
+  (`src/http.c` leaves its `iLength` negative otherwise) and aborts with
+  "server did not reply" on any chunked reply above ~256KB, so those clients
+  could not clone a repository larger than that from a libfossil server. No
+  buffering was introduced — the response was always fully in memory — so
+  #88's per-clone bound (`DefaultCloneBatchBytes`) still caps each reply. The
+  fix is unconditional rather than negotiated: because the server never streams,
+  chunked framing offers no memory saving over `Content-Length`, and
+  `Content-Length` is what canonical fossil's own server emits, so it is
+  strictly the more compatible framing for every client (issue #101).
 - The message decoder now selects a body's framing from its §4 Content-Type
   rather than by trying each framing and seeing which parses. A body sent as
   `application/x-fossil` is decoded as the §4.1 compressed container; every

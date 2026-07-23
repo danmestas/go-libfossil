@@ -41,20 +41,30 @@ import (
 // flight. 16,000,000 stays a safe, if generous, upper bound either way: it
 // only widens how much stored content one round may carry.
 //
-// Note this bounds a round at budget plus one artifact, not at budget: the
-// artifact that crosses the budget is sent whole (see emitCloneBatch), so a
-// repository holding one large stored artifact still emits a round at least
-// that big.
+// This bounds an ordinary round at the budget plus the artifact that crosses
+// it, and emitCloneBatch caps that sum at xfer.MaxDecompressedBytes so the
+// client can always decode a round (issue #109). The one exception is a single
+// artifact larger than that bound: it is sent alone, in a round of its own, to
+// make progress -- so a repository holding one 2 GB artifact still emits a 2 GB
+// round, but such an artifact is unclonable regardless. Measured worst case is
+// ~25 MB across the three repositories above, since the largest single
+// artifacts are 9.4 MB (libfossil) and 17.0 MB (sqlite). Against the count
+// bound's unbounded 44.9 MB that is a large reduction, and concurrent clones
+// multiply it.
 const DefaultCloneBatchBytes = 16_000_000
 
 // A round this server emits must stay inside the bound the client applies when
 // it decompresses one, or a clone between two libfossil peers fails on a
-// message this same code produced (issue #104). The budget is charged before
-// each artifact and the artifact that crosses it is sent whole, so a round can
-// reach the budget plus one artifact; requiring two budgets of room reserves an
-// artifact allowance equal to the budget itself. Raising DefaultCloneBatchBytes
-// past half of xfer.MaxDecompressedBytes underflows this unsigned expression
-// and fails the build rather than the clone.
+// message this same code produced (issue #104). emitCloneBatch enforces that at
+// runtime: it flushes a round rather than let an artifact carry it past
+// xfer.MaxDecompressedBytes, and sends an over-bound artifact alone (issue
+// #109). This compile-time guard makes that enforcement well-conditioned: with
+// the bound at least twice the budget, filler accumulates up to one budget and
+// any artifact up to a second budget still fits in the same round, so ordinary
+// artifacts ride along and only genuinely large ones (above bound minus budget)
+// take a round of their own. Raising DefaultCloneBatchBytes past half of
+// xfer.MaxDecompressedBytes underflows this unsigned expression and fails the
+// build rather than the clone.
 const _ = uint(xfer.MaxDecompressedBytes - 2*DefaultCloneBatchBytes)
 
 // cloneCardOverheadBytes over-approximates the non-payload bytes of an
@@ -844,6 +854,24 @@ func (h *handler) emitCloneBatch() error {
 				return fmt.Errorf("handler: loading stored content for rid %d: %w", rid, err)
 			}
 		}
+		cost := cloneCardOverheadBytes + len(data)
+		// Respect the client's decode bound: the round the client decompresses
+		// must stay within xfer.MaxDecompressedBytes. If adding this artifact
+		// would push the round past that bound and the round already carries
+		// content, flush now so the artifact leads a round of its own. Without
+		// this the budget check above only bounds the accumulated *filler*, and
+		// a large artifact riding behind sub-budget filler carried the round to
+		// budget-plus-artifact, past what the client could decode (issue #109).
+		//
+		// The first artifact of a round (count == 0) is always sent, so an
+		// artifact larger than the bound still makes forward progress -- it is
+		// simply unclonable, which is now a property of the artifact alone and
+		// not of what precedes it in the round.
+		if count > 0 && bytesSent+cost > xfer.MaxDecompressedBytes {
+			nextRID = rid
+			break
+		}
+
 		if isPriv {
 			h.resp = append(h.resp, &xfer.PrivateCard{})
 		}
@@ -851,7 +879,7 @@ func (h *handler) emitCloneBatch() error {
 		h.filesSent++
 		lastSentRID = rid
 		count++
-		bytesSent += cloneCardOverheadBytes + len(data)
+		bytesSent += cost
 	}
 	if err := rows.Err(); err != nil {
 		return err

@@ -25,7 +25,7 @@ func ExampleMessage_Encode() {
 	fmt.Printf("compressed: %v\n", len(wire) > 0)
 
 	// Decode round-trips back to a Message.
-	decoded, err := xfer.Decode(wire)
+	decoded, err := xfer.Decode(wire, xfer.ContentTypeCompressed)
 	if err != nil {
 		fmt.Println("error:", err)
 		return

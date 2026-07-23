@@ -188,6 +188,76 @@ func TestServeHTTPBadPayload(t *testing.T) {
 	}
 }
 
+// TestServeHTTPUnknownContentType pins that a body whose Content-Type is absent
+// or unrecognised is rejected outright rather than decoded as plain card text.
+// A peer is untrusted input: without a §4 media type nothing says how the body
+// is framed, and guessing "uncompressed" reopens issue #104, where still-
+// compressed bytes were fed to the card parser.
+func TestServeHTTPUnknownContentType(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	addr := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go ServeHTTP(ctx, addr, r, HandleSync)
+	time.Sleep(100 * time.Millisecond)
+
+	// A compressed container sent without the media type that identifies it.
+	body, err := (&xfer.Message{Cards: []xfer.Card{
+		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+	}}).Encode()
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+
+	for _, ct := range []string{"", "text/plain", "application/octet-stream"} {
+		req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/", addr),
+			strings.NewReader(string(body)))
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if ct != "" {
+			req.Header.Set("Content-Type", ct)
+		} else {
+			// Go sets no Content-Type unless asked; make the absence explicit.
+			req.Header.Del("Content-Type")
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %q: %v", ct, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusUnsupportedMediaType {
+			t.Fatalf("content type %q: status %d, want %d",
+				ct, resp.StatusCode, http.StatusUnsupportedMediaType)
+		}
+	}
+}
+
+// TestServeHTTPUncompressedContentType pins that the other §4 media type is
+// still accepted — the rejection above is of unrecognised types, not of
+// uncompressed framing.
+func TestServeHTTPUncompressedContentType(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	addr := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go ServeHTTP(ctx, addr, r, HandleSync)
+	time.Sleep(100 * time.Millisecond)
+
+	resp, err := http.Post(fmt.Sprintf("http://%s/", addr),
+		xfer.ContentTypeUncompressed+"; charset=utf-8",
+		strings.NewReader("pragma client-version 1\n"))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("uncompressed POST status: %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestServeHTTPHandlerError(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	addr := freePort(t)

@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -48,7 +49,10 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 		}
 
 		if item.linkFlag {
-			_ = crosslinkSingle(r, current)
+			if err := crosslinkSingle(r, current); err != nil {
+				slog.Warn("manifest.AfterDephantomize: crosslink failed, blob left un-crosslinked",
+					"rid", current, "error", err)
+			}
 		}
 
 		// Process orphaned delta manifests whose baseline is this rid.
@@ -63,7 +67,10 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 			}
 			orphanRows.Close()
 			for _, orid := range orphans {
-				_ = crosslinkSingle(r, orid)
+				if err := crosslinkSingle(r, orid); err != nil {
+					slog.Warn("manifest.AfterDephantomize: crosslink of orphan failed, blob left un-crosslinked",
+						"rid", orid, "baseline", current, "error", err)
+				}
 			}
 			if len(orphans) > 0 {
 				if _, err := r.DB().Exec("DELETE FROM orphan WHERE baseline=?", current); err != nil {

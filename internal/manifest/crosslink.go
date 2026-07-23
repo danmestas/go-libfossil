@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"container/heap"
+	"context"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -14,6 +15,14 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
+
+// crosslinkCancelCheckStride is how many candidates the sweep processes between
+// context-cancellation checks. The sweep is the only phase of a clone that
+// touches every artifact in one uninterruptible call, so it must observe the
+// deadline; checking every candidate would pay a channel read per artifact, so
+// the check is batched. The value bounds cancellation latency to this many
+// candidates' worth of work.
+const crosslinkCancelCheckStride = 256
 
 // attachTargetTypeName maps attachment target type codes to human-readable names.
 // Used by crosslinkAttachment and updateAttachmentComments.
@@ -204,9 +213,21 @@ func (h *ridHeap) Pop() any {
 // is a pure function of its own artifact; leaf and tag-propagation state,
 // which depend on the whole plink graph rather than any one artifact, are
 // deferred to repairLeafTable and repairTagPropagation at the end.
+// Crosslink runs the sweep with no cancellation, supplying its own background
+// context. It is the historical entry point; callers that can be interrupted
+// (a clone bounded by a deadline) should use CrosslinkContext instead.
 func Crosslink(r *repo.Repo) (int, error) {
+	return CrosslinkContext(context.Background(), r)
+}
+
+// CrosslinkContext is Crosslink that observes ctx: a cancelled context aborts
+// the candidate sweep within crosslinkCancelCheckStride candidates, returning
+// the count linked so far and ctx.Err(). This is what lets a clone deadline
+// interrupt the whole-repository crosslink pass, which has no round boundary of
+// its own to fall back on.
+func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 	if r == nil {
-		panic("manifest.Crosslink: r must not be nil")
+		panic("manifest.CrosslinkContext: r must not be nil")
 	}
 
 	// Canonical fossil creates forumpost on demand -- only when a forum
@@ -276,7 +297,14 @@ func Crosslink(r *repo.Repo) (int, error) {
 	var deferredRids []libfossil.FslID
 	missingBlobs := make(map[string]struct{})
 	var pending []pendingItem
-	for _, c := range candidates {
+	for i, c := range candidates {
+		if i%crosslinkCancelCheckStride == 0 {
+			select {
+			case <-ctx.Done():
+				return linked, ctx.Err()
+			default:
+			}
+		}
 		data, err := cache.Expand(r.DB(), c.rid)
 		if err != nil {
 			continue // not expandable, skip

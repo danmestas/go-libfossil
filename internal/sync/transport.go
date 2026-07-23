@@ -56,7 +56,7 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport request: %w", err)
 	}
-	httpReq.Header.Set("Content-Type", "application/x-fossil")
+	httpReq.Header.Set("Content-Type", xfer.ContentTypeCompressed)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
@@ -66,5 +66,8 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport read: %w", err)
 	}
-	return xfer.Decode(respBody)
+	// §4: the reply's framing is given by its Content-Type, not guessed. A
+	// clone-v3 reply arrives uncompressed; a pull reply arrives as the
+	// compressed container.
+	return xfer.Decode(respBody, resp.Header.Get("Content-Type"))
 }

@@ -1212,7 +1212,7 @@ func TestCkinLockPragma_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	decoded, err := Decode(encoded)
+	decoded, err := Decode(encoded, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

@@ -29,6 +29,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The xfer HTTP server now sends an explicit `Content-Length` on every clone
+  and sync reply. The full response is already materialised by `Encode` before
+  the first byte is written, so its exact length is known for free; setting the
+  header keeps `net/http` from silently switching to `Transfer-Encoding:
+  chunked` once the buffered body passes its internal flush threshold.
+  Release-tagged fossil ≤2.23 reads the reply length only from `Content-Length`
+  (`src/http.c` leaves its `iLength` negative otherwise) and aborts with
+  "server did not reply" on any chunked reply above ~256KB, so those clients
+  could not clone a repository larger than that from a libfossil server. No
+  buffering was introduced — the response was always fully in memory — so
+  #88's per-clone bound (`DefaultCloneBatchBytes`) still caps each reply. The
+  fix is unconditional rather than negotiated: because the server never streams,
+  chunked framing offers no memory saving over `Content-Length`, and
+  `Content-Length` is what canonical fossil's own server emits, so it is
+  strictly the more compatible framing for every client (issue #101).
+- The message decoder now selects a body's framing from its §4 Content-Type
+  rather than by trying each framing and seeing which parses. A body sent as
+  `application/x-fossil` is decoded as the §4.1 compressed container; every
+  other type, including `application/x-fossil-uncompressed` (used by clone-v3
+  replies), is decoded as plain card text — the same rule canonical fossil
+  applies. Trial-based dispatch made a decompression failure indistinguishable
+  from "wrong framing"; a compressed body that now fails to inflate is reported
+  as the fault it is and never re-fed to the card parser. The former unprefixed
+  raw-zlib framing was removed: it was checked before the prefixed container on
+  the belief that real fossil emits it, but a fossil 2.28 server never does —
+  its pull replies are the prefixed container and its clone replies are plain
+  text — so the framing was only ever right by accident. Removing it also
+  retires the length-prefix/zlib-header aliasing guard, which existed solely to
+  disambiguate the two compressed framings that trial-dispatch conflated.
+  `xfer.Decode` now takes the Content-Type; call sites that carry no header
+  (the byte-oriented NATS transport, both ends libfossil) pass the compressed
+  type explicitly, matching what they always emit. The HTTP server rejects a
+  request body whose Content-Type is absent or neither §4 type with 415
+  Unsupported Media Type instead of decoding it as plain card text: bodies come
+  from untrusted peers, and without a framing signal decoding either way is a
+  guess. Real fossil always sets the header, so no conforming peer is affected.
+  (#106)
+- A large artifact now clones regardless of its position within a clone round.
+  The server charged its batch budget before each artifact and sent the one
+  that crossed it whole, so a round carried `budget + one whole artifact` — and
+  when ordinary sub-budget filler preceded a large artifact, that sum exceeded
+  what the client could decode (`xfer.MaxDecompressedBytes`), failing the clone
+  with a spurious "declared container length exceeds" error. The size at which
+  a clone failed depended on incidental filler: 8–15 MB of filler ahead of a
+  58.7 MB artifact all failed, while 17 MB passed by pushing the artifact into a
+  round of its own. `emitCloneBatch` now flushes the round and sends an
+  over-bound artifact alone when adding it would cross the client's decode
+  bound, so the ceiling is a property of the artifact alone. The `2 * budget`
+  compile-time guard now certifies what it appears to: filler plus one
+  budget-sized artifact always fits in a decodable round. (#109)
 - A clone from a libfossil server could fail with a card-syntax error
   (`decode card 16303: empty line after split`) naming a card the response
   never contained. The message decoder tried three body framings in order and
@@ -42,12 +92,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or reported, never reparsed. The bound is also raised to 64 MiB, since it sat
   below what this implementation's own server emits in a single clone round —
   two libfossil peers could not reliably clone from each other even though each
-  could clone from fossil. Two compile-time guards constrain the bound: it must
-  clear the server's clone *batch budget* twice over, and it must stay below the
-  size at which a length prefix this implementation writes could itself be read
-  as a zlib header. Neither guard certifies a whole round — the budget bounds
-  what precedes an artifact, not the artifact, so a large artifact that does not
-  lead its round can still overrun the bound (#109). (#104)
+  could clone from fossil. A compile-time guard keeps the bound at least twice
+  the server's clone *batch budget*, so filler plus one budget-sized artifact
+  always fits in a round the client can decode. (#104)
 - Committing a file with zero-length content panicked in `blob.Store`,
   which treated an empty artifact -- a normal, well-known Fossil blob -- as
   invalid input; the panic then triggered `manifest.Checkin`'s postcondition

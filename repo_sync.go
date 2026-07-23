@@ -68,7 +68,10 @@ func (a *transportAdapter) Exchange(ctx context.Context, req *xfer.Message) (*xf
 	if err != nil {
 		return nil, err
 	}
-	return xfer.Decode(respBytes)
+	// This transport carries no Content-Type. Both ends are libfossil and reply
+	// via Message.Encode, which always produces the §4.1 compressed container,
+	// so the framing is fixed rather than negotiated per message.
+	return xfer.Decode(respBytes, xfer.ContentTypeCompressed)
 }
 
 // observerAdapter bridges the public context-free SyncObserver to the internal
@@ -202,7 +205,9 @@ func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error) {
 
 // HandleSyncWithOpts processes an incoming xfer request with optional configuration.
 func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts HandleOpts) ([]byte, error) {
-	msg, err := xfer.Decode(payload)
+	// The payload arrives without a Content-Type; a libfossil peer always sends
+	// the §4.1 compressed container (Message.Encode), so the framing is fixed.
+	msg, err := xfer.Decode(payload, xfer.ContentTypeCompressed)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: decode xfer: %w", err)
 	}

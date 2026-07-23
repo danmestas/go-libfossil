@@ -8,7 +8,7 @@ A five-minute tour of libfossil: clone a repo and read its history from Go.
 ## Install
 
 ```sh
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 libfossil --help
 ```
 
@@ -25,7 +25,7 @@ import (
     "context"
     "log"
 
-    "github.com/danmestas/libfossil"
+    "github.com/danmestas/go-libfossil"
 )
 
 func main() {
@@ -49,7 +49,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/danmestas/libfossil"
+    "github.com/danmestas/go-libfossil"
 )
 
 func main() {
@@ -78,7 +78,7 @@ import (
     "context"
     "log"
 
-    "github.com/danmestas/libfossil"
+    "github.com/danmestas/go-libfossil"
 )
 
 func main() {

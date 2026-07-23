@@ -7,9 +7,9 @@ import (
 	"os/user"
 	"path/filepath"
 
-	libdb "github.com/danmestas/libfossil/db"
+	libdb "github.com/danmestas/go-libfossil/db"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // Globals holds flags shared by all CLI commands.

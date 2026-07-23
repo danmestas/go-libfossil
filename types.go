@@ -1,6 +1,6 @@
 package libfossil
 
-import "github.com/danmestas/libfossil/internal/fsltype"
+import "github.com/danmestas/go-libfossil/internal/fsltype"
 
 // FslID is a row-id in the blob table (content-addressed artifacts).
 type FslID = fsltype.FslID

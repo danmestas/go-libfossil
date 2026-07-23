@@ -3,8 +3,8 @@ package shun
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Entry represents a shunned artifact.

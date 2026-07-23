@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/danmestas/libfossil/db"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // TimelineOpts configures a repository-wide event enumeration.

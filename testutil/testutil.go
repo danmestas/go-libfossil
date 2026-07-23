@@ -14,9 +14,17 @@ type TestRepo struct {
 	Dir  string
 }
 
+// FossilBinary resolves the canonical fossil binary: the FOSSIL_BIN override
+// first, then PATH. An override that does not resolve to an executable is
+// treated as no binary at all, so the caller reports "fossil not found" rather
+// than letting a stale path surface later as a raw fork/exec error.
 func FossilBinary() string {
 	if bin := os.Getenv("FOSSIL_BIN"); bin != "" {
-		return bin
+		path, err := exec.LookPath(bin)
+		if err != nil {
+			return ""
+		}
+		return path
 	}
 	path, err := exec.LookPath("fossil")
 	if err != nil {
@@ -25,12 +33,32 @@ func FossilBinary() string {
 	return path
 }
 
+// RequireFossilBin resolves the fossil binary for tests that need canonical
+// Fossil to run. It resolves the same way FossilBinary does (the FOSSIL_BIN
+// override, then PATH). When no binary is found it skips the test, unless
+// REQUIRE_FOSSIL_BIN=1 is set -- then it fails. That makes CI turn a missing
+// binary into a loud failure (verifying real Fossil reads what we write is the
+// one thing our own tests cannot substitute for) while local runs without
+// fossil installed stay an opt-in skip.
+func RequireFossilBin(t *testing.T) string {
+	t.Helper()
+	if bin := FossilBinary(); bin != "" {
+		return bin
+	}
+	where := "set FOSSIL_BIN or install fossil on PATH"
+	if bin := os.Getenv("FOSSIL_BIN"); bin != "" {
+		where = fmt.Sprintf("FOSSIL_BIN=%q is not an executable", bin)
+	}
+	if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
+		t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary found (%s)", where)
+	}
+	t.Skipf("fossil binary not found (%s); set REQUIRE_FOSSIL_BIN=1 to require it", where)
+	return ""
+}
+
 func NewTestRepo(t *testing.T) *TestRepo {
 	t.Helper()
-	bin := FossilBinary()
-	if bin == "" {
-		t.Skip("fossil binary not found")
-	}
+	bin := RequireFossilBin(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.fossil")
 	cmd := exec.Command(bin, "new", path)
@@ -68,10 +96,6 @@ func (r *TestRepo) FossilArtifact(t *testing.T, uuid string) []byte {
 		t.Fatalf("fossil artifact %s failed: %v", uuid, err)
 	}
 	return out
-}
-
-func HasFossil() bool {
-	return FossilBinary() != ""
 }
 
 func FossilRebuild(repoPath string) error {

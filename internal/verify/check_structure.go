@@ -3,8 +3,8 @@ package verify
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/repo"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // checkDeltaChains verifies delta relationships are valid.

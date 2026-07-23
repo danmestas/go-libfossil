@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	internalsync "github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
+	internalsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // SyncOpts configures a sync operation.

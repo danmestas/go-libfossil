@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/hash"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Manage adds files to tracking. For each path:

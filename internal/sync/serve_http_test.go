@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 func freePort(t *testing.T) string {
@@ -29,7 +29,7 @@ func TestServeHTTPRoundTrip(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	data := []byte("http test blob")
 	uuid := hash.SHA1(data)
-	storeReceivedFile(r, uuid, "", data)
+	storeReceivedFile(r, uuid, "", data, nil)
 
 	addr := freePort(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,7 +226,7 @@ func TestServeHTTPClone(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		data := []byte(fmt.Sprintf("clone http %d", i))
 		uuid := hash.SHA1(data)
-		storeReceivedFile(r, uuid, "", data)
+		storeReceivedFile(r, uuid, "", data, nil)
 		stored[uuid] = true
 	}
 

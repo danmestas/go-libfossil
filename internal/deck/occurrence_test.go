@@ -330,14 +330,15 @@ func TestMarshalEmitsParseableIntraRunOrder(t *testing.T) {
 
 // TestMarshalSortsTagsByDecodedName pins that the marshaller orders T
 // cards by the same decoded key the parser checks (§4.7.16). TagCard.Name
-// holds the raw wire form, so a name carrying an escape orders one way
-// decoded and the other way raw; sorting on the raw form would emit a run
-// the parser rejects.
+// holds the decoded form, so a name whose decoded byte (a space, 0x20)
+// sorts before another's ('-', 0x2D) must emit first even though its
+// escaped wire form ("sym-a\sb") sorts the other way; sorting on the wire
+// form would emit a run the parser rejects.
 func TestMarshalSortsTagsByDecodedName(t *testing.T) {
 	d := &Deck{
 		T: []TagCard{
 			{Type: TagPropagating, Name: "sym-a-c", UUID: hashN('b')},
-			{Type: TagPropagating, Name: `sym-a\sb`, UUID: hashN('a')},
+			{Type: TagPropagating, Name: "sym-a b", UUID: hashN('a')},
 		},
 	}
 	data, err := d.Marshal()

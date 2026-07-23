@@ -3,10 +3,10 @@ package blob
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err error) {
@@ -174,7 +174,13 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 // never a panic. Argument shapes StoreDeltaRaw's own caller controls (q,
 // uuid, srcRid) are still asserted, matching this package's usual
 // nil/invalid-argument convention.
-func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossil.FslID) (rid libfossil.FslID, err error) {
+//
+// storedBlob, when non-nil, is deltaBytes already re-expressed in Fossil's
+// on-disk blob format (e.g. bytes received over the wire already encoded
+// that way) and is written verbatim via EncodeForStorage instead of being
+// recompressed. Pass nil when no such bytes are available (e.g. a delta
+// computed locally rather than received).
+func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossil.FslID, storedBlob []byte) (rid libfossil.FslID, err error) {
 	if q == nil {
 		panic("blob.StoreDeltaRaw: q must not be nil")
 	}
@@ -208,7 +214,7 @@ func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossi
 	if err != nil {
 		return 0, fmt.Errorf("blob.StoreDeltaRaw: output size: %w", err)
 	}
-	compressed, err := Compress(deltaBytes)
+	compressed, err := EncodeForStorage(deltaBytes, storedBlob)
 	if err != nil {
 		return 0, fmt.Errorf("blob.StoreDeltaRaw: compress: %w", err)
 	}

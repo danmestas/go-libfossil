@@ -7,16 +7,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	"github.com/danmestas/libfossil/testutil"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // startFossilServer starts a fossil server on a free port and returns the URL
@@ -24,10 +25,7 @@ import (
 func startFossilServer(t *testing.T, repoPath string) string {
 	t.Helper()
 
-	bin := testutil.FossilBinary()
-	if bin == "" {
-		t.Skip("fossil not in PATH")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	// Find a free port
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -115,10 +113,7 @@ func getServerCode(t *testing.T, repoPath string) string {
 }
 
 func TestIntegrationPushToFossilServer(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
-	bin := testutil.FossilBinary()
+	bin := testutil.RequireFossilBin(t)
 
 	dir, err := os.MkdirTemp("", "TestIntegrationPush*")
 	if err != nil {
@@ -187,8 +182,8 @@ func TestIntegrationPushToFossilServer(t *testing.T) {
 		Pull:        false,
 		ProjectCode: projCode,
 		ServerCode:  srvCode,
-		User:     "",
-		Password: "",
+		User:        "",
+		Password:    "",
 	})
 
 	// Log results regardless of error — this is informational since fossil
@@ -209,10 +204,7 @@ func TestIntegrationPushToFossilServer(t *testing.T) {
 }
 
 func TestIntegrationPullFromFossilServer(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
-	bin := testutil.FossilBinary()
+	bin := testutil.RequireFossilBin(t)
 
 	dir, err := os.MkdirTemp("", "TestIntegrationPull*")
 	if err != nil {
@@ -262,8 +254,8 @@ func TestIntegrationPullFromFossilServer(t *testing.T) {
 		Pull:        true,
 		ProjectCode: projCode,
 		ServerCode:  srvCode,
-		User:     "",
-		Password: "",
+		User:        "",
+		Password:    "",
 	})
 
 	t.Logf("Pull result: rounds=%d filesSent=%d filesRecvd=%d errors=%v err=%v",
@@ -299,4 +291,121 @@ func TestIntegrationPullFromFossilServer(t *testing.T) {
 	}
 	t.Logf("Pull completed in %d rounds, received %d files, verified %d blobs",
 		result.Rounds, result.FilesRecvd, verified)
+}
+
+// blobContentBytes returns SELECT sum(length(content)) FROM blob WHERE
+// size>=0 for a fossil repo at path, via the fossil CLI.
+func blobContentBytesFossilSQL(t *testing.T, path string) int64 {
+	t.Helper()
+	bin := testutil.FossilBinary()
+	out, err := exec.Command(bin, "sql", "-R", path,
+		"SELECT sum(length(content)) FROM blob WHERE size>=0",
+	).Output()
+	if err != nil {
+		t.Fatalf("fossil sql content bytes: %v", err)
+	}
+	s := strings.TrimSpace(string(out))
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		t.Fatalf("parse content bytes %q: %v", s, err)
+	}
+	return n
+}
+
+// TestIntegrationCloneContentBytesMatchSource is the acceptance test for
+// issue #112: go-libfossil's clone must store received wire frames
+// verbatim, so a cloned repository's blob.content bytes sum to exactly the
+// same total as its source -- not merely reconstruct to the same content
+// after decompression. Before the fix, storeReceivedFile/storeDeltaContent
+// decompressed every received frame and re-encoded it with blob.Compress's
+// unparameterized zlib.DefaultCompression, producing a clone that verifies
+// correctly but is not byte-identical to its source (fossil and zit both
+// are).
+//
+// The corpus commits several files across multiple revisions so the
+// exchange includes both full-content and delta-encoded (cfile with a
+// delta source) cards -- the two receive paths this issue's fix touches.
+func TestIntegrationCloneContentBytesMatchSource(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+
+	dir, err := os.MkdirTemp("", "TestIntegrationCloneParity*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+
+	// 1. Create the source repo and populate it with a small multi-revision
+	// corpus via the real fossil CLI, so its blob table holds Fossil's own
+	// compression output -- the thing our clone must reproduce exactly.
+	remotePath := filepath.Join(dir, "remote.fossil")
+	if out, err := exec.Command(bin, "new", remotePath).CombinedOutput(); err != nil {
+		t.Fatalf("fossil new: %v\n%s", err, out)
+	}
+
+	workDir := filepath.Join(dir, "work")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	runFossil := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = workDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("fossil %v: %v\n%s", args, err, out)
+		}
+	}
+	runFossil("open", remotePath)
+	// fossil new already provisions a default admin user (named after the
+	// OS user); commits just need *a* user to attribute to, not "tester"
+	// specifically.
+
+	writeAndCommit := func(name, body, msg string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		runFossil("add", name)
+		runFossil("commit", "-m", msg, "--no-warnings")
+	}
+
+	// A file that grows across three revisions, long enough that Fossil
+	// deltifies later revisions against earlier ones -- exercising the
+	// delta-cfile receive path, not just full-content.
+	base := strings.Repeat("the quick brown fox jumps over the lazy dog\n", 40)
+	writeAndCommit("growing.txt", base, "initial")
+	writeAndCommit("growing.txt", base+strings.Repeat("more content appended here\n", 20), "grow once")
+	writeAndCommit("growing.txt", base+strings.Repeat("more content appended here\n", 40), "grow twice")
+	writeAndCommit("other.txt", strings.Repeat("unrelated content\n", 30), "unrelated file")
+
+	sourceBytes := blobContentBytesFossilSQL(t, remotePath)
+	if sourceBytes <= 0 {
+		t.Fatalf("fixture bug: source content bytes = %d, want > 0", sourceBytes)
+	}
+
+	// 2. Serve the populated source and clone it with our own engine.
+	serverURL := startFossilServer(t, remotePath)
+
+	localPath := filepath.Join(dir, "local.fossil")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	transport := &HTTPTransport{URL: serverURL}
+	r, result, err := Clone(ctx, localPath, transport, CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	defer r.Close()
+	t.Logf("Clone completed in %d rounds, received %d blobs", result.Rounds, result.BlobsRecvd)
+
+	// 3. blob.content must sum to exactly the source's total -- not just
+	// decompress to the same content.
+	var localBytes int64
+	if err := r.DB().QueryRow("SELECT sum(length(content)) FROM blob WHERE size>=0").Scan(&localBytes); err != nil {
+		t.Fatalf("query local content bytes: %v", err)
+	}
+	if localBytes != sourceBytes {
+		t.Fatalf("clone content bytes = %d, want %d (source) -- clone is not byte-identical "+
+			"to its source; received wire frames were re-encoded instead of stored verbatim",
+			localBytes, sourceBytes)
+	}
 }

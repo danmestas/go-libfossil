@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/auth"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // findCards returns all cards of type T from a message.
@@ -33,7 +33,7 @@ func findCards[T xfer.Card](msg *xfer.Message) []T {
 func storeTestBlob(t *testing.T, r *repo.Repo, data []byte) string {
 	t.Helper()
 	uuid := hash.SHA1(data)
-	if err := storeReceivedFile(r, uuid, "", data); err != nil {
+	if err := storeReceivedFile(r, uuid, "", data, nil); err != nil {
 		t.Fatalf("storeReceivedFile: %v", err)
 	}
 	return uuid
@@ -1126,7 +1126,7 @@ func TestHandlerPublicFileClearsPrivate(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	// Pre-store as private.
-	storeReceivedFile(r, uuid, "", data)
+	storeReceivedFile(r, uuid, "", data, nil)
 	rid, _ := blob.Exists(r.DB(), uuid)
 	content.MakePrivate(r.DB(), int64(rid))
 	if !content.IsPrivate(r.DB(), int64(rid)) {

@@ -96,7 +96,7 @@ Linux/WSL: substitute `linux-amd64` for `darwin-universal` and `/usr/local/bin/h
 
 ```bash
 cd docs/site
-hugo mod init github.com/danmestas/libfossil/docs/site
+hugo mod init github.com/danmestas/go-libfossil/docs/site
 hugo mod get github.com/imfing/hextra
 cd -
 ```
@@ -137,7 +137,7 @@ menu:
         type: search
     - name: GitHub
       weight: 5
-      url: "https://github.com/danmestas/libfossil"
+      url: "https://github.com/danmestas/go-libfossil"
       params:
         icon: github
 
@@ -163,7 +163,7 @@ params:
 
   editURL:
     enable: true
-    base: "https://github.com/danmestas/libfossil/edit/main/docs/site/content"
+    base: "https://github.com/danmestas/go-libfossil/edit/main/docs/site/content"
 
   page:
     width: wide
@@ -342,7 +342,7 @@ A five-minute tour of libfossil: install the CLI, clone a repo, and read its his
 ## Install
 
 ```sh
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 libfossil --help
 ```
 
@@ -364,7 +364,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/danmestas/libfossil"
+    "github.com/danmestas/go-libfossil"
 )
 
 func main() {
@@ -387,7 +387,7 @@ func main() {
 ## Sync over HTTP
 
 ```go
-import "github.com/danmestas/libfossil"
+import "github.com/danmestas/go-libfossil"
 
 t := libfossil.NewHTTPTransport("https://example.com/repo.fossil")
 if err := repo.Sync(ctx, t); err != nil {
@@ -434,7 +434,7 @@ title: Examples
 weight: 60
 ---
 
-Runnable examples live in [`examples/`](https://github.com/danmestas/libfossil/tree/main/examples) in the repo. (This page will index them once the directory is populated.)
+Runnable examples live in [`examples/`](https://github.com/danmestas/go-libfossil/tree/main/examples) in the repo. (This page will index them once the directory is populated.)
 ```
 
 - [ ] **Step 5: Verify**
@@ -544,7 +544,7 @@ cat > "$STATIC_DIR/llms.txt" << 'HEADER'
 - DST — deterministic simulation harness for fault injection
 
 ## Quick Start
-1. go install github.com/danmestas/libfossil/cmd/libfossil@latest
+1. go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 2. libfossil clone <url> repo.fossil
 3. Open from Go: repo, err := libfossil.Open("repo.fossil")
 4. Sync: repo.Sync(ctx, transport)
@@ -559,7 +559,7 @@ cat > "$STATIC_DIR/llms.txt" << 'HEADER'
 - dst/ — deterministic simulation harness
 
 ## Documentation
-Full docs: https://github.com/danmestas/libfossil/tree/main/docs/site
+Full docs: https://github.com/danmestas/go-libfossil/tree/main/docs/site
 HEADER
 
 # llms-full.txt: all content concatenated, frontmatter stripped
@@ -792,7 +792,7 @@ Find the topbar region (near the top of `<body>`, contains `DAGNATS` left wordma
 - `DAGNATS` → `LIBFOSSIL`
 - Version label → `v 0.4.1`
 - License label → `license MIT` (replacing `Apache-2.0`)
-- GitHub link href → `https://github.com/danmestas/libfossil`
+- GitHub link href → `https://github.com/danmestas/go-libfossil`
 - Docs link href → `/docs/` (already a relative URL in dagnats; verify it still points to `/docs/`)
 
 - [ ] **Step 4: Replace hero**
@@ -808,20 +808,20 @@ Find the metadata table (six rows: PROJECT, LANGUAGE, RUNTIME DEPS, BINARIES, LI
 | Key | Value |
 |---|---|
 | PROJECT | libfossil — pure-Go Fossil SCM library |
-| LANGUAGE | Go (module github.com/danmestas/libfossil) |
+| LANGUAGE | Go (module github.com/danmestas/go-libfossil) |
 | RUNTIME DEPS | none · pluggable SQLite drivers (modernc · ncruces) |
 | BINARIES | 1 (libfossil CLI) |
 | LICENSE | MIT |
 | STATUS | v0.4.1 · alpha · breaking changes possible |
 
-If dagnats's table embeds a `<code>` link (e.g., `github.com/danmestas/dagnats`), update that link target to `github.com/danmestas/libfossil`.
+If dagnats's table embeds a `<code>` link (e.g., `github.com/danmestas/dagnats`), update that link target to `github.com/danmestas/go-libfossil`.
 
 - [ ] **Step 6: Replace footer**
 
 Find the footer at the bottom of the page. Replace its text with:
 
 ```
-libfossil · MIT · v0.4.1 · 2026 · github.com/danmestas/libfossil
+libfossil · MIT · v0.4.1 · 2026 · github.com/danmestas/go-libfossil
 ```
 
 (If the dagnats footer uses a `<a>` for the repo link, preserve the link; just swap the URL and label.)
@@ -865,7 +865,7 @@ Each step rewrites one `<section>` block. The blocks are identifiable by `<span 
 Replace the install code block content with:
 
 ```sh
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 libfossil --help
 ```
 
@@ -945,12 +945,12 @@ Replace prose with three points:
 
 Replace prose with:
 
-> Read the [Quickstart](/docs/quickstart) — five-minute tour. Browse the [SDK reference](/docs/reference/sdk) — every package, every exported symbol. File issues at [github.com/danmestas/libfossil](https://github.com/danmestas/libfossil).
+> Read the [Quickstart](/docs/quickstart) — five-minute tour. Browse the [SDK reference](/docs/reference/sdk) — every package, every exported symbol. File issues at [github.com/danmestas/go-libfossil](https://github.com/danmestas/go-libfossil).
 
 Replace any code block in this section with:
 
 ```sh
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 ```
 
 Preserve the COPY button if dagnats uses one here.
@@ -966,7 +966,7 @@ Open `http://localhost:1313/`. Walk through every section:
 - All seven section bodies show libfossil content (no `dagnats` text remaining)
 - `grep -ci 'dagnats' docs/site/layouts/index.html` should return `0`
 - Code blocks copy cleanly when you click COPY
-- Internal links (`/docs/quickstart`, `/docs/reference/sdk`, `https://github.com/danmestas/libfossil`) work
+- Internal links (`/docs/quickstart`, `/docs/reference/sdk`, `https://github.com/danmestas/go-libfossil`) work
 - §04 diagram lays out without horizontal overflow
 - Light/dark toggle still swaps cleanly
 

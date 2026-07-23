@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/danmestas/libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/content"
 )
 
 // RepoCoCmd checks out a version to the working directory.

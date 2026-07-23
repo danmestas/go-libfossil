@@ -1,8 +1,8 @@
 package libfossil
 
 import (
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // Repo is an opaque handle to a Fossil repository.

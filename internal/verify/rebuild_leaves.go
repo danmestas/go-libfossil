@@ -3,7 +3,7 @@ package verify
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
 )
 
 // rebuildLeaves populates the leaf table from event/plink data.

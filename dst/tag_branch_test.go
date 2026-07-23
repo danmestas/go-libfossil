@@ -5,10 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/branch"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/internal/branch"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // TestTagPropagationAcrossSync creates checkins with inline T-cards on the

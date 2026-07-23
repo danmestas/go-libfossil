@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/tag"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
 // RepoBranchCmd groups branch operations.

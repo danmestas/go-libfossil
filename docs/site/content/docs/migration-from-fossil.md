@@ -31,7 +31,7 @@ The compiled binary is named `libfossil` (not `fossil`) to avoid `$PATH`
 collisions when both tools are installed on the same machine:
 
 ```
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 ```
 
 `libfossil` uses a subcommand-grouped syntax: the top-level group is `repo`,

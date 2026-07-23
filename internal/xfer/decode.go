@@ -4,12 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
 // readPayload reads exactly size bytes from the reader.
@@ -247,24 +248,29 @@ func parseClone(args []string) (Card, error) {
 	if len(args) != 0 && len(args) != 2 {
 		return nil, fmt.Errorf("xfer: clone requires 0 or 2 args, got %d", len(args))
 	}
-	c := &CloneCard{}
-	if len(args) == 2 {
-		v, err := strconv.Atoi(args[0])
-		if err != nil {
-			return nil, fmt.Errorf("xfer: clone version: %w", err)
-		}
-		s, err := strconv.Atoi(args[1])
-		if err != nil {
-			return nil, fmt.Errorf("xfer: clone seqno: %w", err)
-		}
-		c.Version = v
-		c.SeqNo = s
+	if len(args) == 0 {
+		return &CloneCard{}, nil
+	}
+	// §8.1 withholds its fatal from a SEQNO that fails the digit-only rule
+	// (isDecimal below) but a token strconv.Atoi cannot parse at all -- e.g.
+	// "abc" or "3x" -- is rarer still and outside anything §8.1 discusses.
+	// Erroring the whole message for it is harsher than the fatal the spec
+	// was careful to withhold, so degrade the same way parseCloneSeqNo does
+	// for clone_seqno: carry the raw tokens forward as an UnknownCard rather
+	// than failing every later card in the message.
+	v, vErr := strconv.Atoi(args[0])
+	s, sErr := strconv.Atoi(args[1])
+	if vErr != nil || sErr != nil {
+		return &UnknownCard{Command: "clone", Args: args}, nil
+	}
+	return &CloneCard{
+		Version: v,
+		SeqNo:   s,
 		// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds
 		// it from one that fails digit-only recognition, so record whether
 		// this token qualifies rather than only what it parsed to.
-		c.SeqNoIsDecimal = isDecimal(args[1])
-	}
-	return c, nil
+		SeqNoIsDecimal: isDecimal(args[1]),
+	}, nil
 }
 
 func parseCloneSeqNo(args []string) (Card, error) {
@@ -410,7 +416,11 @@ func parseCFile(r *bufio.Reader, args []string) (Card, error) {
 	// ([4-byte BE size prefix][zlib data]) or plain zlib. Try plain first
 	// (matches our own encoder), fall back to skipping a 4-byte prefix
 	// (matches Fossil's send_compressed_file which sends raw blob content).
-	decompressed, err := decompressCFile(compressed)
+	// decompressCFile also hands back storedBlob: the same bytes recast
+	// into Fossil's on-disk blob format, built without a second zlib pass,
+	// so a receive path can persist storedBlob verbatim instead of
+	// recompressing decompressed content and getting different bytes.
+	decompressed, storedBlob, err := decompressCFile(compressed)
 	if err != nil {
 		return nil, err
 	}
@@ -424,6 +434,7 @@ func parseCFile(r *bufio.Reader, args []string) (Card, error) {
 	}
 	c.USize = usize
 	c.Content = decompressed
+	c.StoredBlob = storedBlob
 	return c, nil
 }
 
@@ -480,29 +491,45 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	return c, nil
 }
 
-// decompressCFile tries plain zlib first (matches our encoder), then
-// falls back to skipping a 4-byte BE size prefix (Fossil's blob format
-// used by send_compressed_file in clone v3).
-func decompressCFile(data []byte) ([]byte, error) {
-	// Try plain zlib.
-	if zr, err := zlib.NewReader(bytes.NewReader(data)); err == nil {
+// decompressCFile decompresses a cfile card's wire payload and also returns
+// storedBlob: the same bytes recast into Fossil's on-disk blob format
+// ([4-byte BE uncompressed-size prefix][zlib data]), built without ever
+// invoking zlib as a writer. This lets a caller persist storedBlob directly
+// as blob.content -- reproducing whatever bytes the sender's own storage
+// held -- instead of decompressing here and recompressing later, which
+// would depend on this process's zlib writer parameters rather than the
+// sender's.
+func decompressCFile(data []byte) (decompressed []byte, storedBlob []byte, err error) {
+	// Try plain zlib (matches our own encoder, which sends no prefix).
+	if zr, zerr := zlib.NewReader(bytes.NewReader(data)); zerr == nil {
 		out, readErr := io.ReadAll(zr)
 		zr.Close()
 		if readErr == nil {
-			return out, nil
+			// data carries no size prefix. Fossil's on-disk format needs
+			// one, so prepend it -- the zlib bytes themselves pass through
+			// unchanged, so this is bookkeeping, not recompression.
+			var buf bytes.Buffer
+			if err := binary.Write(&buf, binary.BigEndian, uint32(len(out))); err != nil {
+				return nil, nil, fmt.Errorf("xfer: cfile size prefix: %w", err)
+			}
+			buf.Write(data)
+			return out, buf.Bytes(), nil
 		}
 	}
-	// Try with 4-byte size prefix skip (Fossil blob format).
+	// Try with 4-byte size prefix skip (Fossil blob format). Fossil's
+	// send_compressed_file transmits the source's own blob.content bytes
+	// unmodified, so data IS already the canonical on-disk form here --
+	// nothing needs to be rebuilt.
 	if len(data) > 4 {
-		if zr, err := zlib.NewReader(bytes.NewReader(data[4:])); err == nil {
+		if zr, zerr := zlib.NewReader(bytes.NewReader(data[4:])); zerr == nil {
 			out, readErr := io.ReadAll(zr)
 			zr.Close()
 			if readErr == nil {
-				return out, nil
+				return out, data, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("xfer: cfile zlib init: could not decompress payload (%d bytes)", len(data))
+	return nil, nil, fmt.Errorf("xfer: cfile zlib init: could not decompress payload (%d bytes)", len(data))
 }
 
 func parseSchema(r *bufio.Reader, args []string) (Card, error) {

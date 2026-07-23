@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/cli"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/sync"
-	"github.com/danmestas/libfossil/internal/xfer"
-	"github.com/danmestas/libfossil/testutil"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/cli"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/testutil"
 
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // NOTE: TestRepoServeCmdRun and every test that goes through serveRepo send
@@ -185,20 +185,11 @@ func TestRepoServeCmdCanonicalFossilClone(t *testing.T) {
 	}
 }
 
-// requireFossilBin returns the canonical fossil binary, skipping the test if
-// it is absent. A skip is invisible without -v, so a run with no fossil
-// binary would otherwise be byte-identical to a passing one -- for the single
-// criterion our own transport cannot substitute for. CI sets
-// REQUIRE_FOSSIL_BIN=1 to turn a missing binary into a failure (issue #86).
+// requireFossilBin returns the canonical fossil binary, logging its version so
+// a run that exercised real Fossil is distinguishable from one that did not.
 func requireFossilBin(t *testing.T) string {
 	t.Helper()
-	bin := testutil.FossilBinary()
-	if bin == "" {
-		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
-			t.Fatal("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH")
-		}
-		t.Skip("fossil binary not on PATH; cannot verify canonical interoperability")
-	}
+	bin := testutil.RequireFossilBin(t)
 	if out, err := exec.Command(bin, "version").CombinedOutput(); err == nil {
 		t.Logf("using canonical fossil binary %s: %s", bin, bytes.TrimSpace(out))
 	} else {

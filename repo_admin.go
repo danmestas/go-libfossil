@@ -3,7 +3,7 @@ package libfossil
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/auth"
 )
 
 // UserOpts configures a user creation or update.

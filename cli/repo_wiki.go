@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // RepoWikiCmd groups wiki operations.

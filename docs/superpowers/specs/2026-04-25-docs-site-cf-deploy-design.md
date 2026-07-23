@@ -86,7 +86,7 @@ Approach: fork dagnats's `docs/site/layouts/index.html` — a self-contained HTM
 | — | Topbar | left wordmark `LIBFOSSIL`; right `v0.4.1 · license MIT · github · docs` |
 | — | Hero | `<h1>libfossil</h1>` (Geist Mono, sized + weighted). Tagline: "A pure-Go library for Fossil SCM repositories. Zero CGo. Static binaries. WASM-ready." |
 | — | Spec-sheet metadata table | rows: PROJECT, LANGUAGE, RUNTIME DEPS, BINARIES, LICENSE, STATUS |
-| §01 | Install | `go install github.com/danmestas/libfossil/cmd/libfossil@latest` plus `libfossil --help` |
+| §01 | Install | `go install github.com/danmestas/go-libfossil/cmd/libfossil@latest` plus `libfossil --help` |
 | §02 | What it is | 2 paragraphs — pure-Go reader/writer for `.fossil` SQLite repos; embeddable; WASM target via `GOOS=wasip1` |
 | §03 | Why you might want it | prose contrasting libfossil with shelling out to the upstream `fossil` binary, and with CGo bindings |
 | §04 | How it fits together *(architecture)* | inline diagram for libfossil layers: CLI → Repo → Transport / DB Driver / Observers |
@@ -100,7 +100,7 @@ Approach: fork dagnats's `docs/site/layouts/index.html` — a self-contained HTM
 | Field | Value |
 |---|---|
 | PROJECT | libfossil — pure-Go Fossil SCM library |
-| LANGUAGE | Go (module `github.com/danmestas/libfossil`) |
+| LANGUAGE | Go (module `github.com/danmestas/go-libfossil`) |
 | RUNTIME DEPS | none · pluggable SQLite drivers (modernc · ncruces) |
 | BINARIES | 1 (`libfossil` CLI) |
 | LICENSE | MIT |
@@ -113,8 +113,8 @@ Content prose is drafted during implementation from `README.md` and the existing
 Hugo (extended) + Hextra theme via Hugo modules. Mirrors dagnats's `hugo.yaml` with three deltas:
 
 - `title: libfossil`
-- GitHub menu URL → `https://github.com/danmestas/libfossil`
-- `editURL.base` → `https://github.com/danmestas/libfossil/edit/main/docs/site/content`
+- GitHub menu URL → `https://github.com/danmestas/go-libfossil`
+- `editURL.base` → `https://github.com/danmestas/go-libfossil/edit/main/docs/site/content`
 - Menu adds an `SDK` entry pointing to `/docs/reference/sdk/`
 
 Inherited from Hextra without modification: dark/light toggle (system default), edit-on-GitHub link, wide page width, FlexSearch (client-side, indexes `content`, forward tokenization).
@@ -166,7 +166,7 @@ Curated `llms.txt` content:
 - DST — deterministic simulation harness for fault injection
 
 ## Quick Start
-1. go install github.com/danmestas/libfossil/cmd/libfossil@latest
+1. go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 2. libfossil clone <url> repo.fossil
 3. Open from Go: repo, err := libfossil.Open("repo.fossil")
 4. Sync: repo.Sync(ctx, transport)

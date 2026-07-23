@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/blob"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // countingQuerier forwards to an inner Querier and counts the blob-content

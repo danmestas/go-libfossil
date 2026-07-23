@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"testing"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/simio"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // TestObserverFullLifecycle exercises the complete observer lifecycle:

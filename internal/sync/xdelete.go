@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // applyXDeleteLocally applies an xdelete to the local repo. Calls DeleteXRowByPKHash first;

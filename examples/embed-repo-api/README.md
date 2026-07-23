@@ -4,7 +4,7 @@ A minimal example showing how to embed `libfossil` as a library in a Go
 application. It walks the basic repo lifecycle:
 
 1. Register the default pure-Go SQLite driver via blank import
-   (`_ "github.com/danmestas/libfossil/db/driver/modernc"`).
+   (`_ "github.com/danmestas/go-libfossil/db/driver/modernc"`).
 2. Create a new `.fossil` repository in a temp directory with
    `libfossil.Create`.
 3. Close the handle returned by `Create` and re-open the file from disk
@@ -17,7 +17,7 @@ application. It walks the basic repo lifecycle:
 
 ## Running
 
-This example lives inside the root `github.com/danmestas/libfossil` module,
+This example lives inside the root `github.com/danmestas/go-libfossil` module,
 so no separate `go.mod` is needed.
 
 From the repo root:

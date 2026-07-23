@@ -26,11 +26,25 @@ func TestFossilSQL(t *testing.T) {
 }
 
 func TestFossilBinary(t *testing.T) {
-	path := FossilBinary()
-	if path == "" {
-		t.Skip("fossil binary not found in PATH")
-	}
+	path := RequireFossilBin(t)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("fossil binary not found at %q: %v", path, err)
+	}
+}
+
+// TestRequireFossilBin verifies the found path: when a fossil binary is
+// resolvable, RequireFossilBin returns exactly the path FossilBinary resolves
+// and neither skips nor fails. The not-found branches (skip vs. Fatalf when
+// REQUIRE_FOSSIL_BIN=1) are exercised end-to-end by the CI test step, which
+// runs the whole suite with REQUIRE_FOSSIL_BIN=1 against an installed fossil.
+func TestRequireFossilBin(t *testing.T) {
+	want := FossilBinary()
+	if want == "" {
+		// Fails under REQUIRE_FOSSIL_BIN=1, skips otherwise.
+		RequireFossilBin(t)
+	}
+	got := RequireFossilBin(t)
+	if got != want {
+		t.Fatalf("RequireFossilBin = %q, want %q", got, want)
 	}
 }

@@ -77,7 +77,7 @@ func SQLDriverAndDSN(path string, cfg OpenConfig, params map[string]string) (str
 		panic("db.SQLDriverAndDSN: path must not be empty")
 	}
 	if registered == nil {
-		panic("db.SQLDriverAndDSN: no driver registered — import a driver package (e.g., _ \"github.com/danmestas/libfossil/db/driver/modernc\")")
+		panic("db.SQLDriverAndDSN: no driver registered — import a driver package (e.g., _ \"github.com/danmestas/go-libfossil/db/driver/modernc\")")
 	}
 	driver := cfg.Driver
 	if driver == "" {

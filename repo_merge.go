@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/merge"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/merge"
 )
 
 // MergeResult describes the outcome of a merge.

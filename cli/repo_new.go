@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // RepoNewCmd creates a new Fossil repository.

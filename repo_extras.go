@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/tag"
-	"github.com/danmestas/libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/uv"
 )
 
 // StashEntry describes a saved stash.

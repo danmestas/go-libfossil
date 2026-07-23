@@ -25,30 +25,17 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/branch"
-	"github.com/danmestas/libfossil/internal/deck"
-	"github.com/danmestas/libfossil/internal/hash"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/branch"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
-
-func fossilBin(t *testing.T) string {
-	t.Helper()
-	for _, p := range []string{"/opt/homebrew/bin/fossil", "/usr/local/bin/fossil"} {
-		if _, err := os.Stat(p); err == nil {
-			return p
-		}
-	}
-	if p, err := exec.LookPath("fossil"); err == nil {
-		return p
-	}
-	t.Skip("fossil binary not found in PATH")
-	return ""
-}
 
 // runFossilLs returns the file paths printed by `fossil ls -R repo -r rev`
 // (one path per line, blanks discarded), plus the raw stderr for diagnostics.
@@ -160,7 +147,7 @@ func TestLsBranchTipReturnsEmpty(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test (uses fossil binary)")
 	}
-	fossil := fossilBin(t)
+	fossil := testutil.RequireFossilBin(t)
 
 	t.Run("trunk_tip_rev_uuid", func(t *testing.T) {
 		repoPath := filepath.Join(t.TempDir(), "trunk.fossil")

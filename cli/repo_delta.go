@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/danmestas/libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/delta"
 )
 
 // RepoDeltaCmd groups delta create/apply operations.

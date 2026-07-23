@@ -8,14 +8,14 @@ import (
 	"fmt"
 	"sync"
 
-	libfossil "github.com/danmestas/libfossil"
+	libfossil "github.com/danmestas/go-libfossil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
-const scopeName = "github.com/danmestas/libfossil/observer/otel"
+const scopeName = "github.com/danmestas/go-libfossil/observer/otel"
 
 // --- SyncObserver ---
 

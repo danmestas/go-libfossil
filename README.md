@@ -5,15 +5,15 @@
 <h1 align="center">go-libfossil</h1>
 
 [![Docs](https://img.shields.io/badge/docs-online-c63a0f)](https://libfossil-docs.daniel-mestas.workers.dev/)
-[![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/libfossil.svg)](https://pkg.go.dev/github.com/danmestas/libfossil)
-[![Go Report Card](https://goreportcard.com/badge/github.com/danmestas/libfossil)](https://goreportcard.com/report/github.com/danmestas/libfossil)
+[![Go Reference](https://pkg.go.dev/badge/github.com/danmestas/go-libfossil.svg)](https://pkg.go.dev/github.com/danmestas/go-libfossil)
+[![Go Report Card](https://goreportcard.com/badge/github.com/danmestas/go-libfossil)](https://goreportcard.com/report/github.com/danmestas/go-libfossil)
 [![Tests](https://github.com/danmestas/go-libfossil/actions/workflows/test.yml/badge.svg)](https://github.com/danmestas/go-libfossil/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8.svg)](https://go.dev)
 
 Pure-Go library and CLI for [Fossil](https://fossil-scm.org) repositories. Drop-in compatible with Fossil's `.fossil` SQLite format, with no CGo and no upstream `fossil` binary required.
 
-> The repository is named **go-libfossil**, but the module is imported as `libfossil` (`go get github.com/danmestas/libfossil`) and the CLI installs as the `libfossil` command — the import path is unchanged.
+> The repository and module path are **go-libfossil** (`go get github.com/danmestas/go-libfossil`), but the Go package is still imported as `libfossil` and the CLI installs as the `libfossil` command. Only the path moved; the package and binary names are unchanged.
 
 ## Why libfossil
 
@@ -28,7 +28,7 @@ Pure-Go library and CLI for [Fossil](https://fossil-scm.org) repositories. Drop-
 ### CLI
 
 ```bash
-go install github.com/danmestas/libfossil/cmd/libfossil@latest
+go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
 ```
 
 The binary is named `libfossil` to avoid `$PATH` collisions with upstream `fossil`.
@@ -36,7 +36,7 @@ The binary is named `libfossil` to avoid `$PATH` collisions with upstream `fossi
 ### Library
 
 ```bash
-go get github.com/danmestas/libfossil
+go get github.com/danmestas/go-libfossil
 ```
 
 ## CLI quick start
@@ -60,8 +60,8 @@ package main
 import (
     "log"
 
-    libfossil "github.com/danmestas/libfossil"
-    _ "github.com/danmestas/libfossil/db/driver/modernc"
+    libfossil "github.com/danmestas/go-libfossil"
+    _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 )
 
 func main() {
@@ -115,8 +115,8 @@ The `Transport` interface is pluggable — swap HTTP for NATS, WebSocket, libp2p
 ```go
 import (
     "github.com/alecthomas/kong"
-    "github.com/danmestas/libfossil/cli"
-    _ "github.com/danmestas/libfossil/db/driver/modernc"
+    "github.com/danmestas/go-libfossil/cli"
+    _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 )
 
 type MyCLI struct {
@@ -153,8 +153,8 @@ Deep dive: [docs/architecture.md](./docs/site/content/docs/architecture.md).
 
 | Driver | Import | When to use |
 |--------|--------|-------------|
-| `modernc` (default) | `_ "github.com/danmestas/libfossil/db/driver/modernc"` | Default for any server, CLI, or desktop use |
-| `ncruces` | `_ "github.com/danmestas/libfossil/db/driver/ncruces"` | wasm targets (`GOOS=wasip1` or browser/OPFS) |
+| `modernc` (default) | `_ "github.com/danmestas/go-libfossil/db/driver/modernc"` | Default for any server, CLI, or desktop use |
+| `ncruces` | `_ "github.com/danmestas/go-libfossil/db/driver/ncruces"` | wasm targets (`GOOS=wasip1` or browser/OPFS) |
 
 Driver selection happens via blank import at link time. See [docs/extension-points.md](./docs/site/content/docs/extension-points.md#sqlite-driver-interface) for the registration contract.
 
@@ -166,7 +166,7 @@ libfossil.NopSyncObserver()     // silent
 libfossil.StdoutSyncObserver()  // human-readable stderr
 
 // Optional OpenTelemetry (separate submodule — no OTel deps in core).
-import "github.com/danmestas/libfossil/observer/otel"
+import "github.com/danmestas/go-libfossil/observer/otel"
 obs := otel.NewSyncObserver()
 ```
 

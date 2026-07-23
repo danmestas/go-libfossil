@@ -3,7 +3,7 @@ package delta_test
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/delta"
 )
 
 func ExampleCreate() {

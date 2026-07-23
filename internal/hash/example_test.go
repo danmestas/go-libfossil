@@ -3,7 +3,7 @@ package hash_test
 import (
 	"fmt"
 
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 func ExampleSHA1() {

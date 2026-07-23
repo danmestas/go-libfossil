@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/danmestas/libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // Transport sends an xfer request and returns the response.

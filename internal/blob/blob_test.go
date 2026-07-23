@@ -7,11 +7,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func setupTestDB(t *testing.T) *db.DB {
@@ -239,7 +239,7 @@ func TestStoreDeltaRawAgainstPhantomBase(t *testing.T) {
 		t.Fatalf("StorePhantom base: %v", err)
 	}
 
-	rid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid)
+	rid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid, nil)
 	if err != nil {
 		t.Fatalf("StoreDeltaRaw: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestStoreDeltaRawExistingRealBlobIsNoOp(t *testing.T) {
 	deltaBytes := delta.Create(source, target)
 	targetUUID := hash.SHA1(target)
 
-	gotRid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid)
+	gotRid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid, nil)
 	if err != nil {
 		t.Fatalf("StoreDeltaRaw: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestStoreDeltaRawOverflowHeaderRejected(t *testing.T) {
 	targetUUID := "0000000000000000000000000000000000000001"
 	overflowHeader := []byte("~~~~~~~~~~~\n;0,")
 
-	if _, err := StoreDeltaRaw(d, targetUUID, overflowHeader, srcRid); err == nil {
+	if _, err := StoreDeltaRaw(d, targetUUID, overflowHeader, srcRid, nil); err == nil {
 		t.Fatal("StoreDeltaRaw(overflow header) = nil error, want rejection")
 	}
 
@@ -373,10 +373,53 @@ func TestStoreDeltaRawEmptyPayloadReturnsError(t *testing.T) {
 	}
 
 	targetUUID := "0000000000000000000000000000000000000002"
-	_, err = StoreDeltaRaw(d, targetUUID, []byte{}, srcRid)
+	_, err = StoreDeltaRaw(d, targetUUID, []byte{}, srcRid, nil)
 	if err == nil {
 		t.Fatal("StoreDeltaRaw(empty payload) = nil error, want an error " +
 			"(wire-supplied empty content must not panic)")
+	}
+}
+
+// TestStoreDeltaRawStoresVerbatimBlobWhenGiven is the storage-layer
+// regression test for issue #112 on the delta path: when a caller supplies
+// storedBlob (bytes already in Fossil's on-disk blob format, e.g. received
+// over the wire), StoreDeltaRaw must write those bytes into blob.content
+// unchanged rather than recompressing deltaBytes with its own zlib writer.
+func TestStoreDeltaRawStoresVerbatimBlobWhenGiven(t *testing.T) {
+	d := setupTestDB(t)
+
+	source := []byte("original content here, long enough to compress well")
+	target := []byte("original content here, long enough to compress well, and modified")
+	deltaBytes := delta.Create(source, target)
+	targetUUID := hash.SHA1(target)
+	baseUUID := hash.SHA1(source)
+
+	srcRid, err := StorePhantom(d, baseUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom base: %v", err)
+	}
+
+	// A deliberately distinctive "verbatim" blob -- not what Compress would
+	// produce -- so the test fails loudly if StoreDeltaRaw recompresses
+	// deltaBytes instead of using storedBlob.
+	storedBlob, err := Compress(deltaBytes)
+	if err != nil {
+		t.Fatalf("Compress(deltaBytes): %v", err)
+	}
+	storedBlob = append(append([]byte{}, storedBlob...), []byte("-marker-not-part-of-real-zlib")...)
+
+	rid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid, storedBlob)
+	if err != nil {
+		t.Fatalf("StoreDeltaRaw: %v", err)
+	}
+
+	var gotContent []byte
+	if err := d.QueryRow("SELECT content FROM blob WHERE rid=?", rid).Scan(&gotContent); err != nil {
+		t.Fatalf("query content: %v", err)
+	}
+	if !bytes.Equal(gotContent, storedBlob) {
+		t.Fatalf("blob.content was recompressed instead of stored verbatim:\n  got  %x\n  want %x",
+			gotContent, storedBlob)
 	}
 }
 

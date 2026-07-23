@@ -1,6 +1,6 @@
 package sync
 
-import "github.com/danmestas/libfossil/simio"
+import "github.com/danmestas/go-libfossil/simio"
 
 // CloneOpts configures a clone operation.
 type CloneOpts struct {

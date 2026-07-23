@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/db"
+	"github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // trunkTip returns the RID of the latest checkin on trunk.

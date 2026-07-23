@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil"
-	"github.com/danmestas/libfossil/internal/auth"
+	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/auth"
 )
 
 // RepoCloneCmd clones a remote Fossil repository.

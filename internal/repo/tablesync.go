@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/libfossil/db"
-	"github.com/danmestas/libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // ColumnDef defines a column in a synced table.

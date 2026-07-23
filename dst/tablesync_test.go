@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/uv"
 )
 
 // --- Table sync test helpers ---

@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/danmestas/libfossil/simio"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func setupTSRepo(t *testing.T) *Repo {

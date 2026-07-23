@@ -7,19 +7,15 @@ import (
 	"testing"
 	"time"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/manifest"
-	"github.com/danmestas/libfossil/internal/repo"
-	"github.com/danmestas/libfossil/simio"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
-
-func hasFossil() bool {
-	_, err := exec.LookPath("fossil")
-	return err == nil
-}
 
 // createDivergentRepo creates a repo with:
 //   - Initial checkin: file.txt = baseContent
@@ -173,9 +169,7 @@ func TestDetectForksLinear(t *testing.T) {
 // --- Strategy tests with Fossil validation ---
 
 func TestThreeWayStrategyWithFossilValidation(t *testing.T) {
-	if !hasFossil() {
-		t.Skip("fossil binary not found")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	// Non-overlapping edits: local changes line 1, remote changes line 3.
 	base := "line1\nline2\nline3\n"
@@ -227,7 +221,7 @@ func TestThreeWayStrategyWithFossilValidation(t *testing.T) {
 	r.Close()
 
 	// Fossil rebuild — validates repo integrity.
-	cmd := exec.Command("fossil", "rebuild", r.Path())
+	cmd := exec.Command(fossilBin, "rebuild", r.Path())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
@@ -245,9 +239,7 @@ func TestThreeWayStrategyWithFossilValidation(t *testing.T) {
 }
 
 func TestLastWriterWinsWithFossilValidation(t *testing.T) {
-	if !hasFossil() {
-		t.Skip("fossil binary not found")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	base := "original content\n"
 	local := "local edit\n"
@@ -285,7 +277,7 @@ func TestLastWriterWinsWithFossilValidation(t *testing.T) {
 	}
 	r.Close()
 
-	cmd := exec.Command("fossil", "rebuild", r.Path())
+	cmd := exec.Command(fossilBin, "rebuild", r.Path())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild: %v\n%s", err, out)
@@ -295,9 +287,7 @@ func TestLastWriterWinsWithFossilValidation(t *testing.T) {
 }
 
 func TestBinaryStrategyWithFossilValidation(t *testing.T) {
-	if !hasFossil() {
-		t.Skip("fossil binary not found")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	base := "binary\x00base\xff"
 	local := "binary\x00local\xff"
@@ -330,7 +320,7 @@ func TestBinaryStrategyWithFossilValidation(t *testing.T) {
 	}
 	r.Close()
 
-	cmd := exec.Command("fossil", "rebuild", r.Path())
+	cmd := exec.Command(fossilBin, "rebuild", r.Path())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild: %v\n%s", err, out)
@@ -340,9 +330,7 @@ func TestBinaryStrategyWithFossilValidation(t *testing.T) {
 }
 
 func TestConflictForkWithFossilValidation(t *testing.T) {
-	if !hasFossil() {
-		t.Skip("fossil binary not found")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 
 	base := "config: v1\n"
 	local := "config: v2-local\n"
@@ -399,7 +387,7 @@ func TestConflictForkWithFossilValidation(t *testing.T) {
 
 	r.Close()
 
-	cmd := exec.Command("fossil", "rebuild", r.Path())
+	cmd := exec.Command(fossilBin, "rebuild", r.Path())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fossil rebuild: %v\n%s", err, out)

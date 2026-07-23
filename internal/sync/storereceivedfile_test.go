@@ -3,11 +3,11 @@ package sync
 import (
 	"testing"
 
-	"github.com/danmestas/libfossil/internal/blob"
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/delta"
-	"github.com/danmestas/libfossil/internal/hash"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // TestStoreReceivedFileEmptyDeltaPayloadReturnsError is the end-to-end
@@ -23,7 +23,7 @@ func TestStoreReceivedFileEmptyDeltaPayloadReturnsError(t *testing.T) {
 	baseUUID := hash.SHA1([]byte("some base content, unrelated to this test"))
 	targetUUID := hash.SHA1([]byte("some target content, unrelated to this test"))
 
-	err := storeReceivedFile(r, targetUUID, baseUUID, []byte{})
+	err := storeReceivedFile(r, targetUUID, baseUUID, []byte{}, nil)
 	if err == nil {
 		t.Fatal("storeReceivedFile(empty delta payload) = nil error, want an error " +
 			"(a peer-supplied empty delta must not panic the process)")
@@ -52,7 +52,7 @@ func TestStoreReceivedFileNonHexDeltaSrcReturnsError(t *testing.T) {
 		nonHexDeltaSrc += "z" // valid length, not a hex digit
 	}
 
-	if err := storeReceivedFile(r, targetUUID, nonHexDeltaSrc, deltaBytes); err == nil {
+	if err := storeReceivedFile(r, targetUUID, nonHexDeltaSrc, deltaBytes, nil); err == nil {
 		t.Fatal("storeReceivedFile(non-hex deltaSrc) = nil error, want rejection")
 	}
 
@@ -88,7 +88,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	targetUUID := hash.SHA1(target)
 
 	// The delta arrives first. baseUUID has never been seen before.
-	if err := storeReceivedFile(r, targetUUID, baseUUID, deltaBytes); err != nil {
+	if err := storeReceivedFile(r, targetUUID, baseUUID, deltaBytes, nil); err != nil {
 		t.Fatalf("storeReceivedFile(delta before base) = %v, want nil: a delta "+
 			"arriving before its base must not be treated as an error", err)
 	}
@@ -138,7 +138,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	}
 
 	// Now the base arrives as ordinary full content, in a later round.
-	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
+	if err := storeReceivedFile(r, baseUUID, "", base, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -180,10 +180,10 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 
 	// Deliver deepest-first: target's delta references mid, which itself
 	// doesn't exist yet either.
-	if err := storeReceivedFile(r, targetUUID, midUUID, targetDelta); err != nil {
+	if err := storeReceivedFile(r, targetUUID, midUUID, targetDelta, nil); err != nil {
 		t.Fatalf("storeReceivedFile(target delta) = %v, want nil", err)
 	}
-	if err := storeReceivedFile(r, midUUID, baseUUID, midDelta); err != nil {
+	if err := storeReceivedFile(r, midUUID, baseUUID, midDelta, nil); err != nil {
 		t.Fatalf("storeReceivedFile(mid delta) = %v, want nil", err)
 	}
 
@@ -192,7 +192,7 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 
 	// Finally the root arrives.
-	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
+	if err := storeReceivedFile(r, baseUUID, "", base, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -206,6 +206,45 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 	if string(got) != string(target) {
 		t.Fatalf("expanded content = %q, want %q", got, target)
+	}
+}
+
+// TestStoreReceivedFileStoresVerbatimBlobForFullContent is the regression
+// test for issue #112 on the full-content receive path: when a caller
+// supplies storedBlob (bytes already in Fossil's on-disk blob format, as
+// xfer.CFileCard.StoredBlob carries them), storeReceivedFile must persist
+// those bytes unchanged rather than recompressing fullContent with its own
+// zlib writer -- otherwise a clone reproduces the source's content but not
+// its stored bytes.
+func TestStoreReceivedFileStoresVerbatimBlobForFullContent(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	full := []byte("full content received over the wire, long enough to compress")
+	uuid := hash.SHA1(full)
+
+	storedBlob, err := blob.Compress(full)
+	if err != nil {
+		t.Fatalf("blob.Compress: %v", err)
+	}
+	// Distinctive marker so the test fails loudly if the verbatim bytes are
+	// silently discarded in favor of a fresh compression pass.
+	storedBlob = append(append([]byte{}, storedBlob...), []byte("-marker-not-part-of-real-zlib")...)
+
+	if err := storeReceivedFile(r, uuid, "", full, storedBlob); err != nil {
+		t.Fatalf("storeReceivedFile: %v", err)
+	}
+
+	rid, ok := blob.Exists(r.DB(), uuid)
+	if !ok {
+		t.Fatal("blob row missing after store")
+	}
+	var gotContent []byte
+	if err := r.DB().QueryRow("SELECT content FROM blob WHERE rid=?", rid).Scan(&gotContent); err != nil {
+		t.Fatalf("query content: %v", err)
+	}
+	if string(gotContent) != string(storedBlob) {
+		t.Fatalf("blob.content was recompressed instead of stored verbatim:\n  got  %x\n  want %x",
+			gotContent, storedBlob)
 	}
 }
 
@@ -270,14 +309,14 @@ func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
 	}
 
 	// Guard 3: the delta arrives first, base absent, claiming the GOOD uuid.
-	if err := storeReceivedFile(r, claimedUUID, baseUUID, evilDelta); err != nil {
+	if err := storeReceivedFile(r, claimedUUID, baseUUID, evilDelta, nil); err != nil {
 		t.Fatalf("storeReceivedFile(evil delta, base absent) = %v, want nil: a delta arriving "+
 			"before its base must be stored, not rejected up front — rejection has to happen "+
 			"where the claim can actually be checked", err)
 	}
 
 	// The base is delivered afterward, as ordinary full content.
-	if err := storeReceivedFile(r, baseUUID, "", base); err != nil {
+	if err := storeReceivedFile(r, baseUUID, "", base, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 

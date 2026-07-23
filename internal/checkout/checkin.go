@@ -8,10 +8,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/danmestas/libfossil/internal/content"
-	"github.com/danmestas/libfossil/internal/deck"
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	"github.com/danmestas/libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
 // Enqueue adds files to the commit staging queue. If the queue is empty (nil),

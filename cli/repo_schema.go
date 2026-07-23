@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danmestas/libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // RepoSchemaCmd groups synced table schema operations.

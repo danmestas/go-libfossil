@@ -2,4 +2,4 @@
 
 package testdriver
 
-import _ "github.com/danmestas/libfossil/db/driver/ncruces"
+import _ "github.com/danmestas/go-libfossil/db/driver/ncruces"

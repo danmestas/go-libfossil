@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"testing"
 
-	libfossil "github.com/danmestas/libfossil/internal/fsltype"
-	libdb "github.com/danmestas/libfossil/db"
-	_ "github.com/danmestas/libfossil/internal/testdriver"
+	libdb "github.com/danmestas/go-libfossil/db"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
 // buildPlink creates an in-memory SQLite DB with plink table and populates it.

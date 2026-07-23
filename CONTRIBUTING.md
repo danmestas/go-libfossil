@@ -9,7 +9,7 @@ submit changes.
 Requires Go 1.26 or newer.
 
 ```
-git clone https://github.com/danmestas/libfossil
+git clone https://github.com/danmestas/go-libfossil
 cd libfossil
 make setup-hooks
 ```
@@ -40,7 +40,7 @@ test-drivers` to take a few minutes end to end.
 
 ## Code layout
 
-- Root module (`github.com/danmestas/libfossil`) holds the public API: `Repo`,
+- Root module (`github.com/danmestas/go-libfossil`) holds the public API: `Repo`,
   checkout, sync, merge, and history helpers. See `fossil.go`, `repo.go`, and the
   `repo_*.go` files.
 - `cli/` hosts the Kong-based command-line surface; the `libfossil` binary is

@@ -60,6 +60,42 @@ func TestCheckinBasic(t *testing.T) {
 	}
 }
 
+// TestCheckinZeroLengthFile is a regression test for issue #68: committing
+// a zero-length file used to panic in blob.Store, and Checkin's own
+// postcondition defer masked that panic with an unrelated "manifestRid
+// must be positive" message during unwind. A zero-length file is legal
+// input and must commit like any other file.
+func TestCheckinZeroLengthFile(t *testing.T) {
+	r := setupTestRepo(t)
+	rid, uuid, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "empty.txt", Content: []byte{}}},
+		Comment: "empty file",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin(empty file): %v", err)
+	}
+	if rid <= 0 {
+		t.Fatalf("rid = %d, want > 0", rid)
+	}
+	if len(uuid) != 40 && len(uuid) != 64 {
+		t.Fatalf("uuid len = %d", len(uuid))
+	}
+
+	files, err := ListFiles(r, rid)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "empty.txt" {
+		t.Fatalf("ListFiles = %+v, want one entry named empty.txt", files)
+	}
+	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	if files[0].UUID != emptySHA1 {
+		t.Fatalf("empty.txt UUID = %q, want %q", files[0].UUID, emptySHA1)
+	}
+}
+
 func TestCheckinFossilRebuild(t *testing.T) {
 	testutil.RequireFossilBin(t)
 	r := setupTestRepo(t)

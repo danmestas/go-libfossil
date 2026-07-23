@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -12,6 +14,44 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 )
+
+// phantomStallSampleSize caps how many missing UUIDs PhantomStallError
+// carries, so a repository with thousands of phantoms doesn't produce an
+// unreadable error message.
+const phantomStallSampleSize = 10
+
+// PhantomStallError reports a clone that stopped making progress while
+// phantom blobs — content referenced but never received — were still
+// outstanding. Terminating a stalled clone is correct; reporting it as
+// success is not, so this is always returned instead of nil in that case.
+// Count is programmatically reachable so a caller can act on it without
+// parsing the message.
+type PhantomStallError struct {
+	Count  int      // phantom UUIDs still outstanding when the clone stopped
+	Sample []string // up to phantomStallSampleSize lexicographically-smallest of those UUIDs, for diagnosis
+}
+
+func (e *PhantomStallError) Error() string {
+	return fmt.Sprintf("sync.Clone: stalled with %d phantom artifact(s) outstanding, e.g. %s",
+		e.Count, strings.Join(e.Sample, ", "))
+}
+
+// newPhantomStallError builds a PhantomStallError from the session's current
+// phantom set. Called only once that set is known to be non-empty.
+func newPhantomStallError(phantoms map[string]bool) *PhantomStallError {
+	if len(phantoms) == 0 {
+		panic("sync.newPhantomStallError: phantoms must not be empty")
+	}
+	all := make([]string, 0, len(phantoms))
+	for uuid := range phantoms {
+		all = append(all, uuid)
+	}
+	sort.Strings(all)
+	if len(all) > phantomStallSampleSize {
+		all = all[:phantomStallSampleSize]
+	}
+	return &PhantomStallError{Count: len(phantoms), Sample: all}
+}
 
 // cloneSession holds the mutable state of a running clone.
 type cloneSession struct {
@@ -94,6 +134,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 
 	cloneResult, cloneErr := cs.run(ctx, t)
 	if cloneErr != nil {
+		// cloneResult is still meaningful on a stall or round-limit error —
+		// callers inspecting the returned result (e.g. BlobsRecvd) alongside
+		// a *PhantomStallError shouldn't see it silently dropped to nil.
+		result = cloneResult
 		err = cloneErr
 		return
 	}
@@ -101,6 +145,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	// Crosslink: parse received manifests into event/plink/leaf/mlink tables.
 	linked, xlinkErr := manifest.Crosslink(r)
 	if xlinkErr != nil {
+		result = cloneResult
 		err = fmt.Errorf("sync.Clone: crosslink: %w", xlinkErr)
 		return
 	}
@@ -159,25 +204,13 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 		cs.result.Rounds = cycle + 1
 		cs.obs.RoundCompleted(roundCtx, cycle, RoundStats{FilesReceived: cs.result.BlobsRecvd - recvdBefore})
 
-		// Convergence: need at least 2 rounds.
-		// Continue while seqno > 0 or phantoms remain with progress.
-		if cycle >= 1 && done {
-			if cs.seqno <= 0 && len(cs.phantoms) == 0 {
-				break
-			}
-			// If phantoms remain but no progress, stop.
-			phantomCount := len(cs.phantoms)
-			if cs.seqno <= 0 && phantomCount > 0 && phantomCount >= prevPhantomCount {
-				break
-			}
-			prevPhantomCount = phantomCount
-			if cs.seqno <= 0 {
-				// Only phantoms remain, keep going if making progress.
-				continue
-			}
+		stop, stopErr := cs.checkStop(cycle, done, &prevPhantomCount)
+		if stopErr != nil {
+			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), stopErr)
+			return &cs.result, stopErr
 		}
-		if cycle >= 1 {
-			prevPhantomCount = len(cs.phantoms)
+		if stop {
+			break
 		}
 	}
 
@@ -185,6 +218,40 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 	cs.result.ServerCode = cs.serverCode
 	cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), nil)
 	return &cs.result, nil
+}
+
+// checkStop decides whether the clone loop should stop after processing a
+// round. Convergence needs at least two rounds (cycle >= 1), and only once a
+// round delivers no new file content (roundDone). *prevPhantomCount tracks
+// the phantom count observed at the end of the prior round and is updated
+// in place.
+//
+// A non-nil err means the loop is stopping because it stalled with phantoms
+// still outstanding — the phantom count held steady or grew across a round
+// that delivered nothing new. That is a failed clone, not a successful one,
+// even though continuing would only spin forever (see PhantomStallError).
+func (cs *cloneSession) checkStop(cycle int, roundDone bool, prevPhantomCount *int) (stop bool, err error) {
+	if prevPhantomCount == nil {
+		panic("cloneSession.checkStop: prevPhantomCount must not be nil")
+	}
+
+	if cycle < 1 {
+		return false, nil
+	}
+	if !roundDone {
+		*prevPhantomCount = len(cs.phantoms)
+		return false, nil
+	}
+
+	phantomCount := len(cs.phantoms)
+	if cs.seqno <= 0 && phantomCount == 0 {
+		return true, nil
+	}
+	if cs.seqno <= 0 && phantomCount > 0 && phantomCount >= *prevPhantomCount {
+		return true, newPhantomStallError(cs.phantoms)
+	}
+	*prevPhantomCount = phantomCount
+	return false, nil
 }
 
 // sessionEndFromClone builds a SessionEnd from a CloneResult.

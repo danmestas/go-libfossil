@@ -16,6 +16,13 @@ jobs:
           go-version-file: go.mod
       - name: Install Fossil
         run: sudo apt-get update && sudo apt-get install -y fossil
+      - name: Build all packages
+        # Build every package, not just the cmd/libfossil dependency closure.
+        # The `go test $(go list ./...)` step below silently drops any package
+        # that fails to compile (go list omits it from stdout instead of
+        # failing), so a broken import can vanish from the test run undetected.
+        # Building `./...` first makes that a loud, fail-fast build error.
+        run: GOWORK=off go build ./...
       - name: Unit tests
         # REQUIRE_FOSSIL_BIN turns "fossil is missing" into a failure rather
         # than an invisible skip. Verifying a real fossil reads what we write
@@ -29,8 +36,6 @@ jobs:
         run: cd db/driver/modernc && GOWORK=off go test ./... -count=1
       - name: Vet
         run: GOWORK=off go vet ./...
-      - name: Build libfossil binary
-        run: GOWORK=off go build ./cmd/libfossil/
 
   test-ncruces:
     name: Test (ncruces)
@@ -42,6 +47,10 @@ jobs:
           go-version-file: go.mod
       - name: Install Fossil
         run: sudo apt-get update && sudo apt-get install -y fossil
+      - name: Build all packages (ncruces)
+        # Same fail-fast guard as the modernc leg, under the test_ncruces tag so
+        # the ncruces driver's compile surface is covered too.
+        run: GOWORK=off go build -tags test_ncruces ./...
       - name: Unit tests (ncruces)
         env:
           REQUIRE_FOSSIL_BIN: "1"

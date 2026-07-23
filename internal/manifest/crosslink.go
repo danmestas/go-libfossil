@@ -165,10 +165,13 @@ func deltaChainOrder(q db.Querier, candidates []candidate) ([]candidate, error) 
 
 	// A candidate's delta chain terminates within maxDeltaChainDepth
 	// (content.walkDeltaChain enforces that on every expansion), so it
-	// cannot cycle back on itself; every candidate must therefore drain
-	// from the queue exactly once.
+	// should not cycle back on itself and every candidate should drain
+	// from the queue exactly once. The `delta` table is on-disk data --
+	// possibly hostile or corrupt, arriving over sync from a remote peer --
+	// so a graph that fails to drain is reported as an error rather than
+	// treated as a programmer-contract violation.
 	if len(ordered) != len(candidates) {
-		panic("manifest.deltaChainOrder: candidate delta graph did not fully drain (cycle?)")
+		return nil, fmt.Errorf("manifest.deltaChainOrder: candidate delta graph did not fully drain (%d of %d candidates ordered); delta table may contain a cycle", len(ordered), len(candidates))
 	}
 	return ordered, nil
 }

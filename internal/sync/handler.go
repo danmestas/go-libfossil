@@ -796,35 +796,58 @@ func (h *handler) emitCloneBatch() error {
 			break
 		}
 
-		// §7.2: clone retransmits the repository's stored compressed full
-		// artifact or stored compressed delta verbatim -- never the fully
-		// expanded content cache.Expand produces. blob.Load already returns
-		// exactly that: the decompressed bytes as stored, which for a delta
-		// row are the delta bytes against DeltaSource, not the reconstructed
-		// target. Expanding here would inflate the wire by 80-220x on real
-		// repositories (issue #98) for no reader of this response, since the
-		// client (storeDeltaContent) stores a received delta exactly as
-		// given and resolves it against its source later, out of order if
-		// necessary.
-		data, err := blob.Load(h.repo.DB(), libfossil.FslID(rid))
-		if err != nil {
-			return fmt.Errorf("handler: loading stored content for rid %d: %w", rid, err)
-		}
-		var deltaSrcUUID string
+		// §7.2: clone retransmits the repository's stored compressed content
+		// verbatim rather than the fully expanded form cache.Expand produces
+		// for a whole artifact -- blob.Load returns exactly that, and using
+		// it here (instead of Expand) is most of this fix's wire-size win
+		// (issue #98): a whole artifact goes out compressed instead of
+		// expanded and uncompressed.
+		//
+		// A row stored as a delta is the one case blob.Load's bytes cannot
+		// be forwarded as-is: content.Deltify always deltifies the OLDER
+		// artifact against the NEWER one (see deltify.go's doc comment), so
+		// DeltaSource almost always names a rid greater than rid itself. This
+		// loop sends cards in ascending-rid order for cursor/pagination
+		// reasons unrelated to delta direction, which means a delta card is
+		// routinely emitted before the very source card it names. libfossil's
+		// own client tolerates that forward reference (storeDeltaContent
+		// creates a phantom for an unseen source and resolves it later), but
+		// real fossil 2.28 does not: the source stays a genuine, unfilled
+		// phantom, and content_get() on it during the client's post-clone
+		// rebuild pass returns without initializing its output blob, which
+		// trips an assertion in blob_copy (blob.c:397) and aborts the
+		// client mid-rebuild. Verified against a real fossil 2.28 client
+		// cloning a libfossil server holding a delta chain.
+		//
+		// So a deltified row is expanded and sent as a plain (non-delta)
+		// cfile instead of forwarding the stored delta bytes -- still
+		// zlib-compressed over the wire, just not chain-dependent on send
+		// order. That gives up the delta win specifically (retransmitting a
+		// delta chain's savings, not just this fix's compression win) for
+		// deltified rows; re-enabling delta retransmission needs either a
+		// source-before-dependent send order or confirmation that a newer
+		// canonical tolerates the forward reference, and is left as a
+		// follow-up rather than blocking the non-delta win here.
 		srcRid, err := content.DeltaSource(h.repo.DB(), libfossil.FslID(rid))
 		if err != nil {
 			return fmt.Errorf("handler: delta source for rid %d: %w", rid, err)
 		}
+		var data []byte
 		if srcRid != 0 {
-			deltaSrcUUID, err = h.repo.UUIDByRID(int64(srcRid))
+			data, err = content.Expand(h.repo.DB(), libfossil.FslID(rid))
 			if err != nil {
-				return fmt.Errorf("handler: uuid for delta source rid %d: %w", srcRid, err)
+				return fmt.Errorf("handler: expanding deltified rid %d: %w", rid, err)
+			}
+		} else {
+			data, err = blob.Load(h.repo.DB(), libfossil.FslID(rid))
+			if err != nil {
+				return fmt.Errorf("handler: loading stored content for rid %d: %w", rid, err)
 			}
 		}
 		if isPriv {
 			h.resp = append(h.resp, &xfer.PrivateCard{})
 		}
-		h.resp = append(h.resp, &xfer.CFileCard{UUID: uuid, DeltaSrc: deltaSrcUUID, USize: fullSize, Content: data})
+		h.resp = append(h.resp, &xfer.CFileCard{UUID: uuid, USize: fullSize, Content: data})
 		h.filesSent++
 		lastSentRID = rid
 		count++

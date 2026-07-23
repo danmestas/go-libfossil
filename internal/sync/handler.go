@@ -221,7 +221,7 @@ func (h *handler) handleLoginCard(c *xfer.LoginCard) {
 	h.authed = true
 }
 
-func (h *handler) process(_ context.Context, req *xfer.Message) (*xfer.Message, error) {
+func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
 	// Initialize auth state from nobody user.
 	h.initAuth()
 
@@ -277,8 +277,12 @@ func (h *handler) process(_ context.Context, req *xfer.Message) (*xfer.Message, 
 	//
 	// Only walk the crosslink scanner when we accepted files this round;
 	// pure pull/igot rounds add nothing relational to update.
+	//
+	// Context-aware (#120): this sweep walks the whole repository in one call,
+	// so on a large repo it is where a request whose client has already gone
+	// away would otherwise keep working uninterrupted.
 	if h.filesRecvd > 0 {
-		if _, err := manifest.Crosslink(h.repo); err != nil {
+		if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
 			return nil, fmt.Errorf("HandleSync: crosslink: %w", err)
 		}
 	}

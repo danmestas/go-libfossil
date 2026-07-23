@@ -249,8 +249,10 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		}
 	}
 
-	// Auto-crosslink after convergence
-	linked, xlinkErr := manifest.Crosslink(s.repo)
+	// Auto-crosslink after convergence. Context-aware for the same reason the
+	// clone's sweep is (#120): this runs after the round loop, so it has no
+	// round boundary of its own at which a cancelled context could be noticed.
+	linked, xlinkErr := manifest.CrosslinkContext(ctx, s.repo)
 	if xlinkErr != nil {
 		obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), xlinkErr)
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)

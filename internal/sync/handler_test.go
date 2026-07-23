@@ -263,7 +263,11 @@ func TestHandleClone(t *testing.T) {
 		t.Fatalf("HandleSync: %v", err)
 	}
 
-	files := findCards[*xfer.FileCard](resp)
+	// §7.2: clone sends cfile, not file — no plain file cards should appear.
+	if plain := findCards[*xfer.FileCard](resp); len(plain) > 0 {
+		t.Fatalf("clone response carried %d 'file' cards; §7.2 requires 'cfile'", len(plain))
+	}
+	files := findCards[*xfer.CFileCard](resp)
 	for _, f := range files {
 		delete(stored, f.UUID)
 	}
@@ -272,17 +276,90 @@ func TestHandleClone(t *testing.T) {
 	}
 }
 
-// cloneRound runs one clone round at the given cursor and returns the file
+// similarCloneArtifacts returns two bodies sharing almost all their text, so
+// a delta between them is well under content.Deltify's policy threshold and
+// far smaller than either full body.
+func similarCloneArtifacts() ([]byte, []byte) {
+	var a, b strings.Builder
+	for i := 0; i < 200; i++ {
+		fmt.Fprintf(&a, "line %04d: the quick brown fox jumps over the lazy dog\n", i)
+		if i == 100 {
+			fmt.Fprintf(&b, "line %04d: CHANGED FOR THE DELTA TEST\n", i)
+		} else {
+			fmt.Fprintf(&b, "line %04d: the quick brown fox jumps over the lazy dog\n", i)
+		}
+	}
+	return []byte(a.String()), []byte(b.String())
+}
+
+// TestEmitCloneBatchRetransmitsDeltaAsDelta pins §7.2's harder half: a stored
+// delta must be retransmitted as a delta -- small payload, DeltaSrc set to
+// its source's UUID -- never expanded to full content first. Issue #98:
+// before this fix, emitCloneBatch called cache.Expand and lost the delta
+// entirely, which is where the 80-220x wire amplification came from on real
+// repositories full of deltified history.
+func TestEmitCloneBatchRetransmitsDeltaAsDelta(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	predecessor, successor := similarCloneArtifacts()
+	var oldUUID, newUUID string
+	if err := r.WithTx(func(tx *db.Tx) error {
+		oldRid, u1, err := blob.Store(tx, predecessor)
+		if err != nil {
+			return err
+		}
+		newRid, u2, err := blob.Store(tx, successor)
+		if err != nil {
+			return err
+		}
+		oldUUID, newUUID = u1, u2
+		saved, err := content.Deltify(tx, oldRid, newRid)
+		if err != nil {
+			return err
+		}
+		if saved <= 0 {
+			t.Fatalf("test setup: Deltify saved %d bytes, want > 0", saved)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("deltify setup: %v", err)
+	}
+
+	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	var deltaCard *xfer.CFileCard
+	for _, c := range findCards[*xfer.CFileCard](resp) {
+		if c.UUID == oldUUID {
+			deltaCard = c
+		}
+	}
+	if deltaCard == nil {
+		t.Fatal("expected a cfile card for the deltified predecessor")
+	}
+	if deltaCard.DeltaSrc != newUUID {
+		t.Errorf("DeltaSrc = %q, want %q (the artifact it was deltified against)", deltaCard.DeltaSrc, newUUID)
+	}
+	if len(deltaCard.Content) >= len(predecessor) {
+		t.Errorf("cfile payload = %d bytes, want < %d (full content) — delta was expanded before sending",
+			len(deltaCard.Content), len(predecessor))
+	}
+}
+
+// cloneRound runs one clone round at the given cursor and returns the cfile
 // cards it produced, their total payload size, and the cursor the server
 // reported back. A zero cursor back means the snapshot is exhausted.
-func cloneRound(t *testing.T, r *repo.Repo, seqno int) (files []*xfer.FileCard, payload int, next int) {
+func cloneRound(t *testing.T, r *repo.Repo, seqno int) (files []*xfer.CFileCard, payload int, next int) {
 	t.Helper()
 	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: seqno}}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("clone round at seqno %d: %v", seqno, err)
 	}
-	files = findCards[*xfer.FileCard](resp)
+	files = findCards[*xfer.CFileCard](resp)
 	for _, f := range files {
 		payload += len(f.Content)
 	}
@@ -588,7 +665,7 @@ func TestHandleCloneCursorPastEnd(t *testing.T) {
 	// Get all blobs to find the max rid
 	req1 := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
 	resp1, _ := HandleSync(context.Background(), r, req1)
-	files1 := findCards[*xfer.FileCard](resp1)
+	files1 := findCards[*xfer.CFileCard](resp1)
 
 	// Now clone with seqno past all blobs — should get nothing
 	req2 := &xfer.Message{Cards: []xfer.Card{
@@ -598,7 +675,7 @@ func TestHandleCloneCursorPastEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
-	files2 := findCards[*xfer.FileCard](resp2)
+	files2 := findCards[*xfer.CFileCard](resp2)
 	if len(files2) > 0 {
 		t.Fatalf("expected no files with high seqno, got %d", len(files2))
 	}
@@ -1345,7 +1422,7 @@ func TestEmitCloneBatchSkipsPrivate(t *testing.T) {
 		&xfer.CloneCard{Version: 1},
 	)
 
-	files := findCards[*xfer.FileCard](resp)
+	files := findCards[*xfer.CFileCard](resp)
 	fileUUIDs := make(map[string]bool)
 	for _, f := range files {
 		fileUUIDs[f.UUID] = true
@@ -1373,7 +1450,7 @@ func TestEmitCloneBatchIncludesPrivateWhenAuthorized(t *testing.T) {
 		&xfer.PragmaCard{Name: "send-private"},
 	)
 
-	files := findCards[*xfer.FileCard](resp)
+	files := findCards[*xfer.CFileCard](resp)
 	fileUUIDs := make(map[string]bool)
 	for _, f := range files {
 		fileUUIDs[f.UUID] = true
@@ -1663,8 +1740,8 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 	if len(resp.Cards) != 1 {
 		t.Errorf("resp has %d cards, want 1 (output must be cleared)", len(resp.Cards))
 	}
-	if n := len(findCards[*xfer.FileCard](resp)); n != 0 {
-		t.Errorf("sent %d file cards on a fatal clone request, want 0", n)
+	if n := len(findCards[*xfer.CFileCard](resp)); n != 0 {
+		t.Errorf("sent %d cfile cards on a fatal clone request, want 0", n)
 	}
 	if n := len(findCards[*xfer.ConfigCard](resp)); n != 0 {
 		t.Errorf("later reqconfig card was parsed; §8.1 forbids it")
@@ -1699,7 +1776,7 @@ func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
 					t.Fatalf("§8.1 fatal applied to a case it excludes")
 				}
 			}
-			if n := len(findCards[*xfer.FileCard](resp)); n == 0 {
+			if n := len(findCards[*xfer.CFileCard](resp)); n == 0 {
 				t.Errorf("no files sent; request should clone from the first rid")
 			}
 		})

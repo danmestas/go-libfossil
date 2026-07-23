@@ -54,6 +54,16 @@ type CFileCard struct {
 	DeltaSrc string
 	USize    int
 	Content  []byte
+
+	// StoredBlob is the received card's payload re-expressed in Fossil's
+	// on-disk blob format ([4-byte big-endian uncompressed size][zlib
+	// data]), suitable for writing to the blob table's content column
+	// verbatim. It is derived by decode-time bookkeeping only -- never by
+	// recompressing Content -- so a receiver that persists StoredBlob
+	// reproduces the sender's stored bytes exactly, rather than the bytes
+	// of a fresh, independently-parameterized zlib pass. Always non-nil
+	// after a successful decode.
+	StoredBlob []byte
 }
 
 func (c *CFileCard) Type() CardType { return CardCFile }

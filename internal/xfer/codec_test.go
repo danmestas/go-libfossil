@@ -916,6 +916,98 @@ func TestRoundTrip_CFileLargeContent(t *testing.T) {
 	}
 }
 
+// TestDecodeCFile_StoredBlobPrefixedWirePreservedVerbatim is the regression
+// test for issue #112: when a cfile card's wire payload already carries
+// Fossil's on-disk blob format ([4-byte BE size][zlib data]) -- exactly
+// what send_compressed_file transmits, since it reads a blob.content column
+// straight off disk -- StoredBlob must be those exact bytes, not a
+// recompression of the decompressed content. This is the case that fires
+// against a real Fossil server.
+func TestDecodeCFile_StoredBlobPrefixedWirePreservedVerbatim(t *testing.T) {
+	plain := []byte("some artifact content, long enough that zlib actually does something")
+
+	var zbuf bytes.Buffer
+	zw := zlib.NewWriter(&zbuf)
+	if _, err := zw.Write(plain); err != nil {
+		t.Fatalf("zlib write: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zlib close: %v", err)
+	}
+
+	// Fossil's on-disk blob format: 4-byte BE uncompressed-size prefix,
+	// then the zlib stream, exactly as send_compressed_file would send it.
+	wireBlob := make([]byte, 0, 4+zbuf.Len())
+	sizeHdr := make([]byte, 4)
+	binary.BigEndian.PutUint32(sizeHdr, uint32(len(plain)))
+	wireBlob = append(wireBlob, sizeHdr...)
+	wireBlob = append(wireBlob, zbuf.Bytes()...)
+
+	wire := fmt.Sprintf("cfile aabbcc %d %d\n", len(plain), len(wireBlob))
+	r := bufio.NewReader(strings.NewReader(wire + string(wireBlob)))
+	card, err := DecodeCard(r)
+	if err != nil {
+		t.Fatalf("DecodeCard: %v", err)
+	}
+	c, ok := card.(*CFileCard)
+	if !ok {
+		t.Fatalf("expected *CFileCard, got %T", card)
+	}
+	if !bytes.Equal(c.Content, plain) {
+		t.Fatalf("Content = %q, want %q", c.Content, plain)
+	}
+	if !bytes.Equal(c.StoredBlob, wireBlob) {
+		t.Fatalf("StoredBlob was re-encoded instead of preserved verbatim:\n  got  %x\n  want %x",
+			c.StoredBlob, wireBlob)
+	}
+}
+
+// TestDecodeCFile_StoredBlobPlainZlibGetsPrefixWithoutRecompression covers
+// the other wire form: our own encoder sends plain zlib with no size
+// prefix. StoredBlob must still be built without a second zlib pass --
+// only the 4-byte length header is bookkeeping added on top of the exact
+// zlib bytes that were received.
+func TestDecodeCFile_StoredBlobPlainZlibGetsPrefixWithoutRecompression(t *testing.T) {
+	plain := []byte("other artifact content, also long enough for zlib to matter here")
+
+	c := &CFileCard{UUID: "abc123", Content: plain}
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+
+	r := bufio.NewReader(&buf)
+	got, err := DecodeCard(r)
+	if err != nil {
+		t.Fatalf("DecodeCard: %v", err)
+	}
+	gotCFile, ok := got.(*CFileCard)
+	if !ok {
+		t.Fatalf("expected *CFileCard, got %T", got)
+	}
+	if len(gotCFile.StoredBlob) < 4 {
+		t.Fatalf("StoredBlob too short to carry a size prefix: %d bytes", len(gotCFile.StoredBlob))
+	}
+	gotUsize := binary.BigEndian.Uint32(gotCFile.StoredBlob[:4])
+	if int(gotUsize) != len(plain) {
+		t.Fatalf("StoredBlob size prefix = %d, want %d", gotUsize, len(plain))
+	}
+	// Decompressing StoredBlob (skipping the prefix we just checked) must
+	// reproduce plain exactly.
+	zr, err := zlib.NewReader(bytes.NewReader(gotCFile.StoredBlob[4:]))
+	if err != nil {
+		t.Fatalf("zlib.NewReader(StoredBlob[4:]): %v", err)
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("zlib read: %v", err)
+	}
+	if !bytes.Equal(out, plain) {
+		t.Fatalf("StoredBlob decompressed = %q, want %q", out, plain)
+	}
+}
+
 func TestEncode_CFileCompression(t *testing.T) {
 	// Verify that compression actually reduces size for compressible data
 	content := bytes.Repeat([]byte("AAAA"), 1000)

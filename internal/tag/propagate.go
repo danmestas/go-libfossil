@@ -214,9 +214,11 @@ func PropagateAll(q db.Querier, rid libfossil.FslID) error {
 	for rows.Next() {
 		var e entry
 		var mtimeRaw any
-		if err := rows.Scan(&e.tagid, &e.tagtype, &mtimeRaw, &e.value, &e.origid); err != nil {
+		var value sql.NullString // tagxref.value is nullable (e.g. CrosslinkCluster's cluster tag)
+		if err := rows.Scan(&e.tagid, &e.tagtype, &mtimeRaw, &value, &e.origid); err != nil {
 			return fmt.Errorf("tag.PropagateAll scan: %w", err)
 		}
+		e.value = value.String
 		e.mtime, _ = db.ScanJulianDay(mtimeRaw)
 		entries = append(entries, e)
 	}

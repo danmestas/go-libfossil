@@ -134,9 +134,12 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 
 	// Inherit propagating tags (branch, sym-*, bgcolor) from the primary parent.
 	// Without this, a new commit on an existing branch would not carry its
-	// parent's branch tag — breaking branch-aware queries. Matches the
-	// corresponding PropagateAll call in crosslink's applyInlineTags so the
-	// fresh-commit and sync-import paths converge on the same tagxref state.
+	// parent's branch tag — breaking branch-aware queries. A local commit is
+	// always linked immediately after its parent exists, so calling this
+	// here (rather than deferring to a repair pass) is safe; crosslink's
+	// sync-import path defers the equivalent work to repairTagPropagation
+	// instead, since candidates there are not visited in parent-before-child
+	// order. Both converge on the same tagxref state.
 	if opts.Parent > 0 {
 		if err := tag.PropagateAll(r.DB(), opts.Parent); err != nil {
 			return 0, "", fmt.Errorf("manifest.Checkin propagate from parent: %w", err)

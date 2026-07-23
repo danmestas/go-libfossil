@@ -60,7 +60,7 @@ func TestDecodeOversizeCompressedMessageIsReported(t *testing.T) {
 	}
 	data := compressedContainer(t, MaxDecompressedBytes+1024)
 
-	_, err := Decode(data)
+	_, err := Decode(data, ContentTypeCompressed)
 	if err == nil {
 		t.Fatal("Decode accepted a message over MaxDecompressedBytes")
 	}
@@ -82,7 +82,7 @@ func TestDecodeCorruptZlibIsNotParsedAsCards(t *testing.T) {
 	full := compressedContainer(t, 1<<20)
 	truncated := full[:len(full)/2]
 
-	_, err := Decode(truncated)
+	_, err := Decode(truncated, ContentTypeCompressed)
 	if err == nil {
 		t.Fatal("Decode accepted a truncated zlib stream")
 	}
@@ -109,7 +109,7 @@ func TestDecodeRoundTripsLargeMessageUnderBound(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 
-	got, err := Decode(wire)
+	got, err := Decode(wire, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestDecodeRoundTripsLargeMessageUnderBound(t *testing.T) {
 func TestDecodeUncompressedBodyStillWorks(t *testing.T) {
 	body := []byte("igot " + strings.Repeat("c", 40) + "\nclone_seqno 7\n")
 
-	msg, err := Decode(body)
+	msg, err := Decode(body, ContentTypeUncompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -155,42 +155,43 @@ func TestMaxDecompressedBytesIsReachable(t *testing.T) {
 	}
 }
 
-// TestDecodeRejectsAliasingDeclaredLength pins issue #110: a §4.1 container
-// whose declared length's top byte presents as a valid zlib CMF byte (i.e. it
-// would alias as a format-1 header) must be rejected on the declared length
-// alone, before format 1 ever gets a chance to (mis)parse it. Method: build a
-// genuine container -- 4-byte declared length plus a real zlib payload -- but
-// give it a declared length at 0x081D0000 (>= zlibCMFAliasBytes, and known
-// from the issue's own probe to present a valid header at offset 0) and
-// assert Decode rejects it rather than returning whatever format 1 produces.
-func TestDecodeRejectsAliasingDeclaredLength(t *testing.T) {
+// TestDecodeRejectsOversizeDeclaredLength pins issue #110's surviving
+// protection: a §4.1 container whose declared length exceeds
+// MaxDecompressedBytes is rejected on the declared length alone, before the
+// zlib stream after it is inflated. Method: build a genuine container -- 4-byte
+// declared length plus a real zlib payload -- but overwrite its declared
+// length with 0x081D0000 (well over the bound) and assert it is rejected
+// naming the declared length, not after expansion. Content-Type dispatch made
+// this unconditional: a compressed body always reads its length prefix, so the
+// former format-1/format-2 aliasing that motivated #110 can no longer arise.
+func TestDecodeRejectsOversizeDeclaredLength(t *testing.T) {
 	real := compressedContainer(t, 64) // small, genuine §4.1 container
-	// Overwrite the genuine declared-length prefix with an aliasing one; the
+	// Overwrite the genuine declared-length prefix with an oversize one; the
 	// zlib payload after it is untouched and still real.
-	aliasing := append([]byte{0x08, 0x1D, 0x00, 0x00}, real[4:]...)
+	oversize := append([]byte{0x08, 0x1D, 0x00, 0x00}, real[4:]...)
 
-	_, err := decompressContainer(aliasing)
+	_, err := decompressContainer(oversize)
 	if err == nil {
-		t.Fatal("decompressContainer accepted a container with an aliasing declared length")
+		t.Fatal("decompressContainer accepted a container with an oversize declared length")
 	}
 	if !strings.Contains(err.Error(), "declared") {
 		t.Errorf("error does not name the declared-length rejection: %v", err)
 	}
 
-	if _, err := Decode(aliasing); err == nil {
-		t.Fatal("Decode accepted a container with an aliasing declared length")
+	if _, err := Decode(oversize, ContentTypeCompressed); err == nil {
+		t.Fatal("Decode accepted a container with an oversize declared length")
 	}
 }
 
-// TestDecodeUncompressedBodyWithLargeLeadingBytesStillWorks guards the fix for
-// #110 against over-rejecting: plain uncompressed card text whose first four
-// bytes happen to read as a large integer (ordinary ASCII often does) must
-// still fall through to format 3, since it never presented a zlib header at
-// all and so was never actually ambiguous with the §4.1 container.
+// TestDecodeUncompressedBodyWithLargeLeadingBytesStillWorks checks that plain
+// card text whose first four bytes happen to read as a large integer decodes
+// as cards. Under Content-Type dispatch the leading bytes are never read as a
+// length: an uncompressed Content-Type sends the body straight to the card
+// parser, so a body can never be misclassified as an oversize container.
 func TestDecodeUncompressedBodyWithLargeLeadingBytesStillWorks(t *testing.T) {
 	body := []byte("igot " + strings.Repeat("c", 40) + "\nclone_seqno 7\n")
 
-	msg, err := Decode(body)
+	msg, err := Decode(body, ContentTypeUncompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

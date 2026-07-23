@@ -32,7 +32,7 @@ func TestMessage_MultiCardRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	got, err := Decode(data)
+	got, err := Decode(data, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestMessage_WithPayloadCards(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	got, err := Decode(data)
+	got, err := Decode(data, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -130,7 +130,7 @@ func TestMessage_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Encode empty: %v", err)
 	}
-	got, err := Decode(data)
+	got, err := Decode(data, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode empty: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestMessage_CompressionReducesSize(t *testing.T) {
 		float64(len(compressed))*100/float64(len(uncompressed)))
 
 	// Verify round-trip through compressed path
-	got, err := Decode(compressed)
+	got, err := Decode(compressed, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestMessage_RealisticSyncTraffic(t *testing.T) {
 	t.Logf("realistic sync message: %d cards, %d bytes compressed", len(cards), len(data))
 
 	// Decode
-	got, err := Decode(data)
+	got, err := Decode(data, ContentTypeCompressed)
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -458,7 +458,7 @@ func BenchmarkDecodeMessage(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := Decode(data)
+		_, err := Decode(data, ContentTypeCompressed)
 		if err != nil {
 			b.Fatal(err)
 		}

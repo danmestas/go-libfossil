@@ -48,6 +48,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a zlib header. Neither guard certifies a whole round — the budget bounds
   what precedes an artifact, not the artifact, so a large artifact that does not
   lead its round can still overrun the bound (#109). (#104)
+- Committing a file with zero-length content panicked in `blob.Store`,
+  which treated an empty artifact -- a normal, well-known Fossil blob -- as
+  invalid input; the panic then triggered `manifest.Checkin`'s postcondition
+  defer, which re-panicked with an unrelated "manifestRid must be positive"
+  message that masked the real cause. `blob.Store` now accepts zero-length
+  (and nil) content, and `Checkin`'s defer re-panics with the original panic
+  value instead of asserting a postcondition that was never going to hold
+  mid-unwind (#68).
+- A commit no longer silently carries a tracked file's last-committed
+  content forward when that file has been deleted from disk without
+  `Unmanage`/`Remove` -- it now fails clearly, naming the file, matching
+  fossil's own behavior for a missing file that is in scope for the commit
+  being made. A missing file outside the commit's scope (relevant only to
+  an explicit `Enqueue`) is left untouched exactly as before (#79).
 
 ### Changed
 

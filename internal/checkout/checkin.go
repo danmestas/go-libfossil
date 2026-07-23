@@ -3,6 +3,7 @@ package checkout
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -240,7 +241,7 @@ func (c *Checkout) buildCommitFiles(
 				return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
 			}
 			if _, err := c.env.Storage.Stat(fullPath); err != nil {
-				if os.IsNotExist(err) {
+				if errors.Is(err, os.ErrNotExist) {
 					return nil, fmt.Errorf(
 						"checkout.Commit: tracked file missing from disk: %s", name,
 					)
@@ -353,7 +354,7 @@ func (c *Checkout) restatCommitPerms(
 		}
 		info, err := c.env.Storage.Stat(fullPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue // missing on disk: carry the existing Perm forward unchanged
 			}
 			return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)

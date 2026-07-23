@@ -93,8 +93,19 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 
 		// §4: select framing from the request's Content-Type rather than by
 		// trial. A canonical or libfossil client sends the compressed container
-		// as application/x-fossil.
-		msg, err := xfer.Decode(body, req.Header.Get("Content-Type"))
+		// as application/x-fossil. A type we do not recognise carries no framing
+		// signal at all, so decoding it either way is a guess -- reject it rather
+		// than feed possibly-compressed bytes to the card parser (issue #104).
+		ct := req.Header.Get("Content-Type")
+		if !xfer.KnownContentType(ct) {
+			slog.Error("serve-http: unsupported content type", "content-type", ct)
+			http.Error(w, fmt.Sprintf("unsupported content type %q: expected %s or %s",
+				ct, xfer.ContentTypeCompressed, xfer.ContentTypeUncompressed),
+				http.StatusUnsupportedMediaType)
+			return
+		}
+
+		msg, err := xfer.Decode(body, ct)
 		if err != nil {
 			slog.Error("serve-http: decode failed", "bytes", len(body), "err", err)
 			http.Error(w, fmt.Sprintf("decode xfer (%d bytes): %v", len(body), err),

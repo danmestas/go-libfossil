@@ -41,6 +41,11 @@ func TestCloneSelfRoundTripLargeArtifactAfterFiller(t *testing.T) {
 
 	for _, fillerBytes := range []int{8 << 20, 12 << 20, 15 << 20} {
 		t.Run(fmt.Sprintf("filler-%dMiB", fillerBytes>>20), func(t *testing.T) {
+			// Each size is an independent repository in its own temp dir, so the
+			// three run concurrently -- serially they push this package past the
+			// 120s per-package timeout CI runs with.
+			t.Parallel()
+
 			// The filler must stay under the batch budget so it does not force a
 			// round of its own; only then does the artifact ride into the same
 			// round, which is the #109 condition. (filler + artifact + per-card

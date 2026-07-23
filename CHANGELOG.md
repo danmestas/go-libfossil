@@ -45,7 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   disambiguate the two compressed framings that trial-dispatch conflated.
   `xfer.Decode` now takes the Content-Type; call sites that carry no header
   (the byte-oriented NATS transport, both ends libfossil) pass the compressed
-  type explicitly, matching what they always emit. (#106)
+  type explicitly, matching what they always emit. The HTTP server rejects a
+  request body whose Content-Type is absent or neither §4 type with 415
+  Unsupported Media Type instead of decoding it as plain card text: bodies come
+  from untrusted peers, and without a framing signal decoding either way is a
+  guess. Real fossil always sets the header, so no conforming peer is affected.
+  (#106)
 - A large artifact now clones regardless of its position within a clone round.
   The server charged its batch budget before each artifact and sent the one
   that crossed it whole, so a round carried `budget + one whole artifact` — and

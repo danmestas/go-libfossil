@@ -136,10 +136,26 @@ func Decode(data []byte, contentType string) (*Message, error) {
 // compressed container framing. §4 signals framing by the bare media type, so
 // any parameters (e.g. "; charset=...") and letter case are ignored.
 func contentTypeIsCompressed(contentType string) bool {
+	return strings.EqualFold(mediaType(contentType), ContentTypeCompressed)
+}
+
+// KnownContentType reports whether a Content-Type is one of the two §4 media
+// types. Decode treats every other type as plain card text, so a server reading
+// bodies from untrusted peers uses this to reject a body that carries no
+// framing signal instead of guessing at its framing.
+func KnownContentType(contentType string) bool {
+	mt := mediaType(contentType)
+	return strings.EqualFold(mt, ContentTypeCompressed) ||
+		strings.EqualFold(mt, ContentTypeUncompressed)
+}
+
+// mediaType strips any parameters (e.g. "; charset=...") from a Content-Type,
+// leaving the bare media type §4 signals framing with.
+func mediaType(contentType string) string {
 	if i := strings.IndexByte(contentType, ';'); i >= 0 {
 		contentType = contentType[:i]
 	}
-	return strings.EqualFold(strings.TrimSpace(contentType), ContentTypeCompressed)
+	return strings.TrimSpace(contentType)
 }
 
 // DecodeCompressed decodes a §4.1 compressed container: a 4-byte big-endian

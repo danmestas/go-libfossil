@@ -79,7 +79,7 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 
 	// Already a delta: leave it. This is the rule that keeps chain depth
 	// linear in revision count instead of compounding (content.c:869).
-	source, err := deltaSource(tx, rid)
+	source, err := DeltaSource(tx, rid)
 	if err != nil {
 		return 0, err
 	}
@@ -180,7 +180,7 @@ func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
 		}
 		seen[cur] = true
 
-		next, err := deltaSource(tx, cur)
+		next, err := DeltaSource(tx, cur)
 		if err != nil {
 			return false, err
 		}
@@ -240,7 +240,7 @@ func Undelta(tx *db.Tx, rid libfossil.FslID) error {
 		panic("content.Undelta: rid must be > 0")
 	}
 
-	source, err := deltaSource(tx, rid)
+	source, err := DeltaSource(tx, rid)
 	if err != nil {
 		return err
 	}
@@ -266,16 +266,18 @@ func Undelta(tx *db.Tx, rid libfossil.FslID) error {
 	return nil
 }
 
-// deltaSource returns the rid that rid is stored as a delta against, or 0 if
-// rid holds full content.
-func deltaSource(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
+// DeltaSource returns the rid that rid is stored as a delta against, or 0 if
+// rid holds full content. Exported so callers outside this package (the
+// clone send path, notably) can tell whether stored content read via
+// blob.Load is a delta payload or full text without duplicating this query.
+func DeltaSource(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
 	var srcid int64
 	err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", rid).Scan(&srcid)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return 0, nil
 	case err != nil:
-		return 0, fmt.Errorf("content.deltaSource rid=%d: %w", rid, err)
+		return 0, fmt.Errorf("content.DeltaSource rid=%d: %w", rid, err)
 	}
 	return libfossil.FslID(srcid), nil
 }

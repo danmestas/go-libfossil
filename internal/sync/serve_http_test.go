@@ -246,7 +246,7 @@ func TestServeHTTPClone(t *testing.T) {
 		t.Fatalf("clone exchange: %v", err)
 	}
 
-	files := findCards[*xfer.FileCard](resp)
+	files := findCards[*xfer.CFileCard](resp)
 	for _, f := range files {
 		delete(stored, f.UUID)
 	}

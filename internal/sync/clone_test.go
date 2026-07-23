@@ -1029,7 +1029,7 @@ func TestHandleCloneCursorFromCloneCard(t *testing.T) {
 	var gotSeqNo int
 	for _, card := range resp.Cards {
 		switch c := card.(type) {
-		case *xfer.FileCard:
+		case *xfer.CFileCard:
 			gotUUIDs = append(gotUUIDs, c.UUID)
 		case *xfer.CloneSeqNoCard:
 			gotSeqNo = c.SeqNo

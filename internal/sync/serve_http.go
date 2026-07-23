@@ -91,7 +91,10 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 			return
 		}
 
-		msg, err := xfer.Decode(body)
+		// §4: select framing from the request's Content-Type rather than by
+		// trial. A canonical or libfossil client sends the compressed container
+		// as application/x-fossil.
+		msg, err := xfer.Decode(body, req.Header.Get("Content-Type"))
 		if err != nil {
 			slog.Error("serve-http: decode failed", "bytes", len(body), "err", err)
 			http.Error(w, fmt.Sprintf("decode xfer (%d bytes): %v", len(body), err),
@@ -116,7 +119,7 @@ func writeXferResponse(w http.ResponseWriter, msg *xfer.Message) {
 		http.Error(w, "encode response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/x-fossil")
+	w.Header().Set("Content-Type", xfer.ContentTypeCompressed)
 	if _, err := w.Write(respBytes); err != nil {
 		slog.Error("serve-http: write response failed", "err", err)
 	}

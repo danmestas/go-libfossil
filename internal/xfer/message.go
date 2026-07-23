@@ -5,15 +5,34 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Message is a sequence of cards forming one xfer request or response.
 type Message struct {
 	Cards []Card
 }
+
+// ContentTypeCompressed and ContentTypeUncompressed are the two §4 media types
+// that signal how an xfer body is framed. A body sent as ContentTypeCompressed
+// is the §4.1 compressed container: a 4-byte big-endian pre-compression length
+// followed by a zlib stream. A body sent as ContentTypeUncompressed is plain
+// card text, which is what a clone-v3 reply uses (its file content is already
+// compressed per artifact, so the message itself is not).
+//
+// §4 says the receiver selects framing on the Content-Type, and canonical
+// fossil does exactly that: it decompresses a body if and only if the type is
+// ContentTypeCompressed, and treats every other type as plain text. Verified
+// against fossil 2.28 -- a pull reply arrives as ContentTypeCompressed with a
+// `00 00 00 3e 78 9c ...` prefixed container, and a clone reply arrives as
+// ContentTypeUncompressed with `pragma server-version ...` card text. No
+// canonical reply is ever an unprefixed raw zlib stream.
+const (
+	ContentTypeCompressed   = "application/x-fossil"
+	ContentTypeUncompressed = "application/x-fossil-uncompressed"
+)
 
 // MaxDecompressedBytes caps how far one message may expand during
 // decompression. It bounds the expansion only. The compressed body itself
@@ -27,100 +46,30 @@ type Message struct {
 // the decompressed size of the compressed container. This implementation is
 // deliberately stricter than canonical here, which sizes its output buffer
 // from the attacker-supplied length prefix (blob.c blob_uncompress); the bound
-// below counts bytes actually inflated and ignores the advertised length.
+// below counts bytes actually inflated and also rejects a declared length that
+// exceeds it before inflating anything (issue #110).
 //
 // Because it is a guard and not a rule, it has to sit above anything a
 // conforming peer will send, or a legitimate exchange fails -- which is how
 // issue #104 arose, with the bound below what this implementation's own server
-// emitted in one clone round. Two constraints fix the range:
+// emitted in one clone round. A clone round this implementation's server emits
+// stays within this bound by construction: the server flushes a round rather
+// than let it cross the bound, and sends an over-bound artifact alone
+// (internal/sync.emitCloneBatch). The compile-time guard in internal/sync
+// pins DefaultCloneBatchBytes below half of this bound so that filler plus one
+// budget-sized artifact always fits.
 //
-//   - Above: a clone round carries sync.DefaultCloneBatchBytes of expanded
-//     content plus the whole artifact that crossed that budget, so the bound
-//     must clear the budget twice over. Enforced at compile time in
-//     internal/sync.
-//   - Below: it must stay under zlibCMFAliasBytes, so that no length prefix
-//     this implementation writes can present as a zlib header. Enforced at
-//     compile time immediately below. Read that constant's comment before
-//     trusting the guard: it bounds what we emit, not what we accept.
-//
-// Consequence worth naming, and it is not the simple one. An artifact larger
-// than this bound can never be cloned, because the server must send it whole
-// to make progress. But the real threshold is lower and is not a property of
-// the artifact alone: a round already holding bytes has that much less room,
-// so the ceiling is this bound minus whatever the round accumulated before the
-// artifact. With a 16 MB budget an artifact much above 48 MiB clones only when
-// it happens to lead its round, and fails when ordinary artifacts precede it.
-// That ordering dependence is issue #109; it is a defect this fix exposes
-// rather than one this fix introduces or resolves.
+// Consequence worth naming: an artifact larger than this bound cannot be
+// cloned, because the server must send it whole in a round of its own and the
+// client cannot decode a round past this bound. That limit is a property of
+// the artifact alone -- it no longer depends on what precedes the artifact in
+// its round (issue #109).
 const MaxDecompressedBytes = 64 << 20 // 64 MiB
 
-// zlibCMFAliasBytes is the declared length at which the first byte of a §4.1
-// container's big-endian length prefix can itself be a valid zlib CMF byte.
-// RFC 1950 requires CM == 8 in the low nibble, so the lowest aliasing prefix
-// byte is 0x08, reached at a declared length of 0x08000000.
-//
-// It matters because Decode attempts unprefixed zlib before the prefixed
-// container, and format 1 returns immediately if it succeeds -- format 2 is
-// consulted only when format 1 fails. A prefix that presents as a zlib header
-// therefore gets first refusal on a legitimate container.
-//
-// Be precise about what the guard below is worth, because it is less than it
-// looks:
-//
-//   - It does NOT bound aliasing on input. The aliasing byte comes from the
-//     length the *peer* declared, and this decoder never reads that field --
-//     it slices past it and counts bytes actually inflated. No value of
-//     MaxDecompressedBytes constrains what a peer declares. A peer declaring
-//     0x081D0000 while sending 46 bytes produces a parsing header at offset 0,
-//     confirmed by probe.
-//   - What actually protects a real container in that case is the rest of the
-//     stream, not arithmetic: after consuming two prefix bytes as a header,
-//     inflate must still parse the remaining two prefix bytes plus the real
-//     zlib stream as DEFLATE and match its Adler-32. It does not -- measured
-//     `flate: corrupt input` on all three aliasing lengths probed -- so format
-//     1 fails, format 2 runs, and the container decodes correctly. The
-//     residual risk is a stream that both parses as DEFLATE and hits a 32-bit
-//     checksum by chance.
-//   - What the guard DOES buy is narrow and real: this implementation's own
-//     Encode writes uint32(len(raw)) as the prefix, so holding the bound below
-//     this threshold means a body libfossil emits can never carry an aliasing
-//     prefix. It is an invariant on our output, not a defence of our input.
-//
-// The airtight fix is to stop guessing the framing -- select on Content-Type
-// per §4, or reject a declared length above the bound before attempting format
-// 1. Both are redesigns of framing selection and neither belongs in #104.
-const zlibCMFAliasBytes = 0x0800_0000 // 128 MiB
-
-// Compile-time guards on MaxDecompressedBytes. Each subtraction underflows and
-// fails the build if the bound leaves its valid range, rather than letting a
-// clone fail at runtime on a message this implementation itself produced.
-const (
-	_ = uint(zlibCMFAliasBytes - 1 - MaxDecompressedBytes)
-	_ = uint(MaxDecompressedBytes - 1) // must be positive.
-)
-
-// errNotZlib marks a payload whose first two bytes are not a zlib header
-// (RFC 1950). It is the only decompression outcome that licenses the caller to
-// try a different framing: once a stream is recognized as zlib, a failure to
-// decode it is a real failure and must be reported, never reinterpreted.
-var errNotZlib = errors.New("xfer: not a zlib stream")
-
-// isZlibHeader reports whether data begins with a structurally valid RFC 1950
-// zlib header: CM (the low nibble of the first byte) must be 8, and the
-// header word must be a multiple of 31. It is a pure structural check with no
-// I/O, used only to decide whether the first four bytes of data could also be
-// read as a §4.1 declared length worth checking against the bound -- it does
-// not attempt to decompress anything.
-func isZlibHeader(data []byte) bool {
-	if len(data) < 2 {
-		return false
-	}
-	cmf, flg := data[0], data[1]
-	if cmf&0x0f != 8 {
-		return false
-	}
-	return (uint16(cmf)*256+uint16(flg))%31 == 0
-}
+// Compile-time guard: the bound must be positive. The subtraction underflows
+// and fails the build if MaxDecompressedBytes is ever set to zero, rather than
+// letting a clone fail at runtime on a message this implementation produced.
+const _ = uint(MaxDecompressedBytes - 1)
 
 // Encode serializes all cards and zlib-compresses the result.
 // Uses Fossil's compression format: 4-byte big-endian uncompressed size prefix
@@ -159,92 +108,77 @@ func (m *Message) EncodeUncompressed() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Decode decodes an xfer message. It tries three formats in order:
-//  1. Unprefixed zlib. No Fossil wire format produces this: every
-//     application/x-fossil body carries the §4.1 length prefix, on both the
-//     request side (http.c) and the reply side (cgi.c), both through
-//     blob_compress. It is kept as a tolerance for a peer that omits the
-//     prefix, not because canonical emits it.
-//  2. 4-byte BE length prefix + zlib (the §4.1 compressed container, which is
-//     also what Encode produces, and what every Fossil peer sends).
-//  3. Uncompressed card data (clone protocol v3, x-fossil-uncompressed).
+// Decode decodes an xfer message, selecting its framing from the §4
+// Content-Type rather than by trying each framing and seeing which parses.
+// A ContentTypeCompressed body is decoded as the §4.1 compressed container;
+// any other type (including ContentTypeUncompressed, or an absent header) is
+// decoded as plain card text, matching canonical fossil's rule of
+// decompressing a body iff its type is exactly ContentTypeCompressed.
 //
-// Compressed bytes are never handed to the card parser. A payload that is
-// recognizable as zlib but fails to decode — corrupt stream, or larger than
-// MaxDecompressedBytes — is reported as the transport failure it is. Falling
-// through to format 3 in that case parses the still-compressed body as card
-// text, which yields thousands of nonsense cards and finally an arbitrary
-// syntax error thousands of cards deep, naming neither the real fault nor the
-// real position (issue #104).
-func Decode(data []byte) (*Message, error) {
+// Selecting on Content-Type is what keeps a decompression failure from being
+// misread as "wrong framing". A compressed body that fails to inflate -- a
+// corrupt stream, or one larger than MaxDecompressedBytes -- is reported as
+// the transport fault it is and never re-fed to the card parser, which under
+// the old trial-based dispatch read still-compressed bytes as thousands of
+// nonsense cards and reported a syntax error thousands of cards deep, naming
+// neither the real fault nor the real position (issue #104).
+func Decode(data []byte, contentType string) (*Message, error) {
 	if len(data) == 0 {
 		return &Message{}, nil
 	}
-	raw, err := decompressContainer(data)
-	if err == nil {
-		return DecodeUncompressed(raw)
+	if contentTypeIsCompressed(contentType) {
+		return DecodeCompressed(data)
 	}
-	if !errors.Is(err, errNotZlib) {
-		return nil, err
-	}
-	// Format 3: the body is not zlib under either framing, so it is either
-	// uncompressed card data or garbage. The card parser tells them apart.
 	return DecodeUncompressed(data)
 }
 
-// decompressContainer decompresses a message body under either compressed
-// framing. Format 1 wins outright if it decodes; format 2 is tried only when
-// format 1 fails. The error comparison at the end therefore decides nothing
-// about which framing is used -- it only selects which failure to report when
-// both have already failed. It returns errNotZlib only when neither framing is
-// a zlib stream at all.
-func decompressContainer(data []byte) ([]byte, error) {
-	// If this body presents a valid zlib header at offset 0, it is exactly
-	// the case zlibCMFAliasBytes describes: the first four bytes double as
-	// both a would-be zlib header (what format 1 is about to try) and a
-	// §4.1 declared length (what format 2 would read from the same bytes).
-	// Read that declared length now and reject it if it is over the bound,
-	// before format 1 gets a chance to settle the ambiguity by however the
-	// rest of the stream happens to inflate. A body that does not present a
-	// valid header here was never ambiguous with the container format, so it
-	// is left to the existing format 1 / format 2 / format 3 fallback below.
-	if len(data) >= 4 && isZlibHeader(data) {
-		declared := binary.BigEndian.Uint32(data[:4])
-		if declared > MaxDecompressedBytes {
-			return nil, fmt.Errorf(
-				"xfer: declared container length %d exceeds %d bytes", declared, MaxDecompressedBytes)
-		}
+// contentTypeIsCompressed reports whether a §4 Content-Type selects the
+// compressed container framing. §4 signals framing by the bare media type, so
+// any parameters (e.g. "; charset=...") and letter case are ignored.
+func contentTypeIsCompressed(contentType string) bool {
+	if i := strings.IndexByte(contentType, ';'); i >= 0 {
+		contentType = contentType[:i]
 	}
-	// Format 1: unprefixed zlib. See Decode; a tolerance, not a Fossil format.
-	rawDirect, errDirect := decompressBounded(data)
-	if errDirect == nil {
-		return rawDirect, nil
-	}
-	if len(data) < 4 {
-		return nil, errDirect
-	}
-	// Format 2: 4-byte BE length prefix + zlib (§4.1).
-	rawPrefixed, errPrefixed := decompressBounded(data[4:])
-	if errPrefixed == nil {
-		return rawPrefixed, nil
-	}
-	// Both framings failed. Report the one that was actually recognized as
-	// zlib; a length prefix can coincidentally parse as a zlib header, so
-	// "format 1 failed" alone does not mean the body is corrupt.
-	if errors.Is(errDirect, errNotZlib) {
-		return nil, errPrefixed
-	}
-	return nil, errDirect
+	return strings.EqualFold(strings.TrimSpace(contentType), ContentTypeCompressed)
 }
 
-// decompressBounded decompresses one zlib stream with a size cap.
-// It returns errNotZlib when data does not begin with a zlib header, and a
-// descriptive error when a real zlib stream fails to decode or exceeds
-// MaxDecompressedBytes.
+// DecodeCompressed decodes a §4.1 compressed container: a 4-byte big-endian
+// pre-compression length followed by a zlib stream. It is the framing a
+// ContentTypeCompressed body carries and the framing Encode produces.
+func DecodeCompressed(data []byte) (*Message, error) {
+	raw, err := decompressContainer(data)
+	if err != nil {
+		return nil, err
+	}
+	return DecodeUncompressed(raw)
+}
+
+// decompressContainer decompresses a §4.1 compressed container. The declared
+// length is checked against MaxDecompressedBytes before inflating anything, so
+// an oversized body is rejected on its own claim rather than after being
+// expanded (issue #110). A stream that fails to inflate is returned as the
+// error it is; the caller does not retry it as another framing, because the
+// Content-Type already committed this body to the compressed container.
+func decompressContainer(data []byte) ([]byte, error) {
+	if len(data) < 4 {
+		return nil, fmt.Errorf(
+			"xfer: compressed body is %d bytes, too short for a 4-byte length prefix", len(data))
+	}
+	declared := binary.BigEndian.Uint32(data[:4])
+	if declared > MaxDecompressedBytes {
+		return nil, fmt.Errorf(
+			"xfer: declared container length %d exceeds %d bytes", declared, MaxDecompressedBytes)
+	}
+	return decompressBounded(data[4:])
+}
+
+// decompressBounded decompresses one zlib stream with a size cap. It reports a
+// descriptive error when the data is not a zlib stream, when a real zlib stream
+// fails to decode, or when it exceeds MaxDecompressedBytes.
 func decompressBounded(data []byte) ([]byte, error) {
 	zr, err := zlib.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errNotZlib, err)
+		return nil, fmt.Errorf("xfer: compressed body is not a valid zlib stream: %w", err)
 	}
 	defer zr.Close()
 	lr := io.LimitReader(zr, MaxDecompressedBytes+1)

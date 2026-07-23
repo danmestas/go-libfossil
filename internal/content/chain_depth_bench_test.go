@@ -25,23 +25,50 @@ import (
 func BenchmarkExpandOldestVersion(b *testing.B) {
 	for _, revisions := range []int{12, 50, 200} {
 		b.Run(fmt.Sprintf("revisions=%d", revisions), func(b *testing.B) {
-			d := setupBenchDB(b)
-			oldestRID, depth := buildBackwardChain(b, d, revisions)
-
-			b.ReportMetric(float64(depth), "depth")
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				got, err := Expand(d, oldestRID)
-				if err != nil {
-					b.Fatalf("Expand oldest rid=%d: %v", oldestRID, err)
-				}
-				if len(got) == 0 {
-					b.Fatalf("Expand returned empty content for rid=%d", oldestRID)
-				}
-			}
+			benchmarkExpandOldest(b, revisions, smallFileLines)
 		})
 	}
+}
+
+// BenchmarkExpandOldestVersionLarge is the >64 KiB counterpart of
+// BenchmarkExpandOldestVersion. It exists to test one specific claim: that
+// delta.Apply's fixed-growth path is gated behind deltaInitialCap (64 KiB),
+// so only targets larger than that see #81/#82's allocation fix.
+//
+// Same chain shape, same revision counts; the only variable is target size.
+// Comparing B/op per link between the two benchmarks isolates the threshold:
+// if the gate is real, per-link allocation relative to target size drops here
+// and does not in the small case.
+func BenchmarkExpandOldestVersionLarge(b *testing.B) {
+	for _, revisions := range []int{12, 50, 200} {
+		b.Run(fmt.Sprintf("revisions=%d", revisions), func(b *testing.B) {
+			benchmarkExpandOldest(b, revisions, largeFileLines)
+		})
+	}
+}
+
+// benchmarkExpandOldest builds a `revisions`-deep backward chain over a file
+// of `lines` lines and times Expand of the oldest (deepest) version.
+func benchmarkExpandOldest(b *testing.B, revisions, lines int) {
+	b.Helper()
+	d := setupBenchDB(b)
+	oldestRID, depth := buildBackwardChain(b, d, revisions, lines)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := Expand(d, oldestRID)
+		if err != nil {
+			b.Fatalf("Expand oldest rid=%d: %v", oldestRID, err)
+		}
+		if len(got) == 0 {
+			b.Fatalf("Expand returned empty content for rid=%d", oldestRID)
+		}
+	}
+	// Reported after the loop: ResetTimer deletes user metrics, so a depth
+	// reported before it never reaches the output.
+	b.StopTimer()
+	b.ReportMetric(float64(depth), "chain-depth")
 }
 
 // setupBenchDB opens a fresh repository schema in a temp file. It mirrors
@@ -71,7 +98,7 @@ func setupBenchDB(tb testing.TB) *db.DB {
 // expands the source before diffing, so a chain of deltas-against-deltas comes
 // out canonical-correct, which is exactly the on-disk shape a real repository
 // carries and the one issue #85 is about reading.
-func buildBackwardChain(tb testing.TB, d *db.DB, revisions int) (oldest libfossil.FslID, depth int) {
+func buildBackwardChain(tb testing.TB, d *db.DB, revisions, lines int) (oldest libfossil.FslID, depth int) {
 	tb.Helper()
 	if revisions < 2 {
 		panic("buildBackwardChain: revisions must be >= 2")
@@ -80,7 +107,7 @@ func buildBackwardChain(tb testing.TB, d *db.DB, revisions int) (oldest libfossi
 	// All versions stored whole first, oldest (rev 0) at rids[0].
 	rids := make([]libfossil.FslID, revisions)
 	for k := 0; k < revisions; k++ {
-		rid, _, err := blob.Store(d, revisionContent(k))
+		rid, _, err := blob.Store(d, revisionContent(k, lines))
 		if err != nil {
 			tb.Fatalf("Store revision %d: %v", k, err)
 		}
@@ -114,11 +141,19 @@ func buildBackwardChain(tb testing.TB, d *db.DB, revisions int) (oldest libfossi
 	return rids[0], depth
 }
 
+// File sizes for the two benchmark arms. Each generated line is 64 bytes, so
+// smallFileLines lands at ~26 KB (below delta.Apply's 64 KiB deltaInitialCap)
+// and largeFileLines at ~211 KB (above it). The threshold is what the two arms
+// are there to straddle.
+const (
+	smallFileLines = 400
+	largeFileLines = 3200
+)
+
 // revisionContent returns the content of revision `rev`: a deterministic
-// 400-line, ~26 KB file whose lines drift with rev so consecutive revisions
+// `lines`-line file whose lines drift with rev so consecutive revisions
 // differ by a handful of lines, the shape content_deltify sees in practice.
-func revisionContent(rev int) []byte {
-	const lines = 400
+func revisionContent(rev, lines int) []byte {
 	buf := make([]byte, 0, lines*66)
 	for i := 0; i < lines; i++ {
 		// Most lines are stable across revisions; a strided subset changes
@@ -132,8 +167,13 @@ func revisionContent(rev int) []byte {
 			i, token)
 		buf = append(buf, line...)
 	}
-	if len(buf) < 20000 {
-		panic("revisionContent: expected a file of roughly 26 KB")
+	// Guard the size assumption the two arms rest on: 64 bytes per line, so
+	// the small arm must stay under and the large arm over the 64 KiB cap.
+	if lines == smallFileLines && len(buf) >= 64*1024 {
+		panic("revisionContent: small arm must stay below the 64 KiB cap")
+	}
+	if lines == largeFileLines && len(buf) <= 64*1024 {
+		panic("revisionContent: large arm must exceed the 64 KiB cap")
 	}
 	return buf
 }

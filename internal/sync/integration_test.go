@@ -326,10 +326,7 @@ func blobContentBytesFossilSQL(t *testing.T, path string) int64 {
 // exchange includes both full-content and delta-encoded (cfile with a
 // delta source) cards -- the two receive paths this issue's fix touches.
 func TestIntegrationCloneContentBytesMatchSource(t *testing.T) {
-	if !testutil.HasFossil() {
-		t.Skip("fossil not in PATH")
-	}
-	bin := testutil.FossilBinary()
+	bin := testutil.RequireFossilBin(t)
 
 	dir, err := os.MkdirTemp("", "TestIntegrationCloneParity*")
 	if err != nil {

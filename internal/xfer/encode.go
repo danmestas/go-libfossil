@@ -244,6 +244,13 @@ func encodeFile(w *bytes.Buffer, c *FileCard) error {
 
 // encodeCFile writes: cfile UUID USIZE CSIZE \n ZCONTENT  (no trailing \n)
 // or: cfile UUID DELTASRC USIZE CSIZE \n ZCONTENT  (delta variant)
+//
+// §7.2: USIZE is the sender's full reconstructed artifact size, which for a
+// delta card is not len(Content) -- Content there is the (smaller) delta
+// payload. A caller that knows the reconstructed size (the clone send path
+// does, from blob.size) sets c.USize; callers that don't -- every non-delta
+// caller, where the two quantities coincide -- leave it zero and get the old
+// len(Content) behaviour.
 func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
 	// Compress content with zlib
 	var zbuf bytes.Buffer
@@ -254,13 +261,17 @@ func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
 	if err := zw.Close(); err != nil {
 		return fmt.Errorf("xfer: cfile zlib close: %w", err)
 	}
+	usize := c.USize
+	if usize == 0 {
+		usize = len(c.Content)
+	}
 	w.WriteString("cfile ")
 	w.WriteString(c.UUID)
 	if c.DeltaSrc != "" {
 		w.WriteByte(' ')
 		w.WriteString(c.DeltaSrc)
 	}
-	fmt.Fprintf(w, " %d %d\n", len(c.Content), zbuf.Len())
+	fmt.Fprintf(w, " %d %d\n", usize, zbuf.Len())
 	w.Write(zbuf.Bytes())
 	// NO trailing newline
 	return nil

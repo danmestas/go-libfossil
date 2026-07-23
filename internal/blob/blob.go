@@ -13,8 +13,12 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 	if q == nil {
 		panic("blob.Store: q must not be nil")
 	}
-	if len(content) == 0 {
-		panic("blob.Store: content length must be > 0")
+	// Zero-length content is legal: the empty artifact is a normal Fossil
+	// blob with a well-known hash (SHA1 da39a3ee...). A caller may pass
+	// nil for it (an unread/empty file) rather than remembering to
+	// substitute []byte{}; treat the two identically.
+	if content == nil {
+		content = []byte{}
 	}
 	defer func() {
 		if err == nil && rid <= 0 {

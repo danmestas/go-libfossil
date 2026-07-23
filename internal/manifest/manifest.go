@@ -42,6 +42,17 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		panic("manifest.Checkin: opts.User must not be empty")
 	}
 	defer func() {
+		// If a panic is already unwinding the stack (e.g. a lower-level
+		// invariant violation inside the transaction body), that panic is
+		// the real diagnosis and must propagate unchanged. Without this
+		// check, the postcondition assertion below fires unconditionally
+		// during unwind too — manifestRid is still its zero value because
+		// the panicking call never returned — replacing the original
+		// panic with an unrelated "manifestRid must be positive" message
+		// and masking the actual cause (issue #68).
+		if p := recover(); p != nil {
+			panic(p)
+		}
 		if err == nil && manifestRid <= 0 {
 			panic("manifest.Checkin: manifestRid must be positive on success")
 		}

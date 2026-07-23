@@ -9,7 +9,9 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
@@ -1162,6 +1164,54 @@ func TestCrosslinkForum(t *testing.T) {
 	}
 }
 
+// TestCrosslinkForumPostTableDropped reproduces #103: canonical `fossil
+// rebuild` drops on-demand tables it did not populate, including forumpost,
+// so a repository handed to us straight out of a rebuild may not have the
+// table at all. Crosslink must create it on demand the way canonical does,
+// rather than erroring with "no such table: forumpost".
+func TestCrosslinkForumPostTableDropped(t *testing.T) {
+	r := setupTestRepo(t)
+
+	// Simulate a repository straight out of a canonical rebuild that never
+	// saw a forum post: the table does not exist at all.
+	if _, err := r.DB().Exec("DROP TABLE forumpost"); err != nil {
+		t.Fatalf("drop forumpost: %v", err)
+	}
+
+	forumTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	d := &deck.Deck{
+		Type: deck.ForumPost,
+		H:    "Discussion about sync",
+		U:    deck.User("testuser"),
+		W:    []byte("This is a test forum post"),
+		D:    forumTime,
+	}
+	manifestBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	rid, _, err := blob.Store(r.DB(), manifestBytes)
+	if err != nil {
+		t.Fatalf("Store manifest: %v", err)
+	}
+
+	n, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("expected at least 1 artifact crosslinked, got %d", n)
+	}
+
+	var froot int64
+	if err := r.DB().QueryRow("SELECT froot FROM forumpost WHERE fpid=?", rid).Scan(&froot); err != nil {
+		t.Fatalf("forumpost query: %v", err)
+	}
+	if froot != int64(rid) {
+		t.Errorf("froot=%d, want %d (self)", froot, rid)
+	}
+}
+
 func TestCrosslinkTwoPass(t *testing.T) {
 	r := setupTestRepo(t)
 
@@ -1228,5 +1278,139 @@ func TestCrosslinkTwoPass(t *testing.T) {
 		t.Errorf("checkin event query: %v", err)
 	} else if checkinEventType != "ci" {
 		t.Errorf("checkin event type=%q, want 'ci'", checkinEventType)
+	}
+}
+
+// forceDeltify rewrites rid as a delta against srcRid, the same way
+// content.Deltify would, without content.Deltify's size/ratio gate --
+// exercising that gate isn't the point of the tests that use this, only
+// forcing candidates into a genuine delta relationship so Crosslink's
+// delta-chain-order sweep has something to reorder around. Mirrors
+// deltifyWrite (internal/content/deltify.go) exactly: compress the delta
+// bytes over the blob row, link it in delta, and verify the round trip
+// through content.Expand before trusting it.
+func forceDeltify(t *testing.T, r *repo.Repo, rid, srcRid libfossil.FslID) {
+	t.Helper()
+	data, err := content.Expand(r.DB(), rid)
+	if err != nil {
+		t.Fatalf("forceDeltify: expand rid=%d: %v", rid, err)
+	}
+	src, err := content.Expand(r.DB(), srcRid)
+	if err != nil {
+		t.Fatalf("forceDeltify: expand srcid=%d: %v", srcRid, err)
+	}
+	deltaBytes := delta.Create(src, data)
+	compressed, err := blob.Compress(deltaBytes)
+	if err != nil {
+		t.Fatalf("forceDeltify: compress: %v", err)
+	}
+	if err := r.WithTx(func(tx *db.Tx) error {
+		if _, err := tx.Exec("UPDATE blob SET content=? WHERE rid=?", compressed, rid); err != nil {
+			return err
+		}
+		_, err := tx.Exec("REPLACE INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid)
+		return err
+	}); err != nil {
+		t.Fatalf("forceDeltify: %v", err)
+	}
+	if _, err := content.Expand(r.DB(), rid); err != nil {
+		t.Fatalf("forceDeltify: round-trip verify rid=%d: %v", rid, err)
+	}
+}
+
+// TestCrosslinkReversedDeltaOrderStillPropagatesAndLeafs is the #102
+// regression: manifest.Checkin deltifies each checkin's parent manifest
+// against the new one it just wrote (content.Deltify(parent, this)), so in
+// a repository old enough for that to take, the chain root is the newest
+// commit and the deepest ancestor is the oldest -- forced here directly
+// with forceDeltify rather than relying on real commits being large and
+// similar enough for content.Deltify's own size/ratio gate to take the
+// delta, which is a orthogonal concern this test doesn't need to exercise.
+// Once the derived tables are cleared to simulate a fresh clone, Crosslink's
+// delta-chain-order sweep visits v3 first and v1 last -- the exact reverse
+// of commit order, and the opposite of what the old per-checkin
+// PropagateAll(parent) and incremental leaf bookkeeping assumed. tagxref and
+// leaf must still come out correct: v1's propagating branch tag on all
+// three, and only v3 marked a leaf.
+func TestCrosslinkReversedDeltaOrderStillPropagatesAndLeafs(t *testing.T) {
+	r := setupTestRepo(t)
+
+	v1, _, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v1 content")}},
+		Comment: "v1",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin v1: %v", err)
+	}
+	v2, _, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v2 content")}},
+		Comment: "v2",
+		User:    "testuser",
+		Parent:  v1,
+		Time:    time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin v2: %v", err)
+	}
+	v3, _, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "a.txt", Content: []byte("v3 content")}},
+		Comment: "v3",
+		User:    "testuser",
+		Parent:  v2,
+		Time:    time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin v3: %v", err)
+	}
+
+	forceDeltify(t, r, v1, v2)
+	forceDeltify(t, r, v2, v3)
+
+	// Reset to the state a fresh clone is in right before crosslinking.
+	for _, tbl := range crosslinkDerivedTables {
+		if _, err := r.DB().Exec("DELETE FROM " + tbl); err != nil {
+			t.Fatalf("clear %s: %v", tbl, err)
+		}
+	}
+
+	n, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if n != 3 {
+		t.Fatalf("linked=%d, want 3", n)
+	}
+
+	for _, rid := range []libfossil.FslID{v1, v2, v3} {
+		var value string
+		err := r.DB().QueryRow(`
+			SELECT value FROM tagxref
+			JOIN tag USING(tagid)
+			WHERE tagname='branch' AND rid=?
+		`, rid).Scan(&value)
+		if err != nil {
+			t.Errorf("rid=%d: branch tag missing: %v", rid, err)
+		} else if value != "trunk" {
+			t.Errorf("rid=%d: branch tag=%q, want %q", rid, value, "trunk")
+		}
+	}
+
+	var leafRids []libfossil.FslID
+	rows, err := r.DB().Query("SELECT rid FROM leaf ORDER BY rid")
+	if err != nil {
+		t.Fatalf("leaf query: %v", err)
+	}
+	for rows.Next() {
+		var rid libfossil.FslID
+		if err := rows.Scan(&rid); err != nil {
+			t.Fatalf("leaf scan: %v", err)
+		}
+		leafRids = append(leafRids, rid)
+	}
+	rows.Close()
+	if len(leafRids) != 1 || leafRids[0] != v3 {
+		t.Errorf("leaf=%v, want [%d] (v3 only)", leafRids, v3)
 	}
 }

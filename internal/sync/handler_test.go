@@ -13,7 +13,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
@@ -336,40 +338,63 @@ func similarCloneArtifacts() ([]byte, []byte) {
 	return []byte(a.String()), []byte(b.String())
 }
 
-// TestEmitCloneBatchExpandsDeltifiedRows pins the fix for the interop
-// regression a code review caught on issue #98's first attempt: that attempt
-// retransmitted a stored delta's bytes verbatim with DeltaSrc set, per §7.2's
-// letter. But emitCloneBatch sends cards in ascending-rid order, and
-// content.Deltify always deltifies the OLDER artifact against the NEWER one,
-// so a delta's source almost always has a *greater* rid than the delta card
-// itself -- meaning the delta card routinely reached the client before the
-// source card it names. libfossil's own client tolerates that (phantom the
-// unseen source, resolve later), but real fossil 2.28 does not: verified
-// against a real fossil 2.28 client, that ordering crashed the client's
-// post-clone rebuild pass (assertion in blob_copy, blob.c:397) on a
-// repository holding a delta chain. See TestCloneRealFossilWithDeltaChain for
-// the end-to-end repro against a real binary.
+// cloneContentCard normalizes the two wire cards a clone uses to carry an
+// artifact -- a compressed cfile (full content) and an uncompressed file
+// (delta content) -- into the fields the #141 ordering tests reason about.
+type cloneContentCard struct {
+	uuid     string
+	deltaSrc string
+	content  []byte
+}
+
+// cloneContentCards flattens a clone response into the artifact-bearing cards
+// in wire order. A clone emits full content as a cfile and delta content as an
+// uncompressed file card (matching canonical fossil's send_delta_native, whose
+// receive path re-frames the delta into fossil's on-disk blob format -- a
+// cfile would be stored verbatim and fail to decompress on a real client).
+func cloneContentCards(resp *xfer.Message) []cloneContentCard {
+	var out []cloneContentCard
+	for _, c := range resp.Cards {
+		switch cf := c.(type) {
+		case *xfer.CFileCard:
+			out = append(out, cloneContentCard{cf.UUID, cf.DeltaSrc, cf.Content})
+		case *xfer.FileCard:
+			out = append(out, cloneContentCard{cf.UUID, cf.DeltaSrc, cf.Content})
+		}
+	}
+	return out
+}
+
+// TestEmitCloneBatchSendsDeltifiedRowsAsDelta pins the #141 send behavior: a
+// deltified row goes on the wire as a delta card (reclaiming the bandwidth the
+// old expand-before-send path gave up), but its source is emitted first so the
+// delta never forward-references a card that has not gone out yet.
 //
-// So a deltified row is expanded to full content before sending: still a
-// zlib-compressed cfile card (the wire-size win over the old FileCard/Expand
-// path survives), just no longer a delta forward-referencing a card that
-// hasn't gone out yet. This test requires exactly that: no DeltaSrc, and a
-// payload at least as large as the un-deltified original.
-func TestEmitCloneBatchExpandsDeltifiedRows(t *testing.T) {
+// content.Deltify deltifies the OLDER artifact against the NEWER one, so the
+// predecessor's DeltaSource is the (higher-rid) successor. emitCloneBatch must
+// therefore emit the successor's full card BEFORE the predecessor's delta card,
+// even though that is out of ascending-rid order. That ordering is a real
+// invariant of the send path -- a delta must never forward-reference a card the
+// receiver has not yet seen -- and TestEmitCloneBatchSourcePrecedesDelta guards
+// it across a deeper chain. It is necessary but not sufficient for a real fossil
+// 2.28 client, whose clone is still unusable because full content rides a
+// compressed cfile that go-libfossil frames as bare zlib (separate, pre-existing
+// bug #152); see TestCloneRealFossilWithDeltaChain, which skips against #152.
+func TestEmitCloneBatchSendsDeltifiedRowsAsDelta(t *testing.T) {
 	r := setupSyncTestRepo(t)
 
 	predecessor, successor := similarCloneArtifacts()
-	var oldUUID string
+	var oldUUID, newUUID string
 	if err := r.WithTx(func(tx *db.Tx) error {
 		oldRid, u1, err := blob.Store(tx, predecessor)
 		if err != nil {
 			return err
 		}
-		newRid, _, err := blob.Store(tx, successor)
+		newRid, u2, err := blob.Store(tx, successor)
 		if err != nil {
 			return err
 		}
-		oldUUID = u1
+		oldUUID, newUUID = u1, u2
 		saved, err := content.Deltify(tx, oldRid, newRid)
 		if err != nil {
 			return err
@@ -388,21 +413,103 @@ func TestEmitCloneBatchExpandsDeltifiedRows(t *testing.T) {
 		t.Fatalf("HandleSync: %v", err)
 	}
 
-	var card *xfer.CFileCard
-	for _, c := range findCards[*xfer.CFileCard](resp) {
-		if c.UUID == oldUUID {
-			card = c
+	// Locate the predecessor delta and the successor source, and the positions
+	// they occupy in wire order.
+	var delta, source *cloneContentCard
+	deltaPos, sourcePos := -1, -1
+	for i, cc := range cloneContentCards(resp) {
+		cc := cc
+		switch cc.uuid {
+		case oldUUID:
+			delta, deltaPos = &cc, i
+		case newUUID:
+			source, sourcePos = &cc, i
 		}
 	}
-	if card == nil {
-		t.Fatal("expected a cfile card for the deltified predecessor")
+	if delta == nil || source == nil {
+		t.Fatalf("expected content cards for both predecessor and successor; got delta=%v source=%v",
+			delta != nil, source != nil)
 	}
-	if card.DeltaSrc != "" {
-		t.Errorf("DeltaSrc = %q, want empty -- a deltified row must be expanded, not sent as a delta, "+
-			"to avoid forward-referencing a source card that hasn't been sent yet", card.DeltaSrc)
+	if delta.deltaSrc != newUUID {
+		t.Errorf("predecessor DeltaSrc = %q, want %q (the successor it deltas against)",
+			delta.deltaSrc, newUUID)
 	}
-	if len(card.Content) != len(predecessor) {
-		t.Errorf("cfile payload = %d bytes, want %d (full expanded content)", len(card.Content), len(predecessor))
+	if source.deltaSrc != "" {
+		t.Errorf("successor DeltaSrc = %q, want empty (it is the full-content chain tip)", source.deltaSrc)
+	}
+	if sourcePos > deltaPos {
+		t.Errorf("source card at position %d must precede the delta card at position %d",
+			sourcePos, deltaPos)
+	}
+	if len(delta.content) >= len(predecessor) {
+		t.Errorf("delta payload = %d bytes, want < %d (the un-deltified original) -- a delta must be smaller",
+			len(delta.content), len(predecessor))
+	}
+}
+
+// TestEmitCloneBatchSourcePrecedesDelta asserts the airtight #141 invariant on
+// a deeper corpus: every content card that carries a DeltaSrc is preceded, in
+// wire order, by a card that supplies that source UUID. A delta whose source
+// has not already been sent would create an unfillable phantom on a real fossil
+// client, so this is a correctness guard, not a bandwidth one.
+//
+// Method: build six revisions of one file so content.Deltify produces a
+// multi-link chain, clone in a single round, and walk the response cards
+// tracking which UUIDs have been supplied so far.
+func TestEmitCloneBatchSourcePrecedesDelta(t *testing.T) {
+	r := setupSyncTestRepo(t)
+
+	base := make([]byte, 4096)
+	for i := range base {
+		base[i] = byte(i % 251)
+	}
+	var parent libfossil.FslID
+	for c := 0; c < 6; c++ {
+		body := append([]byte(nil), base...)
+		body[c] = byte(200 + c)
+		body = append(body, []byte(fmt.Sprintf("\nrevision marker %d\n", c))...)
+		mid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+			Comment: fmt.Sprintf("checkin %d", c),
+			User:    "testuser",
+			Parent:  parent,
+			Files:   []manifest.File{{Name: "big.bin", Content: body}},
+		})
+		if err != nil {
+			t.Fatalf("Checkin %d: %v", c, err)
+		}
+		parent = mid
+	}
+	if _, err := manifest.Crosslink(r); err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	var deltaCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM delta").Scan(&deltaCount); err != nil {
+		t.Fatalf("count deltas: %v", err)
+	}
+	if deltaCount == 0 {
+		t.Fatal("fixture bug: no deltas created -- this test needs a deltified chain to be meaningful")
+	}
+
+	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	sawDelta := false
+	supplied := map[string]bool{}
+	for _, cc := range cloneContentCards(resp) {
+		if cc.deltaSrc != "" {
+			sawDelta = true
+			if !supplied[cc.deltaSrc] {
+				t.Errorf("delta card %s names source %s that no earlier card supplied",
+					cc.uuid, cc.deltaSrc)
+			}
+		}
+		supplied[cc.uuid] = true
+	}
+	if !sawDelta {
+		t.Error("expected at least one delta card in the clone of a deltified chain, got none")
 	}
 }
 

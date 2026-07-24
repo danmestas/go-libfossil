@@ -277,20 +277,28 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 		return 0, err
 	}
 
-	linked, err := linkCandidatesInOrder(ctx, r, candidates)
-	if err != nil {
-		return linked, err
-	}
+	linked, sweepErr := linkCandidatesInOrder(ctx, r, candidates)
 
 	// Repair pass: recompute the state that depends on every plink edge and
 	// tagxref origin this sweep wrote being present, none of which can be
 	// guaranteed mid-sweep once candidates are visited in delta-chain order
-	// instead of ancestors-before-descendants. Skipped when nothing was
-	// linked, since both repairs are full recomputes and a no-op sweep
-	// cannot have changed their inputs. Mirrors Fossil's own
-	// manifest_crosslink_end + leaf_rebuild() shape: defer the
-	// order-sensitive work and repair it once, rather than trying to
-	// preserve order through the sweep itself.
+	// instead of ancestors-before-descendants. Mirrors Fossil's own
+	// manifest_crosslink_end + leaf_rebuild() shape: defer the order-sensitive
+	// work and repair it once, rather than trying to preserve order through the
+	// sweep itself.
+	//
+	// Gated on linked > 0, not on sweepErr == nil: an interrupted sweep -- a
+	// cancelled clone deadline, or an artifact-level error -- still committed
+	// every batch before the one it stopped in (batches commit as they go),
+	// and those batches wrote plink edges and tagxref origins whose leaf/tag
+	// consequences are now stale. Repairing here on the way out closes that
+	// window; skipping it would leave leaf/tag stale until a later sweep links
+	// something, and a later sweep whose remaining candidates all link zero
+	// artifacts would skip this same gate and leave the window open longer than
+	// one sweep in an unlucky ordering (issue #143). A truly no-op sweep
+	// (linked == 0) cannot have changed either repair's inputs, so it still
+	// skips. The repair runs in its own context-free transaction, so a
+	// cancelled ctx interrupts the candidate sweep but not this recovery.
 	if linked > 0 {
 		if err := r.WithTx(func(tx *db.Tx) error {
 			if err := repairLeafTable(tx); err != nil {
@@ -298,11 +306,17 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 			}
 			return repairTagPropagation(tx)
 		}); err != nil {
+			// The interruption cause is the primary error to surface; a repair
+			// failure layered on top of it is secondary. When the sweep itself
+			// succeeded (sweepErr == nil), the repair failure is the error.
+			if sweepErr != nil {
+				return linked, sweepErr
+			}
 			return linked, fmt.Errorf("manifest.Crosslink: %w", err)
 		}
 	}
 
-	return linked, nil
+	return linked, sweepErr
 }
 
 // collectCrosslinkCandidates returns every not-yet-crosslinked blob, ordered so

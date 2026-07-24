@@ -329,12 +329,13 @@ func cloneContentCards(resp *xfer.Message) []cloneContentCard {
 // content.Deltify deltifies the OLDER artifact against the NEWER one, so the
 // predecessor's DeltaSource is the (higher-rid) successor. emitCloneBatch must
 // therefore emit the successor's full card BEFORE the predecessor's delta card,
-// even though that is out of ascending-rid order. That ordering is what keeps a
-// real fossil 2.28 client's post-clone rebuild from tripping over an unfilled
-// phantom source (assertion in blob_copy, blob.c:397); see
-// TestCloneRealFossilWithDeltaChain for the end-to-end repro against a real
-// binary, and TestEmitCloneBatchSourcePrecedesDelta for the invariant across a
-// deeper chain.
+// even though that is out of ascending-rid order. That ordering is a real
+// invariant of the send path -- a delta must never forward-reference a card the
+// receiver has not yet seen -- and TestEmitCloneBatchSourcePrecedesDelta guards
+// it across a deeper chain. It is necessary but not sufficient for a real fossil
+// 2.28 client, whose clone is still unusable because full content rides a
+// compressed cfile that go-libfossil frames as bare zlib (separate, pre-existing
+// bug #152); see TestCloneRealFossilWithDeltaChain, which skips against #152.
 func TestEmitCloneBatchSendsDeltifiedRowsAsDelta(t *testing.T) {
 	r := setupSyncTestRepo(t)
 

@@ -836,11 +836,17 @@ func (h *handler) emitCloneBatch() error {
 		// itself and would not yet have been sent under this loop's ascending
 		// order; buildCloneArtifact walks the chain and emits each source ahead
 		// of its dependent so no delta ever forward-references a card that has
-		// not arrived. That send order, together with sending the delta as an
-		// uncompressed "file" card (not a "cfile"), is what keeps a real fossil
-		// 2.28 client's post-clone rebuild from tripping over an unfilled
-		// phantom source (the assertion in blob_copy, blob.c:397 that the first
-		// #98 attempt hit); see TestCloneRealFossilWithDeltaChain.
+		// not arrived. The delta rides an uncompressed "file" card (not a
+		// "cfile"), matching canonical fossil's send_delta_native.
+		//
+		// This is a bandwidth win, verified content-identical for
+		// libfossil<->libfossil clones by the self-round-trip tests. It does
+		// NOT by itself make a real fossil client's clone usable: full content
+		// still rides a compressed cfile, which go-libfossil emits as bare zlib
+		// while fossil expects [4-byte size][zlib] framing, so a real fossil
+		// client still decodes full content to garbage and rebuilds to zero
+		// check-ins. That is a separate, pre-existing bug tracked as #152; see
+		// TestCloneRealFossilWithDeltaChain, which skips against it.
 		cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, sent)
 		if err != nil {
 			return err

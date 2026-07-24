@@ -48,8 +48,20 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 		return nil, fmt.Errorf("annotate: FilePath is required")
 	}
 
+	// One cache for the whole walk. Annotate expands the file blob -- and the
+	// checkin manifest -- at every revision back along the parent chain, and
+	// content_deltify stores each older revision as a delta against a newer
+	// one, so those per-revision expansions are all walks of the same few
+	// delta chains (one for the file, one for the manifest). Without the
+	// cache each revision replays its chain from the root: O(revisions^2) blob
+	// reads. With it, LRU keeps the just-visited newer revision hot, so the
+	// next older revision truncates its walk one link back -- O(revisions).
+	// Blob content is immutable and the repo is only read here, so no entry
+	// this loop caches can go stale; the cache is dropped when Annotate returns.
+	cache := content.NewCache(annotateCacheBytes)
+
 	// Load file content at StartRID.
-	fileContent, err := loadFileAt(r, opts.StartRID, opts.FilePath)
+	fileContent, err := loadFileAt(r, opts.StartRID, opts.FilePath, cache)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: load file at start: %w", err)
 	}
@@ -71,13 +83,22 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 		return result, nil
 	}
 
-	walkParentChain(r, opts, lines, result)
+	walkParentChain(r, opts, lines, result, cache)
 	return result, nil
 }
 
+// annotateCacheBytes bounds the expanded content one Annotate walk keeps live.
+// The working set is the handful of delta-chain nodes in flight for the single
+// file and its manifests, not the whole repository, so this only has to be
+// large enough that the immediately-preceding revision is never evicted before
+// the next older one truncates its walk at it. A miss costs throughput, not
+// correctness. Matches manifest.crosslinkCacheBytes, the other whole-history
+// sweep in the tree.
+const annotateCacheBytes = 256 << 20
+
 // walkParentChain walks the primary parent chain from opts.StartRID, pushing
 // line attributions back to the earliest ancestor that contains the same line.
-func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result []Line) {
+func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result []Line, cache *content.Cache) {
 	currentRID := opts.StartRID
 	steps := 0
 
@@ -99,7 +120,7 @@ func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result [
 		}
 
 		// Load file in parent.
-		parentContent, err := loadFileAt(r, parentRID, opts.FilePath)
+		parentContent, err := loadFileAt(r, parentRID, opts.FilePath, cache)
 		if err != nil {
 			// File doesn't exist in parent — all remaining lines belong to current.
 			break
@@ -127,8 +148,10 @@ func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result [
 	}
 }
 
-// loadFileAt loads the content of a file at a given checkin RID.
-func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string) ([]byte, error) {
+// loadFileAt loads the content of a file at a given checkin RID, serving both
+// the checkin manifest and the file blob through cache so a full-history walk
+// amortizes their overlapping delta chains. A nil cache reads uncached.
+func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache) ([]byte, error) {
 	if r == nil {
 		panic("annotate.loadFileAt: r must not be nil")
 	}
@@ -138,7 +161,7 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string) ([]byte, err
 	if filePath == "" {
 		panic("annotate.loadFileAt: filePath must not be empty")
 	}
-	files, err := manifest.ListFiles(r, rid)
+	files, err := manifest.ListFilesCached(r, rid, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +171,7 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string) ([]byte, err
 			if !ok {
 				return nil, fmt.Errorf("blob %s not found", f.UUID)
 			}
-			return content.Expand(r.DB(), fileRID)
+			return cache.Expand(r.DB(), fileRID)
 		}
 	}
 	return nil, fmt.Errorf("file %q not found in checkin %d", filePath, rid)

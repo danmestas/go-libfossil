@@ -17,7 +17,16 @@ type FileEntry struct {
 }
 
 func ListFiles(r *repo.Repo, rid libfossil.FslID) ([]FileEntry, error) {
-	d, err := GetManifest(r, rid)
+	return ListFilesCached(r, rid, nil)
+}
+
+// ListFilesCached is ListFiles that serves the checkin manifest -- and, for a
+// delta manifest, its baseline -- through cache. A nil cache is exactly
+// ListFiles (content.Cache's nil receiver falls through to content.Expand).
+// A live cache helps only a caller listing many overlapping revisions, such as
+// annotate walking one file's history; see GetManifestCached.
+func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([]FileEntry, error) {
+	d, err := GetManifestCached(r, rid, cache)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFiles: %w", err)
 	}
@@ -28,7 +37,7 @@ func ListFiles(r *repo.Repo, rid libfossil.FslID) ([]FileEntry, error) {
 	if !ok {
 		return nil, fmt.Errorf("manifest.ListFiles: baseline %s not found", d.B)
 	}
-	baseData, err := content.Expand(r.DB(), baseRid)
+	baseData, err := cache.Expand(r.DB(), baseRid)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFiles: expand baseline: %w", err)
 	}
@@ -91,6 +100,8 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 		if !ok {
 			return nil, fmt.Errorf("manifest.MergeParentFiles: blob %s for %s not found", pf.UUID, pf.Name)
 		}
+		// Bare Expand: each untouched parent file is expanded once to build a
+		// single commit's full-tree file set. Distinct blobs, no overlap.
 		data, err := content.Expand(r.DB(), baseRid)
 		if err != nil {
 			return nil, fmt.Errorf("manifest.MergeParentFiles: expand %s: %w", pf.Name, err)

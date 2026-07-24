@@ -18,7 +18,7 @@ import (
 //
 // Precondition: rebuildManifests has already populated event/plink/mlink/filename.
 // The plink graph must exist before tag propagation can walk descendants.
-func rebuildTags(_ *repo.Repo, tx *db.Tx, report *Report) error {
+func rebuildTags(_ *repo.Repo, tx *db.Tx, report *Report, cache *content.Cache) error {
 	if tx == nil {
 		panic("rebuildTags: nil *db.Tx")
 	}
@@ -32,8 +32,11 @@ func rebuildTags(_ *repo.Repo, tx *db.Tx, report *Report) error {
 	}
 
 	// Pass 1: process checkin manifests (inline T-cards where UUID == "*").
+	// Both passes re-expand every blob; sharing checkBlobs'/rebuildManifests'
+	// cache means each blob's chain is walked once for the whole rebuild, not
+	// once per pass.
 	for _, e := range entries {
-		data, err := content.Expand(tx, e.rid)
+		data, err := cache.Expand(tx, e.rid)
 		if err != nil {
 			continue // already counted in BlobsSkipped by rebuildManifests
 		}
@@ -51,7 +54,7 @@ func rebuildTags(_ *repo.Repo, tx *db.Tx, report *Report) error {
 
 	// Pass 2: process control artifacts (T-cards with explicit target UUID).
 	for _, e := range entries {
-		data, err := content.Expand(tx, e.rid)
+		data, err := cache.Expand(tx, e.rid)
 		if err != nil {
 			continue // already counted in BlobsSkipped by rebuildManifests
 		}

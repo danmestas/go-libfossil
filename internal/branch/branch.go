@@ -56,6 +56,9 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 		if !ok {
 			return 0, "", fmt.Errorf("branch.Create: file blob %s not found", e.UUID)
 		}
+		// Bare Expand: each file of the single parent checkin is expanded
+		// exactly once to seed the new branch commit. There is no repeated or
+		// overlapping-chain access here for a cache to amortize.
 		data, err := content.Expand(r.DB(), frid)
 		if err != nil {
 			return 0, "", fmt.Errorf("branch.Create: expand %s: %w", e.Name, err)

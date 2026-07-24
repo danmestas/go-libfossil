@@ -379,6 +379,10 @@ func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("blob not found for uuid %s", f.UUID)
 		}
+		// Bare Expand: Diff is pairwise (two named checkins), not a walk over a
+		// file's whole history, so each side's blob is expanded once. There is
+		// no deep overlapping delta chain here for content.Cache to amortize --
+		// that pattern lives in annotate, which is cached.
 		return content.Expand(r.DB(), rid)
 	}
 	return nil, nil

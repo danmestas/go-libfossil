@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
 // pollCancelCtx is a context that reports live for its first livePolls calls to
@@ -110,6 +112,100 @@ func TestCrosslinkContextObservesPreCancelledContext(t *testing.T) {
 	}
 	if linked != 0 {
 		t.Errorf("linked = %d, want 0 on immediate cancellation", linked)
+	}
+}
+
+// TestCrosslinkRepairsLeafAfterCancelledSweep pins issue #143: a sweep that is
+// cancelled after committing at least one batch must still run the leaf/tag
+// repair pass before returning, rather than leaving derived leaf/tag state
+// stale until some later sweep happens to link an artifact.
+//
+// Method: build one real root check-in (childless, so it is a leaf) plus enough
+// filler blobs to push the candidate set past a single batch. leaf is populated
+// only by the deferred repair pass -- crosslinkCheckinTables never touches it --
+// so a check-in that is committed but whose sweep skips the repair never lands
+// in leaf. Cancel at the second batch's boundary, with the first batch (holding
+// the check-in) already committed: the only path that returns linked > 0
+// together with a context error, since a mid-batch cancellation rolls its batch
+// back and commits nothing. Then run a second, zero-link sweep and confirm the
+// repaired leaf state persists across it rather than the stale window reopening.
+func TestCrosslinkRepairsLeafAfterCancelledSweep(t *testing.T) {
+	r := setupTestRepo(t)
+	d := r.DB()
+
+	_, fileUUID, err := blob.Store(d, []byte("root file content"))
+	if err != nil {
+		t.Fatalf("blob.Store file: %v", err)
+	}
+	ci := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "root checkin",
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		U:    deck.User("testuser"),
+		F:    []deck.FileCard{{Name: "file.txt", UUID: fileUUID}},
+		R:    "0000000000000000000000000000000000000000",
+	}
+	ciBytes, err := ci.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal checkin: %v", err)
+	}
+	checkinRid, _, err := blob.Store(d, ciBytes)
+	if err != nil {
+		t.Fatalf("blob.Store checkin: %v", err)
+	}
+
+	// Pad past one batch so the sweep reaches a second batch boundary. The
+	// check-in and its file blob sit at the front by rid, well inside batch 0.
+	for i := 0; i < crosslinkBatchSize-1; i++ {
+		if _, _, err := blob.Store(d, fmt.Appendf(nil, "filler %d not a manifest", i)); err != nil {
+			t.Fatalf("blob.Store filler %d: %v", i, err)
+		}
+	}
+
+	// Stay live through the whole first batch, die at the second batch's
+	// boundary poll: one boundary poll before batch 0, then one in-batch poll
+	// per stride within it. Derived from the constants so it tracks any
+	// retuning of either the batch size or the stride.
+	inBatchPolls := (crosslinkBatchSize + crosslinkCancelCheckStride - 1) / crosslinkCancelCheckStride
+	ctx := newPollCancelCtx(1 + inBatchPolls)
+
+	linked, err := CrosslinkContext(ctx, r)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CrosslinkContext error = %v, want context.Canceled (polls=%d)", err, ctx.polls)
+	}
+	if linked < 1 {
+		t.Fatalf("linked = %d, want >= 1 (the first batch commits the check-in before cancellation)", linked)
+	}
+
+	leafCount := func(when string) int {
+		var n int
+		if scanErr := d.QueryRow("SELECT count(*) FROM leaf WHERE rid=?", checkinRid).Scan(&n); scanErr != nil {
+			t.Fatalf("leaf query %s: %v", when, scanErr)
+		}
+		return n
+	}
+
+	// The fix: the cancelled sweep still ran the leaf repair, so the childless
+	// check-in is recorded as a leaf despite the interruption.
+	if got := leafCount("after cancelled sweep"); got != 1 {
+		t.Fatalf("leaf rows for rid=%d after cancelled sweep = %d, want 1 "+
+			"(the cancelled sweep skipped the leaf repair, issue #143)", checkinRid, got)
+	}
+
+	// A later sweep whose remaining candidates all link zero artifacts skips
+	// the repair gate itself; the state repaired above must already be correct
+	// and simply persist, rather than staying stale until a future sweep links
+	// something.
+	n, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("second Crosslink: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("second Crosslink linked = %d, want 0 (no remaining candidate is a manifest)", n)
+	}
+	if got := leafCount("after following zero-link sweep"); got != 1 {
+		t.Fatalf("leaf rows for rid=%d after zero-link sweep = %d, want 1 "+
+			"(stale leaf state persisted across the zero-link sweep)", checkinRid, got)
 	}
 }
 

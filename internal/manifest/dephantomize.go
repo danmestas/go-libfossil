@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -118,26 +119,32 @@ func crosslinkSingle(r *repo.Repo, rid libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("crosslinkSingle parse rid=%d: %w", rid, err)
 	}
-	switch d.Type {
-	case deck.Checkin:
-		return crosslinkCheckin(r, rid, d)
-	case deck.Wiki:
-		_, err = crosslinkWiki(r, rid, d)
-		return err
-	case deck.Ticket:
-		_, err = crosslinkTicket(r, rid, d)
-		return err
-	case deck.Event:
-		_, err = crosslinkEvent(r, rid, d)
-		return err
-	case deck.Attachment:
-		return crosslinkAttachment(r, rid, d)
-	case deck.Cluster:
-		return CrosslinkCluster(r.DB(), rid, d)
-	case deck.ForumPost:
-		return crosslinkForum(r, rid, d)
-	case deck.Control:
-		return crosslinkControl(r, rid, d)
-	}
-	return nil
+	// The crosslink helpers write on a *db.Tx so the whole-repository sweep can
+	// run in one transaction (see CrosslinkContext). This single-blob path is
+	// not that sweep, so it wraps its one artifact's writes in their own
+	// transaction, keeping event/plink/mlink/tagxref for the blob atomic.
+	return r.WithTx(func(tx *db.Tx) error {
+		switch d.Type {
+		case deck.Checkin:
+			return crosslinkCheckin(tx, rid, d)
+		case deck.Wiki:
+			_, err := crosslinkWiki(tx, rid, d)
+			return err
+		case deck.Ticket:
+			_, err := crosslinkTicket(tx, rid, d)
+			return err
+		case deck.Event:
+			_, err := crosslinkEvent(tx, rid, d)
+			return err
+		case deck.Attachment:
+			return crosslinkAttachment(tx, rid, d)
+		case deck.Cluster:
+			return CrosslinkCluster(tx, rid, d)
+		case deck.ForumPost:
+			return crosslinkForum(tx, rid, d)
+		case deck.Control:
+			return crosslinkControl(tx, rid, d)
+		}
+		return nil
+	})
 }

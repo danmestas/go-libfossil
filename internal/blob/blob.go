@@ -301,6 +301,13 @@ func StorePhantom(q db.Querier, uuid string) (rid libfossil.FslID, err error) {
 }
 
 func Load(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
+	return loadWith(q, rid, nil)
+}
+
+// loadWith is the shared body of Load and Inflater.Load. inf, when non-nil,
+// decompresses through a reusable zlib reader instead of building a fresh one;
+// the uncompressed fast path needs no reader and is identical either way.
+func loadWith(q db.Querier, rid libfossil.FslID, inf *Inflater) (result []byte, err error) {
 	if q == nil {
 		panic("blob.Load: q must not be nil")
 	}
@@ -337,7 +344,7 @@ func Load(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 	if len(content) >= 6 {
 		prefixSize := int64(content[0])<<24 | int64(content[1])<<16 | int64(content[2])<<8 | int64(content[3])
 		if prefixSize == size && content[4] == 0x78 {
-			return Decompress(content)
+			return decompress(content, inf)
 		}
 	}
 	// No compression prefix — content is stored uncompressed.
@@ -345,7 +352,16 @@ func Load(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 		return content, nil
 	}
 	// Stored bytes < declared size — compressed.
-	return Decompress(content)
+	return decompress(content, inf)
+}
+
+// decompress inflates a compressed blob, reusing inf's reader when inf is
+// non-nil and falling back to a one-shot Decompress otherwise.
+func decompress(data []byte, inf *Inflater) ([]byte, error) {
+	if inf != nil {
+		return inf.decompress(data)
+	}
+	return Decompress(data)
 }
 
 // Exists reports whether a blob row with the given uuid is present, and

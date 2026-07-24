@@ -223,6 +223,8 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 
 	// R-card (always over full file set)
 	rDeck := &deck.Deck{F: fCards}
+	// Bare Expand: computing one checkin's R-card expands each file in the
+	// tree exactly once. Distinct blobs, single pass, no overlap to amortize.
 	getContent := func(uuid string) ([]byte, error) {
 		rid, ok := content.AvailableByUUID(tx, uuid)
 		if !ok {
@@ -354,7 +356,18 @@ func ensureFilename(tx *db.Tx, name string) (int64, error) {
 	return result.LastInsertId()
 }
 
-func GetManifest(r *repo.Repo, rid libfossil.FslID) (result *deck.Deck, err error) {
+func GetManifest(r *repo.Repo, rid libfossil.FslID) (*deck.Deck, error) {
+	return GetManifestCached(r, rid, nil)
+}
+
+// GetManifestCached is GetManifest that serves the manifest's own delta-chain
+// expansion through cache. A nil cache behaves exactly like GetManifest:
+// content.Cache's nil receiver falls through to content.Expand. Passing a live
+// cache pays off only for a caller that reads many manifests whose delta chains
+// overlap -- annotate walking one file's whole history re-expands the same
+// chain interiors at every revision -- so a single-manifest read gains nothing
+// and should pass nil.
+func GetManifestCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) (result *deck.Deck, err error) {
 	if r == nil {
 		panic("manifest.GetManifest: r must not be nil")
 	}
@@ -366,7 +379,7 @@ func GetManifest(r *repo.Repo, rid libfossil.FslID) (result *deck.Deck, err erro
 			panic("manifest.GetManifest: result must not be nil on success")
 		}
 	}()
-	data, err := content.Expand(r.DB(), rid)
+	data, err := cache.Expand(r.DB(), rid)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.GetManifest: %w", err)
 	}
@@ -374,6 +387,9 @@ func GetManifest(r *repo.Repo, rid libfossil.FslID) (result *deck.Deck, err erro
 }
 
 func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid libfossil.FslID) error {
+	// Bare Expand: building one delta manifest reads its parent and baseline
+	// once each. This is the commit path, not a history sweep -- no repeated
+	// overlapping-chain access for a cache to pay off against.
 	parentData, err := content.Expand(tx, parentRid)
 	if err != nil {
 		return fmt.Errorf("expand parent: %w", err)

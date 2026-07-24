@@ -10,8 +10,17 @@ import (
 )
 
 // checkBlobs verifies blob integrity: content hashing and delta application.
-// Walks every non-phantom blob, expands delta chains, hashes content, and compares against stored UUID.
-func checkBlobs(r *repo.Repo, report *Report) error {
+// Walks every non-phantom blob, expands delta chains, hashes content, and
+// compares against stored UUID.
+//
+// cache is the shared expansion cache for the whole Verify/Rebuild pass. This
+// sweep touches every blob, and content_deltify stores older revisions as
+// deltas against newer ones, so two blobs in one file's history share the
+// same chain: expanding the deepest member materializes and caches every
+// interior, turning what would be O(revisions^2) blob reads into O(revisions).
+// The same cache carries forward to the later sweeps, which would otherwise
+// re-expand every blob from scratch. A nil cache expands uncached.
+func checkBlobs(r *repo.Repo, report *Report, cache *content.Cache) error {
 	if r == nil {
 		panic("checkBlobs: nil *repo.Repo")
 	}
@@ -44,7 +53,7 @@ func checkBlobs(r *repo.Repo, report *Report) error {
 	for _, e := range entries {
 		report.BlobsChecked++
 		rid := libfossil.FslID(e.rid)
-		data, err := content.Expand(r.DB(), rid)
+		data, err := cache.Expand(r.DB(), rid)
 		if err != nil {
 			report.BlobsFailed++
 			report.addIssue(Issue{

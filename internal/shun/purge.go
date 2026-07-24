@@ -53,6 +53,9 @@ func Purge(d *db.DB) (PurgeResult, error) {
 		}
 		rows.Close()
 
+		// Bare Expand: each dependent of a shunned base is expanded once to be
+		// rewritten as whole content. Distinct rids, single pass -- and the
+		// deltas are being deleted, so there is no chain left to cache against.
 		for _, rid := range dependents {
 			expanded, err := content.Expand(tx, rid)
 			if err != nil {

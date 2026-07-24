@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -913,6 +914,111 @@ func TestRoundTrip_CFileLargeContent(t *testing.T) {
 	got := roundTrip(t, c).(*CFileCard)
 	if !bytes.Equal(got.Content, content) {
 		t.Errorf("large content mismatch: got %d bytes, want %d", len(got.Content), len(content))
+	}
+}
+
+// splitCFileWire parses an encoded cfile card into (usize, csize, payload).
+// It expects the non-delta form: "cfile UUID USIZE CSIZE\n<payload>".
+func splitCFileWire(t *testing.T, wire []byte) (usize, csize int, payload []byte) {
+	t.Helper()
+	nl := bytes.IndexByte(wire, '\n')
+	if nl < 0 {
+		t.Fatalf("cfile wire has no header newline: %q", wire)
+	}
+	header := string(wire[:nl])
+	payload = wire[nl+1:]
+	fields := strings.Fields(header)
+	if len(fields) != 4 || fields[0] != "cfile" {
+		t.Fatalf("unexpected cfile header %q", header)
+	}
+	var err error
+	if usize, err = strconv.Atoi(fields[2]); err != nil {
+		t.Fatalf("USIZE parse %q: %v", fields[2], err)
+	}
+	if csize, err = strconv.Atoi(fields[3]); err != nil {
+		t.Fatalf("CSIZE parse %q: %v", fields[3], err)
+	}
+	return usize, csize, payload
+}
+
+// TestEncodeCFile_FossilOnDiskFraming is the regression test for issue #152:
+// a cfile card's wire payload must be Fossil's on-disk blob format
+// ([4-byte big-endian uncompressed-size prefix][zlib stream]) -- the exact
+// bytes blob_compress() produces -- because a real fossil client stores the
+// cfile payload verbatim as blob.content and later reads it back with
+// blob_uncompress(), which reads that 4-byte prefix to size its output before
+// inflating. Emitting bare zlib (no prefix) leaves the client with content its
+// own decompressor cannot decode, so a clone yields zero usable check-ins.
+func TestEncodeCFile_FossilOnDiskFraming(t *testing.T) {
+	content := []byte("full artifact content, long enough that zlib actually compresses it")
+	c := &CFileCard{UUID: "abc123def456", Content: content}
+
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+
+	usize, csize, payload := splitCFileWire(t, buf.Bytes())
+	if usize != len(content) {
+		t.Fatalf("USIZE = %d, want %d", usize, len(content))
+	}
+	if csize != len(payload) {
+		t.Fatalf("CSIZE = %d, want payload length %d", csize, len(payload))
+	}
+	if len(payload) < 4 {
+		t.Fatalf("payload too short for a 4-byte prefix: %d bytes", len(payload))
+	}
+	gotPrefix := binary.BigEndian.Uint32(payload[:4])
+	if gotPrefix != uint32(len(content)) {
+		t.Fatalf("4-byte size prefix = %d, want %d (bare zlib with no prefix?)", gotPrefix, len(content))
+	}
+	// The bytes after the prefix must be a valid zlib stream that inflates to
+	// the content -- exactly what a real fossil client's blob_uncompress reads.
+	zr, err := zlib.NewReader(bytes.NewReader(payload[4:]))
+	if err != nil {
+		t.Fatalf("payload after prefix is not a valid zlib stream: %v", err)
+	}
+	got, err := io.ReadAll(zr)
+	zr.Close()
+	if err != nil {
+		t.Fatalf("zlib read: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("decompressed content mismatch:\n  got  %q\n  want %q", got, content)
+	}
+}
+
+// TestEncodeCFile_DeltaPrefixIsPayloadSize confirms that for a delta cfile the
+// 4-byte prefix is the size of the (delta) payload being compressed, while the
+// USIZE header field carries the full reconstructed artifact size -- matching
+// fossil's blob_compress(&delta) where the prefix is len(delta), not len(full).
+func TestEncodeCFile_DeltaPrefixIsPayloadSize(t *testing.T) {
+	delta := []byte("delta payload bytes that stand in for a real fossil delta stream")
+	const fullSize = 4096
+	c := &CFileCard{UUID: "abc123", DeltaSrc: "def456", USize: fullSize, Content: delta}
+
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+	nl := bytes.IndexByte(buf.Bytes(), '\n')
+	if nl < 0 {
+		t.Fatalf("no header newline")
+	}
+	fields := strings.Fields(string(buf.Bytes()[:nl]))
+	// cfile UUID DELTASRC USIZE CSIZE
+	if len(fields) != 5 {
+		t.Fatalf("delta cfile header fields = %v", fields)
+	}
+	if fields[3] != strconv.Itoa(fullSize) {
+		t.Fatalf("USIZE = %s, want %d", fields[3], fullSize)
+	}
+	payload := buf.Bytes()[nl+1:]
+	if len(payload) < 4 {
+		t.Fatalf("payload too short: %d", len(payload))
+	}
+	if gotPrefix := binary.BigEndian.Uint32(payload[:4]); gotPrefix != uint32(len(delta)) {
+		t.Fatalf("delta prefix = %d, want len(delta)=%d", gotPrefix, len(delta))
 	}
 }
 

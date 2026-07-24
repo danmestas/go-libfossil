@@ -13,7 +13,7 @@ import (
 )
 
 // checkDerived verifies consistency of derived tables: event, mlink, plink, tagxref, filename, leaf.
-func checkDerived(r *repo.Repo, report *Report) error {
+func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 	if r == nil {
 		panic("verify: checkDerived: nil repo")
 	}
@@ -21,7 +21,7 @@ func checkDerived(r *repo.Repo, report *Report) error {
 		panic("verify: checkDerived: nil report")
 	}
 
-	if err := checkCheckins(r, report); err != nil {
+	if err := checkCheckins(r, report, cache); err != nil {
 		return err
 	}
 	if err := checkLeaves(r, report); err != nil {
@@ -32,7 +32,7 @@ func checkDerived(r *repo.Repo, report *Report) error {
 }
 
 // checkCheckins verifies event and plink tables against checkin manifests.
-func checkCheckins(r *repo.Repo, report *Report) error {
+func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
 	if r == nil {
 		panic("verify: checkCheckins: nil repo")
 	}
@@ -53,7 +53,7 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 			return fmt.Errorf("checkCheckins scan: %w", err)
 		}
 
-		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid); err != nil {
+		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache); err != nil {
 			return err
 		}
 	}
@@ -62,7 +62,7 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 }
 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
-func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid string) error {
+func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
 	}
@@ -70,7 +70,7 @@ func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid str
 		panic("verify: checkOneCheckin: nil report")
 	}
 
-	data, err := content.Expand(r.DB(), rid)
+	data, err := cache.Expand(r.DB(), rid)
 	if err != nil {
 		// Not expandable - skip silently (might be corrupt, already reported)
 		return nil

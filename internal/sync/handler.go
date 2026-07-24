@@ -248,9 +248,23 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		}
 	}
 
+	// Process data cards and emit response blobs.
+	if err := h.processDataCards(req.Cards); err != nil {
+		return nil, err
+	}
+
 	// Emit PushCard with project-code/server-code so the clone client can
 	// identify the repo. Only in clone mode — sync clients already have
 	// codes, and real Fossil treats server-sent "push" as unknown during sync.
+	//
+	// This must trail the clone batch's clone_seqno card, matching canonical's
+	// order (fossil-scm xfer.c emits the batch, then clone_seqno at :1571, then
+	// push at :1577). A real fossil client re-issues `clone 3 SEQNO` every round
+	// it sees a `push` card while its clone cursor is still positive (xfer.c:2706),
+	// and it learns the cursor hit zero only from the clone_seqno card. Emitting
+	// push ahead of clone_seqno makes the client queue one more clone request
+	// before it sees the terminal clone_seqno 0, so the server serves the whole
+	// repository a second time — the 2.06x end-to-end blow-up of issue #138.
 	if h.cloneMode {
 		var projectCode, serverCode string
 		_ = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&projectCode)
@@ -261,11 +275,6 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 				ServerCode:  serverCode,
 			})
 		}
-	}
-
-	// Process data cards and emit response blobs.
-	if err := h.processDataCards(req.Cards); err != nil {
-		return nil, err
 	}
 
 	// Crosslink any newly-received manifests into the relational tables
@@ -781,14 +790,25 @@ func (h *handler) emitCloneBatch() error {
 	defer rows.Close()
 
 	count := 0
-	// bytesSent accumulates the wire cost of the file cards emitted this
-	// round, mirroring canonical's `while( mxSend > blob_size(pOut) )`: the
-	// budget is tested before each artifact and the artifact that crosses it
-	// is still sent whole. That ordering is what guarantees forward progress
-	// when a single artifact is larger than the entire budget — a post-send
-	// test would emit nothing and stall the cursor.
+	// sent records every rid emitted this round, including delta sources a
+	// dependent's chain pulls in ahead of their ascending position (issue
+	// #141). It caps re-emission at once per round the way canonical fossil's
+	// per-request "sent" bag does; across rounds the ascending cursor resumes,
+	// and a source pulled in early in a prior round may be re-sent, which the
+	// receiver dedupes by hash.
+	sent := map[int]bool{}
+	// sentTop counts top-level artifacts sent this round. Each carries a whole
+	// delta chain, so it is distinct from count (the card total) and is the
+	// quantity the truncate liveness guard below reasons about.
+	sentTop := 0
+	// bytesSent accumulates the wire cost of the cards emitted this round,
+	// mirroring canonical's `while( mxSend > blob_size(pOut) )`: the budget is
+	// tested before each artifact and the artifact (with its chain) that
+	// crosses it is still sent whole. That ordering is what guarantees forward
+	// progress when a single artifact is larger than the entire budget — a
+	// post-send test would emit nothing and stall the cursor.
 	bytesSent := 0
-	var lastSentRID int
+	var lastTopRID int
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
 	nextRID := 0
@@ -798,6 +818,13 @@ func (h *handler) emitCloneBatch() error {
 		var fullSize int
 		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
 			return err
+		}
+
+		// A higher-rid delta source that a dependent's chain already pulled in
+		// this round is on the wire; skip it before it can consume budget or
+		// advance the cursor a second time.
+		if sent[rid] {
+			continue
 		}
 
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
@@ -810,99 +837,75 @@ func (h *handler) emitCloneBatch() error {
 			break
 		}
 
-		// §7.2: clone retransmits the repository's stored compressed content
-		// verbatim rather than the fully expanded form cache.Expand produces
-		// for a whole artifact -- blob.Load returns exactly that, and using
-		// it here (instead of Expand) is most of this fix's wire-size win
-		// (issue #98): a whole artifact goes out compressed instead of
-		// expanded and uncompressed.
+		// §7.2/#141: emit the artifact source-first. A row stored as a delta
+		// goes out as a delta card preceded by the source it names, reclaiming
+		// the delta-transmission bandwidth a plain (expanded) cfile gives up.
+		// content.Deltify deltifies the OLDER artifact against the NEWER one,
+		// so a delta's source almost always has a *greater* rid than the delta
+		// itself and would not yet have been sent under this loop's ascending
+		// order; buildCloneArtifact walks the chain and emits each source ahead
+		// of its dependent so no delta ever forward-references a card that has
+		// not arrived. The delta rides an uncompressed "file" card (not a
+		// "cfile"), matching canonical fossil's send_delta_native.
 		//
-		// A row stored as a delta is the one case blob.Load's bytes cannot
-		// be forwarded as-is: content.Deltify always deltifies the OLDER
-		// artifact against the NEWER one (see deltify.go's doc comment), so
-		// DeltaSource almost always names a rid greater than rid itself. This
-		// loop sends cards in ascending-rid order for cursor/pagination
-		// reasons unrelated to delta direction, which means a delta card is
-		// routinely emitted before the very source card it names. libfossil's
-		// own client tolerates that forward reference (storeDeltaContent
-		// creates a phantom for an unseen source and resolves it later), but
-		// real fossil 2.28 does not: the source stays a genuine, unfilled
-		// phantom, and content_get() on it during the client's post-clone
-		// rebuild pass returns without initializing its output blob, which
-		// trips an assertion in blob_copy (blob.c:397) and aborts the
-		// client mid-rebuild. Verified against a real fossil 2.28 client
-		// cloning a libfossil server holding a delta chain.
-		//
-		// So a deltified row is expanded and sent as a plain (non-delta)
-		// cfile instead of forwarding the stored delta bytes -- still
-		// zlib-compressed over the wire, just not chain-dependent on send
-		// order. That gives up the delta win specifically (retransmitting a
-		// delta chain's savings, not just this fix's compression win) for
-		// deltified rows; re-enabling delta retransmission needs either a
-		// source-before-dependent send order or confirmation that a newer
-		// canonical tolerates the forward reference, and is left as a
-		// follow-up rather than blocking the non-delta win here.
-		srcRid, err := content.DeltaSource(h.repo.DB(), libfossil.FslID(rid))
+		// This is a bandwidth win, verified content-identical for
+		// libfossil<->libfossil clones by the self-round-trip tests. It does
+		// NOT by itself make a real fossil client's clone usable: full content
+		// still rides a compressed cfile, which go-libfossil emits as bare zlib
+		// while fossil expects [4-byte size][zlib] framing, so a real fossil
+		// client still decodes full content to garbage and rebuilds to zero
+		// check-ins. That is a separate, pre-existing bug tracked as #152; see
+		// TestCloneRealFossilWithDeltaChain, which skips against it.
+		cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, sent)
 		if err != nil {
-			return fmt.Errorf("handler: delta source for rid %d: %w", rid, err)
+			return err
 		}
-		var data []byte
-		if srcRid != 0 {
-			data, err = content.Expand(h.repo.DB(), libfossil.FslID(rid))
-			if err != nil {
-				return fmt.Errorf("handler: expanding deltified rid %d: %w", rid, err)
-			}
-		} else {
-			data, err = blob.Load(h.repo.DB(), libfossil.FslID(rid))
-			if err != nil {
-				return fmt.Errorf("handler: loading stored content for rid %d: %w", rid, err)
-			}
-		}
-		cost := cloneCardOverheadBytes + len(data)
 		// Respect the client's decode bound: the round the client decompresses
-		// must stay within xfer.MaxDecompressedBytes. If adding this artifact
+		// must stay within xfer.MaxDecompressedBytes. If this artifact's chain
 		// would push the round past that bound and the round already carries
-		// content, flush now so the artifact leads a round of its own. Without
-		// this the budget check above only bounds the accumulated *filler*, and
-		// a large artifact riding behind sub-budget filler carried the round to
+		// content, flush now so the chain leads a round of its own. Without this
+		// the budget check above only bounds the accumulated *filler*, and a
+		// large artifact riding behind sub-budget filler carried the round to
 		// budget-plus-artifact, past what the client could decode (issue #109).
 		//
-		// The first artifact of a round (count == 0) is always sent, so an
-		// artifact larger than the bound still makes forward progress -- it is
-		// simply unclonable, which is now a property of the artifact alone and
-		// not of what precedes it in the round.
+		// The first artifact of a round (count == 0) is always sent, so a chain
+		// larger than the bound still makes forward progress -- it is simply
+		// unclonable, a property of the artifact alone and not of what precedes
+		// it in the round.
 		if count > 0 && bytesSent+cost > xfer.MaxDecompressedBytes {
 			nextRID = rid
 			break
 		}
 
-		if isPriv {
-			h.resp = append(h.resp, &xfer.PrivateCard{})
+		h.resp = append(h.resp, cards...)
+		for _, r := range rids {
+			sent[r] = true
 		}
-		h.resp = append(h.resp, &xfer.CFileCard{UUID: uuid, USize: fullSize, Content: data})
-		h.filesSent++
-		lastSentRID = rid
-		count++
+		h.filesSent += len(rids)
+		lastTopRID = rid
+		count += len(rids)
+		sentTop++
 		bytesSent += cost
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	// BUGGIFY: truncate — remove last cfile card to simulate incomplete batch.
-	// `count > 1` is a liveness constraint, not just a chaos-injection guard.
-	// Dropping the only card in a batch would set nextRID to lastSentRID,
-	// which equals the cursor we entered with, and the client would re-request
-	// the same batch until MaxRounds. Under the old exclusive `rid > cursor`
-	// semantics `count > 0` was safe here; it no longer is.
-	if truncate && count > 1 {
+	// BUGGIFY: truncate — remove the last cfile card to simulate an incomplete
+	// batch. `sentTop > 1` is a liveness constraint, not just a chaos-injection
+	// guard. The removed card is the deepest dependent of the last artifact's
+	// chain (emitted last in source-first order, so nothing else on the wire
+	// depends on it), and nextRID is set to that artifact's top-level rid. With
+	// more than one top-level artifact sent this round that rid strictly
+	// exceeds the cursor we entered with, so the client re-requests from it
+	// rather than looping on the same batch until MaxRounds.
+	if truncate && sentTop > 1 {
 		for i := len(h.resp) - 1; i >= 0; i-- {
 			if _, ok := h.resp[i].(*xfer.CFileCard); ok {
 				h.resp = append(h.resp[:i], h.resp[i+1:]...)
 				h.filesSent--
-				count--
-				// The dropped card held lastSentRID, so that rid becomes the
+				// The dropped card held lastTopRID, so that rid becomes the
 				// next one owed to the client rather than being skipped.
-				nextRID = lastSentRID
+				nextRID = lastTopRID
 				break
 			}
 		}
@@ -917,4 +920,147 @@ func (h *handler) emitCloneBatch() error {
 	// SeqNo 0 signals completion so the client stops requesting.
 	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: nextRID})
 	return nil
+}
+
+// maxCloneChainWalk bounds the delta-chain walk in walkCloneChain. A real
+// chain is only as deep as an artifact's revision count and always terminates
+// at a full-content tip; this cap exists solely so a corrupt or adversarial
+// delta graph cannot spin the walk forever. content.Deltify forbids cycles,
+// but the send path does not trust its store to be uncorrupted here. On
+// reaching the cap the deepest artifact is emitted as full content, which is
+// always safe (it references no source card).
+const maxCloneChainWalk = 4096
+
+// cloneArtifact is one artifact the clone will emit. An empty srcUUID means
+// emit full content as a compressed cfile card; a set srcUUID means emit a
+// delta against that source, which buildCloneArtifact guarantees precedes this
+// artifact on the wire.
+type cloneArtifact struct {
+	rid     int
+	uuid    string
+	usize   int
+	priv    bool
+	srcUUID string
+}
+
+// cloneBlobRow holds the columns walkCloneChain needs to decide whether a
+// delta source can be forwarded to the receiver this clone.
+type cloneBlobRow struct {
+	uuid string
+	size int
+	priv bool
+}
+
+// loadCloneBlob reads the blob row for rid. ok is false when no such row
+// exists (a source named by a dangling delta link, which is treated as
+// unforwardable rather than an error).
+func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
+	var row cloneBlobRow
+	err := h.repo.DB().QueryRow("SELECT uuid, size FROM blob WHERE rid = ?", rid).
+		Scan(&row.uuid, &row.size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return cloneBlobRow{}, false, nil
+	}
+	if err != nil {
+		return cloneBlobRow{}, false, fmt.Errorf("handler: clone blob info rid %d: %w", rid, err)
+	}
+	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
+	return row, true, nil
+}
+
+// walkCloneChain follows rid's delta chain toward its full-content tip and
+// returns the artifacts to emit, ordered DEPENDENT-FIRST (rid itself first).
+// The walk stops at the first source that is already available to the receiver
+// (emitted earlier this round) or that cannot be forwarded this clone —
+// outside the snapshot bound, a phantom, or a private source under a public
+// clone — and tags the artifact below such a source for full-content emission
+// so it never depends on a card that will not arrive.
+func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]bool) ([]cloneArtifact, error) {
+	chain := make([]cloneArtifact, 0, 8)
+	curRID, curUUID, curUSize := rid, uuid, usize
+	curPriv := content.IsPrivate(h.repo.DB(), int64(curRID))
+	for step := 0; step < maxCloneChainWalk; step++ {
+		src, err := content.DeltaSource(h.repo.DB(), libfossil.FslID(curRID))
+		if err != nil {
+			return nil, fmt.Errorf("handler: delta source for rid %d: %w", curRID, err)
+		}
+		m := cloneArtifact{rid: curRID, uuid: curUUID, usize: curUSize, priv: curPriv}
+		if src == 0 {
+			return append(chain, m), nil // full-content tip
+		}
+		info, ok, err := h.loadCloneBlob(int(src))
+		if err != nil {
+			return nil, err
+		}
+		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
+			(!info.priv || h.syncPrivate)
+		if !forwardable {
+			return append(chain, m), nil // source unsendable: emit curRID full
+		}
+		m.srcUUID = info.uuid
+		chain = append(chain, m)
+		if sent[int(src)] {
+			return chain, nil // source already on the wire this round
+		}
+		curRID, curUUID, curUSize, curPriv = int(src), info.uuid, info.size, info.priv
+	}
+	// Walk cap hit: force the deepest artifact to full content so its delta
+	// does not reference a source we never emitted.
+	chain[len(chain)-1].srcUUID = ""
+	return chain, nil
+}
+
+// buildCloneArtifact assembles the wire cards that deliver artifact rid to the
+// receiver, ordered source-first: the chain tip (or the lowest full-content
+// anchor) leads, each delta follows the source it names, and rid itself is
+// last. It returns the cards, the artifact rids they cover (for the caller's
+// sent bookkeeping), and the accumulated wire cost. It does not consult the
+// byte budget — the caller decides whether the whole sequence fits the round.
+func (h *handler) buildCloneArtifact(
+	rid int, uuid string, usize int, sent map[int]bool,
+) ([]xfer.Card, []int, int, error) {
+	chain, err := h.walkCloneChain(rid, uuid, usize, sent)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if len(chain) == 0 {
+		panic("handler.buildCloneArtifact: walkCloneChain returned no artifacts")
+	}
+	cards := make([]xfer.Card, 0, 2*len(chain))
+	rids := make([]int, 0, len(chain))
+	cost := 0
+	// chain is dependent-first; emit it reversed so every source precedes the
+	// delta that names it.
+	for i := len(chain) - 1; i >= 0; i-- {
+		m := chain[i]
+		var data []byte
+		if m.srcUUID == "" {
+			data, err = content.Expand(h.repo.DB(), libfossil.FslID(m.rid))
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("handler: expanding rid %d: %w", m.rid, err)
+			}
+		} else {
+			data, err = blob.Load(h.repo.DB(), libfossil.FslID(m.rid))
+			if err != nil {
+				return nil, nil, 0, fmt.Errorf("handler: loading delta rid %d: %w", m.rid, err)
+			}
+		}
+		if m.priv {
+			cards = append(cards, &xfer.PrivateCard{})
+		}
+		// Full content rides a compressed cfile (the #98/#113 wire-size win). A
+		// delta rides an uncompressed "file" card, matching canonical fossil's
+		// send_delta_native: a real fossil client stores a cfile's payload
+		// verbatim and cannot decompress it without fossil's on-disk
+		// [4-byte size][zlib] framing, which the wire cfile omits, whereas an
+		// uncompressed file card is re-framed by the receiver's own compressor.
+		if m.srcUUID == "" {
+			cards = append(cards, &xfer.CFileCard{UUID: m.uuid, USize: m.usize, Content: data})
+		} else {
+			cards = append(cards, &xfer.FileCard{UUID: m.uuid, DeltaSrc: m.srcUUID, Content: data})
+		}
+		rids = append(rids, m.rid)
+		cost += cloneCardOverheadBytes + len(data)
+	}
+	return cards, rids, cost, nil
 }

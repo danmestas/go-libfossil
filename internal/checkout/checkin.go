@@ -79,6 +79,7 @@ func (c *Checkout) DiscardQueue() error {
 // vfileEntry holds a single vfile row for commit processing.
 type vfileCommitEntry struct {
 	pathname string
+	origname string // prior pathname if renamed, else empty
 	changed  bool
 	deleted  bool
 	rid      int64
@@ -94,7 +95,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	err error,
 ) {
 	rows, err := c.db.Query(`
-		SELECT pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid, CAST(isexe AS INTEGER)
+		SELECT pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid, CAST(isexe AS INTEGER)
 		FROM vfile
 		WHERE vid = ?
 	`, int64(vid))
@@ -107,13 +108,22 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 
 	for rows.Next() {
 		var pathname string
+		var origname sql.NullString
 		var chnged, deleted, isexe int
 		var rid sql.NullInt64
-		if err := rows.Scan(&pathname, &chnged, &deleted, &rid, &isexe); err != nil {
+		if err := rows.Scan(&pathname, &origname, &chnged, &deleted, &rid, &isexe); err != nil {
 			return nil, nil, nil, fmt.Errorf("checkout.Commit: scan vfile: %w", err)
+		}
+		// A rename is only a rename when origname differs from the current
+		// pathname; canonical Fossil stores origname==pathname for unmodified
+		// files (checkin.c:161), so collapse that case to "no rename" here.
+		orig := ""
+		if origname.Valid && origname.String != pathname {
+			orig = origname.String
 		}
 		entries[pathname] = vfileCommitEntry{
 			pathname: pathname,
+			origname: orig,
 			changed:  chnged > 0,
 			deleted:  deleted > 0,
 			rid:      rid.Int64,
@@ -209,6 +219,11 @@ func (c *Checkout) buildCommitFiles(
 		loadedFromDisk[name] = true
 	}
 
+	// 2b. Apply renames: retire each renamed file's old pathname and record
+	// the prior name on the surviving new-name entry, so the file is emitted
+	// exactly once as a rename F-card rather than twice.
+	c.applyRenames(fileMap, vfEntries, shouldInclude)
+
 	// 3. For unchanged files, load content from the repo.
 	//
 	// loadedFromDisk (not len(entry.Content) > 0) is the sentinel for
@@ -276,6 +291,7 @@ func (c *Checkout) buildCommitFiles(
 			Name:    name,
 			Content: fileData,
 			Perm:    entry.Perm,
+			OldName: entry.OldName,
 		}
 	}
 
@@ -291,6 +307,74 @@ func (c *Checkout) buildCommitFiles(
 		commitFiles = append(commitFiles, f)
 	}
 	return commitFiles, nil
+}
+
+// applyRenames rewrites fileMap so each renamed file is emitted exactly once,
+// under its new name, carrying its prior name for the rename F-card.
+//
+// It is driven off vfile.origname rather than the changed-files list because a
+// pure rename (identical content) is not flagged as changed by ScanChanges —
+// so without this pass the new name would never enter fileMap and the old name
+// would carry forward from the parent manifest, double-emitting the content
+// (the #51 defect). This mirrors canonical Fossil, whose manifest query
+// selects rows where pathname!=origname independent of the chnged flag
+// (src/checkin.c:1939-1944).
+//
+// The retired old name is deleted from fileMap unless it has independently
+// reappeared as its own live vfile pathname (a rename that reuses a freed
+// name), in which case that entry is left for the normal passes to handle.
+//
+// A renamed row that is also marked deleted retires both names and emits
+// nothing, matching canonical Fossil's exclusion of deleted rows from the
+// manifest query.
+func (c *Checkout) applyRenames(
+	fileMap map[string]manifest.File,
+	vfEntries map[string]vfileCommitEntry,
+	shouldInclude func(string) bool,
+) {
+	if fileMap == nil {
+		panic("checkout.applyRenames: fileMap must not be nil")
+	}
+	if shouldInclude == nil {
+		panic("checkout.applyRenames: shouldInclude must not be nil")
+	}
+
+	for name, ve := range vfEntries {
+		if ve.origname == "" || ve.origname == name {
+			continue
+		}
+		if !shouldInclude(name) {
+			continue
+		}
+
+		// A renamed file that was subsequently deleted must not be emitted at
+		// all — under either name. Canonical Fossil's manifest query excludes
+		// such rows outright (WHERE NOT deleted OR NOT is_selected), and the
+		// deleted-files pass above cannot retire the old name, since it only
+		// knows the file's current pathname.
+		if ve.deleted {
+			if _, reAdded := vfEntries[ve.origname]; !reAdded {
+				delete(fileMap, ve.origname)
+			}
+			delete(fileMap, name)
+			continue
+		}
+
+		// Ensure a new-name entry exists so the file is emitted under its new
+		// name. A content-changed rename already has one (from the changed-file
+		// pass); a pure rename seeds an empty entry whose content the
+		// unchanged-file pass fills from the vfile blob.
+		entry, ok := fileMap[name]
+		if !ok {
+			entry = manifest.File{Name: name, Perm: fileMap[ve.origname].Perm}
+		}
+		entry.OldName = ve.origname
+		fileMap[name] = entry
+
+		if _, reAdded := vfEntries[ve.origname]; !reAdded {
+			delete(fileMap, ve.origname)
+		}
+	}
 }
 
 // restatCommitPerms re-derives each included file's executable permission

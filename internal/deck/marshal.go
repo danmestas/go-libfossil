@@ -77,14 +77,25 @@ func marshalCards(b *strings.Builder, d *Deck) {
 			if f.UUID != "" {
 				b.WriteString(" ")
 				b.WriteString(f.UUID)
-				if f.Perm != "" {
-					b.WriteString(" ")
-					b.WriteString(f.Perm)
+				// Canonical Fossil forces a "w" permission placeholder on a
+				// rename card whose perm would otherwise be empty, so the
+				// prior-name field keeps its 4th positional slot rather than
+				// being misread as the permission (src/checkin.c:1999).
+				perm := f.Perm
+				if perm == "" && f.OldName != "" {
+					perm = "w"
 				}
-			}
-			if f.OldName != "" {
-				b.WriteString(" ")
-				b.WriteString(FossilEncode(f.OldName))
+				if perm != "" {
+					b.WriteString(" ")
+					b.WriteString(perm)
+				}
+				// The prior name is positional and only meaningful after a
+				// UUID; a deletion card (no UUID) must never carry one, or
+				// the old name would be misread as the hash.
+				if f.OldName != "" {
+					b.WriteString(" ")
+					b.WriteString(FossilEncode(f.OldName))
+				}
 			}
 			b.WriteString("\n")
 		}

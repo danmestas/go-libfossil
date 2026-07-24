@@ -278,6 +278,50 @@ func TestHandleClone(t *testing.T) {
 	}
 }
 
+// TestHandleClonePushCardTrailsCloneSeqno pins the card order a clone response
+// must use to keep a real fossil client from re-transferring the whole
+// repository (issue #138). Canonical's client re-issues `clone 3 SEQNO` every
+// time it sees a server `push` card while its cloneSeqno is still > 0
+// (fossil-scm xfer.c:2706), and canonical's server emits `push` *after* the
+// terminal `clone_seqno 0` (xfer.c:1571 then 1577). If go-libfossil emits
+// `push` before `clone_seqno`, the client queues one more `clone 3 SEQNO`
+// before it learns the cursor reached 0, and the server serves the entire
+// content a second time -- the measured 2.06x end-to-end blow-up. So in a clone
+// response the CloneSeqNoCard must precede the PushCard.
+func TestHandleClonePushCardTrailsCloneSeqno(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	for i := range 5 {
+		storeTestBlob(t, r, []byte(fmt.Sprintf("clone order test %d", i)))
+	}
+
+	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+
+	seqnoIdx, pushIdx := -1, -1
+	for i, c := range resp.Cards {
+		switch c.(type) {
+		case *xfer.CloneSeqNoCard:
+			seqnoIdx = i
+		case *xfer.PushCard:
+			pushIdx = i
+		}
+	}
+	if seqnoIdx < 0 {
+		t.Fatal("clone response missing clone_seqno card")
+	}
+	if pushIdx < 0 {
+		t.Fatal("clone response missing push card")
+	}
+	if pushIdx < seqnoIdx {
+		t.Fatalf("push card at index %d precedes clone_seqno at index %d; "+
+			"a real fossil client re-clones the whole repo when push arrives "+
+			"before the terminal clone_seqno (issue #138)", pushIdx, seqnoIdx)
+	}
+}
+
 // similarCloneArtifacts returns two bodies sharing almost all their text, so
 // a delta between them is well under content.Deltify's policy threshold and
 // far smaller than either full body.

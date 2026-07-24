@@ -402,6 +402,86 @@ func TestCreate_RoundTrip_FossilValidation(t *testing.T) {
 	}
 }
 
+// TestApplyInto_NilDstMatchesApply pins the delegation: ApplyInto(nil, ...)
+// must reconstruct exactly what Apply does, since Apply is defined as that
+// call. Goal: prove the fresh-buffer path is untouched by the reuse variant.
+func TestApplyInto_NilDstMatchesApply(t *testing.T) {
+	source := bytes.Repeat([]byte("abcdefghij"), 200)
+	target := append(bytes.Repeat([]byte("abcdefghij"), 199), []byte("CHANGED!")...)
+	d := Create(source, target)
+
+	got, err := ApplyInto(nil, source, d)
+	if err != nil {
+		t.Fatalf("ApplyInto(nil): %v", err)
+	}
+	if !bytes.Equal(got, target) {
+		t.Fatalf("ApplyInto(nil) round-trip failed")
+	}
+
+	want, err := Apply(source, d)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ApplyInto(nil) differs from Apply")
+	}
+}
+
+// TestApplyInto_ReusedBufferAllocatesLess is the point of ApplyInto: handed a
+// buffer whose capacity already covers the target, it reconstructs in place
+// and skips the output allocation Apply always makes. Goal: prove the reuse
+// path removes at least the one output allocation, measured via AllocsPerRun
+// so it does not depend on the exact allocator count.
+func TestApplyInto_ReusedBufferAllocatesLess(t *testing.T) {
+	source := bytes.Repeat([]byte("abcdefghij"), 200)
+	target := append(bytes.Repeat([]byte("abcdefghij"), 199), []byte("CHANGED!")...)
+	d := Create(source, target)
+
+	dst := make([]byte, 0, len(target))
+
+	freshAllocs := testing.AllocsPerRun(200, func() {
+		out, err := Apply(source, d)
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if len(out) != len(target) {
+			t.Fatalf("Apply produced %d bytes, want %d", len(out), len(target))
+		}
+	})
+
+	reuseAllocs := testing.AllocsPerRun(200, func() {
+		out, err := ApplyInto(dst[:0], source, d)
+		if err != nil {
+			t.Fatalf("ApplyInto: %v", err)
+		}
+		if !bytes.Equal(out, target) {
+			t.Fatalf("ApplyInto reuse round-trip failed")
+		}
+	})
+
+	if reuseAllocs >= freshAllocs {
+		t.Fatalf("ApplyInto into a pre-sized buffer allocated %.0f times, "+
+			"want fewer than Apply's %.0f -- the output allocation was not saved",
+			reuseAllocs, freshAllocs)
+	}
+}
+
+// TestApplyInto_PanicsOnNonEmptyDst guards the reuse contract: the caller must
+// hand over a reset buffer (dst[:0]); a non-empty dst would append after live
+// bytes and silently corrupt the result. That is a programmer error, so it
+// panics rather than returning an error.
+func TestApplyInto_PanicsOnNonEmptyDst(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic when dst has non-zero length")
+		}
+	}()
+	source := []byte("source")
+	target := []byte("target")
+	d := Create(source, target)
+	_, _ = ApplyInto([]byte("live"), source, d)
+}
+
 func BenchmarkApply(b *testing.B) {
 	source := bytes.Repeat([]byte("abcdefghij"), 1000)
 	target := append(bytes.Repeat([]byte("abcdefghij"), 999), []byte("CHANGED!")...)

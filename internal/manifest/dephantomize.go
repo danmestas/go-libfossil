@@ -110,6 +110,9 @@ func crosslinkSingle(r *repo.Repo, rid libfossil.FslID) error {
 		panic("crosslinkSingle: rid must be positive")
 	}
 
+	// Bare Expand: crosslinks one just-dephantomized artifact, expanded once.
+	// The whole-repository crosslink sweep that has genuine chain overlap is
+	// Crosslink/CrosslinkContext, which already runs its own content.Cache.
 	data, err := content.Expand(r.DB(), rid)
 	if err != nil {
 		return fmt.Errorf("crosslinkSingle expand rid=%d: %w", rid, err)

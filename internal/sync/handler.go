@@ -248,9 +248,23 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		}
 	}
 
+	// Process data cards and emit response blobs.
+	if err := h.processDataCards(req.Cards); err != nil {
+		return nil, err
+	}
+
 	// Emit PushCard with project-code/server-code so the clone client can
 	// identify the repo. Only in clone mode — sync clients already have
 	// codes, and real Fossil treats server-sent "push" as unknown during sync.
+	//
+	// This must trail the clone batch's clone_seqno card, matching canonical's
+	// order (fossil-scm xfer.c emits the batch, then clone_seqno at :1571, then
+	// push at :1577). A real fossil client re-issues `clone 3 SEQNO` every round
+	// it sees a `push` card while its clone cursor is still positive (xfer.c:2706),
+	// and it learns the cursor hit zero only from the clone_seqno card. Emitting
+	// push ahead of clone_seqno makes the client queue one more clone request
+	// before it sees the terminal clone_seqno 0, so the server serves the whole
+	// repository a second time — the 2.06x end-to-end blow-up of issue #138.
 	if h.cloneMode {
 		var projectCode, serverCode string
 		_ = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&projectCode)
@@ -261,11 +275,6 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 				ServerCode:  serverCode,
 			})
 		}
-	}
-
-	// Process data cards and emit response blobs.
-	if err := h.processDataCards(req.Cards); err != nil {
-		return nil, err
 	}
 
 	// Crosslink any newly-received manifests into the relational tables

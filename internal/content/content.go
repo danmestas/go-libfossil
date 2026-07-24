@@ -86,12 +86,28 @@ func expandChain(
 		}
 	}
 
+	// inf reuses one zlib reader for every delta load on this chain instead of
+	// building a fresh ~32 KiB reader per link; scratch ping-pongs two output
+	// buffers so the replay holds a constant two targets rather than one per
+	// link. Both are what turn a single sub-64 KiB Expand from ~2.7x
+	// depth*targetLen allocation down toward a constant. scratch is only used
+	// when put == nil: a caching walk hands every materialized buffer to put,
+	// which takes ownership, so those buffers cannot be reused underneath it.
+	var inf blob.Inflater
+	var scratch [2][]byte
 	for i := 1; i < len(chain); i++ {
-		deltaBytes, err := blob.Load(q, chain[i])
+		deltaBytes, err := inf.Load(q, chain[i])
 		if err != nil {
 			return nil, fmt.Errorf("content.Expand load delta rid=%d: %w", chain[i], err)
 		}
-		content, err = delta.Apply(content, deltaBytes)
+		if put != nil {
+			content, err = delta.Apply(content, deltaBytes)
+		} else {
+			// scratch[i&1] held content two links back, already consumed as the
+			// source of link i-1; content (the source here) is scratch[(i-1)&1],
+			// the opposite slot, so dst and source never alias.
+			content, err = delta.ApplyInto(scratch[i&1][:0], content, deltaBytes)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("content.Expand apply delta rid=%d: %w", chain[i], err)
 		}
@@ -100,6 +116,8 @@ func expandChain(
 				return nil, err
 			}
 			put(chain[i], content)
+		} else {
+			scratch[i&1] = content
 		}
 	}
 

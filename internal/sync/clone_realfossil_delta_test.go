@@ -34,16 +34,14 @@ import (
 // format. That change is a bandwidth win and is verified content-identical for
 // libfossil<->libfossil clones by the self-round-trip tests.
 //
-// It does NOT, on its own, make a real fossil client's clone usable. Full
-// content still rides a compressed "cfile", and go-libfossil emits that cfile
-// as bare zlib while fossil's on-disk cfile format is [4-byte size][zlib] --
-// so a real fossil client decodes full content to garbage and rebuilds to zero
-// check-ins. That is a separate, pre-existing bug (present on unmodified main),
-// tracked as #152. This test asserts real usability so the gap is visible: it
-// clones, rebuilds, and counts check-ins, and when the count is zero it skips
-// with a pointer to #152 rather than silently passing on corrupt content. When
-// #152 lands, the clone will materialize all six check-ins and this test starts
-// genuinely passing.
+// Full content rides a compressed "cfile" card. #152 fixed that card's wire
+// framing: the payload is now fossil's on-disk blob format ([4-byte
+// big-endian size][zlib]), the exact bytes blob_compress() produces, so a real
+// fossil client stores it verbatim and later reads it back through
+// blob_uncompress() successfully. Before that fix go-libfossil emitted bare
+// zlib (no prefix), so full content decoded to garbage and rebuilt to zero
+// check-ins. This test asserts real usability -- it clones, rebuilds, and
+// requires all six check-ins to materialize.
 func TestCloneRealFossilWithDeltaChain(t *testing.T) {
 	bin, err := exec.LookPath("fossil")
 	if err != nil {
@@ -118,17 +116,8 @@ func TestCloneRealFossilWithDeltaChain(t *testing.T) {
 	}
 
 	got := fossilCheckinCount(t, bin, clonePath)
-	if got == 0 {
-		t.Skipf("KNOWN BUG (#152): a real fossil client cloned 0 usable check-ins "+
-			"from this server. #141's delta retransmission is correct and verified "+
-			"for libfossil<->libfossil clones, but real-fossil interop is blocked on "+
-			"a separate cfile-framing bug: go-libfossil emits the cfile payload as "+
-			"bare zlib while fossil expects [4-byte size][zlib], so full content "+
-			"decodes to garbage and no check-in survives rebuild. Remove this skip "+
-			"when #152 lands (expect %d check-ins).", wantCheckins)
-	}
 	if got != wantCheckins {
-		t.Fatalf("clone materialized %d check-ins, want %d", got, wantCheckins)
+		t.Fatalf("clone materialized %d check-ins, want %d (#152: cfile framing regression?)", got, wantCheckins)
 	}
 }
 

@@ -211,6 +211,154 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 	})
 }
 
+// mustMarshalManifest computes a manifest's R-card over blobs and marshals it
+// to its on-disk bytes, failing the test on any error. blobs maps every file
+// UUID the R-card walks to its content.
+func mustMarshalManifest(t *testing.T, d *deck.Deck, blobs map[string][]byte) []byte {
+	t.Helper()
+	rHash, err := d.ComputeR(func(uuid string) ([]byte, error) {
+		if c, ok := blobs[uuid]; ok {
+			return c, nil
+		}
+		return nil, fmt.Errorf("unexpected uuid: %s", uuid)
+	})
+	if err != nil {
+		t.Fatalf("ComputeR: %v", err)
+	}
+	d.R = rHash
+	b, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return b
+}
+
+// TestInsertCheckinMlinks_DiffsAgainstParentManifest pins the #89 mlink
+// correctness fix on the Crosslink (xfer ingestion) write path: an mlink row
+// must be emitted only for a file that CHANGED relative to its primary
+// parent's manifest -- added, modified, deleted, or renamed -- not one row per
+// F-card. pmid/pid must be populated from the parent MANIFEST, so pid is
+// correct even when the parent check-in has not been crosslinked yet, which is
+// routine under the delta-chain visiting order that crosslinks a child before
+// its parent.
+//
+// Methodology: hand-build a parent baseline manifest {a.txt=A, b.txt=B} and a
+// child {a.txt=A (unchanged), b.txt=B2 (modified)} whose P-card names the
+// parent. Store the CHILD manifest blob FIRST so it takes the lower rid and is
+// visited before the parent in the same Crosslink sweep -- the exact timing
+// under which the old parent-mlink lookup returned an empty set and defaulted
+// pid to 0. Assert the child's mlink holds exactly one row (b.txt), none for
+// the unchanged a.txt, and that b.txt's pmid/pid name the parent manifest and
+// the parent's b.txt blob.
+func TestInsertCheckinMlinks_DiffsAgainstParentManifest(t *testing.T) {
+	r := setupTestRepo(t)
+	dbq := r.DB()
+
+	aContent := []byte("a content")
+	bContent := []byte("b content v1")
+	b2Content := []byte("b content v2")
+	aUUID := hash.SHA1(aContent)
+	bUUID := hash.SHA1(bContent)
+	b2UUID := hash.SHA1(b2Content)
+
+	// Store every file blob up front so Crosslink never defers.
+	if _, _, err := blob.Store(dbq, aContent); err != nil {
+		t.Fatalf("store a: %v", err)
+	}
+	bRid, _, err := blob.Store(dbq, bContent)
+	if err != nil {
+		t.Fatalf("store b: %v", err)
+	}
+	b2Rid, _, err := blob.Store(dbq, b2Content)
+	if err != nil {
+		t.Fatalf("store b2: %v", err)
+	}
+
+	trunkTags := []deck.TagCard{
+		{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+		{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+	}
+
+	// Parent baseline manifest: {a.txt=A, b.txt=B}.
+	parent := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "parent",
+		D:    time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "a.txt", UUID: aUUID}, {Name: "b.txt", UUID: bUUID}},
+		U:    deck.User("tester"),
+		T:    trunkTags,
+	}
+	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{aUUID: aContent, bUUID: bContent})
+	parentUUID := hash.SHA1(parentBytes)
+
+	// Child baseline manifest atop the parent: a.txt unchanged, b.txt modified.
+	child := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "child modifies b.txt",
+		D:    time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC),
+		P:    []string{parentUUID},
+		F:    []deck.FileCard{{Name: "a.txt", UUID: aUUID}, {Name: "b.txt", UUID: b2UUID}},
+		U:    deck.User("tester"),
+	}
+	childBytes := mustMarshalManifest(t, child, map[string][]byte{aUUID: aContent, b2UUID: b2Content})
+
+	// Store the CHILD blob before the PARENT blob so the child gets the lower
+	// rid and is crosslinked first -- reproducing the parent-not-yet-linked
+	// timing that made the old code default pid to 0.
+	childRid, _, err := blob.Store(dbq, childBytes)
+	if err != nil {
+		t.Fatalf("store child: %v", err)
+	}
+	parentRid, _, err := blob.Store(dbq, parentBytes)
+	if err != nil {
+		t.Fatalf("store parent: %v", err)
+	}
+
+	linked, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if linked != 2 {
+		t.Fatalf("Crosslink linked = %d, want 2 (parent + child)", linked)
+	}
+
+	// The child must have exactly one mlink row: b.txt (modified). a.txt is
+	// unchanged from the parent and must not appear.
+	var childMlinkCount int
+	if err := dbq.QueryRow("SELECT count(*) FROM mlink WHERE mid=?", childRid).Scan(&childMlinkCount); err != nil {
+		t.Fatalf("count child mlink: %v", err)
+	}
+	if childMlinkCount != 1 {
+		t.Errorf("child mlink count = %d, want 1 (only the modified b.txt)", childMlinkCount)
+	}
+
+	var aCount int
+	if err := dbq.QueryRow(
+		`SELECT count(*) FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='a.txt'`,
+		childRid).Scan(&aCount); err != nil {
+		t.Fatalf("count a.txt mlink: %v", err)
+	}
+	if aCount != 0 {
+		t.Errorf("a.txt mlink rows = %d, want 0 (unchanged from parent)", aCount)
+	}
+
+	var row mlinkRow
+	if err := dbq.QueryRow(
+		`SELECT m.fid, m.pmid, m.pid, m.fnid FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='b.txt'`,
+		childRid).Scan(&row.fid, &row.pmid, &row.pid, &row.fnid); err != nil {
+		t.Fatalf("b.txt mlink row: %v", err)
+	}
+	if row.fid != int64(b2Rid) {
+		t.Errorf("b.txt fid = %d, want %d (child's new blob)", row.fid, b2Rid)
+	}
+	if row.pmid != int64(parentRid) {
+		t.Errorf("b.txt pmid = %d, want %d (primary parent manifest)", row.pmid, parentRid)
+	}
+	if row.pid != int64(bRid) {
+		t.Errorf("b.txt pid = %d, want %d (parent's b.txt blob); pid must come from the parent manifest, not default to 0", row.pid, bRid)
+	}
+}
+
 // TestInsertMlinks_MergeParentsGetPidNegativeOne exercises the SAME
 // three-case pid rule on the direct check-in path (insertMlinks in
 // manifest.go), confirming resolveMlinkParent produces identical

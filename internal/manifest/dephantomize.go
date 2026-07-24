@@ -126,7 +126,10 @@ func crosslinkSingle(r *repo.Repo, rid libfossil.FslID) error {
 	return r.WithTx(func(tx *db.Tx) error {
 		switch d.Type {
 		case deck.Checkin:
-			return crosslinkCheckin(tx, rid, d)
+			// nil cache: this is the single-artifact path, not the sweep, so the
+			// parent manifest is expanded directly rather than through the sweep's
+			// shared content cache.
+			return crosslinkCheckin(tx, rid, d, nil)
 		case deck.Wiki:
 			_, err := crosslinkWiki(tx, rid, d)
 			return err

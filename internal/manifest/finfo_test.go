@@ -373,8 +373,9 @@ func TestFileHistory_CrosslinkGeneratedMlink(t *testing.T) {
 		Parent:  rid1,
 	})
 
-	// Wipe mlink and re-crosslink — this uses insertCheckinMlinks
-	// which doesn't set pid/pmid (unlike Checkin's insertMlinks).
+	// Wipe mlink and re-crosslink — this uses insertCheckinMlinks, which
+	// since #89 diffs each check-in against its parent manifest and sets
+	// pmid/pid from that manifest (previously it left pid=0 on every row).
 	r.DB().Exec("DELETE FROM mlink")
 	r.DB().Exec("DELETE FROM event")
 	r.DB().Exec("DELETE FROM plink")
@@ -392,20 +393,21 @@ func TestFileHistory_CrosslinkGeneratedMlink(t *testing.T) {
 		t.Fatalf("FileHistory after crosslink: %v", err)
 	}
 
-	// Crosslink doesn't set pid, so all entries appear as "added".
-	// This is expected — crosslink mlinks are simpler than Checkin mlinks.
-	if len(versions) < 1 {
-		t.Fatal("expected at least 1 version after crosslink")
+	// Only the second commit is re-crosslinked here: the wipe above leaves
+	// tagxref intact, and the candidate query skips any blob that is a tagxref
+	// source, which the tag-bearing first commit is. That single re-linked
+	// commit modified x.txt relative to its parent, so with pid now sourced
+	// from the parent manifest finfo classifies it as a modification. Before
+	// #89 the row carried pid=0 and finfo mis-reported it as an add.
+	if len(versions) != 1 {
+		t.Fatalf("expected 1 version for x.txt after crosslink, got %d", len(versions))
 	}
-	for _, v := range versions {
-		if v.Action != FileAdded {
-			// With crosslink mlinks (no pid), everything looks like FileAdded.
-			// This is a known limitation documented in the ADR.
-			t.Logf("note: crosslink mlink action = %v (pid not set, so all show as added)", v.Action)
-		}
-		if v.CheckinUUID == "" {
-			t.Error("CheckinUUID should be set")
-		}
+	v := versions[0]
+	if v.CheckinUUID == "" {
+		t.Error("CheckinUUID should be set")
+	}
+	if v.Action != FileModified {
+		t.Errorf("x.txt action = %v, want modified; pid must be set from the parent manifest, not default to 0 (which would classify as added)", v.Action)
 	}
 }
 

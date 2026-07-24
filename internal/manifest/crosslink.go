@@ -453,7 +453,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 		if d.Type == deck.Checkin && deferCheckin(tx, c, d, st) {
 			continue
 		}
-		p, handled, linkErr := linkArtifact(tx, c.rid, d)
+		p, handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)
 		if linkErr != nil {
 			return fmt.Errorf("manifest.Crosslink rid=%d type=%d: %w", c.rid, d.Type, linkErr)
 		}
@@ -472,10 +472,10 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 // returns any follow-up pending items. handled is false for artifact types the
 // sweep does not link (so the caller does not count them), matching the old
 // switch's `default: continue`.
-func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (pending []pendingItem, handled bool, err error) {
+func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) (pending []pendingItem, handled bool, err error) {
 	switch d.Type {
 	case deck.Checkin:
-		return nil, true, crosslinkCheckin(tx, rid, d)
+		return nil, true, crosslinkCheckin(tx, rid, d, cache)
 	case deck.Wiki:
 		p, e := crosslinkWiki(tx, rid, d)
 		return p, true, e
@@ -664,7 +664,11 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCach
 	return missing
 }
 
-func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+// crosslinkCheckin links one check-in manifest. cache is the whole-sweep
+// content cache (nil outside the sweep, e.g. the dephantomize single-artifact
+// path); insertCheckinMlinks uses it to expand the parent manifest at most once
+// per parent across the sweep.
+func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
 	if tx == nil {
 		panic("crosslinkCheckin: tx must not be nil")
 	}
@@ -672,7 +676,7 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		panic("crosslinkCheckin: rid must be positive")
 	}
 
-	if err := crosslinkCheckinTables(tx, rid, d); err != nil {
+	if err := crosslinkCheckinTables(tx, rid, d, cache); err != nil {
 		return err
 	}
 	return applyInlineTags(tx, rid, d)
@@ -682,7 +686,7 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 // deliberately not touched here -- see repairLeafTable. tx is the whole
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
-func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
 	// event
 	if _, err := tx.Exec(
 		"INSERT OR IGNORE INTO event(type, mtime, objid, user, comment) VALUES('ci', ?, ?, ?, ?)",
@@ -703,7 +707,7 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error 
 	if err := insertCheckinPlinks(tx, rid, d, baseid); err != nil {
 		return err
 	}
-	if err := insertCheckinMlinks(tx, rid, d); err != nil {
+	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
 		return err
 	}
 	return insertCherrypicks(tx, rid, d)
@@ -730,22 +734,64 @@ func insertCheckinPlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, baseid an
 	return nil
 }
 
-// insertCheckinMlinks inserts mlink rows for each file mapping (F-card).
+// parentFile is one file's identity in a parent check-in's manifest: the
+// content UUID and permission mlink needs to decide whether a child changed the
+// file, and to resolve the changed row's pid.
+type parentFile struct {
+	uuid string
+	perm string
+}
+
+// insertCheckinMlinks inserts mlink rows for a check-in, emitting a row only
+// for a file that CHANGED relative to its primary parent's manifest -- added,
+// modified, deleted, or renamed. A file carried over untouched gets no row,
+// matching canonical Fossil's add_mlink diff (src/manifest.c) and the rebuild
+// path's internal/verify.rebuildMlinks; the prior code emitted one row per
+// F-card, over-inserting ~180x on a real repository.
+//
+// pmid/pid come from the parent MANIFEST (expanded through cache), not the
+// parent's mlink rows. The manifest is always present once the check-in is
+// eligible to link, whereas the parent's mlink rows are not -- the delta-chain
+// visiting order routinely crosslinks a child before its parent -- which is why
+// the old parent-mlink lookup defaulted pid to 0 for most rows.
+//
 // An F-card with an empty UUID is an explicit deletion (delta-manifest
-// convention); it still gets a row, with fid=0, so `fossil ls -r` and
-// compute_fileage's ancestry walk see it — see insertMlinkRow for the
-// parent-column convention shared with the direct check-in path.
-func insertCheckinMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
-	primaryParentMid, mergeParentMids := resolveParentMids(tx, d)
-	parents, err := loadMlinkParents(tx, primaryParentMid, mergeParentMids)
-	if err != nil {
-		return err
+// convention); it is a change, so it still gets a row with fid=0 and pid = the
+// parent's blob rid. See insertMlinkRow for the shared parent-column convention.
+func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d *deck.Deck) error {
+	if tx == nil {
+		panic("manifest.insertCheckinMlinks: tx must not be nil")
 	}
+	if rid <= 0 {
+		panic("manifest.insertCheckinMlinks: rid must be positive")
+	}
+	if d == nil {
+		panic("manifest.insertCheckinMlinks: d must not be nil")
+	}
+
+	primaryParentMid, mergeParentMids := resolveParentMids(tx, d)
+	parentFiles := loadPrimaryParentFiles(tx, cache, primaryParentMid)
+	mergeNames := loadMergeParentNames(tx, cache, mergeParentMids)
+
+	// parents carries only the (fnid -> parent blob rid) and merge-fnid entries
+	// for the rows actually emitted, so resolveMlinkParent (inside insertMlinkRow)
+	// applies Fossil's pid convention against the parent manifest.
+	parents := &mlinkParents{
+		primaryMid: primaryParentMid,
+		primaryFid: make(map[int64]int64),
+		mergeFnids: make(map[int64]struct{}),
+	}
+
 	for _, f := range d.F {
+		pf, inParent := parentFiles[f.Name]
+		if mlinkFileUnchanged(f, pf, inParent) {
+			continue // carried over untouched: canonical add_mlink emits no row
+		}
 		fnid, err := ensureFilename(tx, f.Name)
 		if err != nil {
 			return fmt.Errorf("filename %q: %w", f.Name, err)
 		}
+		recordMlinkParentOf(tx, parents, fnid, f.Name, pf, inParent, mergeNames)
 		var fileRid int64
 		if f.UUID != "" {
 			if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", f.UUID).Scan(&fileRid); err != nil {
@@ -757,6 +803,153 @@ func insertCheckinMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		}
 	}
 	return nil
+}
+
+// mlinkFileUnchanged reports whether F-card f is byte-identical to the primary
+// parent's version -- present under the same name with the same content UUID
+// and the same mperm. Only then does canonical Fossil's add_mlink skip the row.
+// A file absent from the parent (add or rename) or with an empty UUID
+// (deletion) is always a change.
+func mlinkFileUnchanged(f deck.FileCard, pf parentFile, inParent bool) bool {
+	if !inParent {
+		return false
+	}
+	if f.UUID == "" {
+		return false
+	}
+	return f.UUID == pf.uuid && permToMperm(f.Perm) == permToMperm(pf.perm)
+}
+
+// recordMlinkParentOf teaches parents how resolveMlinkParent must resolve one
+// emitted file's pid: a file carried from the primary parent takes that
+// parent's blob rid, a file present only in a merge parent takes -1, and a file
+// new to this check-in takes 0 (the default when neither map has its fnid). A
+// parent file whose blob is absent leaves pid at 0 -- the change is still
+// recorded. See resolveMlinkParent for the convention.
+func recordMlinkParentOf(tx *db.Tx, parents *mlinkParents, fnid int64, name string, pf parentFile, inParent bool, mergeNames map[string]struct{}) {
+	if inParent {
+		var parentFileRid int64
+		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", pf.uuid).Scan(&parentFileRid); err == nil {
+			parents.primaryFid[fnid] = parentFileRid
+		}
+		return
+	}
+	if _, ok := mergeNames[name]; ok {
+		parents.mergeFnids[fnid] = struct{}{}
+	}
+}
+
+// loadPrimaryParentFiles expands the primary parent check-in's manifest and
+// returns its full file tree keyed by name. A primaryParentMid of 0 (no P-card,
+// or a parent whose blob has not arrived) yields an empty map, so every child
+// file reads as new -- canonical Fossil's "first check-in: all files are adds"
+// branch. A parent that cannot be expanded or parsed degrades to the same empty
+// map rather than failing the sweep, mirroring internal/verify.buildParentFileMap.
+func loadPrimaryParentFiles(q db.Querier, cache *content.Cache, primaryParentMid libfossil.FslID) map[string]parentFile {
+	if primaryParentMid <= 0 {
+		return map[string]parentFile{}
+	}
+	data, err := expandManifestBytes(q, cache, primaryParentMid)
+	if err != nil {
+		return map[string]parentFile{}
+	}
+	pd, err := deck.Parse(data)
+	if err != nil {
+		// A parent that does not parse (e.g. a PGP-clearsigned manifest, which
+		// deck.Parse does not yet strip) leaves the tree unknown: every child
+		// file then reads as new. This preserves the pre-fix behavior for those
+		// few check-ins rather than dropping their rows; see the package tests
+		// for the parseable-parent path this fix targets.
+		return map[string]parentFile{}
+	}
+	files, err := effectiveManifestFiles(q, cache, pd)
+	if err != nil {
+		return map[string]parentFile{}
+	}
+	return files
+}
+
+// loadMergeParentNames returns the union of filenames present in any merge
+// parent's manifest -- the set that decides pid=-1 (a file added by this
+// check-in but already present via a merge). An unexpandable merge parent
+// contributes nothing rather than failing the sweep.
+func loadMergeParentNames(q db.Querier, cache *content.Cache, mergeParentMids []libfossil.FslID) map[string]struct{} {
+	names := make(map[string]struct{})
+	for _, mid := range mergeParentMids {
+		if mid <= 0 {
+			continue
+		}
+		data, err := expandManifestBytes(q, cache, mid)
+		if err != nil {
+			continue
+		}
+		md, err := deck.Parse(data)
+		if err != nil {
+			continue
+		}
+		files, err := effectiveManifestFiles(q, cache, md)
+		if err != nil {
+			continue
+		}
+		for name := range files {
+			names[name] = struct{}{}
+		}
+	}
+	return names
+}
+
+// effectiveManifestFiles returns a parsed manifest's full file tree keyed by
+// name, expanding a delta manifest (B-card) against its baseline so a delta
+// parent contributes its whole tree, not just its own changes. cache backs the
+// baseline expansion. Mirrors manifest.ListFiles, but tx-scoped and returning
+// only the (uuid, perm) mlink needs.
+func effectiveManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (map[string]parentFile, error) {
+	files := make(map[string]parentFile, len(d.F))
+	if d.B != "" {
+		baseRid, ok := content.AvailableByUUID(q, d.B)
+		if !ok {
+			return nil, fmt.Errorf("baseline %s not found", d.B)
+		}
+		baseData, err := expandManifestBytes(q, cache, baseRid)
+		if err != nil {
+			return nil, fmt.Errorf("expand baseline: %w", err)
+		}
+		baseDeck, err := deck.Parse(baseData)
+		if err != nil {
+			return nil, fmt.Errorf("parse baseline: %w", err)
+		}
+		for _, f := range baseDeck.F {
+			applyFileCard(files, f)
+		}
+	}
+	for _, f := range d.F {
+		applyFileCard(files, f)
+	}
+	return files, nil
+}
+
+// applyFileCard folds one F-card into a file tree: an empty UUID removes the
+// name (delta-manifest deletion), any other card sets it.
+func applyFileCard(files map[string]parentFile, f deck.FileCard) {
+	if f.UUID == "" {
+		delete(files, f.Name)
+		return
+	}
+	files[f.Name] = parentFile{uuid: f.UUID, perm: f.Perm}
+}
+
+// expandManifestBytes returns a blob's fully-expanded content, using cache when
+// one is supplied (the whole-repo sweep passes its shared cache so each parent
+// manifest's delta chain is walked at most once across every child that
+// references it) and falling back to a direct expansion otherwise.
+func expandManifestBytes(q db.Querier, cache *content.Cache, rid libfossil.FslID) ([]byte, error) {
+	if q == nil {
+		panic("manifest.expandManifestBytes: q must not be nil")
+	}
+	if cache != nil {
+		return cache.Expand(q, rid)
+	}
+	return content.Expand(q, rid)
 }
 
 // resolveParentMids resolves a checkin manifest's P-card UUIDs to blob

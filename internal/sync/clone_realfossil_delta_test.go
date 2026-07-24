@@ -19,25 +19,25 @@ import (
 // content in the chain -- the interop regression a code review caught on
 // issue #98's first attempt.
 //
-// That attempt forwarded a deltified row's stored delta bytes verbatim
-// (correct per §7.2) but emitted cards in ascending-rid order for
-// cursor/pagination reasons unrelated to delta direction. content.Deltify
-// always deltifies the OLDER artifact against the NEWER one, so a delta's
-// DeltaSource almost always names a rid greater than the delta's own rid --
-// meaning the delta card routinely reached the client before the very source
-// card it names. libfossil's own client tolerates that forward reference
-// (storeDeltaContent phantoms the unseen source and resolves it later), but
-// real fossil 2.28 does not: the source stayed a genuine, unfilled phantom,
-// and content_get() on it during the client's post-clone rebuild pass
-// returned without initializing its output blob, tripping an assertion in
-// blob_copy (blob.c:397) and aborting the client mid-rebuild.
+// That attempt forwarded a deltified row's stored delta bytes as a compressed
+// "cfile" card and emitted cards in ascending-rid order. Two things broke a
+// real fossil 2.28 client: the send order (content.Deltify deltifies the OLDER
+// artifact against the NEWER one, so a delta's source almost always has a
+// greater rid than the delta and, in ascending order, had not been sent yet),
+// and the wire format (a real client stores a cfile payload verbatim and
+// cannot decompress it without fossil's on-disk [4-byte size][zlib] framing,
+// which the wire cfile omits). Either way the delta's source never
+// materialized, so content_get() on it during the post-clone rebuild returned
+// without initializing its output blob, tripping an assertion in blob_copy
+// (blob.c:397) and aborting the client mid-rebuild.
 //
-// The fix in emitCloneBatch expands a deltified row to full content before
-// sending, rather than forwarding the stored delta bytes -- still
-// zlib-compressed as a cfile card, just no longer dependent on send order.
-// This test drives a fixed corpus (a linear 5-deep delta chain) through a
-// real fossil binary end to end; it is skipped, not failed, when no fossil
-// binary is on PATH.
+// The #141 fix retransmits a deltified row as a delta but emits its source
+// first (buildCloneArtifact walks the chain source-first) and sends the delta
+// as an uncompressed "file UUID DELTASRC SIZE" card -- exactly as canonical
+// fossil's send_delta_native does, so the receiver re-frames it into fossil's
+// on-disk blob format. Full content still rides a compressed cfile. This test
+// drives a fixed corpus (a linear delta chain) through a real fossil binary end
+// to end; it is skipped, not failed, when no fossil binary is on PATH.
 func TestCloneRealFossilWithDeltaChain(t *testing.T) {
 	bin, err := exec.LookPath("fossil")
 	if err != nil {

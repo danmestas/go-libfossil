@@ -4,12 +4,12 @@ github.com/chromedp/chromedp v0.15.0 h1:B5abPcaCVetu6GDHsQKj8HbMhDWdiOM52E/TuOfu
 github.com/chromedp/chromedp v0.15.0/go.mod h1:V5szO2ASqoBZsIQ88EfNMRhi9737Equm5HFL9tsBt3Q=
 github.com/chromedp/sysutil v1.1.0 h1:PUFNv5EcprjqXZD9nJb9b/c9ibAbxiYo4exNWZyipwM=
 github.com/chromedp/sysutil v1.1.0/go.mod h1:WiThHUdltqCNKGc4gaU50XgYjwjYIhKWoHGPTUfWTJ8=
+github.com/danmestas/go-libfossil v0.6.4-0.20260724230440-48111c1c984d h1:+zTuDMtfj5Rg2Rm6bCnVrZxzFBF5JtP0rwdFuQmeSJU=
+github.com/danmestas/go-libfossil v0.6.4-0.20260724230440-48111c1c984d/go.mod h1:srcBH/pQu2vKaebmyTIQcwJ5Jev2PUtL76JQXxEy7mQ=
+github.com/danmestas/go-libfossil/db/driver/modernc v0.3.0 h1:O01NTY1LOkD9rcjneDAti5SC4RGvSARrrWtfnXyehBs=
+github.com/danmestas/go-libfossil/db/driver/modernc v0.3.0/go.mod h1:spdUGmH76DTTxNqmE2BaH3PvzGkilaNYnGQbaHO3T7M=
 github.com/danmestas/go-sqlite3-opfs v0.2.0 h1:bO6iQYobgWCqTCQZ4NQ147x3yU2v+J+nn0Sq3y1b7sk=
 github.com/danmestas/go-sqlite3-opfs v0.2.0/go.mod h1:eAYxwG9hykpkB6oNMnsM8sSGB9HhHZv/NIN6yO9ZVQE=
-github.com/danmestas/libfossil v0.1.0 h1:4YvP/Ope5ggWQK4xsW6Y2DXI6U9kow7SgArRzuALMfs=
-github.com/danmestas/libfossil v0.1.0/go.mod h1:Ex+ADZ0kBLkBhSqnyrKg+KHbANVyQpKEWvVHUq8qMLc=
-github.com/danmestas/libfossil/db/driver/modernc v0.1.0 h1:w3elyVSdXdbGNZ3Iu9xE6RP4XTz6JRlkpk0RZKBMl1Y=
-github.com/danmestas/libfossil/db/driver/modernc v0.1.0/go.mod h1:sXeYxCmAkz3Tb/zLIOo7X2CoZDelYQ1MWyoUrySD/vU=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433 h1:vymEbVwYFP/L05h5TKQxvkXoKxNvTpjxYKdF1Nlwuao=

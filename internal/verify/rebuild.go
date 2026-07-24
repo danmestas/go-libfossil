@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -27,8 +28,14 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 	start := time.Now()
 	report := &Report{}
 
+	// One expansion cache for the whole rebuild; see verifyCacheBytes. It spans
+	// the pre-transaction blob check and the in-transaction sweeps because a
+	// blob's rid and content are the same whichever querier reads them, and
+	// rebuild never rewrites blob content -- only the derived tables.
+	cache := content.NewCache(verifyCacheBytes)
+
 	// Phase 1: verify blobs (read-only, outside transaction)
-	if err := checkBlobs(r, report); err != nil {
+	if err := checkBlobs(r, report, cache); err != nil {
 		return nil, fmt.Errorf("verify.Rebuild: %w", err)
 	}
 
@@ -37,10 +44,10 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 		if err := dropDerivedTables(tx); err != nil {
 			return err
 		}
-		if err := rebuildManifests(r, tx, report); err != nil {
+		if err := rebuildManifests(r, tx, report, cache); err != nil {
 			return fmt.Errorf("rebuild manifests: %w", err)
 		}
-		if err := rebuildTags(r, tx, report); err != nil {
+		if err := rebuildTags(r, tx, report, cache); err != nil {
 			return fmt.Errorf("rebuild tags: %w", err)
 		}
 		if err := rebuildLeaves(tx); err != nil {

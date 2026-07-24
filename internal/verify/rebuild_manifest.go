@@ -13,7 +13,7 @@ import (
 
 // rebuildManifests walks all non-phantom blobs, parses checkin manifests,
 // and inserts event/plink/mlink/filename rows.
-func rebuildManifests(r *repo.Repo, tx *db.Tx, report *Report) error {
+func rebuildManifests(r *repo.Repo, tx *db.Tx, report *Report, cache *content.Cache) error {
 	if r == nil {
 		panic("rebuildManifests: nil *repo.Repo")
 	}
@@ -30,7 +30,7 @@ func rebuildManifests(r *repo.Repo, tx *db.Tx, report *Report) error {
 	}
 
 	for _, e := range entries {
-		data, err := content.Expand(tx, e.rid)
+		data, err := cache.Expand(tx, e.rid)
 		if err != nil {
 			report.BlobsSkipped++
 			continue // not expandable — corrupt, raw data blob, or phantom
@@ -42,7 +42,7 @@ func rebuildManifests(r *repo.Repo, tx *db.Tx, report *Report) error {
 		if d.Type != deck.Checkin {
 			continue
 		}
-		if err := rebuildCheckin(tx, e.rid, d, report); err != nil {
+		if err := rebuildCheckin(tx, e.rid, d, report, cache); err != nil {
 			return fmt.Errorf("rebuildManifests rid=%d: %w", e.rid, err)
 		}
 	}
@@ -75,7 +75,7 @@ func collectBlobEntries(q db.Querier) ([]blobEntry, error) {
 }
 
 // rebuildCheckin inserts event, plink, and mlink rows for one checkin manifest.
-func rebuildCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, report *Report) error {
+func rebuildCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, report *Report, cache *content.Cache) error {
 	if tx == nil {
 		panic("rebuildCheckin: nil *db.Tx")
 	}
@@ -100,7 +100,7 @@ func rebuildCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, report *Report
 
 	// Insert mlink/filename rows for manifest F-cards.
 	// Uses d.F directly (not expanded) — matches Fossil's mlink semantics.
-	if err := rebuildMlinks(tx, rid, d); err != nil {
+	if err := rebuildMlinks(tx, rid, d, cache); err != nil {
 		return err
 	}
 
@@ -140,9 +140,9 @@ func rebuildPlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, mtime float64, 
 // changed relative to the primary parent. Fossil's rebuild only creates mlink
 // rows for files that differ from the parent checkin — unchanged files are
 // skipped. This matches fossil rebuild behavior.
-func rebuildMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+func rebuildMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
 	// Build parent file map (name → uuid) for comparison.
-	parentFiles := buildParentFileMap(tx, d)
+	parentFiles := buildParentFileMap(tx, d, cache)
 
 	for _, f := range d.F {
 		if f.UUID == "" {
@@ -172,7 +172,7 @@ func rebuildMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 
 // buildParentFileMap returns a map of filename→UUID from the primary parent's
 // manifest. Returns an empty map if there is no parent (initial checkin).
-func buildParentFileMap(tx *db.Tx, d *deck.Deck) map[string]string {
+func buildParentFileMap(tx *db.Tx, d *deck.Deck, cache *content.Cache) map[string]string {
 	if len(d.P) == 0 {
 		return nil // initial checkin — no parent
 	}
@@ -180,7 +180,7 @@ func buildParentFileMap(tx *db.Tx, d *deck.Deck) map[string]string {
 	if !ok {
 		return nil
 	}
-	parentData, err := content.Expand(tx, parentRID)
+	parentData, err := cache.Expand(tx, parentRID)
 	if err != nil {
 		return nil
 	}

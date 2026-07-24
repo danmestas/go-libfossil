@@ -810,12 +810,15 @@ func (h *handler) emitCloneBatch() error {
 			break
 		}
 
-		// §7.2: clone retransmits the repository's stored compressed content
-		// verbatim rather than the fully expanded form cache.Expand produces
-		// for a whole artifact -- blob.Load returns exactly that, and using
-		// it here (instead of Expand) is most of this fix's wire-size win
-		// (issue #98): a whole artifact goes out compressed instead of
-		// expanded and uncompressed.
+		// §7.2: clone sends a whole artifact as compressed content rather than
+		// the fully expanded form the old FileCard path emitted, which is most
+		// of this fix's wire-size win (issue #98). The bytes are not a verbatim
+		// passthrough of the stored blob: blob.Load DECOMPRESSES the stored
+		// content, and encodeCFile then RE-COMPRESSES it with zlib before it
+		// goes on the wire. The round-trip is byte-deterministic -- zlib at a
+		// fixed level maps the same decompressed input to the same output -- so
+		// the wire bytes equal what re-compressing the stored content yields,
+		// but nothing here forwards the stored compressed bytes untouched.
 		//
 		// A row stored as a delta is the one case blob.Load's bytes cannot
 		// be forwarded as-is: content.Deltify always deltifies the OLDER

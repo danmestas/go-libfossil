@@ -111,16 +111,39 @@ func OutputSize(deltaBytes []byte) (uint64, error) {
 	return parseTargetLen(&reader{data: deltaBytes})
 }
 
-// Apply reconstructs target data from source and delta.
+// Apply reconstructs target data from source and delta, allocating a fresh
+// output buffer. It is ApplyInto with no buffer to reuse.
+func Apply(source, delta []byte) (result []byte, err error) {
+	return ApplyInto(nil, source, delta)
+}
+
+// ApplyInto reconstructs target data from source and delta into dst, reusing
+// dst's capacity when it is large enough. dst must be empty (len(dst) == 0);
+// pass dst[:0] to reuse a buffer from a previous call. A nil dst is the
+// fresh-allocation path and behaves exactly like Apply.
+//
+// Reuse is what makes a delta-chain replay allocate a constant number of
+// output buffers instead of one per link: the caller ping-pongs two buffers,
+// each link's target reusing the buffer that held the target two links back.
+// The reused capacity is proven prior work, not a wire claim, so it is a safe
+// starting size — unlike targetLen, which is a header value ApplyInto never
+// trusts to allocate from (see the deltaInitialCap comment below).
+//
+// The returned slice may share dst's backing array; the caller must not hold
+// a reference to dst afterwards expecting it to be independent.
+//
 // Variable naming follows fossil/src/delta.c for cross-reference:
 //   cnt = count, offset = source offset, cmd = command byte
-func Apply(source, delta []byte) (result []byte, err error) {
+func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 	if source == nil {
-		panic("delta.Apply: source must not be nil")
+		panic("delta.ApplyInto: source must not be nil")
+	}
+	if len(dst) != 0 {
+		panic("delta.ApplyInto: dst must be empty (pass dst[:0])")
 	}
 	defer func() {
 		if err == nil && result == nil {
-			panic("delta.Apply: postcondition violated: result is nil with no error")
+			panic("delta.ApplyInto: postcondition violated: result is nil with no error")
 		}
 	}()
 
@@ -146,13 +169,24 @@ func Apply(source, delta []byte) (result []byte, err error) {
 	// parse spike. Starting small and growing tracks actual work
 	// performed instead of trusting the claim.
 	const deltaInitialCap = 64 * 1024 // 64 KiB; upgraded once real work is proven (see growOutputCap)
-	initialCap := targetLen
+	var output []byte
 	capped := false
-	if initialCap > deltaInitialCap {
-		initialCap = deltaInitialCap
-		capped = true
+	if cap(dst) == 0 {
+		initialCap := targetLen
+		if initialCap > deltaInitialCap {
+			initialCap = deltaInitialCap
+			capped = true
+		}
+		output = make([]byte, 0, initialCap)
+	} else {
+		// A reused buffer's capacity is proven prior work: reconstructing an
+		// adjacent revision produced it, so it is a legitimate starting size
+		// even above deltaInitialCap. Only when this target outgrows the
+		// inherited buffer does the one-time upgrade fire, and it still sizes
+		// off len(delta) rather than the targetLen header (see growOutputCap).
+		output = dst[:0]
+		capped = uint64(cap(output)) < targetLen
 	}
-	output := make([]byte, 0, initialCap)
 
 	// grownPastInitialCap upgrades output's capacity exactly once, the
 	// first time a command actually executes. Go's growth factor for

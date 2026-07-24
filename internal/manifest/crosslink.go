@@ -3,6 +3,7 @@ package manifest
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -308,9 +309,13 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 		}); err != nil {
 			// The interruption cause is the primary error to surface; a repair
 			// failure layered on top of it is secondary. When the sweep itself
-			// succeeded (sweepErr == nil), the repair failure is the error.
+			// succeeded (sweepErr == nil), the repair failure is the error. When
+			// the sweep was interrupted, join both so a real repair failure
+			// (disk full, corruption, constraint violation) during a cancelled
+			// sweep is still surfaced rather than silently dropped, while
+			// errors.Is(err, context.Canceled) keeps holding for callers.
 			if sweepErr != nil {
-				return linked, sweepErr
+				return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
 			}
 			return linked, fmt.Errorf("manifest.Crosslink: %w", err)
 		}

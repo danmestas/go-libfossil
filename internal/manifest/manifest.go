@@ -254,6 +254,10 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 }
 
 func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {
+	parents, err := loadMlinkParents(tx, opts.Parent, opts.MergeParents)
+	if err != nil {
+		return err
+	}
 	for _, f := range opts.Files {
 		fnid, err := ensureFilename(tx, f.Name)
 		if err != nil {
@@ -261,7 +265,7 @@ func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) erro
 		}
 		fileUUID := hash.SHA1(f.Content)
 		fileRid, _ := blob.Exists(tx, fileUUID)
-		if err := insertMlinkRow(tx, manifestRid, int64(fileRid), fnid, "", f.Perm, opts.Parent, opts.MergeParents); err != nil {
+		if err := insertMlinkRow(tx, manifestRid, int64(fileRid), fnid, "", f.Perm, parents); err != nil {
 			return err
 		}
 	}

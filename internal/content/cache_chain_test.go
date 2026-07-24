@@ -18,6 +18,7 @@ type countingQuerier struct {
 	inner      db.Querier
 	blobLoads  int
 	deltaWalks int
+	availSteps int
 }
 
 func (c *countingQuerier) Exec(q string, args ...any) (sql.Result, error) {
@@ -30,6 +31,8 @@ func (c *countingQuerier) QueryRow(q string, args ...any) *sql.Row {
 		c.blobLoads++
 	case strings.HasPrefix(q, "SELECT srcid FROM delta"):
 		c.deltaWalks++
+	case strings.HasPrefix(q, "SELECT b.size, d.rid IS NOT NULL, d.srcid"):
+		c.availSteps++
 	}
 	return c.inner.QueryRow(q, args...)
 }

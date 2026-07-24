@@ -32,12 +32,18 @@ func Parse(data []byte) (*Deck, error) {
 	if data == nil {
 		panic("deck.Parse: data must not be nil")
 	}
-	if err := VerifyZ(data); err != nil {
+	// A clearsigned blob carries PGP/SSH framing around the manifest; strip
+	// it once so both the Z-card check and card parsing see the inner content
+	// (the artifact's content-addressed hash, taken over the raw blob
+	// elsewhere, is unaffected). stripClearsign returns data unchanged for the
+	// common non-clearsigned case.
+	content := stripClearsign(data)
+	if err := verifyZ(content); err != nil {
 		return nil, fmt.Errorf("deck.Parse: %w", err)
 	}
 
-	// body is safe: VerifyZ above guarantees len(data) >= 35.
-	body := data[:len(data)-35]
+	// body is safe: verifyZ above guarantees len(content) >= 35.
+	body := content[:len(content)-35]
 	d := &Deck{}
 	var lastCard byte
 	var seen seenCards

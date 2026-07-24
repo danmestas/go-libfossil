@@ -7,16 +7,27 @@ import (
 	"strings"
 )
 
+// VerifyZ validates a control artifact's trailing Z-card checksum. The blob
+// may arrive PGP/SSH clearsigned (historical artifacts, e.g. Fossil's own
+// 2007-era check-ins); stripClearsign isolates the inner content the Z card
+// is computed over so the last-35-byte check lands on the Z card and not on a
+// trailing signature block. The artifact's content-addressed hash is computed
+// over the raw blob elsewhere and is unaffected by this stripping.
 func VerifyZ(data []byte) error {
-	if len(data) < 35 {
-		return fmt.Errorf("deck.VerifyZ: manifest too short (%d bytes)", len(data))
+	return verifyZ(stripClearsign(data))
+}
+
+// verifyZ checks the Z card of already-clearsign-stripped artifact content.
+func verifyZ(body []byte) error {
+	if len(body) < 35 {
+		return fmt.Errorf("deck.VerifyZ: manifest too short (%d bytes)", len(body))
 	}
-	tail := data[len(data)-35:]
+	tail := body[len(body)-35:]
 	if tail[0] != 'Z' || tail[1] != ' ' || tail[34] != '\n' {
 		return fmt.Errorf("deck.VerifyZ: invalid Z-card format")
 	}
 	stated := string(tail[2:34])
-	computed := computeZ(data[:len(data)-35])
+	computed := computeZ(body[:len(body)-35])
 	if computed != stated {
 		return fmt.Errorf("deck.VerifyZ: checksum mismatch: stated=%s computed=%s", stated, computed)
 	}

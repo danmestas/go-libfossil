@@ -3,6 +3,7 @@ package xfer
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -245,6 +246,20 @@ func encodeFile(w *bytes.Buffer, c *FileCard) error {
 // encodeCFile writes: cfile UUID USIZE CSIZE \n ZCONTENT  (no trailing \n)
 // or: cfile UUID DELTASRC USIZE CSIZE \n ZCONTENT  (delta variant)
 //
+// The ZCONTENT payload is Fossil's on-disk compressed-blob format, produced by
+// blob_compress() in src/blob.c: a 4-byte big-endian uncompressed-size prefix
+// followed by the zlib stream. This framing is mandatory for interop (issue
+// #152): fossil's send_compressed_file transmits a blob.content column
+// verbatim, and its receiver stores the cfile payload verbatim into
+// blob.content, then later reads it back through blob_uncompress(), which reads
+// that 4-byte prefix to size its output before inflating. A bare zlib payload
+// (no prefix) is stored unreadable, so a real fossil client cloning from us
+// ends up with zero usable check-ins. CSIZE therefore counts the prefix.
+//
+// The prefix value is the size of the bytes being compressed -- len(Content) --
+// which for a delta card is the delta payload, not the full artifact. That is
+// distinct from USIZE.
+//
 // §7.2: USIZE is the sender's full reconstructed artifact size, which for a
 // delta card is not len(Content) -- Content there is the (smaller) delta
 // payload. A caller that knows the reconstructed size (the clone send path
@@ -252,9 +267,12 @@ func encodeFile(w *bytes.Buffer, c *FileCard) error {
 // caller, where the two quantities coincide -- leave it zero and get the old
 // len(Content) behaviour.
 func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
-	// Compress content with zlib
-	var zbuf bytes.Buffer
-	zw := zlib.NewWriter(&zbuf)
+	// Fossil on-disk blob format: [4-byte BE uncompressed size][zlib stream].
+	var payload bytes.Buffer
+	if err := binary.Write(&payload, binary.BigEndian, uint32(len(c.Content))); err != nil {
+		return fmt.Errorf("xfer: cfile size prefix: %w", err)
+	}
+	zw := zlib.NewWriter(&payload)
 	if _, err := zw.Write(c.Content); err != nil {
 		return fmt.Errorf("xfer: cfile zlib write: %w", err)
 	}
@@ -271,8 +289,8 @@ func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
 		w.WriteByte(' ')
 		w.WriteString(c.DeltaSrc)
 	}
-	fmt.Fprintf(w, " %d %d\n", usize, zbuf.Len())
-	w.Write(zbuf.Bytes())
+	fmt.Fprintf(w, " %d %d\n", usize, payload.Len())
+	w.Write(payload.Bytes())
 	// NO trailing newline
 	return nil
 }
@@ -351,4 +369,3 @@ func encodeXDelete(w *bytes.Buffer, c *XDeleteCard) error {
 	w.WriteByte('\n')
 	return nil
 }
-

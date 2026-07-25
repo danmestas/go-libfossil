@@ -359,6 +359,258 @@ func TestInsertCheckinMlinks_DiffsAgainstParentManifest(t *testing.T) {
 	}
 }
 
+// TestInsertCheckinMlinks_FullManifestDeletionByOmission pins issue #157 gap 1:
+// a file present in the primary parent but simply ABSENT from a full (non-delta)
+// child manifest -- deleted by omission, with no empty-UUID F-card -- must still
+// get a delete mlink row (fid=0) whose pid names the parent's blob, matching
+// canonical Fossil's add_mlink. The prior code walked only the child's F-cards,
+// so an omitted file produced no row at all.
+//
+// Methodology: hand-build a full parent {a.txt=A, b.txt=B} and a full child
+// {a.txt=A} that drops b.txt by omission (b.txt appears in NO F-card, empty or
+// otherwise). Store the child blob first so it takes the lower rid and is
+// crosslinked before its parent -- the same delta-chain timing #89 exercised --
+// then assert the child holds exactly one mlink row: b.txt with fid=0, pmid the
+// parent manifest, pid the parent's b.txt blob, and no pfnid.
+func TestInsertCheckinMlinks_FullManifestDeletionByOmission(t *testing.T) {
+	r := setupTestRepo(t)
+	dbq := r.DB()
+
+	aContent := []byte("a content")
+	bContent := []byte("b content")
+	aUUID := hash.SHA1(aContent)
+	bUUID := hash.SHA1(bContent)
+
+	if _, _, err := blob.Store(dbq, aContent); err != nil {
+		t.Fatalf("store a: %v", err)
+	}
+	bRid, _, err := blob.Store(dbq, bContent)
+	if err != nil {
+		t.Fatalf("store b: %v", err)
+	}
+
+	trunkTags := []deck.TagCard{
+		{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+		{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+	}
+
+	// Parent full manifest: {a.txt=A, b.txt=B}.
+	parent := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "parent",
+		D:    time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "a.txt", UUID: aUUID}, {Name: "b.txt", UUID: bUUID}},
+		U:    deck.User("tester"),
+		T:    trunkTags,
+	}
+	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{aUUID: aContent, bUUID: bContent})
+	parentUUID := hash.SHA1(parentBytes)
+
+	// Child full manifest: {a.txt=A}. b.txt is dropped by OMISSION -- there is
+	// no F-card for it at all, not even an empty-UUID deletion card.
+	child := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "child drops b.txt by omission",
+		D:    time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC),
+		P:    []string{parentUUID},
+		F:    []deck.FileCard{{Name: "a.txt", UUID: aUUID}},
+		U:    deck.User("tester"),
+	}
+	childBytes := mustMarshalManifest(t, child, map[string][]byte{aUUID: aContent})
+
+	// Store the CHILD before the PARENT so the child is crosslinked first --
+	// pid must still come from the parent MANIFEST, not the not-yet-written
+	// parent mlink rows.
+	childRid, _, err := blob.Store(dbq, childBytes)
+	if err != nil {
+		t.Fatalf("store child: %v", err)
+	}
+	parentRid, _, err := blob.Store(dbq, parentBytes)
+	if err != nil {
+		t.Fatalf("store parent: %v", err)
+	}
+
+	linked, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if linked != 2 {
+		t.Fatalf("Crosslink linked = %d, want 2 (parent + child)", linked)
+	}
+
+	// The child must have exactly one mlink row: the b.txt deletion. a.txt is
+	// carried over unchanged and must not appear.
+	var childMlinkCount int
+	if err := dbq.QueryRow("SELECT count(*) FROM mlink WHERE mid=?", childRid).Scan(&childMlinkCount); err != nil {
+		t.Fatalf("count child mlink: %v", err)
+	}
+	if childMlinkCount != 1 {
+		t.Errorf("child mlink count = %d, want 1 (only the b.txt deletion by omission)", childMlinkCount)
+	}
+
+	var aCount int
+	if err := dbq.QueryRow(
+		`SELECT count(*) FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='a.txt'`,
+		childRid).Scan(&aCount); err != nil {
+		t.Fatalf("count a.txt mlink: %v", err)
+	}
+	if aCount != 0 {
+		t.Errorf("a.txt mlink rows = %d, want 0 (carried over unchanged)", aCount)
+	}
+
+	var row mlinkRow
+	var pfnid int64
+	if err := dbq.QueryRow(
+		`SELECT m.fid, m.pmid, m.pid, m.fnid, coalesce(m.pfnid,0) FROM mlink m
+		 JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='b.txt'`,
+		childRid).Scan(&row.fid, &row.pmid, &row.pid, &row.fnid, &pfnid); err != nil {
+		t.Fatalf("b.txt mlink row: %v", err)
+	}
+	if row.fid != 0 {
+		t.Errorf("b.txt fid = %d, want 0 (deleted by omission)", row.fid)
+	}
+	if row.pmid != int64(parentRid) {
+		t.Errorf("b.txt pmid = %d, want %d (primary parent manifest)", row.pmid, parentRid)
+	}
+	if row.pid != int64(bRid) {
+		t.Errorf("b.txt pid = %d, want %d (parent's b.txt blob rid)", row.pid, bRid)
+	}
+	if pfnid != 0 {
+		t.Errorf("b.txt pfnid = %d, want 0 (a deletion, not a rename)", pfnid)
+	}
+}
+
+// TestInsertCheckinMlinks_RenameResolvesPidFromOldPath pins issue #157 gap 2:
+// the rename row (keyed on the new name) must resolve its pid from the parent's
+// blob at the OLD path, not default to 0 as a fresh add would. The fixture
+// renames-with-edit so pid (old blob) and fid (new blob) are distinct rids,
+// making the "pid comes from the old path" claim unambiguous.
+//
+// Canonical Fossil emits TWO rows for a rename, confirmed against the fossil
+// binary in TestFossilBinaryMlinkParity_DeletionAndRename: the rename row under
+// the new name (pfnid = old name) and a delete row (fid=0) for the vacated old
+// name. Both carry pid = the parent's old-path blob rid.
+//
+// Methodology: parent full {old.txt=X}; child full renames old.txt -> new.txt
+// while editing its content to Y, as a single F-card {Name:new.txt, UUID:Y,
+// OldName:old.txt}. Assert both rows: new.txt with fid=Y, pid=X, pfnid=old.txt;
+// and old.txt with fid=0, pid=X, no pfnid.
+func TestInsertCheckinMlinks_RenameResolvesPidFromOldPath(t *testing.T) {
+	r := setupTestRepo(t)
+	dbq := r.DB()
+
+	xContent := []byte("original content")
+	yContent := []byte("edited content after rename")
+	xUUID := hash.SHA1(xContent)
+	yUUID := hash.SHA1(yContent)
+
+	xRid, _, err := blob.Store(dbq, xContent)
+	if err != nil {
+		t.Fatalf("store x: %v", err)
+	}
+	yRid, _, err := blob.Store(dbq, yContent)
+	if err != nil {
+		t.Fatalf("store y: %v", err)
+	}
+
+	trunkTags := []deck.TagCard{
+		{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+		{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+	}
+
+	// Parent full manifest: {old.txt=X}.
+	parent := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "parent",
+		D:    time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "old.txt", UUID: xUUID}},
+		U:    deck.User("tester"),
+		T:    trunkTags,
+	}
+	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{xUUID: xContent})
+	parentUUID := hash.SHA1(parentBytes)
+
+	// Child full manifest: old.txt renamed to new.txt AND edited to Y, as one
+	// F-card carrying the prior name.
+	child := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "child renames and edits old.txt",
+		D:    time.Date(2026, 6, 1, 13, 0, 0, 0, time.UTC),
+		P:    []string{parentUUID},
+		F:    []deck.FileCard{{Name: "new.txt", UUID: yUUID, OldName: "old.txt"}},
+		U:    deck.User("tester"),
+	}
+	childBytes := mustMarshalManifest(t, child, map[string][]byte{yUUID: yContent})
+
+	childRid, _, err := blob.Store(dbq, childBytes)
+	if err != nil {
+		t.Fatalf("store child: %v", err)
+	}
+	if _, _, err := blob.Store(dbq, parentBytes); err != nil {
+		t.Fatalf("store parent: %v", err)
+	}
+
+	linked, err := Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if linked != 2 {
+		t.Fatalf("Crosslink linked = %d, want 2 (parent + child)", linked)
+	}
+
+	// Two rows: the rename (new.txt) and the delete of the vacated old.txt.
+	var childMlinkCount int
+	if err := dbq.QueryRow("SELECT count(*) FROM mlink WHERE mid=?", childRid).Scan(&childMlinkCount); err != nil {
+		t.Fatalf("count child mlink: %v", err)
+	}
+	if childMlinkCount != 2 {
+		t.Errorf("child mlink count = %d, want 2 (the rename row plus the old-name delete)", childMlinkCount)
+	}
+
+	var oldFnid int64
+	if err := dbq.QueryRow(`SELECT fnid FROM filename WHERE name='old.txt'`).Scan(&oldFnid); err != nil {
+		t.Fatalf("old.txt fnid lookup: %v", err)
+	}
+
+	// The rename row, keyed on the new name: fid=Y, pid=X (old path), pfnid=old.
+	var renameRow mlinkRow
+	var renamePfnid int64
+	if err := dbq.QueryRow(
+		`SELECT m.fid, m.pid, m.fnid, coalesce(m.pfnid,0) FROM mlink m
+		 JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='new.txt'`,
+		childRid).Scan(&renameRow.fid, &renameRow.pid, &renameRow.fnid, &renamePfnid); err != nil {
+		t.Fatalf("new.txt mlink row: %v", err)
+	}
+	if renameRow.fid != int64(yRid) {
+		t.Errorf("new.txt fid = %d, want %d (child's new blob)", renameRow.fid, yRid)
+	}
+	if renameRow.pid != int64(xRid) {
+		t.Errorf("new.txt pid = %d, want %d (parent's OLD-path blob rid, not 0)", renameRow.pid, xRid)
+	}
+	if renamePfnid != oldFnid {
+		t.Errorf("new.txt pfnid = %d, want %d (old.txt's fnid)", renamePfnid, oldFnid)
+	}
+
+	// The delete row for the vacated old name: fid=0, pid=X, no pfnid.
+	var delRow mlinkRow
+	var delPfnid int64
+	if err := dbq.QueryRow(
+		`SELECT m.fid, m.pid, m.fnid, coalesce(m.pfnid,0) FROM mlink m
+		 WHERE m.mid=? AND m.fnid=?`,
+		childRid, oldFnid).Scan(&delRow.fid, &delRow.pid, &delRow.fnid, &delPfnid); err != nil {
+		t.Fatalf("old.txt delete mlink row: %v", err)
+	}
+	if delRow.fid != 0 {
+		t.Errorf("old.txt fid = %d, want 0 (vacated by the rename)", delRow.fid)
+	}
+	if delRow.pid != int64(xRid) {
+		t.Errorf("old.txt pid = %d, want %d (parent's old.txt blob rid)", delRow.pid, xRid)
+	}
+	if delPfnid != 0 {
+		t.Errorf("old.txt pfnid = %d, want 0 (a deletion, not a rename)", delPfnid)
+	}
+}
+
 // TestInsertMlinks_MergeParentsGetPidNegativeOne exercises the SAME
 // three-case pid rule on the direct check-in path (insertMlinks in
 // manifest.go), confirming resolveMlinkParent produces identical

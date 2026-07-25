@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -13,17 +14,24 @@ import (
 
 // AfterDephantomize crosslinks a formerly-phantom blob and any dependents.
 // Matches Fossil's after_dephantomize (content.c:389-456).
-func AfterDephantomize(r *repo.Repo, rid libfossil.FslID) {
+//
+// ctx bounds the graph walk: this cascade runs synchronously mid-round as a
+// clone fills phantoms (see sync.storeReceivedFile), and on a large delta/orphan
+// graph can run for many multiples of a clone's deadline. A cancelled ctx aborts
+// the walk within crosslinkCancelCheckStride steps (see afterDephantomize),
+// mirroring the whole-repository sweep's CrosslinkContext contract. Callers with
+// no deadline pass context.Background().
+func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) {
 	if r == nil {
 		panic("manifest.AfterDephantomize: r must not be nil")
 	}
 	if rid <= 0 {
 		return
 	}
-	afterDephantomize(r, rid, true)
+	afterDephantomize(ctx, r, rid, true)
 }
 
-func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
+func afterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 	// Work stack replaces recursion. Bounded by total blob count in repo.
 	type workItem struct {
 		rid      libfossil.FslID
@@ -35,6 +43,21 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 	iterations := 0
 
 	for len(stack) > 0 {
+		// Observe the deadline every crosslinkCancelCheckStride pops, mirroring
+		// linkBatch's stride-batched poll in the whole-repository sweep. This
+		// cascade runs synchronously mid-round as a clone fills phantoms (see
+		// sync.storeReceivedFile), so without this a cancelled clone context
+		// could not interrupt it until the walk finished or hit maxIterations --
+		// the deadline-blind overshoot of issue #166. On cancellation we return
+		// what has been crosslinked so far, exactly as the batch sweep abandons
+		// its remaining candidates; nothing pretends the whole cascade completed.
+		if iterations%crosslinkCancelCheckStride == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+		}
 		iterations++
 		if iterations > maxIterations {
 			return // Safety bound exceeded.
@@ -50,7 +73,7 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 		}
 
 		if item.linkFlag {
-			if err := crosslinkSingle(r, current); err != nil {
+			if err := crosslinkSingle(ctx, r, current); err != nil {
 				slog.Warn("manifest.AfterDephantomize: crosslink failed, blob left un-crosslinked",
 					"rid", current, "error", err)
 			}
@@ -68,7 +91,7 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 			}
 			orphanRows.Close()
 			for _, orid := range orphans {
-				if err := crosslinkSingle(r, orid); err != nil {
+				if err := crosslinkSingle(ctx, r, orid); err != nil {
 					slog.Warn("manifest.AfterDephantomize: crosslink of orphan failed, blob left un-crosslinked",
 						"rid", orid, "baseline", current, "error", err)
 				}
@@ -103,7 +126,12 @@ func afterDephantomize(r *repo.Repo, rid libfossil.FslID, linkFlag bool) {
 }
 
 // crosslinkSingle crosslinks a single blob by rid.
-func crosslinkSingle(r *repo.Repo, rid libfossil.FslID) error {
+//
+// ctx is threaded for signature consistency with the AfterDephantomize call
+// chain; the cancellation poll lives in afterDephantomize's work-stack loop
+// (stride-batched, like linkBatch) rather than here, so a filled phantom is not
+// charged a channel read per artifact.
+func crosslinkSingle(ctx context.Context, r *repo.Repo, rid libfossil.FslID) error {
 	if r == nil {
 		panic("crosslinkSingle: r must not be nil")
 	}

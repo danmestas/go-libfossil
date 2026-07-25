@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -702,7 +703,7 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 // Callers with no such bytes on hand (payload built locally, or a bare
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
-func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if r == nil { panic("storeReceivedFile: r must not be nil") }
 	if uuid == "" { panic("storeReceivedFile: uuid must not be empty") }
 	if payload == nil { panic("storeReceivedFile: payload must not be nil") }
@@ -734,7 +735,7 @@ func storeReceivedFile(r *repo.Repo, uuid, deltaSrc string, payload []byte, stor
 	// its own connection, and calling it from inside that transaction's
 	// closure would contend with the still-open write lock.
 	if dephantomizedRid > 0 {
-		manifest.AfterDephantomize(r, dephantomizedRid)
+		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
 	}
 	return nil
 }
@@ -878,7 +879,13 @@ func (s *session) loadDBPhantoms() error {
 // storage (see storeReceivedFile); it is nil for uncompressed "file" cards,
 // which never carry a compressed frame to preserve.
 func (s *session) handleFileCard(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	if err := storeReceivedFile(s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+	// The client sync loop (session.Sync) does not thread its deadline context
+	// through processResponse to here, so the general push/pull path has no
+	// deadline to observe -- the clone path (cloneSession.handleFile), where the
+	// mid-round phantom-fill cascade of issue #166 actually bites, passes its
+	// real context instead. context.Background() keeps this path's behavior
+	// unchanged rather than inventing plumbing across the session loop.
+	if err := storeReceivedFile(context.Background(), s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		return err
 	}
 

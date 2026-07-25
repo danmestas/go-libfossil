@@ -1,11 +1,15 @@
 package manifest
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
@@ -55,7 +59,7 @@ func TestAfterDephantomizeCheckin(t *testing.T) {
 	}
 
 	// Call AfterDephantomize.
-	AfterDephantomize(r, rid)
+	AfterDephantomize(context.Background(), r, rid)
 
 	// Verify event row was created.
 	r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", rid).Scan(&eventCount)
@@ -138,7 +142,7 @@ func TestAfterDephantomizeOrphan(t *testing.T) {
 	}
 
 	// Call AfterDephantomize on the baseline.
-	AfterDephantomize(r, baselineRid)
+	AfterDephantomize(context.Background(), r, baselineRid)
 
 	// Verify orphan was cleaned up.
 	r.DB().QueryRow("SELECT count(*) FROM orphan WHERE baseline=?", baselineRid).Scan(&orphanCount)
@@ -156,18 +160,125 @@ func TestAfterDephantomizeOrphan(t *testing.T) {
 	}
 }
 
+// buildDephantomizeFanout stores one full "root" checkin manifest plus fanout
+// distinct checkin manifests, each a depth-1 delta against that root, so every
+// child appears in the delta table with srcid = root. That is exactly the shape
+// afterDephantomize's work stack walks when a base fills and unblocks the delta
+// children waiting on it: root is popped, all fanout children are pushed, then
+// each is popped in turn. The walk therefore runs fanout+1 stack pops -- deep
+// enough to cross crosslinkCancelCheckStride -- while every child stays a
+// single-hop delta so content.Expand reconstructs it without a deep delta chain.
+func buildDephantomizeFanout(t *testing.T, r *repo.Repo, fanout int) (root libfossil.FslID, children []libfossil.FslID) {
+	t.Helper()
+
+	// One shared file blob keeps the fixture cheap; the manifests differ only by
+	// commit message and time, which is enough to make each a distinct blob.
+	fileContent := []byte("fanout shared file")
+	_, fileUUID, err := blob.Store(r.DB(), fileContent)
+	if err != nil {
+		t.Fatalf("Store fanout file blob: %v", err)
+	}
+
+	manifest := func(i int) []byte {
+		d := &deck.Deck{
+			Type: deck.Checkin,
+			C:    fmt.Sprintf("fanout commit %d", i),
+			U:    deck.User("testuser"),
+			D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute),
+			F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
+		}
+		mb, err := d.Marshal()
+		if err != nil {
+			t.Fatalf("Marshal fanout manifest %d: %v", i, err)
+		}
+		return mb
+	}
+
+	root, _, err = blob.Store(r.DB(), manifest(0))
+	if err != nil {
+		t.Fatalf("Store fanout root: %v", err)
+	}
+
+	children = make([]libfossil.FslID, fanout)
+	for i := 0; i < fanout; i++ {
+		rid, _, err := blob.StoreDelta(r.DB(), manifest(i+1), root)
+		if err != nil {
+			t.Fatalf("StoreDelta fanout child %d: %v", i, err)
+		}
+		children[i] = rid
+	}
+	return root, children
+}
+
+// countCrosslinked reports how many of rids got a crosslink event row, i.e. how
+// far the phantom-fill cascade actually processed.
+func countCrosslinked(t *testing.T, r *repo.Repo, rids []libfossil.FslID) int {
+	t.Helper()
+	n := 0
+	for _, rid := range rids {
+		var c int
+		if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", rid).Scan(&c); err != nil {
+			t.Fatalf("count event objid=%d: %v", rid, err)
+		}
+		if c > 0 {
+			n++
+		}
+	}
+	return n
+}
+
+// TestAfterDephantomizeObservesCancellationMidWalk pins that a clone's deadline
+// can interrupt the mid-round phantom-fill cascade (issue #166). AfterDephantomize
+// runs synchronously as a clone fills phantoms and walks the whole reachable
+// delta/orphan graph; before the fix nothing in that walk observed the clone's
+// context, so on a large graph it ran for many multiples of the configured
+// deadline, bounded only by a 1,000,000-iteration safety cap.
+//
+// fanout is deliberately larger than crosslinkCancelCheckStride so the work
+// stack polls its context more than once. Spelled as a literal -- matching the
+// sibling TestCrosslinkContextObservesCancellationMidSweep -- so a corpus that
+// grew or shrank in lockstep with the stride could never mask a neutered check.
+func TestAfterDephantomizeObservesCancellationMidWalk(t *testing.T) {
+	const fanout = 300
+
+	// Control: a live context crosslinks every child. This proves the fixture is
+	// fully walkable, so any shortfall in the cancelled run below is the deadline
+	// biting, not a broken graph.
+	rLive := setupTestRepo(t)
+	liveRoot, liveChildren := buildDephantomizeFanout(t, rLive, fanout)
+	AfterDephantomize(context.Background(), rLive, liveRoot)
+	if got := countCrosslinked(t, rLive, liveChildren); got != fanout {
+		t.Fatalf("with a live context, crosslinked %d of %d fanout children, want all %d",
+			got, fanout, fanout)
+	}
+
+	// Cancellation: the context is live for its first Done() poll (the pop of
+	// the root, at stack position 0) and cancelled from the second poll on (the
+	// pop at crosslinkCancelCheckStride). Only an in-loop, stride-batched check
+	// can observe that transition; a walk that ignores ctx runs to completion.
+	rCancel := setupTestRepo(t)
+	cancelRoot, cancelChildren := buildDephantomizeFanout(t, rCancel, fanout)
+	ctx := newPollCancelCtx(1)
+	AfterDephantomize(ctx, rCancel, cancelRoot)
+	if got := countCrosslinked(t, rCancel, cancelChildren); got >= fanout {
+		t.Fatalf("with a context cancelled mid-walk, crosslinked %d of %d fanout children: "+
+			"AfterDephantomize ran the whole phantom-fill cascade without observing the "+
+			"deadline (issue #166)", got, fanout)
+	}
+}
+
 func TestAfterDephantomizeNilRepo(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
 			t.Error("expected panic for nil repo")
 		}
 	}()
-	AfterDephantomize(nil, 1)
+	AfterDephantomize(context.Background(), nil, 1)
 }
 
 func TestAfterDephantomizeZeroRid(t *testing.T) {
 	r := setupTestRepo(t)
 	// Should return without panicking.
-	AfterDephantomize(r, 0)
-	AfterDephantomize(r, -1)
+	AfterDephantomize(context.Background(), r, 0)
+	AfterDephantomize(context.Background(), r, -1)
 }

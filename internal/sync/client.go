@@ -473,7 +473,7 @@ func (s *session) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, error) {
 
 // processResponse handles all cards in a server response.
 // It returns true when the sync has converged (nothing more to do).
-func (s *session) processResponse(msg *xfer.Message) (bool, error) {
+func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool, error) {
 	if msg == nil {
 		panic("sync.processResponse: msg must not be nil")
 	}
@@ -488,7 +488,7 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 		case *xfer.FileCard:
 			// Uncompressed cards never carry a wire-encoded frame to
 			// preserve — storage always compresses payload itself.
-			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
+			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
 				return false, err
 			}
 			if err := s.applyPrivateStatus(c.UUID); err != nil {
@@ -499,7 +499,7 @@ func (s *session) processResponse(msg *xfer.Message) (bool, error) {
 			delete(s.phantoms, c.UUID)
 
 		case *xfer.CFileCard:
-			if err := s.handleFileCard(c.UUID, c.DeltaSrc, c.Content, c.StoredBlob); err != nil {
+			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob); err != nil {
 				return false, err
 			}
 			if err := s.applyPrivateStatus(c.UUID); err != nil {
@@ -878,14 +878,14 @@ func (s *session) loadDBPhantoms() error {
 // storedBlob carries a cfile card's already wire-encoded bytes through to
 // storage (see storeReceivedFile); it is nil for uncompressed "file" cards,
 // which never carry a compressed frame to preserve.
-func (s *session) handleFileCard(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	// The client sync loop (session.Sync) does not thread its deadline context
-	// through processResponse to here, so the general push/pull path has no
-	// deadline to observe -- the clone path (cloneSession.handleFile), where the
-	// mid-round phantom-fill cascade of issue #166 actually bites, passes its
-	// real context instead. context.Background() keeps this path's behavior
-	// unchanged rather than inventing plumbing across the session loop.
-	if err := storeReceivedFile(context.Background(), s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+	// ctx is the sync loop's own deadline context, threaded down from
+	// session.Sync through processResponse (issue #167). It reaches the
+	// mid-round phantom-fill crosslink cascade inside storeReceivedFile, so a
+	// long-running cascade on the general push/pull path is interruptible by the
+	// caller's deadline -- the same guarantee #166 gave the clone and
+	// server-push receive paths.
+	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		return err
 	}
 

@@ -46,6 +46,7 @@ type DB struct {
 	conn   *sql.DB
 	path   string
 	driver string
+	stmts  stmtCache
 }
 
 // Open opens a SQLite database with the registered driver and default pragmas.
@@ -191,7 +192,7 @@ func OpenWith(path string, cfg OpenConfig) (*DB, error) {
 		return nil, fmt.Errorf("db.Open %w", err)
 	}
 
-	return &DB{conn: conn, path: path, driver: driver}, nil
+	return &DB{conn: conn, path: path, driver: driver, stmts: stmtCache{src: conn}}, nil
 }
 
 // SqlDB returns the underlying *sql.DB connection.
@@ -212,6 +213,9 @@ func (d *DB) Close() error {
 	if !wasmClearPragmas {
 		ckptErr = d.Checkpoint(CheckpointTruncate)
 	}
+	// Release cached prepared statements before closing the pool so no
+	// statement handle outlives the connection it was compiled against.
+	d.stmts.closeAll()
 	closeErr := d.conn.Close()
 	return errors.Join(ckptErr, closeErr)
 }
@@ -244,15 +248,40 @@ func (d *DB) Driver() string {
 }
 
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
-	return d.conn.Exec(query, args...)
+	if !cacheableStmt(query) {
+		return d.conn.Exec(query, args...)
+	}
+	st, err := d.stmts.get(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.Exec(args...)
 }
 
 func (d *DB) QueryRow(query string, args ...any) *sql.Row {
-	return d.conn.QueryRow(query, args...)
+	if !cacheableStmt(query) {
+		return d.conn.QueryRow(query, args...)
+	}
+	st, err := d.stmts.get(query)
+	if err != nil {
+		// Preserve database/sql's deferred-error contract: a prepare failure
+		// must surface from Row.Scan, never here. The raw QueryRow re-attempts
+		// the prepare internally and returns a *sql.Row that yields the error
+		// on Scan — identical to the pre-cache behavior.
+		return d.conn.QueryRow(query, args...)
+	}
+	return st.QueryRow(args...)
 }
 
 func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
-	return d.conn.Query(query, args...)
+	if !cacheableStmt(query) {
+		return d.conn.Query(query, args...)
+	}
+	st, err := d.stmts.get(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.Query(args...)
 }
 
 func (d *DB) SetApplicationID(id int32) error {
@@ -267,19 +296,42 @@ func (d *DB) ApplicationID() (int32, error) {
 }
 
 type Tx struct {
-	tx *sql.Tx
+	tx    *sql.Tx
+	stmts stmtCache
 }
 
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
-	return t.tx.Exec(query, args...)
+	if !cacheableStmt(query) {
+		return t.tx.Exec(query, args...)
+	}
+	st, err := t.stmts.get(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.Exec(args...)
 }
 
 func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
-	return t.tx.QueryRow(query, args...)
+	if !cacheableStmt(query) {
+		return t.tx.QueryRow(query, args...)
+	}
+	st, err := t.stmts.get(query)
+	if err != nil {
+		// Preserve the deferred-error contract; see DB.QueryRow.
+		return t.tx.QueryRow(query, args...)
+	}
+	return st.QueryRow(args...)
 }
 
 func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
-	return t.tx.Query(query, args...)
+	if !cacheableStmt(query) {
+		return t.tx.Query(query, args...)
+	}
+	st, err := t.stmts.get(query)
+	if err != nil {
+		return nil, err
+	}
+	return st.Query(args...)
 }
 
 func (d *DB) WithTx(fn func(tx *Tx) error) error {
@@ -293,12 +345,18 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 	if err != nil {
 		return fmt.Errorf("db.WithTx begin: %w", err)
 	}
+	tx := &Tx{tx: sqlTx, stmts: stmtCache{src: sqlTx}}
 	defer func() {
+		// A statement prepared against this transaction cannot outlive it, so
+		// close the whole cache before the transaction ends. This runs on
+		// every path (commit, error, panic); Close is idempotent, so closing
+		// again after a successful Commit is a safe no-op.
+		tx.stmts.closeAll()
 		if rbErr := sqlTx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
 			fmt.Fprintf(os.Stderr, "db.WithTx: rollback failed: %v\n", rbErr)
 		}
 	}()
-	if err := fn(&Tx{tx: sqlTx}); err != nil {
+	if err := fn(tx); err != nil {
 		return err
 	}
 	return sqlTx.Commit()

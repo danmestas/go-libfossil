@@ -802,7 +802,14 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 	}
 
 	for _, f := range d.F {
-		pf, inParent := parentFiles[f.Name]
+		// pid resolves against the parent's OLD path for a rename (#157 gap 2) --
+		// the pre-rename ancestry content_deltify needs -- otherwise against the
+		// file's own name.
+		parentName := f.Name
+		if f.OldName != "" {
+			parentName = f.OldName
+		}
+		pf, inParent := parentFiles[parentName]
 		if mlinkFileUnchanged(f, pf, inParent) {
 			continue // carried over untouched: canonical add_mlink emits no row
 		}
@@ -810,7 +817,7 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 		if err != nil {
 			return fmt.Errorf("filename %q: %w", f.Name, err)
 		}
-		recordMlinkParentOf(tx, parents, fnid, f.Name, pf, inParent, mergeNames)
+		recordMlinkParentOf(tx, parents, fnid, parentName, pf, inParent, mergeNames)
 		var fileRid int64
 		if f.UUID != "" {
 			if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", f.UUID).Scan(&fileRid); err != nil {
@@ -821,15 +828,104 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 			return err
 		}
 	}
+
+	return insertOmittedDeletions(tx, cache, rid, d, parentFiles, parents)
+}
+
+// insertOmittedDeletions emits a delete mlink row (fid=0) for every file the
+// primary parent carried that the child dropped by OMISSION -- present in the
+// parent, absent from the child's effective tree, and named by no F-card.
+// Canonical Fossil's add_mlink emits such a row when it diffs the two full file
+// trees; the F-card walk in insertCheckinMlinks cannot, because an omitted file
+// leaves no card to visit. See issue #157 gap 1.
+//
+// A file the child DID name in an F-card is already handled by that walk -- a
+// modify or an explicit empty-UUID deletion under the card's own name -- so
+// childAccountedNames collects those names for this pass to skip and never
+// double-emit. A rename's PRIOR name is deliberately NOT accounted: canonical
+// Fossil emits a delete row (fid=0) for the vacated old name in addition to the
+// rename row keyed on the new name, so this pass must emit it (issue #157). The
+// child's effective tree (effectiveManifestFiles) covers files still carried,
+// whether inherited by a delta manifest or re-listed by a full one.
+func insertOmittedDeletions(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d *deck.Deck, parentFiles map[string]parentFile, parents *mlinkParents) error {
+	if tx == nil {
+		panic("manifest.insertOmittedDeletions: tx must not be nil")
+	}
+	if d == nil {
+		panic("manifest.insertOmittedDeletions: d must not be nil")
+	}
+	if len(parentFiles) == 0 {
+		return nil // no parent files: nothing could have been omitted
+	}
+	childFiles, err := effectiveManifestFiles(tx, cache, d)
+	if err != nil {
+		// The child's effective tree is unknown (e.g. its delta baseline has not
+		// arrived), so which parent files it still carries cannot be told apart
+		// from which it dropped. Skip rather than emit wrong deletions; a
+		// checkin with a missing baseline is deferred before reaching here.
+		return nil
+	}
+	accounted := childAccountedNames(d)
+
+	// Deterministic row order: map iteration is randomized, but two Crosslink
+	// runs over the same repo must write byte-identical mlink rows.
+	names := make([]string, 0, len(parentFiles))
+	for name := range parentFiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		if _, stillPresent := childFiles[name]; stillPresent {
+			continue // carried over or modified: the F-card walk handled it
+		}
+		if _, ok := accounted[name]; ok {
+			continue // explicit deletion or rename source: already emitted
+		}
+		pf := parentFiles[name]
+		fnid, err := ensureFilename(tx, name)
+		if err != nil {
+			return fmt.Errorf("filename %q: %w", name, err)
+		}
+		// A deleted file is by definition in the primary parent, so inParent is
+		// true and mergeNames is never consulted -- pass nil.
+		recordMlinkParentOf(tx, parents, fnid, name, pf, true, nil)
+		if err := insertMlinkRow(tx, rid, 0, fnid, "", pf.perm, parents); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// childAccountedNames returns the filenames the child's F-cards emit an mlink
+// row for -- each card's own name (an add, modify, or explicit empty-UUID
+// deletion). insertCheckinMlinks always keys a row on the card's Name, so this
+// is exactly the set the omission pass must skip to avoid a double row. A
+// rename's prior name is intentionally absent: it is emitted under the new name
+// with a pfnid, leaving the old name to receive its own delete row.
+func childAccountedNames(d *deck.Deck) map[string]struct{} {
+	if d == nil {
+		panic("manifest.childAccountedNames: d must not be nil")
+	}
+	accounted := make(map[string]struct{}, len(d.F))
+	for _, f := range d.F {
+		accounted[f.Name] = struct{}{}
+	}
+	return accounted
 }
 
 // mlinkFileUnchanged reports whether F-card f is byte-identical to the primary
 // parent's version -- present under the same name with the same content UUID
 // and the same mperm. Only then does canonical Fossil's add_mlink skip the row.
-// A file absent from the parent (add or rename) or with an empty UUID
-// (deletion) is always a change.
+// A rename (OldName set), a file absent from the parent (add), or an empty UUID
+// (deletion) is always a change: a rename in particular must always emit a row
+// so it records the pfnid, even when its content is unchanged. pf here is the
+// parent file at the resolved parent name (OldName for a rename), so the rename
+// short-circuit runs before that same-content comparison could skip the row.
 func mlinkFileUnchanged(f deck.FileCard, pf parentFile, inParent bool) bool {
+	if f.OldName != "" {
+		return false
+	}
 	if !inParent {
 		return false
 	}
@@ -947,9 +1043,15 @@ func effectiveManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (m
 	return files, nil
 }
 
-// applyFileCard folds one F-card into a file tree: an empty UUID removes the
-// name (delta-manifest deletion), any other card sets it.
+// applyFileCard folds one F-card into a file tree: a rename (OldName set)
+// vacates the prior name so the effective tree no longer carries it, an empty
+// UUID removes the card's own name (delta-manifest deletion), and any other card
+// sets it. The OldName removal runs first so a rename that reuses a name still
+// resolves to the card's new content.
 func applyFileCard(files map[string]parentFile, f deck.FileCard) {
+	if f.OldName != "" {
+		delete(files, f.OldName)
+	}
 	if f.UUID == "" {
 		delete(files, f.Name)
 		return

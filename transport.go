@@ -15,6 +15,30 @@ type Transport interface {
 	RoundTrip(ctx context.Context, payload []byte) ([]byte, error)
 }
 
+// FramedTransport is an optional interface a Transport may also implement when
+// it can report the framing signal — such as an HTTP Content-Type header — that
+// accompanied a reply. Sync uses that signal to select the reply's §4 framing
+// instead of assuming the §4.1 compressed container, which matters when the
+// peer is a different Fossil-protocol implementation that legitimately replies
+// with the uncompressed plain-card framing (e.g. a real Fossil server's clone
+// reply).
+//
+// It is optional in the same way http.Flusher is optional on an
+// http.ResponseWriter: a Transport whose framing is fixed by convention (both
+// ends always emit the compressed container) need not implement it, and sync
+// falls back to assuming the compressed framing for such a Transport. Callers
+// type-assert a Transport to FramedTransport and use RoundTripFramed when it is
+// available. Reporting the signal as a return value keeps it per-call, with no
+// shared mutable state to make a reused Transport unsafe across concurrent
+// calls.
+type FramedTransport interface {
+	Transport
+	// RoundTripFramed behaves like RoundTrip but also returns the framing
+	// signal (e.g. the reply's Content-Type) the wire carried for this reply,
+	// or "" when the transport observed none.
+	RoundTripFramed(ctx context.Context, payload []byte) (resp []byte, contentType string, err error)
+}
+
 // NewHTTPTransport creates a Transport that speaks Fossil's HTTP /xfer protocol.
 func NewHTTPTransport(url string, opts ...HTTPOption) Transport {
 	t := &httpTransport{url: url, client: http.DefaultClient}
@@ -38,21 +62,34 @@ type httpTransport struct {
 }
 
 func (t *httpTransport) RoundTrip(ctx context.Context, payload []byte) ([]byte, error) {
+	body, _, err := t.roundTrip(ctx, payload)
+	return body, err
+}
+
+// RoundTripFramed implements FramedTransport: it returns the reply body along
+// with the reply's Content-Type, which selects the §4 framing for decoding. A
+// peer that replies uncompressed (e.g. a real Fossil clone reply) is decoded
+// correctly instead of being force-read as the compressed container.
+func (t *httpTransport) RoundTripFramed(ctx context.Context, payload []byte) ([]byte, string, error) {
+	return t.roundTrip(ctx, payload)
+}
+
+func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("libfossil: http transport: %w", err)
+		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/x-fossil")
 	resp, err := t.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("libfossil: http transport: %w", err)
+		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("libfossil: http transport read: %w", err)
+		return nil, "", fmt.Errorf("libfossil: http transport read: %w", err)
 	}
-	return body, nil
+	return body, resp.Header.Get("Content-Type"), nil
 }
 
 // MockTransport is a test double that delegates to a handler function.

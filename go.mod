@@ -4,8 +4,8 @@ go 1.26.0
 
 require (
 	github.com/alecthomas/kong v1.15.0
-	github.com/danmestas/go-libfossil/db/driver/modernc v0.1.0
-	github.com/danmestas/go-libfossil/db/driver/ncruces v0.1.0
+	github.com/danmestas/go-libfossil/db/driver/modernc v0.3.0
+	github.com/danmestas/go-libfossil/db/driver/ncruces v0.3.0
 	github.com/hexops/gotextdiff v1.0.3
 	golang.org/x/crypto v0.52.0
 )
@@ -28,18 +28,4 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	modernc.org/sqlite v1.46.1 // indirect
-)
-
-// The db/driver submodules are versioned in-repo and are not yet published under
-// the go-libfossil path, so resolve them from their local directories for
-// non-workspace (GOWORK=off) builds. Replace directives are ignored by
-// downstream consumers, which resolve the published modules.
-//
-// Temporary. The Release workflow refuses to cut a tag while any replace
-// directive is present, because a tagged module carrying them breaks
-// `go install ...@<tag>`. When these are dropped, also clear the stale
-// old-path (libfossil) lines still carried in the go.sum files.
-replace (
-	github.com/danmestas/go-libfossil/db/driver/modernc => ./db/driver/modernc
-	github.com/danmestas/go-libfossil/db/driver/ncruces => ./db/driver/ncruces
 )

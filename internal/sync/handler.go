@@ -249,7 +249,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 
 	// Process data cards and emit response blobs.
-	if err := h.processDataCards(req.Cards); err != nil {
+	if err := h.processDataCards(ctx, req.Cards); err != nil {
 		return nil, err
 	}
 
@@ -302,7 +302,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 // processDataCards handles file, igot, gimme, and other data cards in the
 // correct order, then emits igot/clone batches. Extracted from process() to
 // keep each function under 70 lines.
-func (h *handler) processDataCards(cards []xfer.Card) error {
+func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error {
 	// File cards (and private prefix) first so blobs are stored before
 	// IGotCard checks blob.Exists. Without this, a request containing
 	// both IGotCard and FileCard for the same blob produces a spurious
@@ -310,7 +310,7 @@ func (h *handler) processDataCards(cards []xfer.Card) error {
 	for _, card := range cards {
 		switch card.(type) {
 		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
-			if err := h.handleDataCard(card); err != nil {
+			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
 			}
 		}
@@ -321,7 +321,7 @@ func (h *handler) processDataCards(cards []xfer.Card) error {
 		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
 			continue // Already handled above.
 		default:
-			if err := h.handleDataCard(card); err != nil {
+			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
 			}
 		}
@@ -446,16 +446,16 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	}
 }
 
-func (h *handler) handleDataCard(card xfer.Card) error {
+func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
 	switch c := card.(type) {
 	case *xfer.IGotCard:
 		return h.handleIGot(c)
 	case *xfer.GimmeCard:
 		return h.handleGimme(c)
 	case *xfer.FileCard:
-		return h.handleFile(c.UUID, c.DeltaSrc, c.Content, nil)
+		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, nil)
 	case *xfer.CFileCard:
-		return h.handleFile(c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
+		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
 	case *xfer.PrivateCard:
 		if !auth.CanSyncPrivate(h.caps) {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -554,7 +554,7 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	return nil
 }
 
-func (h *handler) handleFile(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if uuid == "" {
 		panic("handler.handleFile: uuid must not be empty")
 	}
@@ -571,7 +571,7 @@ func (h *handler) handleFile(uuid, deltaSrc string, payload []byte, storedBlob [
 		})
 		return nil
 	}
-	if err := storeReceivedFile(h.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("storing %s: %v", uuid, err),
 		})

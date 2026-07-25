@@ -424,7 +424,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) 
 				filesRecvd++
 				continue
 			}
-			if err := cs.handleFile(c.UUID, c.DeltaSrc, content, nil); err != nil {
+			if err := cs.handleFile(ctx, c.UUID, c.DeltaSrc, content, nil); err != nil {
 				return false, err
 			}
 			filesRecvd++
@@ -453,7 +453,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) 
 				filesRecvd++
 				continue
 			}
-			if err := cs.handleFile(c.UUID, c.DeltaSrc, content, storedBlob); err != nil {
+			if err := cs.handleFile(ctx, c.UUID, c.DeltaSrc, content, storedBlob); err != nil {
 				return false, err
 			}
 			filesRecvd++
@@ -493,8 +493,8 @@ func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) 
 // on-disk blob format (see xfer.CFileCard.StoredBlob) and is persisted
 // verbatim rather than recompressed — this is what makes a clone
 // byte-identical to its source's blob table, not merely content-identical.
-func (cs *cloneSession) handleFile(uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	if err := storeReceivedFile(cs.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 

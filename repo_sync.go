@@ -64,13 +64,24 @@ func (a *transportAdapter) Exchange(ctx context.Context, req *xfer.Message) (*xf
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: transport encode: %w", err)
 	}
+	// When the transport can report the reply's framing signal (e.g. an HTTP
+	// Content-Type), decode by that signal — a §4-conforming peer may reply
+	// with either framing, and a real Fossil clone reply is uncompressed. §4
+	// framing selection lives in xfer.Decode.
+	if ft, ok := a.pub.(FramedTransport); ok {
+		respBytes, contentType, err := ft.RoundTripFramed(ctx, payload)
+		if err != nil {
+			return nil, err
+		}
+		return xfer.Decode(respBytes, contentType)
+	}
 	respBytes, err := a.pub.RoundTrip(ctx, payload)
 	if err != nil {
 		return nil, err
 	}
-	// This transport carries no Content-Type. Both ends are libfossil and reply
-	// via Message.Encode, which always produces the §4.1 compressed container,
-	// so the framing is fixed rather than negotiated per message.
+	// The transport reports no framing signal. Both ends are libfossil and
+	// reply via Message.Encode, which always produces the §4.1 compressed
+	// container, so the framing is fixed by construction rather than negotiated.
 	return xfer.Decode(respBytes, xfer.ContentTypeCompressed)
 }
 

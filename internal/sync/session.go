@@ -227,7 +227,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		sentBefore := s.result.FilesSent
 		recvdBefore := s.result.FilesRecvd
 
-		done, err := s.processResponse(resp)
+		done, err := s.processResponse(ctx, resp)
 
 		s.roundStats.FilesSent = s.result.FilesSent - sentBefore
 		s.roundStats.FilesReceived = s.result.FilesRecvd - recvdBefore

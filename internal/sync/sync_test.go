@@ -287,7 +287,7 @@ func TestProcessResponseStoresFileCard(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.FileCard{UUID: uuid, Content: content},
 	}}
-	done, err := s.processResponse(resp)
+	done, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
 	}}
-	if _, err := s.processResponse(resp); err != nil {
+	if _, err := s.processResponse(context.Background(), resp); err != nil {
 		t.Fatalf("processResponse(delta before base) = %v, want nil", err)
 	}
 
@@ -358,7 +358,7 @@ func TestProcessResponseIGotAddsPhantom(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.IGotCard{UUID: missingUUID},
 	}}
-	_, err := s.processResponse(resp)
+	_, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestProcessResponseIGotNoPhantomWhenExists(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.IGotCard{UUID: uuid},
 	}}
-	_, err = s.processResponse(resp)
+	_, err = s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestProcessResponseGimmeAddsPendingSend(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.GimmeCard{UUID: wantUUID},
 	}}
-	done, err := s.processResponse(resp)
+	done, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestProcessResponseCookieCached(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.CookieCard{Value: "session-abc-123"},
 	}}
-	_, err := s.processResponse(resp)
+	_, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -434,7 +434,7 @@ func TestProcessResponseConvergence(t *testing.T) {
 
 	// Empty response with no pending work = converged
 	resp := &xfer.Message{}
-	done, err := s.processResponse(resp)
+	done, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestProcessResponseErrorCard(t *testing.T) {
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.ErrorCard{Message: "access denied"},
 	}}
-	done, err := s.processResponse(resp)
+	done, err := s.processResponse(context.Background(), resp)
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
@@ -654,7 +654,7 @@ func BenchmarkProcessResponse(b *testing.B) {
 		})
 		b.StartTimer()
 
-		_, err = s.processResponse(msg)
+		_, err = s.processResponse(context.Background(), msg)
 		if err != nil {
 			b.Fatalf("processResponse: %v", err)
 		}

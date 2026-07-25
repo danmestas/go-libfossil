@@ -399,6 +399,116 @@ func TestCrosslinkAfterFossilRebuild(t *testing.T) {
 	}
 }
 
+// TestFossilBinaryMlinkParity_DeletionAndRename is issue #157's canonical
+// cross-check: a repository the fossil binary itself authored -- so its
+// manifests carry a real rename card and a real dropped file -- must yield the
+// same mlink rows from our Crosslink as fossil's own rebuild derives from the
+// same blobs.
+//
+// Method: let the fossil binary build a two-commit history whose second commit
+// deletes one file and renames-and-edits another, empty the crosslink-derived
+// tables, re-derive them with our Crosslink, then run `fossil rebuild` and diff
+// the two mlink digests. This is the one check our hand-built decks cannot make:
+// the fixture's rename card and deletion are exactly what canonical Fossil
+// emits, not what our test helpers approximate.
+func TestFossilBinaryMlinkParity_DeletionAndRename(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+
+	dir := t.TempDir()
+	repoPath := filepath.Join(dir, "parity.fossil")
+	work := filepath.Join(dir, "work")
+	if err := os.Mkdir(work, 0o755); err != nil {
+		t.Fatalf("mkdir work: %v", err)
+	}
+
+	runIn := func(wd string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(bin, args...)
+		cmd.Dir = wd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("fossil %s failed: %v\n%s", strings.Join(args, " "), err, out)
+		}
+	}
+	writeFile := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	runIn(dir, "init", repoPath)
+	runIn(work, "open", repoPath)
+
+	// c1: two tracked files.
+	writeFile("alpha.txt", "alpha original\n")
+	writeFile("beta.txt", "beta original\n")
+	runIn(work, "add", "alpha.txt", "beta.txt")
+	runIn(work, "commit", "-m", "c1: add alpha and beta")
+
+	// c2: delete beta, and rename alpha -> gamma while also editing its content.
+	// This single child manifest carries both #157 cases: a dropped file and a
+	// rename whose pid must trace the pre-rename path.
+	runIn(work, "rm", "--hard", "beta.txt")
+	runIn(work, "mv", "--hard", "alpha.txt", "gamma.txt")
+	writeFile("gamma.txt", "alpha edited after the rename\n")
+	runIn(work, "commit", "-m", "c2: drop beta, rename+edit alpha to gamma")
+
+	// Put the repo back in a freshly-transferred clone's pre-crosslink state.
+	d, err := db.Open(repoPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	for _, tbl := range crosslinkDerivedTables {
+		// A freshly-initialized fossil repo creates some derived tables (e.g.
+		// forumpost) lazily, so one may not exist yet. Clearing an absent table
+		// is a no-op, not a failure -- Crosslink recreates whatever it needs.
+		var exists int
+		if err := d.QueryRow(
+			"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", tbl,
+		).Scan(&exists); err != nil {
+			t.Fatalf("check %s: %v", tbl, err)
+		}
+		if exists == 0 {
+			continue
+		}
+		if _, err := d.Exec("DELETE FROM " + tbl); err != nil {
+			t.Fatalf("clear %s: %v", tbl, err)
+		}
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	r2, err := repo.Open(repoPath)
+	if err != nil {
+		t.Fatalf("repo.Open: %v", err)
+	}
+	linked, err := Crosslink(r2)
+	if err != nil {
+		t.Fatalf("Crosslink: %v", err)
+	}
+	if linked == 0 {
+		t.Fatal("Crosslink linked nothing")
+	}
+	if err := r2.Close(); err != nil {
+		t.Fatalf("repo.Close: %v", err)
+	}
+
+	got := snapshotDerived(t, repoPath)
+
+	// Canonical rebuild re-derives mlink from the same blobs; the two derivations
+	// must agree row for row on the columns snapshotDerived compares.
+	if out, err := exec.Command(bin, "rebuild", repoPath).CombinedOutput(); err != nil {
+		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
+	}
+	reference := snapshotDerived(t, repoPath)
+
+	if got["mlink"] != reference["mlink"] {
+		t.Errorf("mlink differs from what fossil derived on a delete+rename history\n fossil:    %s\n crosslink: %s",
+			reference["mlink"], got["mlink"])
+	}
+}
+
 // snapshotDerived returns a per-table digest of the crosslink-derived tables,
 // restricted to the columns Crosslink is responsible for writing.
 func snapshotDerived(t *testing.T, path string) map[string]string {

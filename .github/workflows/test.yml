@@ -5,6 +5,22 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # The canonical fossil the real-fossil-gated tests compare against. Local
+  # development validates against this exact version, so CI must too --
+  # otherwise the two are checking our output against different reference
+  # implementations. Bump deliberately, here, in one place.
+  #
+  # The distro package is unusable for this: it is unpinned, currently lags
+  # several releases behind, and tracks different upstream check-ins over time
+  # under the same version string, so two runs at nominally the same version
+  # can behave differently. The official upstream release tarball is a fixed
+  # build, and FOSSIL_SHA256 pins it to that exact artifact -- a re-upload
+  # upstream then fails the checksum loudly instead of silently changing what
+  # we test against.
+  FOSSIL_VERSION: "2.28"
+  FOSSIL_SHA256: "c9d2bf9d150dff1076eae1b0b822ed3cde892e1273f78b040c4f8ace1b59dd40"
+
 jobs:
   test:
     name: Test (modernc)
@@ -14,8 +30,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install Fossil
-        run: sudo apt-get update && sudo apt-get install -y fossil
+      - name: Install pinned Fossil
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            -o /tmp/fossil.tar.gz \
+            "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          echo "${FOSSIL_SHA256}  /tmp/fossil.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/fossil.tar.gz -C /usr/local/bin fossil
+          rm -f /tmp/fossil.tar.gz
+      - name: Verify Fossil version
+        # A silent upstream change has to surface as an explicit failure here,
+        # not as mysterious behavioural drift in the real-fossil-gated tests.
+        run: |
+          reported=$(fossil version | sed -n 's/.*fossil version \([0-9][0-9.]*\).*/\1/p')
+          if [ "$reported" != "${FOSSIL_VERSION}" ]; then
+            echo "expected fossil ${FOSSIL_VERSION}, got: $(fossil version)" >&2
+            exit 1
+          fi
+          fossil version
       - name: Build all packages
         # Build every package, not just the cmd/libfossil dependency closure.
         # The `go test $(go list ./...)` step below silently drops any package
@@ -45,8 +77,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Install Fossil
-        run: sudo apt-get update && sudo apt-get install -y fossil
+      - name: Install pinned Fossil
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            -o /tmp/fossil.tar.gz \
+            "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          echo "${FOSSIL_SHA256}  /tmp/fossil.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/fossil.tar.gz -C /usr/local/bin fossil
+          rm -f /tmp/fossil.tar.gz
+      - name: Verify Fossil version
+        # A silent upstream change has to surface as an explicit failure here,
+        # not as mysterious behavioural drift in the real-fossil-gated tests.
+        run: |
+          reported=$(fossil version | sed -n 's/.*fossil version \([0-9][0-9.]*\).*/\1/p')
+          if [ "$reported" != "${FOSSIL_VERSION}" ]; then
+            echo "expected fossil ${FOSSIL_VERSION}, got: $(fossil version)" >&2
+            exit 1
+          fi
+          fossil version
       - name: Build all packages (ncruces)
         # Same fail-fast guard as the modernc leg, under the test_ncruces tag so
         # the ncruces driver's compile surface is covered too.

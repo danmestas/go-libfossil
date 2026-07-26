@@ -33,9 +33,10 @@ var attachTargetTypeName = map[byte]string{
 	'e': "tech note",
 }
 
-// crosslinkCacheBytes bounds the expanded content one Crosslink sweep keeps
-// live. A miss costs throughput, not correctness: the walk simply continues
-// further back toward the chain root.
+// crosslinkCacheBytes bounds the expanded content one crosslink run keeps live
+// -- a whole-repository sweep, or one phantom-fill cascade (see
+// cascadeLinker). A miss costs throughput, not correctness: the walk simply
+// continues further back toward the chain root.
 //
 // Candidates are visited in delta-chain order (see deltaChainOrder), not
 // ascending rid: every base a candidate needs is expanded at most one
@@ -683,10 +684,11 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCach
 	return missing
 }
 
-// crosslinkCheckin links one check-in manifest. cache is the whole-sweep
-// content cache (nil outside the sweep, e.g. the dephantomize single-artifact
-// path); insertCheckinMlinks uses it to expand the parent manifest at most once
-// per parent across the sweep.
+// crosslinkCheckin links one check-in manifest. cache is the caller's shared
+// content cache -- the whole-sweep one, or the one cascadeLinker runs for a
+// phantom-fill cascade; insertCheckinMlinks uses it to expand the parent
+// manifest at most once per parent across the run. A nil cache is legal and
+// expands every parent from scratch, but no caller passes one.
 func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
 	if tx == nil {
 		panic("crosslinkCheckin: tx must not be nil")

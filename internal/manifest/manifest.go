@@ -97,7 +97,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			}
 		}
 
-		if txErr := markLeafAndEvent(tx, opts, manifestRid); txErr != nil {
+		if txErr := markPlinkAndEvent(tx, opts, manifestRid); txErr != nil {
 			return txErr
 		}
 
@@ -155,6 +155,17 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	if opts.Parent > 0 {
 		if err := tag.PropagateAll(r.DB(), opts.Parent); err != nil {
 			return 0, "", fmt.Errorf("manifest.Checkin propagate from parent: %w", err)
+		}
+	}
+
+	// Leaf state last, once every branch tag it reads is in place: this checkin
+	// is a new leaf, and each parent stops being one only if this checkin
+	// landed on the parent's own branch. Fossil queues the same set --
+	// leaf_eventually_check(rid) enqueues rid and its parents -- and runs the
+	// checks when the transaction commits.
+	for _, rid := range append([]libfossil.FslID{manifestRid}, collectParents(opts)...) {
+		if err := leafCheck(r.DB(), rid); err != nil {
+			return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
 		}
 	}
 
@@ -272,7 +283,7 @@ func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) erro
 	return nil
 }
 
-func markLeafAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {
+func markPlinkAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {
 	// plink: one row per parent; primary (isprim=1) is opts.Parent, merge
 	// parents are secondary (isprim=0). Matches the sync-path layout in
 	// crosslink.go so merged history looks identical however it arrived.
@@ -299,16 +310,12 @@ func markLeafAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) 
 		return fmt.Errorf("event: %w", err)
 	}
 
-	// leaf: this checkin is new; remove every parent from leaf so merge
-	// commits correctly supersede both sides.
-	if _, err := tx.Exec("INSERT OR IGNORE INTO leaf(rid) VALUES(?)", manifestRid); err != nil {
-		return fmt.Errorf("leaf insert: %w", err)
-	}
-	for _, pid := range allParents {
-		if _, err := tx.Exec("DELETE FROM leaf WHERE rid=?", pid); err != nil {
-			return fmt.Errorf("leaf delete parent: %w", err)
-		}
-	}
+	// leaf is deliberately not written here. Whether this checkin or any of its
+	// parents is a leaf depends on the branch tags of both ends of every plink
+	// edge, and this checkin's own branch tag is not applied until after the
+	// transaction commits -- so Checkin runs the leaf check once the tag work
+	// is done, the same deferral fossil gets from running its pending leaf
+	// checks at commit time (see leafCheck).
 
 	// Mark manifest as unsent so sync pushes it (unclustered is handled by blob.Store).
 	if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", manifestRid); err != nil {

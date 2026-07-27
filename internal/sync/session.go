@@ -69,6 +69,7 @@ type session struct {
 	repo                *repo.Repo
 	env                 *simio.Env
 	opts                SyncOpts
+	projectCode         string // resolved once: SyncOpts.ProjectCode, else the repo's own
 	result              SyncResult
 	cookie              string
 	remoteHas           map[string]bool
@@ -108,10 +109,19 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 	if env == nil {
 		env = simio.RealEnv()
 	}
+	// A repo knows its own project code, so a caller holding one never has to
+	// supply it. An explicit SyncOpts.ProjectCode still wins; a repo with no
+	// stored code leaves this empty, and the sites that need one say so.
+	projectCode := opts.ProjectCode
+	if projectCode == "" {
+		projectCode, _ = r.Config("project-code")
+	}
+
 	s := &session{
 		repo:           r,
 		env:            env,
 		opts:           opts,
+		projectCode:    projectCode,
 		maxSend:        ms,
 		remoteHas:      make(map[string]bool),
 		phantoms:       make(map[string]bool),
@@ -141,6 +151,12 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 	}
 
 	return s
+}
+
+// errNoProjectCode reports that neither the caller nor the repo could supply
+// the project code the named wire element needs.
+func errNoProjectCode(what string) error {
+	return fmt.Errorf("sync: %s requires a project-code: none in SyncOpts.ProjectCode and none stored in the repo's config", what)
 }
 
 // getXTableDef returns a cached table definition, loading all tables on first miss.
@@ -176,6 +192,12 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		panic("sync.Sync: t must not be nil")
 	}
 	defer func() {
+		// The invariant below is only meaningful on a normal return: while a
+		// panic unwinds, err and result are both nil and asserting here would
+		// replace the real cause with this one.
+		if p := recover(); p != nil {
+			panic(p)
+		}
 		if err == nil && result == nil {
 			panic("sync.Sync: result must not be nil on success")
 		}
@@ -189,20 +211,20 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		Push:        opts.Push,
 		Pull:        opts.Pull,
 		UV:          opts.UV,
-		ProjectCode: opts.ProjectCode,
+		ProjectCode: s.projectCode,
 		PeerID:      opts.PeerID,
 	})
 
 	for cycle := 0; ; cycle++ {
 		select {
 		case <-ctx.Done():
-			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), ctx.Err())
+			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), ctx.Err())
 			return &s.result, ctx.Err()
 		default:
 		}
 		if cycle >= MaxRounds {
 			err := fmt.Errorf("sync: exceeded %d rounds", MaxRounds)
-			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), err)
+			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, err
 		}
 
@@ -213,14 +235,14 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		if err != nil {
 			obs.Error(roundCtx, err)
 			obs.RoundCompleted(roundCtx, cycle, s.roundStats)
-			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), err)
+			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, fmt.Errorf("sync: buildRequest round %d: %w", cycle, err)
 		}
 		resp, err := exchangeWithRetry(ctx, t, req, s.env.Clock, obs)
 		if err != nil {
 			obs.Error(roundCtx, err)
 			obs.RoundCompleted(roundCtx, cycle, s.roundStats)
-			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), err)
+			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, fmt.Errorf("sync: exchange round %d: %w", cycle, err)
 		}
 
@@ -237,7 +259,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		if err != nil {
 			obs.Error(roundCtx, err)
 			obs.RoundCompleted(roundCtx, cycle, s.roundStats)
-			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), err)
+			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, fmt.Errorf("sync: processResponse round %d: %w", cycle, err)
 		}
 		s.result.Rounds = cycle + 1
@@ -254,12 +276,12 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// round boundary of its own at which a cancelled context could be noticed.
 	linked, xlinkErr := manifest.CrosslinkContext(ctx, s.repo)
 	if xlinkErr != nil {
-		obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), xlinkErr)
+		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), xlinkErr)
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)
 	}
 	s.result.ArtifactsLinked = linked
 
-	obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), nil)
+	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)
 	return &s.result, nil
 }
 

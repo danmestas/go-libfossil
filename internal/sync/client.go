@@ -38,15 +38,9 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	// 2. Push/Pull cards.
 	//
 	// The project code is required on the wire (Fossil C rejects bare push/pull).
-	// Prefer the caller-supplied code; fall back to the local repo's stored
-	// project-code so callers that don't populate SyncOpts.ProjectCode still work.
-	// Every repo created by libfossil has a project-code (see db/schema.go).
-	projCode := s.opts.ProjectCode
-	if projCode == "" {
-		_ = s.repo.DB().QueryRow(
-			"SELECT value FROM config WHERE name='project-code'",
-		).Scan(&projCode)
-	}
+	// s.projectCode is the caller's code or, failing that, the repo's own —
+	// every repo created by libfossil has a project-code (see db/schema.go).
+	projCode := s.projectCode
 	// Fossil C also reads a cached remote server-code from the local repo
 	// config ('server-code' written by a prior pull). Fall back to that when
 	// SyncOpts.ServerCode is not provided.
@@ -58,7 +52,7 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	}
 	if s.opts.Push {
 		if projCode == "" {
-			panic("sync.buildRequest: ProjectCode is required for push but not found in SyncOpts or repo config")
+			return nil, errNoProjectCode("push")
 		}
 		cards = append(cards, &xfer.PushCard{
 			ProjectCode: projCode,
@@ -67,7 +61,7 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	}
 	if s.opts.Pull {
 		if projCode == "" {
-			panic("sync.buildRequest: ProjectCode is required for pull but not found in SyncOpts or repo config")
+			return nil, errNoProjectCode("pull")
 		}
 		// Fossil C's pull parser requires both project-code and server-code.
 		// Use "0" as the server-code placeholder when none is cached — this is
@@ -463,12 +457,15 @@ func (s *session) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, error) {
 			return nil, err
 		}
 	}
+	if s.projectCode == "" {
+		return nil, errNoProjectCode("login")
+	}
 	payload := appendRandomComment(buf.Bytes(), s.env.Rand)
 	// BUGGIFY: corrupt the nonce payload to trigger auth failures.
 	if s.opts.Buggify != nil && s.opts.Buggify.Check("sync.buildLoginCard.badNonce", 0.02) {
 		payload = append(payload, []byte("BUGGIFY")...)
 	}
-	return computeLogin(s.opts.User, s.opts.Password, s.opts.ProjectCode, payload), nil
+	return computeLogin(s.opts.User, s.opts.Password, s.projectCode, payload), nil
 }
 
 // processResponse handles all cards in a server response.

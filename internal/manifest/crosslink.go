@@ -75,8 +75,13 @@ func ensureForumPostTable(q db.Querier) error {
 	return nil
 }
 
+// pendingItem is follow-up work an artifact's crosslink left for after the
+// sweep. Nothing consumes it yet: the wiki backlink pass is still a stub, and
+// ticket rebuilds deliberately do not go through here -- deferring a ticket's
+// event row past the transaction that wrote its tkt- tag is what issue #184
+// was, so ticketRebuildEntry runs inline instead.
 type pendingItem struct {
-	Type byte // 'w' = wiki backlink, 't' = ticket rebuild
+	Type byte // 'w' = wiki backlink
 	ID   string
 }
 
@@ -431,7 +436,7 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 
 	logDeferredCheckins("Crosslink", st.guard.deferredRids, st.guard.missingBlobs, st.linked)
 
-	// Pass 2: Process pending items (wiki backlinks, ticket rebuilds).
+	// Pass 2: Process pending items (wiki backlinks).
 	for _, item := range st.pending {
 		_ = item // Stubs return nil, nothing to process yet.
 	}
@@ -498,8 +503,7 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 		p, e := crosslinkWiki(tx, rid, d)
 		return p, true, e
 	case deck.Ticket:
-		p, e := crosslinkTicket(tx, rid, d)
-		return p, true, e
+		return nil, true, crosslinkTicket(tx, rid, d, cache)
 	case deck.Event:
 		p, e := crosslinkEvent(tx, rid, d)
 		return p, true, e
@@ -1392,7 +1396,16 @@ func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem,
 	return []pendingItem{{Type: 'w', ID: title}}, nil
 }
 
-func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem, error) {
+// crosslinkTicket links one ticket-change artifact: it applies the tkt-<uuid>
+// tag that marks the artifact as belonging to its ticket, then rebuilds every
+// derived row that ticket owns from the full tag set (see ticketRebuildEntry).
+//
+// The rebuild runs here, in the caller's transaction, rather than after the
+// sweep. The tag is what collectCrosslinkCandidates reads as "this blob is
+// already linked", so anything written after the tag but outside its
+// transaction can be skipped without trace -- which is exactly what issue #184
+// was. Both writes now commit together or roll back together.
+func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
 	if tx == nil {
 		panic("crosslinkTicket: tx must not be nil")
 	}
@@ -1402,7 +1415,7 @@ func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingIte
 
 	ticketUUID := d.K
 	if ticketUUID == "" {
-		return nil, fmt.Errorf("ticket manifest missing UUID (K-card)")
+		return fmt.Errorf("ticket manifest missing UUID (K-card)")
 	}
 	if err := tag.ApplyTagWithTx(tx, tag.ApplyOpts{
 		TargetRID: rid,
@@ -1411,12 +1424,15 @@ func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingIte
 		TagType:   tag.TagSingleton,
 		MTime:     libfossil.TimeToJulian(d.D),
 	}); err != nil {
-		return nil, fmt.Errorf("ticket tag: %w", err)
+		return fmt.Errorf("ticket tag: %w", err)
+	}
+	if err := ticketRebuildEntry(tx, cache, ticketUUID); err != nil {
+		return fmt.Errorf("ticket rebuild: %w", err)
 	}
 	if err := updateAttachmentComments(tx, ticketUUID, 't'); err != nil {
-		return nil, fmt.Errorf("ticket attachment comments: %w", err)
+		return fmt.Errorf("ticket attachment comments: %w", err)
 	}
-	return []pendingItem{{Type: 't', ID: ticketUUID}}, nil
+	return nil
 }
 
 func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem, error) {

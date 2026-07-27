@@ -48,6 +48,31 @@ jobs:
             exit 1
           fi
           fossil version
+      - name: Warm Fossil global config
+        # Fossil keeps a per-user global config database outside any repository
+        # and creates it lazily on first use. `go test` runs packages
+        # concurrently, several of them shell out to fossil, and nothing sets
+        # HOME, so on a fresh runner two test processes can race to create it:
+        # one wins and the others die with "table global_config already exists".
+        # Creating it once here, single-threaded, means no test process is ever
+        # the one to create it. `fossil version` does not open that database, so
+        # the step above does not incidentally cover this; `fossil all list`
+        # does, and prints nothing.
+        #
+        # The first call's exit status is ignored deliberately -- it exists to
+        # create the database, not to assert anything, so an unrelated non-zero
+        # must not red the job. The second call is what carries the weight: it
+        # must succeed on its own, which proves the database is both present and
+        # usable. Checking that a file exists would not -- a truncated or
+        # partially-written database passes an existence check while concurrent
+        # invocations still die on the missing schema, which is exactly the
+        # "looks like protection while the race stays live" failure this guards
+        # against. Re-running the command also keeps the check independent of
+        # where fossil resolved the database to (~/.fossil, ~/.config/fossil.db,
+        # $XDG_CONFIG_HOME, or $FOSSIL_HOME).
+        run: |
+          fossil all list >/dev/null 2>&1 || true
+          fossil all list >/dev/null
       - name: Build all packages
         # Build every package, not just the cmd/libfossil dependency closure.
         # The `go test $(go list ./...)` step below silently drops any package
@@ -95,6 +120,13 @@ jobs:
             exit 1
           fi
           fossil version
+      - name: Warm Fossil global config
+        # Same single-threaded warm-up as the modernc leg -- see the comment
+        # there for why `fossil version` does not cover this, and why the first
+        # call's exit status is ignored but the second call's is not.
+        run: |
+          fossil all list >/dev/null 2>&1 || true
+          fossil all list >/dev/null
       - name: Build all packages (ncruces)
         # Same fail-fast guard as the modernc leg, under the test_ncruces tag so
         # the ncruces driver's compile surface is covered too.

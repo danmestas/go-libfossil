@@ -1,8 +1,10 @@
 package content
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -17,25 +19,34 @@ func TestChainBoundBitesAtSameLength(t *testing.T) {
 	for _, n := range []int{maxDeltaChainDepth, maxDeltaChainDepth + 1} {
 		d := setupTestDB(t)
 
+		// Build the whole chain under one commit. This fixture is incidental
+		// to what the test asserts, but at maxDeltaChainDepth it is ~65k rows
+		// across the two arms; a commit per row makes the runtime durability-
+		// bound and pushed the package past its CI timeout.
 		rids := make([]libfossil.FslID, n)
-		for i := 0; i < n; i++ {
-			res, err := d.Exec(
-				"INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040d', ?), 42, x'00', 1)", i)
-			if err != nil {
-				t.Fatalf("insert blob %d: %v", i, err)
+		if err := d.WithTx(func(tx *db.Tx) error {
+			for i := 0; i < n; i++ {
+				res, err := tx.Exec(
+					"INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040d', ?), 42, x'00', 1)", i)
+				if err != nil {
+					return fmt.Errorf("insert blob %d: %w", i, err)
+				}
+				id, err := res.LastInsertId()
+				if err != nil {
+					return fmt.Errorf("LastInsertId for blob %d: %w", i, err)
+				}
+				rids[i] = libfossil.FslID(id)
 			}
-			id, err := res.LastInsertId()
-			if err != nil {
-				t.Fatalf("LastInsertId: %v", err)
+			// An acyclic chain grounded at its far end, so only the bound can
+			// decide the outcome.
+			for i := 0; i < n-1; i++ {
+				if _, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[i], rids[i+1]); err != nil {
+					return fmt.Errorf("insert delta %d: %w", i, err)
+				}
 			}
-			rids[i] = libfossil.FslID(id)
-		}
-		// An acyclic chain grounded at its far end, so only the bound can
-		// decide the outcome.
-		for i := 0; i < n-1; i++ {
-			if _, err := d.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[i], rids[i+1]); err != nil {
-				t.Fatalf("insert delta %d: %v", i, err)
-			}
+			return nil
+		}); err != nil {
+			t.Fatalf("build chain of %d nodes: %v", n, err)
 		}
 
 		available := IsAvailable(d, rids[0])

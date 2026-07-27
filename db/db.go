@@ -49,6 +49,7 @@ type DB struct {
 	driver    string
 	stmts     stmtCache
 	poolExecs atomic.Int64
+	writeTxns atomic.Int64
 }
 
 // Open opens a SQLite database with the registered driver and default pragmas.
@@ -263,6 +264,20 @@ func (d *DB) PoolExecs() int64 {
 	return d.poolExecs.Load()
 }
 
+// WriteTxns counts transactions begun through WithTx. Each is its own
+// BEGIN IMMEDIATE and fsync, and each takes the single write lock
+// independently, so a path that opens one per artifact is both slow and
+// fragile under contention -- the cost issue #200 measured at roughly three
+// per received file. Tests pin the per-round transaction budget against this,
+// which PoolExecs cannot see: moving a per-artifact write from the pool into
+// its own transaction leaves PoolExecs unchanged while the real cost stays.
+func (d *DB) WriteTxns() int64 {
+	if d == nil {
+		panic("db.WriteTxns: receiver must not be nil")
+	}
+	return d.writeTxns.Load()
+}
+
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
 	d.poolExecs.Add(1)
 	if !cacheableStmt(query) {
@@ -355,6 +370,7 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 	if d == nil {
 		panic("db.WithTx: receiver must not be nil")
 	}
+	d.writeTxns.Add(1)
 	if fn == nil {
 		panic("db.WithTx: fn must not be nil")
 	}

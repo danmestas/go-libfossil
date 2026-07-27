@@ -29,9 +29,11 @@ func TestPullDoesNotWritePerArtifactOutsideTransaction(t *testing.T) {
 		}
 	}
 
-	before := client.DB().PoolExecs()
+	beforeExecs := client.DB().PoolExecs()
+	beforeTxns := client.DB().WriteTxns()
 	res := syncViaHandler(t, server, client, SyncOpts{Pull: true})
-	got := client.DB().PoolExecs() - before
+	got := client.DB().PoolExecs() - beforeExecs
+	gotTxns := client.DB().WriteTxns() - beforeTxns
 
 	if res.FilesRecvd < receiveBudgetArtifacts {
 		t.Fatalf("received %d artifacts, want at least %d", res.FilesRecvd, receiveBudgetArtifacts)
@@ -42,6 +44,18 @@ func TestPullDoesNotWritePerArtifactOutsideTransaction(t *testing.T) {
 	if got > budget {
 		t.Fatalf("pull executed %d statements outside a transaction for %d artifacts over %d rounds; want <= %d (O(rounds), not O(artifacts))",
 			got, res.FilesRecvd, res.Rounds, budget)
+	}
+	// PoolExecs alone does not pin the cost issue #200 measured: moving a
+	// per-artifact write from the pool into its own transaction leaves this
+	// counter unchanged while every artifact still pays a BEGIN IMMEDIATE and
+	// an fsync, and still contests the write lock on its own. Count the
+	// transactions too. The storing transaction per received artifact is
+	// expected; what must not scale with artifacts is anything beyond it.
+	txnBudget := int64(res.FilesRecvd) + int64(res.Rounds*4)
+	if gotTxns > txnBudget {
+		t.Fatalf("pull began %d write transactions for %d artifacts over %d rounds; want <= %d "+
+			"(one store per artifact plus per-round bookkeeping, not one per side-effect)",
+			gotTxns, res.FilesRecvd, res.Rounds, txnBudget)
 	}
 }
 
@@ -63,7 +77,14 @@ func TestPullSurvivesConcurrentWriteLockHolder(t *testing.T) {
 	}
 
 	// A second connection to the same file takes and releases the write lock
-	// in short bursts for the duration of the pull.
+	// in short bursts for the duration of the pull, yielding between bursts.
+	//
+	// The yield is load-bearing. Without it the rival re-acquires immediately
+	// on release, and on a loaded machine it can starve the pull's BEGIN past
+	// busy_timeout -- which fails this test even when the batching under test
+	// is perfect, because a single BEGIN is still a BEGIN. Occasional writes
+	// from another process is the situation worth modelling; a rival that
+	// never yields is testing SQLite's fairness, not our transaction budget.
 	rival, err := db.Open(client.DB().Path())
 	if err != nil {
 		t.Fatalf("open rival connection: %v", err)
@@ -87,6 +108,7 @@ func TestPullSurvivesConcurrentWriteLockHolder(t *testing.T) {
 				time.Sleep(time.Millisecond)
 				return nil
 			})
+			time.Sleep(10 * time.Millisecond)
 		}
 	}()
 
@@ -171,8 +193,10 @@ func TestIGotVisibilityUpdatesAreBatched(t *testing.T) {
 	}
 
 	before := client.DB().PoolExecs()
+	beforeTxns := client.DB().WriteTxns()
 	res := syncViaHandler(t, server, client, SyncOpts{Pull: true})
 	got := client.DB().PoolExecs() - before
+	gotTxns := client.DB().WriteTxns() - beforeTxns
 
 	for _, uuid := range uuids {
 		rid, ok := blob.Exists(client.DB(), uuid)
@@ -187,5 +211,14 @@ func TestIGotVisibilityUpdatesAreBatched(t *testing.T) {
 	if got > budget {
 		t.Fatalf("pull executed %d statements outside a transaction for %d igot cards over %d rounds; want <= %d",
 			got, len(uuids), res.Rounds, budget)
+	}
+	// PoolExecs alone does not pin this: folding the per-card writes into one
+	// transaction each would leave it unchanged while restoring the real cost
+	// issue #200 measured. Count transactions too.
+	txnBudget := int64(res.Rounds * 4)
+	if gotTxns > txnBudget {
+		t.Fatalf("pull began %d write transactions for %d igot cards over %d rounds; want <= %d "+
+			"(one batched visibility transaction per round, not one per card)",
+			gotTxns, len(uuids), res.Rounds, txnBudget)
 	}
 }

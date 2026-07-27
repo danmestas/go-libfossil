@@ -329,7 +329,13 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 	}
 	d, err := deck.Parse(data)
 	if err != nil {
-		cl.warn(item, fmt.Errorf("parse rid=%d: %w", rid, err))
+		// Not a manifest, so there is nothing to crosslink -- the ordinary
+		// outcome for a file blob, which is most of what a clone delivers.
+		// The whole-repository sweep has always treated this as a skip (see
+		// linkBatch); warning here instead made a clone log one line per file
+		// blob it filled, ~39k of them on fossil's own repository, and buried
+		// the failures that do matter (issue #186). A blob that parses but
+		// cannot be linked is still a real fault and still warns, below.
 		return
 	}
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-27
+
 ### Added
 
 - `libfossil version` prints a single, stable, machine-parseable build
@@ -109,9 +111,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fossil's own behavior for a missing file that is in scope for the commit
   being made. A missing file outside the commit's scope (relevant only to
   an explicit `Enqueue`) is left untouched exactly as before (#79).
+- Clone deadline now interrupts the mid-round phantom-fill crosslink cascade,
+  ensuring the clone does not stall with phantoms outstanding. The same deadline
+  is now threaded into the general push/pull phantom-fill cascade for consistency.
+- Sync replies are now decoded by their wire's real `Content-Type` instead of a
+  hardcoded assumption. The HTTP server sends the correct type on each response;
+  call sites receiving frames without a header (the byte-oriented NATS transport)
+  pass the type explicitly.
+- PGP/SSH clearsigned manifests are now accepted: the deck module strips the
+  clearsign framing before verification.
+- Manifest now emits delete rows for files omitted by the check-in, matching
+  fossil's own behavior. Renames now resolve their parent blob from the
+  pre-rename path to ensure the rename-source blob exists and is reachable.
 
 ### Changed
 
+- **Breaking:** The module path has changed from `github.com/danmestas/libfossil`
+  to `github.com/danmestas/go-libfossil`. All `replace` directives in `go.mod`
+  have been dropped. Consumers must update their imports and remove any
+  `replace` directives pointing to the old path.
 - **Breaking:** `StatusOpts`, `MergeOpts`, and `CheckoutOpts` have been
   removed. No function anywhere accepted any of the three, and nothing
   constructed one: `Checkout.Status()` takes zero arguments, `Repo.Merge`
@@ -194,6 +212,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TimelineEntry`'s embedded `LogEntry`. Callers that stored a
   `Repo.Timeline` result as `[]LogEntry` (rather than letting `:=` infer
   the type, or using `[]TimelineEntry`) will fail to compile.
+- Performance improvements throughout the sync and manifest subsystems: the
+  phantom-fill crosslink cascade now batches onto a shared content cache,
+  `db.Querier` caches prepared statements to stop per-call SQL re-parse overhead,
+  and delta-chain walks bound their hash-collision chain to prevent quadratic
+  behavior on low-entropy input. History-walking expansions are routed through
+  the content cache, cutting sub-64KiB delta-chain expansion allocation ~18x
+  and bounding `Apply` growth per-command to cut ~5x allocation overhead.
+
+## [0.6.3] - 2026-05-13
+
+### Fixed
+
+- The SQLite DSN now sets `_txlock=immediate`, so writers serialize at `BEGIN`
+  rather than discovering the conflict partway through a transaction (#33).
+
+## [0.6.2] - 2026-05-12
+
+### Fixed
+
+- `Repo.Commit` now preserves the parent check-in's tracked files, instead of
+  dropping files the commit did not itself touch (#30).
+
+## [0.6.1] - 2026-05-12
+
+### Added
+
+- `CreateOpts.ProjectCode` accepts an explicit project code when creating a
+  repository, rather than always generating one (#31).
+
+## [0.6.0] - 2026-05-05
+
+### Fixed
+
+- The WAL is checkpointed on `Close`, so a repository written by this library is
+  readable by canonical fossil without a recovery pass (#28).
+
+## [0.5.0] - 2026-05-04
+
+- Added support for whole-checkin diff via empty filePath parameter.
+- Added `Repo.UUIDFromRID` for public rid-to-uuid lookup.
+- Added cross-repo release automation specification and implementation.
+- Added release workflow with downstream dispatch for automated releases.
+
+## [0.4.5] - 2026-04-30
+
+### Fixed
+
+- A clone against a hub that is being written to concurrently now converges,
+  instead of looping without making progress (#17).
+
+## [0.4.4] - 2026-04-27
+
+### Fixed
+
+- A partial xfer no longer panics with `rid=0`; the incomplete transfer is
+  handled rather than dereferenced (#14).
+
+## [0.4.3] - 2026-04-26
+
+- Stabilized xfer encoder and multi-round sync with deferred manifest crosslink.
+- Added `libfossil version` command to print build identifier including module
+  version, Go toolchain version, and platform.
+- Wired live documentation URL into README and hugo baseURL.
+- Added SVG architecture diagram and SDK refresh.
+- Launched documentation site and Cloudflare auto-deploy.
+
+## [0.4.2] - 2026-04-26
+
+- Fixed manifest crosslink deferral to handle referenced blobs arriving later.
+
+## [0.4.1] - 2026-04-25
+
+- Implemented xfer encoder and multi-round sync foundation with manifest crosslink.
+
+## [0.4.0] - 2026-04-25
+
+- Added `Repo.Pull` public wrapper with HTTP transport and hostile-input assertions.
+- Added Tiger Style test coverage for `Checkout.Update`.
+- Improved documentation and test coverage for `Repo.Pull`.
+
+## [0.3.0] - 2026-04-21
+
+- Added `Repo.ReadFile` for reading tracked file content from the repository at
+  any version.
+
+## [0.2.0] - 2026-04-20
+
+- Added `Repo.Merge` for branch-to-branch 3-way merge operations.
+- Added `Repo.Diff` for computing diffs between tree states.
 
 ## [0.1.0] - 2026-04-20
 

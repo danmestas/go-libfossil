@@ -3,7 +3,7 @@ module github.com/danmestas/go-libfossil/db/driver/modernc
 go 1.26.0
 
 require (
-	github.com/danmestas/go-libfossil v0.6.4-0.20260724230440-48111c1c984d
+	github.com/danmestas/go-libfossil v0.7.0
 	modernc.org/sqlite v1.46.1
 )
 

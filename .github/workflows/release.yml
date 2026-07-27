@@ -32,6 +32,25 @@ jobs:
             exit 1
           fi
 
+      # A pseudo-version names a bare commit rather than a tag. When the commit
+      # comes from a PR branch that is later squash-merged, the original is
+      # rewritten and orphaned, so the require line resolves only for as long as
+      # proxy.golang.org keeps its cached copy; anything on direct git (e.g.
+      # GOPRIVATE=github.com/danmestas/*) fails outright. That shipped in v0.7.0
+      # unnoticed because CI reads through the proxy. In-repo modules must
+      # therefore reference each other by released tag only. Unblock a release by
+      # pointing the offending requires at the current tag and running
+      # `go mod tidy` in each affected module.
+      - name: Guard against in-repo pseudo-version requires
+        run: |
+          offenders=$(git ls-files '*go.mod' | xargs -r grep -nE \
+            'github\.com/danmestas/go-libfossil(/[^[:space:]]+)?[[:space:]]+v[0-9][^[:space:]]*[-.][0-9]{14}-[0-9a-f]{12}' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::refusing to release: in-repo pseudo-version requires present:"
+            echo "$offenders"
+            exit 1
+          fi
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

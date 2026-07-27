@@ -216,7 +216,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 			obs.Completed(ctx, sessionEndFromSync(&s.result, opts.ProjectCode), err)
 			return &s.result, fmt.Errorf("sync: buildRequest round %d: %w", cycle, err)
 		}
-		resp, err := t.Exchange(ctx, req)
+		resp, err := exchangeWithRetry(ctx, t, req, s.env.Clock, obs)
 		if err != nil {
 			obs.Error(roundCtx, err)
 			obs.RoundCompleted(roundCtx, cycle, s.roundStats)

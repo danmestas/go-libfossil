@@ -62,12 +62,28 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
 	}
 	defer resp.Body.Close()
+	// An error page is not an xfer reply: report the status rather than
+	// handing HTML to the decoder, which would report the peer's outage as a
+	// framing defect. Whether the status is worth another attempt is
+	// StatusError's to say.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &StatusError{Code: resp.StatusCode, Status: resp.Status}
+	}
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("sync.HTTPTransport read: %w", err)
+		// The reply was cut short on the wire. Nothing has been interpreted
+		// yet, so the same request may safely be sent again.
+		return nil, &transportFault{
+			err:       fmt.Errorf("sync.HTTPTransport read: %w", err),
+			retryable: true,
+		}
 	}
 	// §4: the reply's framing is given by its Content-Type, not guessed. A
 	// clone-v3 reply arrives uncompressed; a pull reply arrives as the
 	// compressed container.
+	//
+	// A failure from here on is a protocol fault: the reply arrived whole and
+	// did not parse. It is left untagged so the retry classifier fails it
+	// fast — resending would only make a malformed reply intermittent.
 	return xfer.Decode(respBody, resp.Header.Get("Content-Type"))
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 )
 
 // Transport delivers sync payloads between peers.
@@ -85,9 +87,21 @@ func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, 
 		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}
 	defer resp.Body.Close()
+	// An error page is not an xfer reply. Reporting the status directly keeps
+	// a peer's outage from surfacing as a framing defect, and lets the sync
+	// round loop tell a 5xx worth retrying from a 4xx that never will be.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, "", &internalsync.StatusError{Code: resp.StatusCode, Status: resp.Status}
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, "", fmt.Errorf("libfossil: http transport read: %w", err)
+		// The reply was cut short on the wire; nothing has been decoded yet,
+		// so the round loop may safely send this request again. Tagging it
+		// here is what distinguishes a severed connection from a body that
+		// arrived whole and would not decode — both surface as
+		// io.ErrUnexpectedEOF, and only the former is worth retrying.
+		return nil, "", internalsync.RetryableFault(
+			fmt.Errorf("libfossil: http transport read: %w", err))
 	}
 	return body, resp.Header.Get("Content-Type"), nil
 }

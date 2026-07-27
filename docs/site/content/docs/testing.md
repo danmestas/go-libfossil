@@ -39,6 +39,56 @@ pre-commit hook runs both drivers with `-short`, `go vet`, the OTel submodule,
 and the CLI build in roughly 45 seconds. Skip with `git commit --no-verify`
 only in emergencies.
 
+## Corpus parity gate
+
+`TestCloneCorpusParity` (root package, `clone_corpus_parity_test.go`) clones one
+repository two ways — with the canonical `fossil` binary and with
+`libfossil.Clone` — and compares what each derived. It is opt-in:
+
+```
+LIBFOSSIL_CORPUS_PARITY=1 go test -run TestCloneCorpusParity -v .
+```
+
+Without the variable it skips, so `make test` is unchanged in both runtime and
+outcome. It also needs a fossil binary and skips without one (or fails, under
+`REQUIRE_FOSSIL_BIN=1`). Budget roughly a second and under a megabyte of temp
+space; everything lands in `t.TempDir()` and is removed on exit.
+
+It exists because the per-package parity tests compare our derivation against
+fossil's for fixtures built in-test, which only covers the shapes someone
+thought to build. Issue #184 — a silent 100% loss of the ticket-change artifact
+shape — passed that suite and was found by an external benchmark instead.
+
+The gate asserts two things:
+
+- **Per-`event`-type counts match**, not just the total. This distinction is the
+  point: on the real Fossil repository the totals read 23,396 vs 27,099, a 14%
+  shortfall easy to wave off, while the per-type breakdown put ticket events at
+  96 vs 3,808.
+- **Row totals match for `blob`, `event`, `mlink`, `plink`, `tagxref` and
+  `leaf`**, reported in both directions. A surplus matters as much as a
+  shortfall — our `tagxref` ran +17,119 over fossil's on the real repository,
+  which is what writing a tag without finishing the work it marks looks like.
+
+Failures name the table or type and the delta, e.g.
+`event type "t": got 0, want 10 (-10)`.
+
+The corpus is built by the canonical binary at test time rather than
+downloaded: seconds and kilobytes instead of the ~10 minutes and ~1 GB the real
+Fossil repository costs, no network dependency, and contents that are a
+property of the test rather than of whatever a remote server holds today. It
+covers check-ins (including a branch and a merge), ticket creations and
+updates, a wiki page, a technote, an attachment, and a tag control artifact.
+
+`requireCorpusShapes` classifies every blob by its card set and fails if any
+shape falls below its expected floor. Without that check a corpus that quietly
+stopped producing ticket artifacts would let the gate pass while covering
+nothing — the exact blind spot it exists to remove.
+
+Not covered: forum posts (`f` events), because fossil exposes no CLI to create
+them; the scale-dependent behaviour of a large repository; and per-row content
+comparison — this gate counts rows, and `internal/manifest` diffs them.
+
 ## Driver matrix
 
 libfossil abstracts SQLite behind `db/` and two driver submodules. Both must

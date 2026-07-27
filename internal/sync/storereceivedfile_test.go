@@ -26,7 +26,7 @@ func TestStoreReceivedFileEmptyDeltaPayloadReturnsError(t *testing.T) {
 	baseUUID := hash.SHA1([]byte("some base content, unrelated to this test"))
 	targetUUID := hash.SHA1([]byte("some target content, unrelated to this test"))
 
-	err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, []byte{}, nil)
+	err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, []byte{}, nil, visibilityPublic)
 	if err == nil {
 		t.Fatal("storeReceivedFile(empty delta payload) = nil error, want an error " +
 			"(a peer-supplied empty delta must not panic the process)")
@@ -55,7 +55,7 @@ func TestStoreReceivedFileNonHexDeltaSrcReturnsError(t *testing.T) {
 		nonHexDeltaSrc += "z" // valid length, not a hex digit
 	}
 
-	if err := storeReceivedFile(context.Background(), r, targetUUID, nonHexDeltaSrc, deltaBytes, nil); err == nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, nonHexDeltaSrc, deltaBytes, nil, visibilityPublic); err == nil {
 		t.Fatal("storeReceivedFile(non-hex deltaSrc) = nil error, want rejection")
 	}
 
@@ -91,7 +91,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	targetUUID := hash.SHA1(target)
 
 	// The delta arrives first. baseUUID has never been seen before.
-	if err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, deltaBytes, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, deltaBytes, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(delta before base) = %v, want nil: a delta "+
 			"arriving before its base must not be treated as an error", err)
 	}
@@ -141,7 +141,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	}
 
 	// Now the base arrives as ordinary full content, in a later round.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -183,10 +183,10 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 
 	// Deliver deepest-first: target's delta references mid, which itself
 	// doesn't exist yet either.
-	if err := storeReceivedFile(context.Background(), r, targetUUID, midUUID, targetDelta, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, midUUID, targetDelta, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(target delta) = %v, want nil", err)
 	}
-	if err := storeReceivedFile(context.Background(), r, midUUID, baseUUID, midDelta, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, midUUID, baseUUID, midDelta, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(mid delta) = %v, want nil", err)
 	}
 
@@ -195,7 +195,7 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 
 	// Finally the root arrives.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -233,7 +233,7 @@ func TestStoreReceivedFileStoresVerbatimBlobForFullContent(t *testing.T) {
 	// silently discarded in favor of a fresh compression pass.
 	storedBlob = append(append([]byte{}, storedBlob...), []byte("-marker-not-part-of-real-zlib")...)
 
-	if err := storeReceivedFile(context.Background(), r, uuid, "", full, storedBlob); err != nil {
+	if err := storeReceivedFile(context.Background(), r, uuid, "", full, storedBlob, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile: %v", err)
 	}
 
@@ -312,14 +312,14 @@ func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
 	}
 
 	// Guard 3: the delta arrives first, base absent, claiming the GOOD uuid.
-	if err := storeReceivedFile(context.Background(), r, claimedUUID, baseUUID, evilDelta, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, claimedUUID, baseUUID, evilDelta, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(evil delta, base absent) = %v, want nil: a delta arriving "+
 			"before its base must be stored, not rejected up front — rejection has to happen "+
 			"where the claim can actually be checked", err)
 	}
 
 	// The base is delivered afterward, as ordinary full content.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -386,7 +386,7 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 	// The checkin manifest arrives first, as a delta against a base that
 	// has never been seen -- create-phantom-if-missing phantomizes the
 	// base, mirroring the client.go:storeDeltaContent doc comment.
-	if err := storeReceivedFile(context.Background(), r, manifestUUID, baseUUID, manifestDelta, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, manifestUUID, baseUUID, manifestDelta, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(manifest delta, base absent) = %v, want nil", err)
 	}
 
@@ -402,7 +402,7 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 	}
 
 	// The base arrives as ordinary full content, filling the phantom.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v, want nil", err)
 	}
 

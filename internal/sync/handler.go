@@ -571,13 +571,15 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		})
 		return nil
 	}
-	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+	vis := visibility(h.nextIsPrivate)
+	h.nextIsPrivate = false
+	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("storing %s: %v", uuid, err),
 		})
 		return nil
 	}
-	rid, ok := blob.Exists(h.repo.DB(), uuid)
+	_, ok := blob.Exists(h.repo.DB(), uuid)
 	if h.buggify != nil && h.buggify.Check("handler.handleFile.missingAfterStore", 0.01) {
 		ok = false
 	}
@@ -586,16 +588,6 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 			Message: fmt.Sprintf("blob %s missing after store", uuid),
 		})
 		return nil
-	}
-	if h.nextIsPrivate {
-		if err := content.MakePrivate(h.repo.DB(), int64(rid)); err != nil {
-			return fmt.Errorf("handler: MakePrivate %s: %w", uuid, err)
-		}
-		h.nextIsPrivate = false
-	} else {
-		if err := content.MakePublic(h.repo.DB(), int64(rid)); err != nil {
-			return fmt.Errorf("handler: MakePublic %s: %w", uuid, err)
-		}
 	}
 	h.filesRecvd++
 	return nil

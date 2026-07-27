@@ -46,6 +46,7 @@ func afterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID, l
 	cache := cl.cache.Stats()
 	cl.stats.expansions = int(cache.Misses)
 	cl.stats.cacheHits = int(cache.Hits)
+	logDeferredCheckins("AfterDephantomize", cl.guard.deferredRids, cl.guard.missingBlobs, cl.stats.linked)
 	return cl.stats
 }
 
@@ -98,6 +99,18 @@ type cascadeLinker struct {
 	r     *repo.Repo
 	cache *content.Cache
 
+	// guard holds back a Checkin whose referenced blobs are not yet locally
+	// available, exactly as the whole-repository sweep's linkState.guard does
+	// (see checkinDeferralGuard in crosslink.go). A deferred checkin gets no
+	// event/leaf/plink/mlink/tagxref rows from this cascade at all -- that is
+	// what lets the sweep's own candidate query, which only reselects rids
+	// with no event row, rediscover and complete it once the missing blob
+	// arrives. The cascade has no candidate query or round boundary of its
+	// own to retry from, so it depends entirely on falling through to the
+	// sweep's recovery path; writing so much as the event row here would
+	// strand the checkin permanently (issue #180).
+	guard *checkinDeferralGuard
+
 	// pending holds discovered artifacts whose writes have not been committed.
 	// The walk discovers work as it goes, so there is no candidate slice to cut
 	// into batches the way linkCandidatesInOrder does: the buffer flushes when it
@@ -111,6 +124,7 @@ func newCascadeLinker(r *repo.Repo) *cascadeLinker {
 	return &cascadeLinker{
 		r:     r,
 		cache: content.NewCache(crosslinkCacheBytes),
+		guard: newCheckinDeferralGuard(),
 	}
 }
 
@@ -316,6 +330,16 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 	d, err := deck.Parse(data)
 	if err != nil {
 		cl.warn(item, fmt.Errorf("parse rid=%d: %w", rid, err))
+		return
+	}
+
+	// Hold back a Checkin referencing a blob that has not arrived yet, same
+	// as the whole-repository sweep's linkBatch does before ever calling
+	// linkArtifact. Checked before the savepoint opens, not inside it: a
+	// deferred checkin must leave nothing in the open batch transaction at
+	// all, matching the sweep's defer skipping every row write. See
+	// cascadeLinker.guard and checkinDeferralGuard.
+	if d.Type == deck.Checkin && cl.guard.shouldDefer(tx, "AfterDephantomize", rid, d) {
 		return
 	}
 

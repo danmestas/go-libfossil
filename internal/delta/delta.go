@@ -340,6 +340,12 @@ func Checksum(data []byte) uint32 {
 
 const zDigitsEnc = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz~"
 
+// nHash is the width of the window the encoder hashes to find landmarks,
+// matching NHASH in fossil/src/delta.c. The hash table is keyed on windows
+// of this size and a copy command is only worth emitting for a match at
+// least this long.
+const nHash = 16
+
 type hashEntry struct {
 	offset int
 	next   int
@@ -370,7 +376,7 @@ func Create(source, target []byte) (result []byte) {
 		return buf
 	}
 
-	if len(source) < 16 {
+	if len(source) < nHash {
 		return createInsertAll(target)
 	}
 
@@ -379,8 +385,6 @@ func Create(source, target []byte) (result []byte) {
 }
 
 func buildHashTable(source []byte) (heads []int, entries []hashEntry, mask int) {
-	const nHash = 16
-
 	tableSize := len(source) / nHash
 	if tableSize < 64 {
 		tableSize = 64
@@ -404,9 +408,44 @@ func buildHashTable(source []byte) (heads []int, entries []hashEntry, mask int) 
 	return heads, entries, mask
 }
 
-func emitMatches(source, target []byte, heads []int, entries []hashEntry, mask int) []byte {
-	const nHash = 16
+// maxChainCandidates bounds how many hash-bucket collision-chain entries the
+// encoder inspects for a single target position. rollingHash is a weak
+// multiply-accumulate over an nHash-byte window, so low-entropy input —
+// repeated tokens, runs of whitespace, boilerplate — funnels an enormous
+// number of source windows into one bucket, and walking every one of them at
+// every target position makes Create quadratic in target length. Fossil's
+// delta_create (src/delta.c) bounds the identical loop with `int limit = 250`,
+// deliberately settling for a possibly-shorter match rather than letting a
+// pathological chain dominate; match that limit so the trade behaves the same.
+const maxChainCandidates = 250
 
+// bestMatch returns the longest run of source matching target[tPos:], along
+// with that run's offset in source, searching the collision chain for the
+// hash of target[tPos:tPos+nHash]. Callers must ensure that window is in
+// bounds. bestLen is 0 when no candidate matches at least nHash bytes.
+//
+// examined reports how many chain entries were inspected, never more than
+// maxChainCandidates. emitMatches has no use for it; it is what lets the
+// regression test assert the walk stays bounded without timing anything.
+func bestMatch(source, target []byte, tPos int, heads []int, entries []hashEntry, mask int) (bestOff, bestLen, examined int) {
+	idx := int(rollingHash(target[tPos:tPos+nHash])) & mask
+
+	for ei := heads[idx]; ei > 0 && examined < maxChainCandidates; ei = entries[ei-1].next + 1 {
+		examined++
+		sOff := entries[ei-1].offset
+		if sOff+nHash > len(source) {
+			continue
+		}
+		if ml := matchLen(source[sOff:], target[tPos:]); ml >= nHash && ml > bestLen {
+			bestLen = ml
+			bestOff = sOff
+		}
+	}
+
+	return bestOff, bestLen, examined
+}
+
+func emitMatches(source, target []byte, heads []int, entries []hashEntry, mask int) []byte {
 	var buf []byte
 	buf = appendInt(buf, uint64(len(target)))
 	buf = append(buf, '\n')
@@ -424,26 +463,10 @@ func emitMatches(source, target []byte, heads []int, entries []hashEntry, mask i
 	}
 
 	for tPos < len(target) {
-		bestLen := 0
-		bestOff := 0
+		var bestLen, bestOff int
 
 		if tPos+nHash <= len(target) {
-			h := rollingHash(target[tPos : tPos+nHash])
-			idx := int(h) & mask
-			ei := heads[idx]
-			for ei > 0 {
-				e := entries[ei-1]
-				sOff := e.offset
-
-				if sOff+nHash <= len(source) && matchLen(source[sOff:], target[tPos:]) >= nHash {
-					ml := matchLen(source[sOff:], target[tPos:])
-					if ml > bestLen {
-						bestLen = ml
-						bestOff = sOff
-					}
-				}
-				ei = e.next + 1
-			}
+			bestOff, bestLen, _ = bestMatch(source, target, tPos, heads, entries, mask)
 		}
 
 		if bestLen >= nHash {

@@ -1,11 +1,13 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -61,10 +63,57 @@ func TestComputeLogin(t *testing.T) {
 	if card.Nonce != expectedNonce {
 		t.Fatalf("Nonce = %q, want %q", card.Nonce, expectedNonce)
 	}
-	sharedSecret := sha1hex("projcode/testuser/secret")
-	expectedSig := sha1hex(card.Nonce + sharedSecret)
+	secret := sha1hex("projcode/testuser/secret")
+	expectedSig := sha1hex(card.Nonce + secret)
 	if card.Signature != expectedSig {
 		t.Fatalf("Signature = %q, want %q", card.Signature, expectedSig)
+	}
+}
+
+// TestComputeLoginMatchesCapturedFossilCard replays a login card fossil 2.28
+// actually put on the wire and requires us to reproduce it byte for byte.
+//
+// The payload is the request body that followed that login card, captured with
+// `fossil clone --httptrace` against a server whose project code and user
+// password are the constants below. Two things about it are load-bearing and
+// were both wrong before #203: the trailing "# ..." comment is part of the
+// hashed payload and so must be transmitted, not merely hashed; and the
+// signature covers the *hashed* password, salted with the project code.
+func TestComputeLoginMatchesCapturedFossilCard(t *testing.T) {
+	const (
+		projectCode = "2d5573080bf03f15ed58105794cc80c6a51f4c52"
+		user        = "syncer"
+		password    = "pw123"
+		wantNonce   = "0a1023892bbe47501cfd1e1a54fd0bc1e403eed7"
+		wantSig     = "7e93a6c9f1a38d9a00f08b74248adf6a6b86497a"
+	)
+	payload := []byte("pragma client-version 22800 20260311 113146\n" +
+		"clone 3 1\n" +
+		"reqconfig /all\n" +
+		"# EAFD8046BFE8B4CF96EC2C919144A9B13DC026BB\n")
+
+	card := computeLogin(user, password, projectCode, payload)
+	if card.Nonce != wantNonce {
+		t.Errorf("Nonce = %q, want %q (fossil's own card for this payload)", card.Nonce, wantNonce)
+	}
+	if card.Signature != wantSig {
+		t.Errorf("Signature = %q, want %q (fossil's own card for these credentials)", card.Signature, wantSig)
+	}
+}
+
+// TestSharedSecretAcceptsAPreHashedPassword covers canonical's rule that a
+// 40-character hex password is already the shared secret and must not be
+// hashed again (src/http.c http_build_login_card) — that is the form fossil
+// itself caches and re-sends.
+func TestSharedSecretAcceptsAPreHashedPassword(t *testing.T) {
+	const projectCode = "2d5573080bf03f15ed58105794cc80c6a51f4c52"
+	hashed := sha1hex(projectCode + "/syncer/pw123")
+
+	if got := sharedSecret("pw123", "syncer", projectCode); got != hashed {
+		t.Errorf("cleartext password derived %q, want %q", got, hashed)
+	}
+	if got := sharedSecret(hashed, "syncer", projectCode); got != hashed {
+		t.Errorf("pre-hashed password derived %q, want it passed through unchanged", got)
 	}
 }
 
@@ -78,15 +127,21 @@ func TestComputeLoginAnonymous(t *testing.T) {
 	}
 }
 
-func TestAppendRandomComment(t *testing.T) {
+func TestRandomComment(t *testing.T) {
 	rng := simio.CryptoRand{}
-	payload1 := appendRandomComment([]byte("test\n"), rng)
-	payload2 := appendRandomComment([]byte("test\n"), rng)
-	if string(payload1) == string(payload2) {
+	if randomComment(rng).Text == randomComment(rng).Text {
 		t.Fatal("random comments should be unique")
 	}
-	if payload1[len(payload1)-1] != '\n' {
-		t.Fatal("should end with newline")
+
+	// The comment is what makes each nonce unique, so it has to reach the
+	// wire — a login card the server can validate hashes bytes it received.
+	var buf bytes.Buffer
+	if err := xfer.EncodeCard(&buf, randomComment(rng)); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
+	}
+	line := buf.String()
+	if !strings.HasPrefix(line, "# ") || !strings.HasSuffix(line, "\n") {
+		t.Fatalf("comment encoded as %q, want a \"# ...\\n\" line", line)
 	}
 }
 

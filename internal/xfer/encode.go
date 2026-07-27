@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"encoding/binary"
 	"fmt"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/deck"
 )
@@ -42,6 +43,8 @@ func EncodeCard(w *bytes.Buffer, c Card) error {
 		return encodePragma(w, v)
 	case *LoginCard:
 		return encodeLogin(w, v)
+	case *CommentCard:
+		return encodeComment(w, v)
 	case *ErrorCard:
 		return encodeError(w, v)
 	case *MessageCard:
@@ -90,36 +93,36 @@ func encodeGimme(w *bytes.Buffer, c *GimmeCard) error {
 	return nil
 }
 
-// encodePush writes "push <project-code> [<server-code>]\n".
+// encodePush writes "push <server-code> <project-code>\n".
 //
-// The Fossil C xfer parser (src/xfer.c xfer_push_card) requires at least the
-// project code; a bare "push\n" is rejected by real Fossil servers. The
-// project code must always be present — callers must populate PushCard.ProjectCode
-// before encoding. ServerCode is optional (omitted on the first round when no
-// prior session exists).
+// Server code first, project code second: canonical emits both cards as
+// `blob_appendf(&send, "push %s %s\n", zSCode, zPCode)` (src/xfer.c
+// client_sync) and parses them as `push SERVERCODE PROJECTCODE` on both ends
+// — the server compares aToken[2] against its own project-code and ignores
+// the server code, and a cloning client reads the project-code it must adopt
+// out of aToken[2] of the server's push reply.
 //
-// Wire-format arg order matches Fossil C: project-code first, server-code second.
+// Both codes are required: canonical only honours the card at nToken==3, so a
+// two-token "push <code>" is silently ignored by a real Fossil server. Callers
+// with no cached server code send canonical's own placeholder, "x".
 func encodePush(w *bytes.Buffer, c *PushCard) error {
 	if c.ProjectCode == "" {
 		panic("xfer: encodePush: ProjectCode must not be empty")
 	}
-	w.WriteString("push ")
-	w.WriteString(c.ProjectCode)
-	if c.ServerCode != "" {
-		w.WriteByte(' ')
-		w.WriteString(c.ServerCode)
+	if c.ServerCode == "" {
+		panic("xfer: encodePush: ServerCode must not be empty")
 	}
+	w.WriteString("push ")
+	w.WriteString(c.ServerCode)
+	w.WriteByte(' ')
+	w.WriteString(c.ProjectCode)
 	w.WriteByte('\n')
 	return nil
 }
 
-// encodePull writes "pull <project-code> <server-code>\n".
+// encodePull writes "pull <server-code> <project-code>\n".
 //
-// The Fossil C xfer parser requires both args on pull — a bare "pull\n" or
-// single-arg "pull <code>\n" is rejected. Both ProjectCode and ServerCode must
-// be non-empty before encoding.
-//
-// Wire-format arg order matches Fossil C: project-code first, server-code second.
+// Same arg order and same nToken==3 requirement as push; see encodePush.
 func encodePull(w *bytes.Buffer, c *PullCard) error {
 	if c.ProjectCode == "" {
 		panic("xfer: encodePull: ProjectCode must not be empty")
@@ -128,9 +131,9 @@ func encodePull(w *bytes.Buffer, c *PullCard) error {
 		panic("xfer: encodePull: ServerCode must not be empty")
 	}
 	w.WriteString("pull ")
-	w.WriteString(c.ProjectCode)
-	w.WriteByte(' ')
 	w.WriteString(c.ServerCode)
+	w.WriteByte(' ')
+	w.WriteString(c.ProjectCode)
 	w.WriteByte('\n')
 	return nil
 }
@@ -193,6 +196,18 @@ func encodeLogin(w *bytes.Buffer, c *LoginCard) error {
 	w.WriteString(c.Nonce)
 	w.WriteByte(' ')
 	w.WriteString(c.Signature)
+	w.WriteByte('\n')
+	return nil
+}
+
+// encodeComment writes "# <text>\n". Text must be a single line: an embedded
+// newline would make the remainder parse as a card of its own.
+func encodeComment(w *bytes.Buffer, c *CommentCard) error {
+	if strings.ContainsAny(c.Text, "\n\r") {
+		panic("xfer: encodeComment: Text must not contain a newline")
+	}
+	w.WriteString("# ")
+	w.WriteString(c.Text)
 	w.WriteByte('\n')
 	return nil
 }

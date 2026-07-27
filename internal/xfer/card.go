@@ -32,6 +32,7 @@ const (
 	CardXGimme                     // 22 — xgimme (table sync row request)
 	CardXRow                       // 23 — xrow (table sync row payload)
 	CardXDelete                    // 24 — xdelete (table sync row deletion)
+	CardComment                    // 25 — "# ..." comment line
 )
 
 // Card is the interface implemented by every xfer card type.
@@ -92,6 +93,21 @@ type LoginCard struct {
 }
 
 func (c *LoginCard) Type() CardType { return CardLogin }
+
+// CommentCard represents a "# ..." line. A receiver ignores it — canonical's
+// card loop skips any line starting with '#', as does this package's decoder,
+// so a comment never survives a round trip.
+//
+// It carries no protocol meaning but it is not inert: a login card's nonce
+// hashes every byte that follows it, and the server re-hashes those bytes to
+// validate it (src/xfer.c check_tail_hash). The comment is where a client puts
+// the randomness that makes each nonce, and so each signature, unique — which
+// only works if the comment is actually transmitted, not merely hashed.
+type CommentCard struct {
+	Text string
+}
+
+func (c *CommentCard) Type() CardType { return CardComment }
 
 // PushCard represents a "push" card sent by the client to begin a push.
 type PushCard struct {

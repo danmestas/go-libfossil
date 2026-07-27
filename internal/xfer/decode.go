@@ -168,43 +168,28 @@ func parseGimme(args []string) (Card, error) {
 	return &GimmeCard{UUID: args[0]}, nil
 }
 
-// parsePush parses "push <project-code> [<server-code>]".
+// parsePush parses "push <server-code> <project-code>".
 //
-// Fossil C (src/xfer.c) always emits the project code; the server code is
-// optional (present when the client has a cached server-code from a prior
-// session). A bare "push\n" is rejected by real Fossil servers, so we treat
-// 0-arg push as an error to tighten interop — our encoder now panics rather
-// than emitting bare "push\n".
-//
-// Arg order: project-code first, server-code second (matches Fossil C).
+// Canonical (src/xfer.c) accepts push and pull only at nToken==3, and reads
+// the project code — the value it validates, and the value a cloning client
+// adopts as its own — out of the second argument. Anything shorter is not a
+// push card canonical would act on, so it is an error here rather than a
+// guess about which code the sender meant.
 func parsePush(args []string) (Card, error) {
-	switch len(args) {
-	case 0:
-		return nil, fmt.Errorf("xfer: push requires at least 1 arg (project-code), got 0")
-	case 1:
-		return &PushCard{ProjectCode: args[0]}, nil
-	case 2:
-		return &PushCard{ProjectCode: args[0], ServerCode: args[1]}, nil
-	default:
-		return nil, fmt.Errorf("xfer: push requires 1-2 args, got %d", len(args))
+	if len(args) != 2 {
+		return nil, fmt.Errorf("xfer: push requires 2 args (server-code project-code), got %d", len(args))
 	}
+	return &PushCard{ServerCode: args[0], ProjectCode: args[1]}, nil
 }
 
-// parsePull parses "pull <project-code> <server-code>".
+// parsePull parses "pull <server-code> <project-code>".
 //
-// Fossil C requires both args on pull. A bare "pull\n" or single-arg pull is
-// rejected by real Fossil servers.
-//
-// Arg order: project-code first, server-code second (matches Fossil C).
+// Same arg order and arity as push; see parsePush.
 func parsePull(args []string) (Card, error) {
-	switch len(args) {
-	case 0, 1:
-		return nil, fmt.Errorf("xfer: pull requires 2 args (project-code server-code), got %d", len(args))
-	case 2:
-		return &PullCard{ProjectCode: args[0], ServerCode: args[1]}, nil
-	default:
-		return nil, fmt.Errorf("xfer: pull requires 2 args, got %d", len(args))
+	if len(args) != 2 {
+		return nil, fmt.Errorf("xfer: pull requires 2 args (server-code project-code), got %d", len(args))
 	}
+	return &PullCard{ServerCode: args[0], ProjectCode: args[1]}, nil
 }
 
 func parseCookie(args []string) (Card, error) {

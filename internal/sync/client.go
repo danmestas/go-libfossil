@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strconv"
@@ -49,12 +48,18 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	}
 	// Fossil C also reads a cached remote server-code from the local repo
 	// config ('server-code' written by a prior pull). Fall back to that when
-	// SyncOpts.ServerCode is not provided.
+	// SyncOpts.ServerCode is not provided. Both push and pull carry it, and
+	// when none is cached Fossil C sends its own placeholder — `zSCode =
+	// db_get("server-code", "x")` in xfer.c client_sync. The server ignores
+	// the value; only the project code that follows it is validated.
 	srvCode := s.opts.ServerCode
 	if srvCode == "" {
 		_ = s.repo.DB().QueryRow(
 			"SELECT value FROM config WHERE name='server-code'",
 		).Scan(&srvCode)
+	}
+	if srvCode == "" {
+		srvCode = "x"
 	}
 	if s.opts.Push {
 		if projCode == "" {
@@ -62,19 +67,12 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 		}
 		cards = append(cards, &xfer.PushCard{
 			ProjectCode: projCode,
-			ServerCode:  srvCode, // optional; omitted on first push to a remote
+			ServerCode:  srvCode,
 		})
 	}
 	if s.opts.Pull {
 		if projCode == "" {
 			panic("sync.buildRequest: ProjectCode is required for pull but not found in SyncOpts or repo config")
-		}
-		// Fossil C's pull parser requires both project-code and server-code.
-		// Use "0" as the server-code placeholder when none is cached — this is
-		// what Fossil C itself sends on the first pull to an unknown remote
-		// (xfer.c: zSCode defaults to "0" when not found in the config).
-		if srvCode == "" {
-			srvCode = "0"
 		}
 		cards = append(cards, &xfer.PullCard{
 			ProjectCode: projCode,
@@ -196,12 +194,17 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 
 	// 7. Login card computed LAST, prepended to the front.
 	// Nonce = SHA1 of all other cards encoded + random comment.
+	//
+	// projCode, not s.opts.ProjectCode: the signature is salted with the
+	// project code, so a login built from an empty one is rejected by every
+	// server. Callers routinely leave SyncOpts.ProjectCode unset and let the
+	// repo's own config supply it, exactly as the push and pull cards above do.
 	if s.opts.User != "" {
-		loginCard, err := s.buildLoginCard(cards)
+		loginCard, signed, err := s.buildLoginCard(cards, projCode)
 		if err != nil {
 			return nil, fmt.Errorf("buildRequest login: %w", err)
 		}
-		cards = append([]xfer.Card{loginCard}, cards...)
+		cards = append([]xfer.Card{loginCard}, signed...)
 	}
 
 	return &xfer.Message{Cards: cards}, nil
@@ -454,21 +457,21 @@ func (s *session) buildUVFileCards() ([]xfer.Card, error) {
 	return cards, nil
 }
 
-// buildLoginCard encodes the non-login cards, appends a random comment,
-// then computes the login card and returns it.
-func (s *session) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, error) {
-	var buf bytes.Buffer
-	for _, c := range cards {
-		if err := xfer.EncodeCard(&buf, c); err != nil {
-			return nil, err
-		}
+// buildLoginCard appends a random comment to cards and computes the login card
+// over the result. It returns the login card and the card list it signed, which
+// the caller must send verbatim behind that login card — the server recomputes
+// the nonce from those bytes.
+func (s *session) buildLoginCard(cards []xfer.Card, projectCode string) (*xfer.LoginCard, []xfer.Card, error) {
+	signed := append(cards[:len(cards):len(cards)], randomComment(s.env.Rand))
+	payload, err := encodeCards(signed)
+	if err != nil {
+		return nil, nil, err
 	}
-	payload := appendRandomComment(buf.Bytes(), s.env.Rand)
 	// BUGGIFY: corrupt the nonce payload to trigger auth failures.
 	if s.opts.Buggify != nil && s.opts.Buggify.Check("sync.buildLoginCard.badNonce", 0.02) {
 		payload = append(payload, []byte("BUGGIFY")...)
 	}
-	return computeLogin(s.opts.User, s.opts.Password, s.opts.ProjectCode, payload), nil
+	return computeLogin(s.opts.User, s.opts.Password, projectCode, payload), signed, nil
 }
 
 // processResponse handles all cards in a server response.

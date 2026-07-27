@@ -195,7 +195,7 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 			return &cs.result, fmt.Errorf("sync.Clone: buildRequest round %d: %w", cycle, err)
 		}
 
-		resp, err := t.Exchange(ctx, req)
+		resp, err := exchangeWithRetry(ctx, t, req, cs.env.Clock, cs.obs)
 		if err != nil {
 			cs.obs.RoundCompleted(roundCtx, cycle, RoundStats{})
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)

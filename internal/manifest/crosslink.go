@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -308,10 +310,15 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 	// cancelled ctx interrupts the candidate sweep but not this recovery.
 	if linked > 0 {
 		if err := r.WithTx(func(tx *db.Tx) error {
-			if err := repairLeafTable(tx); err != nil {
+			// Tag propagation first: the leaf rule compares the branch name of
+			// a checkin against each child's, and a child that declares no
+			// branch of its own only has one once propagation has run. Rebuilt
+			// in the other order, every branch whose tip is not itself the
+			// branch's first checkin looks like it has no same-branch child.
+			if err := repairTagPropagation(tx); err != nil {
 				return err
 			}
-			return repairTagPropagation(tx)
+			return repairLeafTable(tx)
 		}); err != nil {
 			// The interruption cause is the primary error to surface; a repair
 			// failure layered on top of it is secondary. When the sweep itself
@@ -595,6 +602,14 @@ func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) bool {
 	return st.guard.shouldDefer(tx, "Crosslink", c.rid, d)
 }
 
+// logDeferredSampleSize is how many identifiers the deferral rollup prints per
+// list. The counts alongside them are what the line is read for -- "this many
+// artifacts are waiting on this many blobs" -- and a few examples are enough to
+// start chasing a specific stuck artifact. A real clone deferred 180 checkins on
+// 417 missing blobs, which rendered in full was a single ~28 KB log line (issue
+// #194): unreadable in a terminal and cut at an arbitrary byte by log shippers.
+const logDeferredSampleSize = 8
+
 // logDeferredCheckins emits the one-line rollup of checkins held back this
 // run, with missing-blob UUIDs sorted so it is byte-identical across runs
 // that defer the same set regardless of map iteration order. source labels
@@ -608,36 +623,26 @@ func logDeferredCheckins(source string, deferredRids []libfossil.FslID, missingB
 		distinctMissing = append(distinctMissing, u)
 	}
 	sort.Strings(distinctMissing)
+	rids := make([]string, len(deferredRids))
+	for i, rid := range deferredRids {
+		rids[i] = strconv.FormatInt(int64(rid), 10)
+	}
 	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
 		"deferred", len(deferredRids),
 		"linked", linked,
-		"deferred_rids", deferredRids,
+		"deferred_rids", sampleList(rids),
 		"missing_blob_count", len(distinctMissing),
-		"missing_blobs", distinctMissing)
+		"missing_blobs", sampleList(distinctMissing))
 }
 
-// repairLeafTable recomputes leaf from scratch: a checkin is a leaf iff no
-// other checkin names it as a parent. Crosslink no longer maintains leaf
-// incrementally as each checkin is linked -- inserting the new checkin and
-// deleting its parent only produces the right answer when parents are
-// always linked before their children, which delta-chain order does not
-// guarantee. A full recompute is Fossil's own leaf_rebuild() shape and,
-// unlike the incremental version, is correct regardless of visiting order.
-func repairLeafTable(q db.Querier) error {
-	if q == nil {
-		panic("manifest.repairLeafTable: q must not be nil")
+// sampleList renders at most logDeferredSampleSize of items, naming how many it
+// left out rather than truncating silently.
+func sampleList(items []string) string {
+	if len(items) <= logDeferredSampleSize {
+		return strings.Join(items, " ")
 	}
-	if _, err := q.Exec("DELETE FROM leaf"); err != nil {
-		return fmt.Errorf("repairLeafTable clear: %w", err)
-	}
-	if _, err := q.Exec(`
-		INSERT INTO leaf(rid)
-		SELECT objid FROM event
-		WHERE type='ci' AND objid NOT IN (SELECT pid FROM plink)
-	`); err != nil {
-		return fmt.Errorf("repairLeafTable insert: %w", err)
-	}
-	return nil
+	return fmt.Sprintf("%s ...and %d more",
+		strings.Join(items[:logDeferredSampleSize], " "), len(items)-logDeferredSampleSize)
 }
 
 // repairTagPropagation re-runs tag propagation from every self-declared tag

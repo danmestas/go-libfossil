@@ -645,47 +645,60 @@ func sampleList(items []string) string {
 		strings.Join(items[:logDeferredSampleSize], " "), len(items)-logDeferredSampleSize)
 }
 
-// repairTagPropagation re-runs tag propagation from every self-declared tag
-// origin in tagxref, once, now that the whole sweep's plink edges are in
-// place.
+// repairTagPropagation re-runs tag propagation from every primary parent,
+// once, now that the whole sweep's plink edges are in place.
 //
-// tag.propagate is mtime-gated: it only overwrites a descendant's copy of a
-// tag when the descendant has no declaration of its own and the incoming
-// value is newer than whatever is already there, and it walks the plink
-// table live at call time rather than a snapshot. That makes replaying
-// every origin exactly once, in any order, converge on the same tagxref
-// state regardless of which order the origins are replayed in -- an origin
-// visited before its descendants exist yet contributes nothing for them,
-// but every origin still gets replayed here after every plink edge exists,
-// so nothing is lost the way it was when propagation ran once per checkin,
-// from the immediate parent only, at the moment each checkin was linked
-// (see applyInlineTags and addFWTPlink).
+// Canonical fossil seeds propagation the same way: having inserted a new
+// check-in's plink edges it calls tag_propagate_all on the *primary parent*
+// rather than on whichever artifact originally declared the tag
+// (src/manifest.c:2300-2302 and 2467-2469). The parent is the right seed
+// because tag_propagate's per-child test is strict:
+//
+//	coalesce(srcid=0 AND tagxref.mtime<:mtime, 1) AS doit
+//
+// A descendant that already carries the tag holds it at exactly the origin's
+// mtime, so `mtime < mtime` is false, doit is 0, and the walk neither retags
+// that child nor queues it for further descent. Seeding from an origin
+// therefore stops dead at the first descendant that already has the tag,
+// which silently strands any check-in linked after that descendant was --
+// deferred behind a missing blob, or arriving in a later clone round. Seeding
+// from each parent instead only ever tests that parent's own children, so a
+// newly linked check-in is reached however late it arrives (issue #198).
+//
+// Running it once per parent, in any order, converges: tag.propagate walks the
+// plink table live at call time rather than a snapshot, and cascades through
+// descendants that hold no row of their own, so a parent visited before its
+// ancestors are tagged contributes nothing then but is reached by the ancestor's
+// own cascade. This replaces propagating once per checkin at the moment each
+// checkin was linked, which depended on ancestors being crosslinked before
+// their descendants -- true for an ascending-rid sweep, false for delta-chain
+// order (see applyInlineTags and addFWTPlink).
 func repairTagPropagation(q db.Querier) error {
 	if q == nil {
 		panic("manifest.repairTagPropagation: q must not be nil")
 	}
 
-	rows, err := q.Query("SELECT DISTINCT rid FROM tagxref WHERE origid = rid")
+	rows, err := q.Query("SELECT DISTINCT pid FROM plink WHERE isprim = 1")
 	if err != nil {
 		return fmt.Errorf("repairTagPropagation query: %w", err)
 	}
-	var origins []libfossil.FslID
+	var parents []libfossil.FslID
 	for rows.Next() {
-		var rid int64
-		if err := rows.Scan(&rid); err != nil {
+		var pid int64
+		if err := rows.Scan(&pid); err != nil {
 			rows.Close()
 			return fmt.Errorf("repairTagPropagation scan: %w", err)
 		}
-		origins = append(origins, libfossil.FslID(rid))
+		parents = append(parents, libfossil.FslID(pid))
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("repairTagPropagation rows: %w", err)
 	}
 
-	for _, rid := range origins {
-		if err := tag.PropagateAll(q, rid); err != nil {
-			return fmt.Errorf("repairTagPropagation propagate rid=%d: %w", rid, err)
+	for _, pid := range parents {
+		if err := tag.PropagateAll(q, pid); err != nil {
+			return fmt.Errorf("repairTagPropagation propagate rid=%d: %w", pid, err)
 		}
 	}
 	return nil

@@ -1,6 +1,8 @@
 package tag
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,7 +34,7 @@ type ApplyOpts struct {
 	TargetRID libfossil.FslID // Artifact to tag.
 	SrcRID    libfossil.FslID // Control artifact that introduced this tag (0 for inline T-cards).
 	TagName   string
-	TagType   int    // TagCancel, TagSingleton, or TagPropagating.
+	TagType   int // TagCancel, TagSingleton, or TagPropagating.
 	Value     string
 	MTime     float64 // Julian day.
 }
@@ -113,6 +115,18 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 
 		// Insert or replace tagxref row
 		mtime := libfossil.TimeToJulian(opts.Time)
+		skip, err := superseded(tx, tagid, opts.TargetRID, mtime)
+		if err != nil {
+			return err
+		}
+		if skip {
+			// The control artifact is still stored and queued for sync --
+			// only the derived tagxref state is left alone.
+			if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", controlRid); err != nil {
+				return fmt.Errorf("tag.AddTag: unsent: %w", err)
+			}
+			return nil
+		}
 		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -160,6 +174,14 @@ func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
 			return fmt.Errorf("ensure tag %q: %w", opts.TagName, err)
 		}
 
+		skip, err := superseded(tx, tagid, opts.TargetRID, opts.MTime)
+		if err != nil {
+			return err
+		}
+		if skip {
+			return nil
+		}
+
 		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -204,6 +226,14 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return fmt.Errorf("ensure tag %q: %w", opts.TagName, err)
 	}
 
+	skip, err := superseded(q, tagid, opts.TargetRID, opts.MTime)
+	if err != nil {
+		return err
+	}
+	if skip {
+		return nil
+	}
+
 	if _, err := q.Exec(
 		`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -226,6 +256,44 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 	}
 
 	return nil
+}
+
+// superseded reports whether tagxref already holds a row for (tagid, rid)
+// whose mtime is at least as new as the application being attempted.
+//
+// Canonical fossil opens tag_insert with exactly this query and returns
+// without touching tagxref -- and, just as importantly, without calling
+// tag_propagate -- when it matches (src/tag.c:173-186):
+//
+//	SELECT 1 FROM tagxref WHERE tagid=%d AND rid=%d AND mtime>=:mtime
+//	...
+//	if( rc==SQLITE_ROW ){
+//	  /* Another entry that is more recent already exists.  Do nothing */
+//	  return tagid;
+//	}
+//
+// This is what makes the resulting tagxref state independent of the order
+// artifacts are applied in. A check-in's inline T-cards and a control artifact
+// that later retagged the same check-in reach us in whichever order the sweep
+// visits them; the newer one has to win either way. Dropping the propagation
+// matters as much as dropping the write: replaying a stale branch value from
+// a check-in that has since been retagged floods every descendant with it
+// (issue #198).
+//
+// The comparison is >=, not >, so equal mtimes leave the standing row alone,
+// matching fossil.
+func superseded(q db.Querier, tagid int64, rid libfossil.FslID, mtime float64) (bool, error) {
+	var one int
+	err := q.QueryRow(
+		"SELECT 1 FROM tagxref WHERE tagid=? AND rid=? AND mtime>=?", tagid, rid, mtime,
+	).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("tagxref mtime check: %w", err)
+	}
+	return true, nil
 }
 
 // ensureTag returns the tagid for the given tag name, creating it if it doesn't exist.

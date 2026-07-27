@@ -485,10 +485,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 		case *xfer.FileCard:
 			// Uncompressed cards never carry a wire-encoded frame to
 			// preserve — storage always compresses payload itself.
-			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
-				return false, err
-			}
-			if err := s.applyPrivateStatus(c.UUID); err != nil {
+			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil, s.takeVisibility()); err != nil {
 				return false, err
 			}
 			filesRecvd++
@@ -496,10 +493,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 			delete(s.phantoms, c.UUID)
 
 		case *xfer.CFileCard:
-			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob); err != nil {
-				return false, err
-			}
-			if err := s.applyPrivateStatus(c.UUID); err != nil {
+			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob, s.takeVisibility()); err != nil {
 				return false, err
 			}
 			filesRecvd++
@@ -509,20 +503,19 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 		case *xfer.IGotCard:
 			s.remoteHas[c.UUID] = true
 			rid, exists := blob.Exists(s.repo.DB(), c.UUID)
-			if c.IsPrivate {
-				if exists {
-					if err := content.MakePrivate(s.repo.DB(), int64(rid)); err != nil {
-						return false, fmt.Errorf("sync: MakePrivate %s: %w", c.UUID, err)
-					}
-				} else if s.opts.Private && s.opts.Pull {
+			switch {
+			case exists:
+				// Buffered, not written here: a response announcing tens of
+				// thousands of artifacts would otherwise cost one implicit
+				// transaction per card (issue #200).
+				s.visibilityUpdates = append(s.visibilityUpdates,
+					visibilityUpdate{rid: rid, vis: visibility(c.IsPrivate)})
+			case c.IsPrivate:
+				if s.opts.Private && s.opts.Pull {
 					s.phantoms[c.UUID] = true
 				}
-			} else {
-				if exists {
-					if err := content.MakePublic(s.repo.DB(), int64(rid)); err != nil {
-						return false, fmt.Errorf("sync: MakePublic %s: %w", c.UUID, err)
-					}
-				} else if s.opts.Pull {
+			default:
+				if s.opts.Pull {
 					s.phantoms[c.UUID] = true
 				}
 			}
@@ -583,6 +576,10 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 				return false, err
 			}
 		}
+	}
+
+	if err := s.flushVisibilityUpdates(); err != nil {
+		return false, fmt.Errorf("sync: record artifact visibility: %w", err)
 	}
 
 	s.result.FilesRecvd += filesRecvd
@@ -700,7 +697,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 // Callers with no such bytes on hand (payload built locally, or a bare
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
-func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
 	if r == nil { panic("storeReceivedFile: r must not be nil") }
 	if uuid == "" { panic("storeReceivedFile: uuid must not be empty") }
 	if payload == nil { panic("storeReceivedFile: payload must not be nil") }
@@ -718,10 +715,10 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 		if !hash.IsValidHash(deltaSrc) {
 			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
 		}
-		return storeDeltaContent(r, uuid, deltaSrc, payload, storedBlob)
+		return storeDeltaContent(r, uuid, deltaSrc, payload, storedBlob, vis)
 	}
 
-	dephantomizedRid, err := storeResolvedContent(r, uuid, payload, storedBlob)
+	dephantomizedRid, err := storeResolvedContent(r, uuid, payload, storedBlob, vis)
 	if err != nil {
 		return err
 	}
@@ -743,17 +740,56 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 // 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
 // unconditionally, matching content_put_ex's REPLACE INTO delta, whether
 // or not srcRid is itself currently available.
-func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
 	return r.WithTx(func(tx *db.Tx) error {
 		srcRid, err := blob.StorePhantom(tx, deltaSrc)
 		if err != nil {
 			return fmt.Errorf("storeDeltaContent: resolve base %s: %w", deltaSrc, err)
 		}
-		if _, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid, storedBlob); err != nil {
+		rid, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid, storedBlob)
+		if err != nil {
 			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
-		return nil
+		return recordVisibility(tx, rid, vis)
 	})
+}
+
+// visibilityUpdate is one artifact whose private/public status an igot card
+// announced, buffered until the round's single visibility transaction.
+type visibilityUpdate struct {
+	rid libfossil.FslID
+	vis visibility
+}
+
+// visibility is whether a received artifact is private -- a private card
+// preceded it on the wire -- or public.
+type visibility bool
+
+const (
+	visibilityPublic  visibility = false
+	visibilityPrivate visibility = true
+)
+
+// recordVisibility writes an artifact's private/public status. It takes a
+// Querier rather than a *repo.Repo so it runs inside the transaction that
+// stored the artifact: on the pool it would be a separate implicit
+// transaction per artifact, each with its own fsync and its own contest for
+// the write lock (issue #200), and the status would not be atomic with the
+// content it describes.
+func recordVisibility(q db.Querier, rid libfossil.FslID, vis visibility) error {
+	if rid <= 0 {
+		return nil
+	}
+	if vis == visibilityPrivate {
+		if err := content.MakePrivate(q, int64(rid)); err != nil {
+			return fmt.Errorf("record private rid=%d: %w", rid, err)
+		}
+		return nil
+	}
+	if err := content.MakePublic(q, int64(rid)); err != nil {
+		return fmt.Errorf("record public rid=%d: %w", rid, err)
+	}
+	return nil
 }
 
 // storeResolvedContent verifies that fullContent hashes to uuid and stores
@@ -766,7 +802,7 @@ func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, stor
 // Returns the rid of a phantom that was just filled, so the caller can run
 // AfterDephantomize on it once this transaction has committed; returns 0
 // when no phantom was filled (blob already real, or newly inserted).
-func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte) (libfossil.FslID, error) {
+func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte, vis visibility) (libfossil.FslID, error) {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)
@@ -784,7 +820,8 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 			var size int64
 			tx.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size)
 			if size != -1 {
-				return nil // real blob already exists
+				// Real blob already exists; only its visibility can have moved.
+				return recordVisibility(tx, existingRid, vis)
 			}
 			// Fill phantom: update blob content, remove from phantom table.
 			compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
@@ -802,7 +839,7 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 				return fmt.Errorf("unclustered rid=%d: %w", existingRid, err)
 			}
 			dephantomizedRid = libfossil.FslID(existingRid)
-			return nil
+			return recordVisibility(tx, existingRid, vis)
 		}
 		compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
 		if err != nil {
@@ -820,6 +857,9 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 			return err
 		}
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
+			return err
+		}
+		if err := recordVisibility(tx, libfossil.FslID(rid), vis); err != nil {
 			return err
 		}
 
@@ -875,14 +915,14 @@ func (s *session) loadDBPhantoms() error {
 // storedBlob carries a cfile card's already wire-encoded bytes through to
 // storage (see storeReceivedFile); it is nil for uncompressed "file" cards,
 // which never carry a compressed frame to preserve.
-func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
 	// ctx is the sync loop's own deadline context, threaded down from
 	// session.Sync through processResponse (issue #167). It reaches the
 	// mid-round phantom-fill crosslink cascade inside storeReceivedFile, so a
 	// long-running cascade on the general push/pull path is interruptible by the
 	// caller's deadline -- the same guarantee #166 gave the clone and
 	// server-push receive paths.
-	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis); err != nil {
 		return err
 	}
 
@@ -901,31 +941,40 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	return nil
 }
 
-// applyPrivateStatus marks a just-stored blob as private or public based on
-// whether a PrivateCard preceded it. Extracted from FileCard/CFileCard handlers
-// to eliminate duplication.
-func (s *session) applyPrivateStatus(uuid string) error {
-	if s.nextIsPrivate {
-		// BUGGIFY: 3% chance skip MakePrivate — leave blob as public;
-		// the next sync round should correct the status.
-		if s.opts.Buggify != nil && s.opts.Buggify.Check("sync.applyPrivateStatus.skipMakePrivate", 0.03) {
-			s.nextIsPrivate = false
-			return nil
-		}
-		rid, _ := blob.Exists(s.repo.DB(), uuid)
-		if err := content.MakePrivate(s.repo.DB(), int64(rid)); err != nil {
-			return fmt.Errorf("sync: MakePrivate %s: %w", uuid, err)
-		}
-		s.nextIsPrivate = false
-	} else {
-		rid, exists := blob.Exists(s.repo.DB(), uuid)
-		if exists {
-			if err := content.MakePublic(s.repo.DB(), int64(rid)); err != nil {
-				return fmt.Errorf("sync: MakePublic %s: %w", uuid, err)
+// takeVisibility consumes the pending private-card flag and reports the
+// visibility the next file or cfile card is to be stored with. A private card
+// applies to exactly one following card, so reading the flag clears it.
+func (s *session) takeVisibility() visibility {
+	if !s.nextIsPrivate {
+		return visibilityPublic
+	}
+	s.nextIsPrivate = false
+	// BUGGIFY: 3% chance the private status is dropped — the artifact lands
+	// public and the next sync round should correct it.
+	if s.opts.Buggify != nil && s.opts.Buggify.Check("sync.takeVisibility.skipMakePrivate", 0.03) {
+		return visibilityPublic
+	}
+	return visibilityPrivate
+}
+
+// flushVisibilityUpdates writes the visibility changes announced by this
+// round's igot cards, in one transaction. Buffering them is what keeps a round
+// that hears about a large repository to a single write transaction instead of
+// one per artifact.
+func (s *session) flushVisibilityUpdates() error {
+	if len(s.visibilityUpdates) == 0 {
+		return nil
+	}
+	updates := s.visibilityUpdates
+	s.visibilityUpdates = s.visibilityUpdates[:0]
+	return s.repo.WithTx(func(tx *db.Tx) error {
+		for _, u := range updates {
+			if err := recordVisibility(tx, u.rid, u.vis); err != nil {
+				return err
 			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // handleUVIGotCard processes a uvigot card from the server.

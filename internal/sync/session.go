@@ -88,6 +88,9 @@ type session struct {
 	nUvFileRcvd         int
 	nGimmeRcvd          int // cumulative gimmes received across all rounds
 	nextIsPrivate       bool // true when a PrivateCard precedes the next file/cfile
+	// visibilityUpdates buffers this round's igot-announced status changes so
+	// they are written in one transaction rather than one per card.
+	visibilityUpdates []visibilityUpdate
 	roundStats          RoundStats
 	xTableHashSent map[string]bool            // table -> true if xtable-hash pragma sent
 	xTableGimmes   map[string]map[string]bool // table -> pkHash -> true

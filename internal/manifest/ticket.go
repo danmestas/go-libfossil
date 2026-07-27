@@ -31,8 +31,24 @@ import (
 // buys that atomicity, and it is also what makes the result independent of
 // arrival order -- a change artifact that arrives before the create artifact
 // it amends produces the same final rows either way, because the last replay
-// to run rewrites all of them. The cost is quadratic in one ticket's artifact
-// count, which is a handful in every repository we have measured.
+// to run rewrites all of them.
+//
+// Cost, measured, so that nobody has to rediscover it from a profile: this is
+// quadratic in one ticket's artifact count -- 50 artifacts 47ms, 200 431ms,
+// 400 1.5s -- and flat in everything else, because a ticket's replay set is
+// only its own artifacts. Fossil's own repository averages about two artifacts
+// per ticket, so the real figure there is noise.
+//
+// The cheaper shape is to collect ticket uuids during a batch and rebuild each
+// one once before the transaction commits; that stays atomic and would collapse
+// the quadratic term. It is deliberately not what this does. It requires both
+// linkBatch and cascadeLinker.flush to remember to make that call, and a
+// forgotten call reintroduces issue #184 exactly: rows missing, nothing logged,
+// test-integrity clean, and the tag already written to keep the artifact hidden
+// from every later sweep. That is the second bug of the shape this package has
+// shipped (see also #180). If you are here to optimize a repository with one
+// hot ticket, move the call, do not drop it -- and prove it with
+// TestCrosslink_TicketArtifactsProduceEventRows and TestFossilBinaryTicketParity.
 func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) error {
 	if tx == nil {
 		panic("ticketRebuildEntry: tx must not be nil")

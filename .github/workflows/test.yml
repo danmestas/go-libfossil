@@ -140,6 +140,66 @@ jobs:
       - name: Driver tests (ncruces)
         run: cd db/driver/ncruces && GOWORK=off go test ./... -count=1
 
+  build-wasm:
+    name: Build (js/wasm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build main module for js/wasm
+        # Browser support is the reason the ncruces driver is in this repo at
+        # all, but until this job nothing was ever compiled for js/wasm.
+        #
+        # What a build gate catches is a dependency with no js/wasm build at
+        # all -- most realistically the wrong SQLite driver reaching a shared
+        # package, since modernc.org/libc is linux/darwin-only and would fail
+        # here while both linux legs above stay green. It does not catch every
+        # WASM problem: much of the stdlib (os/exec included) compiles for js
+        # behind stubs and only fails when called, so runtime-behaviour gaps
+        # need tests under a browser harness, which is a separate question.
+        #
+        # test_ncruces is the same tag the ncruces leg builds under, and it is
+        # the correct one here: it only switches internal/testdriver's blank
+        # driver import from modernc to ncruces, which is the driver that can
+        # actually target WASM. Without the tag internal/testdriver would have
+        # to be excluded too, for no reason other than the default it picks.
+        #
+        # The package set comes from `go list`, not a hand-written list, so a
+        # newly added package is inside the gate by default rather than
+        # silently outside it. `-e` stops go list from aborting on the two
+        # packages excluded below -- without it their unresolvable imports
+        # discard the entire list. Packages that already declare `//go:build
+        # !js` in source (internal/stash, internal/undo) are dropped by go list
+        # itself under GOOS=js; that exclusion lives in the code, not here.
+        #
+        # The two greps are the only exclusions this job adds and both have the
+        # same single cause: each of these main packages imports the modernc
+        # driver directly in its own main.go, and modernc.org/libc ships no
+        # js/wasm build, so neither can target WASM by construction. Both stay
+        # fully covered by the linux legs above.
+        env:
+          GOWORK: "off"
+          GOOS: js
+          GOARCH: wasm
+        run: |
+          set -o pipefail
+          pkgs=$(go list -e -tags test_ncruces ./... \
+            | grep -v -e '/cmd/libfossil$' -e '/examples/embed-repo-api$')
+          echo "building $(echo "$pkgs" | wc -l) packages for js/wasm:"
+          echo "$pkgs"
+          echo "$pkgs" | xargs go build -tags test_ncruces
+      - name: Build ncruces driver for js/wasm
+        # A separate module, so the step above never reaches it -- and it is
+        # the driver the browser build actually runs on. Its js-only source
+        # (ncruces_js.go) is compiled by no other job in this workflow.
+        env:
+          GOWORK: "off"
+          GOOS: js
+          GOARCH: wasm
+        run: cd db/driver/ncruces && go build ./...
+
   test-otel:
     name: Test (observer/otel)
     runs-on: ubuntu-latest

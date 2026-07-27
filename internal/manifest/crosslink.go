@@ -382,16 +382,15 @@ func collectCrosslinkCandidates(q db.Querier) ([]candidate, error) {
 const crosslinkBatchSize = 2000
 
 // linkState carries the sweep's cross-batch accumulators: one content cache for
-// every chain, and the set of checkins deferred because a referenced blob has
-// not arrived. It is threaded through the per-batch transactions so a chain
-// expanded in one batch stays cached for its dependents in later batches.
+// every chain, and the checkinDeferralGuard tracking checkins deferred because
+// a referenced blob has not arrived. It is threaded through the per-batch
+// transactions so a chain expanded in one batch stays cached for its
+// dependents in later batches.
 type linkState struct {
-	cache        *content.Cache
-	avail        *content.AvailabilityCache
-	linked       int
-	deferredRids []libfossil.FslID
-	missingBlobs map[string]struct{}
-	pending      []pendingItem
+	cache   *content.Cache
+	guard   *checkinDeferralGuard
+	linked  int
+	pending []pendingItem
 }
 
 // linkCandidatesInOrder expands and crosslinks every candidate in delta-chain
@@ -409,9 +408,8 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 	// however many chains are interleaved at once, not the whole repository.
 	// See internal/content.Cache.Expand and crosslinkCacheBytes.
 	st := &linkState{
-		cache:        content.NewCache(crosslinkCacheBytes),
-		avail:        content.NewAvailabilityCache(),
-		missingBlobs: make(map[string]struct{}),
+		cache: content.NewCache(crosslinkCacheBytes),
+		guard: newCheckinDeferralGuard(),
 	}
 
 	for start := 0; start < len(candidates); start += crosslinkBatchSize {
@@ -431,7 +429,7 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 		}
 	}
 
-	logDeferredCheckins(st.deferredRids, st.missingBlobs, st.linked)
+	logDeferredCheckins("Crosslink", st.guard.deferredRids, st.guard.missingBlobs, st.linked)
 
 	// Pass 2: Process pending items (wiki backlinks, ticket rebuilds).
 	for _, item := range st.pending {
@@ -517,12 +515,46 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 	return nil, false, nil
 }
 
-// deferCheckin reports whether a checkin must be held back this sweep because a
-// blob it references (F-cards or the B-card baseline) has not arrived locally
-// yet, recording it in deferredRids/missingBlobs when so. The manifest blob
-// remains durable in 'blob'; skipping event/leaf/plink/mlink for it keeps a
-// downstream Checkout.Update walking the manifest's F-cards via
-// manifest.ListFiles from hitting `blob not found` mid-traversal.
+// checkinDeferralGuard is the accumulator state behind holding back a Checkin
+// manifest whose referenced blobs (F-cards or the B-card baseline) are not
+// yet available locally: one availability cache shared across every checkin
+// it tests, plus the running set of deferred rids and missing blob UUIDs for
+// the end-of-run rollup log.
+//
+// Both the whole-repository sweep (linkState.guard) and the phantom-fill
+// cascade (cascadeLinker.guard) embed one. Sharing the type -- rather than
+// each path growing its own copy of this bookkeeping -- is what keeps a
+// cascade-deferred checkin falling through to the sweep's own recovery path:
+// collectCrosslinkCandidates reselects a rid only when it has NO event row,
+// and the cascade has no candidate query or round boundary of its own to
+// fall back on. It depends entirely on writing nothing for a deferred rid, so
+// a later sweep still sees it as undiscovered. See shouldDefer.
+type checkinDeferralGuard struct {
+	avail        *content.AvailabilityCache
+	deferredRids []libfossil.FslID
+	missingBlobs map[string]struct{}
+}
+
+// newCheckinDeferralGuard returns a guard ready to test checkins for one
+// sweep or one cascade run. Not safe for concurrent use; each caller owns one.
+func newCheckinDeferralGuard() *checkinDeferralGuard {
+	return &checkinDeferralGuard{
+		avail:        content.NewAvailabilityCache(),
+		missingBlobs: make(map[string]struct{}),
+	}
+}
+
+// shouldDefer reports whether rid's checkin manifest d must be held back
+// because a blob it references (F-cards or the B-card baseline) has not
+// arrived locally yet, recording it in g's accumulators when so. source
+// labels the caller in the debug log ("Crosslink" or "AfterDephantomize").
+//
+// The manifest blob remains durable in 'blob'; the caller MUST write nothing
+// else -- no event/leaf/plink/mlink/tagxref rows -- for rid when this returns
+// true. Skipping every row for it is what keeps a downstream Checkout.Update
+// walking the manifest's F-cards via manifest.ListFiles from hitting `blob
+// not found` mid-traversal, and what lets a later sweep rediscover and
+// complete rid once the missing blob arrives; see the type doc.
 //
 // Surfaced by agent-infra trial #10 under 16-way concurrent fork+merge: a leaf
 // Pulled a multi-blob session in which the merge manifest landed before its
@@ -532,27 +564,38 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 // Crosslink sweep (HandleSync runs Crosslink whenever filesRecvd > 0); the
 // candidate query selects this rid again because no event row was written, and
 // the checkin crosslinks completely.
-func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) bool {
-	missing := missingCheckinRefs(tx, d, st.avail)
+func (g *checkinDeferralGuard) shouldDefer(tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck) bool {
+	missing := missingCheckinRefs(tx, d, g.avail)
 	if len(missing) == 0 {
 		return false
 	}
-	st.deferredRids = append(st.deferredRids, c.rid)
+	g.deferredRids = append(g.deferredRids, rid)
 	for _, u := range missing {
-		st.missingBlobs[u] = struct{}{}
+		g.missingBlobs[u] = struct{}{}
 	}
-	slog.Debug("manifest.Crosslink: deferring checkin",
-		"rid", c.rid,
-		"uuid", c.uuid,
+	var uuid string
+	_ = tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid)
+	slog.Debug("manifest."+source+": deferring checkin",
+		"rid", rid,
+		"uuid", uuid,
 		"missing_count", len(missing),
 		"first_missing", missing[0])
 	return true
 }
 
+// deferCheckin reports whether a checkin must be held back this sweep because
+// a blob it references has not arrived locally yet. Thin wrapper over
+// checkinDeferralGuard.shouldDefer so linkBatch's call site -- and its
+// existing behavior and tests -- do not change.
+func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) bool {
+	return st.guard.shouldDefer(tx, "Crosslink", c.rid, d)
+}
+
 // logDeferredCheckins emits the one-line rollup of checkins held back this
-// sweep, with missing-blob UUIDs sorted so it is byte-identical across runs
-// that defer the same set regardless of map iteration order.
-func logDeferredCheckins(deferredRids []libfossil.FslID, missingBlobs map[string]struct{}, linked int) {
+// run, with missing-blob UUIDs sorted so it is byte-identical across runs
+// that defer the same set regardless of map iteration order. source labels
+// the caller ("Crosslink" for the sweep, "AfterDephantomize" for the cascade).
+func logDeferredCheckins(source string, deferredRids []libfossil.FslID, missingBlobs map[string]struct{}, linked int) {
 	if len(deferredRids) == 0 {
 		return
 	}
@@ -561,7 +604,7 @@ func logDeferredCheckins(deferredRids []libfossil.FslID, missingBlobs map[string
 		distinctMissing = append(distinctMissing, u)
 	}
 	sort.Strings(distinctMissing)
-	slog.Info("manifest.Crosslink: deferred checkins awaiting missing blobs",
+	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
 		"deferred", len(deferredRids),
 		"linked", linked,
 		"deferred_rids", deferredRids,

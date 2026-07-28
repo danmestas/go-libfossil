@@ -8,6 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -98,9 +99,8 @@ func rebuildCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, report *Report
 		return err
 	}
 
-	// Insert mlink/filename rows for manifest F-cards.
-	// Uses d.F directly (not expanded) — matches Fossil's mlink semantics.
-	if err := rebuildMlinks(tx, rid, d, cache); err != nil {
+	// Derive mlink/filename rows through the shared canonical implementation.
+	if err := manifest.DeriveCheckinMlinks(tx, cache, rid, d); err != nil {
 		return err
 	}
 
@@ -134,84 +134,4 @@ func rebuildPlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, mtime float64, 
 		}
 	}
 	return nil
-}
-
-// rebuildMlinks inserts mlink and filename rows for files that are new or
-// changed relative to the primary parent. Fossil's rebuild only creates mlink
-// rows for files that differ from the parent checkin — unchanged files are
-// skipped. This matches fossil rebuild behavior.
-func rebuildMlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
-	// Build parent file map (name → uuid) for comparison.
-	parentFiles := buildParentFileMap(tx, d, cache)
-
-	for _, f := range d.F {
-		if f.UUID == "" {
-			continue // deleted file in delta manifest
-		}
-		// Skip unchanged files — only create mlink for new or modified.
-		if parentUUID, exists := parentFiles[f.Name]; exists && parentUUID == f.UUID {
-			continue
-		}
-		fnid, err := rebuildEnsureFilename(tx, f.Name)
-		if err != nil {
-			return fmt.Errorf("filename %q: %w", f.Name, err)
-		}
-		fileRID, ok := blob.Exists(tx, f.UUID)
-		if !ok {
-			continue // file blob missing — phantom or not yet received
-		}
-		if _, err := tx.Exec(
-			"INSERT OR IGNORE INTO mlink(mid, fid, fnid) VALUES(?, ?, ?)",
-			rid, fileRID, fnid,
-		); err != nil {
-			return fmt.Errorf("mlink: %w", err)
-		}
-	}
-	return nil
-}
-
-// buildParentFileMap returns a map of filename→UUID from the primary parent's
-// manifest. Returns an empty map if there is no parent (initial checkin).
-func buildParentFileMap(tx *db.Tx, d *deck.Deck, cache *content.Cache) map[string]string {
-	if len(d.P) == 0 {
-		return nil // initial checkin — no parent
-	}
-	parentRID, ok := content.AvailableByUUID(tx, d.P[0]) // primary parent
-	if !ok {
-		return nil
-	}
-	parentData, err := cache.Expand(tx, parentRID)
-	if err != nil {
-		return nil
-	}
-	parentDeck, err := deck.Parse(parentData)
-	if err != nil {
-		return nil
-	}
-	m := make(map[string]string, len(parentDeck.F))
-	for _, f := range parentDeck.F {
-		m[f.Name] = f.UUID
-	}
-	return m
-}
-
-// rebuildEnsureFilename ensures a filename row exists and returns its fnid.
-func rebuildEnsureFilename(tx *db.Tx, name string) (int64, error) {
-	if tx == nil {
-		panic("rebuildEnsureFilename: nil *db.Tx")
-	}
-	if name == "" {
-		panic("rebuildEnsureFilename: empty name")
-	}
-
-	var fnid int64
-	err := tx.QueryRow("SELECT fnid FROM filename WHERE name=?", name).Scan(&fnid)
-	if err == nil {
-		return fnid, nil
-	}
-	result, err := tx.Exec("INSERT INTO filename(name) VALUES(?)", name)
-	if err != nil {
-		return 0, fmt.Errorf("insert filename %q: %w", name, err)
-	}
-	return result.LastInsertId()
 }

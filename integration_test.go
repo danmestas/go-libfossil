@@ -224,9 +224,10 @@ func TestPhaseB_Integration(t *testing.T) {
 	if plinkCount != 2 {
 		t.Fatalf("plink count = %d, want 2", plinkCount)
 	}
-	// mlink count: commit1=2, commit2=3, commit3=4 = 9 total
-	if mlinkCount != 9 {
-		t.Fatalf("mlink count = %d, want 9", mlinkCount)
+	// Canonical sparse mlink count: 2 root, 2 second-checkin changes,
+	// 2 third-checkin changes = 6 total.
+	if mlinkCount != 6 {
+		t.Fatalf("mlink count = %d, want 6", mlinkCount)
 	}
 
 	// Verify parent-child relationships via plink

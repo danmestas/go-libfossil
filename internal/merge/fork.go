@@ -30,14 +30,53 @@ func EnsureConflictTable(r *repo.Repo) error {
 	if r == nil {
 		panic("merge.EnsureConflictTable: r must not be nil")
 	}
-	_, err := r.DB().Exec(`CREATE TABLE IF NOT EXISTS conflict(
+	if _, err := r.DB().Exec(`CREATE TABLE IF NOT EXISTS conflict(
 		cid INTEGER PRIMARY KEY,
 		filename TEXT NOT NULL,
 		base_rid INTEGER REFERENCES blob,
 		local_rid INTEGER REFERENCES blob,
 		remote_rid INTEGER REFERENCES blob,
-		mtime REAL NOT NULL
-	)`)
+		mtime REAL NOT NULL,
+		rid_kind INTEGER NOT NULL DEFAULT 0
+	)`); err != nil {
+		return err
+	}
+
+	hasRIDKind, err := func() (present bool, err error) {
+		rows, err := r.DB().Query("PRAGMA table_info(conflict)")
+		if err != nil {
+			return false, err
+		}
+		defer func() {
+			if closeErr := rows.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}()
+
+		for rows.Next() {
+			var cid, notNull, primaryKey int
+			var name, columnType string
+			var defaultValue any
+			if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+				return false, err
+			}
+			if name == "rid_kind" {
+				present = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return false, err
+		}
+		return present, nil
+	}()
+	if err != nil {
+		return err
+	}
+	if hasRIDKind {
+		return nil
+	}
+
+	_, err = r.DB().Exec("ALTER TABLE conflict ADD COLUMN rid_kind INTEGER NOT NULL DEFAULT 0")
 	return err
 }
 
@@ -50,7 +89,7 @@ func RecordConflictFork(r *repo.Repo, filename string, baseRID, localRID, remote
 		panic("merge.RecordConflictFork: filename must not be empty")
 	}
 	_, err := r.DB().Exec(
-		"INSERT INTO conflict(filename, base_rid, local_rid, remote_rid, mtime) VALUES(?, ?, ?, ?, julianday('now'))",
+		"INSERT INTO conflict(filename, base_rid, local_rid, remote_rid, mtime, rid_kind) VALUES(?, ?, ?, ?, julianday('now'), 1)",
 		filename, baseRID, localRID, remoteRID,
 	)
 	return err

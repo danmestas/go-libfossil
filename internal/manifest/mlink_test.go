@@ -7,7 +7,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
@@ -609,111 +608,4 @@ func TestInsertCheckinMlinks_RenameResolvesPidFromOldPath(t *testing.T) {
 	if delPfnid != 0 {
 		t.Errorf("old.txt pfnid = %d, want 0 (a deletion, not a rename)", delPfnid)
 	}
-}
-
-// TestInsertMlinks_MergeParentsGetPidNegativeOne exercises the SAME
-// three-case pid rule on the direct check-in path (insertMlinks in
-// manifest.go), confirming resolveMlinkParent produces identical
-// pid/pmid semantics regardless of which write path calls it.
-func TestInsertMlinks_MergeParentsGetPidNegativeOne(t *testing.T) {
-	r := setupTestRepo(t)
-	d := r.DB()
-
-	rootContent := []byte("root content")
-	trunkRid, _, err := Checkin(r, CheckinOpts{
-		Files:   []File{{Name: "root.txt", Content: rootContent}},
-		Comment: "trunk seed",
-		User:    "tester",
-		Time:    time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("trunk Checkin: %v", err)
-	}
-
-	onBranchContent := []byte("on-branch content")
-	featureRid, _, err := Checkin(r, CheckinOpts{
-		Files: []File{
-			{Name: "root.txt", Content: rootContent},
-			{Name: "on-branch.txt", Content: onBranchContent},
-		},
-		Parent:  trunkRid,
-		Comment: "feature adds on-branch.txt",
-		User:    "tester",
-		Time:    time.Date(2026, 5, 1, 13, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("feature Checkin: %v", err)
-	}
-
-	// Merge commit via the direct path: primary=trunk, merge parent=feature.
-	// on-branch.txt is new relative to trunk but already exists on feature,
-	// so it must resolve to pid=-1; brand-new.txt exists in neither
-	// parent, so it must resolve to pid=0.
-	mergeNewContent := []byte("brand new content")
-	mergeRid, _, err := Checkin(r, CheckinOpts{
-		Files: []File{
-			{Name: "root.txt", Content: rootContent},
-			{Name: "on-branch.txt", Content: onBranchContent},
-			{Name: "brand-new.txt", Content: mergeNewContent},
-		},
-		Parent:       trunkRid,
-		MergeParents: []libfossil.FslID{featureRid},
-		Comment:      "merge feature into trunk",
-		User:         "tester",
-		Time:         time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC),
-	})
-	if err != nil {
-		t.Fatalf("merge Checkin: %v", err)
-	}
-
-	// rowFor takes the subtest's own *testing.T so a Fatalf in one
-	// subtest's lookup cannot abort its siblings (see the twin helper in
-	// TestInsertCheckinMlinks_ThreeCasePidRule for the mechanism).
-	rowFor := func(t *testing.T, name string) mlinkRow {
-		t.Helper()
-		var row mlinkRow
-		err := d.QueryRow(
-			`SELECT m.fid, m.pmid, m.pid, m.fnid FROM mlink m
-			 JOIN filename f USING(fnid) WHERE m.mid=? AND f.name=?`,
-			mergeRid, name,
-		).Scan(&row.fid, &row.pmid, &row.pid, &row.fnid)
-		if err != nil {
-			t.Fatalf("mlink row for %q: %v", name, err)
-		}
-		return row
-	}
-
-	t.Run("merge_added_file_gets_pid_negative_one", func(t *testing.T) {
-		row := rowFor(t, "on-branch.txt")
-		if row.pid != -1 {
-			t.Errorf("on-branch.txt pid = %d, want -1 (added by merge)", row.pid)
-		}
-		if row.pmid != int64(trunkRid) {
-			t.Errorf("on-branch.txt pmid = %d, want %d (primary parent)", row.pmid, trunkRid)
-		}
-	})
-
-	t.Run("normal_added_file_gets_pid_zero", func(t *testing.T) {
-		row := rowFor(t, "brand-new.txt")
-		if row.pid != 0 {
-			t.Errorf("brand-new.txt pid = %d, want 0", row.pid)
-		}
-	})
-
-	t.Run("carried_over_file_gets_parent_fid", func(t *testing.T) {
-		row := rowFor(t, "root.txt")
-		var trunkFid int64
-		if err := d.QueryRow(
-			`SELECT m.fid FROM mlink m JOIN filename f USING(fnid) WHERE m.mid=? AND f.name='root.txt'`,
-			trunkRid,
-		).Scan(&trunkFid); err != nil {
-			t.Fatalf("trunk root.txt fid lookup: %v", err)
-		}
-		if row.pid != trunkFid {
-			t.Errorf("root.txt pid = %d, want %d (the primary parent's file rid, carried over unchanged)", row.pid, trunkFid)
-		}
-		if row.pmid != int64(trunkRid) {
-			t.Errorf("root.txt pmid = %d, want %d", row.pmid, trunkRid)
-		}
-	})
 }

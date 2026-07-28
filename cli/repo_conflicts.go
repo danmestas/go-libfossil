@@ -5,8 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/internal/content"
-	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/merge"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -74,6 +75,7 @@ type conflictForkEntry struct {
 	baseRid   int64
 	localRid  int64
 	remoteRid int64
+	ridKind   int64
 }
 
 func listConflictForkDetails(r *repo.Repo) ([]conflictForkEntry, error) {
@@ -96,58 +98,60 @@ func listConflictForkDetails(r *repo.Repo) ([]conflictForkEntry, error) {
 }
 
 func loadConflictFork(r *repo.Repo, filename string) (*conflictForkEntry, error) {
-	var count int
-	if r.DB().QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conflict'").Scan(&count); count == 0 {
-		return nil, fmt.Errorf("%s: no conflict-fork entries", filename)
+	if err := merge.EnsureConflictTable(r); err != nil {
+		return nil, err
 	}
+
 	var e conflictForkEntry
 	e.filename = filename
-	err := r.DB().QueryRow("SELECT base_rid, local_rid, remote_rid FROM conflict WHERE filename=?", filename).
-		Scan(&e.baseRid, &e.localRid, &e.remoteRid)
+	err := r.DB().QueryRow(
+		"SELECT base_rid, local_rid, remote_rid, rid_kind FROM conflict WHERE filename=?",
+		filename,
+	).Scan(&e.baseRid, &e.localRid, &e.remoteRid, &e.ridKind)
 	if err != nil {
-		return nil, fmt.Errorf("%s: not found in conflict table", filename)
+		return nil, fmt.Errorf("%s: load conflict-fork entry: %w", filename, err)
 	}
 	return &e, nil
 }
 
-func expandForkFile(r *repo.Repo, checkinRid int64, filename string) ([]byte, error) {
-	if checkinRid <= 0 {
-		return nil, nil
-	}
-	// Use internal manifest to list files, then expand.
-	rows, err := r.DB().Query(`
-		SELECT f.uuid FROM mlink m
-		JOIN filename fn ON fn.fnid = m.fnid
-		JOIN blob f ON f.rid = m.fid
-		WHERE m.mid = ? AND fn.name = ?`, checkinRid, filename)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	if rows.Next() {
-		var uuid string
-		rows.Scan(&uuid)
-		frid, ok := content.AvailableByUUID(r.DB(), uuid)
-		if !ok {
-			return nil, fmt.Errorf("blob %s not found", uuid)
-		}
-		return content.Expand(r.DB(), frid)
-	}
-	// Fallback: use manifest parsing.
-	return expandForkFileFallback(r, checkinRid, filename)
-}
+func expandForkFile(r *repo.Repo, rid int64, filename string, rowKind int64) ([]byte, bool, error) {
 
-func expandForkFileFallback(r *repo.Repo, checkinRid int64, filename string) ([]byte, error) {
-	files, err := r.DB().Query(`
-		SELECT b2.uuid FROM event e
-		JOIN blob b ON b.rid = e.objid
-		WHERE e.objid = ?`, checkinRid)
-	if err != nil || files == nil {
-		return nil, fmt.Errorf("file %s not found in checkin %d", filename, checkinRid)
+	switch rowKind {
+	case 0:
+		if rid <= 0 {
+			return nil, false, nil
+		}
+		bytes, err := content.Expand(r.DB(), libfossil.FslID(rid))
+		if err != nil {
+			return nil, true, fmt.Errorf("expand legacy file %q from blob %d: %w", filename, rid, err)
+		}
+		return bytes, true, nil
+	case 1:
+		if rid <= 0 {
+			return nil, false, nil
+		}
+		files, err := manifest.ListFiles(r, libfossil.FslID(rid))
+		if err != nil {
+			return nil, false, fmt.Errorf("list file %q in checkin %d: %w", filename, rid, err)
+		}
+		for _, file := range files {
+			if file.Name != filename {
+				continue
+			}
+			fileRid, ok := content.AvailableByUUID(r.DB(), file.UUID)
+			if !ok {
+				return nil, true, fmt.Errorf("file %q from checkin %d is unavailable", filename, rid)
+			}
+			bytes, err := content.Expand(r.DB(), fileRid)
+			if err != nil {
+				return nil, true, fmt.Errorf("expand file %q from checkin %d: %w", filename, rid, err)
+			}
+			return bytes, true, nil
+		}
+		return nil, false, nil
+	default:
+		return nil, false, fmt.Errorf("expand file %q: unknown conflict RID kind %d", filename, rowKind)
 	}
-	defer files.Close()
-	// This is a simplified fallback; the full version uses manifest.ListFiles.
-	return nil, fmt.Errorf("file %s not found in checkin %d", filename, checkinRid)
 }
 
 // RepoConflictsShowCmd shows all versions of a conflicted file.
@@ -168,16 +172,43 @@ func (c *RepoConflictsShowCmd) Run(g *Globals) error {
 		return err
 	}
 
-	base, _ := expandForkFile(inner, entry.baseRid, c.File)
-	local, _ := expandForkFile(inner, entry.localRid, c.File)
-	remote, _ := expandForkFile(inner, entry.remoteRid, c.File)
+	base, basePresent, err := expandForkFile(inner, entry.baseRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	local, localPresent, err := expandForkFile(inner, entry.localRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	remote, remotePresent, err := expandForkFile(inner, entry.remoteRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
 
 	fmt.Printf("=== BASE (ancestor, rid=%d) ===\n", entry.baseRid)
-	os.Stdout.Write(base)
+	if basePresent {
+		if _, err := os.Stdout.Write(base); err != nil {
+			return err
+		}
+	} else {
+		fmt.Print("<absent>")
+	}
 	fmt.Printf("\n=== LOCAL (your version, rid=%d) ===\n", entry.localRid)
-	os.Stdout.Write(local)
+	if localPresent {
+		if _, err := os.Stdout.Write(local); err != nil {
+			return err
+		}
+	} else {
+		fmt.Print("<absent>")
+	}
 	fmt.Printf("\n=== REMOTE (their version, rid=%d) ===\n", entry.remoteRid)
-	os.Stdout.Write(remote)
+	if remotePresent {
+		if _, err := os.Stdout.Write(remote); err != nil {
+			return err
+		}
+	} else {
+		fmt.Print("<absent>")
+	}
 	fmt.Println()
 	return nil
 }
@@ -205,26 +236,38 @@ func (c *RepoConflictsPickCmd) Run(g *Globals) error {
 	}
 
 	var picked []byte
+	var present bool
 	var label string
 	switch {
 	case c.Remote:
-		picked, _ = expandForkFile(inner, entry.remoteRid, c.File)
+		picked, present, err = expandForkFile(inner, entry.remoteRid, c.File, entry.ridKind)
 		label = "remote"
 	case c.Base:
-		picked, _ = expandForkFile(inner, entry.baseRid, c.File)
+		picked, present, err = expandForkFile(inner, entry.baseRid, c.File, entry.ridKind)
 		label = "base"
 	default:
-		picked, _ = expandForkFile(inner, entry.localRid, c.File)
+		picked, present, err = expandForkFile(inner, entry.localRid, c.File, entry.ridKind)
 		label = "local"
 	}
-
-	outPath := filepath.Join(c.Dir, c.File)
-	os.MkdirAll(filepath.Dir(outPath), 0o755)
-	if err := os.WriteFile(outPath, picked, 0o644); err != nil {
+	if err != nil {
 		return err
 	}
 
-	merge.ResolveConflictFork(inner, c.File)
+	outPath := filepath.Join(c.Dir, c.File)
+	if present {
+		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(outPath, picked, 0o644); err != nil {
+			return err
+		}
+	} else if err := os.Remove(outPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := merge.ResolveConflictFork(inner, c.File); err != nil {
+		return err
+	}
 	fmt.Printf("resolved: %s (picked %s)\n", c.File, label)
 	return nil
 }
@@ -254,9 +297,27 @@ func (c *RepoConflictsMergeCmd) Run(g *Globals) error {
 		return fmt.Errorf("unknown strategy: %s", c.Strategy)
 	}
 
-	base, _ := expandForkFile(inner, entry.baseRid, c.File)
-	local, _ := expandForkFile(inner, entry.localRid, c.File)
-	remote, _ := expandForkFile(inner, entry.remoteRid, c.File)
+	base, basePresent, err := expandForkFile(inner, entry.baseRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	local, localPresent, err := expandForkFile(inner, entry.localRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	remote, remotePresent, err := expandForkFile(inner, entry.remoteRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	if !basePresent {
+		base = nil
+	}
+	if !localPresent {
+		local = nil
+	}
+	if !remotePresent {
+		remote = nil
+	}
 
 	result, err := strat.Merge(base, local, remote)
 	if err != nil {
@@ -270,7 +331,9 @@ func (c *RepoConflictsMergeCmd) Run(g *Globals) error {
 	}
 
 	if result.Clean {
-		merge.ResolveConflictFork(inner, c.File)
+		if err := merge.ResolveConflictFork(inner, c.File); err != nil {
+			return err
+		}
 		fmt.Printf("resolved: %s (merged with %s, clean)\n", c.File, c.Strategy)
 	} else {
 		os.WriteFile(outPath+".LOCAL", local, 0o644)
@@ -301,26 +364,60 @@ func (c *RepoConflictsExtractCmd) Run(g *Globals) error {
 		return err
 	}
 
-	base, _ := expandForkFile(inner, entry.baseRid, c.File)
-	local, _ := expandForkFile(inner, entry.localRid, c.File)
-	remote, _ := expandForkFile(inner, entry.remoteRid, c.File)
+	base, basePresent, err := expandForkFile(inner, entry.baseRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	local, localPresent, err := expandForkFile(inner, entry.localRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
+	remote, remotePresent, err := expandForkFile(inner, entry.remoteRid, c.File, entry.ridKind)
+	if err != nil {
+		return err
+	}
 
-	os.MkdirAll(c.Dir, 0o755)
+	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
+		return err
+	}
 
 	basePath := filepath.Join(c.Dir, c.File+".BASE")
 	localPath := filepath.Join(c.Dir, c.File+".LOCAL")
 	remotePath := filepath.Join(c.Dir, c.File+".REMOTE")
 
-	os.MkdirAll(filepath.Dir(basePath), 0o755)
-	os.WriteFile(basePath, base, 0o644)
-	os.WriteFile(localPath, local, 0o644)
-	os.WriteFile(remotePath, remote, 0o644)
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+		return err
+	}
+	if basePresent {
+		if err := os.WriteFile(basePath, base, 0o644); err != nil {
+			return err
+		}
+	} else if err := os.Remove(basePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if localPresent {
+		if err := os.WriteFile(localPath, local, 0o644); err != nil {
+			return err
+		}
+	} else if err := os.Remove(localPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if remotePresent {
+		if err := os.WriteFile(remotePath, remote, 0o644); err != nil {
+			return err
+		}
+	} else if err := os.Remove(remotePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 
-	fmt.Printf("  %s\n", basePath)
-	fmt.Printf("  %s\n", localPath)
-	fmt.Printf("  %s\n", remotePath)
+	if basePresent {
+		fmt.Printf("  %s\n", basePath)
+	}
+	if localPresent {
+		fmt.Printf("  %s\n", localPath)
+	}
+	if remotePresent {
+		fmt.Printf("  %s\n", remotePath)
+	}
 	return nil
 }
-
-// Ensure fsltype is used to prevent "imported and not used" error.
-var _ fsltype.FslID

@@ -59,6 +59,221 @@ func TestCheckinBasic(t *testing.T) {
 		t.Fatalf("leaf count = %d", leafCount)
 	}
 }
+func TestCheckinRollsBackWhenParentManifestIsPhantom(t *testing.T) {
+	r := setupTestRepo(t)
+	phantomRID, err := blob.StorePhantom(r.DB(), "0123456789012345678901234567890123456789")
+	if err != nil {
+		t.Fatalf("StorePhantom: %v", err)
+	}
+
+	// The phantom reserves a parent UUID while leaving its manifest unavailable;
+	// an unchanged blob count after Checkin fails proves its file and manifest
+	// writes rolled back atomically.
+	var blobCountBefore int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountBefore); err != nil {
+		t.Fatalf("count blobs before Checkin: %v", err)
+	}
+
+	_, _, err = Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "hello.txt", Content: []byte("hello world")}},
+		Comment: "child commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		Parent:  phantomRID,
+	})
+	if err == nil {
+		t.Fatal("Checkin with phantom parent succeeded")
+	}
+
+	var blobCountAfter int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountAfter); err != nil {
+		t.Fatalf("count blobs after Checkin: %v", err)
+	}
+	if blobCountAfter != blobCountBefore {
+		t.Fatalf("blob count after Checkin = %d, want %d", blobCountAfter, blobCountBefore)
+	}
+}
+
+func TestCheckinRollsBackWhenParentManifestIsNotCheckin(t *testing.T) {
+	r := setupTestRepo(t)
+	parentTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	parentBytes, err := (&deck.Deck{
+		Type: deck.Wiki,
+		L:    "ParentPage",
+		U:    deck.User("testuser"),
+		W:    []byte("ordinary wiki content"),
+		D:    parentTime,
+	}).Marshal()
+	if err != nil {
+		t.Fatalf("Marshal wiki parent: %v", err)
+	}
+	parentRID, _, err := blob.Store(r.DB(), parentBytes)
+	if err != nil {
+		t.Fatalf("Store wiki parent: %v", err)
+	}
+
+	// Count after storing the available non-checkin parent; a failed Checkin
+	// must preflight mlink and leave its attempted file and manifest writes undone.
+	var blobCountBefore int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountBefore); err != nil {
+		t.Fatalf("count blobs before Checkin: %v", err)
+	}
+
+	_, _, err = Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "hello.txt", Content: []byte("hello world")}},
+		Comment: "child commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		Parent:  parentRID,
+	})
+	if err == nil {
+		t.Fatal("Checkin with non-checkin parent succeeded")
+	}
+
+	var blobCountAfter int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountAfter); err != nil {
+		t.Fatalf("count blobs after Checkin: %v", err)
+	}
+	if blobCountAfter != blobCountBefore {
+		t.Fatalf("blob count after Checkin = %d, want %d", blobCountAfter, blobCountBefore)
+	}
+}
+
+func TestCheckinDeduplicatesRepeatedMergeParentAndKeepsNewFileNormal(t *testing.T) {
+	r := setupTestRepo(t)
+
+	primaryRid, primaryUUID, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "primary.txt", Content: []byte("primary")}},
+		Comment: "primary parent",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("primary Checkin: %v", err)
+	}
+	mergeParentRid, mergeParentUUID, err := Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "merge-parent.txt", Content: []byte("merge parent")}},
+		Comment: "merge parent",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("merge parent Checkin: %v", err)
+	}
+
+	mergeRid, _, err := Checkin(r, CheckinOpts{
+		Files:        []File{{Name: "new.txt", Content: []byte("new")}},
+		Parent:       primaryRid,
+		MergeParents: []libfossil.FslID{mergeParentRid, mergeParentRid},
+		Comment:      "merge with duplicate parent",
+		User:         "testuser",
+		Time:         time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("merge Checkin: %v", err)
+	}
+
+	manifestBytes, err := blob.Load(r.DB(), mergeRid)
+	if err != nil {
+		t.Fatalf("load merge manifest: %v", err)
+	}
+	mergeDeck, err := deck.Parse(manifestBytes)
+	if err != nil {
+		t.Fatalf("parse merge manifest: %v", err)
+	}
+	wantParents := []string{primaryUUID, mergeParentUUID}
+	if len(mergeDeck.P) != len(wantParents) {
+		t.Fatalf("P-card count = %d, want %d (%v)", len(mergeDeck.P), len(wantParents), wantParents)
+	}
+	for i, want := range wantParents {
+		if mergeDeck.P[i] != want {
+			t.Fatalf("P-card parent %d = %q, want %q", i, mergeDeck.P[i], want)
+		}
+	}
+
+	var pid int64
+	if err := r.DB().QueryRow(
+		`SELECT m.pid FROM mlink m
+		 JOIN filename f USING(fnid)
+		 WHERE m.mid=? AND f.name=? AND NOT m.isaux`,
+		mergeRid,
+		"new.txt",
+	).Scan(&pid); err != nil {
+		t.Fatalf("non-aux mlink for new file: %v", err)
+	}
+	if pid != 0 {
+		t.Fatalf("new file mlink pid = %d, want 0", pid)
+	}
+}
+
+func TestCheckinRollsBackWhenParentTreeReferencesMissingBlob(t *testing.T) {
+	r := setupTestRepo(t)
+	missingContent := []byte("missing parent content")
+	missingRID, missingUUID, err := blob.Store(r.DB(), missingContent)
+	if err != nil {
+		t.Fatalf("Store missing parent file: %v", err)
+	}
+
+	parentDeck := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "parent with unavailable file",
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		U:    deck.User("testuser"),
+		F:    []deck.FileCard{{Name: "missing.txt", UUID: missingUUID}},
+	}
+	rHash, err := parentDeck.ComputeR(func(uuid string) ([]byte, error) {
+		if uuid != missingUUID {
+			return nil, fmt.Errorf("unexpected parent file UUID: %s", uuid)
+		}
+		return missingContent, nil
+	})
+	if err != nil {
+		t.Fatalf("ComputeR parent manifest: %v", err)
+	}
+	parentDeck.R = rHash
+	parentBytes, err := parentDeck.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal parent manifest: %v", err)
+	}
+	parentRID, _, err := blob.Store(r.DB(), parentBytes)
+	if err != nil {
+		t.Fatalf("Store parent manifest: %v", err)
+	}
+	if _, err := r.DB().Exec("DELETE FROM blob WHERE rid=?", missingRID); err != nil {
+		t.Fatalf("delete parent file blob: %v", err)
+	}
+
+	var missingBlobCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob WHERE uuid=?", missingUUID).Scan(&missingBlobCount); err != nil {
+		t.Fatalf("count missing parent blobs: %v", err)
+	}
+	if missingBlobCount != 0 {
+		t.Fatalf("missing parent blob count = %d, want 0", missingBlobCount)
+	}
+
+	var blobCountBefore int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountBefore); err != nil {
+		t.Fatalf("count blobs before Checkin: %v", err)
+	}
+	_, _, err = Checkin(r, CheckinOpts{
+		Files:   []File{{Name: "child.txt", Content: []byte("child")}},
+		Parent:  parentRID,
+		Comment: "child of missing file parent",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("Checkin with parent tree referencing missing blob succeeded")
+	}
+
+	var blobCountAfter int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&blobCountAfter); err != nil {
+		t.Fatalf("count blobs after Checkin: %v", err)
+	}
+	if blobCountAfter != blobCountBefore {
+		t.Fatalf("blob count after Checkin = %d, want %d", blobCountAfter, blobCountBefore)
+	}
+}
 
 // TestCheckinZeroLengthFile is a regression test for issue #68: committing
 // a zero-length file used to panic in blob.Store, and Checkin's own

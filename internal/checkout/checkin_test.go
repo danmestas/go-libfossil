@@ -293,35 +293,18 @@ func TestCommitWithEnqueue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify that README.md still has the old content in the new checkin
-	// (because it wasn't enqueued)
-	// We'll check by reading the new manifest and verifying README.md content
-	// matches the original
-	var readmeUUID string
-	err = r.DB().QueryRow(`
-		SELECT b.uuid FROM mlink m
-		JOIN filename f ON f.fnid = m.fnid
-		JOIN blob b ON b.rid = m.fid
-		WHERE m.mid = ? AND f.name = 'README.md'
-	`, rid2).Scan(&readmeUUID)
-	if err != nil {
-		t.Fatalf("query README.md uuid in new checkin: %v", err)
+	// Verify that README.md still resolves to the original file in the new
+	// effective manifest because it wasn't enqueued.
+	readmeRID, ok := manifest.FileAt(r, rid2, "README.md")
+	if !ok {
+		t.Fatal("README.md missing from new checkin manifest")
 	}
-
-	// The original README.md hash
-	var originalReadmeUUID string
-	err = r.DB().QueryRow(`
-		SELECT b.uuid FROM mlink m
-		JOIN filename f ON f.fnid = m.fnid
-		JOIN blob b ON b.rid = m.fid
-		WHERE m.mid = ? AND f.name = 'README.md'
-	`, rid1).Scan(&originalReadmeUUID)
-	if err != nil {
-		t.Fatalf("query original README.md uuid: %v", err)
+	originalReadmeRID, ok := manifest.FileAt(r, rid1, "README.md")
+	if !ok {
+		t.Fatal("README.md missing from original checkin manifest")
 	}
-
-	if readmeUUID != originalReadmeUUID {
-		t.Fatalf("README.md should be unchanged in commit (enqueue filtered it out), got %s, want %s", readmeUUID, originalReadmeUUID)
+	if readmeRID != originalReadmeRID {
+		t.Fatalf("README.md should be unchanged in commit (enqueue filtered it out), got RID %d, want RID %d", readmeRID, originalReadmeRID)
 	}
 }
 
@@ -397,19 +380,24 @@ func TestCommitWithDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify hello.txt is absent from the new checkin's mlink entries.
+	// Verify hello.txt is absent from the new effective manifest.
+	if _, ok := manifest.FileAt(r, rid2, "hello.txt"); ok {
+		t.Fatal("hello.txt should be absent from new checkin manifest")
+	}
+
+	// Verify the new checkin records the canonical deletion transition.
 	var count int
 	err = r.DB().QueryRow(`
 		SELECT count(*) FROM mlink m
 		JOIN filename f ON f.fnid = m.fnid
-		WHERE m.mid = ? AND f.name = 'hello.txt'
+		WHERE m.mid = ? AND f.name = 'hello.txt' AND m.fid = 0 AND m.isaux = 0
 	`, rid2).Scan(&count)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
+	if count != 1 {
 		t.Fatalf(
-			"hello.txt should be absent from new checkin, got %d mlink rows",
+			"hello.txt should have one canonical deletion mlink row, got %d",
 			count,
 		)
 	}
@@ -735,30 +723,16 @@ func TestCommitMissingTrackedFileOutOfScopeSucceeds(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	var readmeUUID string
-	err = r.DB().QueryRow(`
-		SELECT b.uuid FROM mlink m
-		JOIN filename f ON f.fnid = m.fnid
-		JOIN blob b ON b.rid = m.fid
-		WHERE m.mid = ? AND f.name = 'README.md'
-	`, rid2).Scan(&readmeUUID)
-	if err != nil {
-		t.Fatalf("query README.md uuid in new checkin: %v", err)
+	readmeRID, ok := manifest.FileAt(r, rid2, "README.md")
+	if !ok {
+		t.Fatal("README.md missing from new checkin manifest")
 	}
-
-	var originalReadmeUUID string
-	err = r.DB().QueryRow(`
-		SELECT b.uuid FROM mlink m
-		JOIN filename f ON f.fnid = m.fnid
-		JOIN blob b ON b.rid = m.fid
-		WHERE m.mid = ? AND f.name = 'README.md'
-	`, rid1).Scan(&originalReadmeUUID)
-	if err != nil {
-		t.Fatalf("query original README.md uuid: %v", err)
+	originalReadmeRID, ok := manifest.FileAt(r, rid1, "README.md")
+	if !ok {
+		t.Fatal("README.md missing from original checkin manifest")
 	}
-
-	if readmeUUID != originalReadmeUUID {
-		t.Fatalf("README.md content should be carried forward unchanged, got %s, want %s",
-			readmeUUID, originalReadmeUUID)
+	if readmeRID != originalReadmeRID {
+		t.Fatalf("README.md content should be carried forward unchanged, got RID %d, want RID %d",
+			readmeRID, originalReadmeRID)
 	}
 }

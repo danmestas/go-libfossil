@@ -132,12 +132,22 @@ func (c *RepoMergeCmd) Run(g *Globals) error {
 			fmt.Printf("  [merged]   %s (%s)\n", name, stratName)
 			merged++
 		} else if strat.Name() == "conflict-fork" {
-			merge.EnsureConflictTable(inner)
-			var baseRID, localRID, remoteRID int64
-			idb.QueryRow("SELECT rid FROM blob WHERE uuid=?", baseUUID).Scan(&baseRID)
-			idb.QueryRow("SELECT rid FROM blob WHERE uuid=?", localUUID).Scan(&localRID)
-			idb.QueryRow("SELECT rid FROM blob WHERE uuid=?", remoteUUID).Scan(&remoteRID)
-			merge.RecordConflictFork(inner, name, baseRID, localRID, remoteRID)
+			baseCheckinRid, localCheckinRid, remoteCheckinRid := int64(0), int64(0), int64(0)
+			if baseUUID != "" {
+				baseCheckinRid = ancestorRid
+			}
+			if localUUID != "" {
+				localCheckinRid = localRid
+			}
+			if remoteUUID != "" {
+				remoteCheckinRid = remoteRid
+			}
+			if err := merge.EnsureConflictTable(inner); err != nil {
+				return fmt.Errorf("ensuring conflict table for %s: %w", name, err)
+			}
+			if err := merge.RecordConflictFork(inner, name, baseCheckinRid, localCheckinRid, remoteCheckinRid); err != nil {
+				return fmt.Errorf("recording conflict fork for %s: %w", name, err)
+			}
 			fmt.Printf("  [fork]     %s (conflict-fork: all versions preserved)\n", name)
 			conflicts++
 		} else {

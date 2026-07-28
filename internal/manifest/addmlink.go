@@ -192,8 +192,14 @@ func addOneMlink(
 			return fmt.Errorf("prior filename %q: %w", prior, err)
 		}
 	}
-	pid := ridForUUID(tx, fromUUID)
-	fid := ridForUUID(tx, toUUID)
+	pid, err := ridOrPhantom(tx, fromUUID)
+	if err != nil {
+		return fmt.Errorf("reserve source content %q for file %q: %w", fromUUID, filename, err)
+	}
+	fid, err := ridOrPhantom(tx, toUUID)
+	if err != nil {
+		return fmt.Errorf("reserve target content %q for file %q: %w", toUUID, filename, err)
+	}
 
 	doInsert := true
 	if !isPrimary {
@@ -218,25 +224,31 @@ func addOneMlink(
 	// Store the file's previous version as a delta against this one, exactly
 	// where canonical does it (src/manifest.c add_one_mlink tail) -- outside the
 	// doInsert branch, so a merge-parent transition that writes no row still
-	// gets its content pair encoded. content.Deltify holds the policy and
-	// declines on its own when the pair is not worth encoding.
-	if pid > 0 && fid > 0 {
-		if _, err := content.Deltify(tx, libfossil.FslID(pid), libfossil.FslID(fid)); err != nil {
-			return fmt.Errorf("deltify prior file version: %w", err)
+	// gets its content pair encoded. A phantom reserves the mlink pointer but
+	// has no bytes, so Deltify only receives present source and target blobs.
+	if fromUUID != "" && toUUID != "" {
+		var sourceSize, targetSize int64
+		if err := tx.QueryRow(
+			"SELECT (SELECT size FROM blob WHERE uuid=?), (SELECT size FROM blob WHERE uuid=?)",
+			fromUUID, toUUID,
+		).Scan(&sourceSize, &targetSize); err != nil {
+			return fmt.Errorf("file content availability for %q: %w", filename, err)
+		}
+		if sourceSize >= 0 && targetSize >= 0 {
+			if _, err := content.Deltify(tx, libfossil.FslID(pid), libfossil.FslID(fid)); err != nil {
+				return fmt.Errorf("deltify prior file version: %w", err)
+			}
 		}
 	}
 	return nil
 }
 
-// ridForUUID resolves an artifact hash to its blob rid, returning 0 for the
-// empty hash and for a hash whose blob has not arrived.
+// ridForUUID resolves a check-in artifact hash for addMlink's merge and
+// cherrypick parents. It returns 0 when the hash is empty or its artifact has
+// not arrived, leaving those transitions to be derived when it does.
 //
-// Canonical's add_one_mlink reserves a phantom for the missing case
-// (uuid_to_rid with the create flag). This port does not, here: mlink's pid and
-// fid are content pointers, and 0 already means "no content on that side of the
-// transition", so a phantom would buy an rid that nothing else needs. The
-// ancestry columns are different -- see ridOrPhantom in crosslink.go, which does
-// reserve one, because a missing plink edge cannot be recovered later.
+// File-content pointers use ridOrPhantom in addOneMlink instead, preserving a
+// non-empty missing UUID as a phantom mlink RID.
 func ridForUUID(q db.Querier, uuid string) int64 {
 	if uuid == "" {
 		return 0
@@ -452,6 +464,103 @@ func blobHasContent(q db.Querier, uuid string) bool {
 	return q.QueryRow("SELECT 1 FROM blob WHERE uuid=? AND size>0", uuid).Scan(&one) == nil
 }
 
+// validateCheckinMlinkBounds rejects manifest parent sources that would make
+// mlink derivation exceed its fixed work bound.
+func validateCheckinMlinkBounds(d *deck.Deck) error {
+	if d == nil {
+		return fmt.Errorf("checkin mlink bounds: deck must not be nil")
+	}
+	if len(d.P) > maxMlinkMergeParents+1 {
+		excess := d.P[maxMlinkMergeParents+1]
+		return fmt.Errorf("merge parent %s: exceeds maximum of %d", excess, maxMlinkMergeParents)
+	}
+	if len(d.Q) > maxMlinkMergeParents {
+		excess := d.Q[maxMlinkMergeParents]
+		return fmt.Errorf("cherrypick source %s: exceeds maximum of %d", excess.Target, maxMlinkMergeParents)
+	}
+	return nil
+}
+
+// preflightCheckinMlinks verifies that direct Checkin can derive every
+// parent-to-child mlink transition before it stores the child manifest.
+func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck) error {
+	if tx == nil {
+		panic("manifest.preflightCheckinMlinks: tx must not be nil")
+	}
+	if cache == nil {
+		panic("manifest.preflightCheckinMlinks: cache must not be nil")
+	}
+	if d == nil {
+		panic("manifest.preflightCheckinMlinks: deck must not be nil")
+	}
+
+	if err := validateCheckinMlinkBounds(d); err != nil {
+		return err
+	}
+
+	if _, err := loadManifestFiles(tx, cache, d); err != nil {
+		return fmt.Errorf("child effective tree: %w", err)
+	}
+
+	checkSource := func(kind, uuid string) error {
+		rid, ok := content.AvailableByUUID(tx, uuid)
+		if !ok {
+			return fmt.Errorf("%s %s: not available", kind, uuid)
+		}
+		source, files, err := loadCheckinManifest(tx, cache, rid)
+		if err != nil {
+			return fmt.Errorf("%s %s: load manifest: %w", kind, uuid, err)
+		}
+		if source.Type != deck.Checkin {
+			return fmt.Errorf("%s %s: expected checkin manifest, got %v", kind, uuid, source.Type)
+		}
+		for _, name := range files.treeNames() {
+			file, _ := files.seek(name)
+			if _, ok := content.AvailableByUUID(tx, file.UUID); !ok {
+				return fmt.Errorf("%s %s: effective file %q (%s): not available", kind, uuid, name, file.UUID)
+			}
+		}
+		return nil
+	}
+
+	for i := range d.P {
+		kind := "merge parent"
+		if i == 0 {
+			kind = "primary parent"
+		}
+		if err := checkSource(kind, d.P[i]); err != nil {
+			return err
+		}
+	}
+
+	for _, cp := range d.Q {
+		if cp.IsBackout {
+			continue
+		}
+		if err := checkSource("cherrypick source", cp.Target); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeriveCheckinMlinks derives the mlink rows owned by a check-in.
+func DeriveCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d *deck.Deck) error {
+	if tx == nil {
+		panic("manifest.DeriveCheckinMlinks: tx must not be nil")
+	}
+	if cache == nil {
+		panic("manifest.DeriveCheckinMlinks: cache must not be nil")
+	}
+	if rid <= 0 {
+		panic("manifest.DeriveCheckinMlinks: rid must be positive")
+	}
+	if d == nil {
+		panic("manifest.DeriveCheckinMlinks: d must not be nil")
+	}
+	return insertCheckinMlinks(tx, cache, rid, d)
+}
+
 // insertCheckinMlinks derives every mlink row a check-in owns: the primary
 // parent transition (which fans out to the merge parents and cherrypick
 // sources), the "added by merge" fixup, and the transitions of any child that
@@ -467,6 +576,10 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 	}
 	if d == nil {
 		panic("manifest.insertCheckinMlinks: d must not be nil")
+	}
+
+	if err := validateCheckinMlinkBounds(d); err != nil {
+		return err
 	}
 
 	childFiles, err := loadManifestFiles(tx, cache, d)

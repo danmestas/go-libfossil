@@ -101,19 +101,49 @@ func TestComputeLoginMatchesCapturedFossilCard(t *testing.T) {
 	}
 }
 
-// TestSharedSecretAcceptsAPreHashedPassword covers canonical's rule that a
-// 40-character hex password is already the shared secret and must not be
-// hashed again (src/http.c http_build_login_card) — that is the form fossil
-// itself caches and re-sends.
-func TestSharedSecretAcceptsAPreHashedPassword(t *testing.T) {
-	const projectCode = "2d5573080bf03f15ed58105794cc80c6a51f4c52"
-	hashed := sha1hex(projectCode + "/syncer/pw123")
+// TestLoginNonceCoversTheTransmittedBody is the §6.2 conformance test: the
+// nonce is "SHA-1 over every decompressed body byte after the body login
+// line's LF through body end". It recomputes the nonce from the message the
+// client is actually about to send, rather than from whatever the client chose
+// to hash.
+//
+// That distinction is the #203 defect. The random comment supplying the nonce
+// its uniqueness was appended to the hashed payload but never added to the
+// message, so the covered range and the transmitted range differed by one
+// line. The server, which recomputes the nonce from the bytes it received,
+// rejected every login before comparing a password — making a correct password
+// indistinguishable from a wrong one.
+func TestLoginNonceCoversTheTransmittedBody(t *testing.T) {
+	s, _ := newTestSession(t, SyncOpts{Pull: true, User: "syncer", Password: "pw123"})
 
-	if got := sharedSecret("pw123", "syncer", projectCode); got != hashed {
-		t.Errorf("cleartext password derived %q, want %q", got, hashed)
+	msg, err := s.buildRequest(0)
+	if err != nil {
+		t.Fatalf("buildRequest: %v", err)
 	}
-	if got := sharedSecret(hashed, "syncer", projectCode); got != hashed {
-		t.Errorf("pre-hashed password derived %q, want it passed through unchanged", got)
+	login, ok := msg.Cards[0].(*xfer.LoginCard)
+	if !ok {
+		t.Fatalf("first card is %T, want *xfer.LoginCard — the login card leads the body", msg.Cards[0])
+	}
+
+	body, err := encodeCards(msg.Cards)
+	if err != nil {
+		t.Fatalf("encodeCards: %v", err)
+	}
+	lf := bytes.IndexByte(body, '\n')
+	if lf < 0 {
+		t.Fatal("encoded body has no LF")
+	}
+	tail := body[lf+1:]
+
+	if got := sha1hex(string(tail)); got != login.Nonce {
+		t.Errorf("nonce = %q, but SHA-1 of the body after the login line's LF is %q;\n"+
+			"the client signed bytes it is not sending:\n%s", login.Nonce, got, tail)
+	}
+
+	// The tail must end with the nonce comment — that is where the randomness
+	// lives, and it only varies the nonce if it is actually transmitted.
+	if !bytes.HasSuffix(tail, []byte("\n")) || !bytes.Contains(tail, []byte("\n# ")) {
+		t.Errorf("body after the login line carries no nonce comment:\n%s", tail)
 	}
 }
 

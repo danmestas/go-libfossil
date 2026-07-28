@@ -11,13 +11,18 @@ import (
 )
 
 // computeLogin produces a LoginCard for the given credentials.
-// payload is the encoded bytes of all non-login cards (including random comment).
 //
-// The nonce is the SHA1 of that payload and the signature is the SHA1 of the
-// nonce text followed by the *hashed* password — never the cleartext one. The
-// server compares against the hash it stores in user.pw, so a login card built
-// from the cleartext password is rejected exactly as a wrong password is
-// (src/http.c http_build_login_card, src/xfer.c check_login).
+// payload must be exactly the bytes that will follow the login card on the
+// wire: the nonce is "SHA-1 over every decompressed body byte after the body
+// login line's LF through body end" (§6.2), and the server recomputes it from
+// the bytes it received (src/xfer.c check_tail_hash). Hashing anything the
+// message does not carry yields a nonce the server cannot reproduce, and it
+// rejects the login before the password is compared at all — which is why
+// #203 failed identically for right and wrong passwords.
+//
+//	SIGNATURE = SHA1(NONCE-hex || shared-secret-hex)
+//
+// — §6.4: the two 40-character hex strings concatenated, not their raw digests.
 func computeLogin(user, password, projectCode string, payload []byte) *xfer.LoginCard {
 	if user == "" {
 		panic("sync.computeLogin: user must not be empty")
@@ -30,52 +35,38 @@ func computeLogin(user, password, projectCode string, payload []byte) *xfer.Logi
 	return &xfer.LoginCard{User: user, Nonce: nonce, Signature: signature}
 }
 
-// sharedSecret derives the password hash the server holds in user.pw, which is
-// what a login signature is computed over.
+// sharedSecret derives the value a login signature is computed over, which is
+// also what the server stores in user.pw.
 //
-// Canonical is src/sha1.c sha1_shared_secret: SHA1 of
-// "<project-code>/<login>/<password>". The project code salts it, so the same
-// password yields a different secret per repository. When the project code is
-// not yet known — the first request of a clone — canonical uses the cleartext
-// password, "since that is all we have"; the server's check_login has a
-// matching branch for repositories that store cleartext passwords.
+//	shared-secret = SHA1(project-code "/" login-name "/" plaintext-password)
 //
-// A password that is already 40 hex characters is taken to be a hash and used
-// as-is, matching http_build_login_card. That is how a caller can hand us the
-// stored secret instead of a cleartext password, and it is the same heuristic
-// (and the same limitation for a cleartext password that looks like a hash)
-// canonical applies.
+// — §6.3, 40 lowercase hex. The project code salts it, so the same password
+// yields a different secret per repository; deriving it from the wrong code is
+// indistinguishable from a wrong password (#203).
+//
+// Two branches canonical's C has are deliberately absent, because §6.3 states
+// neither is reachable on the wire: the cleartext-password fallback for an
+// unknown project code (src/sha1.c) cannot arise because "the initial clone
+// sends no login card", and http_build_login_card's rule that an already
+// 40-hex password is passed through unhashed serves fossil's own cached
+// last-sync-pw, which this library does not keep. Both are silent behavioural
+// forks on the authentication path, so the spec's narrower contract is the one
+// implemented here; a caller with no project code is a caller error, not a
+// wire case.
 func sharedSecret(password, login, projectCode string) string {
-	if isSHA1Hex(password) {
-		return password
-	}
 	if projectCode == "" {
-		return password
+		panic("sync.sharedSecret: projectCode must not be empty")
 	}
 	return sha1Hex([]byte(projectCode + "/" + login + "/" + password))
 }
 
-func isSHA1Hex(s string) bool {
-	if len(s) != 40 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
-			return false
-		}
-	}
-	return true
-}
-
-// randomComment returns a comment card holding fresh randomness, to be sent as
-// the last card before a login card is prepended.
+// randomComment returns the nonce comment, sent as the last card before a
+// login card is prepended. "Random comments vary independently generated
+// nonces" (§6.4); without it two identical requests would share a nonce and
+// so a signature.
 //
-// The nonce hashes every byte after the login card and the server re-hashes
-// those same bytes to check it (src/xfer.c check_tail_hash), so this card must
-// be part of the message, not merely part of the hash — hashing a comment that
-// is never transmitted yields a nonce the server can never reproduce, and it
-// rejects the login before the password is ever compared.
+// Its grammar is nonce-comment = "#" SP 40HEXDIG-UC LF (§B.3) — 20 random
+// bytes as uppercase hex.
 func randomComment(rng simio.Rand) *xfer.CommentCard {
 	rb := make([]byte, 20)
 	rng.Read(rb)

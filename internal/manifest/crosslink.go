@@ -77,6 +77,64 @@ func ensureForumPostTable(q db.Querier) error {
 	return nil
 }
 
+// nonArtifactTable records blobs a sweep has already expanded and found to
+// hold no Fossil artifact at all -- ordinary file content, which is most of
+// any repository. See ensureNonArtifactTable.
+const nonArtifactTable = "crosslink_nonartifact"
+
+// ensureNonArtifactTable creates the sweep's already-examined set.
+//
+// The candidate query below finds blobs with none of the derived rows a
+// crosslink writes. Ordinary file content never gains those rows however
+// often it is examined, so without a record of the verdict every sweep
+// re-expands and re-parses every file blob in the repository: 39,727 of the
+// Fossil SCM repository's 67,615 blobs, linking exactly zero of them, on
+// every single sync (issue #202).
+//
+// Canonical fossil does not need such a record because it never sweeps: it
+// attempts a crosslink once per blob, as the blob arrives (xfer.c calls
+// manifest_crosslink on every accepted file, artifact or not). This table
+// gives the sweep the same once-per-blob property. Both facts it records --
+// that the blob expanded, and that its bytes are not a parseable artifact --
+// are properties of immutable blob content, so the verdict never goes stale;
+// a blob that failed to expand, or that parsed but was deferred, is
+// deliberately not recorded and is reconsidered by the next sweep.
+//
+// It is created on demand rather than in db/schema.go so that repositories
+// created by canonical fossil -- which sync and clone must both accept --
+// gain it on first use instead of being rejected for lacking it. Its contents
+// are derived, never authoritative: DROP it and the next sweep re-examines the
+// whole repository from the durable blobs, which is what to do if deck.Parse
+// ever learns to read an artifact form it used to reject.
+func ensureNonArtifactTable(q db.Querier) error {
+	if q == nil {
+		panic("manifest.ensureNonArtifactTable: q must not be nil")
+	}
+	if _, err := q.Exec(
+		"CREATE TABLE IF NOT EXISTS " + nonArtifactTable + "(rid INTEGER PRIMARY KEY)",
+	); err != nil {
+		return fmt.Errorf("ensure %s table: %w", nonArtifactTable, err)
+	}
+	return nil
+}
+
+// recordNonArtifacts marks rids as holding no artifact. Called inside the
+// batch transaction that examined them, so a rolled-back batch records
+// nothing.
+func recordNonArtifacts(tx *db.Tx, rids []libfossil.FslID) error {
+	if tx == nil {
+		panic("manifest.recordNonArtifacts: tx must not be nil")
+	}
+	for _, rid := range rids {
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO "+nonArtifactTable+"(rid) VALUES(?)", int64(rid),
+		); err != nil {
+			return fmt.Errorf("record non-artifact rid=%d: %w", rid, err)
+		}
+	}
+	return nil
+}
+
 // pendingItem is follow-up work an artifact's crosslink left for after the
 // sweep. Nothing consumes it yet: the wiki backlink pass is still a stub, and
 // ticket rebuilds deliberately do not go through here -- deferring a ticket's
@@ -280,6 +338,9 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 	if err := ensureForumPostTable(r.DB()); err != nil {
 		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
 	}
+	if err := ensureNonArtifactTable(r.DB()); err != nil {
+		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
+	}
 
 	candidates, err := collectCrosslinkCandidates(r.DB())
 	if err != nil {
@@ -337,27 +398,42 @@ func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
 	return linked, sweepErr
 }
 
+// candidateQuerySQL selects every blob that still owes the sweep an
+// examination: it has real content, none of the derived rows a crosslink
+// writes, and no recorded verdict that its bytes hold no artifact.
+//
+// ORDER BY b.rid only seeds deltaChainOrder's tie-break, not the final
+// visiting order -- but it must still be deterministic input: deferred
+// manifests re-discovered across sweeps need a stable order downstream of it.
+// Without it, two syncs delivering the same blobs in different arrival orders
+// could produce divergent per-defer slog streams and pending-item processing
+// orders, masking determinism bugs in downstream code.
+//
+// The exclusions are NOT IN rather than correlated NOT EXISTS. Only some of
+// the derived tables can answer "is this rid mine?" from an index -- tagxref's
+// are on (rid, tagid) and (tagid, mtime), neither covering srcid -- so as a
+// correlated subquery tagxref became a full scan per blob: 51,134 x 67,615 row
+// visits on the Fossil SCM repository, 99 s of the 164 s a no-op sync took
+// before this (issue #202). NOT IN materializes each subquery once and probes
+// it, returning the identical rows in 0.08 s. The IS NOT NULL guards are
+// required, not cosmetic: NOT IN against a set containing NULL is never true,
+// and tagxref.srcid, forumpost.fpid and attachment.attachid are all nullable.
+const candidateQuerySQL = `
+	SELECT b.rid, b.uuid FROM blob b
+	WHERE b.size >= 0
+	  AND b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
+	  AND b.rid NOT IN (SELECT srcid FROM tagxref WHERE srcid IS NOT NULL)
+	  AND b.rid NOT IN (SELECT fpid FROM forumpost WHERE fpid IS NOT NULL)
+	  AND b.rid NOT IN (SELECT attachid FROM attachment WHERE attachid IS NOT NULL)
+	  AND b.rid NOT IN (SELECT rid FROM ` + nonArtifactTable + `)
+	ORDER BY b.rid
+`
+
 // collectCrosslinkCandidates returns every not-yet-crosslinked blob, ordered so
 // that a delta's base is visited before the delta itself (see deltaChainOrder).
 // It is read-only, so it runs on q outside any transaction.
 func collectCrosslinkCandidates(q db.Querier) ([]candidate, error) {
-	// Pass 1: Discover and crosslink all uncrosslinked artifacts.
-	// ORDER BY b.rid here only seeds deltaChainOrder's tie-break, not the
-	// final visiting order -- but it must still be deterministic input:
-	// deferred manifests re-discovered across sweeps need a stable order
-	// downstream of it. Without it, two syncs delivering the same blobs in
-	// different arrival orders could produce divergent per-defer slog
-	// streams and pending-item processing orders, masking determinism bugs
-	// in downstream code.
-	rows, err := q.Query(`
-		SELECT b.rid, b.uuid FROM blob b
-		WHERE b.size >= 0
-		  AND NOT EXISTS (SELECT 1 FROM event e WHERE e.objid = b.rid)
-		  AND NOT EXISTS (SELECT 1 FROM tagxref tx WHERE tx.srcid = b.rid)
-		  AND NOT EXISTS (SELECT 1 FROM forumpost fp WHERE fp.fpid = b.rid)
-		  AND NOT EXISTS (SELECT 1 FROM attachment a WHERE a.attachid = b.rid)
-		ORDER BY b.rid
-	`)
+	rows, err := q.Query(candidateQuerySQL)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.Crosslink query: %w", err)
 	}
@@ -464,6 +540,7 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState) error {
 	batchLinked := 0
 	var batchPending []pendingItem
+	var batchNonArtifact []libfossil.FslID
 	for i, c := range batch {
 		if i%crosslinkCancelCheckStride == 0 {
 			select {
@@ -478,7 +555,11 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 		}
 		d, err := deck.Parse(data)
 		if err != nil {
-			continue // not a valid manifest, skip
+			// Expanded fine, holds no artifact: ordinary file content. That
+			// verdict is a property of immutable bytes, so record it and never
+			// expand this blob again (see ensureNonArtifactTable).
+			batchNonArtifact = append(batchNonArtifact, c.rid)
+			continue
 		}
 		if d.Type == deck.Checkin && deferCheckin(tx, c, d, st) {
 			continue
@@ -492,6 +573,9 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 		}
 		batchLinked++
 		batchPending = append(batchPending, p...)
+	}
+	if err := recordNonArtifacts(tx, batchNonArtifact); err != nil {
+		return err
 	}
 	st.linked += batchLinked
 	st.pending = append(st.pending, batchPending...)

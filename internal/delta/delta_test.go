@@ -566,3 +566,77 @@ func writeInt(buf *bytes.Buffer, v uint64) {
 	}
 	buf.Write(tmp[i:])
 }
+
+// TestApply_ExactSizingAllocatesExactlyOnce pins the property that lets a
+// delta-chain replay stop being the allocation hot spot of a clone: when the
+// command stream can be walked to its terminator, the output buffer is
+// allocated once, at exactly the size the commands were proven to emit.
+//
+// Two things are asserted, and the capacity one matters as much as the size.
+// A buffer that arrives with slack is copied again by content.Cache.store
+// (see content.clip) before it can be cached, so every byte of slack is paid
+// for twice downstream. Reconstructing the Fossil SCM repository's 8 GiB of
+// content used to allocate 200 GiB in this function and hand 60 GiB of
+// slack-carrying buffers to that copy; sized exactly, the buffer is allocated
+// once and arrives already clipped.
+//
+// The fixture is the many-small-copies shape (see largeTargetManyCopiesDelta),
+// the one that compounds append's ~1.25x large-slice growth. Counting bytes
+// rather than nanoseconds keeps this stable on any machine.
+func TestApply_ExactSizingAllocatesExactlyOnce(t *testing.T) {
+	const targetSize = 1 << 20 // 1 MiB
+	source, target, d := largeTargetManyCopiesDelta(t)
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+
+	got, err := Apply(source, d)
+
+	runtime.ReadMemStats(&after)
+
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !bytes.Equal(got, target) {
+		t.Fatal("round-trip failed")
+	}
+	if cap(got) != len(got) {
+		t.Fatalf("Apply returned len=%d cap=%d -- want a tightly sized buffer, "+
+			"slack capacity is copied away again by content.Cache.store",
+			len(got), cap(got))
+	}
+
+	grown := after.TotalAlloc - before.TotalAlloc
+	// One target-sized allocation plus small change. Deliberately tighter than
+	// TestApply_LargeTargetAllocationBounded's 3x, which bounds the fallback
+	// growth path this test exists to prove is no longer taken.
+	const maxSaneGrowth = 3 * targetSize / 2
+	if grown > maxSaneGrowth {
+		t.Fatalf("Apply allocated %d bytes for a %d-byte target -- want one exact "+
+			"allocation, not a climb through the growth path",
+			grown, targetSize)
+	}
+}
+
+// TestApplyInto_ExactSizingReusesAdequateBuffer pins that exact sizing does
+// not defeat buffer reuse: a caller ping-ponging two buffers across a chain
+// (see content.expandChain) must keep reusing them rather than being handed a
+// fresh exact-sized allocation on every link.
+func TestApplyInto_ExactSizingReusesAdequateBuffer(t *testing.T) {
+	source, target, d := largeTargetManyCopiesDelta(t)
+
+	scratch := make([]byte, 0, 2*len(target))
+	got, err := ApplyInto(scratch[:0], source, d)
+	if err != nil {
+		t.Fatalf("ApplyInto: %v", err)
+	}
+	if !bytes.Equal(got, target) {
+		t.Fatal("round-trip failed")
+	}
+	if cap(got) != cap(scratch) {
+		t.Fatalf("ApplyInto returned a buffer of cap %d, want the supplied %d -- "+
+			"an adequate caller buffer must still be reused",
+			cap(got), cap(scratch))
+	}
+}

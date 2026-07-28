@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -122,12 +123,22 @@ func TestCancelTag(t *testing.T) {
 // makeCheckin is a test helper that creates a checkin with one file.
 func makeCheckin(t *testing.T, r *repo.Repo, parent int64, name, content, comment string) int64 {
 	t.Helper()
+	return makeCheckinAt(t, r, parent, name, content, comment, time.Now().UTC())
+}
+
+// makeCheckinAt is makeCheckin with an explicit check-in time. A check-in
+// declaring a branch writes its own branch/sym-trunk tagxref rows stamped with
+// that time, and tag application is mtime-guarded (see superseded), so a test
+// that later applies one of those tags by hand has to place the check-in
+// before the tag rather than leaving it at time.Now().
+func makeCheckinAt(t *testing.T, r *repo.Repo, parent int64, name, content, comment string, when time.Time) int64 {
+	t.Helper()
 	rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
 		Files:   []manifest.File{{Name: name, Content: []byte(content)}},
 		Comment: comment,
 		User:    "testuser",
 		Parent:  libfossil.FslID(parent),
-		Time:    time.Now().UTC(),
+		Time:    when,
 	})
 	if err != nil {
 		t.Fatalf("Checkin: %v", err)
@@ -301,8 +312,11 @@ func TestPropagateBgcolor(t *testing.T) {
 func TestApplyTag(t *testing.T) {
 	r := setupTestRepo(t)
 
-	ridA := makeCheckin(t, r, 0, "a.txt", "aaa", "commit A")
-	ridB := makeCheckin(t, r, ridA, "a.txt", "bbb", "commit B")
+	// The check-ins predate the tag applied below, so its mtime is the newest
+	// one standing for (sym-trunk, A) and the application is not superseded.
+	checkedInAt := time.Date(2024, 1, 15, 9, 0, 0, 0, time.UTC)
+	ridA := makeCheckinAt(t, r, 0, "a.txt", "aaa", "commit A", checkedInAt)
+	ridB := makeCheckinAt(t, r, ridA, "a.txt", "bbb", "commit B", checkedInAt.Add(time.Minute))
 
 	err := tag.ApplyTag(r, tag.ApplyOpts{
 		TargetRID: libfossil.FslID(ridA),
@@ -358,10 +372,13 @@ func TestApplyTag(t *testing.T) {
 func TestPropagateAllOrderingAdjacentMillisecond(t *testing.T) {
 	r := setupTestRepo(t)
 
-	// A is the common ancestor; B and C are both primary children of A.
-	ridA := makeCheckin(t, r, 0, "a.txt", "content A", "commit A")
-	ridB := makeCheckin(t, r, ridA, "b.txt", "content B", "commit B")
-	ridC := makeCheckin(t, r, ridA, "c.txt", "content C", "commit C")
+	// A is the common ancestor; B and C are both primary children of A. They
+	// predate the tag mtimes below so the origin application at A is not
+	// superseded by the branch row the check-in itself wrote.
+	checkedInAt := time.Date(2024, 1, 15, 9, 0, 0, 0, time.UTC)
+	ridA := makeCheckinAt(t, r, 0, "a.txt", "content A", "commit A", checkedInAt)
+	ridB := makeCheckinAt(t, r, ridA, "b.txt", "content B", "commit B", checkedInAt.Add(time.Minute))
+	ridC := makeCheckinAt(t, r, ridA, "c.txt", "content C", "commit C", checkedInAt.Add(2*time.Minute))
 
 	base := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
 	mtimeChildOld := libfossil.TimeToJulian(base)                           // B: older than A
@@ -533,5 +550,101 @@ func TestPropagateAll(t *testing.T) {
 	}
 	if valueC != "feature" {
 		t.Errorf("C value = %q, want %q", valueC, "feature")
+	}
+}
+
+// TestApplyTagIgnoresOlderTag pins the guard canonical fossil opens tag_insert
+// with (src/tag.c:173-186): if tagxref already holds a row for (tagid, rid)
+// whose mtime is >= the incoming one, the application is dropped whole -- no
+// tagxref write and no propagation.
+//
+//	SELECT 1 FROM tagxref WHERE tagid=%d AND rid=%d AND mtime>=:mtime
+//	...
+//	if( rc==SQLITE_ROW ){
+//	  /* Another entry that is more recent already exists.  Do nothing */
+//	  return tagid;
+//	}
+//
+// It is what makes the result independent of the order artifacts are applied
+// in, which crosslink relies on: a check-in's inline T-cards and a control
+// artifact that later retagged the same check-in can be crosslinked in either
+// order, and the newer one has to win both times. Without the guard the older
+// application overwrites the newer row and then propagates the stale value to
+// every descendant (issue #198).
+func TestApplyTagIgnoresOlderTag(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	ridA, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "f.txt", Content: []byte("a")}},
+		Comment: "A",
+		User:    "testuser",
+		Time:    base,
+	})
+	if err != nil {
+		t.Fatalf("Checkin A: %v", err)
+	}
+	ridB, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "f.txt", Content: []byte("b")}},
+		Comment: "B",
+		User:    "testuser",
+		Time:    base.Add(time.Minute),
+		Parent:  ridA,
+	})
+	if err != nil {
+		t.Fatalf("Checkin B: %v", err)
+	}
+
+	newer := libfossil.TimeToJulian(base.Add(48 * time.Hour))
+	older := libfossil.TimeToJulian(base.Add(24 * time.Hour))
+
+	// The newer application lands and propagates to B.
+	if err := tag.ApplyTag(r, tag.ApplyOpts{
+		TargetRID: ridA,
+		SrcRID:    ridA,
+		TagName:   "branch",
+		TagType:   tag.TagPropagating,
+		Value:     "clear-title",
+		MTime:     newer,
+	}); err != nil {
+		t.Fatalf("ApplyTag newer: %v", err)
+	}
+
+	// The older one must be dropped whole.
+	if err := tag.ApplyTag(r, tag.ApplyOpts{
+		TargetRID: ridA,
+		SrcRID:    ridA,
+		TagName:   "branch",
+		TagType:   tag.TagPropagating,
+		Value:     "dual-license",
+		MTime:     older,
+	}); err != nil {
+		t.Fatalf("ApplyTag older: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		rid  libfossil.FslID
+	}{{"A", ridA}, {"B", ridB}} {
+		var value string
+		// mtime comes back with a driver-dependent dynamic type, so it goes
+		// through ScanJulianDay the way every other consumer does.
+		var mtimeRaw any
+		if err := r.DB().QueryRow(`
+			SELECT value, mtime FROM tagxref JOIN tag USING(tagid)
+			WHERE tag.tagname = 'branch' AND tagxref.rid = ?
+		`, tc.rid).Scan(&value, &mtimeRaw); err != nil {
+			t.Fatalf("tagxref query for %s: %v", tc.name, err)
+		}
+		mtime, ok := db.ScanJulianDay(mtimeRaw)
+		if !ok {
+			t.Fatalf("ScanJulianDay for %s: cannot read %T", tc.name, mtimeRaw)
+		}
+		if value != "clear-title" {
+			t.Errorf("%s value = %q, want %q (older application must not overwrite)", tc.name, value, "clear-title")
+		}
+		if mtime != newer {
+			t.Errorf("%s mtime = %v, want %v", tc.name, mtime, newer)
+		}
 	}
 }

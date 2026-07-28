@@ -88,15 +88,25 @@ func Parse(data []byte) (*Deck, error) {
 			continue
 		}
 
-		if card < lastCard {
+		if card < lastCard && !isLegacyTechnoteNAfterP(d, card, lastCard) {
 			return nil, fmt.Errorf("deck.Parse: card '%c' out of order (after '%c')", card, lastCard)
 		}
 		lastCard = card
 
-		if len(line) < 2 || line[1] != ' ' {
+		// A card letter on a line by itself carries no arguments. That is
+		// legal, not malformed: the repeatable cards accept an empty argument
+		// list, and Fossil's own first check-in
+		// (a28c83647dfa805f05f3204a7e146eb1f0d90505, "initial empty baseline")
+		// spells its parentless-ness as a bare "P" card. Rejecting the line
+		// dropped that check-in from crosslink entirely. Cards that do require
+		// arguments still reject the empty string in their own parser.
+		if len(line) > 1 && line[1] != ' ' {
 			return nil, fmt.Errorf("deck.Parse: malformed: %q", line)
 		}
-		args := line[2:]
+		var args string
+		if len(line) > 2 {
+			args = line[2:]
+		}
 		if err := parseCard(d, card, args); err != nil {
 			return nil, fmt.Errorf("deck.Parse: %w", err)
 		}
@@ -104,6 +114,23 @@ func Parse(data []byte) (*Deck, error) {
 
 	d.Type = inferType(d)
 	return d, nil
+}
+
+// isLegacyTechnoteNAfterP reports whether an N-card following a P-card is the
+// one out-of-order sequence Fossil accepts.
+//
+// Cards are otherwise required to be in lexicographical order, but a technote
+// generator bug shipped before 2021-02-10 emitted the P-card ahead of the
+// N-card, and the ordering check that would have caught it was itself broken
+// until the same date. Fossil keeps accepting those artifacts for historical
+// compatibility (src/manifest.c, tickets 15d04de574383d61 and 5e67a7f4041a36ad)
+// and so must this parser: rejecting them dropped real technote revisions --
+// along with their event-<id> and bgcolor tags -- out of crosslink (issue #193).
+//
+// The exception is narrow on purpose: only N after P, and only once the E-card
+// that makes the artifact a technote has already been seen.
+func isLegacyTechnoteNAfterP(d *Deck, card, lastCard byte) bool {
+	return card == 'N' && lastCard == 'P' && d.E != nil
 }
 
 func readLine(r *bytes.Reader) (string, error) {
@@ -426,7 +453,16 @@ func inferType(d *Deck) ArtifactType {
 		return Wiki
 	case d.E != nil:
 		return Event
-	case len(d.F) > 0 || d.R != "":
+	// Canonical Fossil settles the remaining ambiguity -- check-in versus
+	// control artifact, both of which are D/T/U/Z-shaped -- on whether the
+	// artifact describes a tree position: a comment, files, or parents
+	// (src/manifest.c, "If the artifact type has not yet been determined").
+	// The C-card is the part that is easy to miss, and it matters: `fossil
+	// merge --integrate` writes a check-in that has a comment and a `T +closed`
+	// card but no F-cards and no P-card, and reading those as control
+	// artifacts lost their tags (issue #193). The R-card is not part of
+	// canonical's test but implies a file tree, so it stays here.
+	case d.C != "" || len(d.F) > 0 || len(d.P) > 0 || d.R != "":
 		return Checkin
 	case len(d.T) > 0:
 		return Control

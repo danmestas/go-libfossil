@@ -43,6 +43,13 @@ func TestAfterDephantomizeCascadeDefersCheckinWithMissingFileBlob(t *testing.T) 
 		U:    deck.User("tester"),
 		D:    time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
 		F:    []deck.FileCard{{Name: "race/file.txt", UUID: fileUUID}},
+		// A root check-in declares its branch -- both fossil's own `init` and
+		// this package's Checkin do -- and leaf only ever considers a check-in
+		// that carries a branch tag. See repairLeafTable.
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+		},
 	}
 	manifestBytes, err := d.Marshal()
 	if err != nil {

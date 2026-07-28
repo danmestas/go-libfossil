@@ -521,10 +521,15 @@ func snapshotDerived(t *testing.T, path string) map[string]string {
 		"plink": `SELECT group_concat(v, '|') FROM
 		            (SELECT pid || '>' || cid || ':' || isprim AS v FROM plink ORDER BY pid, cid)`,
 		"leaf": `SELECT group_concat(rid, '|') FROM (SELECT rid FROM leaf ORDER BY rid)`,
+		// pmid and isaux are part of the digest: without them a merge
+		// check-in's auxiliary rows -- the per-merge-parent transitions
+		// canonical records and this package used to omit entirely -- compare
+		// equal to their primary-parent counterparts and the whole class of
+		// difference issue #193 was about goes unnoticed.
 		"mlink": `SELECT group_concat(v, '|') FROM
-		            (SELECT mid || ':' || fid || ':' || pid || ':' || fnid || ':' ||
-		                    coalesce(pfnid,'') || ':' || coalesce(mperm,'') AS v
-		               FROM mlink ORDER BY mid, fnid, fid)`,
+		            (SELECT mid || ':' || fid || ':' || pmid || ':' || pid || ':' || fnid || ':' ||
+		                    coalesce(pfnid,'') || ':' || coalesce(mperm,'') || ':' || isaux AS v
+		               FROM mlink ORDER BY mid, fnid, isaux, pmid, fid)`,
 		"tagxref": `SELECT group_concat(v, '|') FROM
 		            (SELECT rid || ':' || tagid || ':' || tagtype || ':' ||
 		                    coalesce(srcid,'') || ':' || coalesce(origid,'') || ':' ||

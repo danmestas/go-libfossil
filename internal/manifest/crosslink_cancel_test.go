@@ -144,6 +144,13 @@ func TestCrosslinkRepairsLeafAfterCancelledSweep(t *testing.T) {
 		U:    deck.User("testuser"),
 		F:    []deck.FileCard{{Name: "file.txt", UUID: fileUUID}},
 		R:    "0000000000000000000000000000000000000000",
+		// A root check-in declares its branch -- both fossil's own `init` and
+		// this package's Checkin do -- and leaf only ever considers a check-in
+		// that carries a branch tag. See repairLeafTable.
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+		},
 	}
 	ciBytes, err := ci.Marshal()
 	if err != nil {

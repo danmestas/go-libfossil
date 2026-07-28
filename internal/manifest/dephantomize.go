@@ -338,6 +338,14 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 		// cannot be linked is still a real fault and still warns, below.
 		return
 	}
+	if !isArtifact(d) {
+		// Satisfies the card grammar but not the artifact grammar -- a file
+		// whose leading bytes read as cards, or an artifact missing a card its
+		// type requires. Fossil refuses both, so linking either would write
+		// rows `fossil rebuild` removes. Same skip the sweep applies in
+		// linkBatch; see isArtifact.
+		return
+	}
 
 	// Hold back a Checkin referencing a blob that has not arrived yet, same
 	// as the whole-repository sweep's linkBatch does before ever calling

@@ -84,12 +84,26 @@ func leafCheck(q db.Querier, rid libfossil.FslID) error {
 // delta-chain order does not guarantee -- so the whole table is rebuilt once
 // the sweep's plink edges and propagated branch tags are all in place.
 //
-// This is fossil's leaf_rebuild() with one deliberate difference: fossil draws
-// its candidates from `SELECT cid FROM plink`, which cannot return a check-in
-// that has no parent, and reaches those through leaf_check() instead. Drawing
-// candidates from event covers both in one statement, which is why a repository
-// holding a single parentless check-in ends up with the one leaf row fossil
-// gives it too.
+// Which rows fossil's leaf table can contain is decided by which rids fossil
+// ever runs the rule against, and that is NOT "every check-in". Nothing calls
+// leaf_rebuild() outside `fossil leaves --recompute`; the table is maintained
+// by leaf_check(), scheduled by leaf_eventually_check() for a rid and EACH OF
+// ITS PARENTS whenever a branch tag lands on that rid -- from tag_insert() when
+// a check-in declares one, and from tag_propagate() when one is inherited
+// (src/leaf.c, src/tag.c). So the candidate set is:
+//
+//	every rid carrying a branch tagxref row, plus every rid that is a parent
+//	in plink
+//
+// and it differs from "every check-in" in both directions. A parent whose own
+// artifact never arrived has no event row at all, yet fossil does list such a
+// phantom as a leaf when the check-in naming it sits on another branch. In the
+// other direction, a check-in that neither declares nor inherits a branch tag
+// and has no ancestry -- `fossil merge --integrate` writes one of these, a
+// comment and a `T +closed` card and nothing else -- is never checked, and is
+// absent from fossil's leaf table even though the rule would admit it. Drawing
+// candidates from event instead put four such rows in a corpus clone that
+// `fossil rebuild` then removed (issue #193).
 func repairLeafTable(q db.Querier) error {
 	if q == nil {
 		panic("manifest.repairLeafTable: q must not be nil")
@@ -99,16 +113,19 @@ func repairLeafTable(q db.Querier) error {
 	}
 	if _, err := q.Exec(fmt.Sprintf(`
 		INSERT INTO leaf(rid)
-		SELECT e.objid FROM event e
-		WHERE e.type='ci'
-		  AND NOT EXISTS(
+		SELECT c.rid FROM (
+		    SELECT rid FROM tagxref WHERE tagid=%d
+		    UNION
+		    SELECT pid AS rid FROM plink WHERE pid > 0
+		) c
+		WHERE NOT EXISTS(
 		    SELECT 1 FROM plink
-		     WHERE plink.pid = e.objid
+		     WHERE plink.pid = c.rid
 		       AND coalesce((SELECT value FROM tagxref
 		                      WHERE tagid=%d AND rid=plink.pid),'trunk')
 		         = coalesce((SELECT value FROM tagxref
 		                      WHERE tagid=%d AND rid=plink.cid),'trunk'))
-	`, branchTagID, branchTagID)); err != nil {
+	`, branchTagID, branchTagID, branchTagID)); err != nil {
 		return fmt.Errorf("repairLeafTable insert: %w", err)
 	}
 	return nil

@@ -126,6 +126,20 @@ func makeCheckin(t *testing.T, r *repo.Repo, parent int64, name, content, commen
 	return makeCheckinAt(t, r, parent, name, content, comment, time.Now().UTC())
 }
 
+// tagTime returns a tag-application time n hours from now, for fixtures that
+// apply tags on top of check-ins made by makeCheckin.
+//
+// Competing applications have to land on distinct julian mtimes. TimeToJulian
+// resolves to roughly 47us at present-day julian values -- a float64 carries
+// about 15 significant digits and a julian day number is already ~2.46e6 --
+// so two time.Now() calls in the same test can collapse onto one mtime. Tag
+// application is mtime-guarded (see superseded), and RFC draft-fossil-repo-
+// state-00 §5.3 step 1 notes that the equal-mtime case resolves by write order
+// and is "implementation-defined rather than crosslink-order-independent".
+// Spacing fixtures by hours keeps them off that tie entirely, and being ahead
+// of now keeps them newer than the check-ins they tag.
+func tagTime(n int) time.Time { return time.Now().UTC().Add(time.Duration(n) * time.Hour) }
+
 // makeCheckinAt is makeCheckin with an explicit check-in time. A check-in
 // declaring a branch writes its own branch/sym-trunk tagxref rows stamped with
 // that time, and tag application is mtime-guarded (see superseded), so a test
@@ -161,7 +175,7 @@ func TestPropagateChain(t *testing.T) {
 		TagType:   tag.TagPropagating,
 		Value:     "feature",
 		User:      "testuser",
-		Time:      time.Now().UTC(),
+		Time:      tagTime(1),
 	})
 	if err != nil {
 		t.Fatalf("tag.AddTag: %v", err)
@@ -225,7 +239,7 @@ func TestCancelPropagation(t *testing.T) {
 		TagType:   tag.TagPropagating,
 		Value:     "propvalue",
 		User:      "testuser",
-		Time:      time.Now().UTC(),
+		Time:      tagTime(1),
 	})
 	if err != nil {
 		t.Fatalf("tag.AddTag propagating: %v", err)
@@ -237,7 +251,7 @@ func TestCancelPropagation(t *testing.T) {
 		TagName:   "testprop",
 		TagType:   tag.TagCancel,
 		User:      "testuser",
-		Time:      time.Now().UTC(),
+		Time:      tagTime(2),
 	})
 	if err != nil {
 		t.Fatalf("tag.AddTag cancel: %v", err)
@@ -292,7 +306,7 @@ func TestPropagateBgcolor(t *testing.T) {
 		TagType:   tag.TagPropagating,
 		Value:     "#ff0000",
 		User:      "testuser",
-		Time:      time.Now().UTC(),
+		Time:      tagTime(1),
 	})
 	if err != nil {
 		t.Fatalf("tag.AddTag bgcolor: %v", err)
@@ -460,7 +474,7 @@ func TestPropagateAll(t *testing.T) {
 		TagType:   tag.TagPropagating,
 		Value:     "feature",
 		User:      "testuser",
-		Time:      time.Now().UTC(),
+		Time:      tagTime(1),
 	})
 	if err != nil {
 		t.Fatalf("tag.AddTag: %v", err)
@@ -646,5 +660,84 @@ func TestApplyTagIgnoresOlderTag(t *testing.T) {
 		if mtime != newer {
 			t.Errorf("%s mtime = %v, want %v", tc.name, mtime, newer)
 		}
+	}
+}
+
+// TestApplyTagSingletonBlocksPropagation pins the downgrade canonical performs
+// at the end of tag_insert (src/tag.c:239):
+//
+//	if( tagtype==1 ) tagtype = 0;
+//	tag_propagate(rid, tagid, tagtype, rid, zValue, mtime);
+//
+// A singleton (+) tag is propagated as a cancel, so applying one at an artifact
+// deletes the inherited copies its descendants hold. RFC draft-fossil-repo-
+// state-00 §5.3 step 4 states the same rule: "Before propagation is attempted,
+// a singleton type (1) is downgraded to cancel (0) ... the cancel it becomes
+// blocks a same-named tag from propagating through it to its descendants."
+//
+// Confirmed against fossil 2.28 on a two-check-in repository: after
+// `fossil tag add --raw --propagate zz A v1` the child carries an inherited
+// row, and after `fossil tag add --raw zz A v2` that row is gone, leaving only
+// A's own singleton.
+//
+// Our direct-application path propagated for type 2 and type 0 only, so the
+// inherited row survived and the singleton failed to block (issue #198).
+func TestApplyTagSingletonBlocksPropagation(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2024, 1, 15, 9, 0, 0, 0, time.UTC)
+
+	ridA := makeCheckinAt(t, r, 0, "a.txt", "aaa", "commit A", base)
+	ridB := makeCheckinAt(t, r, ridA, "a.txt", "bbb", "commit B", base.Add(time.Minute))
+
+	if err := tag.ApplyTag(r, tag.ApplyOpts{
+		TargetRID: libfossil.FslID(ridA),
+		SrcRID:    libfossil.FslID(ridA),
+		TagName:   "zz",
+		TagType:   tag.TagPropagating,
+		Value:     "v1",
+		MTime:     libfossil.TimeToJulian(base.Add(time.Hour)),
+	}); err != nil {
+		t.Fatalf("ApplyTag propagating: %v", err)
+	}
+
+	var inherited int
+	if err := r.DB().QueryRow(
+		"SELECT count(*) FROM tagxref JOIN tag USING(tagid) WHERE tagname='zz' AND rid=?", ridB,
+	).Scan(&inherited); err != nil {
+		t.Fatalf("count B before: %v", err)
+	}
+	if inherited != 1 {
+		t.Fatalf("B zz rows before singleton = %d, want 1 (fixture must inherit)", inherited)
+	}
+
+	// The singleton at A must propagate as a cancel and clear B's copy.
+	if err := tag.ApplyTag(r, tag.ApplyOpts{
+		TargetRID: libfossil.FslID(ridA),
+		SrcRID:    libfossil.FslID(ridA),
+		TagName:   "zz",
+		TagType:   tag.TagSingleton,
+		Value:     "v2",
+		MTime:     libfossil.TimeToJulian(base.Add(2 * time.Hour)),
+	}); err != nil {
+		t.Fatalf("ApplyTag singleton: %v", err)
+	}
+
+	if err := r.DB().QueryRow(
+		"SELECT count(*) FROM tagxref JOIN tag USING(tagid) WHERE tagname='zz' AND rid=?", ridB,
+	).Scan(&inherited); err != nil {
+		t.Fatalf("count B after: %v", err)
+	}
+	if inherited != 0 {
+		t.Errorf("B zz rows after singleton = %d, want 0 (singleton must propagate as cancel)", inherited)
+	}
+
+	var tagtype int
+	if err := r.DB().QueryRow(
+		"SELECT tagtype FROM tagxref JOIN tag USING(tagid) WHERE tagname='zz' AND rid=?", ridA,
+	).Scan(&tagtype); err != nil {
+		t.Fatalf("A tagtype: %v", err)
+	}
+	if tagtype != tag.TagSingleton {
+		t.Errorf("A tagtype = %d, want %d (singleton stays singleton at its own artifact)", tagtype, tag.TagSingleton)
 	}
 }

@@ -136,10 +136,8 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 		}
 
 		// Propagate to descendants (matches Fossil's tag_insert → tag_propagate).
-		if opts.TagType == TagPropagating || opts.TagType == TagCancel {
-			if err := propagate(tx, tagid, opts.TagType, opts.TargetRID, mtime, opts.Value, opts.TagName, opts.TargetRID); err != nil {
-				return fmt.Errorf("tag propagate: %w", err)
-			}
+		if err := propagateAfterInsert(tx, tagid, opts.TagType, opts.TargetRID, mtime, opts.Value, opts.TagName); err != nil {
+			return fmt.Errorf("tag propagate: %w", err)
 		}
 
 		// Mark control artifact as unsent so sync pushes it (unclustered is handled by blob.Store).
@@ -197,10 +195,8 @@ func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
 			}
 		}
 
-		if opts.TagType == TagPropagating || opts.TagType == TagCancel {
-			if err := propagate(tx, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName, opts.TargetRID); err != nil {
-				return fmt.Errorf("propagate: %w", err)
-			}
+		if err := propagateAfterInsert(tx, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName); err != nil {
+			return fmt.Errorf("propagate: %w", err)
 		}
 
 		return nil
@@ -249,10 +245,8 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		}
 	}
 
-	if opts.TagType == TagPropagating || opts.TagType == TagCancel {
-		if err := propagate(q, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName, opts.TargetRID); err != nil {
-			return fmt.Errorf("propagate: %w", err)
-		}
+	if err := propagateAfterInsert(q, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName); err != nil {
+		return fmt.Errorf("propagate: %w", err)
 	}
 
 	return nil
@@ -294,6 +288,25 @@ func superseded(q db.Querier, tagid int64, rid libfossil.FslID, mtime float64) (
 		return false, fmt.Errorf("tagxref mtime check: %w", err)
 	}
 	return true, nil
+}
+
+// propagateAfterInsert runs the propagation half of canonical's tag_insert,
+// which downgrades a singleton to a cancel before propagating and then
+// propagates unconditionally (src/tag.c:239):
+//
+//	if( tagtype==1 ) tagtype = 0;
+//	tag_propagate(rid, tagid, tagtype, rid, zValue, mtime);
+//
+// A singleton (+) tag therefore does not merely fail to propagate its own
+// value -- it actively blocks a same-named propagating tag at this artifact,
+// deleting the copies descendants had inherited. Confirmed against fossil
+// 2.28: applying `tag add --raw zz A v2` over an inherited `zz` removes the
+// child's row.
+func propagateAfterInsert(q db.Querier, tagid int64, tagType int, rid libfossil.FslID, mtime float64, value, tagName string) error {
+	if tagType == TagSingleton {
+		tagType = TagCancel
+	}
+	return propagate(q, tagid, tagType, rid, mtime, value, tagName, rid)
 }
 
 // ensureTag returns the tagid for the given tag name, creating it if it doesn't exist.

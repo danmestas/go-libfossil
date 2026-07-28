@@ -383,7 +383,13 @@ func TestCrosslink_DoesNotDeferOnMissingParent(t *testing.T) {
 	if linked != 1 {
 		t.Errorf("linked = %d, want 1 (missing parent must not block)", linked)
 	}
-	assertCounts(t, r, manifestRID, 1, 1, 1, "linked despite missing parent")
+	// mlink is 0, not 1: an mlink row records a parent-to-child transition, and
+	// with the parent's manifest unavailable there is nothing to diff against.
+	// Canonical Fossil's add_mlink returns without writing when the parent's
+	// content is empty, and derives the rows later from the parent's side once
+	// it arrives (issue #193). Claiming every file is an add here is what put
+	// 744 bogus rows in a corpus clone.
+	assertCounts(t, r, manifestRID, 1, 1, 0, "linked despite missing parent")
 }
 
 // TestCrosslink_DedupesDuplicateFCardUUIDs covers a hostile-input case:

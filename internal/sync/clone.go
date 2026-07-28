@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -204,7 +203,7 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 
 		recvdBefore := cs.result.BlobsRecvd
 
-		done, err := cs.processResponse(ctx, resp)
+		done, err := cs.processResponse(ctx, cycle, resp)
 		if err != nil {
 			cs.obs.RoundCompleted(roundCtx, cycle, RoundStats{FilesReceived: cs.result.BlobsRecvd - recvdBefore})
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)
@@ -339,37 +338,39 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 
 	// Login card: skip round 0. On round 1+, only if User is set AND projectCode received.
 	if cycle > 0 && cs.opts.User != "" && cs.projectCode != "" {
-		loginCard, err := cs.buildLoginCard(cards)
+		loginCard, signed, err := cs.buildLoginCard(cards)
 		if err != nil {
 			return nil, fmt.Errorf("clone buildLoginCard: %w", err)
 		}
-		cards = append([]xfer.Card{loginCard}, cards...)
+		cards = append([]xfer.Card{loginCard}, signed...)
 	}
 
 	return &xfer.Message{Cards: cards}, nil
 }
 
-// buildLoginCard encodes the non-login cards, appends a random comment,
-// then computes the login card.
-func (cs *cloneSession) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, error) {
-	var buf bytes.Buffer
-	for _, c := range cards {
-		if err := xfer.EncodeCard(&buf, c); err != nil {
-			return nil, err
-		}
+// buildLoginCard appends a random comment to cards and computes the login card
+// over the result. It returns the login card and the card list it signed, which
+// the caller must send verbatim behind that login card — the server recomputes
+// the nonce from those bytes.
+func (cs *cloneSession) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, []xfer.Card, error) {
+	signed := append(cards[:len(cards):len(cards)], randomComment(cs.env.Rand))
+	payload, err := encodeCards(signed)
+	if err != nil {
+		return nil, nil, err
 	}
-	payload := appendRandomComment(buf.Bytes(), cs.env.Rand)
 	login := computeLogin(cs.opts.User, cs.opts.Password, cs.projectCode, payload)
 	// BUGGIFY: 5% chance corrupt login nonce to test auth failure recovery.
 	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.buildRequest.badLogin", 0.05) {
 		login.Nonce = "corrupted-nonce"
 	}
-	return login, nil
+	return login, signed, nil
 }
 
 // processResponse handles all cards in a server response for a clone round.
-// Returns true when the round produced no new file content.
-func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) (bool, error) {
+// cycle is that round's 0-based index; round 0 is the one sent before the
+// project code — and so the login card — is known. Returns true when the round
+// produced no new file content.
+func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfer.Message) (bool, error) {
 	if msg == nil {
 		panic("sync.Clone.processResponse: msg must not be nil")
 	}
@@ -470,6 +471,21 @@ func (cs *cloneSession) processResponse(ctx context.Context, msg *xfer.Message) 
 			cs.seqno = c.SeqNo
 
 		case *xfer.ErrorCard:
+			// A clone's first round carries no login card: the signature is
+			// salted with the project code, and the project code is exactly
+			// what this round exists to learn. A server that requires
+			// authentication therefore answers round 0 with its push card —
+			// which supplies that code — followed by "not authorized to
+			// clone". Treating that as fatal ends the clone before the
+			// credentials are ever offered, so round 0 records the message and
+			// carries on; round 1 repeats the request with a login card, and
+			// an error there (a genuinely wrong password, say) is fatal.
+			// Canonical does the same: `(syncFlags & SYNC_CLONE)==0 ||
+			// nCycle>0` guards the abort in xfer.c client_sync.
+			if cycle == 0 {
+				cs.result.Messages = append(cs.result.Messages, c.Message)
+				continue
+			}
 			return false, fmt.Errorf("sync.Clone: server error: %s", c.Message)
 
 		case *xfer.CookieCard:

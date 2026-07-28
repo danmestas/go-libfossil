@@ -60,7 +60,7 @@ func TestRoundTrip_Gimme(t *testing.T) {
 }
 
 func TestRoundTrip_Push(t *testing.T) {
-	// Both codes present: "push <project-code> <server-code>\n"
+	// Both codes required: "push <server-code> <project-code>\n"
 	c := &PushCard{ProjectCode: "proj1", ServerCode: "srv1"}
 	got := roundTrip(t, c).(*PushCard)
 	if got.ProjectCode != c.ProjectCode || got.ServerCode != c.ServerCode {
@@ -69,7 +69,7 @@ func TestRoundTrip_Push(t *testing.T) {
 }
 
 func TestRoundTrip_Pull(t *testing.T) {
-	// Both codes required on pull: "pull <project-code> <server-code>\n"
+	// Both codes required on pull: "pull <server-code> <project-code>\n"
 	c := &PullCard{ProjectCode: "proj2", ServerCode: "srv2"}
 	got := roundTrip(t, c).(*PullCard)
 	if got.ProjectCode != c.ProjectCode || got.ServerCode != c.ServerCode {
@@ -291,20 +291,15 @@ func TestDecode_IGotBadArgCount(t *testing.T) {
 	}
 }
 
-// TestDecode_PushOneArg verifies that "push <project-code>" (1 arg) decodes
-// correctly — arg[0] is the project code, not the server code.
+// TestDecode_PushOneArg verifies that "push <code>" (1 arg) is rejected.
+// Canonical acts on push only at nToken==3, and the two codes are not
+// interchangeable — the second is the project code, which is the value a
+// cloning client adopts and a server validates. Guessing which one a one-arg
+// push meant would put a server code where a project code belongs (#203).
 func TestDecode_PushOneArg(t *testing.T) {
 	r := bufio.NewReader(strings.NewReader("push only-one\n"))
-	card, err := DecodeCard(r)
-	if err != nil {
-		t.Fatalf("push with 1 arg should succeed: %v", err)
-	}
-	push := card.(*PushCard)
-	if push.ProjectCode != "only-one" {
-		t.Errorf("ProjectCode = %q, want %q", push.ProjectCode, "only-one")
-	}
-	if push.ServerCode != "" {
-		t.Errorf("ServerCode should be empty, got %q", push.ServerCode)
+	if _, err := DecodeCard(r); err == nil {
+		t.Error("expected error for push with 1 arg")
 	}
 }
 
@@ -376,56 +371,78 @@ func TestDecode_PullZeroArgs(t *testing.T) {
 	}
 }
 
-// TestRoundTrip_PushProjectCodeOnly verifies that a PushCard with only
-// ProjectCode set (no ServerCode) round-trips correctly.
-// Wire form: "push <project-code>\n"
-func TestRoundTrip_PushProjectCodeOnly(t *testing.T) {
-	c := &PushCard{ProjectCode: "proj123"}
+// TestEncode_PushServerCodeOnlyMissing verifies that encoding a PushCard
+// without a ServerCode panics. A two-token push is not a card canonical acts
+// on (it requires nToken==3), so emitting one silently drops the push; a
+// client with no cached server code sends canonical's placeholder "x".
+func TestEncode_PushServerCodeMissing(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected panic for PushCard with empty ServerCode")
+		}
+	}()
 	var buf bytes.Buffer
-	if err := EncodeCard(&buf, c); err != nil {
-		t.Fatalf("EncodeCard: %v", err)
-	}
-	if buf.String() != "push proj123\n" {
-		t.Errorf("wire form = %q, want %q", buf.String(), "push proj123\n")
-	}
-	r := bufio.NewReader(&buf)
-	got, err := DecodeCard(r)
-	if err != nil {
-		t.Fatalf("DecodeCard: %v", err)
-	}
-	push := got.(*PushCard)
-	if push.ProjectCode != "proj123" || push.ServerCode != "" {
-		t.Errorf("decoded = %+v, want ProjectCode=proj123, ServerCode=\"\"", push)
-	}
+	_ = EncodeCard(&buf, &PushCard{ProjectCode: "proj123"})
 }
 
-// TestWireFormat_PushBothCodes verifies the Fossil-wire byte order for push:
-// "push <project-code> <server-code>\n" — project first, server second.
-// This is the format a real Fossil C client emits on the second+ round when
-// both codes are known.
+// TestWireFormat_PushBothCodes and its pull twin pin the byte order of the two
+// codes: server code first, project code second.
+//
+// These bytes are the fix for #203. Emitting them the other way round put the
+// server code where a real fossil server reads the project code — so a clone
+// adopted the server code as its project code, derived its login signature
+// from it, and every authenticated sync was refused with "login failed"
+// whatever the password was. Canonical's own client writes
+// `blob_appendf(&send, "push %s %s\n", zSCode, zPCode)` (src/xfer.c
+// client_sync), and a captured fossil 2.28 pull reads:
+//
+//	pull 49a66cbdf294f973f6b1e5100f04c09b594047cd 2d5573080bf03f15ed58105794cc80c6a51f4c52
+//
+// where the first code is the client repo's own server-code and the second is
+// the project-code shared by both ends.
 func TestWireFormat_PushBothCodes(t *testing.T) {
 	c := &PushCard{ProjectCode: "proj1", ServerCode: "srv1"}
 	var buf bytes.Buffer
 	if err := EncodeCard(&buf, c); err != nil {
 		t.Fatalf("EncodeCard: %v", err)
 	}
-	const want = "push proj1 srv1\n"
+	const want = "push srv1 proj1\n"
 	if buf.String() != want {
 		t.Errorf("wire form = %q, want %q", buf.String(), want)
 	}
 }
 
-// TestWireFormat_PullBothCodes verifies the Fossil-wire byte order for pull:
-// "pull <project-code> <server-code>\n" — project first, server second.
 func TestWireFormat_PullBothCodes(t *testing.T) {
 	c := &PullCard{ProjectCode: "proj1", ServerCode: "srv1"}
 	var buf bytes.Buffer
 	if err := EncodeCard(&buf, c); err != nil {
 		t.Fatalf("EncodeCard: %v", err)
 	}
-	const want = "pull proj1 srv1\n"
+	const want = "pull srv1 proj1\n"
 	if buf.String() != want {
 		t.Errorf("wire form = %q, want %q", buf.String(), want)
+	}
+}
+
+// TestDecode_PushCanonicalCapture decodes the push card a fossil 2.28 server
+// actually sent in reply to a clone. The project code is the second argument;
+// reading the first is what #203 did.
+func TestDecode_PushCanonicalCapture(t *testing.T) {
+	const (
+		serverCode  = "3405626440c494022b54077b9cf27f0ef9a93316"
+		projectCode = "2d5573080bf03f15ed58105794cc80c6a51f4c52"
+	)
+	r := bufio.NewReader(strings.NewReader("push " + serverCode + " " + projectCode + "\n"))
+	card, err := DecodeCard(r)
+	if err != nil {
+		t.Fatalf("DecodeCard: %v", err)
+	}
+	push := card.(*PushCard)
+	if push.ProjectCode != projectCode {
+		t.Errorf("ProjectCode = %q, want %q", push.ProjectCode, projectCode)
+	}
+	if push.ServerCode != serverCode {
+		t.Errorf("ServerCode = %q, want %q", push.ServerCode, serverCode)
 	}
 }
 

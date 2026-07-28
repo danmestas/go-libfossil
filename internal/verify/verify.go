@@ -16,7 +16,12 @@ import (
 // the pass walks each blob's delta chain once instead of once per sweep, and
 // amortizes overlapping chains within each sweep. A miss costs throughput, not
 // correctness; blob content is immutable and neither pass rewrites it, so no
-// cached entry can go stale. Matches manifest.crosslinkCacheBytes.
+// cached entry can go stale.
+//
+// It was once the same number as manifest.crosslinkCacheBytes and no longer
+// is: that budget was measured down against clone wall time and peak RSS
+// (see its comment), and this pass has not been measured the same way. Sharing
+// a number is not a reason to inherit someone else's measurement.
 const verifyCacheBytes = 256 << 20
 
 // IssueKind categorizes the type of verification issue found.

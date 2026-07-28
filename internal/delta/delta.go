@@ -158,7 +158,7 @@ func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 		return nil, err
 	}
 
-	// The initial capacity is deliberately NOT targetLen: targetLen is a
+	// The output buffer is never sized from targetLen alone: targetLen is a
 	// claim read from the delta's own header, and maxDeltaTargetSize
 	// (which parseTargetLen already bounds it to) exists to reject
 	// obviously-hostile claims, not to size a safe allocation from — a
@@ -166,19 +166,35 @@ func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 	// delta can be stored unverified (see blob.StoreDeltaRaw), a peer
 	// plants one such delta and every later Expand of that row repeats
 	// the attempt: a durable, remotely-planted allocation, not a one-off
-	// parse spike. Starting small and growing tracks actual work
-	// performed instead of trusting the claim.
+	// parse spike.
+	//
+	// There are two ways to keep an allocation tied to work rather than to
+	// the claim, and this takes the better one when it can. scanOutputSize
+	// walks the whole command stream first, checking every command against
+	// bytes that exist, so the size it returns is a measurement -- one exact
+	// allocation, no growth, no slack. Only a stream it cannot walk falls
+	// back to starting small and growing, which tracks work performed too but
+	// pays several times the target in discarded intermediates to do it.
 	const deltaInitialCap = 64 * 1024 // 64 KiB; upgraded once real work is proven (see growOutputCap)
 	var output []byte
 	capped := false
-	if cap(dst) == 0 {
+	switch proven, exact := scanOutputSize(r.data[r.pos:], len(source), targetLen); {
+	case exact:
+		// cap(dst) > 0 also screens out a nil dst, which dst[:0] would carry
+		// through to a nil result for an empty target.
+		if cap(dst) > 0 && cap(dst) >= proven {
+			output = dst[:0]
+		} else {
+			output = make([]byte, 0, proven)
+		}
+	case cap(dst) == 0:
 		initialCap := targetLen
 		if initialCap > deltaInitialCap {
 			initialCap = deltaInitialCap
 			capped = true
 		}
 		output = make([]byte, 0, initialCap)
-	} else {
+	default:
 		// A reused buffer's capacity is proven prior work: reconstructing an
 		// adjacent revision produced it, so it is a legitimate starting size
 		// even above deltaInitialCap. Only when this target outgrows the
@@ -279,6 +295,91 @@ func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 	}
 
 	return nil, fmt.Errorf("%w: missing terminator", ErrInvalidDelta)
+}
+
+// scanOutputSize walks a delta's command stream and returns the exact number
+// of bytes it emits, without allocating and without producing any output.
+// cmds is the stream that follows the header; srcLen and targetLen are the
+// same bounds the replay loop enforces.
+//
+// It exists to close the gap between "how much output will this delta
+// produce" and "how much may we safely allocate before we know". The header's
+// targetLen answers the first question but cannot be trusted for the second:
+// a few wire bytes can declare a 4 GiB target (see the deltaInitialCap comment
+// in ApplyInto). This walk answers both. Every copy command is checked against
+// bytes the source actually holds and every insert against bytes the delta
+// actually carries, so a stream that reaches the terminator with the declared
+// total has proven, byte for byte, that a buffer of that size is warranted --
+// a hostile delta with no real commands never gets past the first command and
+// is refused an allocation exactly as before.
+//
+// The payoff is not the single allocation but the absence of the growth path.
+// Reconstructing a multi-megabyte target through append's ~1.25x growth from a
+// 64 KiB start allocates several times the target's size in discarded
+// intermediates and leaves the survivor with slack capacity that
+// content.Cache then copies away; on the Fossil SCM repository that was
+// 200 GiB of delta output allocated to materialize 8 GiB of content. Sized
+// exactly, the buffer is allocated once and arrives already clipped.
+//
+// It reports false -- not an error -- for any stream it cannot walk to a
+// clean terminator. Diagnosing malformed input is the replay loop's job and it
+// is about to run anyway; duplicating the error text here would be two places
+// to keep in step. A false verdict simply falls back to the conservative
+// growth path, so a malformed delta allocates and fails exactly as it did
+// before this scan existed.
+func scanOutputSize(cmds []byte, srcLen int, targetLen uint64) (int, bool) {
+	// maxDeltaTargetSize is 4 GiB, which does not fit an int on a 32-bit
+	// platform -- and js/wasm is one. Declining here leaves such a delta to
+	// the growth path, which fails on it exactly as it always has, rather
+	// than wrapping a size negative.
+	if targetLen > uint64(math.MaxInt) {
+		return 0, false
+	}
+	r := &reader{data: cmds}
+	var total uint64
+	for r.pos < len(r.data) {
+		cnt, err := r.getInt()
+		if err != nil {
+			return 0, false
+		}
+		cmd, err := r.getChar()
+		if err != nil {
+			return 0, false
+		}
+		switch cmd {
+		case '@':
+			offset, err := r.getInt()
+			if err != nil {
+				return 0, false
+			}
+			term, err := r.getChar()
+			if err != nil || term != ',' {
+				return 0, false
+			}
+			if offset > uint64(srcLen) || cnt > uint64(srcLen) || offset+cnt > uint64(srcLen) {
+				return 0, false
+			}
+		case ':':
+			if cnt > uint64(len(r.data)) || r.pos+int(cnt) > len(r.data) {
+				return 0, false
+			}
+			r.pos += int(cnt)
+		case ';':
+			// The terminator's count is the checksum, not a length; the
+			// replay loop verifies it against the bytes it produced.
+			if total != targetLen {
+				return 0, false
+			}
+			return int(total), true
+		default:
+			return 0, false
+		}
+		if total+cnt > targetLen {
+			return 0, false
+		}
+		total += cnt
+	}
+	return 0, false // no terminator
 }
 
 // deltaGrowthFactor bounds the one-time capacity upgrade growOutputCap

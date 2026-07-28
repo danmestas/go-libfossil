@@ -48,7 +48,28 @@ var attachTargetTypeName = map[byte]string{
 // repository size, so this budget only has to cover that concurrency, not
 // the whole repository expanded (8 GiB for the Fossil SCM repository under
 // the old ascending-rid order this replaced).
-const crosslinkCacheBytes = 256 << 20
+//
+// This number is the process's memory ceiling, not just the cache's, and the
+// two are not close. Cloning the Fossil SCM repository, each byte of budget
+// costs roughly five bytes of peak RSS: GOGC=100 doubles it into the heap
+// goal, and the free spans the sweep's own churn leaves behind are returned to
+// the OS by a scavenger paced off GC cycles, of which a faster sweep completes
+// fewer. Measured end to end (67.6k blobs, cache budget against wall time and
+// peak RSS):
+//
+//	 32 MiB   369.6 s    318 MB
+//	 64 MiB   292.3 s    447 MB
+//	128 MiB   249.4 s    812 MB
+//	256 MiB   205.7 s   1473 MB
+//
+// 128 MiB is where both axes beat the 256 MiB that preceded it -- that setting
+// clones in 293 s at 1287 MB with the pre-#187 expander -- rather than trading
+// one for the other. Below it the curve turns sharply: 32 MiB is slower than
+// doing none of this work at all, because the sweep starts re-walking chains
+// it has already paid for. Retune it against measurement, not intuition; the
+// sibling budgets in internal/verify and internal/annotate are separate
+// workloads and were not measured here.
+const crosslinkCacheBytes = 128 << 20
 
 // ensureForumPostTable creates forumpost if a prior `fossil rebuild` (or a
 // repository that never had one) left it absent. Canonical fossil creates

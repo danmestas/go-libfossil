@@ -133,15 +133,63 @@ func AvailableByUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {
 // Total walk work over a sweep is then bounded by the number of distinct blobs,
 // not by the number of F-card references.
 //
-// Not safe for concurrent use, and valid only while the delta table and blob
-// sizes it walked stay put: create one per sweep, discard it at the end.
+// ByUUID additionally memoizes the uuid->rid resolution the walk starts from.
+// That lookup, not the walk, is what a sweep repeats: every F-card of every
+// check-in names a file by hash, the same file hash appears in every revision
+// that did not change it, and each name costs an index seek into a blob.uuid
+// index far larger than SQLite's page cache. On the Fossil SCM repository that
+// one statement was 27% of a whole clone's CPU -- more than delta expansion,
+// hash verification and the receive path combined -- while the chain walk it
+// guards was under 1%.
+//
+// # Scope
+//
+// Not safe for concurrent use. Both memos below are sound because of where
+// this type is used, not because the facts they hold are permanent, so the
+// scope is the invariant and it is worth stating exactly.
+//
+// A cache belongs to ONE crosslink run: one whole-repository sweep
+// (manifest.linkCandidatesInOrder) or one phantom-fill cascade
+// (manifest.newCascadeLinker). Both build it as a local, neither hands it to a
+// *repo.Repo or keeps it past the call, and nothing else constructs one. Over
+// that window blob rows are only ever added -- crosslinking creates phantoms,
+// fills them, and rewrites how content is stored, but removes nothing.
+//
+// The one operation in the tree that removes a blob row is shun.Purge, which
+// DELETEs from blob and delta. It has no production caller today; it runs as
+// its own top-level operation, not from inside a sweep or a sync round. If
+// that ever changes -- a sync learning to process shun cards mid-round is the
+// plausible way -- a cache must not span it, because a memoized rid would then
+// name a row that no longer exists. See
+// TestAvailabilityCacheMustNotSpanAPurge, which pins that consequence so it is
+// discovered by a failing test rather than by a wrong derivation.
+//
+// Widening the lifetime past one crosslink run -- caching one per repository,
+// or per process -- reopens exactly that question and is not a free change.
 type AvailabilityCache struct {
 	avail map[libfossil.FslID]bool
+	// rids memoizes uuid -> rid for hashes that resolved to a blob row.
+	//
+	// Only successful resolutions are recorded, and that asymmetry is
+	// load-bearing rather than an omission. Within the scope above a uuid that
+	// names a row keeps naming the same row: blob.uuid is UNIQUE, rids are
+	// never reassigned, and nothing a crosslink run does deletes the row. A
+	// uuid that names NO row can gain one at any moment -- ridOrPhantom and
+	// blob.StorePhantom both create rows mid-run -- so caching the absence
+	// would answer a later question with an earlier repository, and an
+	// artifact would stay deferred after the content it waits on arrived. The
+	// negative case is also the rare one: it means an artifact references
+	// content that has not arrived, which is the exception a sweep defers on,
+	// not the rule it runs on.
+	rids map[string]libfossil.FslID
 }
 
 // NewAvailabilityCache returns an empty availability cache.
 func NewAvailabilityCache() *AvailabilityCache {
-	return &AvailabilityCache{avail: make(map[libfossil.FslID]bool)}
+	return &AvailabilityCache{
+		avail: make(map[libfossil.FslID]bool),
+		rids:  make(map[string]libfossil.FslID),
+	}
 }
 
 // ByUUID resolves uuid to its rid and reports whether that blob's content is
@@ -157,13 +205,27 @@ func (a *AvailabilityCache) ByUUID(q db.Querier, uuid string) (libfossil.FslID, 
 		panic("content.AvailabilityCache.ByUUID: uuid must not be empty")
 	}
 
+	rid, ok := a.ridForUUID(q, uuid)
+	if !ok {
+		return 0, false
+	}
+	if !a.isAvailable(q, rid) {
+		return 0, false
+	}
+	return rid, true
+}
+
+// ridForUUID resolves uuid to its blob rid, memoizing hits. See the note on
+// AvailabilityCache.rids for why misses are deliberately not memoized.
+func (a *AvailabilityCache) ridForUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {
+	if rid, ok := a.rids[uuid]; ok {
+		return rid, true
+	}
 	var rid int64
 	if err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", uuid).Scan(&rid); err != nil {
 		return 0, false
 	}
-	if !a.isAvailable(q, libfossil.FslID(rid)) {
-		return 0, false
-	}
+	a.rids[uuid] = libfossil.FslID(rid)
 	return libfossil.FslID(rid), true
 }
 

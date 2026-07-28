@@ -92,8 +92,12 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 // file and its manifests, not the whole repository, so this only has to be
 // large enough that the immediately-preceding revision is never evicted before
 // the next older one truncates its walk at it. A miss costs throughput, not
-// correctness. Matches manifest.crosslinkCacheBytes, the other whole-history
-// sweep in the tree.
+// correctness.
+//
+// It is deliberately left at the figure manifest.crosslinkCacheBytes has since
+// been measured down from: this walk follows one file, so the budget is a
+// ceiling it never approaches rather than a working-set bound that decides
+// throughput, and cutting it would buy nothing.
 const annotateCacheBytes = 256 << 20
 
 // walkParentChain walks the primary parent chain from opts.StartRID, pushing

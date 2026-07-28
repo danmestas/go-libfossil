@@ -8,6 +8,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 )
 
 // CheckpointMode mirrors SQLite's PRAGMA wal_checkpoint(<mode>) argument.
@@ -43,10 +44,12 @@ func (m CheckpointMode) String() string {
 
 // DB wraps a SQLite database connection.
 type DB struct {
-	conn   *sql.DB
-	path   string
-	driver string
-	stmts  stmtCache
+	conn      *sql.DB
+	path      string
+	driver    string
+	stmts     stmtCache
+	poolExecs atomic.Int64
+	writeTxns atomic.Int64
 }
 
 // Open opens a SQLite database with the registered driver and default pragmas.
@@ -247,7 +250,36 @@ func (d *DB) Driver() string {
 	return d.driver
 }
 
+// PoolExecs returns how many statements have been executed on the pool rather
+// than inside a transaction. Each one runs in its own implicit transaction, so
+// it costs a BEGIN IMMEDIATE and an fsync of its own and contests the database's
+// single write lock independently of every other. A path that issues one per
+// artifact therefore degrades from slow to failing the moment anything else
+// writes, which is what issue #200 cost a large pull. Tests pin the per-round
+// budget against this counter.
+func (d *DB) PoolExecs() int64 {
+	if d == nil {
+		panic("db.PoolExecs: receiver must not be nil")
+	}
+	return d.poolExecs.Load()
+}
+
+// WriteTxns counts transactions begun through WithTx. Each is its own
+// BEGIN IMMEDIATE and fsync, and each takes the single write lock
+// independently, so a path that opens one per artifact is both slow and
+// fragile under contention -- the cost issue #200 measured at roughly three
+// per received file. Tests pin the per-round transaction budget against this,
+// which PoolExecs cannot see: moving a per-artifact write from the pool into
+// its own transaction leaves PoolExecs unchanged while the real cost stays.
+func (d *DB) WriteTxns() int64 {
+	if d == nil {
+		panic("db.WriteTxns: receiver must not be nil")
+	}
+	return d.writeTxns.Load()
+}
+
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
+	d.poolExecs.Add(1)
 	if !cacheableStmt(query) {
 		return d.conn.Exec(query, args...)
 	}
@@ -338,6 +370,7 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 	if d == nil {
 		panic("db.WithTx: receiver must not be nil")
 	}
+	d.writeTxns.Add(1)
 	if fn == nil {
 		panic("db.WithTx: fn must not be nil")
 	}

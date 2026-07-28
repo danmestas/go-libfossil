@@ -510,7 +510,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 // verbatim rather than recompressed — this is what makes a clone
 // byte-identical to its source's blob table, not merely content-identical.
 func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob); err != nil {
+	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob, visibilityPublic); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 

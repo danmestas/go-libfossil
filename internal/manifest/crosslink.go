@@ -1047,7 +1047,7 @@ func resolveParentMids(tx *db.Tx, d *deck.Deck) (primaryParentMid libfossil.FslI
 	if d == nil {
 		panic("manifest.resolveParentMids: d must not be nil")
 	}
-	if len(d.P) > maxMlinkMergeParents {
+	if len(d.P) > maxMlinkMergeParents+1 {
 		panic("manifest.resolveParentMids: d.P exceeds bound")
 	}
 	for i, parentUUID := range d.P {

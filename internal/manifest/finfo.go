@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -100,7 +101,7 @@ func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVe
 		JOIN blob cb ON cb.rid = m.mid
 		JOIN event e ON e.objid = m.mid
 		LEFT JOIN blob fb ON fb.rid = m.fid
-		WHERE m.fnid = ?
+		WHERE m.fnid = ? AND NOT m.isaux
 		ORDER BY e.mtime DESC` + limitClause
 
 	rows, err := r.DB().Query(query, fnid)
@@ -155,7 +156,7 @@ func classifyAction(fileRID libfossil.FslID, pid, pfnid, fnid int64) (FileAction
 	if pfnid != 0 && pfnid != fnid {
 		return FileRenamed, true
 	}
-	if pid == 0 {
+	if pid <= 0 {
 		return FileAdded, true
 	}
 	if int64(fileRID) == pid {
@@ -169,8 +170,9 @@ func parseMtime(raw any) time.Time {
 	return t
 }
 
-// FileAt returns the file blob RID for a given filename at a specific checkin.
-// Returns 0, false if the file does not exist in that checkin.
+// FileAt returns the available file blob RID for a filename resolved from a
+// check-in's effective manifest tree.
+// Returns 0, false if the file does not exist, is deleted, or is unavailable.
 // This is a convenience wrapper for diff-between-versions use cases.
 func FileAt(r *repo.Repo, checkinRID libfossil.FslID, path string) (libfossil.FslID, bool) {
 	if r == nil {
@@ -183,15 +185,14 @@ func FileAt(r *repo.Repo, checkinRID libfossil.FslID, path string) (libfossil.Fs
 		panic("manifest.FileAt: path must not be empty")
 	}
 
-	var fid int64
-	err := r.DB().QueryRow(`
-		SELECT m.fid FROM mlink m
-		JOIN filename f ON f.fnid = m.fnid
-		WHERE m.mid = ? AND f.name = ? AND m.fid > 0`,
-		checkinRID, path,
-	).Scan(&fid)
+	q := r.DB()
+	_, files, err := loadCheckinManifest(q, nil, checkinRID)
 	if err != nil {
 		return 0, false
 	}
-	return libfossil.FslID(fid), true
+	file, ok := files.seek(path)
+	if !ok || file.UUID == "" {
+		return 0, false
+	}
+	return content.AvailableByUUID(q, file.UUID)
 }

@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -9,7 +10,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
@@ -77,12 +77,17 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		}
 		inlineTCards = d.T // capture for post-tx tag processing
 
+		cache := content.NewCache(crosslinkCacheBytes)
+		if txErr := preflightCheckinMlinks(tx, cache, d); txErr != nil {
+			return fmt.Errorf("preflight checkin mlinks: %w", txErr)
+		}
+
 		manifestRid, manifestUUID, txErr = insertCheckinBlob(tx, d)
 		if txErr != nil {
 			return txErr
 		}
 
-		if txErr := insertMlinks(tx, opts, manifestRid); txErr != nil {
+		if txErr := insertCheckinMlinks(tx, cache, manifestRid, d); txErr != nil {
 			return txErr
 		}
 
@@ -90,7 +95,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		// the same backwards direction used for file content. Canonical does
 		// this at the end of commit (src/checkin.c:3234,
 		// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
-		// insertMlinks above; this covers the manifests themselves.
+		// insertCheckinMlinks above; this covers the manifests themselves.
 		if opts.Parent > 0 {
 			if _, txErr := content.Deltify(tx, opts.Parent, manifestRid); txErr != nil {
 				return fmt.Errorf("deltify parent manifest: %w", txErr)
@@ -197,21 +202,18 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 
 	// Parents: primary parent first, then any merge parents. Fossil renders
 	// this as a space-separated P-card; plink marks i==0 as the primary.
-	if opts.Parent > 0 {
-		var parentUUID string
-		if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", opts.Parent).Scan(&parentUUID); err != nil {
-			return nil, fmt.Errorf("parent uuid: %w", err)
-		}
-		d.P = []string{parentUUID}
-		for _, mp := range opts.MergeParents {
-			if mp <= 0 || mp == opts.Parent {
-				continue
+	if parents := collectParents(opts); len(parents) > 0 {
+		d.P = make([]string, 0, len(parents))
+		for i, parent := range parents {
+			var parentUUID string
+			if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", parent).Scan(&parentUUID); err != nil {
+				kind := "merge parent"
+				if i == 0 {
+					kind = "primary parent"
+				}
+				return nil, fmt.Errorf("%s uuid: %w", kind, err)
 			}
-			var mpUUID string
-			if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", mp).Scan(&mpUUID); err != nil {
-				return nil, fmt.Errorf("merge parent uuid: %w", err)
-			}
-			d.P = append(d.P, mpUUID)
+			d.P = append(d.P, parentUUID)
 		}
 	}
 
@@ -231,6 +233,8 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 			return nil, err
 		}
 	}
+
+	sort.Slice(d.F, func(i, j int) bool { return deck.Compare(d.F[i].Name, d.F[j].Name) < 0 })
 
 	// R-card (always over full file set)
 	rDeck := &deck.Deck{F: fCards}
@@ -262,25 +266,6 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 		return 0, "", fmt.Errorf("store manifest: %w", err)
 	}
 	return rid, uuid, nil
-}
-
-func insertMlinks(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {
-	parents, err := loadMlinkParents(tx, opts.Parent, opts.MergeParents)
-	if err != nil {
-		return err
-	}
-	for _, f := range opts.Files {
-		fnid, err := ensureFilename(tx, f.Name)
-		if err != nil {
-			return fmt.Errorf("filename %q: %w", f.Name, err)
-		}
-		fileUUID := hash.SHA1(f.Content)
-		fileRid, _ := blob.Exists(tx, fileUUID)
-		if err := insertMlinkRow(tx, manifestRid, int64(fileRid), fnid, "", f.Perm, parents); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func markPlinkAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID) error {

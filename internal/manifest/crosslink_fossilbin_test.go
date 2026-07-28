@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -160,10 +161,16 @@ func TestFossilBinaryReadsCrosslinkedRepoBranchAndMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
-	branchAndMergeHistory(t, r)
+	mergeRID := branchAndMergeHistory(t, r)
 	if err := r.Close(); err != nil {
 		t.Fatalf("repo.Close: %v", err)
 	}
+
+	direct := snapshotDerived(t, path)
+	if executableMlinks := countMlinksWithNonzeroMperm(t, path); executableMlinks == 0 {
+		t.Fatal("direct checkin produced no mlink rows with nonzero mperm")
+	}
+	directAux := countAuxMlinks(t, path, mergeRID)
 
 	d, err := db.Open(path)
 	if err != nil {
@@ -193,7 +200,8 @@ func TestFossilBinaryReadsCrosslinkedRepoBranchAndMerge(t *testing.T) {
 		t.Fatalf("repo.Close: %v", err)
 	}
 
-	got := snapshotDerived(t, path)
+	crosslinked := snapshotDerived(t, path)
+	crosslinkedAux := countAuxMlinks(t, path, mergeRID)
 
 	integrity, err := exec.Command(bin, "test-integrity", "-R", path).CombinedOutput()
 	if err != nil {
@@ -207,30 +215,41 @@ func TestFossilBinaryReadsCrosslinkedRepoBranchAndMerge(t *testing.T) {
 		t.Fatalf("fossil rebuild failed: %v\n%s", err, out)
 	}
 
-	// event, plink and tagxref are compared here -- tagxref is this test's
-	// reason for existing, since it is the table repairTagPropagation
-	// derives from the whole (now branched) plink graph rather than any one
-	// artifact, and TestFossilBinaryReadsCrosslinkedRepo's single-branch
-	// fixture cannot exercise a tag stopping at its own branch's declaration
-	// or a merge inheriting from its primary parent.
-	//
-	// leaf and mlink are deliberately not compared here: this fixture
-	// exposed that both have pre-existing gaps against canonical fossil that
-	// predate and are unrelated to this fix (repairLeafTable counts any
-	// plink edge, not just primary-parent edges, so a checkin that is only a
-	// merge parent -- like branch2 here -- outlives its "leaf" status
-	// differently than fossil does; insertCheckinMlinks, similarly
-	// untouched by this fix, writes a row for every F-card rather than only
-	// the ones that changed relative to the primary parent, which a partial
-	// merge such as this one's trunk3/merge pair can trigger for an
-	// unchanged file). Both are out of scope for #102/#103 and belong in
-	// their own follow-up rather than this branch.
-	reference := snapshotDerived(t, path)
+	canonical := snapshotDerived(t, path)
+	canonicalAux := countAuxMlinks(t, path, mergeRID)
+
+	// event, plink and tagxref remain this test's original branch/tag
+	// propagation oracle. mlink additionally compares all three derivations:
+	// the rows written by direct Checkin, the same artifacts re-crosslinked,
+	// and canonical Fossil's rebuild.
 	for _, key := range []string{"event", "plink", "tagxref"} {
-		if got[key] != reference[key] {
+		if crosslinked[key] != canonical[key] {
 			t.Errorf("%s differs from what fossil derived on a branch+merge history\n fossil:    %s\n crosslink: %s",
-				key, reference[key], got[key])
+				key, canonical[key], crosslinked[key])
 		}
+	}
+	if crosslinked["mlink"] != canonical["mlink"] {
+		t.Errorf("crosslinked mlink differs from fossil rebuild\n fossil:    %s\n crosslink: %s",
+			canonical["mlink"], crosslinked["mlink"])
+	}
+	if direct["mlink"] != crosslinked["mlink"] {
+		t.Errorf("direct mlink differs from crosslink\n direct:    %s\n crosslink: %s",
+			direct["mlink"], crosslinked["mlink"])
+	}
+	if direct["mlink"] != canonical["mlink"] {
+		t.Errorf("direct mlink differs from fossil rebuild\n direct: %s\n fossil: %s",
+			direct["mlink"], canonical["mlink"])
+	}
+	if canonicalAux == 0 {
+		t.Fatal("fossil rebuild produced no auxiliary mlink rows for merge check-in")
+	}
+	if crosslinkedAux != canonicalAux {
+		t.Errorf("crosslinked auxiliary mlink rows = %d, fossil rebuild = %d",
+			crosslinkedAux, canonicalAux)
+	}
+	if directAux != canonicalAux {
+		t.Errorf("direct auxiliary mlink rows = %d, fossil rebuild = %d",
+			directAux, canonicalAux)
 	}
 }
 
@@ -255,21 +274,24 @@ func branchAndMergeHistory(t *testing.T, r *repo.Repo) libfossil.FslID {
 		return []byte(fmt.Sprintf("%s revision %d\nthe quick brown fox jumps over the lazy dog\n", tag, rev))
 	}
 	base := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	clone := func(tree map[string][]byte) map[string][]byte {
-		out := make(map[string][]byte, len(tree))
+	clone := func(tree map[string]File) map[string]File {
+		out := make(map[string]File, len(tree))
 		for k, v := range tree {
 			out[k] = v
 		}
 		return out
 	}
-	snapshot := func(tree map[string][]byte) []File {
+	snapshot := func(tree map[string]File) []File {
 		files := make([]File, 0, len(tree))
-		for name, content := range tree {
-			files = append(files, File{Name: name, Content: content})
+		for _, file := range tree {
+			files = append(files, file)
 		}
+		// Deliberately reverse canonical order: direct Checkin must canonicalize
+		// before deriving mlink, or this parity test detects order-dependent filename IDs.
+		sort.Slice(files, func(i, j int) bool { return deck.Compare(files[i].Name, files[j].Name) > 0 })
 		return files
 	}
-	commit := func(name, comment string, tree map[string][]byte, parent libfossil.FslID, mergeParents []libfossil.FslID, tags []deck.TagCard, hour int) libfossil.FslID {
+	commit := func(name, comment string, tree map[string]File, parent libfossil.FslID, mergeParents []libfossil.FslID, tags []deck.TagCard, hour int) libfossil.FslID {
 		t.Helper()
 		rid, _, err := Checkin(r, CheckinOpts{
 			Files:        snapshot(tree),
@@ -289,32 +311,34 @@ func branchAndMergeHistory(t *testing.T, r *repo.Repo) libfossil.FslID {
 	// Each lineage gets its own tree snapshot from the point it diverges, so
 	// a change made only on one branch does not leak into a checkin built
 	// from a different, concurrently-diverging lineage.
-	trunkTree := map[string][]byte{}
-	trunkTree["trunk.txt"] = body("trunk", 1)
-	trunkTree["shared.txt"] = body("shared", 1)
+	trunkTree := map[string]File{
+		"trunk.txt":  {Name: "trunk.txt", Content: body("trunk", 1)},
+		"shared.txt": {Name: "shared.txt", Content: body("shared", 1)},
+		"script.sh":  {Name: "script.sh", Content: []byte("#!/bin/sh\necho branch-and-merge\n"), Perm: "x"},
+	}
 	trunk1 := commit("trunk1", "trunk revision 1", trunkTree, 0, nil, nil, 0)
 
 	trunkTree = clone(trunkTree)
-	trunkTree["trunk.txt"] = body("trunk", 2)
-	trunkTree["shared.txt"] = body("shared", 2)
+	trunkTree["trunk.txt"] = File{Name: "trunk.txt", Content: body("trunk", 2)}
+	trunkTree["shared.txt"] = File{Name: "shared.txt", Content: body("shared", 2)}
 	trunk2 := commit("trunk2", "trunk revision 2", trunkTree, trunk1, nil, nil, 1)
 
 	branchTree := clone(trunkTree)
-	branchTree["feature.txt"] = body("feature", 1)
-	branchTree["shared.txt"] = body("shared", 3)
+	branchTree["feature.txt"] = File{Name: "feature.txt", Content: body("feature", 1)}
+	branchTree["shared.txt"] = File{Name: "shared.txt", Content: body("shared", 3)}
 	branch1 := commit("branch1", "start feature-x", branchTree, trunk2, nil, []deck.TagCard{
 		{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "feature-x"},
 		{Type: deck.TagSingleton, Name: "sym-feature-x", UUID: "*"},
 	}, 2)
 
 	branchTree = clone(branchTree)
-	branchTree["feature.txt"] = body("feature", 2)
+	branchTree["feature.txt"] = File{Name: "feature.txt", Content: body("feature", 2)}
 	branch2 := commit("branch2", "feature-x revision 2", branchTree, branch1, nil, nil, 3)
 
 	// trunk3 continues from trunk2's own tree, not branch2's -- it must not
 	// see feature.txt or branch1/2's shared.txt edit.
 	trunkTree = clone(trunkTree)
-	trunkTree["trunk.txt"] = body("trunk", 3)
+	trunkTree["trunk.txt"] = File{Name: "trunk.txt", Content: body("trunk", 3)}
 	trunk3 := commit("trunk3", "trunk revision 3, parallel to feature-x", trunkTree, trunk2, nil, nil, 4)
 
 	// Merge commit: primary parent stays on trunk, feature-x rides along as a
@@ -323,8 +347,8 @@ func branchAndMergeHistory(t *testing.T, r *repo.Repo) libfossil.FslID {
 	// from the merged-in one. Base the merge tree on trunk3 (keeping trunk's
 	// resolution of shared.txt) and fold in feature.txt from the branch.
 	mergeTree := clone(trunkTree)
-	mergeTree["trunk.txt"] = body("trunk", 4)
-	mergeTree["feature.txt"] = body("feature", 2)
+	mergeTree["trunk.txt"] = File{Name: "trunk.txt", Content: body("trunk", 4)}
+	mergeTree["feature.txt"] = File{Name: "feature.txt", Content: body("feature", 2)}
 	merge := commit("merge", "merge feature-x into trunk", mergeTree, trunk3, []libfossil.FslID{branch2}, nil, 5)
 
 	return merge
@@ -560,4 +584,42 @@ func snapshotDerived(t *testing.T, path string) map[string]string {
 		out[name] = s
 	}
 	return out
+}
+
+func countAuxMlinks(t *testing.T, path string, mid libfossil.FslID) int {
+	t.Helper()
+	if mid <= 0 {
+		panic("countAuxMlinks: mid must be positive")
+	}
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("countAuxMlinks open: %v", err)
+	}
+	defer d.Close()
+
+	var count int
+	if err := d.QueryRow(
+		"SELECT count(*) FROM mlink WHERE mid=? AND isaux=1 AND pmid>0",
+		mid,
+	).Scan(&count); err != nil {
+		t.Fatalf("countAuxMlinks: %v", err)
+	}
+	return count
+}
+
+func countMlinksWithNonzeroMperm(t *testing.T, path string) int {
+	t.Helper()
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("countMlinksWithNonzeroMperm open: %v", err)
+	}
+	defer d.Close()
+
+	var count int
+	if err := d.QueryRow("SELECT count(*) FROM mlink WHERE mperm<>0").Scan(&count); err != nil {
+		t.Fatalf("countMlinksWithNonzeroMperm: %v", err)
+	}
+	return count
 }

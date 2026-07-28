@@ -8,7 +8,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
-	"github.com/danmestas/go-libfossil/internal/verify"
 )
 
 func TestFileHistory_Basic(t *testing.T) {
@@ -295,65 +294,6 @@ func TestFileHistory_ThreeCommitChain(t *testing.T) {
 	}
 }
 
-func TestFileHistory_AfterRebuild(t *testing.T) {
-	r := setupTestRepo(t)
-	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
-
-	rid1, _, _ := Checkin(r, CheckinOpts{
-		Files: []File{
-			{Name: "a.txt", Content: []byte("a1")},
-			{Name: "b.txt", Content: []byte("b1")},
-		},
-		Comment: "initial",
-		User:    "u",
-		Time:    ts,
-	})
-
-	Checkin(r, CheckinOpts{
-		Files: []File{
-			{Name: "a.txt", Content: []byte("a2")},
-			{Name: "b.txt", Content: []byte("b1")}, // unchanged
-		},
-		Comment: "modify a",
-		User:    "u",
-		Time:    ts.Add(time.Hour),
-		Parent:  rid1,
-	})
-
-	// Wipe derived tables and rebuild — this uses rebuildMlinks which
-	// only inserts changed files (unlike Checkin which inserts all).
-	for _, tbl := range []string{"event", "mlink", "plink", "tagxref", "filename", "leaf", "unclustered", "unsent"} {
-		r.DB().Exec("DELETE FROM " + tbl)
-	}
-
-	report, err := verify.Rebuild(r)
-	if err != nil {
-		t.Fatalf("Rebuild: %v", err)
-	}
-	if report.BlobsFailed > 0 {
-		t.Fatalf("Rebuild had %d blob failures", report.BlobsFailed)
-	}
-
-	// After rebuild, FileHistory should still work
-	histA, err := FileHistory(r, FileHistoryOpts{Path: "a.txt"})
-	if err != nil {
-		t.Fatalf("FileHistory a.txt: %v", err)
-	}
-	if len(histA) < 1 {
-		t.Fatal("expected at least 1 version for a.txt after rebuild")
-	}
-
-	// b.txt: rebuild only inserts changed files, so b.txt should
-	// only appear in the initial commit (pid=0 → added).
-	histB, err := FileHistory(r, FileHistoryOpts{Path: "b.txt"})
-	if err != nil {
-		t.Fatalf("FileHistory b.txt: %v", err)
-	}
-	if len(histB) != 1 {
-		t.Fatalf("b.txt: expected 1 version after rebuild (unchanged in commit 2), got %d", len(histB))
-	}
-}
-
 func TestFileHistory_CrosslinkGeneratedMlink(t *testing.T) {
 	r := setupTestRepo(t)
 	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
@@ -409,6 +349,38 @@ func TestFileHistory_CrosslinkGeneratedMlink(t *testing.T) {
 	if v.Action != FileModified {
 		t.Errorf("x.txt action = %v, want modified; pid must be set from the parent manifest, not default to 0 (which would classify as added)", v.Action)
 	}
+}
+func TestFileHistory_MergeCanonicalAuxiliaryRows(t *testing.T) {
+	r := setupTestRepo(t)
+	mergeRID := branchAndMergeHistory(t, r)
+
+	trunkHistory, err := FileHistory(r, FileHistoryOpts{Path: "trunk.txt"})
+	if err != nil {
+		t.Fatalf("FileHistory(trunk.txt): %v", err)
+	}
+	mergeVersions := 0
+	for _, version := range trunkHistory {
+		if version.CheckinRID == mergeRID {
+			mergeVersions++
+		}
+	}
+	if mergeVersions != 1 {
+		t.Fatalf("trunk.txt: expected exactly one version at merge %d, got %d", mergeRID, mergeVersions)
+	}
+
+	featureHistory, err := FileHistory(r, FileHistoryOpts{Path: "feature.txt"})
+	if err != nil {
+		t.Fatalf("FileHistory(feature.txt): %v", err)
+	}
+	for _, version := range featureHistory {
+		if version.CheckinRID == mergeRID {
+			if version.Action != FileAdded {
+				t.Errorf("feature.txt merge action = %v, want added", version.Action)
+			}
+			return
+		}
+	}
+	t.Fatalf("feature.txt: merge version %d is absent", mergeRID)
 }
 
 func TestFileAt_WithContentVerification(t *testing.T) {

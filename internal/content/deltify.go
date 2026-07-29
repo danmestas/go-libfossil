@@ -98,7 +98,8 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 	// Weakening or reordering this guard exposes that walk to a delta graph a
 	// sync peer can shape; it carries its own visited set and its own step
 	// cap so that exposure is survivable rather than a hang.
-	if !IsAvailable(tx, rid) || !IsAvailable(tx, srcRid) {
+	availability := NewAvailabilityCache()
+	if !availability.isAvailable(tx, rid) || !availability.isAvailable(tx, srcRid) {
 		return 0, nil
 	}
 

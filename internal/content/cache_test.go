@@ -8,6 +8,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
@@ -99,6 +100,24 @@ func TestCache_Eviction(t *testing.T) {
 	}
 	if stats.Size > 250 {
 		t.Fatalf("cache size %d exceeds max 250", stats.Size)
+	}
+}
+
+func TestCache_MaxEntries(t *testing.T) {
+	c := NewCache(1)
+
+	for i := 1; i <= maxCacheEntries+1; i++ {
+		c.store(libfossil.FslID(i), []byte{})
+	}
+
+	if got := c.Stats().Entries; got != maxCacheEntries {
+		t.Fatalf("expected %d entries, got %d", maxCacheEntries, got)
+	}
+	if _, ok := c.items[libfossil.FslID(1)]; ok {
+		t.Fatal("oldest entry was not evicted")
+	}
+	if _, ok := c.items[libfossil.FslID(maxCacheEntries+1)]; !ok {
+		t.Fatal("newest entry was evicted")
 	}
 }
 
@@ -242,6 +261,49 @@ func TestCache_BlobLargerThanMax(t *testing.T) {
 	stats := c.Stats()
 	if stats.Entries != 0 {
 		t.Fatalf("expected 0 entries (oversized blob evicted), got %d", stats.Entries)
+	}
+}
+
+func TestCache_RememberOversizedDoesNotAllocate(t *testing.T) {
+	c := NewCache(100)
+	rid := libfossil.FslID(1)
+	data := bytes.Repeat([]byte("B"), 500)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		c.Remember(rid, data)
+	})
+	if allocs != 0 {
+		t.Fatalf("Remember allocated %v times for an oversized entry; want 0", allocs)
+	}
+
+	stats := c.Stats()
+	if stats.Entries != 0 {
+		t.Fatalf("Remember retained %d oversized entries; want 0", stats.Entries)
+	}
+	if stats.Size != 0 {
+		t.Fatalf("Remember retained %d oversized bytes; want 0", stats.Size)
+	}
+}
+
+func TestCache_RememberCachedDoesNotAllocate(t *testing.T) {
+	c := NewCache(100)
+	rid := libfossil.FslID(1)
+	data := bytes.Repeat([]byte("B"), 50)
+	c.Remember(rid, data)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		c.Remember(rid, data)
+	})
+	if allocs != 0 {
+		t.Fatalf("Remember allocated %v times for a cached entry; want 0", allocs)
+	}
+
+	stats := c.Stats()
+	if stats.Entries != 1 {
+		t.Fatalf("Remember retained %d cached entries; want 1", stats.Entries)
+	}
+	if stats.Size != int64(len(data)) {
+		t.Fatalf("Remember retained %d cached bytes; want %d", stats.Size, len(data))
 	}
 }
 

@@ -2,13 +2,17 @@ package manifest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -281,4 +285,629 @@ func TestAfterDephantomizeZeroRid(t *testing.T) {
 	// Should return without panicking.
 	AfterDephantomize(context.Background(), r, 0)
 	AfterDephantomize(context.Background(), r, -1)
+}
+
+func TestReceiveLinkerReplayAfterSettledCapDoesNotDuplicateMlinks(t *testing.T) {
+	r := setupTestRepo(t)
+
+	_, fileUUID, err := blob.Store(r.DB(), []byte("settled-cap file"))
+	if err != nil {
+		t.Fatalf("Store file blob: %v", err)
+	}
+	d := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "settled-cap checkin",
+		U:    deck.User("testuser"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "settled-cap.txt", UUID: fileUUID}},
+	}
+	checkinBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal checkin: %v", err)
+	}
+	checkinRID, checkinUUID, err := blob.Store(r.DB(), checkinBytes)
+	if err != nil {
+		t.Fatalf("Store checkin blob: %v", err)
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	for i := range receiveSettledLimit {
+		linker.settled[libfossil.FslID(-i-1)] = struct{}{}
+	}
+	if got := len(linker.settled); got != receiveSettledLimit {
+		t.Fatalf("pre-filled settled RIDs = %d, want %d", got, receiveSettledLimit)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, checkinRID, checkinUUID, checkinBytes)
+	}); err != nil {
+		t.Fatalf("first LinkStored: %v", err)
+	}
+
+	var firstMlinks int
+	if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=?", checkinRID).Scan(&firstMlinks); err != nil {
+		t.Fatalf("count first mlink rows: %v", err)
+	}
+	if firstMlinks == 0 {
+		t.Fatal("first LinkStored created no mlink rows")
+	}
+	firstLinked := linker.Stats().Linked
+	if firstLinked == 0 {
+		t.Fatal("first LinkStored did not increase Stats.Linked")
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, checkinRID, checkinUUID, checkinBytes)
+	}); err != nil {
+		t.Fatalf("replay LinkStored: %v", err)
+	}
+
+	var replayMlinks int
+	if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=?", checkinRID).Scan(&replayMlinks); err != nil {
+		t.Fatalf("count replay mlink rows: %v", err)
+	}
+	if replayMlinks != firstMlinks {
+		t.Errorf("replay mlink rows = %d, want unchanged %d", replayMlinks, firstMlinks)
+	}
+	if got := linker.Stats().Linked; got != firstLinked {
+		t.Errorf("replay Stats.Linked = %d, want unchanged %d", got, firstLinked)
+	}
+}
+
+func TestReceiveLinkerReplayAfterSettledCapUsesEventMarkerForControl(t *testing.T) {
+	r := setupTestRepo(t)
+	_, targetUUID, err := blob.Store(r.DB(), []byte("settled-cap control target"))
+	if err != nil {
+		t.Fatalf("Store control target: %v", err)
+	}
+	d := &deck.Deck{
+		Type: deck.Control,
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		T: []deck.TagCard{
+			{Type: deck.TagSingleton, Name: "sym-settled-control", UUID: targetUUID},
+		},
+		U: deck.User("testuser"),
+	}
+	controlBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal control: %v", err)
+	}
+	controlRID, controlUUID, err := blob.Store(r.DB(), controlBytes)
+	if err != nil {
+		t.Fatalf("Store control blob: %v", err)
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	for i := range receiveSettledLimit {
+		linker.settled[libfossil.FslID(-i-1)] = struct{}{}
+	}
+	if got := len(linker.settled); got != receiveSettledLimit {
+		t.Fatalf("pre-filled settled RIDs = %d, want %d", got, receiveSettledLimit)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, controlRID, controlUUID, controlBytes)
+	}); err != nil {
+		t.Fatalf("first LinkStored: %v", err)
+	}
+	firstLinked := linker.Stats().Linked
+	if firstLinked == 0 {
+		t.Fatal("first LinkStored did not increase Stats.Linked")
+	}
+
+	var eventCount, sourceTagCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", controlRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count control event rows: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("control event rows = %d, want 1", eventCount)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", controlRID).Scan(&sourceTagCount); err != nil {
+		t.Fatalf("count control source tagxref rows: %v", err)
+	}
+	if sourceTagCount == 0 {
+		t.Fatal("first LinkStored created no control source tagxref rows")
+	}
+
+	r.DB().Exec("DELETE FROM tagxref WHERE srcid=?", controlRID)
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", controlRID).Scan(&sourceTagCount); err != nil {
+		t.Fatalf("count removed control source tagxref rows: %v", err)
+	}
+	if sourceTagCount != 0 {
+		t.Fatalf("control source tagxref rows after removal = %d, want 0", sourceTagCount)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", controlRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count retained control event rows: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("control event rows after source tag removal = %d, want 1", eventCount)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, controlRID, controlUUID, controlBytes)
+	}); err != nil {
+		t.Fatalf("replay LinkStored: %v", err)
+	}
+	if got := linker.Stats().Linked; got != firstLinked {
+		t.Errorf("replay Stats.Linked = %d, want unchanged %d", got, firstLinked)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", controlRID).Scan(&sourceTagCount); err != nil {
+		t.Fatalf("count replay control source tagxref rows: %v", err)
+	}
+	if sourceTagCount != 0 {
+		t.Errorf("replay control source tagxref rows = %d, want unchanged 0", sourceTagCount)
+	}
+}
+
+func TestReceiveLinkerReplayAfterSettledCapUsesTagxrefMarkerForEvent(t *testing.T) {
+	r := setupTestRepo(t)
+	eventTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	d := &deck.Deck{
+		Type: deck.Event,
+		E: &deck.EventCard{
+			Date: eventTime,
+			UUID: "fedcba9876543210fedcba9876543210fedcba98",
+		},
+		U: deck.User("testuser"),
+		D: eventTime,
+		W: []byte("settled-cap event body"),
+		C: "settled-cap event",
+	}
+	eventBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal event: %v", err)
+	}
+	eventRID, eventUUID, err := blob.Store(r.DB(), eventBytes)
+	if err != nil {
+		t.Fatalf("Store event blob: %v", err)
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	for i := range receiveSettledLimit {
+		linker.settled[libfossil.FslID(-i-1)] = struct{}{}
+	}
+	if got := len(linker.settled); got != receiveSettledLimit {
+		t.Fatalf("pre-filled settled RIDs = %d, want %d", got, receiveSettledLimit)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, eventRID, eventUUID, eventBytes)
+	}); err != nil {
+		t.Fatalf("first LinkStored: %v", err)
+	}
+	firstLinked := linker.Stats().Linked
+	if firstLinked == 0 {
+		t.Fatal("first LinkStored did not increase Stats.Linked")
+	}
+
+	var eventCount, firstTagCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", eventRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count event rows: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("event rows = %d, want 1", eventCount)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", eventRID).Scan(&firstTagCount); err != nil {
+		t.Fatalf("count event source tagxref rows: %v", err)
+	}
+	if firstTagCount == 0 {
+		t.Fatal("first LinkStored created no event source tagxref rows")
+	}
+
+	r.DB().Exec("DELETE FROM event WHERE objid=?", eventRID)
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", eventRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count removed event rows: %v", err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("event rows after removal = %d, want 0", eventCount)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, eventRID, eventUUID, eventBytes)
+	}); err != nil {
+		t.Fatalf("replay LinkStored: %v", err)
+	}
+	if got := linker.Stats().Linked; got != firstLinked {
+		t.Errorf("replay Stats.Linked = %d, want unchanged %d", got, firstLinked)
+	}
+	var replayTagCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", eventRID).Scan(&replayTagCount); err != nil {
+		t.Fatalf("count replay event source tagxref rows: %v", err)
+	}
+	if replayTagCount != firstTagCount {
+		t.Errorf("replay event source tagxref rows = %d, want unchanged %d", replayTagCount, firstTagCount)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", eventRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count replay event rows: %v", err)
+	}
+	if eventCount != 0 {
+		t.Errorf("replay event rows = %d, want unchanged 0", eventCount)
+	}
+}
+
+func TestReceiveLinkerReplayAfterSettledCapUsesTagxrefMarkerForTicket(t *testing.T) {
+	r := setupTestRepo(t)
+	d := &deck.Deck{
+		Type: deck.Ticket,
+		K:    "0123456789abcdef0123456789abcdef01234567",
+		U:    deck.User("testuser"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		J: []deck.TicketField{
+			{Name: "title", Value: "settled-cap ticket"},
+		},
+	}
+	ticketBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal ticket: %v", err)
+	}
+	ticketRID, ticketUUID, err := blob.Store(r.DB(), ticketBytes)
+	if err != nil {
+		t.Fatalf("Store ticket blob: %v", err)
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	for i := range receiveSettledLimit {
+		linker.settled[libfossil.FslID(-i-1)] = struct{}{}
+	}
+	if got := len(linker.settled); got != receiveSettledLimit {
+		t.Fatalf("pre-filled settled RIDs = %d, want %d", got, receiveSettledLimit)
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, ticketRID, ticketUUID, ticketBytes)
+	}); err != nil {
+		t.Fatalf("first LinkStored: %v", err)
+	}
+	firstLinked := linker.Stats().Linked
+	if firstLinked == 0 {
+		t.Fatal("first LinkStored did not increase Stats.Linked")
+	}
+
+	var eventCount, firstTagCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", ticketRID).Scan(&eventCount); err != nil {
+		t.Fatalf("count ticket event rows: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("ticket event rows = %d, want 1", eventCount)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", ticketRID).Scan(&firstTagCount); err != nil {
+		t.Fatalf("count ticket source tagxref rows: %v", err)
+	}
+	if firstTagCount == 0 {
+		t.Fatal("first LinkStored created no ticket source tagxref rows")
+	}
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, ticketRID, ticketUUID, ticketBytes)
+	}); err != nil {
+		t.Fatalf("replay LinkStored: %v", err)
+	}
+	if got := linker.Stats().Linked; got != firstLinked {
+		t.Errorf("replay Stats.Linked = %d, want unchanged %d", got, firstLinked)
+	}
+	var replayTagCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", ticketRID).Scan(&replayTagCount); err != nil {
+		t.Fatalf("count replay ticket source tagxref rows: %v", err)
+	}
+	if replayTagCount != firstTagCount {
+		t.Errorf("replay ticket source tagxref rows = %d, want unchanged %d", replayTagCount, firstTagCount)
+	}
+}
+
+// TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade pins the
+// receive-time cancellation boundary: an already-expired clone deadline must
+// stop before linking a phantom base can recursively examine its delta children.
+// The one extra child is deliberate: this fixture sits immediately above the
+// 2,000-artifact cascade cap without turning the regression into a corpus test.
+func TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade(t *testing.T) {
+	const fanout = 2_001
+
+	r := setupTestRepo(t)
+	base := []byte("cancelled phantom base with enough stable bytes for deltas")
+	baseUUID := hash.SHA1(base)
+	baseRID, err := blob.StorePhantom(r.DB(), baseUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom base: %v", err)
+	}
+
+	children := make([]libfossil.FslID, fanout)
+	for i := range children {
+		child := []byte(fmt.Sprintf("cancelled phantom delta child %04d", i))
+		rid, err := blob.StoreDeltaRaw(
+			r.DB(),
+			hash.SHA1(child),
+			delta.Create(base, child),
+			baseRID,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("StoreDeltaRaw child %d: %v", i, err)
+		}
+		children[i] = rid
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = r.WithTx(func(tx *db.Tx) error {
+		rid, uuid, err := blob.Store(tx, base)
+		if err != nil {
+			return fmt.Errorf("fill phantom base: %w", err)
+		}
+		if rid != baseRID {
+			return fmt.Errorf("filled base rid = %d, want original phantom rid %d", rid, baseRID)
+		}
+		return linker.LinkStored(ctx, tx, rid, uuid, base)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("LinkStored cancellation error = %v, want context.Canceled", err)
+	}
+
+	var baseSize int
+	if err := r.DB().QueryRow("SELECT size FROM blob WHERE rid=?", baseRID).Scan(&baseSize); err != nil {
+		t.Fatalf("query base size after rollback: %v", err)
+	}
+	if baseSize != -1 {
+		t.Fatalf("base size after cancelled LinkStored = %d, want phantom size -1", baseSize)
+	}
+	var phantomCount int
+	if err := r.DB().QueryRow("SELECT count(*) FROM phantom WHERE rid=?", baseRID).Scan(&phantomCount); err != nil {
+		t.Fatalf("query phantom after rollback: %v", err)
+	}
+	if phantomCount != 1 {
+		t.Fatalf("phantom rows for base after cancelled LinkStored = %d, want 1", phantomCount)
+	}
+
+	for _, rid := range children {
+		var terminal int
+		if err := r.DB().QueryRow(`
+			SELECT
+				(SELECT count(*) FROM event WHERE objid=?)
+			  + (SELECT count(*) FROM plink WHERE cid=? OR pid=?)
+			  + (SELECT count(*) FROM mlink WHERE mid=?)
+			  + (SELECT count(*) FROM tagxref WHERE rid=?)
+			  + (SELECT count(*) FROM leaf WHERE rid=?)
+			  + (SELECT count(*) FROM crosslink_nonartifact WHERE rid=?)`,
+			rid, rid, rid, rid, rid, rid, rid,
+		).Scan(&terminal); err != nil {
+			t.Fatalf("query terminal state for child %d: %v", rid, err)
+		}
+		if terminal != 0 {
+			t.Fatalf("child %d acquired %d terminal derived/nonartifact rows after cancelled LinkStored", rid, terminal)
+		}
+	}
+}
+func TestReceiveLinkerForumReplyBeforeRootPreservesReservedThreadReferences(t *testing.T) {
+	ctx := context.Background()
+	r := setupTestRepo(t)
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+
+	root := &deck.Deck{
+		Type: deck.ForumPost,
+		H:    "reply-before-root thread",
+		U:    deck.User("testuser"),
+		W:    []byte("root post arrives after its reply"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	}
+	rootBytes, err := root.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal root forum post: %v", err)
+	}
+	rootUUID := hash.SHA1(rootBytes)
+
+	reply := &deck.Deck{
+		Type: deck.ForumPost,
+		G:    rootUUID,
+		H:    "reply-before-root thread",
+		I:    rootUUID,
+		U:    deck.User("testuser"),
+		W:    []byte("reply received before its root"),
+		D:    time.Date(2024, 1, 15, 10, 1, 0, 0, time.UTC),
+	}
+	replyBytes, err := reply.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal reply forum post: %v", err)
+	}
+
+	var replyRID libfossil.FslID
+	if err := r.WithTx(func(tx *db.Tx) error {
+		var replyUUID string
+		replyRID, replyUUID, err = blob.Store(tx, replyBytes)
+		if err != nil {
+			return err
+		}
+		return linker.LinkStored(ctx, tx, replyRID, replyUUID, replyBytes)
+	}); err != nil {
+		t.Fatalf("store and link reply: %v", err)
+	}
+
+	var reservedRoot, reservedIRT libfossil.FslID
+	if err := r.DB().QueryRow(
+		"SELECT froot, firt FROM forumpost WHERE fpid=?", replyRID,
+	).Scan(&reservedRoot, &reservedIRT); err != nil {
+		t.Fatalf("query reply forum references before root: %v", err)
+	}
+	if reservedRoot <= 0 || reservedIRT <= 0 {
+		t.Fatalf("reply references before root = froot %d, firt %d; want positive reserved phantom RIDs",
+			reservedRoot, reservedIRT)
+	}
+	if reservedRoot != reservedIRT {
+		t.Fatalf("reply references before root = froot %d, firt %d; want both references to the root phantom",
+			reservedRoot, reservedIRT)
+	}
+	phantomRootRID, exists := blob.Exists(r.DB(), rootUUID)
+	if !exists {
+		t.Fatal("reply link did not reserve a phantom for its root UUID")
+	}
+	if reservedRoot != phantomRootRID {
+		t.Fatalf("reply froot before root = %d, want root phantom RID %d", reservedRoot, phantomRootRID)
+	}
+
+	var rootRID libfossil.FslID
+	if err := r.WithTx(func(tx *db.Tx) error {
+		var ok bool
+		rootRID, ok = blob.Exists(tx, rootUUID)
+		if !ok {
+			return fmt.Errorf("root phantom %s disappeared before arrival", rootUUID)
+		}
+		compressed, err := blob.EncodeForStorage(rootBytes, nil)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=1 WHERE rid=?",
+			len(rootBytes), compressed, rootRID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", rootRID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rootRID); err != nil {
+			return err
+		}
+		return linker.LinkStored(ctx, tx, rootRID, rootUUID, rootBytes)
+	}); err != nil {
+		t.Fatalf("store root into phantom and link: %v", err)
+	}
+	if rootRID != phantomRootRID {
+		t.Fatalf("root filled RID = %d, want reserved phantom RID %d", rootRID, phantomRootRID)
+	}
+
+	assertReplyThread := func(stage string) {
+		t.Helper()
+		var froot, firt libfossil.FslID
+		if err := r.DB().QueryRow(
+			"SELECT froot, firt FROM forumpost WHERE fpid=?", replyRID,
+		).Scan(&froot, &firt); err != nil {
+			t.Fatalf("%s: query reply forum references: %v", stage, err)
+		}
+		if froot != rootRID || firt != rootRID {
+			t.Fatalf("%s: reply references = froot %d, firt %d; want root RID %d",
+				stage, froot, firt, rootRID)
+		}
+	}
+	assertReplyThread("after root arrival")
+
+	if _, err := linker.Finalize(ctx); err != nil {
+		t.Fatalf("ReceiveLinker.Finalize: %v", err)
+	}
+	assertReplyThread("after Finalize")
+
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink after ReceiveLinker.Finalize: %v", err)
+	}
+	assertReplyThread("after subsequent Crosslink")
+}
+
+// TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder
+// pins the receive-time hard budget independently of cancellation. One phantom
+// source unblocks slightly more real checkin deltas than the budget permits:
+// LinkStored must return after examining at most receiveCascadeLimit artifacts,
+// with the accepted source included, and leave the durable remainder for
+// Finalize rather than silently dropping it.
+func TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder(t *testing.T) {
+	const fanout = receiveCascadeLimit + 1
+
+	r := setupTestRepo(t)
+
+	_, fileUUID, err := blob.Store(r.DB(), []byte("receive cascade budget file"))
+	if err != nil {
+		t.Fatalf("Store file blob: %v", err)
+	}
+	marshal := func(i int, parent string) []byte {
+		d := &deck.Deck{
+			Type: deck.Checkin,
+			C:    fmt.Sprintf("receive cascade budget checkin %d", i),
+			U:    deck.User("testuser"),
+			D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Minute),
+			P:    nil,
+			F:    []deck.FileCard{{Name: "receive-cascade-budget.txt", UUID: fileUUID}},
+		}
+		if parent != "" {
+			d.P = []string{parent}
+		}
+		b, err := d.Marshal()
+		if err != nil {
+			t.Fatalf("Marshal checkin %d: %v", i, err)
+		}
+		return b
+	}
+
+	source := marshal(0, "")
+	sourceUUID := hash.SHA1(source)
+	sourceRID, err := blob.StorePhantom(r.DB(), sourceUUID)
+	if err != nil {
+		t.Fatalf("StorePhantom source: %v", err)
+	}
+
+	children := make([]libfossil.FslID, fanout)
+	for i := range children {
+		child := marshal(i+1, sourceUUID)
+		rid, err := blob.StoreDeltaRaw(
+			r.DB(),
+			hash.SHA1(child),
+			delta.Create(source, child),
+			sourceRID,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("StoreDeltaRaw child %d: %v", i, err)
+		}
+		children[i] = rid
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	if err := r.WithTx(func(tx *db.Tx) error {
+		rid, uuid, err := blob.Store(tx, source)
+		if err != nil {
+			return fmt.Errorf("fill phantom source: %w", err)
+		}
+		if rid != sourceRID {
+			return fmt.Errorf("filled source rid = %d, want phantom rid %d", rid, sourceRID)
+		}
+		return linker.LinkStored(context.Background(), tx, rid, uuid, source)
+	}); err != nil {
+		t.Fatalf("fill and LinkStored source: %v", err)
+	}
+
+	if got := linker.Stats().Linked; got == 0 {
+		t.Fatal("LinkStored did not link the accepted source")
+	} else if got > receiveCascadeLimit {
+		t.Fatalf("LinkStored linked %d artifacts, want at most hard receive cascade budget %d "+
+			"including the accepted source (issue #214)", got, receiveCascadeLimit)
+	}
+
+	if _, err := linker.Finalize(context.Background()); err != nil {
+		t.Fatalf("ReceiveLinker.Finalize: %v", err)
+	}
+	if got := countCrosslinked(t, r, children); got != len(children) {
+		t.Fatalf("Finalize crosslinked %d of %d residual delta children, want all", got, len(children))
+	}
+
+	if got, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink after ReceiveLinker.Finalize: %v", err)
+	} else if got != 0 {
+		t.Fatalf("Crosslink after ReceiveLinker.Finalize linked %d artifacts, want no-op", got)
+	}
 }

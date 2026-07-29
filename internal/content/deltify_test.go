@@ -2,13 +2,20 @@ package content
 
 import (
 	"bytes"
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	modernsqlite "modernc.org/sqlite"
 )
 
 // inTx runs fn against a *db.Tx, which Deltify and Undelta require. All
@@ -47,6 +54,177 @@ func isDelta(t *testing.T, q db.Querier, rid libfossil.FslID) bool {
 		t.Fatalf("DeltaSource(%d): %v", rid, err)
 	}
 	return src > 0
+}
+
+// deltifyAvailabilityDriver turns the existing countingQuerier's availability
+// query seam into a database/sql driver seam. Deltify intentionally requires a
+// *db.Tx, so a db.Querier wrapper cannot observe its reads directly. The
+// wrapper is test-only and counts precisely the one query IsAvailable issues
+// for each examined delta-chain node.
+type deltifyAvailabilityDriver struct {
+	inner driver.Driver
+	steps atomic.Int64
+}
+
+func (d *deltifyAvailabilityDriver) Open(name string) (driver.Conn, error) {
+	conn, err := d.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return &deltifyAvailabilityConn{Conn: conn, steps: &d.steps}, nil
+}
+
+type deltifyAvailabilityConn struct {
+	driver.Conn
+	steps *atomic.Int64
+}
+
+func (c *deltifyAvailabilityConn) Prepare(query string) (driver.Stmt, error) {
+	stmt, err := c.Conn.Prepare(query)
+	if err != nil {
+		return nil, err
+	}
+	return &deltifyAvailabilityStmt{Stmt: stmt, query: query, steps: c.steps}, nil
+}
+
+type deltifyAvailabilityStmt struct {
+	driver.Stmt
+	query string
+	steps *atomic.Int64
+}
+
+func (s *deltifyAvailabilityStmt) Query(args []driver.Value) (driver.Rows, error) {
+	if strings.HasPrefix(s.query, "SELECT b.size, d.rid IS NOT NULL, d.srcid") {
+		s.steps.Add(1)
+	}
+	return s.Stmt.Query(args)
+}
+
+const deltifyAvailabilityDriverName = "content-deltify-availability-test"
+
+var (
+	registerDeltifyAvailabilityDriver sync.Once
+	deltifyAvailabilitySQLDriver      = &deltifyAvailabilityDriver{inner: &modernsqlite.Driver{}}
+)
+
+func setupDeltifyAvailabilityDB(t *testing.T) *db.DB {
+	t.Helper()
+
+	registerDeltifyAvailabilityDriver.Do(func() {
+		sql.Register(deltifyAvailabilityDriverName, deltifyAvailabilitySQLDriver)
+	})
+	deltifyAvailabilitySQLDriver.steps.Store(0)
+
+	d, err := db.OpenWith(filepath.Join(t.TempDir(), "deltify.fossil"), db.OpenConfig{
+		Driver: deltifyAvailabilityDriverName,
+	})
+	if err != nil {
+		t.Fatalf("db.OpenWith: %v", err)
+	}
+	if err := db.CreateRepoSchema(d); err != nil {
+		d.Close()
+		t.Fatalf("CreateRepoSchema: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
+
+// TestDeltifyMemoizesAvailabilityWithinCall keeps issue #214's final
+// availability walk bounded. Run just this regression with:
+//
+//	go test ./internal/content -run '^TestDeltifyMemoizesAvailabilityWithinCall$'
+//
+// source is a delta on target, so Deltify must examine target directly and
+// then again while it proves source readable before declining the loop. A
+// call-local AvailabilityCache makes the second examination a memo hit: two
+// availability steps total (target, then source), not three.
+func TestDeltifyMemoizesAvailabilityWithinCall(t *testing.T) {
+	t.Run("memoizes shared grounded target", func(t *testing.T) {
+		d := setupDeltifyAvailabilityDB(t)
+		targetBody, sourceBody := similarPair()
+		target, _, err := blob.Store(d, targetBody)
+		if err != nil {
+			t.Fatalf("Store target: %v", err)
+		}
+		source, _, err := blob.StoreDelta(d, sourceBody, target)
+		if err != nil {
+			t.Fatalf("StoreDelta source: %v", err)
+		}
+
+		deltifyAvailabilitySQLDriver.steps.Store(0)
+		var saved int
+		if err := d.WithTx(func(tx *db.Tx) error {
+			saved, err = Deltify(tx, target, source)
+			return err
+		}); err != nil {
+			t.Fatalf("Deltify target=%d source=%d: %v", target, source, err)
+		}
+		if saved != 0 {
+			t.Fatalf("looping pair saved %d bytes; Deltify must decline it", saved)
+		}
+		if isDelta(t, d, source) {
+			t.Fatal("source delta survived loop break")
+		}
+		if got := deltifyAvailabilitySQLDriver.steps.Load(); got != 2 {
+			t.Fatalf("availability steps = %d, want 2: target's second examination "+
+				"through source must be memoized", got)
+		}
+	})
+
+	t.Run("does not remember an unavailable source after it arrives", func(t *testing.T) {
+		d := setupDeltifyAvailabilityDB(t)
+		targetBody, sourceBody := similarPair()
+		target, _, err := blob.Store(d, targetBody)
+		if err != nil {
+			t.Fatalf("Store target: %v", err)
+		}
+		sourceUUID := hash.SHA1(sourceBody)
+		source, err := blob.StorePhantom(d, sourceUUID)
+		if err != nil {
+			t.Fatalf("StorePhantom source: %v", err)
+		}
+
+		if err := d.WithTx(func(tx *db.Tx) error {
+			saved, err := Deltify(tx, target, source)
+			if err != nil {
+				return err
+			}
+			if saved != 0 {
+				t.Fatalf("unavailable source saved %d bytes", saved)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("Deltify against phantom: %v", err)
+		}
+		if isDelta(t, d, target) {
+			t.Fatal("target was deltified against an unavailable source")
+		}
+
+		compressed, err := blob.Compress(sourceBody)
+		if err != nil {
+			t.Fatalf("Compress source: %v", err)
+		}
+		if _, err := d.Exec("UPDATE blob SET size=?, content=? WHERE rid=?",
+			len(sourceBody), compressed, source); err != nil {
+			t.Fatalf("fill source phantom: %v", err)
+		}
+
+		if err := d.WithTx(func(tx *db.Tx) error {
+			saved, err := Deltify(tx, target, source)
+			if err != nil {
+				return err
+			}
+			if saved <= 0 {
+				t.Fatalf("available source saved %d bytes; a prior unavailable verdict leaked across Deltify calls", saved)
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("Deltify after source arrival: %v", err)
+		}
+		if !isDelta(t, d, target) {
+			t.Fatal("target stayed whole after its formerly unavailable source arrived")
+		}
+	})
 }
 
 func TestDeltifyEncodesSimilarPredecessor(t *testing.T) {

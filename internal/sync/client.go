@@ -700,7 +700,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 // Callers with no such bytes on hand (payload built locally, or a bare
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
-func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
+func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
 	if r == nil {
 		panic("storeReceivedFile: r must not be nil")
 	}
@@ -724,20 +724,17 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 		if !hash.IsValidHash(deltaSrc) {
 			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
 		}
-		return storeDeltaContent(r, uuid, deltaSrc, payload, storedBlob, vis)
+		return storeDeltaContent(ctx, r, uuid, deltaSrc, payload, storedBlob, vis, linker)
 	}
 
-	dephantomizedRid, err := storeResolvedContent(r, uuid, payload, storedBlob, vis)
+	dephantomizedRid, err := storeResolvedContent(ctx, r, uuid, payload, storedBlob, vis, linker)
 	if err != nil {
 		return err
 	}
-	// A phantom filled: crosslink it and any delta children of it that
-	// were waiting on this content, mirroring Fossil's after_dephantomize
-	// call from content_put_ex (content.c:626) once a phantom's real bytes
-	// land. Runs outside storeResolvedContent's transaction -- r.DB() opens
-	// its own connection, and calling it from inside that transaction's
-	// closure would contend with the still-open write lock.
-	if dephantomizedRid > 0 {
+	// General sync and push paths preserve Fossil's post-commit
+	// after_dephantomize cascade. A clone uses its ReceiveLinker inside the
+	// storage transaction instead, so it must not run a second cascade.
+	if linker == nil && dephantomizedRid > 0 {
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
 	}
 	return nil
@@ -749,7 +746,7 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 // 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
 // unconditionally, matching content_put_ex's REPLACE INTO delta, whether
 // or not srcRid is itself currently available.
-func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
+func storeDeltaContent(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
 	return r.WithTx(func(tx *db.Tx) error {
 		srcRid, err := blob.StorePhantom(tx, deltaSrc)
 		if err != nil {
@@ -759,7 +756,15 @@ func storeDeltaContent(r *repo.Repo, uuid, deltaSrc string, payload []byte, stor
 		if err != nil {
 			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
-		return recordVisibility(tx, rid, vis)
+		if err := recordVisibility(tx, rid, vis); err != nil {
+			return err
+		}
+		if linker != nil {
+			if err := linker.LinkStored(ctx, tx, rid, uuid, nil); err != nil {
+				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
+			}
+		}
+		return nil
 	})
 }
 
@@ -808,10 +813,10 @@ func recordVisibility(q db.Querier, rid libfossil.FslID, vis visibility) error {
 // check the way storeDeltaContent's delta bytes must. Fills a phantom row
 // in place if one already exists for uuid.
 //
-// Returns the rid of a phantom that was just filled, so the caller can run
-// AfterDephantomize on it once this transaction has committed; returns 0
+// Returns the rid of a phantom that was just filled, so a non-linker caller
+// can run AfterDephantomize once this transaction has committed; returns 0
 // when no phantom was filled (blob already real, or newly inserted).
-func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte, vis visibility) (libfossil.FslID, error) {
+func storeResolvedContent(ctx context.Context, r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
 	var computedUUID string
 	if len(uuid) > 40 {
 		computedUUID = hash.SHA3(fullContent)
@@ -824,13 +829,25 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 
 	var dephantomizedRid libfossil.FslID
 	err := r.WithTx(func(tx *db.Tx) error {
+		recordAndLink := func(rid libfossil.FslID) error {
+			if err := recordVisibility(tx, rid, vis); err != nil {
+				return err
+			}
+			if linker != nil {
+				if err := linker.LinkStored(ctx, tx, rid, uuid, fullContent); err != nil {
+					return fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
+				}
+			}
+			return nil
+		}
+
 		existingRid, exists := blob.Exists(tx, uuid)
 		if exists {
 			var size int64
 			tx.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size)
 			if size != -1 {
 				// Real blob already exists; only its visibility can have moved.
-				return recordVisibility(tx, existingRid, vis)
+				return recordAndLink(existingRid)
 			}
 			// Fill phantom: update blob content, remove from phantom table.
 			compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
@@ -848,7 +865,7 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 				return fmt.Errorf("unclustered rid=%d: %w", existingRid, err)
 			}
 			dephantomizedRid = libfossil.FslID(existingRid)
-			return recordVisibility(tx, existingRid, vis)
+			return recordAndLink(existingRid)
 		}
 		compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
 		if err != nil {
@@ -868,8 +885,11 @@ func storeResolvedContent(r *repo.Repo, uuid string, fullContent []byte, storedB
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
 			return err
 		}
-		if err := recordVisibility(tx, libfossil.FslID(rid), vis); err != nil {
+		if err := recordAndLink(libfossil.FslID(rid)); err != nil {
 			return err
+		}
+		if linker != nil {
+			return nil
 		}
 
 		// Crosslink cluster artifacts: parse the content and if it's a
@@ -931,7 +951,7 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// long-running cascade on the general push/pull path is interruptible by the
 	// caller's deadline -- the same guarantee #166 gave the clone and
 	// server-push receive paths.
-	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis); err != nil {
+	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis, nil); err != nil {
 		return err
 	}
 

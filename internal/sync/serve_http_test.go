@@ -32,7 +32,7 @@ func TestServeHTTPRoundTrip(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	data := []byte("http test blob")
 	uuid := hash.SHA1(data)
-	storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic)
+	storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic, nil)
 
 	addr := freePort(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -299,7 +299,7 @@ func TestServeHTTPClone(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		data := []byte(fmt.Sprintf("clone http %d", i))
 		uuid := hash.SHA1(data)
-		storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic)
+		storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic, nil)
 		stored[uuid] = true
 	}
 
@@ -347,7 +347,7 @@ func storeLargeCloneCorpus(t *testing.T, r *repo.Repo, totalBytes int) int {
 			t.Fatalf("rng read: %v", err)
 		}
 		uuid := hash.SHA1(data)
-		storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic)
+		storeReceivedFile(context.Background(), r, uuid, "", data, nil, visibilityPublic, nil)
 		stored += blobBytes
 	}
 	if stored <= 256*1024 {

@@ -170,22 +170,22 @@ type handler struct {
 	repo          *repo.Repo
 	buggify       BuggifyChecker
 	resp          []xfer.Card
-	pushOK        bool // client sent a valid push card
-	pullOK        bool // client sent a valid pull card
-	cloneMode     bool // client sent a clone card
-	fatal         bool // a card rule ended the request; resp holds only its error
-	cloneSeq      int  // rid of the next blob to send, from the client's clone card
-	cloneSnapMax  int  // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
-	uvCatalogSent bool // true after sending UV catalog
-	reqClusters   bool // client sent pragma req-clusters
-	filesSent     int  // files sent in response (for observer)
-	filesRecvd    int  // files received from client (for observer)
-	syncPrivate   bool // true if pragma send-private was accepted
-	nextIsPrivate bool // true if a private card precedes the next file/cfile
-	syncedTables  map[string]*SyncedTable // cached table definitions
-	xrowsSent     int  // table sync rows sent
-	xrowsRecvd    int  // table sync rows received
-	cache         *content.Cache             // nil = passthrough to content.Expand
+	pushOK        bool                      // client sent a valid push card
+	pullOK        bool                      // client sent a valid pull card
+	cloneMode     bool                      // client sent a clone card
+	fatal         bool                      // a card rule ended the request; resp holds only its error
+	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
+	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
+	uvCatalogSent bool                      // true after sending UV catalog
+	reqClusters   bool                      // client sent pragma req-clusters
+	filesSent     int                       // files sent in response (for observer)
+	filesRecvd    int                       // files received from client (for observer)
+	syncPrivate   bool                      // true if pragma send-private was accepted
+	nextIsPrivate bool                      // true if a private card precedes the next file/cfile
+	syncedTables  map[string]*SyncedTable   // cached table definitions
+	xrowsSent     int                       // table sync rows sent
+	xrowsRecvd    int                       // table sync rows received
+	cache         *content.Cache            // nil = passthrough to content.Expand
 	remoteHas     map[string]remoteHasEntry // UUIDs the client announced via igot (mirrors Fossil's onremote table)
 
 	// Auth state
@@ -573,7 +573,7 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	}
 	vis := visibility(h.nextIsPrivate)
 	h.nextIsPrivate = false
-	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis); err != nil {
+	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("storing %s: %v", uuid, err),
 		})

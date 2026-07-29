@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -46,8 +47,451 @@ func afterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID, l
 	cache := cl.cache.Stats()
 	cl.stats.expansions = int(cache.Misses)
 	cl.stats.cacheHits = int(cache.Hits)
-	logDeferredCheckins("AfterDephantomize", cl.guard.deferredRids, cl.guard.missingBlobs, cl.stats.linked)
+	logDeferredCheckinSummary("AfterDephantomize", cl.guard, cl.stats.linked)
 	return cl.stats
+}
+
+// ReceiveLinkStats reports the receive-scoped content work. ExpansionMisses
+// counts only durable-delta expansions; supplied full bytes are linked directly
+// and therefore do not take a cache miss.
+type ReceiveLinkStats struct {
+	ExpansionMisses int
+	ExpansionHits   int
+	Linked          int
+}
+
+const (
+	receiveSavepoint    = "receive_artifact"
+	receiveWaiterLimit  = 8192
+	receiveCascadeLimit = 2000
+	receiveCacheBytes   = 64 << 20
+	receiveSettledLimit = 100_000
+)
+
+// ReceiveLinker incrementally derives manifest state while a clone receives
+// blobs. It owns one bounded expanded-content cache, one bounded reverse waiter
+// index, and one fixed-cap settled RID set through Finalize, when it runs the
+// residual candidate sweep and the single combined leaf/tag repair gate.
+type ReceiveLinker struct {
+	r     *repo.Repo
+	state *linkState
+
+	// waiters maps a newly available UUID to the deferred checkins that need it.
+	// waitingOn is the reverse index needed to replace a checkin's wait set when
+	// another retry discovers a different missing reference.
+	waiters     map[string]map[libfossil.FslID]struct{}
+	waitingOn   map[libfossil.FslID]map[string]struct{}
+	waiterSize  int
+	waiterFull  bool
+	needsRepair bool
+	inFlight    map[libfossil.FslID]struct{}
+
+	// settled keeps terminal receive-session verdicts without consulting
+	// derived tables on every delta child. Its fixed cap is a performance
+	// optimization, not a correctness boundary: once full, parsed artifacts
+	// consult type-appropriate durable replay evidence before derivation.
+	settled map[libfossil.FslID]struct{}
+}
+
+// NewReceiveLinker creates the receive-scoped linker and its on-demand
+// crosslink tables. It is not safe for concurrent use; one clone owns one.
+func NewReceiveLinker(r *repo.Repo) (*ReceiveLinker, error) {
+	if r == nil {
+		panic("manifest.NewReceiveLinker: r must not be nil")
+	}
+	return newReceiveLinker(r, receiveCacheBytes)
+}
+
+// newReceiveLinker creates a linker with an explicit expanded-content budget.
+// CrosslinkContext uses the rebuild budget while incremental receive sessions
+// use receiveCacheBytes.
+func newReceiveLinker(r *repo.Repo, cacheBytes int64) (*ReceiveLinker, error) {
+	if r == nil {
+		panic("manifest.newReceiveLinker: r must not be nil")
+	}
+	if cacheBytes <= 0 {
+		panic("manifest.newReceiveLinker: cacheBytes must be > 0")
+	}
+	if err := prepareCrosslinkTables(r); err != nil {
+		return nil, err
+	}
+	return &ReceiveLinker{
+		r:         r,
+		state:     newLinkState(cacheBytes),
+		waiters:   make(map[string]map[libfossil.FslID]struct{}),
+		waitingOn: make(map[libfossil.FslID]map[string]struct{}),
+		inFlight:  make(map[libfossil.FslID]struct{}),
+		settled:   make(map[libfossil.FslID]struct{}),
+	}, nil
+}
+
+// LinkStored examines and links one blob inside the transaction that stored it.
+// verifiedFullBytes is supplied only for already hash-verified full content;
+// nil means the durable delta must be expanded through the receive cache.
+//
+// One accepted blob may make a large delta or deferred-checkin graph eligible,
+// so its synchronous receive-time work is bounded. Residual work is durable:
+// Finalize retries the waiters and sweeps every still-unlinked candidate.
+func (rl *ReceiveLinker) LinkStored(ctx context.Context, tx *db.Tx, rid libfossil.FslID, uuid string, verifiedFullBytes []byte) error {
+	if rl == nil {
+		panic("manifest.ReceiveLinker.LinkStored: linker must not be nil")
+	}
+	if tx == nil {
+		panic("manifest.ReceiveLinker.LinkStored: tx must not be nil")
+	}
+	if rid <= 0 {
+		panic("manifest.ReceiveLinker.LinkStored: rid must be positive")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	// A blob arrived since the previous checkin examination. Availability
+	// negatives are deliberately scoped to one accepted blob so a formerly
+	// missing UUID cannot keep a waiter deferred after this transaction fills it.
+	rl.state.guard.avail = content.NewAvailabilityCache()
+	remaining := receiveCascadeLimit
+	if err := rl.linkStored(ctx, tx, rid, verifiedFullBytes, &remaining); err != nil {
+		return err
+	}
+	if uuid == "" || remaining == 0 {
+		return nil
+	}
+	return rl.retryWaitersFor(ctx, tx, uuid, &remaining)
+}
+
+// Finalize retries the bounded deferred set, sweeps only residual candidates
+// with the same content cache, and repairs leaf/tag state exactly once. Its
+// return count is only the final-sweep work, not receive-time links.
+func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
+	if rl == nil {
+		panic("manifest.ReceiveLinker.Finalize: linker must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		_, repairErr := repairCrosslinkState(rl.r, rl.state.linked, err)
+		return 0, repairErr
+	}
+	if err := rl.retryAllWaiters(ctx); err != nil {
+		// A cancellation or savepoint-control failure stops new derivation, but
+		// receive-time batches may already have committed plink/tagxref rows.
+		// They still get the same single repair gate before the cause returns.
+		_, repairErr := repairCrosslinkState(rl.r, rl.state.linked, err)
+		return 0, repairErr
+	}
+	linked, sweepErr := crosslinkSweepWithState(ctx, rl.r, rl.state)
+	if linked > 0 {
+		rl.needsRepair = true
+	}
+	if !rl.needsRepair {
+		return linked, sweepErr
+	}
+	_, repairErr := repairCrosslinkState(rl.r, 1, sweepErr)
+	if repairErr == nil {
+		rl.needsRepair = false
+	}
+	return linked, repairErr
+}
+
+// Stats returns a snapshot of receive-time linking and bounded-cache work.
+func (rl *ReceiveLinker) Stats() ReceiveLinkStats {
+	if rl == nil {
+		return ReceiveLinkStats{}
+	}
+	cache := rl.state.cache.Stats()
+	return ReceiveLinkStats{
+		ExpansionMisses: int(cache.Misses),
+		ExpansionHits:   int(cache.Hits),
+		Linked:          rl.state.linked,
+	}
+}
+
+// linkStored examines one durable blob, using supplied full bytes before it
+// touches the cache. Link failures roll back only this artifact and remain
+// candidates for Finalize; savepoint-control failures return to abort the
+// caller's outer storage transaction.
+//
+// remaining is shared by a top-level receive call and counts only candidates
+// that were neither already settled nor already on the active recursion path.
+func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossil.FslID, verifiedFullBytes []byte, remaining *int) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, settled := rl.settled[rid]; settled {
+		return nil
+	}
+	if _, busy := rl.inFlight[rid]; busy {
+		return nil
+	}
+	if *remaining == 0 {
+		return nil
+	}
+	(*remaining)--
+	rl.inFlight[rid] = struct{}{}
+	defer delete(rl.inFlight, rid)
+
+	data := verifiedFullBytes
+	direct := data != nil
+	available := false
+	defer func() {
+		if direct {
+			// Parsing/linking consumes these exact verified bytes first. An
+			// over-budget entry is only eligible for eviction afterwards.
+			rl.state.cache.Remember(rid, data)
+		}
+		if err != nil || !available {
+			return
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+			return
+		}
+		if *remaining != 0 {
+			err = rl.retryDeltaChildren(ctx, tx, rid, remaining)
+		}
+	}()
+	if !direct {
+		data, err = rl.state.cache.Expand(tx, rid)
+		if err != nil {
+			return nil // not grounded yet; a later source arrival retries it
+		}
+	}
+	available = true
+
+	d, err := deck.Parse(data)
+	if err != nil || !isArtifact(d) {
+		err = recordNonArtifacts(tx, []libfossil.FslID{rid})
+		if err == nil {
+			rl.settle(rid)
+		}
+		return err
+	}
+	if len(rl.settled) >= receiveSettledLimit {
+		replayed, replayErr := parsedArtifactReplayed(tx, rid, d)
+		if replayErr != nil {
+			return replayErr
+		}
+		if replayed {
+			return nil
+		}
+	}
+
+	if d.Type == deck.Checkin {
+		missing := missingCheckinRefs(tx, d, rl.state.guard.avail)
+		if len(missing) != 0 {
+			rl.state.guard.recordDeferred(tx, "ReceiveLinker", rid, missing)
+			rl.enqueueWaiter(rid, missing)
+			return nil
+		}
+	}
+
+	if _, err := tx.Exec("SAVEPOINT " + receiveSavepoint); err != nil {
+		return fmt.Errorf("manifest.ReceiveLinker savepoint rid=%d: %w", rid, err)
+	}
+	handled, linkErr := linkArtifact(tx, rid, d, rl.state.cache)
+	if linkErr != nil {
+		if _, err := tx.Exec("ROLLBACK TO " + receiveSavepoint); err != nil {
+			return fmt.Errorf("manifest.ReceiveLinker rollback rid=%d: %w", rid, err)
+		}
+		if _, err := tx.Exec("RELEASE " + receiveSavepoint); err != nil {
+			return fmt.Errorf("manifest.ReceiveLinker release rid=%d: %w", rid, err)
+		}
+		slog.Warn("manifest.ReceiveLinker: crosslink failed, blob left un-crosslinked",
+			"rid", rid, "type", d.Type, "error", linkErr)
+		return nil
+	}
+	if _, err := tx.Exec("RELEASE " + receiveSavepoint); err != nil {
+		return fmt.Errorf("manifest.ReceiveLinker release rid=%d: %w", rid, err)
+	}
+	if handled {
+		rl.state.linked++
+		rl.needsRepair = true
+		rl.settle(rid)
+	}
+	return nil
+}
+
+func (rl *ReceiveLinker) settle(rid libfossil.FslID) {
+	if len(rl.settled) >= receiveSettledLimit {
+		return
+	}
+	rl.settled[rid] = struct{}{}
+}
+
+// parsedArtifactReplayed reports whether a parsed artifact has the durable
+// output that proves a prior receive attempt committed. Event and Cluster
+// artifacts use their tagxref source rows as replay evidence; every other
+// handled artifact type uses its event row.
+func parsedArtifactReplayed(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
+	table, column := "event", "objid"
+	if d.Type == deck.Event || d.Type == deck.Cluster {
+		table, column = "tagxref", "srcid"
+	}
+	var replayed int
+	if err := tx.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM "+table+" WHERE "+column+"=?)",
+		rid,
+	).Scan(&replayed); err != nil {
+		return false, fmt.Errorf("manifest.ReceiveLinker replay rid=%d: %w", rid, err)
+	}
+	return replayed != 0, nil
+}
+
+// retryDeltaChildren follows the durable delta graph from an accepted source.
+// Its query is deliberately just the indexed delta source lookup joined to real
+// blobs: receive-session settled RIDs avoid repeated work without materializing
+// or scanning any derived table for each source. inFlight still breaks cycles,
+// and Finalize's candidate sweep remains the durable correctness backstop.
+func (rl *ReceiveLinker) retryDeltaChildren(ctx context.Context, tx *db.Tx, srcid libfossil.FslID, remaining *int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if *remaining == 0 {
+		return nil
+	}
+	rows, err := tx.Query(`
+		SELECT d.rid
+		  FROM delta d JOIN blob b ON b.rid=d.rid
+		 WHERE d.srcid=?
+		   AND b.size>=0
+		 ORDER BY d.rid
+		 LIMIT ?`, srcid, *remaining)
+	if err != nil {
+		return fmt.Errorf("manifest.ReceiveLinker delta children rid=%d: %w", srcid, err)
+	}
+	defer rows.Close()
+	children := make([]libfossil.FslID, 0, *remaining)
+	for i := 0; rows.Next(); i++ {
+		if i%crosslinkCancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			return fmt.Errorf("manifest.ReceiveLinker delta child rid=%d: %w", srcid, err)
+		}
+		children = append(children, libfossil.FslID(rid))
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("manifest.ReceiveLinker delta children rid=%d: %w", srcid, err)
+	}
+	for i, rid := range children {
+		if *remaining == 0 {
+			return nil
+		}
+		if i%crosslinkCancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		if err := rl.linkStored(ctx, tx, rid, nil, remaining); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rl *ReceiveLinker) enqueueWaiter(rid libfossil.FslID, missing []string) {
+	rl.removeWaiter(rid)
+	if rl.waiterFull {
+		return
+	}
+	for _, uuid := range missing {
+		if rl.waiterSize == receiveWaiterLimit {
+			rl.waiterFull = true
+			return
+		}
+		byRID := rl.waiters[uuid]
+		if byRID == nil {
+			byRID = make(map[libfossil.FslID]struct{})
+			rl.waiters[uuid] = byRID
+		}
+		if _, exists := byRID[rid]; exists {
+			continue
+		}
+		byRID[rid] = struct{}{}
+		byUUID := rl.waitingOn[rid]
+		if byUUID == nil {
+			byUUID = make(map[string]struct{})
+			rl.waitingOn[rid] = byUUID
+		}
+		byUUID[uuid] = struct{}{}
+		rl.waiterSize++
+	}
+}
+
+func (rl *ReceiveLinker) removeWaiter(rid libfossil.FslID) {
+	for uuid := range rl.waitingOn[rid] {
+		byRID := rl.waiters[uuid]
+		delete(byRID, rid)
+		rl.waiterSize--
+		if len(byRID) == 0 {
+			delete(rl.waiters, uuid)
+		}
+	}
+	delete(rl.waitingOn, rid)
+}
+
+func (rl *ReceiveLinker) retryWaitersFor(ctx context.Context, tx *db.Tx, uuid string, remaining *int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if *remaining == 0 {
+		return nil
+	}
+	byRID := rl.waiters[uuid]
+	if len(byRID) == 0 {
+		return nil
+	}
+	rids := make([]libfossil.FslID, 0, len(byRID))
+	for rid := range byRID {
+		rids = append(rids, rid)
+	}
+	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
+	for i, rid := range rids {
+		if *remaining == 0 {
+			return nil
+		}
+		if i%crosslinkCancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		rl.removeWaiter(rid)
+		if err := rl.linkStored(ctx, tx, rid, nil, remaining); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (rl *ReceiveLinker) retryAllWaiters(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if len(rl.waitingOn) == 0 {
+		return nil
+	}
+	rids := make([]libfossil.FslID, 0, len(rl.waitingOn))
+	for rid := range rl.waitingOn {
+		rids = append(rids, rid)
+	}
+	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
+	for i, rid := range rids {
+		if i%crosslinkCancelCheckStride == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		rl.removeWaiter(rid)
+		if err := rl.r.WithTx(func(tx *db.Tx) error {
+			remaining := receiveCascadeLimit
+			return rl.linkStored(ctx, tx, rid, nil, &remaining)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // cascadeStats reports how one cascade executed: how much work it did, how many
@@ -299,7 +743,9 @@ func (cl *cascadeLinker) flush(ctx context.Context) bool {
 				default:
 				}
 			}
-			cl.linkOne(tx, item)
+			if err := cl.linkOne(tx, item); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -318,14 +764,14 @@ func (cl *cascadeLinker) flush(ctx context.Context) bool {
 
 // linkOne crosslinks one artifact on the batch transaction, isolated by a
 // savepoint so a mid-artifact failure discards only its own writes.
-func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
+func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) error {
 	cl.stats.attempts++
 	rid := item.rid
 
 	data, err := cl.cache.Expand(tx, rid)
 	if err != nil {
 		cl.warn(item, fmt.Errorf("expand rid=%d: %w", rid, err))
-		return
+		return nil
 	}
 	d, err := deck.Parse(data)
 	if err != nil {
@@ -336,7 +782,7 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 		// blob it filled, ~39k of them on fossil's own repository, and buried
 		// the failures that do matter (issue #186). A blob that parses but
 		// cannot be linked is still a real fault and still warns, below.
-		return
+		return nil
 	}
 	if !isArtifact(d) {
 		// Satisfies the card grammar but not the artifact grammar -- a file
@@ -344,7 +790,7 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 		// type requires. Fossil refuses both, so linking either would write
 		// rows `fossil rebuild` removes. Same skip the sweep applies in
 		// linkBatch; see isArtifact.
-		return
+		return nil
 	}
 
 	// Hold back a Checkin referencing a blob that has not arrived yet, same
@@ -354,34 +800,30 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) {
 	// all, matching the sweep's defer skipping every row write. See
 	// cascadeLinker.guard and checkinDeferralGuard.
 	if d.Type == deck.Checkin && cl.guard.shouldDefer(tx, "AfterDephantomize", rid, d) {
-		return
+		return nil
 	}
 
 	if _, err := tx.Exec("SAVEPOINT " + cascadeSavepoint); err != nil {
-		cl.warn(item, fmt.Errorf("savepoint rid=%d: %w", rid, err))
-		return
+		return fmt.Errorf("manifest.AfterDephantomize savepoint rid=%d: %w", rid, err)
 	}
-	_, handled, linkErr := linkArtifact(tx, rid, d, cl.cache)
+	handled, linkErr := linkArtifact(tx, rid, d, cl.cache)
 	if linkErr != nil {
 		if _, err := tx.Exec("ROLLBACK TO " + cascadeSavepoint); err != nil {
-			// Return rather than fall through to RELEASE: releasing an
-			// unrolled-back savepoint folds this artifact's partial writes into
-			// the batch, which is the leak the savepoint exists to prevent.
-			cl.warn(item, fmt.Errorf("rollback rid=%d: %w", rid, err))
-			return
+			return fmt.Errorf("manifest.AfterDephantomize rollback rid=%d: %w", rid, err)
 		}
+		if _, err := tx.Exec("RELEASE " + cascadeSavepoint); err != nil {
+			return fmt.Errorf("manifest.AfterDephantomize release rid=%d: %w", rid, err)
+		}
+		cl.warn(item, fmt.Errorf("link rid=%d type=%d: %w", rid, d.Type, linkErr))
+		return nil
 	}
 	if _, err := tx.Exec("RELEASE " + cascadeSavepoint); err != nil {
-		cl.warn(item, fmt.Errorf("release rid=%d: %w", rid, err))
-		return
-	}
-	if linkErr != nil {
-		cl.warn(item, fmt.Errorf("link rid=%d type=%d: %w", rid, d.Type, linkErr))
-		return
+		return fmt.Errorf("manifest.AfterDephantomize release rid=%d: %w", rid, err)
 	}
 	if handled {
 		cl.stats.linked++
 	}
+	return nil
 }
 
 // warn logs an artifact-level failure, keeping the orphan and non-orphan

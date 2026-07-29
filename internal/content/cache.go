@@ -14,13 +14,14 @@ import (
 //
 // A nil *Cache is valid and acts as a passthrough to [Expand].
 type Cache struct {
-	mu      sync.Mutex
-	items   map[libfossil.FslID]*list.Element
-	order   *list.List
-	curSize int64
-	maxSize int64
-	hits    int64
-	misses  int64
+	mu         sync.Mutex
+	items      map[libfossil.FslID]*list.Element
+	order      *list.List
+	curSize    int64
+	maxSize    int64
+	maxEntries int
+	hits       int64
+	misses     int64
 }
 
 type cacheEntry struct {
@@ -37,15 +38,24 @@ type CacheStats struct {
 	Entries int
 }
 
-// NewCache creates a cache bounded by maxBytes of expanded content.
+// maxCacheEntries is a fixed hard bound on cache metadata. It is deliberately
+// independent of maxSize: content byte accounting remains exact, while empty
+// or tiny entries cannot grow the map and LRU list without bound. The limit
+// exceeds the 76,700-blob corpus clone and ordinary cache use, so it does not
+// perturb their LRU behavior.
+const maxCacheEntries = 100_000
+
+// NewCache creates a cache bounded by maxBytes of expanded content and by
+// maxCacheEntries metadata entries.
 func NewCache(maxBytes int64) *Cache {
 	if maxBytes <= 0 {
 		panic("content.NewCache: maxBytes must be > 0")
 	}
 	return &Cache{
-		items:   make(map[libfossil.FslID]*list.Element),
-		order:   list.New(),
-		maxSize: maxBytes,
+		items:      make(map[libfossil.FslID]*list.Element),
+		order:      list.New(),
+		maxSize:    maxBytes,
+		maxEntries: maxCacheEntries,
 	}
 }
 
@@ -108,9 +118,45 @@ func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 // store takes ownership of data as the cached content for rid. expandChain
 // hands over buffers it will not touch again.
 func (c *Cache) store(rid libfossil.FslID, data []byte) {
+	c.storeOwned(rid, data)
+}
+
+// Remember retains a copy of already-expanded content. It is for receive paths
+// that have just hash-verified full bytes and must examine those supplied bytes
+// before permitting normal cache eviction; callers retain ownership of data.
+func (c *Cache) Remember(rid libfossil.FslID, data []byte) {
+	if c == nil {
+		return
+	}
+	if rid <= 0 {
+		panic("content.Cache.Remember: rid must be > 0")
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if elem, ok := c.items[rid]; ok {
+		c.order.MoveToFront(elem)
+		return
+	}
+	if int64(len(data)) > c.maxSize {
+		return
+	}
+
+	copied := make([]byte, len(data))
+	copy(copied, data)
+	c.storeOwnedLocked(rid, copied)
+}
+
+func (c *Cache) storeOwned(rid libfossil.FslID, data []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.storeOwnedLocked(rid, data)
+}
+
+// storeOwnedLocked takes ownership of data as the cached content for rid.
+// c.mu must be held.
+func (c *Cache) storeOwnedLocked(rid libfossil.FslID, data []byte) {
 	if elem, ok := c.items[rid]; ok {
 		c.order.MoveToFront(elem)
 		return
@@ -121,7 +167,7 @@ func (c *Cache) store(rid libfossil.FslID, data []byte) {
 	c.items[rid] = elem
 	c.curSize += entrySize(data)
 
-	for c.curSize > c.maxSize && c.order.Len() > 0 {
+	for (c.curSize > c.maxSize || c.order.Len() > c.maxEntries) && c.order.Len() > 0 {
 		c.evictOldest()
 	}
 }

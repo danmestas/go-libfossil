@@ -26,6 +26,11 @@ const phantomStallSampleSize = 10
 // batched to avoid a channel read per card.
 const processResponseCancelCheckStride = 256
 
+// cloneAvailableDeltaSourceLimit bounds the positive-only availability memo
+// used while processing received delta cards. Once full, correctness falls
+// back to querying the repository for subsequent sources.
+const cloneAvailableDeltaSourceLimit = 4096
+
 // PhantomStallError reports a clone that stopped making progress while
 // phantom blobs — content referenced but never received — were still
 // outstanding. Terminating a stalled clone is correct; reporting it as
@@ -61,15 +66,17 @@ func newPhantomStallError(phantoms map[string]bool) *PhantomStallError {
 
 // cloneSession holds the mutable state of a running clone.
 type cloneSession struct {
-	repo        *repo.Repo
-	env         *simio.Env
-	opts        CloneOpts
-	result      CloneResult
-	phantoms    map[string]bool
-	seqno       int
-	projectCode string
-	serverCode  string
-	cookie      string // server-issued snapshot bound; echoed every round so the
+	repo                  *repo.Repo
+	env                   *simio.Env
+	opts                  CloneOpts
+	result                CloneResult
+	linker                *manifest.ReceiveLinker
+	phantoms              map[string]bool
+	availableDeltaSources map[string]struct{}
+	seqno                 int
+	projectCode           string
+	serverCode            string
+	cookie                string // server-issued snapshot bound; echoed every round so the
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
 	obs Observer
@@ -129,12 +136,20 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		return
 	}
 
+	linker, linkerErr := manifest.NewReceiveLinker(r)
+	if linkerErr != nil {
+		err = fmt.Errorf("sync.Clone: create receive linker: %w", linkerErr)
+		return
+	}
+
 	cs := &cloneSession{
-		repo:     r,
-		env:      env,
-		opts:     opts,
-		seqno:    1,
-		phantoms: make(map[string]bool),
+		repo:                  r,
+		env:                   env,
+		opts:                  opts,
+		linker:                linker,
+		phantoms:              make(map[string]bool),
+		availableDeltaSources: make(map[string]struct{}),
+		seqno:                 1,
 	}
 	cs.obs = resolveObserver(opts.Observer)
 
@@ -148,17 +163,16 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		return
 	}
 
-	// Crosslink: parse received manifests into event/plink/leaf/mlink tables.
-	// Use the ctx-aware variant so a clone deadline can interrupt this
-	// whole-repository sweep, which runs after the round loop and so has no
-	// round boundary of its own to observe cancellation at.
-	linked, xlinkErr := manifest.CrosslinkContext(ctx, r)
-	if xlinkErr != nil {
+	// The receive linker has already handled artifacts as their verified
+	// content arrived. Finalize retries deferred candidates and runs the
+	// bounded residual sweep with that same cache.
+	_, finalizeErr := cs.linker.Finalize(ctx)
+	cloneResult.ArtifactsLinked = cs.linker.Stats().Linked
+	if finalizeErr != nil {
 		result = cloneResult
-		err = fmt.Errorf("sync.Clone: crosslink: %w", xlinkErr)
+		err = fmt.Errorf("sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
 		return
 	}
-	cloneResult.ArtifactsLinked = linked
 
 	return r, cloneResult, nil
 }
@@ -510,17 +524,22 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 // verbatim rather than recompressed — this is what makes a clone
 // byte-identical to its source's blob table, not merely content-identical.
 func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob, visibilityPublic); err != nil {
+	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob, visibilityPublic, cs.linker); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 
 	delete(cs.phantoms, uuid)
 	if deltaSrc != "" {
-		// Availability, not existence: a phantom row for deltaSrc still
-		// needs requesting, and so does a delta whose own base is a
-		// phantom.
-		if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
-			cs.phantoms[deltaSrc] = true
+		if _, cached := cs.availableDeltaSources[deltaSrc]; !cached {
+			// Availability, not existence: a phantom row for deltaSrc still
+			// needs requesting, and so does a delta whose own base is a
+			// phantom. Only a confirmed available source is memoized: an
+			// unavailable source can arrive later in this same clone.
+			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
+				cs.phantoms[deltaSrc] = true
+			} else if len(cs.availableDeltaSources) < cloneAvailableDeltaSourceLimit {
+				cs.availableDeltaSources[deltaSrc] = struct{}{}
+			}
 		}
 	}
 	return nil

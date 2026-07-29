@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -463,6 +465,65 @@ func TestCrosslink_DedupesDuplicateFCardUUIDs(t *testing.T) {
 	}
 	// Two F-cards same UUID -> two mlink rows (one per filename).
 	assertCounts(t, r, manifestRID, 1, 1, 2, "linked, two mlinks")
+}
+
+// TestCheckinDeferralGuardBoundsDiagnosticSamples ensures a long receive
+// sweep preserves exact diagnostics without retaining every deferred artifact.
+// RIDs and unique missing UUIDs arrive largest-first; repeated references
+// still count as observations, while each bounded sample keeps the smallest
+// distinct identifiers.
+func TestCheckinDeferralGuardBoundsDiagnosticSamples(t *testing.T) {
+	const deferrals = logDeferredSampleSize + 3
+
+	r := setupTestRepo(t)
+	guard := newCheckinDeferralGuard()
+	const sharedMissingUUID = "0000000000000000000000000000000000000001"
+
+	if err := r.WithTx(func(tx *db.Tx) error {
+		for rid := deferrals; rid > 0; rid-- {
+			uniqueMissingUUID := fmt.Sprintf("%040x", rid+1)
+			d := &deck.Deck{
+				Type: deck.Checkin,
+				F: []deck.FileCard{
+					{Name: "shared", UUID: sharedMissingUUID},
+					{Name: fmt.Sprintf("unique-%d", rid), UUID: uniqueMissingUUID},
+				},
+			}
+			if !guard.shouldDefer(tx, "test", libfossil.FslID(rid), d) {
+				return fmt.Errorf("rid %d was not deferred", rid)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("record deferrals: %v", err)
+	}
+
+	if got := guard.deferredCount; got != deferrals {
+		t.Errorf("deferred event count = %d, want %d", got, deferrals)
+	}
+	if got, want := guard.missingReferenceCount, 2*deferrals; got != want {
+		t.Errorf("missing reference count = %d, want %d", got, want)
+	}
+	if got := len(guard.deferredRids); got != logDeferredSampleSize {
+		t.Errorf("retained deferred RID samples = %d, want %d", got, logDeferredSampleSize)
+	}
+	if got := len(guard.missingBlobs); got != logDeferredSampleSize {
+		t.Errorf("retained missing UUID samples = %d, want %d", got, logDeferredSampleSize)
+	}
+
+	retainedRIDs := make(map[libfossil.FslID]struct{}, len(guard.deferredRids))
+	for _, rid := range guard.deferredRids {
+		retainedRIDs[rid] = struct{}{}
+	}
+	for rid := 1; rid <= logDeferredSampleSize; rid++ {
+		if _, ok := retainedRIDs[libfossil.FslID(rid)]; !ok {
+			t.Errorf("missing smallest retained RID %d from %v", rid, guard.deferredRids)
+		}
+		wantUUID := fmt.Sprintf("%040x", rid)
+		if _, ok := guard.missingBlobs[wantUUID]; !ok {
+			t.Errorf("missing smallest retained UUID %q from %v", wantUUID, guard.missingBlobs)
+		}
+	}
 }
 
 // assertCounts verifies the relational rows (event/leaf/mlink) for a

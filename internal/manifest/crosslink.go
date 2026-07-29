@@ -62,14 +62,10 @@ var attachTargetTypeName = map[byte]string{
 //	128 MiB   249.4 s    812 MB
 //	256 MiB   205.7 s   1473 MB
 //
-// 128 MiB is where both axes beat the 256 MiB that preceded it -- that setting
-// clones in 293 s at 1287 MB with the pre-#187 expander -- rather than trading
-// one for the other. Below it the curve turns sharply: 32 MiB is slower than
-// doing none of this work at all, because the sweep starts re-walking chains
-// it has already paid for. Retune it against measurement, not intuition; the
-// sibling budgets in internal/verify and internal/annotate are separate
-// workloads and were not measured here.
-const crosslinkCacheBytes = 128 << 20
+// One-shot rebuilds retain the 256 MiB cache budget. Receive-time linking has
+// a separate, smaller budget because its session also retains bounded
+// coordination metadata until Finalize.
+const crosslinkCacheBytes = 256 << 20
 
 // ensureForumPostTable creates forumpost if a prior `fossil rebuild` (or a
 // repository that never had one) left it absent. Canonical fossil creates
@@ -154,16 +150,6 @@ func recordNonArtifacts(tx *db.Tx, rids []libfossil.FslID) error {
 		}
 	}
 	return nil
-}
-
-// pendingItem is follow-up work an artifact's crosslink left for after the
-// sweep. Nothing consumes it yet: the wiki backlink pass is still a stub, and
-// ticket rebuilds deliberately do not go through here -- deferring a ticket's
-// event row past the transaction that wrote its tkt- tag is what issue #184
-// was, so ticketRebuildEntry runs inline instead.
-type pendingItem struct {
-	Type byte // 'w' = wiki backlink
-	ID   string
 }
 
 // candidate is one not-yet-crosslinked blob discovered by Crosslink's
@@ -308,114 +294,67 @@ func Crosslink(r *repo.Repo) (int, error) {
 	return CrosslinkContext(context.Background(), r)
 }
 
-// CrosslinkContext is Crosslink that observes ctx: a cancelled context aborts
-// the candidate sweep within crosslinkCancelCheckStride candidates, returning
-// the count linked so far and ctx.Err(). This is what lets a clone deadline
-// interrupt the whole-repository crosslink pass, which has no round boundary of
-// its own to fall back on.
+// CrosslinkContext is a one-shot ReceiveLinker: callers that do not receive
+// blobs incrementally get the same candidate ordering, cache, and single repair
+// gate as a clone, without retaining a linker beyond this call.
 func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
-	if r == nil {
-		panic("manifest.CrosslinkContext: r must not be nil")
+	linker, err := newReceiveLinker(r, crosslinkCacheBytes)
+	if err != nil {
+		return 0, err
 	}
-
-	// The whole sweep runs inside one transaction. Per-candidate transactions
-	// made every SQL statement open its own WAL read-transaction, whose setup
-	// cost climbs as the uncheckpointed WAL grows -- the #89 collapse from
-	// hundreds of artifacts per second to a handful within a few seconds of a
-	// large sweep. One transaction sets the read point once and commits once,
-	// matching Fossil's own rebuild_db and the single-tx shape of
-	// internal/verify.Rebuild. Crosslink output is derived data, so rolling
-	// the whole sweep back on interruption is correct: the next sync re-runs
-	// it from the same durable blobs.
-	return crosslinkSweep(ctx, r)
+	return linker.Finalize(ctx)
 }
 
-// crosslinkSweep discovers every uncrosslinked artifact, links them in
-// delta-chain order, and repairs the order-sensitive derived state.
-//
-// The link pass commits in batches of crosslinkBatchSize candidates rather
-// than in one repository-wide transaction. In WAL mode every page read first
-// probes the wal-index for a newer frame, so a single transaction that writes
-// every artifact's rows lets the WAL grow to hundreds of thousands of frames
-// and every read -- even of unmodified blob and delta pages -- slows as that
-// index grows, which collapsed throughput partway through a large sweep.
-// Committing each batch lets SQLite checkpoint and truncate the WAL, holding
-// wal-index probes flat. Per-candidate transactions (the state this replaces)
-// paid a fresh WAL read-transaction setup on every statement instead; a batch
-// amortizes that setup across thousands of candidates while still bounding the
-// WAL. Crosslink output is derived data, so batch-granular durability is
-// correct: an interrupted sweep leaves committed batches in place and the next
-// candidate query re-selects only what is still unlinked.
-func crosslinkSweep(ctx context.Context, r *repo.Repo) (int, error) {
+// crosslinkSweepWithState performs only the candidate pass. The caller owns the
+// one combined leaf/tag repair gate so receive-time links and sweep links repair
+// together, not once each.
+func crosslinkSweepWithState(ctx context.Context, r *repo.Repo, st *linkState) (int, error) {
 	if r == nil {
-		panic("manifest.crosslinkSweep: r must not be nil")
+		panic("manifest.crosslinkSweepWithState: r must not be nil")
 	}
-
-	// Canonical fossil creates forumpost on demand -- only when a forum
-	// artifact first requires it -- which is why `fossil rebuild` can drop
-	// it for a repository that never had one. The candidate query below
-	// names the table unconditionally, so a repository straight out of a
-	// canonical rebuild needs it recreated before the sweep can run.
-	if err := ensureForumPostTable(r.DB()); err != nil {
-		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
+	if st == nil {
+		panic("manifest.crosslinkSweepWithState: state must not be nil")
 	}
-	if err := ensureNonArtifactTable(r.DB()); err != nil {
-		return 0, fmt.Errorf("manifest.Crosslink: %w", err)
+	if err := prepareCrosslinkTables(r); err != nil {
+		return 0, err
 	}
-
 	candidates, err := collectCrosslinkCandidates(r.DB())
 	if err != nil {
 		return 0, err
 	}
+	return linkCandidatesInOrder(ctx, r, candidates, st)
+}
 
-	linked, sweepErr := linkCandidatesInOrder(ctx, r, candidates)
-
-	// Repair pass: recompute the state that depends on every plink edge and
-	// tagxref origin this sweep wrote being present, none of which can be
-	// guaranteed mid-sweep once candidates are visited in delta-chain order
-	// instead of ancestors-before-descendants. Mirrors Fossil's own
-	// manifest_crosslink_end + leaf_rebuild() shape: defer the order-sensitive
-	// work and repair it once, rather than trying to preserve order through the
-	// sweep itself.
-	//
-	// Gated on linked > 0, not on sweepErr == nil: an interrupted sweep -- a
-	// cancelled clone deadline, or an artifact-level error -- still committed
-	// every batch before the one it stopped in (batches commit as they go),
-	// and those batches wrote plink edges and tagxref origins whose leaf/tag
-	// consequences are now stale. Repairing here on the way out closes that
-	// window; skipping it would leave leaf/tag stale until a later sweep links
-	// something, and a later sweep whose remaining candidates all link zero
-	// artifacts would skip this same gate and leave the window open longer than
-	// one sweep in an unlucky ordering (issue #143). A truly no-op sweep
-	// (linked == 0) cannot have changed either repair's inputs, so it still
-	// skips. The repair runs in its own context-free transaction, so a
-	// cancelled ctx interrupts the candidate sweep but not this recovery.
-	if linked > 0 {
-		if err := r.WithTx(func(tx *db.Tx) error {
-			// Tag propagation first: the leaf rule compares the branch name of
-			// a checkin against each child's, and a child that declares no
-			// branch of its own only has one once propagation has run. Rebuilt
-			// in the other order, every branch whose tip is not itself the
-			// branch's first checkin looks like it has no same-branch child.
-			if err := repairTagPropagation(tx); err != nil {
-				return err
-			}
-			return repairLeafTable(tx)
-		}); err != nil {
-			// The interruption cause is the primary error to surface; a repair
-			// failure layered on top of it is secondary. When the sweep itself
-			// succeeded (sweepErr == nil), the repair failure is the error. When
-			// the sweep was interrupted, join both so a real repair failure
-			// (disk full, corruption, constraint violation) during a cancelled
-			// sweep is still surfaced rather than silently dropped, while
-			// errors.Is(err, context.Canceled) keeps holding for callers.
-			if sweepErr != nil {
-				return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
-			}
-			return linked, fmt.Errorf("manifest.Crosslink: %w", err)
-		}
+func prepareCrosslinkTables(r *repo.Repo) error {
+	if r == nil {
+		panic("manifest.prepareCrosslinkTables: r must not be nil")
 	}
+	if err := ensureForumPostTable(r.DB()); err != nil {
+		return fmt.Errorf("manifest.Crosslink: %w", err)
+	}
+	if err := ensureNonArtifactTable(r.DB()); err != nil {
+		return fmt.Errorf("manifest.Crosslink: %w", err)
+	}
+	return nil
+}
 
+// repairCrosslinkState runs the single order-sensitive repair gate after every
+// derivation that the caller owns has committed.
+func repairCrosslinkState(r *repo.Repo, linked int, sweepErr error) (int, error) {
+	if linked == 0 {
+		return linked, sweepErr
+	}
+	if err := r.WithTx(func(tx *db.Tx) error {
+		if err := repairTagPropagation(tx); err != nil {
+			return err
+		}
+		return repairLeafTable(tx)
+	}); err != nil {
+		if sweepErr != nil {
+			return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
+		}
+		return linked, fmt.Errorf("manifest.Crosslink: %w", err)
+	}
 	return linked, sweepErr
 }
 
@@ -492,39 +431,37 @@ const crosslinkBatchSize = 2000
 
 // linkState carries the sweep's cross-batch accumulators: one content cache for
 // every chain, and the checkinDeferralGuard tracking checkins deferred because
-// a referenced blob has not arrived. It is threaded through the per-batch
-// transactions so a chain expanded in one batch stays cached for its
-// dependents in later batches.
+// a referenced blob has not arrived. A ReceiveLinker owns the same state from
+// each accepted blob through its final candidate sweep.
 type linkState struct {
-	cache   *content.Cache
-	guard   *checkinDeferralGuard
-	linked  int
-	pending []pendingItem
+	cache  *content.Cache
+	guard  *checkinDeferralGuard
+	linked int
+}
+
+func newLinkState(cacheBytes int64) *linkState {
+	if cacheBytes <= 0 {
+		panic("manifest.newLinkState: cacheBytes must be > 0")
+	}
+	return &linkState{
+		cache: content.NewCache(cacheBytes),
+		guard: newCheckinDeferralGuard(),
+	}
 }
 
 // linkCandidatesInOrder expands and crosslinks every candidate in delta-chain
 // order, committing once per crosslinkBatchSize candidates, and returns the
 // number of artifacts linked.
-func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candidate) (int, error) {
-	// One cache for the whole sweep, outliving the per-batch transactions.
-	// Candidate rids were snapshotted above and blob content is immutable once
-	// written, so nothing this loop does can invalidate an entry.
-	//
-	// It exists for the delta chains, not for repeated lookups of the same
-	// rid — each candidate is expanded exactly once. Visiting candidates in
-	// delta-chain order (deltaChainOrder, above) keeps a chain's working set
-	// to the handful of nodes currently in flight; this budget covers
-	// however many chains are interleaved at once, not the whole repository.
-	// See internal/content.Cache.Expand and crosslinkCacheBytes.
-	st := &linkState{
-		cache: content.NewCache(crosslinkCacheBytes),
-		guard: newCheckinDeferralGuard(),
+func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candidate, st *linkState) (int, error) {
+	if st == nil {
+		panic("manifest.linkCandidatesInOrder: state must not be nil")
 	}
+	startLinked := st.linked
 
 	for start := 0; start < len(candidates); start += crosslinkBatchSize {
 		select {
 		case <-ctx.Done():
-			return st.linked, ctx.Err()
+			return st.linked - startLinked, ctx.Err()
 		default:
 		}
 		end := start + crosslinkBatchSize
@@ -534,17 +471,13 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 		if err := r.WithTx(func(tx *db.Tx) error {
 			return linkBatch(ctx, tx, candidates[start:end], st)
 		}); err != nil {
-			return st.linked, err
+			return st.linked - startLinked, err
 		}
 	}
 
-	logDeferredCheckins("Crosslink", st.guard.deferredRids, st.guard.missingBlobs, st.linked)
+	logDeferredCheckinSummary("Crosslink", st.guard, st.linked)
 
-	// Pass 2: Process pending items (wiki backlinks).
-	for _, item := range st.pending {
-		_ = item // Stubs return nil, nothing to process yet.
-	}
-	return st.linked, nil
+	return st.linked - startLinked, nil
 }
 
 // linkBatch links one batch of candidates on tx. ctx is polled once every
@@ -555,12 +488,11 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 // a deferred checkin is skipped, matching the single-pass behavior this
 // batching preserves.
 //
-// The linked count and pending items are accumulated locally and merged into st
-// only once the batch completes, so a rolled-back batch (cancelled or errored)
-// contributes nothing to the count st reports.
+// The linked count is accumulated locally and merged into st only once the
+// batch completes, so a rolled-back batch (cancelled or errored) contributes
+// nothing to the count st reports.
 func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState) error {
 	batchLinked := 0
-	var batchPending []pendingItem
 	var batchNonArtifact []libfossil.FslID
 	for i, c := range batch {
 		if i%crosslinkCancelCheckStride == 0 {
@@ -594,7 +526,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 		if d.Type == deck.Checkin && deferCheckin(tx, c, d, st) {
 			continue
 		}
-		p, handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)
+		handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)
 		if linkErr != nil {
 			return fmt.Errorf("manifest.Crosslink rid=%d type=%d: %w", c.rid, d.Type, linkErr)
 		}
@@ -602,13 +534,11 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			continue
 		}
 		batchLinked++
-		batchPending = append(batchPending, p...)
 	}
 	if err := recordNonArtifacts(tx, batchNonArtifact); err != nil {
 		return err
 	}
 	st.linked += batchLinked
-	st.pending = append(st.pending, batchPending...)
 	return nil
 }
 
@@ -668,39 +598,36 @@ func hasSelfTag(d *deck.Deck) bool {
 	return false
 }
 
-// linkArtifact writes the derived rows for one parsed artifact on tx and
-// returns any follow-up pending items. handled is false for artifact types the
-// sweep does not link (so the caller does not count them), matching the old
-// switch's `default: continue`.
-func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) (pending []pendingItem, handled bool, err error) {
+// linkArtifact writes the derived rows for one parsed artifact on tx. handled
+// is false for artifact types the sweep does not link (so the caller does not
+// count them), matching the old switch's `default: continue`.
+func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) (handled bool, err error) {
 	switch d.Type {
 	case deck.Checkin:
-		return nil, true, crosslinkCheckin(tx, rid, d, cache)
+		return true, crosslinkCheckin(tx, rid, d, cache)
 	case deck.Wiki:
-		p, e := crosslinkWiki(tx, rid, d)
-		return p, true, e
+		return true, crosslinkWiki(tx, rid, d)
 	case deck.Ticket:
-		return nil, true, crosslinkTicket(tx, rid, d, cache)
+		return true, crosslinkTicket(tx, rid, d, cache)
 	case deck.Event:
-		p, e := crosslinkEvent(tx, rid, d)
-		return p, true, e
+		return true, crosslinkEvent(tx, rid, d)
 	case deck.Attachment:
-		return nil, true, crosslinkAttachment(tx, rid, d)
+		return true, crosslinkAttachment(tx, rid, d)
 	case deck.Cluster:
-		return nil, true, CrosslinkCluster(tx, rid, d)
+		return true, CrosslinkCluster(tx, rid, d)
 	case deck.ForumPost:
-		return nil, true, crosslinkForum(tx, rid, d)
+		return true, crosslinkForum(tx, rid, d)
 	case deck.Control:
-		return nil, true, crosslinkControl(tx, rid, d)
+		return true, crosslinkControl(tx, rid, d)
 	}
-	return nil, false, nil
+	return false, nil
 }
 
 // checkinDeferralGuard is the accumulator state behind holding back a Checkin
 // manifest whose referenced blobs (F-cards or the B-card baseline) are not
 // yet available locally: one availability cache shared across every checkin
-// it tests, plus the running set of deferred rids and missing blob UUIDs for
-// the end-of-run rollup log.
+// it tests, exact deferred-reference counts for the end-of-run rollup, and
+// bounded deterministic samples of deferred rids and missing blob UUIDs.
 //
 // Both the whole-repository sweep (linkState.guard) and the phantom-fill
 // cascade (cascadeLinker.guard) embed one. Sharing the type -- rather than
@@ -711,9 +638,11 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 // fall back on. It depends entirely on writing nothing for a deferred rid, so
 // a later sweep still sees it as undiscovered. See shouldDefer.
 type checkinDeferralGuard struct {
-	avail        *content.AvailabilityCache
-	deferredRids []libfossil.FslID
-	missingBlobs map[string]struct{}
+	avail                 *content.AvailabilityCache
+	deferredCount         int
+	missingReferenceCount int
+	deferredRids          []libfossil.FslID
+	missingBlobs          map[string]struct{}
 }
 
 // newCheckinDeferralGuard returns a guard ready to test checkins for one
@@ -721,7 +650,8 @@ type checkinDeferralGuard struct {
 func newCheckinDeferralGuard() *checkinDeferralGuard {
 	return &checkinDeferralGuard{
 		avail:        content.NewAvailabilityCache(),
-		missingBlobs: make(map[string]struct{}),
+		deferredRids: make([]libfossil.FslID, 0, logDeferredSampleSize),
+		missingBlobs: make(map[string]struct{}, logDeferredSampleSize),
 	}
 }
 
@@ -750,9 +680,19 @@ func (g *checkinDeferralGuard) shouldDefer(tx *db.Tx, source string, rid libfoss
 	if len(missing) == 0 {
 		return false
 	}
-	g.deferredRids = append(g.deferredRids, rid)
-	for _, u := range missing {
-		g.missingBlobs[u] = struct{}{}
+	g.recordDeferred(tx, source, rid, missing)
+	return true
+}
+
+// recordDeferred retains exact diagnostic counts and bounded samples for a
+// checkin whose missing references have already been computed by a receive-time
+// linker.
+func (g *checkinDeferralGuard) recordDeferred(tx *db.Tx, source string, rid libfossil.FslID, missing []string) {
+	g.deferredCount++
+	g.deferredRids = insertDeferredRIDSample(g.deferredRids, rid)
+	for _, uuid := range missing {
+		g.missingReferenceCount++
+		g.recordMissingBlobSample(uuid)
 	}
 	var uuid string
 	_ = tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid)
@@ -761,7 +701,50 @@ func (g *checkinDeferralGuard) shouldDefer(tx *db.Tx, source string, rid libfoss
 		"uuid", uuid,
 		"missing_count", len(missing),
 		"first_missing", missing[0])
-	return true
+}
+
+// recordMissingBlobSample retains only the lexicographically smallest distinct
+// missing UUIDs, independent of the order in which checkins are examined.
+func (g *checkinDeferralGuard) recordMissingBlobSample(uuid string) {
+	if _, exists := g.missingBlobs[uuid]; exists {
+		return
+	}
+	if len(g.missingBlobs) < logDeferredSampleSize {
+		g.missingBlobs[uuid] = struct{}{}
+		return
+	}
+
+	var greatest string
+	for sample := range g.missingBlobs {
+		if sample > greatest {
+			greatest = sample
+		}
+	}
+	if uuid < greatest {
+		delete(g.missingBlobs, greatest)
+		g.missingBlobs[uuid] = struct{}{}
+	}
+}
+
+// insertDeferredRIDSample inserts rid into a sorted, distinct, bounded sample
+// and discards values greater than the retained smallest rids.
+func insertDeferredRIDSample(samples []libfossil.FslID, rid libfossil.FslID) []libfossil.FslID {
+	index := sort.Search(len(samples), func(i int) bool { return samples[i] >= rid })
+	if index < len(samples) && samples[index] == rid {
+		return samples
+	}
+	if len(samples) < logDeferredSampleSize {
+		samples = append(samples, 0)
+		copy(samples[index+1:], samples[index:len(samples)-1])
+		samples[index] = rid
+		return samples
+	}
+	if index == len(samples) {
+		return samples
+	}
+	copy(samples[index+1:], samples[index:len(samples)-1])
+	samples[index] = rid
+	return samples
 }
 
 // deferCheckin reports whether a checkin must be held back this sweep because
@@ -780,39 +763,97 @@ func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) bool {
 // #194): unreadable in a terminal and cut at an arbitrary byte by log shippers.
 const logDeferredSampleSize = 8
 
-// logDeferredCheckins emits the one-line rollup of checkins held back this
-// run, with missing-blob UUIDs sorted so it is byte-identical across runs
-// that defer the same set regardless of map iteration order. source labels
-// the caller ("Crosslink" for the sweep, "AfterDephantomize" for the cascade).
+// logDeferredCheckinSummary emits the production guard rollup. Observation
+// counts and bounded deterministic samples are intentionally named separately:
+// samples never imply an omitted-count relationship.
+func logDeferredCheckinSummary(source string, guard *checkinDeferralGuard, linked int) {
+	if guard == nil || guard.deferredCount == 0 {
+		return
+	}
+	rids := make([]string, len(guard.deferredRids))
+	for i, rid := range guard.deferredRids {
+		rids[i] = strconv.FormatInt(int64(rid), 10)
+	}
+	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
+		"defer_attempt_count", guard.deferredCount,
+		"missing_reference_observation_count", guard.missingReferenceCount,
+		"deferred_rid_sample", strings.Join(rids, " "),
+		"missing_uuid_sample", strings.Join(smallestMissingBlobSample(guard.missingBlobs), " "),
+		"linked", linked)
+}
+
+// logDeferredCheckins is retained for direct-input callers and tests. It
+// derives the same deterministic smallest samples as a guard while keeping
+// exact len-based counts for its unbounded input collections.
 func logDeferredCheckins(source string, deferredRids []libfossil.FslID, missingBlobs map[string]struct{}, linked int) {
 	if len(deferredRids) == 0 {
 		return
 	}
-	distinctMissing := make([]string, 0, len(missingBlobs))
-	for u := range missingBlobs {
-		distinctMissing = append(distinctMissing, u)
-	}
-	sort.Strings(distinctMissing)
+	logDeferredCheckinLegacyRollup(
+		source,
+		len(deferredRids),
+		smallestDeferredRIDSample(deferredRids),
+		len(missingBlobs),
+		smallestMissingBlobSample(missingBlobs),
+		linked,
+	)
+}
+
+func logDeferredCheckinLegacyRollup(source string, deferredCount int, deferredRids []libfossil.FslID, missingReferenceCount int, missingBlobs []string, linked int) {
 	rids := make([]string, len(deferredRids))
 	for i, rid := range deferredRids {
 		rids[i] = strconv.FormatInt(int64(rid), 10)
 	}
 	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
-		"deferred", len(deferredRids),
+		"deferred", deferredCount,
 		"linked", linked,
-		"deferred_rids", sampleList(rids),
-		"missing_blob_count", len(distinctMissing),
-		"missing_blobs", sampleList(distinctMissing))
+		"deferred_rids", sampledList(rids, deferredCount),
+		"missing_blob_count", missingReferenceCount,
+		"missing_blobs", sampledList(missingBlobs, missingReferenceCount))
 }
 
-// sampleList renders at most logDeferredSampleSize of items, naming how many it
-// left out rather than truncating silently.
-func sampleList(items []string) string {
-	if len(items) <= logDeferredSampleSize {
+func smallestDeferredRIDSample(rids []libfossil.FslID) []libfossil.FslID {
+	sample := make([]libfossil.FslID, 0, logDeferredSampleSize)
+	for _, rid := range rids {
+		sample = insertDeferredRIDSample(sample, rid)
+	}
+	return sample
+}
+
+func smallestMissingBlobSample(blobs map[string]struct{}) []string {
+	sample := make([]string, 0, logDeferredSampleSize)
+	for uuid := range blobs {
+		sample = insertMissingBlobSample(sample, uuid)
+	}
+	return sample
+}
+
+func insertMissingBlobSample(samples []string, uuid string) []string {
+	index := sort.SearchStrings(samples, uuid)
+	if index < len(samples) && samples[index] == uuid {
+		return samples
+	}
+	if len(samples) < logDeferredSampleSize {
+		samples = append(samples, "")
+		copy(samples[index+1:], samples[index:len(samples)-1])
+		samples[index] = uuid
+		return samples
+	}
+	if index == len(samples) {
+		return samples
+	}
+	copy(samples[index+1:], samples[index:len(samples)-1])
+	samples[index] = uuid
+	return samples
+}
+
+// sampledList renders a bounded sample while preserving its exact total count.
+func sampledList(items []string, total int) string {
+	if total <= len(items) {
 		return strings.Join(items, " ")
 	}
 	return fmt.Sprintf("%s ...and %d more",
-		strings.Join(items[:logDeferredSampleSize], " "), len(items)-logDeferredSampleSize)
+		strings.Join(items, " "), total-len(items))
 }
 
 // repairTagPropagation re-runs tag propagation from every primary parent,
@@ -1305,7 +1346,7 @@ func wikiContentLen(w []byte) int {
 	return 0
 }
 
-func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem, error) {
+func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	if tx == nil {
 		panic("crosslinkWiki: tx must not be nil")
 	}
@@ -1314,12 +1355,12 @@ func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem,
 	}
 
 	if err := addFWTPlink(tx, rid, d); err != nil {
-		return nil, fmt.Errorf("wiki plink: %w", err)
+		return fmt.Errorf("wiki plink: %w", err)
 	}
 
 	title := d.L
 	if title == "" {
-		return nil, fmt.Errorf("wiki manifest missing title (L-card)")
+		return fmt.Errorf("wiki manifest missing title (L-card)")
 	}
 
 	// Apply wiki-<title> tag with value = content length
@@ -1332,7 +1373,7 @@ func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem,
 		Value:     wikiLen,
 		MTime:     libfossil.TimeToJulian(d.D),
 	}); err != nil {
-		return nil, fmt.Errorf("wiki tag: %w", err)
+		return fmt.Errorf("wiki tag: %w", err)
 	}
 
 	// Insert event row with prefix: '+' = new, ':' = edit, '-' = delete
@@ -1350,10 +1391,10 @@ func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem,
 		"REPLACE INTO event(type, mtime, objid, user, comment) VALUES('w', ?, ?, ?, ?)",
 		libfossil.TimeToJulian(d.D), rid, d.U, comment,
 	); err != nil {
-		return nil, fmt.Errorf("wiki event: %w", err)
+		return fmt.Errorf("wiki event: %w", err)
 	}
 
-	return []pendingItem{{Type: 'w', ID: title}}, nil
+	return nil
 }
 
 // crosslinkTicket links one ticket-change artifact: it applies the tkt-<uuid>
@@ -1395,7 +1436,7 @@ func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conten
 	return nil
 }
 
-func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem, error) {
+func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	if tx == nil {
 		panic("crosslinkEvent: tx must not be nil")
 	}
@@ -1404,10 +1445,10 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem
 	}
 
 	if d.E == nil {
-		return nil, fmt.Errorf("event manifest missing E-card")
+		return fmt.Errorf("event manifest missing E-card")
 	}
 	if err := addFWTPlink(tx, rid, d); err != nil {
-		return nil, fmt.Errorf("event plink: %w", err)
+		return fmt.Errorf("event plink: %w", err)
 	}
 	// A technote's T-cards are applied exactly as a check-in's or a control
 	// artifact's are -- canonical Fossil runs all three through one block
@@ -1415,7 +1456,7 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem
 	// has to happen before the event row is written below, because that row
 	// reads the technote's own bgcolor tag back out of tagxref.
 	if err := applyInlineTags(tx, rid, d); err != nil {
-		return nil, fmt.Errorf("event tags: %w", err)
+		return fmt.Errorf("event tags: %w", err)
 	}
 
 	eventID := d.E.UUID
@@ -1429,12 +1470,12 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem
 		Value:     fmt.Sprintf("%d", wikiContentLen(d.W)),
 		MTime:     mtime,
 	}); err != nil {
-		return nil, fmt.Errorf("event tag: %w", err)
+		return fmt.Errorf("event tag: %w", err)
 	}
 
 	var tagid int64
 	if err := tx.QueryRow("SELECT tagid FROM tag WHERE tagname=?", tagName).Scan(&tagid); err != nil {
-		return nil, fmt.Errorf("event tagid: %w", err)
+		return fmt.Errorf("event tagid: %w", err)
 	}
 
 	var subsequent int64
@@ -1466,13 +1507,13 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) ([]pendingItem
 			"REPLACE INTO event(type, mtime, objid, tagid, user, comment, bgcolor) VALUES('e', ?, ?, ?, ?, ?, ?)",
 			libfossil.TimeToJulian(d.E.Date), rid, tagid, d.U, d.C, bgcolor,
 		); err != nil {
-			return nil, fmt.Errorf("event insert: %w", err)
+			return fmt.Errorf("event insert: %w", err)
 		}
 	}
 	if err := updateAttachmentComments(tx, eventID, 'e'); err != nil {
-		return nil, fmt.Errorf("event attachment comments: %w", err)
+		return fmt.Errorf("event attachment comments: %w", err)
 	}
-	return nil, nil
+	return nil
 }
 
 func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
@@ -1602,8 +1643,11 @@ func crosslinkForum(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		return fmt.Errorf("forum plink: %w", err)
 	}
 
-	// Resolve thread references
-	froot, fprev, firt := resolveForumRefs(tx, rid, d)
+	// Resolve thread references.
+	froot, fprev, firt, err := resolveForumRefs(tx, rid, d)
+	if err != nil {
+		return fmt.Errorf("forum references: %w", err)
+	}
 
 	// Insert forumpost
 	if _, err := tx.Exec(
@@ -1621,30 +1665,33 @@ func crosslinkForum(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	return crosslinkForumReply(tx, rid, d, froot, fprev, mtime)
 }
 
-// resolveForumRefs resolves the thread root, previous, and in-reply-to rids from deck cards.
-func resolveForumRefs(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (froot, fprev, firt libfossil.FslID) {
-	if d.G != "" {
-		var rootRid int64
-		if tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.G).Scan(&rootRid) == nil {
-			froot = libfossil.FslID(rootRid)
+// resolveForumRefs resolves the thread root, previous, and in-reply-to rids
+// from deck cards, reserving stable phantom rids for references not yet stored.
+func resolveForumRefs(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (froot, fprev, firt libfossil.FslID, err error) {
+	if d.G == "" {
+		froot = rid // self is thread root only when no G-card declares one.
+	} else {
+		resolved, err := ridOrPhantom(tx, d.G)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("forum root %q: %w", d.G, err)
 		}
+		froot = libfossil.FslID(resolved)
 	}
-	if froot == 0 {
-		froot = rid // self is thread root
-	}
-	if len(d.P) > 0 {
-		var prevRid int64
-		if tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.P[0]).Scan(&prevRid) == nil {
-			fprev = libfossil.FslID(prevRid)
+	if len(d.P) > 0 && d.P[0] != "" {
+		resolved, err := ridOrPhantom(tx, d.P[0])
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("forum previous %q: %w", d.P[0], err)
 		}
+		fprev = libfossil.FslID(resolved)
 	}
 	if d.I != "" {
-		var irtRid int64
-		if tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.I).Scan(&irtRid) == nil {
-			firt = libfossil.FslID(irtRid)
+		resolved, err := ridOrPhantom(tx, d.I)
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("forum in-reply-to %q: %w", d.I, err)
 		}
+		firt = libfossil.FslID(resolved)
 	}
-	return froot, fprev, firt
+	return froot, fprev, firt, nil
 }
 
 // crosslinkForumStarter inserts the event row for a thread-starting forum post.

@@ -156,7 +156,7 @@ Deep dive: [docs/architecture.md](./docs/site/content/docs/architecture.md).
 | `modernc` (default) | `_ "github.com/danmestas/go-libfossil/db/driver/modernc"` | Default for any server, CLI, or desktop use |
 | `ncruces` | `_ "github.com/danmestas/go-libfossil/db/driver/ncruces"` | wasm targets (`GOOS=wasip1` or browser/OPFS) |
 
-Driver selection happens via blank import at link time. See [docs/extension-points.md](./docs/site/content/docs/extension-points.md#sqlite-driver-interface) for the registration contract.
+Library embedders select exactly one driver with a blank import at link time; importing both panics. The shipped `cmd/libfossil` CLI uses `modernc` by default; `go build -tags test_ncruces ./cmd/libfossil` selects `ncruces`. See [docs/extension-points.md](./docs/site/content/docs/extension-points.md#sqlite-driver-interface) for the registration contract.
 
 ## Observers
 

@@ -102,10 +102,10 @@ pass identical tests:
   `//go:build test_ncruces`.
 
 GitHub Actions runs `test` and `test-ncruces` as parallel jobs (see
-`.github/workflows/test.yml`). The ncruces job excludes `cmd/libfossil` because
-the shipped binary only needs one driver built in; DST and unit tests are
-executed under both. For the canonical invocation, use `make test-drivers`
-rather than hand-rolling tag flags.
+`.github/workflows/test.yml`). The default job builds and tests
+`cmd/libfossil` with modernc; the tagged job builds and tests it with ncruces.
+DST and unit tests are also executed under both. For the canonical invocation,
+use `make test-drivers` rather than hand-rolling tag flags.
 
 ## DST (Deterministic Simulation Testing)
 

@@ -134,7 +134,7 @@ jobs:
       - name: Unit tests (ncruces)
         env:
           REQUIRE_FOSSIL_BIN: "1"
-        run: GOWORK=off go test -tags test_ncruces $(GOWORK=off go list ./... | grep -v '/dst' | grep -v 'cmd/libfossil') -count=1 -timeout=120s
+        run: GOWORK=off go test -tags test_ncruces $(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=120s
       - name: DST (ncruces)
         run: GOWORK=off go test -tags test_ncruces ./dst/... -count=1 -timeout=300s
       - name: Driver tests (ncruces)
@@ -160,25 +160,24 @@ jobs:
         # behind stubs and only fails when called, so runtime-behaviour gaps
         # need tests under a browser harness, which is a separate question.
         #
-        # test_ncruces is the same tag the ncruces leg builds under, and it is
-        # the correct one here: it only switches internal/testdriver's blank
-        # driver import from modernc to ncruces, which is the driver that can
-        # actually target WASM. Without the tag internal/testdriver would have
-        # to be excluded too, for no reason other than the default it picks.
+        # test_ncruces is the same tag the ncruces leg builds under. It switches
+        # both internal/testdriver and cmd/libfossil from modernc to ncruces,
+        # which is the driver that can actually target WASM. Without the tag,
+        # both packages would pull modernc into this build.
         #
         # The package set comes from `go list`, not a hand-written list, so a
         # newly added package is inside the gate by default rather than
-        # silently outside it. `-e` stops go list from aborting on the two
-        # packages excluded below -- without it their unresolvable imports
+        # silently outside it. `-e` stops go list from aborting on the package
+        # excluded below -- without it that unresolvable import would
         # discard the entire list. Packages that already declare `//go:build
         # !js` in source (internal/stash, internal/undo) are dropped by go list
         # itself under GOOS=js; that exclusion lives in the code, not here.
         #
-        # The two greps are the only exclusions this job adds and both have the
-        # same single cause: each of these main packages imports the modernc
-        # driver directly in its own main.go, and modernc.org/libc ships no
-        # js/wasm build, so neither can target WASM by construction. Both stay
-        # fully covered by the linux legs above.
+        # The only exclusion is examples/embed-repo-api: its main package
+        # imports the modernc driver directly, and modernc.org/libc ships no
+        # js/wasm build. cmd/libfossil is deliberately built here with the
+        # test_ncruces binding, so this gate compiles the tagged CLI for WASM.
+        # examples/embed-repo-api stays fully covered by the linux legs above.
         env:
           GOWORK: "off"
           GOOS: js
@@ -186,7 +185,7 @@ jobs:
         run: |
           set -o pipefail
           pkgs=$(go list -e -tags test_ncruces ./... \
-            | grep -v -e '/cmd/libfossil$' -e '/examples/embed-repo-api$')
+            | grep -v -e '/examples/embed-repo-api$')
           echo "building $(echo "$pkgs" | wc -l) packages for js/wasm:"
           echo "$pkgs"
           echo "$pkgs" | xargs go build -tags test_ncruces

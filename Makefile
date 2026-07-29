@@ -66,7 +66,7 @@ ci-default:
 	GOWORK=off go build ./cmd/libfossil/
 
 ci-ncruces:
-	GOWORK=off go test -tags test_ncruces $$(GOWORK=off go list ./... | grep -v '/dst' | grep -v 'cmd/libfossil') -count=1 -timeout=120s
+	GOWORK=off go test -tags test_ncruces $$(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=120s
 	GOWORK=off go test -tags test_ncruces ./dst/... -count=1 -timeout=300s
 	cd db/driver/ncruces && GOWORK=off go test ./... -count=1
 

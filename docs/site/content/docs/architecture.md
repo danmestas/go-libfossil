@@ -94,7 +94,8 @@ the root, two driver modules, and the OTel observer. Layout:
   `tag`, `branch`, `uv`, `stash`, `bisect`, `annotate`, `user`, etc.).
   Intended to be embedded by any `main` that wants a fossil-shaped CLI.
 - **`cmd/libfossil/`** — the shipped binary (`main.go`, 25 lines). Wires
-  Kong, blank-imports `db/driver/modernc`, and dispatches to `cli`.
+  Kong, selects `modernc` by default (`ncruces` under `test_ncruces`), and
+  dispatches to `cli`.
 - **`internal/`** — private implementation, grouped by concern:
   - Storage layer: `blob`, `content`, `manifest`, `deck`, `delta`,
     `hash`, `fsltype`, `repo` (schema + DB boot), `tag`.
@@ -146,22 +147,23 @@ without re-parsing blobs.
 `db/` is a thin wrapper over `database/sql`. See
 [`db/doc.go`](https://github.com/danmestas/go-libfossil/blob/main/db/doc.go). A driver registers at `init` time via
 `db.Register(DriverConfig{Name, BuildDSN})`; exactly one registration is
-allowed (a second call panics). `db.Open` / `db.OpenWith` look up the
-registered driver, run `BuildDSN(path, pragmas)` to produce the DSN, and
-then call `sql.Open` with that driver name. Both shipped drivers
-construct `file:<path>?_pragma=k(v)&...` DSNs — differing only in the
-`database/sql` driver name they register under (`"sqlite"` for modernc,
-`"sqlite3"` for ncruces).
+allowed (a second call panics). Library embedders blank-import exactly one
+driver. `db.Open` / `db.OpenWith` look up the registered driver, run
+`BuildDSN(path, pragmas)` to produce the DSN, and then call `sql.Open` with
+that driver name. Both shipped drivers construct
+`file:<path>?_pragma=k(v)&...` DSNs — differing only in the `database/sql`
+driver name they register under (`"sqlite"` for modernc, `"sqlite3"` for
+ncruces).
 
 Shipped drivers:
 
-- **`db/driver/modernc`** — default. Blank-imports `modernc.org/sqlite`,
-  a pure-Go, CGo-free translation of SQLite with full filesystem access.
-  This is what `cmd/libfossil/main.go` imports.
+- **`db/driver/modernc`** — default for `cmd/libfossil`. Blank-imports
+  `modernc.org/sqlite`, a pure-Go, CGo-free translation of SQLite with full
+  filesystem access.
 - **`db/driver/ncruces`** — blank-imports `github.com/ncruces/go-sqlite3`,
   which runs SQLite as WebAssembly. Has a `ncruces_js.go` variant for
-  `GOOS=js` / browser targets. Used for `GOOS=wasip1` builds and for the
-  `test_ncruces` build tag in the Makefile's driver matrix.
+  `GOOS=js` / browser targets. Used for `GOOS=wasip1` builds and by
+  `go build -tags test_ncruces ./cmd/libfossil`.
 
 ## Sync protocol
 

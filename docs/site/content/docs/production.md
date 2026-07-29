@@ -81,12 +81,14 @@ Concurrent reads through one Repo are safe — SQLite handles the locking. Write
 
 ## Driver selection
 
-For services targeting Linux/macOS/Windows, the default `modernc` driver is the right choice — pure Go, static binaries, no surprises. Switch to `ncruces` only when you're shipping a WASI/browser binary or when you need ncruces-specific behavior:
+The shipped `cmd/libfossil` CLI uses `modernc` by default; `go build -tags test_ncruces ./cmd/libfossil` selects `ncruces`.
+
+For library embedders targeting Linux/macOS/Windows, the default `modernc` driver is the right choice — pure Go, static binaries, no surprises. Switch to `ncruces` only when you're shipping a WASI/browser binary or when you need ncruces-specific behavior. Blank-import exactly one driver:
 
 ```go
 import _ "github.com/danmestas/go-libfossil/db/driver/ncruces"
-// instead of:
-// import _ "github.com/danmestas/go-libfossil/db/driver/modernc"
+// Do not also import:
+// _ "github.com/danmestas/go-libfossil/db/driver/modernc"
 ```
 
 Drivers are mutually exclusive — a process can register exactly one. See [`db`](./reference/sdk/db/api/) for the registry contract.

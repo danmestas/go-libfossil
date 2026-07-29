@@ -151,6 +151,7 @@ inconvenient to run:
 - **WASI / browser deployments** — the `db/driver/ncruces` SQLite driver
   compiles to WebAssembly, enabling repo access from edge runtimes.
 
-See `examples/` (planned) for concrete starting points. Until those land,
-`cmd/libfossil/main.go` is the shortest working example of wiring the CLI
-package into a binary.
+See `examples/` (planned) for concrete starting points. Until those land, the
+`cmd/libfossil` package is the shortest working example: `main.go` wires the
+CLI, while `driver_modernc.go` registers the default driver and
+`driver_ncruces.go` shows the tagged WebAssembly-capable alternative.

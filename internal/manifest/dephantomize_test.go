@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -909,5 +910,57 @@ func TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder(t 
 		t.Fatalf("Crosslink after ReceiveLinker.Finalize: %v", err)
 	} else if got != 0 {
 		t.Fatalf("Crosslink after ReceiveLinker.Finalize linked %d artifacts, want no-op", got)
+	}
+}
+
+func TestReceiveLinkerLinkStoredPreservesCrosslinkErrorAfterRollback(t *testing.T) {
+	const forcedRollback = "forced crosslink rollback"
+
+	r := setupTestRepo(t)
+	eventTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	d := &deck.Deck{
+		Type: deck.Event,
+		E: &deck.EventCard{
+			Date: eventTime,
+			UUID: "fedcba9876543210fedcba9876543210fedcba98",
+		},
+		U: deck.User("testuser"),
+		D: eventTime,
+		W: []byte("forced receive linker rollback event body"),
+		C: "forced receive linker rollback event",
+	}
+	eventBytes, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal event: %v", err)
+	}
+	eventRID, eventUUID, err := blob.Store(r.DB(), eventBytes)
+	if err != nil {
+		t.Fatalf("Store event blob: %v", err)
+	}
+	if _, err := r.DB().Exec(`
+		CREATE TRIGGER force_receive_linker_rollback
+		BEFORE INSERT ON event
+		BEGIN
+			SELECT RAISE(ROLLBACK, 'forced crosslink rollback');
+		END
+	`); err != nil {
+		t.Fatalf("create rollback trigger: %v", err)
+	}
+
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	err = r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, eventRID, eventUUID, eventBytes)
+	})
+	if err == nil {
+		t.Fatal("LinkStored error = nil, want crosslink rollback error")
+	}
+	if !strings.Contains(err.Error(), forcedRollback) {
+		t.Errorf("LinkStored error = %q, want initiating crosslink error %q", err, forcedRollback)
+	}
+	if !strings.Contains(err.Error(), "manifest.ReceiveLinker rollback") {
+		t.Errorf("LinkStored error = %q, want receive_artifact rollback context", err)
 	}
 }

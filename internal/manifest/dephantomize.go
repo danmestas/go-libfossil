@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -290,10 +291,16 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	handled, linkErr := linkArtifact(tx, rid, d, rl.state.cache)
 	if linkErr != nil {
 		if _, err := tx.Exec("ROLLBACK TO " + receiveSavepoint); err != nil {
-			return fmt.Errorf("manifest.ReceiveLinker rollback rid=%d: %w", rid, err)
+			return errors.Join(
+				fmt.Errorf("manifest.ReceiveLinker crosslink rid=%d: %w", rid, linkErr),
+				fmt.Errorf("manifest.ReceiveLinker rollback rid=%d: %w", rid, err),
+			)
 		}
 		if _, err := tx.Exec("RELEASE " + receiveSavepoint); err != nil {
-			return fmt.Errorf("manifest.ReceiveLinker release rid=%d: %w", rid, err)
+			return errors.Join(
+				fmt.Errorf("manifest.ReceiveLinker crosslink rid=%d: %w", rid, linkErr),
+				fmt.Errorf("manifest.ReceiveLinker release rid=%d: %w", rid, err),
+			)
 		}
 		slog.Warn("manifest.ReceiveLinker: crosslink failed, blob left un-crosslinked",
 			"rid", rid, "type", d.Type, "error", linkErr)

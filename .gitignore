@@ -35,3 +35,8 @@ docs/site/static/llms-full.txt
 # Downloaded Hugo binary (used by CF and local manual builds)
 docs/site/hugo
 hugo
+.sesh/
+.agent-config/*
+/banks/*
+docs/superpowers
+go.work.sum

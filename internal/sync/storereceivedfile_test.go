@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
@@ -26,7 +27,7 @@ func TestStoreReceivedFileEmptyDeltaPayloadReturnsError(t *testing.T) {
 	baseUUID := hash.SHA1([]byte("some base content, unrelated to this test"))
 	targetUUID := hash.SHA1([]byte("some target content, unrelated to this test"))
 
-	err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, []byte{}, nil, visibilityPublic)
+	err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, []byte{}, nil, visibilityPublic, nil)
 	if err == nil {
 		t.Fatal("storeReceivedFile(empty delta payload) = nil error, want an error " +
 			"(a peer-supplied empty delta must not panic the process)")
@@ -55,7 +56,7 @@ func TestStoreReceivedFileNonHexDeltaSrcReturnsError(t *testing.T) {
 		nonHexDeltaSrc += "z" // valid length, not a hex digit
 	}
 
-	if err := storeReceivedFile(context.Background(), r, targetUUID, nonHexDeltaSrc, deltaBytes, nil, visibilityPublic); err == nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, nonHexDeltaSrc, deltaBytes, nil, visibilityPublic, nil); err == nil {
 		t.Fatal("storeReceivedFile(non-hex deltaSrc) = nil error, want rejection")
 	}
 
@@ -91,7 +92,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	targetUUID := hash.SHA1(target)
 
 	// The delta arrives first. baseUUID has never been seen before.
-	if err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, deltaBytes, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, baseUUID, deltaBytes, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(delta before base) = %v, want nil: a delta "+
 			"arriving before its base must not be treated as an error", err)
 	}
@@ -141,7 +142,7 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 	}
 
 	// Now the base arrives as ordinary full content, in a later round.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -183,10 +184,10 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 
 	// Deliver deepest-first: target's delta references mid, which itself
 	// doesn't exist yet either.
-	if err := storeReceivedFile(context.Background(), r, targetUUID, midUUID, targetDelta, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, targetUUID, midUUID, targetDelta, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(target delta) = %v, want nil", err)
 	}
-	if err := storeReceivedFile(context.Background(), r, midUUID, baseUUID, midDelta, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, midUUID, baseUUID, midDelta, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(mid delta) = %v, want nil", err)
 	}
 
@@ -195,7 +196,7 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	}
 
 	// Finally the root arrives.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -233,7 +234,7 @@ func TestStoreReceivedFileStoresVerbatimBlobForFullContent(t *testing.T) {
 	// silently discarded in favor of a fresh compression pass.
 	storedBlob = append(append([]byte{}, storedBlob...), []byte("-marker-not-part-of-real-zlib")...)
 
-	if err := storeReceivedFile(context.Background(), r, uuid, "", full, storedBlob, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, uuid, "", full, storedBlob, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile: %v", err)
 	}
 
@@ -312,14 +313,14 @@ func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
 	}
 
 	// Guard 3: the delta arrives first, base absent, claiming the GOOD uuid.
-	if err := storeReceivedFile(context.Background(), r, claimedUUID, baseUUID, evilDelta, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, claimedUUID, baseUUID, evilDelta, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(evil delta, base absent) = %v, want nil: a delta arriving "+
 			"before its base must be stored, not rejected up front — rejection has to happen "+
 			"where the claim can actually be checked", err)
 	}
 
 	// The base is delivered afterward, as ordinary full content.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v", err)
 	}
 
@@ -386,7 +387,7 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 	// The checkin manifest arrives first, as a delta against a base that
 	// has never been seen -- create-phantom-if-missing phantomizes the
 	// base, mirroring the client.go:storeDeltaContent doc comment.
-	if err := storeReceivedFile(context.Background(), r, manifestUUID, baseUUID, manifestDelta, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, manifestUUID, baseUUID, manifestDelta, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(manifest delta, base absent) = %v, want nil", err)
 	}
 
@@ -402,7 +403,7 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 	}
 
 	// The base arrives as ordinary full content, filling the phantom.
-	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic); err != nil {
+	if err := storeReceivedFile(context.Background(), r, baseUUID, "", base, nil, visibilityPublic, nil); err != nil {
 		t.Fatalf("storeReceivedFile(base) = %v, want nil", err)
 	}
 
@@ -420,5 +421,115 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 	}
 	if eventType != "ci" {
 		t.Errorf("event type = %q, want 'ci'", eventType)
+	}
+}
+
+// TestIssue214ReceiveLinkerAvoidsFinalSweepWork exercises one receive-scoped
+// linker across the ordering a sync peer is free to use: a checkin delta can
+// precede both its delta base and its named file blob. Each later full blob
+// must retry only the work it makes available. By Finalize, both ordinary
+// blobs must already have durable non-artifact verdicts, the checkin must
+// already have its derived rows, and the historical whole-repository sweep
+// must have nothing left to expand or write.
+func TestIssue214ReceiveLinkerAvoidsFinalSweepWork(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	ctx := context.Background()
+
+	linker, err := manifest.NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+
+	fileContent := []byte("issue 214 receive linker file")
+	fileUUID := hash.SHA1(fileContent)
+	checkin := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "issue 214 receive linker",
+		U:    deck.User("testuser"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		F:    []deck.FileCard{{Name: "issue-214.txt", UUID: fileUUID}},
+	}
+	checkinBytes, err := checkin.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal checkin: %v", err)
+	}
+	checkinUUID := hash.SHA1(checkinBytes)
+
+	base := []byte("issue 214 delta base, received after its checkin")
+	baseUUID := hash.SHA1(base)
+	checkinDelta := delta.Create(base, checkinBytes)
+
+	// The delta is examined when received, but cannot be linked until its
+	// base and then the checkin's named file become available.
+	if err := storeReceivedFile(ctx, r, checkinUUID, baseUUID, checkinDelta, nil, visibilityPublic, linker); err != nil {
+		t.Fatalf("storeReceivedFile(checkin delta before base) = %v, want nil", err)
+	}
+	if err := storeReceivedFile(ctx, r, baseUUID, "", base, nil, visibilityPublic, linker); err != nil {
+		t.Fatalf("storeReceivedFile(base) = %v, want nil", err)
+	}
+	if err := storeReceivedFile(ctx, r, fileUUID, "", fileContent, nil, visibilityPublic, linker); err != nil {
+		t.Fatalf("storeReceivedFile(checkin file) = %v, want nil", err)
+	}
+
+	checkinRID, ok := blob.Exists(r.DB(), checkinUUID)
+	if !ok {
+		t.Fatal("checkin blob row missing after receive")
+	}
+	var nonArtifactVerdicts int
+	if err := r.DB().QueryRow(
+		"SELECT count(*) FROM crosslink_nonartifact WHERE rid IN ("+
+			"(SELECT rid FROM blob WHERE uuid=?), (SELECT rid FROM blob WHERE uuid=?))",
+		baseUUID, fileUUID,
+	).Scan(&nonArtifactVerdicts); err != nil {
+		t.Fatalf("query non-artifact verdicts: %v", err)
+	}
+	if nonArtifactVerdicts != 2 {
+		t.Fatalf("ordinary receive verdicts = %d, want 2 before Finalize", nonArtifactVerdicts)
+	}
+
+	derivedRows := func() int {
+		var rows int
+		if err := r.DB().QueryRow(
+			"SELECT "+
+				"(SELECT count(*) FROM event WHERE objid=?)+"+
+				"(SELECT count(*) FROM leaf WHERE rid=?)+"+
+				"(SELECT count(*) FROM mlink WHERE mid=?)",
+			checkinRID, checkinRID, checkinRID,
+		).Scan(&rows); err != nil {
+			t.Fatalf("count checkin derived rows: %v", err)
+		}
+		return rows
+	}
+	derivedBefore := derivedRows()
+	if derivedBefore == 0 {
+		t.Fatal("checkin was not linked when its file became available")
+	}
+	statsBefore := linker.Stats()
+
+	finalized, err := linker.Finalize(ctx)
+	if err != nil {
+		t.Fatalf("ReceiveLinker.Finalize: %v", err)
+	}
+	if finalized != 0 {
+		t.Fatalf("ReceiveLinker.Finalize linked %d blobs, want 0 after receive-time linking", finalized)
+	}
+	statsAfter := linker.Stats()
+	if statsAfter.ExpansionMisses != statsBefore.ExpansionMisses {
+		t.Fatalf("Finalize expansion misses = %d, want unchanged from receive-time count %d",
+			statsAfter.ExpansionMisses, statsBefore.ExpansionMisses)
+	}
+	if got := derivedRows(); got != derivedBefore {
+		t.Fatalf("Finalize derived rows = %d, want unchanged at %d", got, derivedBefore)
+	}
+
+	relinked, err := manifest.Crosslink(r)
+	if err != nil {
+		t.Fatalf("Crosslink after ReceiveLinker.Finalize: %v", err)
+	}
+	if relinked != 0 {
+		t.Fatalf("Crosslink after ReceiveLinker.Finalize linked %d blobs, want 0", relinked)
+	}
+	if got := derivedRows(); got != derivedBefore {
+		t.Fatalf("second Crosslink derived rows = %d, want unchanged at %d", got, derivedBefore)
 	}
 }

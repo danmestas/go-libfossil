@@ -290,7 +290,14 @@ func serveRepo(t *testing.T, bin, repo string) string {
 	if err := server.Start(); err != nil {
 		t.Fatalf("start fossil server: %v", err)
 	}
-	t.Cleanup(func() { _ = server.Process.Kill() })
+	// Kill signals but does not reap. Wait for the process to actually exit
+	// before t.TempDir()'s cleanup runs, or fossil can still be writing its
+	// -wal/-shm files while RemoveAll walks the directory -- a file appearing
+	// mid-walk fails the cleanup with "directory not empty".
+	t.Cleanup(func() {
+		_ = server.Process.Kill()
+		_ = server.Wait()
+	})
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	waitTCP(t, addr)

@@ -238,7 +238,12 @@ func TestMeasureServeWireAmplification(t *testing.T) {
 	if err := controlServe.Start(); err != nil {
 		t.Fatalf("start fossil server: %v", err)
 	}
-	defer func() { _ = controlServe.Process.Kill() }()
+	// Kill signals but does not reap; wait for the exit so the server is not
+	// still writing into the temp dir when cleanup removes it.
+	defer func() {
+		_ = controlServe.Process.Kill()
+		_ = controlServe.Wait()
+	}()
 	controlUpstream := fmt.Sprintf("127.0.0.1:%d", port)
 	waitPort(t, controlUpstream)
 

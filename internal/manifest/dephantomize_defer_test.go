@@ -7,7 +7,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
@@ -31,7 +30,7 @@ func TestAfterDephantomizeCascadeDefersCheckinWithMissingFileBlob(t *testing.T) 
 	r := setupTestRepo(t)
 
 	fileContent := []byte("cascade race: file content arrives later")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 
 	// A Checkin manifest referencing fileUUID, stored as full (non-delta)
 	// content -- what storeResolvedContent produces for a "file" card, and

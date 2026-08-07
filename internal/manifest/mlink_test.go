@@ -7,7 +7,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // mlinkRow mirrors one row of the mlink table for assertions below.
@@ -94,9 +93,9 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 	//   - root.txt:      deleted (empty UUID F-card)         -> fid=0
 	//   - on-branch.txt: unchanged from the merge parent       -> pid=-1
 	//   - merge-new.txt: brand new, in neither parent          -> pid=0
-	onBranchUUID := hash.SHA1(onBranchContent)
+	onBranchUUID := repoHash(r, onBranchContent)
 	mergeNewContent := []byte("merge-new content")
-	mergeNewUUID := hash.SHA1(mergeNewContent)
+	mergeNewUUID := repoHash(r, mergeNewContent)
 	if _, _, err := blob.Store(d, mergeNewContent); err != nil {
 		t.Fatalf("blob.Store(merge-new.txt): %v", err)
 	}
@@ -256,9 +255,9 @@ func TestInsertCheckinMlinks_DiffsAgainstParentManifest(t *testing.T) {
 	aContent := []byte("a content")
 	bContent := []byte("b content v1")
 	b2Content := []byte("b content v2")
-	aUUID := hash.SHA1(aContent)
-	bUUID := hash.SHA1(bContent)
-	b2UUID := hash.SHA1(b2Content)
+	aUUID := repoHash(r, aContent)
+	bUUID := repoHash(r, bContent)
+	b2UUID := repoHash(r, b2Content)
 
 	// Store every file blob up front so Crosslink never defers.
 	if _, _, err := blob.Store(dbq, aContent); err != nil {
@@ -288,7 +287,7 @@ func TestInsertCheckinMlinks_DiffsAgainstParentManifest(t *testing.T) {
 		T:    trunkTags,
 	}
 	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{aUUID: aContent, bUUID: bContent})
-	parentUUID := hash.SHA1(parentBytes)
+	parentUUID := repoHash(r, parentBytes)
 
 	// Child baseline manifest atop the parent: a.txt unchanged, b.txt modified.
 	child := &deck.Deck{
@@ -377,8 +376,8 @@ func TestInsertCheckinMlinks_FullManifestDeletionByOmission(t *testing.T) {
 
 	aContent := []byte("a content")
 	bContent := []byte("b content")
-	aUUID := hash.SHA1(aContent)
-	bUUID := hash.SHA1(bContent)
+	aUUID := repoHash(r, aContent)
+	bUUID := repoHash(r, bContent)
 
 	if _, _, err := blob.Store(dbq, aContent); err != nil {
 		t.Fatalf("store a: %v", err)
@@ -403,7 +402,7 @@ func TestInsertCheckinMlinks_FullManifestDeletionByOmission(t *testing.T) {
 		T:    trunkTags,
 	}
 	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{aUUID: aContent, bUUID: bContent})
-	parentUUID := hash.SHA1(parentBytes)
+	parentUUID := repoHash(r, parentBytes)
 
 	// Child full manifest: {a.txt=A}. b.txt is dropped by OMISSION -- there is
 	// no F-card for it at all, not even an empty-UUID deletion card.
@@ -500,8 +499,8 @@ func TestInsertCheckinMlinks_RenameResolvesPidFromOldPath(t *testing.T) {
 
 	xContent := []byte("original content")
 	yContent := []byte("edited content after rename")
-	xUUID := hash.SHA1(xContent)
-	yUUID := hash.SHA1(yContent)
+	xUUID := repoHash(r, xContent)
+	yUUID := repoHash(r, yContent)
 
 	xRid, _, err := blob.Store(dbq, xContent)
 	if err != nil {
@@ -527,7 +526,7 @@ func TestInsertCheckinMlinks_RenameResolvesPidFromOldPath(t *testing.T) {
 		T:    trunkTags,
 	}
 	parentBytes := mustMarshalManifest(t, parent, map[string][]byte{xUUID: xContent})
-	parentUUID := hash.SHA1(parentBytes)
+	parentUUID := repoHash(r, parentBytes)
 
 	// Child full manifest: old.txt renamed to new.txt AND edited to Y, as one
 	// F-card carrying the prior name.

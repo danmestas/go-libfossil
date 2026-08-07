@@ -32,7 +32,7 @@ func TestCrosslink_DefersCheckinWithMissingFileBlob(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("file content arrives later")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 
 	// Build a Checkin manifest that references fileUUID, but do NOT
 	// store the file blob yet. Mirrors the receiver state at the
@@ -103,7 +103,7 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 
 	// Build a "remote" baseline manifest by hand (we never store its blob).
 	baselineFileContent := []byte("baseline file")
-	baselineFileUUID := hash.SHA1(baselineFileContent)
+	baselineFileUUID := repoHash(r, baselineFileContent)
 	baseline := &deck.Deck{
 		Type: deck.Checkin,
 		C:    "baseline",
@@ -129,7 +129,7 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal baseline: %v", err)
 	}
-	baselineUUID := hash.SHA1(baselineBytes)
+	baselineUUID := repoHash(r, baselineBytes)
 
 	// Delta manifest pointing at the baseline (B-card) — no file
 	// changes, but the baseline isn't local.
@@ -200,7 +200,7 @@ func TestCrosslink_LinksWhenAllBlobsPresent(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("present from the start")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 	if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
 		t.Fatalf("blob.Store(file): %v", err)
 	}
@@ -259,7 +259,7 @@ func TestCrosslink_DefersMultipleCheckinsSharingMissingBlob(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("shared file across two checkins")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 
 	mkManifest := func(comment string, when time.Time) (int64, *deck.Deck) {
 		d := &deck.Deck{
@@ -338,7 +338,7 @@ func TestCrosslink_DoesNotDeferOnMissingParent(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("present file")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 	if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
 		t.Fatalf("blob.Store(file): %v", err)
 	}
@@ -409,7 +409,7 @@ func TestCrosslink_DedupesDuplicateFCardUUIDs(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("dedup target")
-	fileUUID := hash.SHA1(fileContent)
+	fileUUID := repoHash(r, fileContent)
 
 	d := &deck.Deck{
 		Type: deck.Checkin,

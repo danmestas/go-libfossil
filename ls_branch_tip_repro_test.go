@@ -240,7 +240,7 @@ func TestLsBranchTipReturnsEmpty(t *testing.T) {
 			t.Fatalf("repo.Create: %v", err)
 		}
 		fileContent := []byte("trunk-via-xfer\n")
-		fileUUID := hash.SHA1(fileContent)
+		fileUUID := hash.NamingFor(r.DB()).New.Hash(fileContent)
 		if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
 			t.Fatalf("blob.Store(file): %v", err)
 		}
@@ -322,7 +322,7 @@ func TestLsBranchTipReturnsEmpty(t *testing.T) {
 		//    blob.Store + Crosslink — exactly what HandleSync does for an
 		//    inbound C-card it has never seen before.
 		fileContent := []byte("ingested via xfer\n")
-		fileUUID := hash.SHA1(fileContent)
+		fileUUID := hash.NamingFor(r.DB()).New.Hash(fileContent)
 		// File blob first (so Crosslink resolves it).
 		if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
 			t.Fatalf("blob.Store(file): %v", err)

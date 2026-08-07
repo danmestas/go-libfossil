@@ -40,18 +40,6 @@ func (a Alg) String() string {
 	return "sha1"
 }
 
-// Fossil's hash-policy config values, in Fossil's own order (see
-// `fossil help hash-policy`). Anything at or above policySHA3 names new
-// artifacts with SHA3; policyAuto does so only once the repo holds a SHA3
-// artifact.
-const (
-	policySHA1     = 0
-	policyAuto     = 1
-	policySHA3     = 2
-	policySHA3Only = 3
-	policyShunSHA1 = 4
-)
-
 // Naming is how one repo names the artifacts it is about to create.
 type Naming struct {
 	// New is the algorithm for a new artifact's name.
@@ -77,7 +65,7 @@ func NamingFor(q db.Querier) Naming {
 		panic("hash.NamingFor: q must not be nil")
 	}
 
-	policy := policyAuto
+	policy := db.HashPolicyAuto
 	var raw string
 	if err := q.QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&raw); err == nil {
 		if n, err := strconv.Atoi(raw); err == nil {
@@ -85,11 +73,11 @@ func NamingFor(q db.Querier) Naming {
 		}
 	}
 
-	n := Naming{New: AlgSHA1, ReuseLegacy: policy < policySHA3Only}
+	n := Naming{New: AlgSHA1, ReuseLegacy: policy < db.HashPolicySHA3Only}
 	switch {
-	case policy >= policySHA3:
+	case policy >= db.HashPolicySHA3:
 		n.New = AlgSHA3
-	case policy == policyAuto && hasSHA3Artifact(q):
+	case policy == db.HashPolicyAuto && hasSHA3Artifact(q):
 		// Fossil promotes "auto" to "sha3" as soon as any SHA3 artifact
 		// enters the repo; deriving that from the artifacts themselves
 		// gives the same answer without rewriting the config row.

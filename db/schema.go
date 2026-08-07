@@ -3,8 +3,24 @@ package db
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/danmestas/go-libfossil/simio"
+)
+
+// Fossil's hash-policy config values, in Fossil's own order (see
+// `fossil help hash-policy`). The row holds the integer as text.
+//
+// Naming follows from the value: SHA1 below HashPolicySHA3, SHA3 at or
+// above it, except HashPolicyAuto, which names with SHA1 until a SHA3
+// artifact enters the repo. From HashPolicySHA3Only up, an artifact already
+// stored under a legacy SHA1 name is not reused.
+const (
+	HashPolicySHA1     = 0
+	HashPolicyAuto     = 1
+	HashPolicySHA3     = 2
+	HashPolicySHA3Only = 3
+	HashPolicyShunSHA1 = 4
 )
 
 const schemaRepo1 = `
@@ -259,11 +275,16 @@ func SeedNobody(d *DB, caps string) error {
 	return err
 }
 
-// SeedConfig seeds the config table with project-code, server-code, and
-// schema markers. If projectCode is empty, a fresh 40-char lowercase-hex
-// project-code is generated from rng. If non-empty, it must match
-// ^[0-9a-f]{40}$; otherwise an error is returned and no rows are written.
-// Server-code is always generated.
+// SeedConfig seeds the config table with project-code, server-code, the
+// schema markers, and hash-policy. If projectCode is empty, a fresh 40-char
+// lowercase-hex project-code is generated from rng. If non-empty, it must
+// match ^[0-9a-f]{40}$; otherwise an error is returned and no rows are
+// written. Server-code is always generated.
+//
+// hash-policy is seeded to sha3, which is what `fossil init` writes and so
+// what a repo created here has to say to name its artifacts the same way.
+// A clone is the exception: it adopts its source's policy, not this one, so
+// sync.Clone drops the row the same way it drops project-code.
 func SeedConfig(d *DB, rng simio.Rand, projectCode string) error {
 	if d == nil {
 		panic("db.SeedConfig: d must not be nil")
@@ -295,6 +316,7 @@ func SeedConfig(d *DB, rng simio.Rand, projectCode string) error {
 		{"server-code", serverCode},
 		{"aux-schema", "2015-01-24"},
 		{"content-schema", "2"},
+		{"hash-policy", strconv.Itoa(HashPolicySHA3)},
 	}
 	for _, s := range stmts {
 		_, err := d.Exec(

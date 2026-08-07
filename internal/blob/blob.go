@@ -9,6 +9,35 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
+// existingName reports the name content is already stored under, if any.
+// uuid is content's name under the repo's current policy; when that name is
+// absent and the policy still honours legacy names, the other algorithm's
+// name counts too — an artifact stored before the repo moved to SHA3 keeps
+// the name every existing manifest already refers to, instead of being
+// stored a second time and churning every F-card that mentions it.
+//
+// Only a stored blob qualifies. A phantom is a name the repo knows of but
+// has no content for, so reusing one would report content as stored that
+// isn't.
+func existingName(q db.Querier, naming hash.Naming, uuid string, content []byte) (libfossil.FslID, string, bool) {
+	if rid, ok := Exists(q, uuid); ok {
+		return rid, uuid, true
+	}
+	if !naming.ReuseLegacy {
+		return 0, "", false
+	}
+	legacy := naming.New.Other().Hash(content)
+	rid, ok := Exists(q, legacy)
+	if !ok {
+		return 0, "", false
+	}
+	var size int64
+	if err := q.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size); err != nil || size == -1 {
+		return 0, "", false
+	}
+	return rid, legacy, true
+}
+
 func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err error) {
 	if q == nil {
 		panic("blob.Store: q must not be nil")
@@ -26,10 +55,11 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 		}
 	}()
 
-	uuid = hash.SHA1(content)
+	naming := hash.NamingFor(q)
+	uuid = naming.New.Hash(content)
 
-	if rid, ok := Exists(q, uuid); ok {
-		return rid, uuid, nil
+	if rid, name, ok := existingName(q, naming, uuid, content); ok {
+		return rid, name, nil
 	}
 
 	compressed, err := Compress(content)
@@ -58,7 +88,7 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 	if err != nil {
 		return 0, "", fmt.Errorf("blob.Store verify read-back: %w", err)
 	}
-	if got := hash.SHA1(readBack); got != uuid {
+	if got := naming.New.Hash(readBack); got != uuid {
 		return 0, "", fmt.Errorf("blob.Store verify: hash mismatch after round-trip: stored %s, got %s", uuid, got)
 	}
 
@@ -93,10 +123,11 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 		}
 	}()
 
-	uuid = hash.SHA1(content)
+	naming := hash.NamingFor(q)
+	uuid = naming.New.Hash(content)
 
-	if rid, ok := Exists(q, uuid); ok {
-		return rid, uuid, nil
+	if rid, name, ok := existingName(q, naming, uuid, content); ok {
+		return rid, name, nil
 	}
 
 	srcContent, err := Load(q, srcRid)
@@ -139,7 +170,7 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 	if err != nil {
 		return 0, "", fmt.Errorf("blob.StoreDelta verify apply: %w", err)
 	}
-	if got := hash.SHA1(rebuilt); got != uuid {
+	if got := naming.New.Hash(rebuilt); got != uuid {
 		return 0, "", fmt.Errorf("blob.StoreDelta verify: hash mismatch after round-trip: stored %s, got %s", uuid, got)
 	}
 

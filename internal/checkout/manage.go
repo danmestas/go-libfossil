@@ -67,15 +67,9 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 			isexe = 1
 		}
 
-		// Detect repo hash mode (SHA3 for 64-char UUIDs, SHA1 otherwise).
-		mhash := hash.SHA1(data)
-		var sampleUUID string
-		_ = c.repo.DB().QueryRow(
-			"SELECT uuid FROM blob WHERE size >= 0 LIMIT 1",
-		).Scan(&sampleUUID)
-		if len(sampleUUID) > 40 {
-			mhash = hash.SHA3(data)
-		}
+		// Name the content the way this repo names artifacts, so the
+		// vfile row matches the F-card a commit will write for it.
+		mhash := hash.NamingFor(c.repo.DB()).New.Hash(data)
 
 		// Insert into vfile with rid=0 (newly added), chnged=1 (modified)
 		_, err = c.db.Exec(

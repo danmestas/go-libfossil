@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-07
+
+### Fixed
+
+- New artifacts are named with the algorithm the repository's `hash-policy`
+  selects, rather than always SHA1. Committing into a repository whose policy
+  is sha3 -- the `fossil init` default since 2.10 -- wrote SHA1 artifact IDs,
+  so every F-card in the new manifest carried a differently-derived hash from
+  the one already in the parent manifest and `fossil diff` reported every
+  tracked file as CHANGED even when one file had been edited. Repository
+  integrity was never affected and canonical fossil could always read the
+  result; the damage was unreadable diffs and a permanently mixed-hash
+  repository, plus artifacts a `shun-sha1` peer would reject.
+
+  Content already stored under the other algorithm's name is reused rather
+  than stored a second time, unless the policy forbids it (`sha3-only`,
+  `shun-sha1`). Without that, a repository holding SHA1 artifacts under a
+  sha3 policy would churn every F-card on its next commit -- the same
+  every-file-CHANGED symptom, mirrored. Only a stored blob qualifies: a
+  phantom is a name the repository knows of but has no content for.
+
+  `checkout.Manage` and `uv.Write` read the same policy instead of each
+  guessing from the width of an existing name. `uv.Write`'s guess read
+  `project-code`, which is 40 hex characters in every repository whatever the
+  policy, so it could only ever choose SHA1.
+
+- Repositories created by this library are seeded with `hash-policy`, so they
+  name artifacts the way `fossil init` does. Without the row, naming derived
+  the algorithm from the repository's own artifacts, and a repository with no
+  artifacts yet settled on SHA1 -- then stayed there permanently, because the
+  first artifact it wrote was SHA1 too.
+
+  A clone is the exception and keeps no seeded policy: it adopts its source's,
+  which the absent row expresses by deriving the algorithm from the artifacts
+  the clone actually receives. Canonical fossil propagates the source's policy
+  value into a clone; the sync protocol carries no configuration, so this
+  reaches the same answer by inference. The two differ only for a source
+  explicitly set to `sha1` that nonetheless holds a SHA3 artifact.
+
+### Added
+
+- `db.HashPolicySHA1`, `db.HashPolicyAuto`, `db.HashPolicySHA3`,
+  `db.HashPolicySHA3Only` and `db.HashPolicyShunSHA1` name Fossil's
+  `hash-policy` values, so the seed path and the naming path read one
+  definition instead of each carrying its own copy of the enum.
+
+### Changed
+
+- Repositories created by this library now name their artifacts SHA3 rather
+  than SHA1. No API changed, but the same content committed into a newly
+  created repository produces a different artifact ID than it did in 0.8.1.
+  Existing repositories are unaffected: their artifacts keep their names, and
+  their own `hash-policy` continues to decide how new ones are named.
+
+## [0.8.1] - 2026-07-30
+
+### Fixed
+
+- Crosslink reports the underlying cause when it fails, instead of replacing
+  it with a generic message.
+- Test fossil servers are reaped before their temporary directories are
+  removed, and the unit-test timeout was raised; leftover servers holding
+  files open made teardown flaky.
+
+### Changed
+
+- Generated and local-only files are no longer tracked.
+
+## [0.8.0] - 2026-07-29
+
+### Fixed
+
+- `mlink`, `plink`, `tagxref` and `leaf` are derived the way canonical fossil
+  derives them, in both the sweep and the commit path, including deriving
+  `leaf` by canonical's branch rule. mlink derivation, previously duplicated,
+  is now unified in one place.
+- Tag propagation stops at branch boundaries instead of crossing them, and the
+  three tag-apply paths share one propagation helper.
+- Authenticated sync interoperates with canonical fossil.
+- Clone retries a dropped exchange round instead of aborting.
+- The project code is derived, and artifact visibility is written inside the
+  storing transaction rather than after it.
+- Ticket artifacts are crosslinked, and ordinary file blobs no longer emit a
+  warning.
+- Checkins cascade-linked while referencing unavailable blobs are deferred
+  until those blobs arrive.
+- Submodules are pinned to v0.7.0 rather than an orphaned pseudo-version.
+
+### Added
+
+- The CLI selects its SQLite driver by build tag.
+
+### Performance
+
+- Clone no longer re-seeks `blob.uuid` per F-card, and no longer over-allocates
+  delta output.
+- The post-sync crosslink sweep no longer re-examines the whole repository.
+- Content received during sync is reused in crosslink instead of being read
+  back.
+
 ## [0.7.0] - 2026-07-27
 
 ### Added

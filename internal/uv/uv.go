@@ -51,14 +51,10 @@ func Write(d *db.DB, name string, content []byte, mtime int64) error {
 		panic("uv.Write: content must not be nil")
 	}
 
-	// Detect repo hash policy. Default to SHA1; use SHA3 if project-code is 64-char.
-	var projCode string
-	_ = d.QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&projCode)
-	referenceHash := "0000000000000000000000000000000000000000" // 40-char = SHA1
-	if len(projCode) > 40 {
-		referenceHash = projCode
-	}
-	contentHash := hash.ContentHash(content, referenceHash)
+	// Name the content by the repo's hash-policy. The old check here read
+	// project-code, which is 40 hex characters in every repo whatever the
+	// policy, so it could only ever choose SHA1.
+	contentHash := hash.NamingFor(d).New.Hash(content)
 	sz := len(content)
 
 	// Compress and check 80% threshold.

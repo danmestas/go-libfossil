@@ -8,7 +8,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -21,7 +20,7 @@ func storeCheckin(t *testing.T, r *repo.Repo, comment, branch string, when time.
 	t.Helper()
 
 	content := []byte("content for " + comment)
-	fileUUID := hash.SHA1(content)
+	fileUUID := repoHash(r, content)
 	if _, _, err := blob.Store(r.DB(), content); err != nil {
 		t.Fatalf("blob.Store(file for %s): %v", comment, err)
 	}

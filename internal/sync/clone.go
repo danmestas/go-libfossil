@@ -136,6 +136,16 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		return
 	}
 
+	// Clear hash-policy for the same reason: a clone adopts its source's
+	// policy, not the sha3 a fresh repo is seeded with, so a clone of a SHA1
+	// repo must not start naming artifacts SHA3. The protocol carries no
+	// config, so dropping the row is what conveys it — an absent row reads
+	// as "auto", which derives the algorithm from the artifacts that arrive.
+	if _, execErr := r.DB().Exec("DELETE FROM config WHERE name='hash-policy'"); execErr != nil {
+		err = fmt.Errorf("sync.Clone: clear hash-policy: %w", execErr)
+		return
+	}
+
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
 		err = fmt.Errorf("sync.Clone: create receive linker: %w", linkerErr)

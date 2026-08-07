@@ -8,7 +8,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -21,7 +20,7 @@ func buildCheckin(t *testing.T, r *repo.Repo, comment string, when time.Time, ta
 	t.Helper()
 
 	content := []byte("content for " + comment)
-	fileUUID := hash.SHA1(content)
+	fileUUID := repoHash(r, content)
 	if _, _, err := blob.Store(r.DB(), content); err != nil {
 		t.Fatalf("blob.Store(file for %s): %v", comment, err)
 	}
@@ -50,7 +49,7 @@ func buildCheckin(t *testing.T, r *repo.Repo, comment string, when time.Time, ta
 	if err != nil {
 		t.Fatalf("Marshal(%s): %v", comment, err)
 	}
-	return manifestBytes, hash.SHA1(manifestBytes)
+	return manifestBytes, repoHash(r, manifestBytes)
 }
 
 // storeControl stores a control artifact carrying the given T-cards.

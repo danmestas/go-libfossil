@@ -13,7 +13,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -617,7 +616,7 @@ func TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade(t *testing.T) 
 
 	r := setupTestRepo(t)
 	base := []byte("cancelled phantom base with enough stable bytes for deltas")
-	baseUUID := hash.SHA1(base)
+	baseUUID := repoHash(r, base)
 	baseRID, err := blob.StorePhantom(r.DB(), baseUUID)
 	if err != nil {
 		t.Fatalf("StorePhantom base: %v", err)
@@ -628,7 +627,7 @@ func TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade(t *testing.T) 
 		child := []byte(fmt.Sprintf("cancelled phantom delta child %04d", i))
 		rid, err := blob.StoreDeltaRaw(
 			r.DB(),
-			hash.SHA1(child),
+			repoHash(r, child),
 			delta.Create(base, child),
 			baseRID,
 			nil,
@@ -713,7 +712,7 @@ func TestReceiveLinkerForumReplyBeforeRootPreservesReservedThreadReferences(t *t
 	if err != nil {
 		t.Fatalf("Marshal root forum post: %v", err)
 	}
-	rootUUID := hash.SHA1(rootBytes)
+	rootUUID := repoHash(r, rootBytes)
 
 	reply := &deck.Deck{
 		Type: deck.ForumPost,
@@ -853,7 +852,7 @@ func TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder(t 
 	}
 
 	source := marshal(0, "")
-	sourceUUID := hash.SHA1(source)
+	sourceUUID := repoHash(r, source)
 	sourceRID, err := blob.StorePhantom(r.DB(), sourceUUID)
 	if err != nil {
 		t.Fatalf("StorePhantom source: %v", err)
@@ -864,7 +863,7 @@ func TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder(t 
 		child := marshal(i+1, sourceUUID)
 		rid, err := blob.StoreDeltaRaw(
 			r.DB(),
-			hash.SHA1(child),
+			repoHash(r, child),
 			delta.Create(source, child),
 			sourceRID,
 			nil,

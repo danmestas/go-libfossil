@@ -1110,3 +1110,46 @@ func TestCloneToleratesNonDecimalCloneSeqNo(t *testing.T) {
 		t.Errorf("BlobsRecvd = %d, want 1 (reply prefix must still be processed)", result.BlobsRecvd)
 	}
 }
+
+// A clone adopts its source's naming, not the sha3 a fresh repo is seeded
+// with. The protocol carries no config, so Clone drops the seeded row and
+// naming derives from the artifacts that actually arrive — a clone of a
+// SHA1 repo therefore keeps naming new artifacts SHA1.
+func TestCloneDropsSeededHashPolicy(t *testing.T) {
+	content := []byte("sha1-named artifact from a legacy server")
+	uuid := hash.SHA1(content)
+
+	transport := &mockCloneTransport{
+		handler: func(round int, req *xfer.Message) *xfer.Message {
+			if round == 0 {
+				return &xfer.Message{
+					Cards: []xfer.Card{
+						&xfer.PushCard{
+							ServerCode:  "test-server-code",
+							ProjectCode: "test-project-code",
+						},
+						&xfer.FileCard{UUID: uuid, Content: content},
+						&xfer.CloneSeqNoCard{SeqNo: 0},
+					},
+				}
+			}
+			return &xfer.Message{Cards: []xfer.Card{&xfer.CloneSeqNoCard{SeqNo: 0}}}
+		},
+	}
+
+	repoPath := filepath.Join(t.TempDir(), "clone.fossil")
+	r, _, err := sync.Clone(context.Background(), repoPath, transport, sync.CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	defer r.Close()
+
+	var policy string
+	err = r.DB().QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&policy)
+	if err == nil {
+		t.Errorf("clone kept a hash-policy row (%q); it must follow its source instead", policy)
+	}
+	if got := hash.NamingFor(r.DB()).New; got != hash.AlgSHA1 {
+		t.Errorf("new-artifact naming = %v, want sha1 to match the cloned artifacts", got)
+	}
+}

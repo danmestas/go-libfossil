@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
@@ -29,6 +30,13 @@ func setupTestRepo(t *testing.T) *repo.Repo {
 	}
 	t.Cleanup(func() { r.Close() })
 	return r
+}
+
+// repoHash names content the way r names its artifacts. Fixtures that build
+// manifests by hand have to agree with what blob.Store will write for the
+// same bytes, so they ask the repo instead of assuming SHA1.
+func repoHash(r *repo.Repo, content []byte) string {
+	return hash.NamingFor(r.DB()).New.Hash(content)
 }
 
 func TestCheckinBasic(t *testing.T) {
@@ -305,9 +313,11 @@ func TestCheckinZeroLengthFile(t *testing.T) {
 	if len(files) != 1 || files[0].Name != "empty.txt" {
 		t.Fatalf("ListFiles = %+v, want one entry named empty.txt", files)
 	}
-	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-	if files[0].UUID != emptySHA1 {
-		t.Fatalf("empty.txt UUID = %q, want %q", files[0].UUID, emptySHA1)
+	// The empty artifact is named by the repo's hash-policy like any other,
+	// so this asserts the empty hash of whichever algorithm the repo uses,
+	// not SHA1's da39a3ee... in particular.
+	if want := repoHash(r, []byte{}); files[0].UUID != want {
+		t.Fatalf("empty.txt UUID = %q, want %q", files[0].UUID, want)
 	}
 }
 

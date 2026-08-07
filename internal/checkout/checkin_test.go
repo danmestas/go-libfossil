@@ -9,6 +9,7 @@ import (
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/simio"
 )
@@ -621,9 +622,10 @@ func TestCommitZeroLengthFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("query empty.txt uuid: %v", err)
 	}
-	const emptySHA1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-	if uuid != emptySHA1 {
-		t.Fatalf("empty.txt uuid = %q, want %q", uuid, emptySHA1)
+	// The empty artifact is named by the repo's hash-policy like any other,
+	// so this asserts the empty hash of whichever algorithm the repo uses.
+	if want := hash.NamingFor(r.DB()).New.Hash([]byte{}); uuid != want {
+		t.Fatalf("empty.txt uuid = %q, want %q", uuid, want)
 	}
 }
 

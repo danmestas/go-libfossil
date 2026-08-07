@@ -243,7 +243,7 @@ func TestSyncPrivateArtifactTransition(t *testing.T) {
 
 	// Store a blob and mark private on server.
 	data := []byte("transitioning-artifact")
-	uuid := hash.SHA1(data)
+	uuid := hash.NamingFor(serverRepo.DB()).New.Hash(data)
 	rid, _, err := blob.Store(serverRepo.DB(), data)
 	if err != nil {
 		t.Fatalf("blob.Store: %v", err)

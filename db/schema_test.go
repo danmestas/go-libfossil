@@ -2,10 +2,12 @@ package db_test
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 func TestSeedNobody(t *testing.T) {
@@ -66,5 +68,33 @@ func TestCreateRepoSchemaTicketTables(t *testing.T) {
 	).Scan(&idxName)
 	if err != nil {
 		t.Errorf("index ticketchng_idx1 not found: %v", err)
+	}
+}
+
+// A new repo is seeded with a hash-policy so it names artifacts the way
+// `fossil init` does. Without the row, naming falls back to deriving from
+// the repo's own artifacts, and an empty repo has none — so it would settle
+// on SHA1 and stay there permanently.
+func TestSeedConfigWritesHashPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.fossil")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := db.CreateRepoSchema(d); err != nil {
+		t.Fatalf("CreateRepoSchema: %v", err)
+	}
+	if err := db.SeedConfig(d, simio.CryptoRand{}, ""); err != nil {
+		t.Fatalf("SeedConfig: %v", err)
+	}
+
+	var got string
+	if err := d.QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&got); err != nil {
+		t.Fatalf("no hash-policy row: %v", err)
+	}
+	if want := strconv.Itoa(db.HashPolicySHA3); got != want {
+		t.Errorf("hash-policy = %q, want %q (sha3, what fossil init writes)", got, want)
 	}
 }

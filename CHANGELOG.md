@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the current version without `Force` keeps it. A forced `Extract` starts the
   checkout's file list fresh, as `fossil checkout --force` does, so a pending
   rename or removal no longer survives it.
+- A database fault while checking whether content is present no longer reads
+  as "content missing" where missing content is tolerated (#239). Since #231,
+  `CreateCheckout` on a partly synced tip leaves the checkout's file list
+  empty instead of failing; a busy or failed database during that check was
+  treated the same way, so `Create` quietly succeeded with an empty checkout.
+  The fault is now reported. New `content.CheckAvailableByUUID` returns the
+  error; the existing boolean checks still treat one as unavailable.
 
 - The CLI's `add`, `rm`, `rename` and `revert` commands call the library
   instead of writing the checkout database with raw SQL (#234). `rename` now

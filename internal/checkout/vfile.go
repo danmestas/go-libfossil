@@ -93,7 +93,12 @@ func (c *Checkout) resolveFiles(
 	blobRIDs := make([]libfossil.FslID, len(files))
 	var missing []string
 	for i, file := range files {
-		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
+		// A database fault must not read as missing content: Create
+		// tolerates missing content, and would swallow the fault with it.
+		blobRID, available, err := content.CheckAvailableByUUID(c.repo.DB(), file.UUID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("checkout.resolveFiles: %s: %w", file.Name, err)
+		}
 		if !available {
 			missing = append(missing, file.Name)
 			continue

@@ -10,12 +10,15 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// Revert restores files to their checkout version state.
-// If opts.Paths is empty, reverts ALL changed files.
+// Revert restores files to their checkout version state, the way fossil's
+// revert does. If opts.Paths is empty, reverts ALL changed files. Change
+// flags are refreshed from disk first, so an edit not yet scanned is
+// reverted too.
 //
 // For each file to revert:
-// - If rid==0 (newly added): DELETE from vfile, remove from Storage
-// - If rid>0 (existing, modified/deleted): restore original content, reset chnged=0, deleted=0
+//   - If rid==0 (newly added): un-manage it (DELETE from vfile). The file stays
+//     on disk: it was never committed, so deleting it would destroy the only copy.
+//   - If rid>0 (existing, modified/deleted): restore original content, reset chnged=0, deleted=0
 //
 // Panics if c is nil (TigerStyle precondition).
 func (c *Checkout) Revert(opts RevertOpts) error {
@@ -27,6 +30,11 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	vid, _, err := c.Version()
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: %w", err)
+	}
+	if vid > 0 {
+		if err := c.refreshChanged(vid); err != nil {
+			return fmt.Errorf("checkout.Revert: %w", err)
+		}
 	}
 
 	// Build query based on whether specific paths are requested
@@ -123,15 +131,11 @@ func (c *Checkout) revertFile(
 	}
 
 	if rid == 0 {
-		// Newly added file (never committed) — remove completely
+		// Newly added file (never committed): un-manage it and leave it on
+		// disk, as fossil's revert does. It has no committed copy to restore.
 		_, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", id)
 		if err != nil {
 			return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", pathname, err)
-		}
-
-		// Remove from filesystem
-		if err := c.env.Storage.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
 		}
 
 		// Notify callback
@@ -144,43 +148,8 @@ func (c *Checkout) revertFile(
 		return nil
 	}
 
-	// Existing file (rid > 0) — restore original content
-	// Expand original blob content
-	data, err := content.Expand(c.repo.DB(), libfossil.FslID(rid))
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: expand blob for %s: %w", pathname, err)
-	}
-
-	// Query file metadata for permissions
-	var isexe int64
-	err = c.db.QueryRow("SELECT CAST(isexe AS INTEGER) FROM vfile WHERE id = ?", id).Scan(&isexe)
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: query vfile metadata for %s: %w", pathname, err)
-	}
-
-	// Ensure parent directory exists
-	parentDir := filepath.Dir(fullPath)
-	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
-		return fmt.Errorf("checkout.Revert: mkdir %s: %w", parentDir, err)
-	}
-
-	// Determine file permissions
-	perm := os.FileMode(0o644)
-	if isexe != 0 {
-		perm = 0o755
-	}
-
-	// Write file to disk
-	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
-		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
-	}
-
-	// Reset vfile state: chnged=0, deleted=0
-	_, err = c.db.Exec(`
-		UPDATE vfile SET chnged = 0, deleted = 0 WHERE id = ?
-	`, id)
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
+	if err := c.restoreCommitted(id, pathname, fullPath, rid); err != nil {
+		return err
 	}
 
 	// Notify callback
@@ -190,5 +159,43 @@ func (c *Checkout) revertFile(
 		}
 	}
 
+	return nil
+}
+
+// restoreCommitted writes the committed content of blob rid back to fullPath,
+// with the row's executable bit, and marks row id unchanged.
+func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int64) error {
+	if rid <= 0 {
+		panic("checkout.restoreCommitted: rid must be positive")
+	}
+	if fullPath == "" {
+		panic("checkout.restoreCommitted: empty fullPath")
+	}
+
+	data, err := content.Expand(c.repo.DB(), libfossil.FslID(rid))
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: expand blob for %s: %w", pathname, err)
+	}
+	var isexe int64
+	err = c.db.QueryRow("SELECT CAST(isexe AS INTEGER) FROM vfile WHERE id = ?", id).Scan(&isexe)
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: query vfile metadata for %s: %w", pathname, err)
+	}
+	parentDir := filepath.Dir(fullPath)
+	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
+		return fmt.Errorf("checkout.Revert: mkdir %s: %w", parentDir, err)
+	}
+	perm := os.FileMode(0o644)
+	if isexe != 0 {
+		perm = 0o755
+	}
+	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
+		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
+	}
+	if _, err := c.db.Exec(
+		"UPDATE vfile SET chnged = 0, deleted = 0 WHERE id = ?", id,
+	); err != nil {
+		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
+	}
 	return nil
 }

@@ -91,6 +91,69 @@ func repoFromCheckout(ckoutPath string) (string, error) {
 	return repoPath, nil
 }
 
+// openWorkingCheckout opens the checkout in dir through the library, with
+// the repository it belongs to: -R when given, otherwise the repository the
+// checkout records. done closes both and reports the first error.
+func openWorkingCheckout(
+	g *Globals, dir string,
+) (co *libfossil.Checkout, done func() error, err error) {
+	if g == nil {
+		panic("cli.openWorkingCheckout: nil globals")
+	}
+	if dir == "" {
+		panic("cli.openWorkingCheckout: empty dir")
+	}
+
+	if g.Repo == "" {
+		ckoutPath, err := checkoutDBPath(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if g.Repo, err = repoFromCheckout(ckoutPath); err != nil {
+			return nil, nil, err
+		}
+	}
+	r, err := g.OpenRepo()
+	if err != nil {
+		return nil, nil, err
+	}
+	co, err = r.OpenCheckout(dir, libfossil.CheckoutOpenOpts{})
+	if err != nil {
+		if cerr := r.Close(); cerr != nil {
+			return nil, nil, fmt.Errorf("%w (closing repository: %v)", err, cerr)
+		}
+		return nil, nil, err
+	}
+	done = func() error {
+		coErr := co.Close()
+		repoErr := r.Close()
+		if coErr != nil {
+			return coErr
+		}
+		return repoErr
+	}
+	return co, done, nil
+}
+
+// closeWith runs done and keeps its error when the command had none, so a
+// failure to close is reported rather than lost.
+func closeWith(done func() error, err *error) {
+	if cerr := done(); cerr != nil && *err == nil {
+		*err = cerr
+	}
+}
+
+// checkoutDBPath returns the path of the checkout database in dir.
+func checkoutDBPath(dir string) (string, error) {
+	for _, name := range []string{".fslckout", "_FOSSIL_"} {
+		path := filepath.Join(dir, name)
+		if _, err := os.Stat(path); err == nil {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("no checkout found in %s (run 'fossil repo open' first)", dir)
+}
+
 // openCheckout opens the .fslckout database in the given directory.
 func openCheckout(dir string) (*sql.DB, error) {
 	ckoutPath := filepath.Join(dir, ".fslckout")

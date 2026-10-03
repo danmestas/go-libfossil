@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -286,5 +287,131 @@ func TestExtractObserver(t *testing.T) {
 	}
 	if events[len(events)-1].name != "completed" {
 		t.Fatalf("last event should be completed, got %s", events[len(events)-1].name)
+	}
+}
+
+// newCheckoutAtFirstOfTwo builds a repo with two checkins (see
+// newTestRepoWithTwoCheckins: rid2 edits hello.txt and adds new.txt) and a
+// checkout with rid1 extracted into memory storage.
+func newCheckoutAtFirstOfTwo(t *testing.T) (co *Checkout, mem *simio.MemStorage, rid1, rid2 libfossil.FslID) {
+	t.Helper()
+	r, rid1, rid2, cleanup := newTestRepoWithTwoCheckins(t)
+	t.Cleanup(cleanup)
+
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { co.Close() })
+	if err := setVVar(co.db, "checkout", itoa(int64(rid1))); err != nil {
+		t.Fatal(err)
+	}
+	mem = simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
+		t.Fatal("extract rid1:", err)
+	}
+	return co, mem, rid1, rid2
+}
+
+// changedNames scans the checkout's current version and returns the names
+// of its changed files.
+func changedNames(t *testing.T, co *Checkout) []string {
+	t.Helper()
+	vid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	err = co.VisitChanges(vid, true, func(e ChangeEntry) error {
+		names = append(names, e.Name)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return names
+}
+
+// Switching a clean checkout to another version is what Extract is for: the
+// files that differ between the versions are not local changes (#230).
+func TestExtractSwitchesCleanCheckout(t *testing.T) {
+	co, mem, _, rid2 := newCheckoutAtFirstOfTwo(t)
+
+	if err := co.Extract(rid2, ExtractOpts{}); err != nil {
+		t.Fatalf("Extract to the next version of a clean checkout: %v", err)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello updated world\n" {
+		t.Fatalf("hello.txt = %q, want rid2's content", data)
+	}
+	if vid, _, _ := co.Version(); vid != rid2 {
+		t.Fatalf("Version = %d, want %d", vid, rid2)
+	}
+}
+
+// A refused Extract must leave the checkout exactly as it was: same version,
+// and the unsaved edit still reported (#230).
+func TestExtractRefusalLeavesCheckoutUntouched(t *testing.T) {
+	co, mem, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	if err := mem.WriteFile("/checkout/README.md", []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := co.Extract(rid2, ExtractOpts{})
+	if err == nil {
+		t.Fatal("Extract over an unsaved edit succeeded")
+	}
+	if !contains(err.Error(), "local changes") {
+		t.Fatalf("error should mention local changes, got: %v", err)
+	}
+	if vid, _, _ := co.Version(); vid != rid1 {
+		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
+	}
+	if got := changedNames(t, co); len(got) != 1 || got[0] != "README.md" {
+		t.Fatalf("changes after refusal = %q, want only README.md", got)
+	}
+}
+
+// A pending add is unsaved work too, even though the target version would
+// not write over the file.
+func TestExtractRefusesOverPendingAdd(t *testing.T) {
+	co, mem, _, rid2 := newCheckoutAtFirstOfTwo(t)
+	if err := mem.WriteFile("/checkout/extra.txt", []byte("extra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Manage(ManageOpts{Paths: []string{"extra.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid2, ExtractOpts{}); err == nil {
+		t.Fatal("Extract over a pending add succeeded")
+	}
+	if got := changedNames(t, co); len(got) != 1 || got[0] != "extra.txt" {
+		t.Fatalf("changes after refusal = %q, want only extra.txt", got)
+	}
+}
+
+// A file the current version does not track, sitting where the target would
+// write different content, is the user's and must not be clobbered.
+func TestExtractRefusesOverUntrackedFile(t *testing.T) {
+	co, mem, _, rid2 := newCheckoutAtFirstOfTwo(t)
+	if err := mem.WriteFile("/checkout/new.txt", []byte("mine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid2, ExtractOpts{}); err == nil {
+		t.Fatal("Extract over an untracked file succeeded")
+	}
+	data, err := mem.ReadFile("/checkout/new.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "mine\n" {
+		t.Fatalf("new.txt = %q, untracked file was overwritten", data)
 	}
 }

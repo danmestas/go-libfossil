@@ -138,7 +138,10 @@ func (c *Checkout) Version() (int64, string, error) {
 	return int64(rid), uuid, nil
 }
 
-// Extract writes files from the specified checkin to the working directory.
+// Extract writes files from the specified checkin to the working directory
+// and makes it the checkout's current version. Unless opts.Force is set it
+// refuses, changing nothing, when the checkout has unsaved changes or when
+// an untracked file sits where the checkin would write different content.
 func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 	err := c.inner.Extract(fsltype.FslID(rid), checkout.ExtractOpts{
 		Force: opts.Force,

@@ -249,6 +249,27 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 	return entries, nil
 }
 
+// refreshChanged brings vfile.chnged for every row of version vid up to date
+// with the files on disk, by hash, without observer notifications. It is the
+// part of ScanChanges that other operations need before they judge what is
+// safe to do; the scan they run is their own detail, not a scan to report.
+func (c *Checkout) refreshChanged(vid libfossil.FslID) error {
+	if vid <= 0 {
+		panic("checkout.refreshChanged: vid must be positive")
+	}
+
+	entries, err := c.loadScanEntries(vid)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if _, _, err := c.scanSingleEntry(e, ScanHash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ScanChanges detects modified and missing files in the checkout.
 // Walks the vfile table, checks each file on disk, and updates vfile.chnged accordingly.
 //

@@ -367,3 +367,65 @@ func TestRepoRevertUndoesRename(t *testing.T) {
 		})
 	}
 }
+
+// Undoing a rename must never land on a name another tracked file holds:
+// a swap (a.txt and b.txt exchanged) or a new add at the old name. Revert
+// refuses up front and leaves every file and the checkout as they were (#242
+// review). go-libfossil has no undo copy to fall back on, unlike fossil.
+func TestRepoRevertRefusesRenameOntoTrackedName(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, bin, ckDir string)
+		files []string
+		check map[string]string // file -> content that must survive
+	}{
+		{
+			name: "swap",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "tmp.txt")
+				runFossil(t, bin, ckDir, "mv", "--hard", "b.txt", "a.txt")
+				runFossil(t, bin, ckDir, "mv", "--hard", "tmp.txt", "b.txt")
+			},
+			check: map[string]string{"a.txt": "two\n", "b.txt": "one\n"},
+		},
+		{
+			name: "add at the old name, revert all",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+				writeCkFile(t, ckDir, "a.txt", "brand new\n")
+				runFossil(t, bin, ckDir, "add", "a.txt")
+			},
+			check: map[string]string{"a.txt": "brand new\n", "z.txt": "one\n"},
+		},
+		{
+			name: "add at the old name, revert by old name",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+				writeCkFile(t, ckDir, "a.txt", "brand new\n")
+				runFossil(t, bin, ckDir, "add", "a.txt")
+			},
+			files: []string{"a.txt"},
+			check: map[string]string{"a.txt": "brand new\n", "z.txt": "one\n"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, repoPath, ckDir := fossilCheckout(t)
+			tc.setup(t, bin, ckDir)
+			before := fossilChanges(t, bin, ckDir)
+
+			cmd := &cli.RepoRevertCmd{Files: tc.files, Dir: ckDir}
+			if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+				t.Fatal("revert succeeded where undoing a rename collides with a tracked name")
+			}
+			for name, want := range tc.check {
+				if got := readCkFile(t, ckDir, name); got != want {
+					t.Fatalf("%s = %q after a refused revert, want %q", name, got, want)
+				}
+			}
+			if got := fossilChanges(t, bin, ckDir); got != before {
+				t.Fatalf("fossil changes after a refused revert = %q, want unchanged %q", got, before)
+			}
+		})
+	}
+}

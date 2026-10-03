@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#242). It used to leave a rename made with `fossil mv` in place, and
   restored a renamed, edited file's content under its new name. The file now
   goes back to its old name with its committed content, and either name can
-  be given.
+  be given. When undoing a rename would land on a name another tracked file
+  now holds (a swap, or a new file added under the old name), `Revert`
+  refuses and changes nothing rather than overwrite that file: go-libfossil
+  has no undo copy to recover it from (#248).
 
 - A dry-run `Extract` or `Update` no longer changes the checkout (#236). Both
   used to replace the checkout's file list and move its version to the

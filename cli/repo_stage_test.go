@@ -329,3 +329,138 @@ func TestRepoRevertKeepsRenamedEditedFile(t *testing.T) {
 		t.Fatal("revert deleted a renamed committed file instead of restoring it")
 	}
 }
+
+// Revert undoes a pending rename, as fossil's revert does: the file goes back
+// to its old name with its committed content, the new name is gone, and the
+// checkout is clean (#242). Naming either the new or the old name works.
+func TestRepoRevertUndoesRename(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+		edit  bool
+	}{
+		{"revert all, pure rename", nil, false},
+		{"revert all, renamed and edited", nil, true},
+		{"by new name", []string{"z.txt"}, true},
+		{"by old name", []string{"a.txt"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, repoPath, ckDir := fossilCheckout(t)
+			runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+			if tc.edit {
+				writeCkFile(t, ckDir, "z.txt", "edited\n")
+			}
+
+			cmd := &cli.RepoRevertCmd{Files: tc.files, Dir: ckDir}
+			if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+				t.Fatalf("revert: %v", err)
+			}
+			if got := readCkFile(t, ckDir, "a.txt"); got != "one\n" {
+				t.Fatalf("a.txt = %q, want the committed content back under the old name", got)
+			}
+			if _, err := os.Stat(filepath.Join(ckDir, "z.txt")); !os.IsNotExist(err) {
+				t.Fatalf("z.txt still on disk after reverting the rename (stat err %v)", err)
+			}
+			if got := fossilChanges(t, bin, ckDir); got != "" {
+				t.Fatalf("fossil changes = %q after revert, want none", got)
+			}
+		})
+	}
+}
+
+// Undoing a rename must never land on a name another tracked file holds:
+// a swap (a.txt and b.txt exchanged) or a new add at the old name. Revert
+// refuses up front and leaves every file and the checkout as they were (#242
+// review). go-libfossil has no undo copy to fall back on, unlike fossil.
+func TestRepoRevertRefusesRenameOntoTrackedName(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, bin, ckDir string)
+		files []string
+		check map[string]string // file -> content that must survive
+	}{
+		{
+			name: "swap",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "tmp.txt")
+				runFossil(t, bin, ckDir, "mv", "--hard", "b.txt", "a.txt")
+				runFossil(t, bin, ckDir, "mv", "--hard", "tmp.txt", "b.txt")
+			},
+			check: map[string]string{"a.txt": "two\n", "b.txt": "one\n"},
+		},
+		{
+			name: "add at the old name, revert all",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+				writeCkFile(t, ckDir, "a.txt", "brand new\n")
+				runFossil(t, bin, ckDir, "add", "a.txt")
+			},
+			check: map[string]string{"a.txt": "brand new\n", "z.txt": "one\n"},
+		},
+		{
+			name: "add at the old name, revert by old name",
+			setup: func(t *testing.T, bin, ckDir string) {
+				runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+				writeCkFile(t, ckDir, "a.txt", "brand new\n")
+				runFossil(t, bin, ckDir, "add", "a.txt")
+			},
+			files: []string{"a.txt"},
+			check: map[string]string{"a.txt": "brand new\n", "z.txt": "one\n"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, repoPath, ckDir := fossilCheckout(t)
+			tc.setup(t, bin, ckDir)
+			before := fossilChanges(t, bin, ckDir)
+
+			cmd := &cli.RepoRevertCmd{Files: tc.files, Dir: ckDir}
+			if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+				t.Fatal("revert succeeded where undoing a rename collides with a tracked name")
+			}
+			for name, want := range tc.check {
+				if got := readCkFile(t, ckDir, name); got != want {
+					t.Fatalf("%s = %q after a refused revert, want %q", name, got, want)
+				}
+			}
+			if got := fossilChanges(t, bin, ckDir); got != before {
+				t.Fatalf("fossil changes after a refused revert = %q, want unchanged %q", got, before)
+			}
+		})
+	}
+}
+
+// Reverting several paths is planned and checked as one revert: when one of
+// them must be refused, none of them is reverted (#242 review).
+func TestRepoRevertSeveralPathsRefusesWhole(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	writeCkFile(t, ckDir, "b.txt", "edited\n")
+	runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+	writeCkFile(t, ckDir, "a.txt", "brand new\n")
+	runFossil(t, bin, ckDir, "add", "a.txt")
+
+	cmd := &cli.RepoRevertCmd{Files: []string{"b.txt", "z.txt"}, Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+		t.Fatal("revert succeeded where z.txt's rename cannot be undone")
+	}
+	if got := readCkFile(t, ckDir, "b.txt"); got != "edited\n" {
+		t.Fatalf("b.txt = %q, a refused revert reverted part of the request", got)
+	}
+}
+
+// An untracked file at a renamed file's old name would be overwritten by
+// undoing the rename; with no undo copy, revert refuses instead (#242
+// review).
+func TestRepoRevertRefusesRenameOntoUntrackedFile(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+	writeCkFile(t, ckDir, "a.txt", "mine, untracked\n")
+
+	cmd := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+		t.Fatal("revert succeeded over an untracked file at the old name")
+	}
+	if got := readCkFile(t, ckDir, "a.txt"); got != "mine, untracked\n" {
+		t.Fatalf("a.txt = %q, the untracked file was overwritten", got)
+	}
+}

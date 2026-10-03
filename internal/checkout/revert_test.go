@@ -481,3 +481,38 @@ func TestRevertUnscannedEdit(t *testing.T) {
 		t.Fatalf("hello.txt = %q after revert, want the committed content", data)
 	}
 }
+
+// TestRevertReportsRename pins that undoing a rename reaches the callback as
+// RevertRename, under the name the file is given back.
+func TestRevertReportsRename(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	rid := mustVersion(t, co)
+	co.env = &simio.Env{
+		Storage: simio.NewMemStorage(), Clock: simio.RealClock{}, Rand: simio.CryptoRand{},
+	}
+	co.dir = "/checkout"
+	if err := co.Extract(rid, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Rename(RenameOpts{From: "hello.txt", To: "moved.txt", DoFsMove: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := map[string]RevertChange{}
+	cb := func(name string, change RevertChange) error {
+		got[name] = change
+		return nil
+	}
+	if err := co.Revert(RevertOpts{Callback: cb}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got["hello.txt"] != RevertRename {
+		t.Fatalf("callback saw %v, want hello.txt: RevertRename", got)
+	}
+}

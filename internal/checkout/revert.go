@@ -41,10 +41,8 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	}
 
 	if len(opts.Paths) > 0 {
-		for _, path := range opts.Paths {
-			if err := c.revertSinglePath(vid, path, opts.Callback); err != nil {
-				return fmt.Errorf("checkout.Revert: %w", err)
-			}
+		if err := c.revertPaths(vid, opts.Paths, opts.Callback); err != nil {
+			return fmt.Errorf("checkout.Revert: %w", err)
 		}
 		return nil
 	}
@@ -57,8 +55,7 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 // revertAll reverts every changed file of version vid and drops any pending
 // merge, as fossil's revert does with no file named. A file is reverted when
 // its content changed, it is removed, an add is pending, a merge touched it,
-// or it is missing from disk. A pure rename is left for #242: revertFile
-// cannot move a file back to its old name yet.
+// it is renamed, or it is missing from disk.
 func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertChange) error) error {
 	if vid < 0 {
 		panic("checkout.revertAll: negative vid")
@@ -72,17 +69,18 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 	if err != nil {
 		return err
 	}
+	var targets []vfile.Row
 	for _, r := range rows {
 		missing, err := c.isMissing(r)
 		if err != nil {
 			return err
 		}
-		if !needsRevert(r, missing) {
-			continue
+		if needsRevert(r, missing) {
+			targets = append(targets, r)
 		}
-		if err := c.revertFile(r, inVersion, callback); err != nil {
-			return err
-		}
+	}
+	if err := c.revertRows(rows, targets, inVersion, callback); err != nil {
+		return err
 	}
 	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
 		return fmt.Errorf("clear vmerge: %w", err)
@@ -91,7 +89,8 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 }
 
 // needsRevert reports whether revert-all restores row r: its content
-// changed, it is removed, a merge touched it, or it is missing from disk.
+// changed, it is removed or renamed, a merge touched it, or it is missing
+// from disk.
 func needsRevert(r vfile.Row, missing bool) bool {
 	if missing {
 		return true
@@ -102,29 +101,140 @@ func needsRevert(r vfile.Row, missing bool) bool {
 	if r.IsRemoved() {
 		return true
 	}
+	if r.RenamedFrom() != "" {
+		return true
+	}
 	return r.PendingMerge()
 }
 
-// revertSinglePath reverts a named file whatever its change flags say, as
-// fossil's revert does for a file it is given: a file missing from disk is
-// restored too. A path the checkout does not track is a no-op, as in fossil.
-func (c *Checkout) revertSinglePath(
-	vid libfossil.FslID, pathname string,
+// revertPaths reverts the named files whatever their change flags say, as
+// fossil's revert does for files it is given: a file missing from disk is
+// restored too. A renamed file answers to its new name and its old one, so a
+// name can select more than one row. Every named row is planned and checked
+// as one revert, so a refusal reverts none of them. A path the checkout does
+// not track is a no-op, as in fossil.
+func (c *Checkout) revertPaths(
+	vid libfossil.FslID, paths []string,
 	callback func(string, RevertChange) error,
 ) error {
+	if len(paths) == 0 {
+		panic("checkout.revertPaths: no paths")
+	}
+	named := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		named[p] = true
+	}
 	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return err
 	}
+	var targets []vfile.Row
 	for _, r := range rows {
-		if r.Pathname != pathname {
+		if named[r.Pathname] || named[r.RenamedFrom()] {
+			targets = append(targets, r)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	inVersion, err := c.versionPaths(vid)
+	if err != nil {
+		return err
+	}
+	return c.revertRows(rows, targets, inVersion, callback)
+}
+
+// revertAction is what revert does to one row. planRevert decides it for
+// every row before anything changes, so a revert that cannot be done safely
+// is refused whole.
+type revertAction int
+
+const (
+	revertRestore revertAction = iota
+	revertUnmanage
+	revertRemoveMergeAdded
+	revertUndoRename
+)
+
+// planRevert decides a row's revert the way fossil's revert does, by whether
+// the checked-out version has the file (under its name, or its name before a
+// pending rename):
+//   - a pending add (rid=0) is un-managed and left on disk: there is no
+//     committed copy, so deleting it would destroy the only one;
+//   - a file the version lacks but the checkout tracks (one a merge added)
+//     is deleted with its row: its content lives on in the merged-in version;
+//   - a pending rename is undone: the file under the new name is removed and
+//     the committed content is restored under the old one;
+//   - anything else gets its committed content back.
+func planRevert(r vfile.Row, inVersion map[string]bool) revertAction {
+	if inVersion == nil {
+		panic("checkout.planRevert: nil inVersion")
+	}
+	if r.IsAdded() {
+		return revertUnmanage
+	}
+	if !inVersion[r.Pathname] && !inVersion[r.RenamedFrom()] {
+		return revertRemoveMergeAdded
+	}
+	if r.RenamedFrom() != "" {
+		return revertUndoRename
+	}
+	return revertRestore
+}
+
+// revertRows reverts targets, chosen from rows (every row of the version).
+// It first checks that undoing each rename among them lands on a free name;
+// if one does not, nothing changes.
+func (c *Checkout) revertRows(
+	rows, targets []vfile.Row, inVersion map[string]bool,
+	callback func(string, RevertChange) error,
+) error {
+	if err := c.checkRenameUndoFree(rows, targets, inVersion); err != nil {
+		return err
+	}
+	for _, t := range targets {
+		if err := c.revertFile(t, planRevert(t, inVersion), callback); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkRenameUndoFree refuses a revert that would move a renamed file back
+// onto a name that is taken: by another tracked row (a swap, a chain, or a
+// new add at the old name), or by an untracked file on disk whose content
+// differs from the committed one. Moving it anyway would overwrite that file,
+// and go-libfossil has no undo copy to recover it from, unlike fossil.
+func (c *Checkout) checkRenameUndoFree(
+	rows, targets []vfile.Row, inVersion map[string]bool,
+) error {
+	held := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		held[r.Pathname] = r.ID
+	}
+	for _, t := range targets {
+		if planRevert(t, inVersion) != revertUndoRename {
 			continue
 		}
-		inVersion, err := c.versionPaths(vid)
+		oldName := t.RenamedFrom()
+		if id, ok := held[oldName]; ok && id != t.ID {
+			return fmt.Errorf(
+				"checkout.Revert: cannot move %s back to %s: another tracked file has that "+
+					"name; revert or commit it first", t.Pathname, oldName)
+		}
+		committed, err := c.baselineHash(t.RID)
+		if err != nil {
+			return fmt.Errorf("checkout.Revert: %s: %w", t.Pathname, err)
+		}
+		clobber, err := c.wouldClobber(oldName, committed)
 		if err != nil {
 			return err
 		}
-		return c.revertFile(r, inVersion, callback)
+		if clobber {
+			return fmt.Errorf(
+				"checkout.Revert: cannot move %s back to %s: an untracked file is there; "+
+					"move it aside first", t.Pathname, oldName)
+		}
 	}
 	return nil
 }
@@ -146,47 +256,96 @@ func (c *Checkout) versionPaths(vid libfossil.FslID) (map[string]bool, error) {
 	return paths, nil
 }
 
-// revertFile reverts one row the way fossil's revert does, by whether the
-// checked-out version has the file (under its name, or its name before a
-// pending rename):
-//   - a pending add (rid=0) is un-managed and left on disk: there is no
-//     committed copy, so deleting it would destroy the only one;
-//   - a file the version lacks but the checkout tracks (one a merge added)
-//     is deleted with its row: its content lives on in the merged-in version;
-//   - anything else gets its committed content back.
+// revertFile carries out the action planRevert chose for row r, and reports
+// it under the name the file ends up with.
 func (c *Checkout) revertFile(
-	r vfile.Row, inVersion map[string]bool,
-	callback func(string, RevertChange) error,
+	r vfile.Row, action revertAction, callback func(string, RevertChange) error,
 ) error {
-	if inVersion == nil {
-		panic("checkout.revertFile: nil inVersion")
-	}
 	fullPath, err := c.safePath(r.Pathname)
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: path traversal in %s: %w", r.Pathname, err)
 	}
 
-	change := RevertContents
-	switch {
-	case r.IsAdded():
+	name, change := r.Pathname, RevertContents
+	switch action {
+	case revertUnmanage:
 		change = RevertUnmanage
 		if _, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", r.ID); err != nil {
 			return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", r.Pathname, err)
 		}
-	case !inVersion[r.Pathname] && !inVersion[r.RenamedFrom()]:
+	case revertRemoveMergeAdded:
 		change = RevertRemove
 		if err := c.removeMergeAdded(r, fullPath); err != nil {
 			return err
 		}
-	default:
+	case revertUndoRename:
+		name, change = r.RenamedFrom(), RevertRename
+		if err := c.undoRename(r, fullPath); err != nil {
+			return err
+		}
+	case revertRestore:
 		if err := c.restoreCommitted(r.ID, r.Pathname, fullPath, r.RID); err != nil {
 			return err
 		}
+	default:
+		panic("checkout.revertFile: unknown action")
 	}
 	if callback != nil {
-		if err := callback(r.Pathname, change); err != nil {
-			return fmt.Errorf("checkout.Revert: callback for %s: %w", r.Pathname, err)
+		if err := callback(name, change); err != nil {
+			return fmt.Errorf("checkout.Revert: callback for %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+// undoRename moves a pending rename back, as fossil's revert does: the file
+// at the new name (fullPath) is removed, the row takes its old name again,
+// and the committed content is written there. checkRenameUndoFree has made
+// sure no other row holds the old name, so a plain UPDATE suffices; it fails
+// rather than replacing a row if that ever stops being true.
+func (c *Checkout) undoRename(r vfile.Row, fullPath string) error {
+	oldName := r.RenamedFrom()
+	if oldName == "" {
+		panic("checkout.undoRename: row records no rename")
+	}
+	if r.RID <= 0 {
+		panic("checkout.undoRename: a pending add has no committed name")
+	}
+
+	oldPath, err := c.safePath(oldName)
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: path traversal in %s: %w", oldName, err)
+	}
+	if err := c.removeRegularFile(fullPath); err != nil {
+		return err
+	}
+	if _, err := c.db.Exec(
+		"UPDATE vfile SET pathname = ?, origname = NULL WHERE id = ?",
+		oldName, r.ID,
+	); err != nil {
+		return fmt.Errorf("checkout.Revert: rename %s back to %s: %w", r.Pathname, oldName, err)
+	}
+	return c.restoreCommitted(r.ID, oldName, oldPath, r.RID)
+}
+
+// removeRegularFile deletes fullPath if a regular file is there; anything
+// else (nothing, or a directory the user made) is left alone.
+func (c *Checkout) removeRegularFile(fullPath string) error {
+	if fullPath == "" {
+		panic("checkout.removeRegularFile: empty path")
+	}
+	info, err := c.env.Storage.Stat(fullPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: stat %s: %w", fullPath, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	if err := c.env.Storage.Remove(fullPath); err != nil {
+		return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
 	}
 	return nil
 }
@@ -199,14 +358,8 @@ func (c *Checkout) removeMergeAdded(r vfile.Row, fullPath string) error {
 	}
 	// Only a regular file is the merge's: anything else at that path (a
 	// directory the user made) is left alone.
-	info, err := c.env.Storage.Stat(fullPath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("checkout.Revert: stat %s: %w", fullPath, err)
-	}
-	if err == nil && info.Mode().IsRegular() {
-		if err := c.env.Storage.Remove(fullPath); err != nil {
-			return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
-		}
+	if err := c.removeRegularFile(fullPath); err != nil {
+		return err
 	}
 	if _, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", r.ID); err != nil {
 		return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", r.Pathname, err)

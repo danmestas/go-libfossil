@@ -100,11 +100,6 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		extractErr = err
 		return extractErr
 	}
-	prior, _, err := c.Version()
-	if err != nil {
-		extractErr = fmt.Errorf("checkout.Extract: %w", err)
-		return extractErr
-	}
 	if !opts.DryRun {
 		if err := c.replaceFileList(rid, opts.Force); err != nil {
 			extractErr = err
@@ -128,18 +123,24 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	if opts.DryRun {
 		return nil
 	}
-	extractErr = c.finalizeExtract(rid, opts.Force || prior != rid)
+	extractErr = c.finalizeExtract(rid, opts.Force)
 	return extractErr
 }
 
 // finalizeExtract looks up the blob UUID for rid and updates the vvar
 // checkout/checkout-hash entries.
-// endMerge ends a pending merge: true for a switch to another version or a
-// forced extract, false for a plain re-extract of the version already
-// checked out, which fossil's checkout does not treat as a switch.
-func (c *Checkout) finalizeExtract(rid libfossil.FslID, endMerge bool) error {
+// It also ends a pending merge on a switch to another version or a forced
+// extract, but not on a plain re-extract of the version already checked out,
+// which fossil's checkout does not treat as a switch.
+func (c *Checkout) finalizeExtract(rid libfossil.FslID, force bool) error {
+	prior, _, err := c.Version()
+	if err != nil {
+		return fmt.Errorf("checkout.Extract: %w", err)
+	}
+	endMerge := force || prior != rid
+
 	var uuid string
-	err := c.repo.DB().QueryRow("SELECT uuid FROM blob WHERE rid = ?", int64(rid)).Scan(&uuid)
+	err = c.repo.DB().QueryRow("SELECT uuid FROM blob WHERE rid = ?", int64(rid)).Scan(&uuid)
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: query blob uuid: %w", err)
 	}

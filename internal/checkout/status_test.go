@@ -206,11 +206,12 @@ func TestVisitChangesMultiple(t *testing.T) {
 }
 
 // TestVisitChangesFossilRowShapes pins how row shapes the fossil binary writes
-// are classified (#228). It writes three rows straight into vfile, then scans:
-//   - new.txt: a fossil add (rid=0, chnged left 0) with the file on disk; the
-//     scan promotes it to chnged=1 and it reports as added.
-//   - gone.txt: a row with no artifact and no file on disk, the shape
-//     LoadVFile writes for content missing from the repo; not a change.
+// are classified (#228, #232). It writes three rows straight into vfile, then
+// scans:
+//   - new.txt: a fossil add (rid=0, chnged left 0) with the file on disk;
+//     reports as added.
+//   - gone.txt: a fossil add whose file was then deleted; reports as missing,
+//     as fossil's changes command does.
 //   - hello.txt: untouched, with origname equal to pathname; not a rename.
 func TestVisitChangesFossilRowShapes(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
@@ -246,19 +247,22 @@ func TestVisitChangesFossilRowShapes(t *testing.T) {
 		}
 	}
 
-	var got []string
+	got := map[string]FileChange{}
 	err = co.VisitChanges(rid, true, func(e ChangeEntry) error {
-		got = append(got, e.Name)
-		if e.Change != ChangeAdded {
-			t.Errorf("%s: change = %v, want ChangeAdded", e.Name, e.Change)
-		}
+		got[e.Name] = e.Change
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0] != "new.txt" {
-		t.Fatalf("visited %q, want only new.txt", got)
+	want := map[string]FileChange{"new.txt": ChangeAdded, "gone.txt": ChangeMissing}
+	if len(got) != len(want) {
+		t.Fatalf("visited %v, want %v", got, want)
+	}
+	for name, change := range want {
+		if got[name] != change {
+			t.Errorf("%s: change = %v, want %v", name, got[name], change)
+		}
 	}
 }
 

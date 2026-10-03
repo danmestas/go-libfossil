@@ -287,3 +287,67 @@ func TestMissingContentRefusedLikeFossil(t *testing.T) {
 		t.Fatalf("Extract error should name c.txt, got: %v", err)
 	}
 }
+
+// A tracked file gone from disk is reported as missing, as fossil's changes
+// command reports MISSING (#232): both a committed file deleted outside
+// fossil and a fossil add whose file was then deleted.
+func TestFossilCheckoutStatusReportsMissing(t *testing.T) {
+	bin, repoPath, ckDir := newFossilCheckout(t)
+	writeFile(t, filepath.Join(ckDir, "c.txt"), "three\n")
+	fossilRun(t, bin, ckDir, "add", "c.txt")
+	for _, name := range []string{"a.txt", "c.txt"} {
+		if err := os.Remove(filepath.Join(ckDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	changes := fossilRun(t, bin, ckDir, "changes")
+	for _, want := range []string{"MISSING    a.txt", "MISSING    c.txt"} {
+		if !strings.Contains(changes, want) {
+			t.Fatalf("fossil changes lacks %q:\n%s", want, changes)
+		}
+	}
+
+	ck := openLibfossilCheckout(t, repoPath, ckDir)
+	got := strings.Join(statusLines(t, ck), ",")
+	if want := "missing a.txt,missing c.txt"; got != want {
+		t.Fatalf("Status = %q, want %q", got, want)
+	}
+}
+
+// HasChanges sees a fossil add without a scan: fossil records the add as
+// rid=0 with chnged left 0, and rid=0 means added (#232).
+func TestFossilCheckoutHasChangesSeesAddWithoutScan(t *testing.T) {
+	bin, repoPath, ckDir := newFossilCheckout(t)
+	writeFile(t, filepath.Join(ckDir, "c.txt"), "three\n")
+	fossilRun(t, bin, ckDir, "add", "c.txt")
+
+	ck := openLibfossilCheckout(t, repoPath, ckDir)
+	has, err := ck.HasChanges()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Fatal("HasChanges = false with a pending fossil add, want true")
+	}
+}
+
+// A directory where a tracked file belongs is not a file: fossil's changes
+// reports it as NOT_A_FILE, under its missing filter. Status reports it as
+// missing instead of failing (#232).
+func TestFossilCheckoutStatusDirectoryInPlaceOfFile(t *testing.T) {
+	_, repoPath, ckDir := newFossilCheckout(t)
+	aPath := filepath.Join(ckDir, "a.txt")
+	if err := os.Remove(aPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(aPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ck := openLibfossilCheckout(t, repoPath, ckDir)
+	got := strings.Join(statusLines(t, ck), ",")
+	if want := "missing a.txt"; got != want {
+		t.Fatalf("Status = %q, want %q", got, want)
+	}
+}

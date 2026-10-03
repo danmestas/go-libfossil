@@ -2,7 +2,6 @@ package checkout
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -267,15 +266,6 @@ func (c *Checkout) checkSafeToExtract(target libfossil.FslID) error {
 	return c.checkNoUntrackedClobber(current, files)
 }
 
-// changeRow is the part of a vfile row firstChangeAtRisk judges.
-type changeRow struct {
-	pathname string
-	origname sql.NullString
-	chnged   int64
-	deleted  int64
-	rid      int64
-}
-
 // firstChangeAtRisk scans version vid and returns the first changed file
 // whose change extracting target would lose, or "" when there is none.
 func (c *Checkout) firstChangeAtRisk(
@@ -299,12 +289,12 @@ func (c *Checkout) firstChangeAtRisk(
 	).Scan(&merging); err != nil {
 		return "", fmt.Errorf("query vmerge: %w", err)
 	}
-	rows, err := c.changeRows(vid)
+	rows, err := c.loadVFileRows(vid)
 	if err != nil {
 		return "", err
 	}
 	for _, r := range rows {
-		change := classifyChange(r.pathname, r.origname, r.chnged, r.deleted, r.rid)
+		change := classifyChange(r, false)
 		if change == ChangeNone {
 			continue
 		}
@@ -324,31 +314,6 @@ func (c *Checkout) firstChangeAtRisk(
 		return r.pathname, nil
 	}
 	return "", nil
-}
-
-// changeRows reads the rows of version vid that classifyChange needs. They
-// are collected up front so no cursor is held open while files are read.
-func (c *Checkout) changeRows(vid libfossil.FslID) ([]changeRow, error) {
-	rows, err := c.db.Query(`
-		SELECT pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid
-		FROM vfile WHERE vid = ?`, int64(vid))
-	if err != nil {
-		return nil, fmt.Errorf("query vfile: %w", err)
-	}
-	defer rows.Close()
-
-	var out []changeRow
-	for rows.Next() {
-		var r changeRow
-		if err := rows.Scan(&r.pathname, &r.origname, &r.chnged, &r.deleted, &r.rid); err != nil {
-			return nil, fmt.Errorf("scan vfile: %w", err)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate vfile: %w", err)
-	}
-	return out, nil
 }
 
 // wouldClobber reports whether writing the artifact uuid to pathname would

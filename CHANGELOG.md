@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would write different content. A tracked file that is missing from disk no
   longer blocks a switch, as in fossil.
 
+- Reading a stored artifact could return compressed bytes (#235). `blob.Load`
+  treated a row as stored uncompressed whenever its stored length equalled
+  `blob.size`. For a delta row those are different things (the compressed
+  delta and the full artifact's length) and can be equal by chance, so the
+  delta step then failed. Fossil always inflates `blob.content`, and so does
+  go-libfossil now. Go 1.27's new compressor made one test fixture hit the
+  case, but any repository could.
+
 - Checkouts created by the fossil binary (`fossil open`) now work through
   `OpenCheckout` (#228). `Status` failed outright with `converting NULL to
   string` on `vfile.mhash`, because go-libfossil judged every file against

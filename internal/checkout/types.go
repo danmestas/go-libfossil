@@ -4,6 +4,7 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -11,35 +12,36 @@ import (
 type VFileChange int
 
 const (
-	VFileNone        VFileChange = 0 // unchanged
-	VFileMod         VFileChange = 1 // modified
-	VFileMergeMod    VFileChange = 2 // modified via merge
-	VFileMergeAdd    VFileChange = 3 // added via merge
-	VFileIntMod      VFileChange = 4 // modified via integrate
-	VFileIntAdd      VFileChange = 5 // added via integrate
-	VFileIsExec      VFileChange = 6 // became executable
-	VFileBecameLink  VFileChange = 7 // became symlink
-	VFileNotExec     VFileChange = 8 // lost executable
-	VFileNotLink     VFileChange = 9 // lost symlink
+	VFileNone       VFileChange = 0 // unchanged
+	VFileMod        VFileChange = 1 // modified
+	VFileMergeMod   VFileChange = 2 // modified via merge
+	VFileMergeAdd   VFileChange = 3 // added via merge
+	VFileIntMod     VFileChange = 4 // modified via integrate
+	VFileIntAdd     VFileChange = 5 // added via integrate
+	VFileIsExec     VFileChange = 6 // became executable
+	VFileBecameLink VFileChange = 7 // became symlink
+	VFileNotExec    VFileChange = 8 // lost executable
+	VFileNotLink    VFileChange = 9 // lost symlink
 )
 
-// FileChange — checkout-level change types (maps to fsl_ckout_change_e)
-type FileChange int
+// FileChange — checkout-level change types (maps to fsl_ckout_change_e).
+// Package vfile owns their meaning; these names keep the checkout API.
+type FileChange = vfile.Change
 
 const (
-	ChangeNone     FileChange = iota
-	ChangeAdded
-	ChangeRemoved
-	ChangeMissing
-	ChangeRenamed
-	ChangeModified
+	ChangeNone     = vfile.ChangeNone
+	ChangeAdded    = vfile.ChangeAdded
+	ChangeRemoved  = vfile.ChangeRemoved
+	ChangeMissing  = vfile.ChangeMissing
+	ChangeRenamed  = vfile.ChangeRenamed
+	ChangeModified = vfile.ChangeModified
 )
 
 // UpdateChange — file states during extract/update (maps to fsl_ckup_fchange_e)
 type UpdateChange int
 
 const (
-	UpdateNone               UpdateChange = iota
+	UpdateNone UpdateChange = iota
 	UpdateAdded
 	UpdateAddPropagated
 	UpdateRemoved
@@ -61,7 +63,7 @@ const (
 type RevertChange int
 
 const (
-	RevertNone        RevertChange = iota
+	RevertNone RevertChange = iota
 	RevertUnmanage
 	RevertRemove
 	RevertRename
@@ -74,9 +76,9 @@ type ScanFlags uint32
 
 const (
 	ScanHash       ScanFlags = 1 << iota // hash file content (not just mtime)
-	ScanENotFile                          // mark non-regular files
-	ScanSetMTime                          // update mtime in vfile
-	ScanKeepOthers                        // keep other version entries
+	ScanENotFile                         // mark non-regular files
+	ScanSetMTime                         // update mtime in vfile
+	ScanKeepOthers                       // keep other version entries
 )
 
 // ManifestFlags — controls WriteManifest behavior
@@ -84,7 +86,7 @@ type ManifestFlags int
 
 const (
 	ManifestMain ManifestFlags = 1 << iota // write manifest file
-	ManifestUUID                            // write manifest.uuid file
+	ManifestUUID                           // write manifest.uuid file
 )
 
 // OpenOpts configures opening an existing checkout.
@@ -103,7 +105,7 @@ type CreateOpts struct {
 // ExtractOpts configures file extraction from a checkin.
 type ExtractOpts struct {
 	Callback func(name string, change UpdateChange) error // per-file notification
-	SetMTime bool // set file mtime to checkin timestamp
+	SetMTime bool                                         // set file mtime to checkin timestamp
 	DryRun   bool
 	Force    bool // overwrite locally modified files
 }
@@ -148,8 +150,8 @@ type ManageCounts struct {
 
 // UnmanageOpts configures removing files from tracking.
 type UnmanageOpts struct {
-	Paths    []string            // pathnames to unmanage
-	VFileIDs []libfossil.FslID   // alternative: pass IDs directly
+	Paths    []string          // pathnames to unmanage
+	VFileIDs []libfossil.FslID // alternative: pass IDs directly
 	Callback func(name string) error
 }
 
@@ -166,11 +168,11 @@ type DequeueOpts struct {
 
 // CommitOpts configures creating a checkin from staged files.
 type CommitOpts struct {
-	Message  string
-	User     string
-	Branch   string    // empty → current branch
-	Tags     []string  // additional T-cards
-	Delta    bool
+	Message        string
+	User           string
+	Branch         string   // empty → current branch
+	Tags           []string // additional T-cards
+	Delta          bool
 	Time           time.Time    // zero → env.Clock.Now()
 	PreCommitCheck func() error // nil = no check; non-nil error aborts commit
 }

@@ -12,10 +12,10 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // Entry represents a single stash entry.
@@ -138,145 +138,139 @@ func Save(ckout *sql.DB, repoDB *sql.DB, dir string, comment string) error {
 	return tx.Commit()
 }
 
-// changedFile describes a single changed file from the vfile table.
-type changedFile struct {
-	pathname string
-	rid      int64
-	chnged   int
-	deleted  int
-	isExec   bool
-	isLink   bool
-}
+// snapshotChangedFiles returns the checked-out version's changed rows,
+// as vfile.Classify judges them. A pending merge or a rename is refused:
+// Save records and restores files by current name against their committed
+// version, which would drop the merge or lose the rename.
+func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
+	if tx == nil {
+		panic("stash.snapshotChangedFiles: nil tx")
+	}
 
-// snapshotChangedFiles queries vfile for changed, deleted, or added files.
-func snapshotChangedFiles(tx *sql.Tx) ([]changedFile, error) {
-	rows, err := tx.Query(`SELECT pathname, rid, chnged, deleted, isexe, islink
-		FROM vfile WHERE chnged=1 OR deleted=1 OR rid=0`)
+	var vidText string
+	if err := tx.QueryRow("SELECT value FROM vvar WHERE name='checkout'").Scan(&vidText); err != nil {
+		return nil, fmt.Errorf("stash.Save: read checkout version: %w", err)
+	}
+	vid, err := strconv.ParseInt(vidText, 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("stash.Save: query vfile: %w", err)
+		return nil, fmt.Errorf("stash.Save: checkout version %q: %w", vidText, err)
+	}
+	rows, err := vfile.Load(tx, vid)
+	if err != nil {
+		return nil, fmt.Errorf("stash.Save: %w", err)
 	}
 
-	var files []changedFile
-	for rows.Next() {
-		var f changedFile
-		var chngedRaw, deletedRaw, isExecRaw, isLinkRaw any
-		if err := rows.Scan(&f.pathname, &f.rid, &chngedRaw, &deletedRaw, &isExecRaw, &isLinkRaw); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("stash.Save: scan vfile: %w", err)
+	var files []vfile.Row
+	for _, r := range rows {
+		if vfile.Classify(r, false) == vfile.ChangeNone {
+			continue
 		}
-		f.chnged, _ = db.ScanInt(chngedRaw)
-		f.deleted, _ = db.ScanInt(deletedRaw)
-		execInt, _ := db.ScanInt(isExecRaw)
-		f.isExec = execInt != 0
-		linkInt, _ := db.ScanInt(isLinkRaw)
-		f.isLink = linkInt != 0
-		files = append(files, f)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("stash.Save: rows iteration: %w", err)
+		if r.PendingMerge() {
+			return nil, fmt.Errorf(
+				"stash.Save: %s has a pending merge; commit or revert it first", r.Pathname)
+		}
+		if r.RenamedFrom() != "" {
+			return nil, fmt.Errorf(
+				"stash.Save: %s is a pending rename; commit or revert it first", r.Pathname)
+		}
+		files = append(files, r)
 	}
 	return files, nil
 }
 
-// storeAndRevertFiles computes deltas, stores stashfile rows, and reverts the working directory.
-func storeAndRevertFiles(tx *sql.Tx, repoDB *sql.DB, dir string, stashID int64, files []changedFile) error {
-	ins, err := tx.Prepare(`INSERT INTO stashfile(stashid, isAdded, isRemoved, isExec, isLink, hash, origname, newname, delta)
-		VALUES(?,?,?,?,?,?,?,?,?)`)
+// storeAndRevertFiles records each changed file in the stash, then reverts
+// it to its committed version.
+func storeAndRevertFiles(
+	tx *sql.Tx, repoDB *sql.DB, dir string, stashID int64, files []vfile.Row,
+) error {
+	if stashID <= 0 {
+		panic("stash.storeAndRevertFiles: stashID must be positive")
+	}
+	ins, err := tx.Prepare(`INSERT INTO stashfile(stashid, isAdded, isRemoved, isExec, isLink,
+		hash, origname, newname, delta) VALUES(?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return fmt.Errorf("stash.Save: prepare insert: %w", err)
 	}
 	defer ins.Close()
 
 	for _, f := range files {
-		fullPath := filepath.Join(dir, f.pathname)
-		isAdded := f.rid == 0
-		isRemoved := f.deleted == 1
-
-		var baselineHash string
-		var deltaBytes []byte
-
-		if isAdded {
-			// Added file: store raw content, no baseline hash.
-			data, err := os.ReadFile(fullPath)
-			if err != nil {
-				return fmt.Errorf("stash.Save: read added %s: %w", f.pathname, err)
-			}
-			deltaBytes = data
-		} else if isRemoved {
-			// Removed file: get baseline hash, empty delta.
-			var uuid string
-			err := repoDB.QueryRow("SELECT uuid FROM blob WHERE rid=?", f.rid).Scan(&uuid)
-			if err != nil {
-				return fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.rid, err)
-			}
-			baselineHash = uuid
-			deltaBytes = []byte{}
-		} else {
-			// Modified file: compute delta from baseline to working content.
-			var uuid string
-			err := repoDB.QueryRow("SELECT uuid FROM blob WHERE rid=?", f.rid).Scan(&uuid)
-			if err != nil {
-				return fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.rid, err)
-			}
-			baselineHash = uuid
-
-			baseline, err := content.Expand(repoDB, libfossil.FslID(f.rid))
-			if err != nil {
-				return fmt.Errorf("stash.Save: expand rid=%d: %w", f.rid, err)
-			}
-
-			working, err := os.ReadFile(fullPath)
-			if err != nil {
-				return fmt.Errorf("stash.Save: read %s: %w", f.pathname, err)
-			}
-
-			deltaBytes = delta.Create(baseline, working)
+		fullPath := filepath.Join(dir, f.Pathname)
+		baselineHash, deltaBytes, err := stashRecord(repoDB, fullPath, f)
+		if err != nil {
+			return err
 		}
-
-		if _, err := ins.Exec(stashID, isAdded, isRemoved, f.isExec, f.isLink,
-			nullStr(baselineHash), f.pathname, f.pathname, deltaBytes); err != nil {
-			return fmt.Errorf("stash.Save: insert stashfile %s: %w", f.pathname, err)
+		if _, err := ins.Exec(stashID, f.IsAdded(), f.IsRemoved(), f.IsExe != 0, f.IsLink != 0,
+			nullStr(baselineHash), f.Pathname, f.Pathname, deltaBytes); err != nil {
+			return fmt.Errorf("stash.Save: insert stashfile %s: %w", f.Pathname, err)
 		}
-
-		// Revert working file.
-		if isAdded {
-			// Remove added file.
-			if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("stash.Save: remove added %s: %w", f.pathname, err)
-			}
-			// Remove from vfile.
-			if _, err := tx.Exec("DELETE FROM vfile WHERE pathname=?", f.pathname); err != nil {
-				return fmt.Errorf("stash.Save: delete vfile %s: %w", f.pathname, err)
-			}
-		} else if isRemoved {
-			// Restore deleted file from baseline.
-			baseline, err := content.Expand(repoDB, libfossil.FslID(f.rid))
-			if err != nil {
-				return fmt.Errorf("stash.Save: expand rid=%d for revert: %w", f.rid, err)
-			}
-			if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-				return fmt.Errorf("stash.Save: mkdir for %s: %w", f.pathname, err)
-			}
-			if err := os.WriteFile(fullPath, baseline, 0o644); err != nil {
-				return fmt.Errorf("stash.Save: write %s: %w", f.pathname, err)
-			}
-			if _, err := tx.Exec("UPDATE vfile SET deleted=0, chnged=0 WHERE pathname=?", f.pathname); err != nil {
-				return fmt.Errorf("stash.Save: update vfile %s: %w", f.pathname, err)
-			}
-		} else {
-			// Restore modified file from baseline.
-			baseline, err := content.Expand(repoDB, libfossil.FslID(f.rid))
-			if err != nil {
-				return fmt.Errorf("stash.Save: expand rid=%d for revert: %w", f.rid, err)
-			}
-			if err := os.WriteFile(fullPath, baseline, 0o644); err != nil {
-				return fmt.Errorf("stash.Save: write %s: %w", f.pathname, err)
-			}
-			if _, err := tx.Exec("UPDATE vfile SET chnged=0 WHERE pathname=?", f.pathname); err != nil {
-				return fmt.Errorf("stash.Save: update vfile %s: %w", f.pathname, err)
-			}
+		if err := revertStashedFile(tx, repoDB, fullPath, f); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// stashRecord returns what the stash keeps for f: an added file's content
+// with no baseline, a removed file's baseline hash with an empty delta, or a
+// modified file's baseline hash with a delta from baseline to its content.
+func stashRecord(
+	repoDB *sql.DB, fullPath string, f vfile.Row,
+) (baselineHash string, deltaBytes []byte, err error) {
+	if f.IsAdded() {
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			return "", nil, fmt.Errorf("stash.Save: read added %s: %w", f.Pathname, err)
+		}
+		return "", data, nil
+	}
+
+	if err := repoDB.QueryRow(
+		"SELECT uuid FROM blob WHERE rid=?", f.RID,
+	).Scan(&baselineHash); err != nil {
+		return "", nil, fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.RID, err)
+	}
+	if f.IsRemoved() {
+		return baselineHash, []byte{}, nil
+	}
+	baseline, err := content.Expand(repoDB, libfossil.FslID(f.RID))
+	if err != nil {
+		return "", nil, fmt.Errorf("stash.Save: expand rid=%d: %w", f.RID, err)
+	}
+	working, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("stash.Save: read %s: %w", f.Pathname, err)
+	}
+	return baselineHash, delta.Create(baseline, working), nil
+}
+
+// revertStashedFile undoes f's change: an added file is removed from disk
+// and vfile; a removed or modified file gets its committed content back and
+// its row is marked unchanged.
+func revertStashedFile(tx *sql.Tx, repoDB *sql.DB, fullPath string, f vfile.Row) error {
+	if f.IsAdded() {
+		if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stash.Save: remove added %s: %w", f.Pathname, err)
+		}
+		if _, err := tx.Exec("DELETE FROM vfile WHERE id=?", f.ID); err != nil {
+			return fmt.Errorf("stash.Save: delete vfile %s: %w", f.Pathname, err)
+		}
+		return nil
+	}
+
+	baseline, err := content.Expand(repoDB, libfossil.FslID(f.RID))
+	if err != nil {
+		return fmt.Errorf("stash.Save: expand rid=%d for revert: %w", f.RID, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("stash.Save: mkdir for %s: %w", f.Pathname, err)
+	}
+	if err := os.WriteFile(fullPath, baseline, 0o644); err != nil {
+		return fmt.Errorf("stash.Save: write %s: %w", f.Pathname, err)
+	}
+	if _, err := tx.Exec(
+		"UPDATE vfile SET deleted=0, chnged=0 WHERE id=?", f.ID,
+	); err != nil {
+		return fmt.Errorf("stash.Save: update vfile %s: %w", f.Pathname, err)
 	}
 	return nil
 }

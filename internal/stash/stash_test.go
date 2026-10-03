@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	libdb "github.com/danmestas/go-libfossil/db"
@@ -316,5 +317,40 @@ func TestDropAndClear(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("after Clear: expected 0 entries, got %d", len(entries))
+	}
+}
+
+// Save cannot yet stash a pending merge: its revert path would rewrite the
+// committed version and drop the merge. It must refuse, naming the file,
+// rather than silently leave the merged file out of the stash (#233).
+func TestSaveRefusesPendingMerge(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if _, err := ckout.Exec("UPDATE vfile SET chnged=2 WHERE pathname='a.txt'"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save(ckout, repoDB, dir, "merge")
+	if err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("Save over a pending merge = %v, want a pending-merge refusal", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "a.txt")); got != "hello world" {
+		t.Fatalf("a.txt = %q after refusal, want the merged content kept", got)
+	}
+}
+
+// Save cannot yet stash a rename: it records and restores files by their
+// current name only. It must refuse rather than stash the rename as a plain
+// edit and lose it (#233).
+func TestSaveRefusesRename(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if _, err := ckout.Exec("UPDATE vfile SET origname='old.txt' WHERE pathname='a.txt'"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save(ckout, repoDB, dir, "rename")
+	if err == nil || !strings.Contains(err.Error(), "rename") {
+		t.Fatalf("Save over a rename = %v, want a rename refusal", err)
 	}
 }

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Status` reports tracked files that are gone from disk as `missing`, as
+  fossil's `changes` command reports MISSING (#232). They used to be left out,
+  or shown as `added` or `modified`. `HasChanges` now sees a pending add made
+  by the fossil binary without a scan first. Both now share one classifier,
+  so they can no longer disagree about what counts as a change.
+
 - Checking out a version whose content is partly missing, as a partial sync
   leaves it, is now refused up front with an error naming the files (#231).
   go-libfossil used to record such files with `rid=0`, which in fossil's

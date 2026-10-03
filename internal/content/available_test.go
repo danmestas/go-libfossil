@@ -278,3 +278,50 @@ func (c *chainStepCounter) QueryRow(query string, args ...any) *sql.Row {
 	}
 	return c.Querier.QueryRow(query, args...)
 }
+
+// faultyQuerier fails every QueryRow whose SQL contains fail, the way a busy,
+// closed or I/O-failed database does, and passes everything else through.
+type faultyQuerier struct {
+	db.Querier
+	fail string
+}
+
+func (f faultyQuerier) QueryRow(query string, args ...any) *sql.Row {
+	if strings.Contains(query, f.fail) {
+		return f.Querier.QueryRow("SELECT * FROM no_such_table_simulating_a_fault")
+	}
+	return f.Querier.QueryRow(query, args...)
+}
+
+// TestCheckAvailableByUUIDReportsFaults pins that a database fault is an
+// error, not "unavailable", while missing content stays a plain false: a
+// caller that tolerates missing content must not swallow a fault with it
+// (#239). The bool wrappers keep reading a fault as unavailable.
+func TestCheckAvailableByUUIDReportsFaults(t *testing.T) {
+	d := setupTestDB(t)
+	_, uuid, err := blob.Store(d, []byte("fault injection content"))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	phantomUUID := "0000000000000000000000000000000000000abc"
+	if _, err := blob.StorePhantom(d, phantomUUID); err != nil {
+		t.Fatalf("StorePhantom: %v", err)
+	}
+
+	for _, missing := range []string{phantomUUID, "00000000000000000000000000000000deadbeef"} {
+		_, ok, err := CheckAvailableByUUID(d, missing)
+		if err != nil || ok {
+			t.Fatalf("CheckAvailableByUUID(%s) = (%v, %v), want (false, nil)", missing, ok, err)
+		}
+	}
+
+	for _, fail := range []string{"SELECT rid FROM blob WHERE uuid", "LEFT JOIN delta"} {
+		q := faultyQuerier{Querier: d, fail: fail}
+		if _, _, err := CheckAvailableByUUID(q, uuid); err == nil {
+			t.Fatalf("fault on %q: CheckAvailableByUUID returned no error", fail)
+		}
+		if _, ok := AvailableByUUID(q, uuid); ok {
+			t.Fatalf("fault on %q: AvailableByUUID = true, want false", fail)
+		}
+	}
+}

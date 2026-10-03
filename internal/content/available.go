@@ -2,6 +2,8 @@ package content
 
 import (
 	"database/sql"
+	"errors"
+	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -44,8 +46,22 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 	if q == nil {
 		panic("content.IsAvailable: q must not be nil")
 	}
+	available, err := checkAvailable(q, rid)
+	if err != nil {
+		return false // A fault reads as unavailable; see CheckAvailableByUUID.
+	}
+	return available
+}
+
+// checkAvailable is IsAvailable's walk, reporting a database fault as an
+// error instead of as "unavailable". An unknown rid, a phantom, a cycle or an
+// over-long chain is a plain false.
+func checkAvailable(q db.Querier, rid libfossil.FslID) (bool, error) {
+	if q == nil {
+		panic("content.checkAvailable: q must not be nil")
+	}
 	if rid <= 0 {
-		return false
+		return false, nil
 	}
 
 	// One statement per chain node, not two. Every SQL round trip here pays
@@ -65,58 +81,83 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 	current := rid
 	for depth := 0; depth < maxDeltaChainDepth; depth++ {
 		if _, repeat := seen[current]; repeat {
-			return false // cycle — the chain is not grounded in anything
+			return false, nil // cycle — the chain is not grounded in anything
 		}
 		seen[current] = struct{}{}
 
 		var size int64
 		var hasDelta bool
 		var srcid sql.NullInt64
-		if err := q.QueryRow(step, current).Scan(&size, &hasDelta, &srcid); err != nil {
-			return false // unknown rid
+		err := q.QueryRow(step, current).Scan(&size, &hasDelta, &srcid)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil // unknown rid
+		}
+		if err != nil {
+			return false, fmt.Errorf("content: availability of rid %d: %w", current, err)
 		}
 		if size < 0 {
-			return false // phantom
+			return false, nil // phantom
 		}
 		if !hasDelta {
-			return true // chain is grounded in full-text content
+			return true, nil // chain is grounded in full-text content
 		}
 		// delta.srcid is NOT NULL in the schema, so Valid is always true
 		// here. Checking it costs nothing and keeps a schema change from
 		// turning into a NULL scanned as zero, which reads as "grounded".
 		if !srcid.Valid {
-			return false
+			return false, nil
 		}
 		if srcid.Int64 == 0 {
-			return true
+			return true, nil
 		}
 		current = libfossil.FslID(srcid.Int64)
 	}
-	return false // bound exceeded — pathological chain
+	return false, nil // bound exceeded — pathological chain
 }
 
 // AvailableByUUID resolves uuid to its rid and reports whether that
-// artifact's content is available, per IsAvailable.
+// artifact's content is available, per IsAvailable. A database fault reads as
+// unavailable; a caller that tolerates missing content on purpose must use
+// CheckAvailableByUUID, so a fault is not mistaken for it.
 //
 // Use this in place of blob.Exists wherever the resolved rid is about to be
 // passed to Expand: blob.Exists answers true for a phantom, whose content
 // cannot be read.
 func AvailableByUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {
+	rid, available, err := CheckAvailableByUUID(q, uuid)
+	if err != nil {
+		return 0, false
+	}
+	return rid, available
+}
+
+// CheckAvailableByUUID is AvailableByUUID that reports a database fault as an
+// error, distinct from content that is simply not there (an unknown uuid, a
+// phantom, or a delta on one), which is (0, false, nil).
+func CheckAvailableByUUID(q db.Querier, uuid string) (libfossil.FslID, bool, error) {
 	if q == nil {
-		panic("content.AvailableByUUID: q must not be nil")
+		panic("content.CheckAvailableByUUID: q must not be nil")
 	}
 	if uuid == "" {
-		panic("content.AvailableByUUID: uuid must not be empty")
+		panic("content.CheckAvailableByUUID: uuid must not be empty")
 	}
 
 	var rid int64
-	if err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", uuid).Scan(&rid); err != nil {
-		return 0, false
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", uuid).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
 	}
-	if !IsAvailable(q, libfossil.FslID(rid)) {
-		return 0, false
+	if err != nil {
+		return 0, false, fmt.Errorf("content: look up %s: %w", uuid, err)
 	}
-	return libfossil.FslID(rid), true
+	available, err := checkAvailable(q, libfossil.FslID(rid))
+	if err != nil {
+		return 0, false, err
+	}
+	if !available {
+		return 0, false, nil
+	}
+	return libfossil.FslID(rid), true, nil
 }
 
 // AvailabilityCache memoizes IsAvailable across many calls that share delta

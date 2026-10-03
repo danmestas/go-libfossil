@@ -8,6 +8,7 @@
 package checkout
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -166,6 +167,8 @@ func (c *Checkout) loadInitialVFile() error {
 	}
 	err = c.LoadVFile(rid, true)
 	if errors.Is(err, errMissingContent) {
+		// Tolerated, but not silently: observers learn why vfile is empty.
+		c.obs.Error(context.Background(), fmt.Errorf("checkout.Create: tip not loaded: %w", err))
 		return nil
 	}
 	return err

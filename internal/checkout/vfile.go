@@ -36,25 +36,11 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 		panic("checkout.LoadVFile: nil *Checkout")
 	}
 
-	files, err := manifest.ListFiles(c.repo, rid)
-	if err != nil {
-		return fmt.Errorf("checkout.LoadVFile: %w", err)
-	}
-
 	// Resolve every file before changing anything, so a refusal leaves
 	// vfile as it was.
-	blobRIDs := make([]libfossil.FslID, len(files))
-	var missing []string
-	for i, file := range files {
-		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
-		if !available {
-			missing = append(missing, file.Name)
-			continue
-		}
-		blobRIDs[i] = blobRID
-	}
-	if len(missing) > 0 {
-		return missingContentError(missing)
+	files, blobRIDs, err := c.resolveFiles(rid)
+	if err != nil {
+		return err
 	}
 
 	if clear {
@@ -81,6 +67,35 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 		}
 	}
 	return nil
+}
+
+// resolveFiles lists the files of checkin rid with the blob each one's
+// content lives in. It fails, wrapping errMissingContent, when the repository
+// does not hold all of that content; callers run it before changing anything
+// so that a version they cannot finish is refused up front.
+func (c *Checkout) resolveFiles(rid libfossil.FslID) ([]manifest.FileEntry, []libfossil.FslID, error) {
+	if rid <= 0 {
+		panic("checkout.resolveFiles: rid must be positive")
+	}
+
+	files, err := manifest.ListFiles(c.repo, rid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("checkout.LoadVFile: %w", err)
+	}
+	blobRIDs := make([]libfossil.FslID, len(files))
+	var missing []string
+	for i, file := range files {
+		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
+		if !available {
+			missing = append(missing, file.Name)
+			continue
+		}
+		blobRIDs[i] = blobRID
+	}
+	if len(missing) > 0 {
+		return nil, nil, missingContentError(missing)
+	}
+	return files, blobRIDs, nil
 }
 
 // missingContentError names up to missingNamesMax of the missing files.

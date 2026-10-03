@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -541,11 +542,20 @@ func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
 	probe := &Checkout{repo: r}
 	phantomize(t, probe, rid2, "new.txt")
 
-	co, err := Create(r, t.TempDir(), CreateOpts{})
+	var observed []error
+	co, err := Create(r, t.TempDir(), CreateOpts{Observer: &testObserver{
+		onError: func(_ context.Context, err error) { observed = append(observed, err) },
+	}})
 	if err != nil {
 		t.Fatalf("Create with a partly synced tip: %v", err)
 	}
 	defer co.Close()
+	if vid, _, _ := co.Version(); vid != rid2 {
+		t.Fatalf("Version = %d after Create, want the tip %d", vid, rid2)
+	}
+	if len(observed) != 1 || !errors.Is(observed[0], errMissingContent) {
+		t.Fatalf("observer errors = %v, want one errMissingContent", observed)
+	}
 	var rows int
 	if err := co.db.QueryRow("SELECT count(*) FROM vfile").Scan(&rows); err != nil {
 		t.Fatal(err)
@@ -558,5 +568,13 @@ func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
 	co.dir = "/checkout"
 	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
 		t.Fatalf("Extract of the complete version: %v", err)
+	}
+	if err := co.db.QueryRow(
+		"SELECT count(*) FROM vfile WHERE vid = ?", int64(rid1),
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 3 {
+		t.Fatalf("vfile holds %d rows for rid1 after Extract, want 3", rows)
 	}
 }

@@ -329,3 +329,41 @@ func TestRepoRevertKeepsRenamedEditedFile(t *testing.T) {
 		t.Fatal("revert deleted a renamed committed file instead of restoring it")
 	}
 }
+
+// Revert undoes a pending rename, as fossil's revert does: the file goes back
+// to its old name with its committed content, the new name is gone, and the
+// checkout is clean (#242). Naming either the new or the old name works.
+func TestRepoRevertUndoesRename(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		files []string
+		edit  bool
+	}{
+		{"revert all, pure rename", nil, false},
+		{"revert all, renamed and edited", nil, true},
+		{"by new name", []string{"z.txt"}, true},
+		{"by old name", []string{"a.txt"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, repoPath, ckDir := fossilCheckout(t)
+			runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+			if tc.edit {
+				writeCkFile(t, ckDir, "z.txt", "edited\n")
+			}
+
+			cmd := &cli.RepoRevertCmd{Files: tc.files, Dir: ckDir}
+			if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+				t.Fatalf("revert: %v", err)
+			}
+			if got := readCkFile(t, ckDir, "a.txt"); got != "one\n" {
+				t.Fatalf("a.txt = %q, want the committed content back under the old name", got)
+			}
+			if _, err := os.Stat(filepath.Join(ckDir, "z.txt")); !os.IsNotExist(err) {
+				t.Fatalf("z.txt still on disk after reverting the rename (stat err %v)", err)
+			}
+			if got := fossilChanges(t, bin, ckDir); got != "" {
+				t.Fatalf("fossil changes = %q after revert, want none", got)
+			}
+		})
+	}
+}

@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.Revert` undoes a pending rename, as fossil's `revert` does
+  (#242). It used to leave a rename made with `fossil mv` in place, and
+  restored a renamed, edited file's content under its new name. The file now
+  goes back to its old name with its committed content, and either name can
+  be given.
+
 - A dry-run `Extract` or `Update` no longer changes the checkout (#236). Both
   used to replace the checkout's file list and move its version to the
   target, losing pending adds, renames and merge state, even though no file

@@ -447,3 +447,24 @@ func TestExtractReextractOlderVersionIntoCreatedCheckout(t *testing.T) {
 		t.Fatalf("hello.txt = %q, want rid1's content", data)
 	}
 }
+
+// A pending merge (a vmerge row) is unsaved work even when every edited file
+// already matches the target: switching would drop it, and the stale vmerge
+// row would later give a commit a bogus merge parent.
+func TestExtractRefusesOverPendingMergeMatchingTarget(t *testing.T) {
+	co, mem, _, rid2 := newCheckoutAtFirstOfTwo(t)
+	if err := mem.WriteFile(
+		"/checkout/hello.txt", []byte("hello updated world\n"), 0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec(
+		"INSERT INTO vmerge(id, merge, mhash) VALUES(0, ?, 'x')", int64(rid2),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid2, ExtractOpts{}); err == nil {
+		t.Fatal("Extract over a pending merge succeeded")
+	}
+}

@@ -291,6 +291,14 @@ func (c *Checkout) firstChangeAtRisk(
 	if err := c.refreshChanged(vid); err != nil {
 		return "", err
 	}
+	// A pending merge is unsaved work in its own right: the vmerge record
+	// would be dropped even if every merged file already matches target.
+	var merging bool
+	if err := c.db.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM vmerge)",
+	).Scan(&merging); err != nil {
+		return "", fmt.Errorf("query vmerge: %w", err)
+	}
 	rows, err := c.changeRows(vid)
 	if err != nil {
 		return "", err
@@ -300,9 +308,9 @@ func (c *Checkout) firstChangeAtRisk(
 		if change == ChangeNone {
 			continue
 		}
-		// Only a plain edit (not a merge state) of a file target also
-		// writes can be safe; its content decides.
-		if change == ChangeModified && r.chnged == 1 {
+		// Only a plain edit (no merge pending, not a merge state) of a file
+		// target also writes can be safe; its content decides.
+		if !merging && change == ChangeModified && r.chnged == 1 {
 			if uuid, ok := targetHash[r.pathname]; ok {
 				clobber, err := c.wouldClobber(r.pathname, uuid)
 				if err != nil {

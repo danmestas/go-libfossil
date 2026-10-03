@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,63 +14,121 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
-// LoadVFile populates vfile table with entries from the specified checkin manifest.
+// errMissingContent reports a version whose files' content the repository
+// does not fully hold (a phantom, or a delta on one), as a partial sync
+// leaves it.
+var errMissingContent = errors.New("content missing")
+
+// missingNamesMax bounds how many missing files an error names.
+const missingNamesMax = 10
+
+// Compile-time check: an error must be able to name at least one file.
+const _ = uint(missingNamesMax - 1)
+
+// LoadVFile populates the vfile table with the files of checkin rid.
 // If clear=true, deletes all vfile rows for OTHER versions (keeps only vid=rid).
-// Returns the count of missing blobs (files whose content is not in the repo).
+//
+// Like fossil's checkout, it refuses a version whose content is not all in
+// the repository, before writing anything: a row it cannot back with content
+// would read as a pending add (rid=0 means added in fossil's vfile) and could
+// never be extracted. The error wraps errMissingContent and names the files.
 //
 // Panics if c is nil (TigerStyle precondition).
-func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) (missing uint32, err error) {
+func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 	if c == nil {
 		panic("checkout.LoadVFile: nil *Checkout")
 	}
 
-	// Clear other versions if requested
+	// Resolve every file before changing anything, so a refusal leaves
+	// vfile as it was.
+	files, blobRIDs, err := c.resolveFiles(rid)
+	if err != nil {
+		return fmt.Errorf("checkout.LoadVFile: %w", err)
+	}
+
 	if clear {
 		if _, err := c.db.Exec("DELETE FROM vfile WHERE vid != ?", int64(rid)); err != nil {
-			return 0, fmt.Errorf("checkout.LoadVFile: clear: %w", err)
+			return fmt.Errorf("checkout.LoadVFile: clear: %w", err)
 		}
 	}
-
-	// Get file list from manifest
-	files, err := manifest.ListFiles(c.repo, rid)
-	if err != nil {
-		return 0, fmt.Errorf("checkout.LoadVFile: %w", err)
-	}
-
-	// Insert each file into vfile
-	for _, file := range files {
-		// Look up blob RID. A phantom, or a delta whose base is a phantom,
-		// counts as missing: the checkout cannot materialize its content.
-		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
-		if !available {
-			missing++
-			// Insert with rid=0 to mark as missing
-			blobRID = 0
+	for i, file := range files {
+		if blobRIDs[i] <= 0 {
+			panic("checkout.LoadVFile: unresolved blob for " + file.Name)
 		}
-
-		// Determine isexe flag
 		isexe := 0
 		if strings.Contains(file.Perm, "x") {
 			isexe = 1
 		}
-
-		// Insert vfile row (INSERT OR IGNORE handles duplicates)
+		// INSERT OR IGNORE keeps an existing row for this version as it is.
 		_, err := c.db.Exec(`
 			INSERT OR IGNORE INTO vfile(vid, pathname, rid, mrid, isexe, islink)
-			VALUES(?, ?, ?, ?, ?, ?)`,
-			int64(rid),
-			file.Name,
-			int64(blobRID),
-			int64(blobRID),
-			isexe,
-			0, // islink - symlinks not tracked yet
+			VALUES(?, ?, ?, ?, ?, 0)`,
+			int64(rid), file.Name, int64(blobRIDs[i]), int64(blobRIDs[i]), isexe,
 		)
 		if err != nil {
-			return 0, fmt.Errorf("checkout.LoadVFile: insert %s: %w", file.Name, err)
+			return fmt.Errorf("checkout.LoadVFile: insert %s: %w", file.Name, err)
 		}
 	}
+	return nil
+}
 
-	return missing, nil
+// resolveFiles lists the files of checkin rid with the blob each one's
+// content lives in. It fails, wrapping errMissingContent, when the repository
+// does not hold all of that content; callers run it before changing anything
+// so that a version they cannot finish is refused up front.
+func (c *Checkout) resolveFiles(
+	rid libfossil.FslID,
+) ([]manifest.FileEntry, []libfossil.FslID, error) {
+	if rid <= 0 {
+		panic("checkout.resolveFiles: rid must be positive")
+	}
+	if c.repo == nil {
+		panic("checkout.resolveFiles: nil repo")
+	}
+
+	files, err := manifest.ListFiles(c.repo, rid)
+	if err != nil {
+		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
+	}
+	blobRIDs := make([]libfossil.FslID, len(files))
+	var missing []string
+	for i, file := range files {
+		blobRID, available := content.AvailableByUUID(c.repo.DB(), file.UUID)
+		if !available {
+			missing = append(missing, file.Name)
+			continue
+		}
+		blobRIDs[i] = blobRID
+	}
+	if len(missing) > 0 {
+		return nil, nil, missingContentError(missing)
+	}
+	if len(blobRIDs) != len(files) {
+		panic("checkout.resolveFiles: blobRIDs out of step with files")
+	}
+	return files, blobRIDs, nil
+}
+
+// missingContentError names up to missingNamesMax of the missing files.
+func missingContentError(missing []string) error {
+	if len(missing) == 0 {
+		panic("checkout.missingContentError: no missing files")
+	}
+	named := missing
+	if len(named) > missingNamesMax {
+		named = named[:missingNamesMax]
+	}
+	if len(named) == 0 {
+		panic("checkout.missingContentError: nothing to name")
+	}
+	more := ""
+	if len(missing) > len(named) {
+		more = fmt.Sprintf(" and %d more", len(missing)-len(named))
+	}
+	return fmt.Errorf(
+		"%w for %d file(s): %s%s",
+		errMissingContent, len(missing), strings.Join(named, ", "), more,
+	)
 }
 
 // UnloadVFile removes all vfile entries for the specified version.

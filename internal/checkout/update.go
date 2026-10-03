@@ -11,7 +11,6 @@ import (
 
 	"time"
 
-	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -199,29 +198,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		panic("checkout.Update: nil *Checkout")
 	}
 
-	// Determine target
-	target := opts.TargetRID
-	if target == 0 {
-		var err error
-		target, err = c.CalcUpdateVersion()
-		if err != nil {
-			return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
-		}
-		if target == 0 {
-			return UpdateResult{}, nil // nothing to update
-		}
-	}
-
-	// Get current version
-	currentRID, _, err := c.Version()
+	target, currentRID, err := c.updateTarget(opts.TargetRID)
 	if err != nil {
-		return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
+		return UpdateResult{}, err
 	}
-	if currentRID == target {
-		return UpdateResult{}, nil // already at target
+	if target == 0 {
+		return UpdateResult{}, nil // nothing to update, or already there
 	}
 
-	// Start observer
 	ctx := c.obs.ExtractStarted(context.Background(), ExtractStart{
 		Operation: "update",
 		TargetRID: target,
@@ -241,7 +225,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		})
 	}()
 
-	// Build 3-version file maps
+	// Refuse a target whose content is not all here before writing any file,
+	// as fossil's update does; finalizeUpdate would refuse it too, but only
+	// after disk had moved.
+	if _, _, err := c.resolveFiles(target); err != nil {
+		updateErr = fmt.Errorf("checkout.Update: %w", err)
+		return UpdateResult{}, updateErr
+	}
+
 	maps, err := c.buildUpdateMaps(currentRID, target)
 	if err != nil {
 		updateErr = err
@@ -254,19 +245,11 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, updateErr
 	}
 
-	// Look up checkin timestamp for SetMTime.
 	var checkinTime time.Time
 	if opts.SetMTime && !opts.DryRun {
-		var mtimeRaw any
-		if err := c.repo.DB().QueryRow(
-			"SELECT mtime FROM event WHERE objid = ? AND type = 'ci'",
-			int64(target),
-		).Scan(&mtimeRaw); err == nil {
-			checkinTime, _ = db.ScanTime(mtimeRaw)
-		}
+		checkinTime = c.checkinTime(target)
 	}
 
-	// Process each file
 	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
@@ -277,26 +260,64 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, updateErr
 	}
 
-	// maps.allNames is a map, so processFileUpdates' iteration order (and
-	// hence the order these slices were built in) is randomized by the Go
-	// runtime. Sort so the result is deterministic: golden-file and
-	// reflect.DeepEqual assertions against these paths are only meaningful
-	// if the same input produces the same order every run.
-	sort.Strings(filesWritten)
-	sort.Strings(filesRemoved)
-	sort.Strings(conflicted)
+	return sortedUpdateResult(filesWritten, filesRemoved, conflicted), nil
+}
 
+// sortedUpdateResult builds Update's result with each path list sorted.
+// processFileUpdates walks a map, so the order the lists were built in is
+// randomized by the Go runtime; sorting makes the result deterministic, so
+// golden-file and reflect.DeepEqual assertions against it are meaningful.
+func sortedUpdateResult(written, removed, conflicted []string) UpdateResult {
+	sort.Strings(written)
+	sort.Strings(removed)
+	sort.Strings(conflicted)
 	return UpdateResult{
-		FilesWritten: filesWritten,
-		FilesRemoved: filesRemoved,
+		FilesWritten: written,
+		FilesRemoved: removed,
 		Conflicted:   conflicted,
-	}, nil
+	}
+}
+
+// updateTarget picks the version Update moves to and the current one. A
+// target of 0 means there is nothing to do: no newer version, or the
+// checkout is already there.
+func (c *Checkout) updateTarget(
+	requested libfossil.FslID,
+) (target, current libfossil.FslID, err error) {
+	if c == nil {
+		panic("checkout.updateTarget: nil *Checkout")
+	}
+	if requested < 0 {
+		return 0, 0, fmt.Errorf("checkout.Update: invalid target rid %d", requested)
+	}
+
+	target = requested
+	if target == 0 {
+		target, err = c.CalcUpdateVersion()
+		if err != nil {
+			return 0, 0, fmt.Errorf("checkout.Update: %w", err)
+		}
+		if target == 0 {
+			return 0, 0, nil
+		}
+	}
+	current, _, err = c.Version()
+	if err != nil {
+		return 0, 0, fmt.Errorf("checkout.Update: %w", err)
+	}
+	if current == target {
+		return 0, current, nil
+	}
+	if target <= 0 {
+		panic("checkout.updateTarget: chose a non-positive target")
+	}
+	return target, current, nil
 }
 
 // finalizeUpdate reloads vfile for the target version, looks up its UUID,
 // and updates the vvar checkout/checkout-hash entries.
 func (c *Checkout) finalizeUpdate(target libfossil.FslID) error {
-	if _, err := c.LoadVFile(target, true); err != nil {
+	if err := c.LoadVFile(target, true); err != nil {
 		return fmt.Errorf("checkout.Update: reload vfile: %w", err)
 	}
 

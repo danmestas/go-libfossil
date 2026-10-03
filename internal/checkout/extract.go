@@ -92,7 +92,7 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		}
 	}
 
-	if _, err := c.LoadVFile(rid, true); err != nil {
+	if err := c.LoadVFile(rid, true); err != nil {
 		extractErr = fmt.Errorf("checkout.Extract: %w", err)
 		return extractErr
 	}

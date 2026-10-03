@@ -8,7 +8,9 @@
 package checkout
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -92,13 +94,7 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		panic("checkout.Create: empty dir")
 	}
 
-	env := opts.Env
-	if env == nil {
-		env = simio.RealEnv()
-	}
-	if env.Storage == nil {
-		env.Storage = simio.OSStorage{}
-	}
+	env := resolveEnv(opts.Env)
 
 	obs := resolveObserver(opts.Observer)
 
@@ -150,18 +146,50 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		obs:  obs,
 		dir:  dir,
 	}
-	rid, _, err := c.Version()
-	if err != nil {
+	if err := c.loadInitialVFile(); err != nil {
 		ckdb.Close()
 		return nil, err
 	}
-	if rid != 0 {
-		if _, err := c.LoadVFile(rid, true); err != nil {
-			ckdb.Close()
-			return nil, err
-		}
-	}
 	return c, nil
+}
+
+// loadInitialVFile loads vfile for the version Create recorded. A tip that a
+// partial sync has not finished is no reason to fail: the caller may be about
+// to extract an older, complete version. vfile then stays empty rather than
+// claiming files the repo cannot produce.
+func (c *Checkout) loadInitialVFile() error {
+	if c == nil {
+		panic("checkout.loadInitialVFile: nil *Checkout")
+	}
+	if c.obs == nil {
+		panic("checkout.loadInitialVFile: nil observer")
+	}
+	rid, _, err := c.Version()
+	if err != nil {
+		return err
+	}
+	if rid == 0 {
+		return nil // Empty repository: nothing to load.
+	}
+	err = c.LoadVFile(rid, true)
+	if errors.Is(err, errMissingContent) {
+		// Tolerated, but not silently: observers learn why vfile is empty.
+		c.obs.Error(context.Background(), fmt.Errorf("checkout.Create: tip not loaded: %w", err))
+		return nil
+	}
+	return err
+}
+
+// resolveEnv fills in the defaults Create and Open share: the real
+// environment when none is given, and OS storage when it has none.
+func resolveEnv(env *simio.Env) *simio.Env {
+	if env == nil {
+		env = simio.RealEnv()
+	}
+	if env.Storage == nil {
+		env.Storage = simio.OSStorage{}
+	}
+	return env
 }
 
 // Open opens an existing checkout database. If opts.SearchParents is true,
@@ -176,13 +204,7 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		panic("checkout.Open: empty dir")
 	}
 
-	env := opts.Env
-	if env == nil {
-		env = simio.RealEnv()
-	}
-	if env.Storage == nil {
-		env.Storage = simio.OSStorage{}
-	}
+	env := resolveEnv(opts.Env)
 
 	obs := resolveObserver(opts.Observer)
 

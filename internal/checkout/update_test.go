@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"sort"
 	"strconv"
@@ -864,5 +865,38 @@ func TestUpdateFailureIsDistinguishableFromConflict(t *testing.T) {
 	_, err = co.Update(UpdateOpts{TargetRID: 999999})
 	if err == nil {
 		t.Fatal("expected error for nonexistent target RID, got nil")
+	}
+}
+
+// TestUpdateRefusesMissingContentBeforeWriting pins that Update checks the
+// target's content is all present before touching disk, as fossil's update
+// does (#231): otherwise it could write some files and then fail, leaving
+// disk on the target while the checkout still records the old version.
+func TestUpdateRefusesMissingContentBeforeWriting(t *testing.T) {
+	co, mem, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	phantomize(t, co, rid2, "new.txt")
+
+	_, err := co.Update(UpdateOpts{TargetRID: rid2})
+	if !errors.Is(err, errMissingContent) {
+		t.Fatalf("Update = %v, want errMissingContent", err)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q, Update wrote before refusing", data)
+	}
+	if vid := mustVersion(t, co); vid != rid1 {
+		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
+	}
+}
+
+// A negative target is a caller's mistake, reported as an error rather than
+// a panic: it arrives through the public UpdateOpts.TargetRID.
+func TestUpdateRejectsNegativeTarget(t *testing.T) {
+	co, _, _, _ := newCheckoutAtFirstOfTwo(t) // only the checkout matters here
+	if _, err := co.Update(UpdateOpts{TargetRID: -1}); err == nil {
+		t.Fatal("Update with a negative target succeeded")
 	}
 }

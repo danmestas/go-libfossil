@@ -351,7 +351,7 @@ func TestExtractSwitchesCleanCheckout(t *testing.T) {
 	if string(data) != "hello updated world\n" {
 		t.Fatalf("hello.txt = %q, want rid2's content", data)
 	}
-	if vid, _, _ := co.Version(); vid != rid2 {
+	if vid := mustVersion(t, co); vid != rid2 {
 		t.Fatalf("Version = %d, want %d", vid, rid2)
 	}
 }
@@ -371,7 +371,7 @@ func TestExtractRefusalLeavesCheckoutUntouched(t *testing.T) {
 	if !contains(err.Error(), "local changes") {
 		t.Fatalf("error should mention local changes, got: %v", err)
 	}
-	if vid, _, _ := co.Version(); vid != rid1 {
+	if vid := mustVersion(t, co); vid != rid1 {
 		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
 	}
 	if got := changedNames(t, co); len(got) != 1 || got[0] != "README.md" {
@@ -513,7 +513,7 @@ func TestExtractRefusesVersionWithMissingContent(t *testing.T) {
 	if !contains(err.Error(), "new.txt") {
 		t.Fatalf("error should name the missing file, got: %v", err)
 	}
-	if vid, _, _ := co.Version(); vid != rid1 {
+	if vid := mustVersion(t, co); vid != rid1 {
 		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
 	}
 	var rows int
@@ -550,7 +550,7 @@ func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
 		t.Fatalf("Create with a partly synced tip: %v", err)
 	}
 	defer co.Close()
-	if vid, _, _ := co.Version(); vid != rid2 {
+	if vid := mustVersion(t, co); vid != rid2 {
 		t.Fatalf("Version = %d after Create, want the tip %d", vid, rid2)
 	}
 	if len(observed) != 1 || !errors.Is(observed[0], errMissingContent) {
@@ -564,7 +564,9 @@ func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
 		t.Fatalf("vfile holds %d rows for a tip it cannot load, want 0", rows)
 	}
 
-	co.env = &simio.Env{Storage: simio.NewMemStorage(), Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.env = &simio.Env{
+		Storage: simio.NewMemStorage(), Clock: simio.RealClock{}, Rand: simio.CryptoRand{},
+	}
 	co.dir = "/checkout"
 	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
 		t.Fatalf("Extract of the complete version: %v", err)
@@ -577,4 +579,15 @@ func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
 	if rows != 3 {
 		t.Fatalf("vfile holds %d rows for rid1 after Extract, want 3", rows)
 	}
+}
+
+// mustVersion returns the checkout's current version, failing the test on
+// error.
+func mustVersion(t *testing.T, co *Checkout) libfossil.FslID {
+	t.Helper()
+	vid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return vid
 }

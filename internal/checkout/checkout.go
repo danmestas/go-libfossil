@@ -158,6 +158,12 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 // to extract an older, complete version. vfile then stays empty rather than
 // claiming files the repo cannot produce.
 func (c *Checkout) loadInitialVFile() error {
+	if c == nil {
+		panic("checkout.loadInitialVFile: nil *Checkout")
+	}
+	if c.obs == nil {
+		panic("checkout.loadInitialVFile: nil observer")
+	}
 	rid, _, err := c.Version()
 	if err != nil {
 		return err

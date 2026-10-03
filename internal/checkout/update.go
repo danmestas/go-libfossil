@@ -206,7 +206,6 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, nil // nothing to update, or already there
 	}
 
-	// Start observer
 	ctx := c.obs.ExtractStarted(context.Background(), ExtractStart{
 		Operation: "update",
 		TargetRID: target,
@@ -226,7 +225,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		})
 	}()
 
-	// Build 3-version file maps
+	// Refuse a target whose content is not all here before writing any file,
+	// as fossil's update does; finalizeUpdate would refuse it too, but only
+	// after disk had moved.
+	if _, _, err := c.resolveFiles(target); err != nil {
+		updateErr = fmt.Errorf("checkout.Update: %w", err)
+		return UpdateResult{}, updateErr
+	}
+
 	maps, err := c.buildUpdateMaps(currentRID, target)
 	if err != nil {
 		updateErr = err
@@ -244,7 +250,6 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		checkinTime = c.checkinTime(target)
 	}
 
-	// Process each file
 	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
@@ -275,12 +280,15 @@ func sortedUpdateResult(written, removed, conflicted []string) UpdateResult {
 
 // updateTarget picks the version Update moves to and the current one. A
 // target of 0 means there is nothing to do: no newer version, or the
-// checkout is already there. A target whose content is not all in the
-// repository is refused here, before anything is written, as fossil's update
-// does; finalizeUpdate would refuse it too, but only after disk had moved.
-func (c *Checkout) updateTarget(requested libfossil.FslID) (target, current libfossil.FslID, err error) {
+// checkout is already there.
+func (c *Checkout) updateTarget(
+	requested libfossil.FslID,
+) (target, current libfossil.FslID, err error) {
+	if c == nil {
+		panic("checkout.updateTarget: nil *Checkout")
+	}
 	if requested < 0 {
-		panic("checkout.updateTarget: negative requested")
+		return 0, 0, fmt.Errorf("checkout.Update: invalid target rid %d", requested)
 	}
 
 	target = requested
@@ -300,8 +308,8 @@ func (c *Checkout) updateTarget(requested libfossil.FslID) (target, current libf
 	if current == target {
 		return 0, current, nil
 	}
-	if _, _, err := c.resolveFiles(target); err != nil {
-		return 0, 0, fmt.Errorf("checkout.Update: %w", err)
+	if target <= 0 {
+		panic("checkout.updateTarget: chose a non-positive target")
 	}
 	return target, current, nil
 }

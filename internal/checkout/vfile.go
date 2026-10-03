@@ -22,6 +22,9 @@ var errMissingContent = errors.New("content missing")
 // missingNamesMax bounds how many missing files an error names.
 const missingNamesMax = 10
 
+// Compile-time check: an error must be able to name at least one file.
+const _ = uint(missingNamesMax - 1)
+
 // LoadVFile populates the vfile table with the files of checkin rid.
 // If clear=true, deletes all vfile rows for OTHER versions (keeps only vid=rid).
 //
@@ -40,7 +43,7 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 	// vfile as it was.
 	files, blobRIDs, err := c.resolveFiles(rid)
 	if err != nil {
-		return err
+		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}
 
 	if clear {
@@ -73,14 +76,19 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 // content lives in. It fails, wrapping errMissingContent, when the repository
 // does not hold all of that content; callers run it before changing anything
 // so that a version they cannot finish is refused up front.
-func (c *Checkout) resolveFiles(rid libfossil.FslID) ([]manifest.FileEntry, []libfossil.FslID, error) {
+func (c *Checkout) resolveFiles(
+	rid libfossil.FslID,
+) ([]manifest.FileEntry, []libfossil.FslID, error) {
 	if rid <= 0 {
 		panic("checkout.resolveFiles: rid must be positive")
+	}
+	if c.repo == nil {
+		panic("checkout.resolveFiles: nil repo")
 	}
 
 	files, err := manifest.ListFiles(c.repo, rid)
 	if err != nil {
-		return nil, nil, fmt.Errorf("checkout.LoadVFile: %w", err)
+		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}
 	blobRIDs := make([]libfossil.FslID, len(files))
 	var missing []string
@@ -95,6 +103,9 @@ func (c *Checkout) resolveFiles(rid libfossil.FslID) ([]manifest.FileEntry, []li
 	if len(missing) > 0 {
 		return nil, nil, missingContentError(missing)
 	}
+	if len(blobRIDs) != len(files) {
+		panic("checkout.resolveFiles: blobRIDs out of step with files")
+	}
 	return files, blobRIDs, nil
 }
 
@@ -107,12 +118,15 @@ func missingContentError(missing []string) error {
 	if len(named) > missingNamesMax {
 		named = named[:missingNamesMax]
 	}
+	if len(named) == 0 {
+		panic("checkout.missingContentError: nothing to name")
+	}
 	more := ""
 	if len(missing) > len(named) {
 		more = fmt.Sprintf(" and %d more", len(missing)-len(named))
 	}
 	return fmt.Errorf(
-		"checkout.LoadVFile: %w for %d file(s): %s%s",
+		"%w for %d file(s): %s%s",
 		errMissingContent, len(missing), strings.Join(named, ", "), more,
 	)
 }

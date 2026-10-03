@@ -887,7 +887,16 @@ func TestUpdateRefusesMissingContentBeforeWriting(t *testing.T) {
 	if string(data) != "hello world\n" {
 		t.Fatalf("hello.txt = %q, Update wrote before refusing", data)
 	}
-	if vid, _, _ := co.Version(); vid != rid1 {
+	if vid := mustVersion(t, co); vid != rid1 {
 		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
+	}
+}
+
+// A negative target is a caller's mistake, reported as an error rather than
+// a panic: it arrives through the public UpdateOpts.TargetRID.
+func TestUpdateRejectsNegativeTarget(t *testing.T) {
+	co, _, _, _ := newCheckoutAtFirstOfTwo(t) // only the checkout matters here
+	if _, err := co.Update(UpdateOpts{TargetRID: -1}); err == nil {
+		t.Fatal("Update with a negative target succeeded")
 	}
 }

@@ -8,25 +8,17 @@ type RepoRmCmd struct {
 	Dir   string   `short:"d" help:"Checkout directory" default:"."`
 }
 
-func (c *RepoRmCmd) Run(g *Globals) error {
-	ckout, err := openCheckout(c.Dir)
+func (c *RepoRmCmd) Run(g *Globals) (err error) {
+	co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
-	defer ckout.Close()
-
-	vid, err := checkoutVid(ckout)
-	if err != nil {
-		return err
-	}
+	defer closeWith(done, &err)
 
 	for _, name := range c.Files {
-		var id int64
-		err := ckout.QueryRow("SELECT id FROM vfile WHERE pathname=? AND vid=?", name, vid).Scan(&id)
-		if err != nil {
-			return fmt.Errorf("%s: not tracked in checkout", name)
+		if err := co.Remove([]string{name}); err != nil {
+			return err
 		}
-		ckout.Exec("UPDATE vfile SET deleted=1 WHERE id=?", id)
 		fmt.Printf("REMOVED  %s\n", name)
 	}
 	return nil

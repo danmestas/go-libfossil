@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `Checkout.Revert` keeps a never-committed file on disk when it reverts the
+  add (#234). It used to delete the file, destroying the only copy. It now
+  un-manages it and leaves it in place, as fossil's `revert` does. `Revert`
+  also checks the disk first, so an edit that no scan has recorded yet is
+  reverted instead of silently skipped; restores a file that is missing from
+  disk; and, when reverting everything, drops a pending merge completely
+  (merged-in versions and the merge record), as fossil does.
+- `Checkout.Rename` refuses to move a file onto one that already exists on
+  disk, as `fossil mv --hard` does, before changing anything. It used to
+  overwrite it.
+
 ### Fixed
+
+- The CLI's `add`, `rm`, `rename` and `revert` commands call the library
+  instead of writing the checkout database with raw SQL (#234). `rename` now
+  moves the file, like `fossil mv --hard`, instead of leaving it under its old
+  name where the next commit couldn't find it. `revert` restores committed
+  content instead of only clearing change flags. Errors, including from
+  closing the checkout, are reported instead of ignored. Without `-R` they
+  find the repository the checkout records, including a relative path as
+  `fossil open` stores it.
 
 - The internal stash no longer drops files changed by a merge (#233). It
   selected only `chnged=1`, leaving out fossil's merge states, and stashed a

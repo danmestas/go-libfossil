@@ -189,10 +189,14 @@ func TestRevertNewlyAdded(t *testing.T) {
 		t.Fatalf("expected 0 rows after revert, got %d", count)
 	}
 
-	// Verify file is removed from Storage (or at least not an error if it doesn't exist)
-	_, err = mem.ReadFile("/checkout/new.txt")
-	if err == nil {
-		t.Fatal("file should be removed after revert")
+	// The file was never committed: revert un-manages it but keeps it on
+	// disk, as fossil does, rather than destroying the only copy (#234).
+	data, err := mem.ReadFile("/checkout/new.txt")
+	if err != nil {
+		t.Fatal("new.txt should stay on disk after revert:", err)
+	}
+	if string(data) != "new file" {
+		t.Fatalf("new.txt = %q after revert, want its content kept", data)
 	}
 }
 
@@ -272,10 +276,9 @@ func TestRevertAll(t *testing.T) {
 		t.Fatalf("src/main.go = %q, want %q", data2, "package main\n")
 	}
 
-	// Verify new.txt is removed
-	_, err = mem.ReadFile("/checkout/new.txt")
-	if err == nil {
-		t.Fatal("new.txt should be removed after revert")
+	// new.txt is un-managed but kept on disk (#234).
+	if _, err := mem.ReadFile("/checkout/new.txt"); err != nil {
+		t.Fatal("new.txt should stay on disk after revert:", err)
 	}
 
 	// Verify no changes remain
@@ -441,5 +444,40 @@ func TestRevertNoChanges(t *testing.T) {
 	err = co.Revert(RevertOpts{Paths: []string{"hello.txt"}})
 	if err != nil {
 		t.Fatal("expected no error for clean file, got:", err)
+	}
+}
+
+// TestRevertUnscannedEdit pins that Revert reverts an edit no scan has
+// recorded yet: it refreshes change flags from disk first, as fossil's revert
+// checks the disk (#234).
+func TestRevertUnscannedEdit(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	rid := mustVersion(t, co)
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.WriteFile("/checkout/hello.txt", []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Revert(RevertOpts{Paths: []string{"hello.txt"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q after revert, want the committed content", data)
 	}
 }

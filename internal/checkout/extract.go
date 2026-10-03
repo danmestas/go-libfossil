@@ -301,7 +301,7 @@ func (c *Checkout) firstChangeAtRisk(
 		}
 		// Only a plain edit (no merge pending, not a merge state) of a file
 		// target also writes can be safe; its content decides.
-		if !merging && change == ChangeModified && r.Chnged == 1 {
+		if !merging && change == ChangeModified && !r.PendingMerge() && !r.ModeChanged() {
 			if uuid, ok := targetHash[r.Pathname]; ok {
 				clobber, err := c.wouldClobber(r.Pathname, uuid)
 				if err != nil {

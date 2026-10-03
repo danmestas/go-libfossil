@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Checkouts created by the fossil binary (`fossil open`) now work through
+  `OpenCheckout` (#228). `Status` failed outright with `converting NULL to
+  string` on `vfile.mhash`, because go-libfossil judged every file against
+  that column, which fossil only fills while a merge is pending. Change
+  detection now follows fossil's own scan: a file is compared with the
+  artifact `vfile.mrid` names, adds and merge states move through the same
+  `chnged` transitions, and fossil adds, renames and `origname==pathname`
+  rows are classified the way fossil classifies them.
+
+- A non-forced `Extract` no longer overwrites uncommitted work in a
+  fossil-made checkout. The local-edit guard swallowed the same NULL scan
+  error and skipped its check, and it never considered a merge that fossil
+  had applied but not yet committed; both now refuse unless `Force` is set.
+
+- `Add` writes `vfile.islink`, which fossil's checkout schema declares with
+  no default, so a file added by go-libfossil to a fossil-made checkout
+  reads back cleanly in both tools. New rows no longer populate `mhash`.
+
 ## [0.9.0] - 2026-08-07
 
 ### Fixed

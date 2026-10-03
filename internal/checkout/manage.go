@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Manage adds files to tracking. For each path:
@@ -52,11 +51,6 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		if err != nil {
 			return counts, fmt.Errorf("checkout.Manage: path traversal in %s: %w", path, err)
 		}
-		data, err := c.env.Storage.ReadFile(fullPath)
-		if err != nil {
-			return counts, fmt.Errorf("checkout.Manage: read %s: %w", path, err)
-		}
-
 		// Stat the on-disk file to capture its executable bit at add time.
 		info, err := c.env.Storage.Stat(fullPath)
 		if err != nil {
@@ -67,14 +61,14 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 			isexe = 1
 		}
 
-		// Name the content the way this repo names artifacts, so the
-		// vfile row matches the F-card a commit will write for it.
-		mhash := hash.NamingFor(c.repo.DB()).New.Hash(data)
-
-		// Insert into vfile with rid=0 (newly added), chnged=1 (modified)
+		// Insert with rid=0 (newly added), chnged=1 (modified). islink is
+		// written explicitly because a checkout made by fossil declares it
+		// with no default. mhash stays NULL as fossil leaves it: it is only
+		// meaningful during a merge.
 		_, err = c.db.Exec(
-			"INSERT INTO vfile(vid, pathname, rid, mrid, mhash, isexe, chnged) VALUES(?, ?, 0, 0, ?, ?, 1)",
-			int64(vid), path, mhash, isexe,
+			"INSERT INTO vfile(vid, pathname, rid, mrid, isexe, islink, chnged) "+
+				"VALUES(?, ?, 0, 0, ?, 0, 1)",
+			int64(vid), path, isexe,
 		)
 		if err != nil {
 			return counts, fmt.Errorf("checkout.Manage: insert vfile: %w", err)

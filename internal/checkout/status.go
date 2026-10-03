@@ -23,11 +23,13 @@ func (c *Checkout) HasChanges() (bool, error) {
 		return false, fmt.Errorf("checkout.HasChanges: %w", err)
 	}
 
-	// Check for any changed or deleted files
+	// Check for any changed, deleted, or renamed files. Fossil stores
+	// origname==pathname on rows that were never renamed, so only a
+	// different origname counts.
 	var count int
 	err = c.db.QueryRow(`
 		SELECT count(*) FROM vfile
-		WHERE (chnged > 0 OR deleted > 0) AND vid = ?
+		WHERE (chnged > 0 OR deleted > 0 OR origname NOT IN ('', pathname)) AND vid = ?
 	`, int64(rid)).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("checkout.HasChanges: query: %w", err)
@@ -43,7 +45,7 @@ func (c *Checkout) HasChanges() (bool, error) {
 // The function classifies each changed file:
 // - deleted > 0 → ChangeRemoved
 // - rid == 0 → ChangeAdded (newly managed file, not yet committed)
-// - origname != "" → ChangeRenamed
+// - origname != "" and != pathname → ChangeRenamed
 // - chnged > 0 → ChangeModified
 //
 // If fn returns a non-nil error, iteration stops and that error is returned.
@@ -66,7 +68,7 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 		SELECT id, pathname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
 		       CAST(isexe AS INTEGER), CAST(islink AS INTEGER), origname, rid
 		FROM vfile
-		WHERE vid = ? AND (chnged > 0 OR deleted > 0 OR origname IS NOT NULL)
+		WHERE vid = ? AND (chnged > 0 OR deleted > 0 OR origname NOT IN ('', pathname))
 	`, int64(vid))
 	if err != nil {
 		return fmt.Errorf("checkout.VisitChanges: query: %w", err)
@@ -86,19 +88,11 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 			return fmt.Errorf("checkout.VisitChanges: scan: %w", err)
 		}
 
-		// Determine change type (priority order: deleted > added > renamed > modified)
-		var changeType FileChange
-		if deleted > 0 {
-			changeType = ChangeRemoved
-		} else if rid == 0 {
-			changeType = ChangeAdded
-		} else if origname.Valid && origname.String != "" {
-			changeType = ChangeRenamed
-		} else if chnged > 0 {
-			changeType = ChangeModified
-		} else {
-			// Should not reach here given WHERE clause, but handle gracefully
-			changeType = ChangeNone
+		changeType := classifyChange(pathname, origname, chnged, deleted, rid)
+		if changeType == ChangeNone {
+			// The WHERE clause and classifyChange disagree, which only a
+			// malformed row can cause (e.g. a non-integer chnged).
+			return fmt.Errorf("checkout.VisitChanges: malformed vfile row for %s", pathname)
 		}
 
 		// Build change entry
@@ -122,4 +116,30 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 	}
 
 	return nil
+}
+
+// classifyChange maps a vfile row to its change type, in priority order
+// deleted > added > renamed > modified. Fossil stores origname==pathname on
+// rows that were never renamed, so only a different origname is a rename.
+func classifyChange(
+	pathname string, origname sql.NullString, chnged, deleted, rid int64,
+) FileChange {
+	if pathname == "" {
+		panic("checkout.classifyChange: empty pathname")
+	}
+	if deleted > 0 {
+		return ChangeRemoved
+	}
+	if rid == 0 {
+		return ChangeAdded
+	}
+	if origname.Valid {
+		if origname.String != "" && origname.String != pathname {
+			return ChangeRenamed
+		}
+	}
+	if chnged > 0 {
+		return ChangeModified
+	}
+	return ChangeNone
 }

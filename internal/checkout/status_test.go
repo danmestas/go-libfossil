@@ -204,3 +204,91 @@ func TestVisitChangesMultiple(t *testing.T) {
 		t.Fatal("expected hello.txt and README.md to be in changes")
 	}
 }
+
+// TestVisitChangesFossilRowShapes pins how row shapes the fossil binary writes
+// are classified (#228). It writes three rows straight into vfile, then scans:
+//   - new.txt: a fossil add (rid=0, chnged left 0) with the file on disk; the
+//     scan promotes it to chnged=1 and it reports as added.
+//   - gone.txt: a row with no artifact and no file on disk, the shape
+//     LoadVFile writes for content missing from the repo; not a change.
+//   - hello.txt: untouched, with origname equal to pathname; not a rename.
+func TestVisitChangesFossilRowShapes(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+
+	rid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid, ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mem.WriteFile("/checkout/new.txt", []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		"UPDATE vfile SET origname = pathname WHERE vid = ?",
+		"INSERT INTO vfile(vid, pathname, rid, mrid, chnged) VALUES(?, 'new.txt', 0, 0, 0)",
+		"INSERT INTO vfile(vid, pathname, rid, mrid, chnged) VALUES(?, 'gone.txt', 0, 0, 0)",
+	} {
+		if _, err := co.db.Exec(stmt, int64(rid)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var got []string
+	err = co.VisitChanges(rid, true, func(e ChangeEntry) error {
+		got = append(got, e.Name)
+		if e.Change != ChangeAdded {
+			t.Errorf("%s: change = %v, want ChangeAdded", e.Name, e.Change)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "new.txt" {
+		t.Fatalf("visited %q, want only new.txt", got)
+	}
+}
+
+// TestNextChangedState pins the chnged transitions against fossil's
+// vfile_check_signature, for a file present on disk.
+func TestNextChangedState(t *testing.T) {
+	cases := []struct {
+		chnged      int64
+		hasBaseline bool
+		differs     bool
+		want        int64
+	}{
+		{0, false, false, 1}, // fossil add: always a change
+		{1, false, false, 1},
+		{3, false, false, 3}, // added by merge: kept
+		{0, true, false, 0},
+		{0, true, true, 1},
+		{1, true, false, 0}, // edit reverted by hand
+		{1, true, true, 1},
+		{2, true, false, 2}, // updated by merge: kept while untouched
+		{2, true, true, 1},  // ...and edited on top
+		{4, true, true, 1},
+		{5, true, true, 5}, // merge conflict: kept
+		{5, true, false, 5},
+	}
+	for _, tc := range cases {
+		got := nextChangedState(tc.chnged, tc.hasBaseline, tc.differs)
+		if got != tc.want {
+			t.Errorf("nextChangedState(%d, %v, %v) = %d, want %d",
+				tc.chnged, tc.hasBaseline, tc.differs, got, tc.want)
+		}
+	}
+}

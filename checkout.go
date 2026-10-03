@@ -169,7 +169,9 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 
 // HasChanges returns true if the checkout has any modified, deleted, or
 // renamed files. This is a DB-only check; call Extract or scan first to
-// detect on-disk modifications.
+// detect on-disk modifications. A file added by the fossil binary counts only
+// after a scan, because fossil records an add without marking the row
+// changed; Status scans, so it always reports such files.
 func (c *Checkout) HasChanges() (bool, error) {
 	has, err := c.inner.HasChanges()
 	if err != nil {

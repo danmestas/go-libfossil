@@ -90,12 +90,15 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		id       int64
 		pathname string
 		blobRid  int64
+		mergeRid int64
+		chnged   int64
 		isexe    int64
 	}
 	var vfRows []vfileRow
 
 	rows, err := c.db.Query(
-		"SELECT id, pathname, rid, CAST(isexe AS INTEGER) FROM vfile WHERE vid = ?",
+		"SELECT id, pathname, rid, mrid, CAST(chnged AS INTEGER), CAST(isexe AS INTEGER) "+
+			"FROM vfile WHERE vid = ?",
 		int64(rid),
 	)
 	if err != nil {
@@ -105,7 +108,7 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	for rows.Next() {
 		var row vfileRow
 		if err := rows.Scan(
-			&row.id, &row.pathname, &row.blobRid, &row.isexe,
+			&row.id, &row.pathname, &row.blobRid, &row.mergeRid, &row.chnged, &row.isexe,
 		); err != nil {
 			rows.Close()
 			extractErr = fmt.Errorf(
@@ -126,29 +129,9 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	// If Force is false, check for locally modified files before writing.
 	if !opts.Force && !opts.DryRun {
 		for _, row := range vfRows {
-			var storedHash string
-			_ = c.db.QueryRow(
-				"SELECT mhash FROM vfile WHERE id = ?", row.id,
-			).Scan(&storedHash)
-			if storedHash == "" {
-				continue // no hash to compare against
-			}
-
-			fullPath, pathErr := c.safePath(row.pathname)
-			if pathErr != nil {
-				continue // will be caught during extraction
-			}
-			data, readErr := c.env.Storage.ReadFile(fullPath)
-			if readErr != nil {
-				continue // file doesn't exist on disk, safe to write
-			}
-			diskHash := hash.ContentHash(data, storedHash)
-			if diskHash != storedHash {
-				extractErr = fmt.Errorf(
-					"checkout.Extract: file %s has local changes; "+
-						"use Force to overwrite",
-					row.pathname,
-				)
+			err := c.checkNoLocalEdit(row.pathname, row.blobRid, row.mergeRid, row.chnged)
+			if err != nil {
+				extractErr = err
 				return extractErr
 			}
 		}
@@ -215,6 +198,60 @@ func (c *Checkout) finalizeExtract(rid libfossil.FslID) error {
 	}
 	if err := setVVar(c.db, "checkout-hash", uuid); err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
+	}
+	return nil
+}
+
+// checkNoLocalEdit returns an error if extracting blobRid over pathname
+// would destroy work the user has not committed: a pending merge (mrid names
+// other content than rid, or chnged holds a merge state), or a file on disk
+// that differs from the artifact mrid names. A file absent from disk, or a
+// row with no artifact behind it (mergeRid 0), has nothing to lose.
+func (c *Checkout) checkNoLocalEdit(pathname string, blobRid, mergeRid, chnged int64) error {
+	if pathname == "" {
+		panic("checkout.checkNoLocalEdit: empty pathname")
+	}
+	if mergeRid < 0 {
+		panic("checkout.checkNoLocalEdit: negative mergeRid")
+	}
+
+	if mergeRid != blobRid {
+		return fmt.Errorf(
+			"checkout.Extract: file %s has a pending merge; use Force to overwrite",
+			pathname,
+		)
+	}
+	if chnged > 1 {
+		return fmt.Errorf(
+			"checkout.Extract: file %s has a pending merge; use Force to overwrite",
+			pathname,
+		)
+	}
+	if mergeRid == 0 {
+		return nil
+	}
+
+	fullPath, err := c.safePath(pathname)
+	if err != nil {
+		return nil // Extraction rejects the path itself, with a better error.
+	}
+	data, err := c.env.Storage.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("checkout.Extract: read %s: %w", fullPath, err)
+	}
+
+	baseline, err := c.baselineHash(mergeRid)
+	if err != nil {
+		return fmt.Errorf("checkout.Extract: %s: %w", pathname, err)
+	}
+	if hash.ContentHash(data, baseline) != baseline {
+		return fmt.Errorf(
+			"checkout.Extract: file %s has local changes; use Force to overwrite",
+			pathname,
+		)
 	}
 	return nil
 }

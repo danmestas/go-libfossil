@@ -366,23 +366,14 @@ func loadWith(q db.Querier, rid libfossil.FslID, inf *Inflater) (result []byte, 
 		return nil, fmt.Errorf("blob.Load: rid %d has NULL or empty content", rid)
 	}
 
-	// Fossil stores blobs as [4-byte BE uncompressed-size][zlib data].
-	// When the compressed form happens to be the same length as the
-	// uncompressed content (rare but real — ~2 in 66K in the Fossil SCM
-	// repo), we must still decompress. Detect compressed content by
-	// checking for the 4-byte BE prefix matching the declared size
-	// followed by a zlib header (0x78).
-	if len(content) >= 6 {
-		prefixSize := int64(content[0])<<24 | int64(content[1])<<16 | int64(content[2])<<8 | int64(content[3])
-		if prefixSize == size && content[4] == 0x78 {
-			return decompress(content, inf)
-		}
-	}
-	// No compression prefix — content is stored uncompressed.
-	if int64(len(content)) == size {
-		return content, nil
-	}
-	// Stored bytes < declared size — compressed.
+	// blob.content is always [4-byte BE length][zlib data]; Fossil inflates
+	// it unconditionally (content_of_blob, src/content.c:218-230) and never
+	// consults blob.size to decide. Guessing "stored raw" from
+	// len(content) == size is unsound: for a delta row, size is the
+	// expanded artifact's length while the stored bytes are the compressed
+	// delta, so the two can coincide by chance -- and whether they do
+	// depends on the exact bytes compress/flate emits, which differs across
+	// Go releases (issue #235).
 	return decompress(content, inf)
 }
 

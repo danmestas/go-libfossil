@@ -13,7 +13,8 @@ import (
 )
 
 // Revert restores files to their checkout version state, the way fossil's
-// revert does. If opts.Paths is empty, reverts ALL changed files. Change
+// revert does. Edits to the reverted files are discarded: fossil saves an undo
+// copy first, but go-libfossil has no undo yet, so they are gone. If opts.Paths is empty, reverts ALL changed files. Change
 // flags are refreshed from disk first, so an edit not yet scanned is
 // reverted too.
 //
@@ -196,8 +197,16 @@ func (c *Checkout) removeMergeAdded(r vfile.Row, fullPath string) error {
 	if r.RID <= 0 {
 		panic("checkout.removeMergeAdded: pending add has no merged-in content")
 	}
-	if err := c.env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
+	// Only a regular file is the merge's: anything else at that path (a
+	// directory the user made) is left alone.
+	info, err := c.env.Storage.Stat(fullPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checkout.Revert: stat %s: %w", fullPath, err)
+	}
+	if err == nil && info.Mode().IsRegular() {
+		if err := c.env.Storage.Remove(fullPath); err != nil {
+			return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
+		}
 	}
 	if _, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", r.ID); err != nil {
 		return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", r.Pathname, err)

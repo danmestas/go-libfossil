@@ -213,7 +213,6 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 
 	var filesWritten, filesRemoved, conflicted []string
 	var updateErr error
-
 	defer func() {
 		c.obs.ExtractCompleted(ctx, ExtractEnd{
 			Operation:    "update",
@@ -256,8 +255,10 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	}
 
 	// Finalize: reload vfile and update vvar
-	if updateErr = c.finalizeUpdate(target); updateErr != nil {
-		return UpdateResult{}, updateErr
+	if !opts.DryRun {
+		if updateErr = c.finalizeUpdate(target); updateErr != nil {
+			return UpdateResult{}, updateErr
+		}
 	}
 
 	return sortedUpdateResult(filesWritten, filesRemoved, conflicted), nil

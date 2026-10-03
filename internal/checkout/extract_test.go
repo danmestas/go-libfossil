@@ -591,3 +591,102 @@ func mustVersion(t *testing.T, co *Checkout) libfossil.FslID {
 	}
 	return vid
 }
+
+// A dry run reports what Extract would write and changes nothing: not the
+// files, not the checkout's file list, not its version (#236).
+func TestExtractDryRunChangesNothing(t *testing.T) {
+	co, mem, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	if err := mem.WriteFile("/checkout/README.md", []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var reported []string
+	report := func(name string, _ UpdateChange) error {
+		reported = append(reported, name)
+		return nil
+	}
+	err := co.Extract(rid2, ExtractOpts{DryRun: true, Callback: report})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if len(reported) != 4 {
+		t.Fatalf("dry run reported %v, want rid2's 4 files", reported)
+	}
+	if vid := mustVersion(t, co); vid != rid1 {
+		t.Fatalf("Version = %d after a dry run, want %d", vid, rid1)
+	}
+	if got := changedNames(t, co); len(got) != 1 || got[0] != "README.md" {
+		t.Fatalf("changes after a dry run = %q, want the README.md edit kept", got)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q after a dry run, want it untouched", data)
+	}
+}
+
+// Switching versions ends any pending merge, as fossil's checkout does: a
+// vmerge row left behind would give the next commit a bogus merge parent
+// (#236).
+func TestExtractClearsPendingMergeRecord(t *testing.T) {
+	co, _, _, rid2 := newCheckoutAtFirstOfTwo(t)
+	if _, err := co.db.Exec(
+		"INSERT INTO vmerge(id, merge, mhash) VALUES(0, ?, 'x')", int64(rid2),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid2, ExtractOpts{Force: true}); err != nil {
+		t.Fatalf("forced extract: %v", err)
+	}
+	var n int
+	if err := co.db.QueryRow("SELECT count(*) FROM vmerge").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("vmerge holds %d rows after switching versions, want 0", n)
+	}
+}
+
+// Re-extracting the current version without Force keeps a pending merge, as
+// fossil's checkout does when the version does not change (#236).
+func TestExtractSameVersionKeepsPendingMerge(t *testing.T) {
+	co, _, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	if _, err := co.db.Exec(
+		"INSERT INTO vmerge(id, merge, mhash) VALUES(0, ?, 'x')", int64(rid2),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
+		t.Fatalf("re-extract: %v", err)
+	}
+	var n int
+	if err := co.db.QueryRow("SELECT count(*) FROM vmerge").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("vmerge holds %d rows after re-extracting the same version, want 1", n)
+	}
+}
+
+// A forced extract starts the file list fresh, as fossil's checkout --force
+// does: a pending rename or removal does not survive it (#236).
+func TestExtractForceStartsFileListFresh(t *testing.T) {
+	co, _, rid1, _ := newCheckoutAtFirstOfTwo(t)
+	if err := co.Rename(RenameOpts{From: "hello.txt", To: "moved.txt", DoFsMove: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Unmanage(UnmanageOpts{Paths: []string{"README.md"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatalf("forced extract: %v", err)
+	}
+	if got := changedNames(t, co); len(got) != 0 {
+		t.Fatalf("changes after a forced extract = %q, want none", got)
+	}
+}

@@ -48,7 +48,7 @@ func IsAvailable(q db.Querier, rid libfossil.FslID) bool {
 	}
 	available, err := checkAvailable(q, rid)
 	if err != nil {
-		return false // A fault reads as unavailable; see CheckAvailableByUUID.
+		return false // A fault reads as unavailable; CheckAvailableByUUID reports it.
 	}
 	return available
 }
@@ -85,7 +85,7 @@ func checkAvailable(q db.Querier, rid libfossil.FslID) (bool, error) {
 		}
 		seen[current] = struct{}{}
 
-		var size int64
+		var size sql.NullInt64
 		var hasDelta bool
 		var srcid sql.NullInt64
 		err := q.QueryRow(step, current).Scan(&size, &hasDelta, &srcid)
@@ -95,8 +95,8 @@ func checkAvailable(q db.Querier, rid libfossil.FslID) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("content: availability of rid %d: %w", current, err)
 		}
-		if size < 0 {
-			return false, nil // phantom
+		if !size.Valid || size.Int64 < 0 {
+			return false, nil // phantom (a NULL size, legal in the schema, too)
 		}
 		if !hasDelta {
 			return true, nil // chain is grounded in full-text content
@@ -293,6 +293,7 @@ func (a *AvailabilityCache) isAvailable(q db.Querier, rid libfossil.FslID) bool 
 	var walked []libfossil.FslID
 	seen := make(map[libfossil.FslID]struct{})
 	result := false
+	faulted := false
 	current := rid
 	for depth := 0; depth < maxDeltaChainDepth; depth++ {
 		if v, ok := a.avail[current]; ok {
@@ -306,15 +307,18 @@ func (a *AvailabilityCache) isAvailable(q db.Querier, rid libfossil.FslID) bool 
 		seen[current] = struct{}{}
 		walked = append(walked, current)
 
-		var size int64
+		var size sql.NullInt64
 		var hasDelta bool
 		var srcid sql.NullInt64
 		if err := q.QueryRow(step, current).Scan(&size, &hasDelta, &srcid); err != nil {
-			result = false // unknown rid
+			// An unknown rid is a verdict; a fault is not, so it is not
+			// remembered for the rest of the sweep.
+			faulted = !errors.Is(err, sql.ErrNoRows)
+			result = false
 			break
 		}
-		if size < 0 {
-			result = false // phantom
+		if !size.Valid || size.Int64 < 0 {
+			result = false // phantom (a NULL size too)
 			break
 		}
 		if !hasDelta {
@@ -332,6 +336,9 @@ func (a *AvailabilityCache) isAvailable(q db.Querier, rid libfossil.FslID) bool 
 		current = libfossil.FslID(srcid.Int64)
 	}
 
+	if faulted {
+		return false
+	}
 	for _, n := range walked {
 		a.avail[n] = result
 	}

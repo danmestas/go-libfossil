@@ -325,3 +325,36 @@ func TestCheckAvailableByUUIDReportsFaults(t *testing.T) {
 		}
 	}
 }
+
+// A NULL blob.size is legal in the schema; it reads as a phantom (not there),
+// not as a fault (#239).
+func TestCheckAvailableByUUIDNullSizeIsMissing(t *testing.T) {
+	d := setupTestDB(t)
+	_, uuid, err := blob.Store(d, []byte("null size content"))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if _, err := d.Exec("UPDATE blob SET size = NULL WHERE uuid = ?", uuid); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := CheckAvailableByUUID(d, uuid); err != nil || ok {
+		t.Fatalf("CheckAvailableByUUID(NULL size) = (%v, %v), want (false, nil)", ok, err)
+	}
+}
+
+// A fault during a cached walk is not remembered: once the database recovers,
+// the same cache answers correctly (#239).
+func TestAvailabilityCacheDoesNotMemoizeFaults(t *testing.T) {
+	d := setupTestDB(t)
+	_, uuid, err := blob.Store(d, []byte("cached fault content"))
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	cache := NewAvailabilityCache()
+	if _, ok := cache.ByUUID(faultyQuerier{Querier: d, fail: "LEFT JOIN delta"}, uuid); ok {
+		t.Fatal("ByUUID during a fault = true, want false")
+	}
+	if _, ok := cache.ByUUID(d, uuid); !ok {
+		t.Fatal("ByUUID after the fault cleared = false, want true (fault was memoized)")
+	}
+}

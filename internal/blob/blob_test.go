@@ -9,6 +9,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/simio"
@@ -176,6 +177,44 @@ func TestStoreDelta(t *testing.T) {
 	}
 	if srcid != int64(srcRid) {
 		t.Fatalf("delta.srcid = %d, want %d", srcid, srcRid)
+	}
+}
+
+// TestLoadInflatesWhenStoredLengthEqualsSize is a regression test for issue
+// #235. A delta row's blob.size is the expanded artifact's length, while its
+// content is the compressed delta; when those two lengths coincide, Load
+// returned the still-compressed bytes as if they were stored raw. Whether a
+// given input hits the coincidence depends on compress/flate's exact output,
+// which changed in Go 1.27, so the row is built here with the lengths forced
+// equal rather than hoping a fixture lands on them.
+func TestLoadInflatesWhenStoredLengthEqualsSize(t *testing.T) {
+	d := setupTestDB(t)
+	deltaBytes := delta.Create(
+		[]byte("the original source content for delta testing purposes here"),
+		[]byte("the original source content for MODIFIED testing purposes here"),
+	)
+	compressed, err := Compress(deltaBytes)
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+	res, err := d.Exec(
+		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+		strings.Repeat("e", 40), len(compressed), compressed,
+	)
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	rid, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("lastid: %v", err)
+	}
+
+	got, err := Load(d, libfossil.FslID(rid))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !bytes.Equal(got, deltaBytes) {
+		t.Fatalf("Load = %x, want the inflated delta %x", got, deltaBytes)
 	}
 }
 

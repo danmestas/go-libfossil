@@ -165,7 +165,12 @@ func TestMaxDecompressedBytesIsReachable(t *testing.T) {
 // this unconditional: a compressed body always reads its length prefix, so the
 // former format-1/format-2 aliasing that motivated #110 can no longer arise.
 func TestDecodeRejectsOversizeDeclaredLength(t *testing.T) {
-	real := compressedContainer(t, 64) // small, genuine §4.1 container
+	// Small, genuine §4.1 container. 1 KiB rather than less because Go 1.27's
+	// compress/flate skips match-finding for inputs under 128 bytes
+	// (deflateFast, compress/flate/deflate.go), so a tinier payload comes out
+	// as a stored block larger than its input and fails compressedContainer's
+	// did-it-compress guard (issue #235).
+	real := compressedContainer(t, 1024)
 	// Overwrite the genuine declared-length prefix with an oversize one; the
 	// zlib payload after it is untouched and still real.
 	oversize := append([]byte{0x08, 0x1D, 0x00, 0x00}, real[4:]...)

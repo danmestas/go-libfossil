@@ -296,7 +296,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 // finalizeUpdate reloads vfile for the target version, looks up its UUID,
 // and updates the vvar checkout/checkout-hash entries.
 func (c *Checkout) finalizeUpdate(target libfossil.FslID) error {
-	if _, err := c.LoadVFile(target, true); err != nil {
+	if err := c.LoadVFile(target, true); err != nil {
 		return fmt.Errorf("checkout.Update: reload vfile: %w", err)
 	}
 

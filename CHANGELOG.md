@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Checking out a version whose content is partly missing, as a partial sync
+  leaves it, is now refused up front with an error naming the files (#231).
+  go-libfossil used to record such files with `rid=0`, which in fossil's
+  checkout format means "added", and `Extract` then panicked trying to read
+  them. This matches fossil, which refuses with "missing content". A
+  `CreateCheckout` whose tip is still partly synced no longer loads the tip's
+  files, so extracting an older, complete version still works.
+
 - A non-forced `Extract` now checks before it changes anything (#230). It
   used to replace the checkout's file list first, so a refusal lost pending
   adds, renames and merge state and left `Status` seeing an empty checkout.

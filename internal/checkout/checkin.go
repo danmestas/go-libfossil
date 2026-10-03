@@ -467,7 +467,7 @@ func (c *Checkout) finalizeCommit(newRID libfossil.FslID, newUUID string) error 
 	if err := setVVar(c.db, "checkout-hash", newUUID); err != nil {
 		return fmt.Errorf("checkout.Commit: set checkout-hash vvar: %w", err)
 	}
-	if _, err := c.LoadVFile(newRID, true); err != nil {
+	if err := c.LoadVFile(newRID, true); err != nil {
 		return fmt.Errorf("checkout.Commit: reload vfile: %w", err)
 	}
 	c.checkinQueue = nil

@@ -235,3 +235,55 @@ func TestFossilCheckoutLibfossilAdd(t *testing.T) {
 		t.Fatalf("fossil changes does not show the add:\n%s", changes)
 	}
 }
+
+// A version whose content is partly missing (a phantom, as a partial sync
+// leaves it) is refused for checkout by fossil and by go-libfossil alike
+// (#231). The test commits c.txt with fossil, turns its blob into a phantom,
+// then asks both tools to check that version out into a fresh directory.
+func TestMissingContentRefusedLikeFossil(t *testing.T) {
+	bin, repoPath, ckDir := newFossilCheckout(t)
+	writeFile(t, filepath.Join(ckDir, "c.txt"), "three\n")
+	fossilRun(t, bin, ckDir, "add", "c.txt")
+	fossilRun(t, bin, ckDir, "commit", "-m", "add c")
+	fossilRun(t, bin, ckDir, "close", "--force")
+	fossilRun(t, bin, filepath.Dir(repoPath), "sql", "-R", repoPath,
+		"UPDATE blob SET size=-1, content=NULL WHERE rid=(SELECT fid FROM mlink "+
+			"JOIN filename USING(fnid) WHERE name='c.txt'); "+
+			"INSERT OR IGNORE INTO phantom(rid) SELECT rid FROM blob WHERE size<0;")
+
+	fossilDir := t.TempDir()
+	cmd := exec.Command(bin, "open", repoPath, "--workdir", fossilDir)
+	cmd.Dir = fossilDir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("fossil open succeeded on missing content:\n%s", out)
+	}
+	if !strings.Contains(string(out), "missing content") {
+		t.Fatalf("fossil open failed for another reason:\n%s", out)
+	}
+
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ck, err := r.CreateCheckout(t.TempDir(), libfossil.CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+	defer ck.Close()
+	tip, err := r.ResolveVersion("trunk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = ck.Extract(tip, libfossil.ExtractOpts{})
+	if err == nil {
+		t.Fatal("Extract of a version with missing content succeeded")
+	}
+	if !strings.Contains(err.Error(), "content missing") {
+		t.Fatalf("Extract should refuse for missing content, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "c.txt") {
+		t.Fatalf("Extract error should name c.txt, got: %v", err)
+	}
+}

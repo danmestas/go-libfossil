@@ -2,6 +2,8 @@ package checkout
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/simio"
@@ -19,12 +21,8 @@ func TestLoadVFile(t *testing.T) {
 	defer co.Close()
 
 	rid, _, _ := co.Version()
-	missing, err := co.LoadVFile(rid, true)
-	if err != nil {
+	if err := co.LoadVFile(rid, true); err != nil {
 		t.Fatal(err)
-	}
-	if missing != 0 {
-		t.Fatalf("expected 0 missing, got %d", missing)
 	}
 
 	// Verify 3 rows in vfile
@@ -66,7 +64,9 @@ func TestUnloadVFile(t *testing.T) {
 	defer co.Close()
 
 	rid, _, _ := co.Version()
-	co.LoadVFile(rid, true)
+	if err := co.LoadVFile(rid, true); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := co.UnloadVFile(rid); err != nil {
 		t.Fatal(err)
@@ -94,12 +94,8 @@ func TestLoadVFileClear(t *testing.T) {
 
 	// Load vfile twice with different RIDs to test clear behavior
 	// First load with clear=false
-	missing, err := co.LoadVFile(rid, false)
-	if err != nil {
+	if err := co.LoadVFile(rid, false); err != nil {
 		t.Fatal(err)
-	}
-	if missing != 0 {
-		t.Fatalf("expected 0 missing, got %d", missing)
 	}
 
 	// Manually insert a row with a different vid to test clear
@@ -119,7 +115,7 @@ func TestLoadVFileClear(t *testing.T) {
 	}
 
 	// Load with clear=true should remove the dummy row
-	_, err = co.LoadVFile(rid, true)
+	err = co.LoadVFile(rid, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,12 +146,8 @@ func TestLoadVFileRIDAndMRIDSet(t *testing.T) {
 	defer co.Close()
 
 	rid, _, _ := co.Version()
-	missing, err := co.LoadVFile(rid, true)
-	if err != nil {
+	if err := co.LoadVFile(rid, true); err != nil {
 		t.Fatal(err)
-	}
-	if missing != 0 {
-		t.Fatalf("expected 0 missing, got %d", missing)
 	}
 
 	// Verify that rid and mrid are both set and non-zero
@@ -348,5 +340,35 @@ func TestScanChangesObserver(t *testing.T) {
 	}
 	if scanEnd.FilesChanged != 1 {
 		t.Fatalf("changed = %d, want 1", scanEnd.FilesChanged)
+	}
+}
+
+// TestLoadVFileRefusesMissingContent pins that a version whose content is
+// partly missing is refused before vfile changes: the error names the file
+// and wraps errMissingContent, and the loaded version's rows survive even
+// with clear=true (#231).
+func TestLoadVFileRefusesMissingContent(t *testing.T) {
+	co, _, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	phantomize(t, co, rid2, "new.txt")
+
+	err := co.LoadVFile(rid2, true)
+	if !errors.Is(err, errMissingContent) {
+		t.Fatalf("LoadVFile = %v, want errMissingContent", err)
+	}
+	if !strings.Contains(err.Error(), "new.txt") {
+		t.Fatalf("error should name new.txt, got: %v", err)
+	}
+	var rows1, rows2 int
+	if err := co.db.QueryRow(
+		"SELECT count(*) FILTER (WHERE vid = ?), count(*) FILTER (WHERE vid = ?) FROM vfile",
+		int64(rid1), int64(rid2),
+	).Scan(&rows1, &rows2); err != nil {
+		t.Fatal(err)
+	}
+	if rows1 != 3 {
+		t.Fatalf("rid1 rows = %d after refusal, want 3", rows1)
+	}
+	if rows2 != 0 {
+		t.Fatalf("rid2 rows = %d after refusal, want 0", rows2)
 	}
 }

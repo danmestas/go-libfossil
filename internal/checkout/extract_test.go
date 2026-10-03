@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -466,5 +467,96 @@ func TestExtractRefusesOverPendingMergeMatchingTarget(t *testing.T) {
 
 	if err := co.Extract(rid2, ExtractOpts{}); err == nil {
 		t.Fatal("Extract over a pending merge succeeded")
+	}
+}
+
+// phantomize turns the stored content of name in version rid into a phantom,
+// the shape a partial sync leaves: the repo knows the artifact's hash but
+// holds no content for it.
+func phantomize(t *testing.T, co *Checkout, rid libfossil.FslID, name string) {
+	t.Helper()
+	files, err := manifest.ListFiles(co.repo, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f.Name != name {
+			continue
+		}
+		db := co.repo.DB()
+		if _, err := db.Exec(
+			"UPDATE blob SET size = -1, content = NULL WHERE uuid = ?", f.UUID,
+		); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(
+			"INSERT OR IGNORE INTO phantom(rid) SELECT rid FROM blob WHERE uuid = ?", f.UUID,
+		); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	t.Fatalf("%s is not in version %d", name, rid)
+}
+
+// Extracting a version whose content is partly missing must refuse up front
+// and leave the checkout as it was, as fossil's checkout does (#231).
+func TestExtractRefusesVersionWithMissingContent(t *testing.T) {
+	co, mem, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+	phantomize(t, co, rid2, "new.txt")
+
+	err := co.Extract(rid2, ExtractOpts{})
+	if err == nil {
+		t.Fatal("Extract of a version with missing content succeeded")
+	}
+	if !contains(err.Error(), "new.txt") {
+		t.Fatalf("error should name the missing file, got: %v", err)
+	}
+	if vid, _, _ := co.Version(); vid != rid1 {
+		t.Fatalf("Version = %d after refusal, want %d", vid, rid1)
+	}
+	var rows int
+	if err := co.db.QueryRow(
+		"SELECT count(*) FROM vfile WHERE vid = ?", int64(rid2),
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("vfile holds %d rows for the refused version, want 0", rows)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q, the refused extract wrote files", data)
+	}
+}
+
+// A partly synced tip must not stop Create: the caller may be about to
+// extract an older, complete version (EdgeSync's ExtractTo does).
+func TestCreateWithPartialTipThenExtractCompleteVersion(t *testing.T) {
+	r, rid1, rid2, cleanup := newTestRepoWithTwoCheckins(t)
+	defer cleanup()
+	probe := &Checkout{repo: r}
+	phantomize(t, probe, rid2, "new.txt")
+
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatalf("Create with a partly synced tip: %v", err)
+	}
+	defer co.Close()
+	var rows int
+	if err := co.db.QueryRow("SELECT count(*) FROM vfile").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("vfile holds %d rows for a tip it cannot load, want 0", rows)
+	}
+
+	co.env = &simio.Env{Storage: simio.NewMemStorage(), Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+	co.dir = "/checkout"
+	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
+		t.Fatalf("Extract of the complete version: %v", err)
 	}
 }

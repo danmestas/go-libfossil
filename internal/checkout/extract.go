@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -92,15 +93,18 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		}
 	}
 
-	if err := c.LoadVFile(rid, true); err != nil {
-		extractErr = fmt.Errorf("checkout.Extract: %w", err)
-		return extractErr
-	}
-
+	// The files come from the target's manifest, so a dry run never has to
+	// load them into vfile; only a real extract replaces the file list.
 	vfRows, err := c.extractRows(rid)
 	if err != nil {
 		extractErr = err
 		return extractErr
+	}
+	if !opts.DryRun {
+		if err := c.LoadVFile(rid, true); err != nil {
+			extractErr = fmt.Errorf("checkout.Extract: %w", err)
+			return extractErr
+		}
 	}
 
 	var mtime time.Time
@@ -116,7 +120,9 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		filesWritten++
 	}
 
-	// Finalize: look up UUID and update vvar
+	if opts.DryRun {
+		return nil
+	}
 	extractErr = c.finalizeExtract(rid)
 	return extractErr
 }
@@ -136,6 +142,11 @@ func (c *Checkout) finalizeExtract(rid libfossil.FslID) error {
 	if err := setVVar(c.db, "checkout-hash", uuid); err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
+	// The switch ends any pending merge, as fossil's checkout does; a stale
+	// vmerge row would give the next commit a bogus merge parent.
+	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
+		return fmt.Errorf("checkout.Extract: clear vmerge: %w", err)
+	}
 	return nil
 }
 
@@ -146,32 +157,25 @@ type extractRow struct {
 	isexe    int64
 }
 
-// extractRows reads version rid's vfile rows. They are collected up front so
-// no cursor is held open during file I/O and DB writes.
+// extractRows lists version rid's files with the blob each one's content is
+// in, from its manifest. It refuses a version whose content is missing
+// (resolveFiles), before anything is written.
 func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 	if rid <= 0 {
 		panic("checkout.extractRows: rid must be positive")
 	}
 
-	rows, err := c.db.Query(
-		"SELECT pathname, rid, CAST(isexe AS INTEGER) FROM vfile WHERE vid = ?",
-		int64(rid),
-	)
+	files, blobRIDs, err := c.resolveFiles(rid)
 	if err != nil {
-		return nil, fmt.Errorf("checkout.Extract: query vfile: %w", err)
+		return nil, fmt.Errorf("checkout.Extract: %w", err)
 	}
-	defer rows.Close()
-
-	var out []extractRow
-	for rows.Next() {
-		var row extractRow
-		if err := rows.Scan(&row.pathname, &row.blobRid, &row.isexe); err != nil {
-			return nil, fmt.Errorf("checkout.Extract: scan vfile row: %w", err)
+	out := make([]extractRow, len(files))
+	for i, f := range files {
+		isexe := int64(0)
+		if strings.Contains(f.Perm, "x") {
+			isexe = 1
 		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("checkout.Extract: iterate vfile rows: %w", err)
+		out[i] = extractRow{pathname: f.Name, blobRid: int64(blobRIDs[i]), isexe: isexe}
 	}
 	return out, nil
 }

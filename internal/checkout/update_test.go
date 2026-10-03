@@ -900,3 +900,22 @@ func TestUpdateRejectsNegativeTarget(t *testing.T) {
 		t.Fatal("Update with a negative target succeeded")
 	}
 }
+
+// A dry-run Update leaves the checkout on its version (#236).
+func TestUpdateDryRunKeepsVersion(t *testing.T) {
+	co, mem, rid1, rid2 := newCheckoutAtFirstOfTwo(t)
+
+	if _, err := co.Update(UpdateOpts{TargetRID: rid2, DryRun: true}); err != nil {
+		t.Fatalf("dry-run update: %v", err)
+	}
+	if vid := mustVersion(t, co); vid != rid1 {
+		t.Fatalf("Version = %d after a dry-run update, want %d", vid, rid1)
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q after a dry-run update, want it untouched", data)
+	}
+}

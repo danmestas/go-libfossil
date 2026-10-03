@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The internal stash no longer drops files changed by a merge (#233). It
   selected only `chnged=1`, leaving out fossil's merge states, and stashed a
   rename as a plain edit. It now selects changes the same way `Status` does,
-  and refuses a pending merge or rename by name, since it can't yet stash
-  either faithfully. The stash isn't reachable through the public API yet.
+  and refuses a pending merge, a permission change or a rename by name, since
+  it can't yet stash those faithfully. The stash isn't reachable through the public API yet.
   Checkin and stash now read the checkout through one internal package,
   `internal/vfile`, which is the only place fossil's checkout encoding is
   interpreted.

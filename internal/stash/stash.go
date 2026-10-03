@@ -139,9 +139,10 @@ func Save(ckout *sql.DB, repoDB *sql.DB, dir string, comment string) error {
 }
 
 // snapshotChangedFiles returns the checked-out version's changed rows,
-// as vfile.Classify judges them. A pending merge or a rename is refused:
-// Save records and restores files by current name against their committed
-// version, which would drop the merge or lose the rename.
+// as vfile.Classify judges them. A pending merge, a permission change or a
+// rename is refused: Save records and restores files by current name against
+// their committed content with default permissions, which would drop the
+// merge, the mode change or the rename.
 func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 	if tx == nil {
 		panic("stash.snapshotChangedFiles: nil tx")
@@ -168,6 +169,11 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 		if r.PendingMerge() {
 			return nil, fmt.Errorf(
 				"stash.Save: %s has a pending merge; commit or revert it first", r.Pathname)
+		}
+		if r.ModeChanged() {
+			return nil, fmt.Errorf(
+				"stash.Save: %s has a pending permission change; commit or revert it first",
+				r.Pathname)
 		}
 		if r.RenamedFrom() != "" {
 			return nil, fmt.Errorf(

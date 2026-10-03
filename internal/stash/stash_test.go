@@ -354,3 +354,36 @@ func TestSaveRefusesRename(t *testing.T) {
 		t.Fatalf("Save over a rename = %v, want a rename refusal", err)
 	}
 }
+
+// An edit made on top of a merge drops chnged back to 1 but leaves mrid on
+// the merged-in content: still a pending merge, still refused (#233).
+func TestSaveRefusesEditOnTopOfMerge(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if _, err := ckout.Exec("UPDATE vfile SET mrid=mrid+100 WHERE pathname='a.txt'"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save(ckout, repoDB, dir, "edited merge")
+	if err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("Save over an edited merge = %v, want a pending-merge refusal", err)
+	}
+}
+
+// chnged 6 through 9 record a change to the executable or symlink bit, not a
+// merge. Save cannot restore modes yet, so it refuses with an accurate reason
+// rather than calling it a merge (#233).
+func TestSaveRefusesModeChangeAccurately(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	if _, err := ckout.Exec("UPDATE vfile SET chnged=6 WHERE pathname='a.txt'"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save(ckout, repoDB, dir, "mode")
+	if err == nil || !strings.Contains(err.Error(), "permission") {
+		t.Fatalf("Save over a mode change = %v, want a permission-change refusal", err)
+	}
+	if strings.Contains(err.Error(), "merge") {
+		t.Fatalf("a mode change was reported as a merge: %v", err)
+	}
+}

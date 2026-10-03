@@ -45,15 +45,29 @@ func TestRowQuestions(t *testing.T) {
 	if !add.IsAdded() || !add.ContentChanged() {
 		t.Error("an add (rid=0, chnged=0) must be added with changed content")
 	}
-	merged := Row{Pathname: "m", RID: 2, Chnged: 4}
+	merged := Row{Pathname: "m", RID: 2, MRID: 2, Chnged: 4}
 	if !merged.PendingMerge() || !merged.ContentChanged() {
 		t.Error("chnged=4 must be a pending merge with changed content")
 	}
-	edit := Row{Pathname: "e", RID: 2, Chnged: 1}
+	edit := Row{Pathname: "e", RID: 2, MRID: 2, Chnged: 1}
 	if edit.PendingMerge() {
 		t.Error("a plain edit is not a pending merge")
 	}
-	if (Row{Pathname: "r", Origname: sql.NullString{Valid: true, String: "r"}}).RenamedFrom() != "" {
+	editedMerge := Row{Pathname: "e", RID: 2, MRID: 5, Chnged: 1}
+	if !editedMerge.PendingMerge() {
+		t.Error("an edit on top of merged-in content (mrid != rid) is a pending merge")
+	}
+	for chnged := int64(6); chnged <= 9; chnged++ {
+		mode := Row{Pathname: "x", RID: 2, MRID: 2, Chnged: chnged}
+		if mode.PendingMerge() {
+			t.Errorf("chnged=%d is a mode change, not a merge", chnged)
+		}
+		if !mode.ModeChanged() {
+			t.Errorf("chnged=%d must be a mode change", chnged)
+		}
+	}
+	unrenamed := Row{Pathname: "r", Origname: sql.NullString{Valid: true, String: "r"}}
+	if unrenamed.RenamedFrom() != "" {
 		t.Error("origname equal to pathname is not a rename")
 	}
 }

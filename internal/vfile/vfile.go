@@ -3,8 +3,9 @@
 // The vfile table is fossil's record of a checkout: one row per tracked file.
 // Its columns encode state in ways that are easy to misread: rid=0 marks a
 // pending add, origname equals pathname on a row that was never renamed,
-// mrid differs from rid while a merge is pending, and chnged carries fossil's
-// merge codes (2 through 9) as well as a plain edit (1). Every caller that
+// mrid differs from rid while a merge is pending, and chnged is not a flag:
+// 1 is an edit, 2 through 5 are merge and integrate outcomes, and 6 through 9
+// are changes to the executable or symlink bit. Every caller that
 // needs to know what a row means asks this package instead of decoding the
 // columns itself, so fossil's encoding is interpreted in exactly one place.
 package vfile
@@ -36,6 +37,7 @@ type Row struct {
 	Chnged   int64
 	Deleted  int64
 	RID      int64
+	MRID     int64 // the artifact last written for the file; differs from RID mid-merge
 	IsExe    int64
 	IsLink   int64
 }
@@ -72,10 +74,21 @@ func (r Row) ContentChanged() bool {
 	return r.Chnged > 0
 }
 
-// PendingMerge reports a merge outcome fossil has recorded but not yet
-// committed (chnged 2 through 9).
+// PendingMerge reports a merge fossil has applied to the file but not yet
+// committed: a merge or integrate outcome (chnged 2 through 5), or merged-in
+// content (mrid differs from rid), which outlives the outcome code once the
+// file is edited on top of the merge.
 func (r Row) PendingMerge() bool {
-	return r.Chnged > 1
+	if r.Chnged >= 2 && r.Chnged <= 5 {
+		return true
+	}
+	return r.MRID != r.RID
+}
+
+// ModeChanged reports a pending change to the executable or symlink bit
+// (chnged 6 through 9).
+func (r Row) ModeChanged() bool {
+	return r.Chnged >= 6 && r.Chnged <= 9
 }
 
 // Classify maps a row to its change type, in fossil's priority order (the
@@ -110,8 +123,10 @@ func Classify(r Row, missing bool) Change {
 }
 
 // Load reads every row of version vid, ordered by pathname as fossil's
-// changes command lists them. Rows are collected up front so no cursor is
-// held open while callers read files or update rows.
+// changes command lists them. A NULL rid reads as 0 (a pending add) and a
+// NULL mrid as rid, the way the checkin code always read them. Rows are
+// collected up front so no cursor is held open while callers read files or
+// update rows.
 func Load(q db.Querier, vid int64) ([]Row, error) {
 	if q == nil {
 		panic("vfile.Load: nil querier")
@@ -122,7 +137,8 @@ func Load(q db.Querier, vid int64) ([]Row, error) {
 
 	rows, err := q.Query(`
 		SELECT id, pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
-		       rid, CAST(isexe AS INTEGER), CAST(islink AS INTEGER)
+		       coalesce(rid, 0), coalesce(mrid, rid, 0),
+		       CAST(isexe AS INTEGER), CAST(islink AS INTEGER)
 		FROM vfile WHERE vid = ? ORDER BY pathname`, vid)
 	if err != nil {
 		return nil, fmt.Errorf("vfile.Load: query: %w", err)
@@ -134,7 +150,7 @@ func Load(q db.Querier, vid int64) ([]Row, error) {
 		var r Row
 		if err := rows.Scan(
 			&r.ID, &r.Pathname, &r.Origname, &r.Chnged, &r.Deleted,
-			&r.RID, &r.IsExe, &r.IsLink,
+			&r.RID, &r.MRID, &r.IsExe, &r.IsLink,
 		); err != nil {
 			return nil, fmt.Errorf("vfile.Load: scan: %w", err)
 		}

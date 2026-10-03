@@ -55,13 +55,12 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) (missing uint32, e
 
 		// Insert vfile row (INSERT OR IGNORE handles duplicates)
 		_, err := c.db.Exec(`
-			INSERT OR IGNORE INTO vfile(vid, pathname, rid, mrid, mhash, isexe, islink)
-			VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			INSERT OR IGNORE INTO vfile(vid, pathname, rid, mrid, isexe, islink)
+			VALUES(?, ?, ?, ?, ?, ?)`,
 			int64(rid),
 			file.Name,
 			int64(blobRID),
 			int64(blobRID),
-			file.UUID,
 			isexe,
 			0, // islink - symlinks not tracked yet
 		)
@@ -93,10 +92,81 @@ func (c *Checkout) UnloadVFile(rid libfossil.FslID) error {
 type scanVFileEntry struct {
 	id       int64
 	pathname string
-	blobRid  int64
-	mhash    string
+	mergeRid int64 // vfile.mrid: the artifact last written for the file, 0 if none
 	chnged   int64
 	deleted  int64
+}
+
+// baselineHash returns the artifact hash a file on disk is judged against:
+// the uuid of vfile.mrid. mrid equals rid except while a merge is pending,
+// when it names the merged-in version. This is fossil's rule (its scan joins
+// blob on mrid). vfile.mhash is deliberately not read: fossil only fills it
+// during a merge, so it is NULL on ordinary rows (#228).
+func (c *Checkout) baselineHash(mergeRid int64) (string, error) {
+	if mergeRid <= 0 {
+		panic("checkout.baselineHash: mergeRid must be positive")
+	}
+
+	var uuid string
+	err := c.repo.DB().QueryRow(
+		"SELECT uuid FROM blob WHERE rid = ?", mergeRid,
+	).Scan(&uuid)
+	if err != nil {
+		return "", fmt.Errorf("blob uuid for rid %d: %w", mergeRid, err)
+	}
+	if !hash.IsValidHash(uuid) {
+		return "", fmt.Errorf("blob rid %d has malformed uuid %q", mergeRid, uuid)
+	}
+	return uuid, nil
+}
+
+// nextChangedState returns the vfile.chnged value fossil's own scan
+// (vfile_check_signature) stores for a file that is present on disk. A row
+// with no artifact behind it (mrid=0) is a pending add, which fossil writes
+// with chnged=0 and the scan promotes to 1. Otherwise differs reports whether
+// the content differs from the artifact mrid names: unchanged (0) and the
+// clean merge outcomes (2, 4) become edited (1), an edited file whose content
+// is back at its baseline returns to 0, and every other merge state is kept.
+func nextChangedState(chnged int64, hasBaseline, differs bool) int64 {
+	if chnged < 0 {
+		panic("checkout.nextChangedState: negative chnged")
+	}
+	if !hasBaseline {
+		if differs {
+			panic("checkout.nextChangedState: differs without a baseline")
+		}
+		if chnged == 0 {
+			return 1
+		}
+		return chnged
+	}
+	if differs {
+		if chnged == 0 || chnged == 2 || chnged == 4 {
+			return 1
+		}
+		return chnged
+	}
+	if chnged == 1 {
+		return 0
+	}
+	return chnged
+}
+
+// syncChangedFlag stores the scan's verdict for e in vfile.chnged and reports
+// whether the file newly became edited.
+func (c *Checkout) syncChangedFlag(e scanVFileEntry, hasBaseline, differs bool) (bool, error) {
+	next := nextChangedState(e.chnged, hasBaseline, differs)
+	if next == e.chnged {
+		return false, nil
+	}
+	if _, err := c.db.Exec(
+		"UPDATE vfile SET chnged = ? WHERE id = ?", next, e.id,
+	); err != nil {
+		return false, fmt.Errorf(
+			"checkout.ScanChanges: update chnged for %s: %w", e.pathname, err,
+		)
+	}
+	return next == 1, nil
 }
 
 // scanSingleEntry checks a single vfile entry against the file on disk,
@@ -130,40 +200,60 @@ func (c *Checkout) scanSingleEntry(
 		return false, false, nil
 	}
 
-	diskHash := hash.ContentHash(data, e.mhash)
-
-	if diskHash != e.mhash {
-		if e.chnged == 0 {
-			if _, err := c.db.Exec(
-				"UPDATE vfile SET chnged = 1 WHERE id = ?", e.id,
-			); err != nil {
-				return false, false, fmt.Errorf(
-					"checkout.ScanChanges: update chnged for %s: %w",
-					e.pathname, err,
-				)
-			}
-			return true, false, nil
-		}
-	} else {
-		if e.chnged != 0 {
-			if _, err := c.db.Exec(
-				"UPDATE vfile SET chnged = 0 WHERE id = ?", e.id,
-			); err != nil {
-				return false, false, fmt.Errorf(
-					"checkout.ScanChanges: reset chnged for %s: %w",
-					e.pathname, err,
-				)
-			}
-		}
+	if e.mergeRid == 0 {
+		// Added and not yet committed: there is no artifact to compare against.
+		changed, err = c.syncChangedFlag(e, false, false)
+		return changed, false, err
 	}
 
-	return false, false, nil
+	baseline, err := c.baselineHash(e.mergeRid)
+	if err != nil {
+		return false, false, fmt.Errorf(
+			"checkout.ScanChanges: %s: %w", e.pathname, err,
+		)
+	}
+	differs := hash.ContentHash(data, baseline) != baseline
+
+	changed, err = c.syncChangedFlag(e, true, differs)
+	return changed, false, err
+}
+
+// loadScanEntries reads every vfile row of version rid. The rows are
+// collected up front so no cursor is held open during file I/O and the
+// per-row chnged updates.
+func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error) {
+	if rid < 0 {
+		panic("checkout.loadScanEntries: negative rid")
+	}
+
+	rows, err := c.db.Query(`
+		SELECT id, pathname, mrid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER)
+		FROM vfile WHERE vid = ?
+	`, int64(rid))
+	if err != nil {
+		return nil, fmt.Errorf("checkout.ScanChanges: query vfile: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []scanVFileEntry
+	for rows.Next() {
+		var e scanVFileEntry
+		if err := rows.Scan(&e.id, &e.pathname, &e.mergeRid, &e.chnged, &e.deleted); err != nil {
+			return nil, fmt.Errorf("checkout.ScanChanges: scan vfile row: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("checkout.ScanChanges: iterate vfile rows: %w", err)
+	}
+	return entries, nil
 }
 
 // ScanChanges detects modified and missing files in the checkout.
 // Walks the vfile table, checks each file on disk, and updates vfile.chnged accordingly.
 //
-// If flags includes ScanHash, hashes file content and compares to vfile.mhash.
+// If flags includes ScanHash, hashes file content and compares it to the
+// hash of the artifact vfile.mrid names (see baselineHash).
 // Otherwise, uses mtime-based detection (future enhancement).
 //
 // Panics if c is nil (TigerStyle precondition).
@@ -190,27 +280,9 @@ func (c *Checkout) ScanChanges(flags ScanFlags) error {
 		return fmt.Errorf("checkout.ScanChanges: %w", err)
 	}
 
-	rows, err := c.db.Query(`
-		SELECT id, pathname, rid, mhash, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER) FROM vfile WHERE vid = ?
-	`, int64(rid))
+	entries, err := c.loadScanEntries(rid)
 	if err != nil {
-		return fmt.Errorf("checkout.ScanChanges: query vfile: %w", err)
-	}
-
-	var entries []scanVFileEntry
-
-	for rows.Next() {
-		var e scanVFileEntry
-		if err := rows.Scan(&e.id, &e.pathname, &e.blobRid, &e.mhash, &e.chnged, &e.deleted); err != nil {
-			rows.Close()
-			return fmt.Errorf("checkout.ScanChanges: scan vfile row: %w", err)
-		}
-		entries = append(entries, e)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("checkout.ScanChanges: iterate vfile rows: %w", err)
+		return err
 	}
 
 	// Build a set of tracked pathnames for extra-file detection.

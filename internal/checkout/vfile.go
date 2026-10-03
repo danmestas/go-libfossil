@@ -245,11 +245,23 @@ func (c *Checkout) scanSingleEntry(
 		)
 	}
 
-	data, err := c.env.Storage.ReadFile(fullPath)
+	// Anything that is not a regular file is missing, as fossil's scan
+	// treats a directory where a file belongs (NOT_A_FILE); reading it
+	// would only fail.
+	info, err := c.env.Storage.Stat(fullPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return false, true, nil
 		}
+		return false, false, fmt.Errorf(
+			"checkout.ScanChanges: stat %s: %w", fullPath, err,
+		)
+	}
+	if !info.Mode().IsRegular() {
+		return false, true, nil
+	}
+	data, err := c.env.Storage.ReadFile(fullPath)
+	if err != nil {
 		return false, false, fmt.Errorf(
 			"checkout.ScanChanges: read %s: %w", fullPath, err,
 		)

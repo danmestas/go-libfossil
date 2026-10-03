@@ -67,8 +67,9 @@ func classifyChange(r vfileRow, missing bool) FileChange {
 	return ChangeNone
 }
 
-// loadVFileRows reads every row of version vid. They are collected up front
-// so no cursor is held open while callers read files or update rows.
+// loadVFileRows reads every row of version vid, ordered by pathname as
+// fossil's changes command lists them. They are collected up front so no
+// cursor is held open while callers read files or update rows.
 func (c *Checkout) loadVFileRows(vid libfossil.FslID) ([]vfileRow, error) {
 	if c == nil {
 		panic("checkout.loadVFileRows: nil *Checkout")
@@ -80,7 +81,7 @@ func (c *Checkout) loadVFileRows(vid libfossil.FslID) ([]vfileRow, error) {
 	rows, err := c.db.Query(`
 		SELECT id, pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
 		       rid, CAST(isexe AS INTEGER), CAST(islink AS INTEGER)
-		FROM vfile WHERE vid = ?`, int64(vid))
+		FROM vfile WHERE vid = ? ORDER BY pathname`, int64(vid))
 	if err != nil {
 		return nil, fmt.Errorf("query vfile: %w", err)
 	}

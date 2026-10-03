@@ -331,3 +331,23 @@ func TestFossilCheckoutHasChangesSeesAddWithoutScan(t *testing.T) {
 		t.Fatal("HasChanges = false with a pending fossil add, want true")
 	}
 }
+
+// A directory where a tracked file belongs is not a file: fossil's changes
+// reports it as NOT_A_FILE, under its missing filter. Status reports it as
+// missing instead of failing (#232).
+func TestFossilCheckoutStatusDirectoryInPlaceOfFile(t *testing.T) {
+	_, repoPath, ckDir := newFossilCheckout(t)
+	aPath := filepath.Join(ckDir, "a.txt")
+	if err := os.Remove(aPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(aPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ck := openLibfossilCheckout(t, repoPath, ckDir)
+	got := strings.Join(statusLines(t, ck), ",")
+	if want := "missing a.txt"; got != want {
+		t.Fatalf("Status = %q, want %q", got, want)
+	}
+}

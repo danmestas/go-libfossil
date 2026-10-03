@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-03
+
 ### Changed
 
 - `Checkout.Revert` keeps a never-committed file on disk when it reverts the

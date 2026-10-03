@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A non-forced `Extract` now checks before it changes anything (#230). It
+  used to replace the checkout's file list first, so a refusal lost pending
+  adds, renames and merge state and left `Status` seeing an empty checkout.
+  It also compared disk with the target version, so a clean checkout could
+  not switch to a version that changed a file. Extract now follows fossil's
+  `checkout`: it refuses while the current version has unsaved changes that
+  the switch would lose, or when an untracked file sits where the target
+  would write different content. A tracked file that is missing from disk no
+  longer blocks a switch, as in fossil.
+
 - Checkouts created by the fossil binary (`fossil open`) now work through
   `OpenCheckout` (#228). `Status` failed outright with `converting NULL to
   string` on `vfile.mhash`, because go-libfossil judged every file against

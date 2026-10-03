@@ -415,3 +415,35 @@ func TestExtractRefusesOverUntrackedFile(t *testing.T) {
 		t.Fatalf("new.txt = %q, untracked file was overwritten", data)
 	}
 }
+
+// Create records the tip as checked out before any file is written. Extracting
+// an older version into a directory that already holds it must still work:
+// the files differ from the tip, but none would lose content. This is how
+// EdgeSync's ExtractTo uses Create + Extract.
+func TestExtractReextractOlderVersionIntoCreatedCheckout(t *testing.T) {
+	r, rid1, _, cleanup := newTestRepoWithTwoCheckins(t)
+	defer cleanup()
+	mem := simio.NewMemStorage()
+	env := &simio.Env{Storage: mem, Clock: simio.RealClock{}, Rand: simio.CryptoRand{}}
+
+	for pass := 1; pass <= 2; pass++ {
+		co, err := Create(r, t.TempDir(), CreateOpts{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		co.env = env
+		co.dir = "/checkout"
+		err = co.Extract(rid1, ExtractOpts{})
+		co.Close()
+		if err != nil {
+			t.Fatalf("pass %d: Extract(rid1) into a created checkout: %v", pass, err)
+		}
+	}
+	data, err := mem.ReadFile("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello world\n" {
+		t.Fatalf("hello.txt = %q, want rid1's content", data)
+	}
+}

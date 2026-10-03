@@ -2,7 +2,7 @@ package checkout
 
 import (
 	"context"
-	"errors"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -223,15 +223,17 @@ func (c *Checkout) extractRow(
 	return nil
 }
 
-// errStopVisit ends a VisitChanges walk early once its answer is known.
-var errStopVisit = errors.New("stop visit")
-
 // checkSafeToExtract refuses an Extract that would destroy work the user has
-// not committed. It follows fossil's checkout command: the current version
-// must have no unsaved changes (edits, adds, removals, renames, merges), and
-// no file the current version does not track may sit where the target would
-// write different content. Fossil prompts in that second case; a library
-// cannot, so it refuses. It runs before anything in the checkout changes.
+// not committed. It follows fossil's checkout command, which refuses while the
+// current version has unsaved changes (edits, adds, removals, renames,
+// merges) and prompts before overwriting a file it does not track; a library
+// cannot prompt, so it refuses. It runs before anything in the checkout
+// changes.
+//
+// One relaxation: an edit whose content already equals what target would
+// write loses nothing, so it does not block. That matters because Create
+// records the tip as checked out before any file is written, so a directory
+// already holding an older version looks edited relative to the tip.
 func (c *Checkout) checkSafeToExtract(target libfossil.FslID) error {
 	if target <= 0 {
 		panic("checkout.checkSafeToExtract: target must be positive")
@@ -241,48 +243,133 @@ func (c *Checkout) checkSafeToExtract(target libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
+	files, err := manifest.ListFiles(c.repo, target)
+	if err != nil {
+		return fmt.Errorf("checkout.Extract: %w", err)
+	}
+	targetHash := make(map[string]string, len(files))
+	for _, f := range files {
+		targetHash[f.Name] = f.UUID
+	}
+
 	if current > 0 {
-		changed, err := c.firstUnsavedChange(current)
+		atRisk, err := c.firstChangeAtRisk(current, targetHash)
 		if err != nil {
 			return fmt.Errorf("checkout.Extract: %w", err)
 		}
-		if changed != "" {
+		if atRisk != "" {
 			return fmt.Errorf(
 				"checkout.Extract: file %s has local changes; use Force to overwrite",
-				changed,
+				atRisk,
 			)
 		}
 	}
-	return c.checkNoUntrackedClobber(current, target)
+	return c.checkNoUntrackedClobber(current, files)
 }
 
-// firstUnsavedChange scans version vid and returns the name of its first
-// changed file, or "" when it has none.
-func (c *Checkout) firstUnsavedChange(vid libfossil.FslID) (string, error) {
+// changeRow is the part of a vfile row firstChangeAtRisk judges.
+type changeRow struct {
+	pathname string
+	origname sql.NullString
+	chnged   int64
+	deleted  int64
+	rid      int64
+}
+
+// firstChangeAtRisk scans version vid and returns the first changed file
+// whose change extracting target would lose, or "" when there is none.
+func (c *Checkout) firstChangeAtRisk(
+	vid libfossil.FslID, targetHash map[string]string,
+) (string, error) {
 	if vid <= 0 {
-		panic("checkout.firstUnsavedChange: vid must be positive")
+		panic("checkout.firstChangeAtRisk: vid must be positive")
+	}
+	if targetHash == nil {
+		panic("checkout.firstChangeAtRisk: nil targetHash")
 	}
 
 	if err := c.refreshChanged(vid); err != nil {
 		return "", err
 	}
-	var name string
-	err := c.VisitChanges(vid, false, func(e ChangeEntry) error {
-		name = e.Name
-		return errStopVisit
-	})
+	rows, err := c.changeRows(vid)
 	if err != nil {
-		if !errors.Is(err, errStopVisit) {
-			return "", err
-		}
+		return "", err
 	}
-	return name, nil
+	for _, r := range rows {
+		change := classifyChange(r.pathname, r.origname, r.chnged, r.deleted, r.rid)
+		if change == ChangeNone {
+			continue
+		}
+		// Only a plain edit (not a merge state) of a file target also
+		// writes can be safe; its content decides.
+		if change == ChangeModified && r.chnged == 1 {
+			if uuid, ok := targetHash[r.pathname]; ok {
+				clobber, err := c.wouldClobber(r.pathname, uuid)
+				if err != nil {
+					return "", err
+				}
+				if !clobber {
+					continue
+				}
+			}
+		}
+		return r.pathname, nil
+	}
+	return "", nil
+}
+
+// changeRows reads the rows of version vid that classifyChange needs. They
+// are collected up front so no cursor is held open while files are read.
+func (c *Checkout) changeRows(vid libfossil.FslID) ([]changeRow, error) {
+	rows, err := c.db.Query(`
+		SELECT pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid
+		FROM vfile WHERE vid = ?`, int64(vid))
+	if err != nil {
+		return nil, fmt.Errorf("query vfile: %w", err)
+	}
+	defer rows.Close()
+
+	var out []changeRow
+	for rows.Next() {
+		var r changeRow
+		if err := rows.Scan(&r.pathname, &r.origname, &r.chnged, &r.deleted, &r.rid); err != nil {
+			return nil, fmt.Errorf("scan vfile: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate vfile: %w", err)
+	}
+	return out, nil
+}
+
+// wouldClobber reports whether writing the artifact uuid to pathname would
+// destroy content: true only when a file is there and differs from it.
+func (c *Checkout) wouldClobber(pathname, uuid string) (bool, error) {
+	if !hash.IsValidHash(uuid) {
+		panic("checkout.wouldClobber: invalid uuid for " + pathname)
+	}
+
+	fullPath, err := c.safePath(pathname)
+	if err != nil {
+		return false, nil // Extraction rejects the path itself, with a better error.
+	}
+	data, err := c.env.Storage.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("checkout.Extract: read %s: %w", fullPath, err)
+	}
+	return hash.ContentHash(data, uuid) != uuid, nil
 }
 
 // checkNoUntrackedClobber returns an error if a file that version current
-// does not track exists on disk where version target would write different
-// content. current may be 0 (nothing checked out yet).
-func (c *Checkout) checkNoUntrackedClobber(current, target libfossil.FslID) error {
+// does not track exists on disk where target would write different content.
+// current may be 0 (nothing checked out yet).
+func (c *Checkout) checkNoUntrackedClobber(
+	current libfossil.FslID, files []manifest.FileEntry,
+) error {
 	if current < 0 {
 		panic("checkout.checkNoUntrackedClobber: negative current")
 	}
@@ -291,26 +378,15 @@ func (c *Checkout) checkNoUntrackedClobber(current, target libfossil.FslID) erro
 	if err != nil {
 		return err
 	}
-	files, err := manifest.ListFiles(c.repo, target)
-	if err != nil {
-		return fmt.Errorf("checkout.Extract: %w", err)
-	}
 	for _, f := range files {
 		if tracked[f.Name] {
 			continue
 		}
-		fullPath, err := c.safePath(f.Name)
+		clobber, err := c.wouldClobber(f.Name, f.UUID)
 		if err != nil {
-			continue // Extraction rejects the path itself, with a better error.
+			return err
 		}
-		data, err := c.env.Storage.ReadFile(fullPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("checkout.Extract: read %s: %w", fullPath, err)
-		}
-		if hash.ContentHash(data, f.UUID) != f.UUID {
+		if clobber {
 			return fmt.Errorf(
 				"checkout.Extract: untracked file %s has local changes; use Force to overwrite",
 				f.Name,

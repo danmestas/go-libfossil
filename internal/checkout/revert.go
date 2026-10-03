@@ -41,10 +41,8 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	}
 
 	if len(opts.Paths) > 0 {
-		for _, path := range opts.Paths {
-			if err := c.revertSinglePath(vid, path, opts.Callback); err != nil {
-				return fmt.Errorf("checkout.Revert: %w", err)
-			}
+		if err := c.revertPaths(vid, opts.Paths, opts.Callback); err != nil {
+			return fmt.Errorf("checkout.Revert: %w", err)
 		}
 		return nil
 	}
@@ -109,22 +107,30 @@ func needsRevert(r vfile.Row, missing bool) bool {
 	return r.PendingMerge()
 }
 
-// revertSinglePath reverts a named file whatever its change flags say, as
-// fossil's revert does for a file it is given: a file missing from disk is
-// restored too. A path the checkout does not track is a no-op, as in fossil.
-func (c *Checkout) revertSinglePath(
-	vid libfossil.FslID, pathname string,
+// revertPaths reverts the named files whatever their change flags say, as
+// fossil's revert does for files it is given: a file missing from disk is
+// restored too. A renamed file answers to its new name and its old one, so a
+// name can select more than one row. Every named row is planned and checked
+// as one revert, so a refusal reverts none of them. A path the checkout does
+// not track is a no-op, as in fossil.
+func (c *Checkout) revertPaths(
+	vid libfossil.FslID, paths []string,
 	callback func(string, RevertChange) error,
 ) error {
+	if len(paths) == 0 {
+		panic("checkout.revertPaths: no paths")
+	}
+	named := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		named[p] = true
+	}
 	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return err
 	}
-	// A renamed file answers to its new name and its old one, as in fossil's
-	// revert, so a name can select more than one row.
 	var targets []vfile.Row
 	for _, r := range rows {
-		if r.Pathname == pathname || r.RenamedFrom() == pathname {
+		if named[r.Pathname] || named[r.RenamedFrom()] {
 			targets = append(targets, r)
 		}
 	}
@@ -183,7 +189,7 @@ func (c *Checkout) revertRows(
 	rows, targets []vfile.Row, inVersion map[string]bool,
 	callback func(string, RevertChange) error,
 ) error {
-	if err := checkRenameUndoFree(rows, targets, inVersion); err != nil {
+	if err := c.checkRenameUndoFree(rows, targets, inVersion); err != nil {
 		return err
 	}
 	for _, t := range targets {
@@ -195,10 +201,13 @@ func (c *Checkout) revertRows(
 }
 
 // checkRenameUndoFree refuses a revert that would move a renamed file back
-// onto a name another tracked row now holds: a swap, a chain, or a new add at
-// the old name. Moving it anyway would overwrite that file, and go-libfossil
-// has no undo copy to recover it from, unlike fossil.
-func checkRenameUndoFree(rows, targets []vfile.Row, inVersion map[string]bool) error {
+// onto a name that is taken: by another tracked row (a swap, a chain, or a
+// new add at the old name), or by an untracked file on disk whose content
+// differs from the committed one. Moving it anyway would overwrite that file,
+// and go-libfossil has no undo copy to recover it from, unlike fossil.
+func (c *Checkout) checkRenameUndoFree(
+	rows, targets []vfile.Row, inVersion map[string]bool,
+) error {
 	held := make(map[string]int64, len(rows))
 	for _, r := range rows {
 		held[r.Pathname] = r.ID
@@ -212,6 +221,19 @@ func checkRenameUndoFree(rows, targets []vfile.Row, inVersion map[string]bool) e
 			return fmt.Errorf(
 				"checkout.Revert: cannot move %s back to %s: another tracked file has that "+
 					"name; revert or commit it first", t.Pathname, oldName)
+		}
+		committed, err := c.baselineHash(t.RID)
+		if err != nil {
+			return fmt.Errorf("checkout.Revert: %s: %w", t.Pathname, err)
+		}
+		clobber, err := c.wouldClobber(oldName, committed)
+		if err != nil {
+			return err
+		}
+		if clobber {
+			return fmt.Errorf(
+				"checkout.Revert: cannot move %s back to %s: an untracked file is there; "+
+					"move it aside first", t.Pathname, oldName)
 		}
 	}
 	return nil

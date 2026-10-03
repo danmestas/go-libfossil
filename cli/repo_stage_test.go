@@ -429,3 +429,38 @@ func TestRepoRevertRefusesRenameOntoTrackedName(t *testing.T) {
 		})
 	}
 }
+
+// Reverting several paths is planned and checked as one revert: when one of
+// them must be refused, none of them is reverted (#242 review).
+func TestRepoRevertSeveralPathsRefusesWhole(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	writeCkFile(t, ckDir, "b.txt", "edited\n")
+	runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+	writeCkFile(t, ckDir, "a.txt", "brand new\n")
+	runFossil(t, bin, ckDir, "add", "a.txt")
+
+	cmd := &cli.RepoRevertCmd{Files: []string{"b.txt", "z.txt"}, Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+		t.Fatal("revert succeeded where z.txt's rename cannot be undone")
+	}
+	if got := readCkFile(t, ckDir, "b.txt"); got != "edited\n" {
+		t.Fatalf("b.txt = %q, a refused revert reverted part of the request", got)
+	}
+}
+
+// An untracked file at a renamed file's old name would be overwritten by
+// undoing the rename; with no undo copy, revert refuses instead (#242
+// review).
+func TestRepoRevertRefusesRenameOntoUntrackedFile(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+	writeCkFile(t, ckDir, "a.txt", "mine, untracked\n")
+
+	cmd := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+		t.Fatal("revert succeeded over an untracked file at the old name")
+	}
+	if got := readCkFile(t, ckDir, "a.txt"); got != "mine, untracked\n" {
+		t.Fatalf("a.txt = %q, the untracked file was overwritten", got)
+	}
+}

@@ -2,9 +2,12 @@ package checkout
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
 // moveFile reads a file from oldPath, writes it to newPath with the given
@@ -82,30 +85,18 @@ func (c *Checkout) Rename(opts RenameOpts) error {
 		return fmt.Errorf("checkout.Rename: %w", err)
 	}
 
-	// Verify From exists in vfile
-	var vfileID int64
-	err = c.db.QueryRow(
-		"SELECT id FROM vfile WHERE vid=? AND pathname=?",
-		int64(vid), opts.From,
-	).Scan(&vfileID)
-	if err == sql.ErrNoRows {
-		return fmt.Errorf("checkout.Rename: file %s not found in vfile", opts.From)
-	}
+	vfileID, err := c.renameRowID(vid, opts.From, opts.To)
 	if err != nil {
-		return fmt.Errorf("checkout.Rename: query vfile for %s: %w", opts.From, err)
+		return err
 	}
 
-	// Verify To does NOT exist in vfile (uniqueness check)
-	var existingID int64
-	err = c.db.QueryRow(
-		"SELECT id FROM vfile WHERE vid=? AND pathname=?",
-		int64(vid), opts.To,
-	).Scan(&existingID)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("checkout.Rename: query vfile for %s: %w", opts.To, err)
-	}
-	if err == nil {
-		return fmt.Errorf("checkout.Rename: target file %s already exists in vfile", opts.To)
+	// Refuse to move onto a file already on disk, before changing anything:
+	// it is not tracked (checked above), so it may be the only copy of
+	// someone's work. fossil mv --hard refuses the same way.
+	if opts.DoFsMove {
+		if err := c.checkRenameTargetFree(opts.To); err != nil {
+			return err
+		}
 	}
 
 	// Update vfile: set new pathname, store old pathname in origname, mark as changed
@@ -216,4 +207,56 @@ func (c *Checkout) RevertRename(name string, doFsMove bool) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// checkRenameTargetFree returns an error if anything already exists on disk
+// at the checkout-relative path to.
+func (c *Checkout) checkRenameTargetFree(to string) error {
+	if to == "" {
+		panic("checkout.checkRenameTargetFree: empty path")
+	}
+	newPath, err := c.safePath(to)
+	if err != nil {
+		return fmt.Errorf("checkout.Rename: path traversal in %s: %w", to, err)
+	}
+	_, err = c.env.Storage.Stat(newPath)
+	if err == nil {
+		return fmt.Errorf(
+			"checkout.Rename: cannot move onto %s: another file already exists there", to)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checkout.Rename: stat %s: %w", newPath, err)
+	}
+	return nil
+}
+
+// renameRowID returns the vfile id of from in version vid, after checking
+// that to is not tracked already.
+func (c *Checkout) renameRowID(vid libfossil.FslID, from, to string) (int64, error) {
+	if from == to {
+		return 0, fmt.Errorf("checkout.Rename: %s is already named %s", from, to)
+	}
+
+	var vfileID int64
+	err := c.db.QueryRow(
+		"SELECT id FROM vfile WHERE vid=? AND pathname=?", int64(vid), from,
+	).Scan(&vfileID)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("checkout.Rename: file %s not found in vfile", from)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("checkout.Rename: query vfile for %s: %w", from, err)
+	}
+
+	var existingID int64
+	err = c.db.QueryRow(
+		"SELECT id FROM vfile WHERE vid=? AND pathname=?", int64(vid), to,
+	).Scan(&existingID)
+	if err == nil {
+		return 0, fmt.Errorf("checkout.Rename: target file %s already exists in vfile", to)
+	}
+	if err != sql.ErrNoRows {
+		return 0, fmt.Errorf("checkout.Rename: query vfile for %s: %w", to, err)
+	}
+	return vfileID, nil
 }

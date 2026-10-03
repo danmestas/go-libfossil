@@ -8,6 +8,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // Revert restores files to their checkout version state, the way fossil's
@@ -37,10 +38,7 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 		}
 	}
 
-	// Build query based on whether specific paths are requested
 	if len(opts.Paths) > 0 {
-		// Revert specific paths
-		// We'll iterate over each path to avoid complex IN clause handling
 		for _, path := range opts.Paths {
 			if err := c.revertSinglePath(vid, path, opts.Callback); err != nil {
 				return fmt.Errorf("checkout.Revert: %w", err)
@@ -48,75 +46,76 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 		}
 		return nil
 	}
-
-	// Revert all changed files
-	// First, collect all file info to avoid database lock during DELETE operations
-	type fileInfo struct {
-		id       int64
-		pathname string
-		rid      int64
+	if err := c.revertAll(vid, opts.Callback); err != nil {
+		return fmt.Errorf("checkout.Revert: %w", err)
 	}
-	var filesToRevert []fileInfo
-
-	rows, err := c.db.Query(`
-		SELECT id, pathname, rid
-		FROM vfile
-		WHERE vid = ? AND (chnged > 0 OR deleted > 0 OR rid = 0)
-	`, int64(vid))
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: query vfile: %w", err)
-	}
-
-	for rows.Next() {
-		var fi fileInfo
-		if err := rows.Scan(&fi.id, &fi.pathname, &fi.rid); err != nil {
-			rows.Close()
-			return fmt.Errorf("checkout.Revert: scan vfile row: %w", err)
-		}
-		filesToRevert = append(filesToRevert, fi)
-	}
-	rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("checkout.Revert: iterate vfile rows: %w", err)
-	}
-
-	// Now process each file (safe to DELETE now that query is closed)
-	for _, fi := range filesToRevert {
-		if err := c.revertFile(fi.id, fi.pathname, fi.rid, opts.Callback); err != nil {
-			return fmt.Errorf("checkout.Revert: %w", err)
-		}
-	}
-
 	return nil
 }
 
-// revertSinglePath reverts a specific path.
+// revertAll reverts every changed file of version vid and drops any pending
+// merge, as fossil's revert does with no file named. A file is reverted when
+// its content changed, it is removed, an add is pending, a merge touched it,
+// or it is missing from disk. A pure rename is left for #242: revertFile
+// cannot move a file back to its old name yet.
+func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertChange) error) error {
+	if vid < 0 {
+		panic("checkout.revertAll: negative vid")
+	}
+
+	rows, err := vfile.Load(c.db, int64(vid))
+	if err != nil {
+		return err
+	}
+	for _, r := range rows {
+		missing, err := c.isMissing(r)
+		if err != nil {
+			return err
+		}
+		if !needsRevert(r, missing) {
+			continue
+		}
+		if err := c.revertFile(r.ID, r.Pathname, r.RID, callback); err != nil {
+			return err
+		}
+	}
+	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
+		return fmt.Errorf("clear vmerge: %w", err)
+	}
+	return nil
+}
+
+// needsRevert reports whether revert-all restores row r: its content
+// changed, it is removed, a merge touched it, or it is missing from disk.
+func needsRevert(r vfile.Row, missing bool) bool {
+	if missing {
+		return true
+	}
+	if r.ContentChanged() {
+		return true
+	}
+	if r.IsRemoved() {
+		return true
+	}
+	return r.PendingMerge()
+}
+
+// revertSinglePath reverts a named file whatever its change flags say, as
+// fossil's revert does for a file it is given: a file missing from disk is
+// restored too. A path the checkout does not track is a no-op, as in fossil.
 func (c *Checkout) revertSinglePath(
 	vid libfossil.FslID, pathname string,
 	callback func(string, RevertChange) error,
 ) error {
-	var id, rid, chnged, deleted int64
-	err := c.db.QueryRow(`
-		SELECT id, rid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER)
-		FROM vfile
-		WHERE vid = ? AND pathname = ?
-	`, int64(vid), pathname).Scan(&id, &rid, &chnged, &deleted)
-
+	var id, rid int64
+	err := c.db.QueryRow(
+		"SELECT id, rid FROM vfile WHERE vid = ? AND pathname = ?", int64(vid), pathname,
+	).Scan(&id, &rid)
 	if err == sql.ErrNoRows {
-		// File not tracked, nothing to revert
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: query vfile for %s: %w", pathname, err)
 	}
-
-	// Only revert if there are changes
-	if chnged == 0 && deleted == 0 && rid != 0 {
-		// No changes to revert
-		return nil
-	}
-
 	return c.revertFile(id, pathname, rid, callback)
 }
 
@@ -163,7 +162,7 @@ func (c *Checkout) revertFile(
 }
 
 // restoreCommitted writes the committed content of blob rid back to fullPath,
-// with the row's executable bit, and marks row id unchanged.
+// with the row's executable bit, and marks row id unchanged and unmerged.
 func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int64) error {
 	if rid <= 0 {
 		panic("checkout.restoreCommitted: rid must be positive")
@@ -192,8 +191,10 @@ func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int
 	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
 		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
 	}
+	// mrid and mhash go back to the committed version, so no merged-in
+	// content outlives the revert (fossil resets them the same way).
 	if _, err := c.db.Exec(
-		"UPDATE vfile SET chnged = 0, deleted = 0 WHERE id = ?", id,
+		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL WHERE id = ?", id,
 	); err != nil {
 		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
 	}

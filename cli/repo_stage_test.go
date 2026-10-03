@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/danmestas/go-libfossil/cli"
+	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
@@ -94,6 +95,22 @@ func TestRepoAddTrackedFileIsNoChange(t *testing.T) {
 	if got := fossilChanges(t, bin, ckDir); got != "" {
 		t.Fatalf("fossil changes = %q after re-adding a tracked file, want none", got)
 	}
+	// fossil's own scan would clear a stray chnged=1, so check the row
+	// itself: re-adding must not mark the file edited.
+	ckdb, err := libdb.OpenSQL(filepath.Join(ckDir, ".fslckout"), libdb.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ckdb.Close()
+	var chnged int
+	if err := ckdb.QueryRow(
+		"SELECT chnged FROM vfile WHERE pathname='a.txt'",
+	).Scan(&chnged); err != nil {
+		t.Fatal(err)
+	}
+	if chnged != 0 {
+		t.Fatalf("a.txt chnged = %d after re-adding, want 0", chnged)
+	}
 }
 
 func TestRepoRmMarksDeleted(t *testing.T) {
@@ -154,5 +171,109 @@ func TestRepoRevertRestoresContent(t *testing.T) {
 	}
 	if got := fossilChanges(t, bin, ckDir); got != "" {
 		t.Fatalf("fossil changes = %q after revert, want none", got)
+	}
+}
+
+// fossilCheckoutRelative is fossilCheckout with the checkout opened by a
+// relative repository path, as `fossil open ../test.fossil` stores it.
+func fossilCheckoutRelative(t *testing.T) (bin, ckDir string) {
+	t.Helper()
+	bin = testutil.RequireFossilBin(t)
+	dir := t.TempDir()
+	ckDir = filepath.Join(dir, "ck")
+	if err := os.Mkdir(ckDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runFossil(t, bin, dir, "init", "test.fossil")
+	runFossil(t, bin, ckDir, "open", "../test.fossil")
+	writeCkFile(t, ckDir, "a.txt", "one\n")
+	writeCkFile(t, ckDir, "b.txt", "two\n")
+	runFossil(t, bin, ckDir, "add", "a.txt", "b.txt")
+	runFossil(t, bin, ckDir, "commit", "-m", "seed")
+	return bin, ckDir
+}
+
+// Without -R the commands find the repository the checkout records, even
+// when fossil stored it as a path relative to the checkout and the command
+// runs from another directory (#234 review).
+func TestRepoRmWithoutRepoFlag(t *testing.T) {
+	bin, ckDir := fossilCheckoutRelative(t)
+
+	cmd := &cli.RepoRmCmd{Files: []string{"a.txt"}, Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{}); err != nil {
+		t.Fatalf("rm without -R: %v", err)
+	}
+	if got := fossilChanges(t, bin, ckDir); got != "DELETED    a.txt" {
+		t.Fatalf("fossil changes = %q, want a.txt DELETED", got)
+	}
+}
+
+// Rename refuses to move onto a file already on disk, as fossil mv --hard
+// does, and leaves everything as it was: that file may be the only copy.
+func TestRepoRenameRefusesExistingTarget(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	writeCkFile(t, ckDir, "u.txt", "mine\n")
+
+	cmd := &cli.RepoRenameCmd{From: "a.txt", To: "u.txt", Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+		t.Fatal("rename onto an existing file succeeded")
+	}
+	if got := readCkFile(t, ckDir, "u.txt"); got != "mine\n" {
+		t.Fatalf("u.txt = %q, the existing file was overwritten", got)
+	}
+	if got := readCkFile(t, ckDir, "a.txt"); got != "one\n" {
+		t.Fatalf("a.txt = %q, want it untouched", got)
+	}
+	if got := fossilChanges(t, bin, ckDir); got != "" {
+		t.Fatalf("fossil changes = %q after a refused rename, want none", got)
+	}
+}
+
+// Revert restores a file that is missing from disk, named or not, as fossil
+// does.
+func TestRepoRevertRestoresMissingFile(t *testing.T) {
+	_, repoPath, ckDir := fossilCheckout(t)
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.Remove(filepath.Join(ckDir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	named := &cli.RepoRevertCmd{Files: []string{"a.txt"}, Dir: ckDir}
+	if err := named.Run(&cli.Globals{Repo: repoPath}); err != nil {
+		t.Fatalf("revert a.txt: %v", err)
+	}
+	all := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := all.Run(&cli.Globals{Repo: repoPath}); err != nil {
+		t.Fatalf("revert all: %v", err)
+	}
+	if got := readCkFile(t, ckDir, "a.txt"); got != "one\n" {
+		t.Fatalf("a.txt = %q, want it restored", got)
+	}
+	if got := readCkFile(t, ckDir, "b.txt"); got != "two\n" {
+		t.Fatalf("b.txt = %q, want it restored", got)
+	}
+}
+
+// Revert of everything undoes a pending merge completely: the merged file's
+// content, its merged-in version, and the merge record, as fossil's revert
+// does. Otherwise the next scan sees the file changed again and the next
+// commit records a merge parent.
+func TestRepoRevertDropsPendingMerge(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	writeCkFile(t, ckDir, "a.txt", "one\nbranch\n")
+	runFossil(t, bin, ckDir, "commit", "-m", "branch", "--branch", "feat")
+	runFossil(t, bin, ckDir, "update", "trunk")
+	runFossil(t, bin, ckDir, "merge", "feat")
+
+	cmd := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if got := readCkFile(t, ckDir, "a.txt"); got != "one\n" {
+		t.Fatalf("a.txt = %q, want trunk's content", got)
+	}
+	if got := fossilChanges(t, bin, ckDir); got != "" {
+		t.Fatalf("fossil changes = %q after revert, want none (merge dropped)", got)
 	}
 }

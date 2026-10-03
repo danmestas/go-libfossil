@@ -76,17 +76,29 @@ func findRepo() (string, error) {
 	return "", fmt.Errorf("no .fossil file found")
 }
 
-// repoFromCheckout reads the repository path from a .fslckout database.
-func repoFromCheckout(ckoutPath string) (string, error) {
-	db, err := libdb.OpenSQL(ckoutPath, libdb.OpenConfig{}, map[string]string{"mode": "ro"})
+// repoFromCheckout reads the repository path from a checkout database. A
+// relative path, as fossil open stores it, is relative to the checkout's
+// directory. The database is opened read-write: forcing read-only clashes
+// with the WAL pragma every connection sets, on a database fossil left in
+// delete journal mode; the library opens it read-write as well.
+func repoFromCheckout(ckoutPath string) (path string, err error) {
+	db, err := libdb.OpenSQL(ckoutPath, libdb.OpenConfig{}, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("checkout %s: %w", ckoutPath, err)
 	}
-	defer db.Close()
+	defer func() {
+		if cerr := db.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 	var repoPath string
-	err = db.QueryRow("SELECT value FROM vvar WHERE name='repository'").Scan(&repoPath)
-	if err != nil {
-		return "", fmt.Errorf("checkout %s: no repository path found", ckoutPath)
+	if err := db.QueryRow(
+		"SELECT value FROM vvar WHERE name='repository'",
+	).Scan(&repoPath); err != nil {
+		return "", fmt.Errorf("checkout %s: read repository path: %w", ckoutPath, err)
+	}
+	if !filepath.IsAbs(repoPath) {
+		repoPath = filepath.Join(filepath.Dir(ckoutPath), repoPath)
 	}
 	return repoPath, nil
 }

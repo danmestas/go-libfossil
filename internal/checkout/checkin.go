@@ -2,7 +2,6 @@ package checkout
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // Enqueue adds files to the commit staging queue. If the queue is empty (nil),
@@ -80,68 +80,40 @@ func (c *Checkout) DiscardQueue() error {
 type vfileCommitEntry struct {
 	pathname string
 	origname string // prior pathname if renamed, else empty
-	changed  bool
 	deleted  bool
 	rid      int64
 	isexe    bool
 }
 
-// collectVFileEntries queries vfile for all entries of the given version and
-// classifies them into changed, deleted, and all-entries map.
+// collectVFileEntries reads vfile for all entries of the given version and
+// sorts them into changed, deleted, and all-entries map. What a row means
+// (an add, a removal, a rename, changed content) is vfile.Row's to say.
 func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	entries map[string]vfileCommitEntry,
 	changedFiles []string,
 	deletedFiles []string,
 	err error,
 ) {
-	rows, err := c.db.Query(`
-		SELECT pathname, origname, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER), rid, CAST(isexe AS INTEGER)
-		FROM vfile
-		WHERE vid = ?
-	`, int64(vid))
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("checkout.Commit: query vfile: %w", err)
-	}
-	defer rows.Close()
-
-	entries = make(map[string]vfileCommitEntry)
-
-	for rows.Next() {
-		var pathname string
-		var origname sql.NullString
-		var chnged, deleted, isexe int
-		var rid sql.NullInt64
-		if err := rows.Scan(&pathname, &origname, &chnged, &deleted, &rid, &isexe); err != nil {
-			return nil, nil, nil, fmt.Errorf("checkout.Commit: scan vfile: %w", err)
-		}
-		// A rename is only a rename when origname differs from the current
-		// pathname; canonical Fossil stores origname==pathname for unmodified
-		// files (checkin.c:161), so collapse that case to "no rename" here.
-		orig := ""
-		if origname.Valid && origname.String != pathname {
-			orig = origname.String
-		}
-		entries[pathname] = vfileCommitEntry{
-			pathname: pathname,
-			origname: orig,
-			changed:  chnged > 0,
-			deleted:  deleted > 0,
-			rid:      rid.Int64,
-			isexe:    isexe > 0,
-		}
-
-		if deleted > 0 {
-			deletedFiles = append(deletedFiles, pathname)
-		} else if chnged > 0 || rid.Int64 == 0 {
-			// rid=0 means newly added (never committed) — always treat
-			// as changed even if ScanChanges reset chnged to 0.
-			changedFiles = append(changedFiles, pathname)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, nil, fmt.Errorf("checkout.Commit: vfile rows: %w", err)
+		return nil, nil, nil, fmt.Errorf("checkout.Commit: %w", err)
 	}
 
+	entries = make(map[string]vfileCommitEntry, len(rows))
+	for _, r := range rows {
+		entries[r.Pathname] = vfileCommitEntry{
+			pathname: r.Pathname,
+			origname: r.RenamedFrom(),
+			deleted:  r.IsRemoved(),
+			rid:      r.RID,
+			isexe:    r.IsExe > 0,
+		}
+		if r.IsRemoved() {
+			deletedFiles = append(deletedFiles, r.Pathname)
+		} else if r.ContentChanged() {
+			changedFiles = append(changedFiles, r.Pathname)
+		}
+	}
 	return entries, changedFiles, deletedFiles, nil
 }
 

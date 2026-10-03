@@ -185,7 +185,8 @@ func (c *Checkout) baselineHash(mergeRid int64) (string, error) {
 // with chnged=0 and the scan promotes to 1. Otherwise differs reports whether
 // the content differs from the artifact mrid names: unchanged (0) and the
 // clean merge outcomes (2, 4) become edited (1), an edited file whose content
-// is back at its baseline returns to 0, and every other merge state is kept.
+// is back at its baseline returns to 0, and every other state is kept: the
+// remaining merge outcomes (3, 5) and the mode changes (6 through 9).
 func nextChangedState(chnged int64, hasBaseline, differs bool) int64 {
 	if chnged < 0 {
 		panic("checkout.nextChangedState: negative chnged")

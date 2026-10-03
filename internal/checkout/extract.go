@@ -13,6 +13,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // extractSingleFile expands a blob and writes it to the checkout directory.
@@ -289,20 +290,20 @@ func (c *Checkout) firstChangeAtRisk(
 	).Scan(&merging); err != nil {
 		return "", fmt.Errorf("query vmerge: %w", err)
 	}
-	rows, err := c.loadVFileRows(vid)
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return "", err
 	}
 	for _, r := range rows {
-		change := classifyChange(r, false)
+		change := vfile.Classify(r, false)
 		if change == ChangeNone {
 			continue
 		}
 		// Only a plain edit (no merge pending, not a merge state) of a file
 		// target also writes can be safe; its content decides.
-		if !merging && change == ChangeModified && r.chnged == 1 {
-			if uuid, ok := targetHash[r.pathname]; ok {
-				clobber, err := c.wouldClobber(r.pathname, uuid)
+		if !merging && change == ChangeModified && !r.PendingMerge() && !r.ModeChanged() {
+			if uuid, ok := targetHash[r.Pathname]; ok {
+				clobber, err := c.wouldClobber(r.Pathname, uuid)
 				if err != nil {
 					return "", err
 				}
@@ -311,7 +312,7 @@ func (c *Checkout) firstChangeAtRisk(
 				}
 			}
 		}
-		return r.pathname, nil
+		return r.Pathname, nil
 	}
 	return "", nil
 }

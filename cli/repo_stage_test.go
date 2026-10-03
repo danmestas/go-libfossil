@@ -277,3 +277,55 @@ func TestRepoRevertDropsPendingMerge(t *testing.T) {
 		t.Fatalf("fossil changes = %q after revert, want none (merge dropped)", got)
 	}
 }
+
+// A file a merge added is not in the checked-out version: reverting the merge
+// removes it, as fossil does (DELETE), instead of keeping it tracked so the
+// next commit would include it.
+func TestRepoRevertRemovesFileAddedByMerge(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	runFossil(t, bin, ckDir, "branch", "new", "feat", "trunk")
+	runFossil(t, bin, ckDir, "update", "feat")
+	writeCkFile(t, ckDir, "new.txt", "from feat\n")
+	runFossil(t, bin, ckDir, "add", "new.txt")
+	runFossil(t, bin, ckDir, "commit", "-m", "add new.txt")
+	runFossil(t, bin, ckDir, "update", "trunk")
+	runFossil(t, bin, ckDir, "merge", "feat")
+
+	cmd := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ckDir, "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("new.txt still on disk after reverting the merge that added it (stat err %v)", err)
+	}
+	if got := fossilChanges(t, bin, ckDir); got != "" {
+		t.Fatalf("fossil changes = %q after revert, want none", got)
+	}
+	if got := runFossil(t, bin, ckDir, "ls"); strings.Contains(got, "new.txt") {
+		t.Fatalf("new.txt still tracked after revert:\n%s", got)
+	}
+}
+
+// A renamed and edited file is not in the checked-out version under its new
+// name, but it is a committed file: revert must never delete it. (Moving it
+// back to its old name is #242.)
+func TestRepoRevertKeepsRenamedEditedFile(t *testing.T) {
+	bin, repoPath, ckDir := fossilCheckout(t)
+	runFossil(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+	writeCkFile(t, ckDir, "z.txt", "edited\n")
+
+	cmd := &cli.RepoRevertCmd{Dir: ckDir}
+	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	kept := false
+	for _, name := range []string{"a.txt", "z.txt"} {
+		data, err := os.ReadFile(filepath.Join(ckDir, name))
+		if err == nil && string(data) == "one\n" {
+			kept = true
+		}
+	}
+	if !kept {
+		t.Fatal("revert deleted a renamed committed file instead of restoring it")
+	}
+}

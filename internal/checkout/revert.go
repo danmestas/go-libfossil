@@ -1,13 +1,14 @@
 package checkout
 
 import (
-	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
@@ -66,6 +67,10 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 	if err != nil {
 		return err
 	}
+	inVersion, err := c.versionPaths(vid)
+	if err != nil {
+		return err
+	}
 	for _, r := range rows {
 		missing, err := c.isMissing(r)
 		if err != nil {
@@ -74,7 +79,7 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 		if !needsRevert(r, missing) {
 			continue
 		}
-		if err := c.revertFile(r.ID, r.Pathname, r.RID, callback); err != nil {
+		if err := c.revertFile(r, inVersion, callback); err != nil {
 			return err
 		}
 	}
@@ -106,58 +111,97 @@ func (c *Checkout) revertSinglePath(
 	vid libfossil.FslID, pathname string,
 	callback func(string, RevertChange) error,
 ) error {
-	var id, rid int64
-	err := c.db.QueryRow(
-		"SELECT id, rid FROM vfile WHERE vid = ? AND pathname = ?", int64(vid), pathname,
-	).Scan(&id, &rid)
-	if err == sql.ErrNoRows {
-		return nil
-	}
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
-		return fmt.Errorf("checkout.Revert: query vfile for %s: %w", pathname, err)
-	}
-	return c.revertFile(id, pathname, rid, callback)
-}
-
-// revertFile handles the revert logic for a single file.
-func (c *Checkout) revertFile(
-	id int64, pathname string, rid int64,
-	callback func(string, RevertChange) error,
-) error {
-	fullPath, err := c.safePath(pathname)
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: path traversal in %s: %w", pathname, err)
-	}
-
-	if rid == 0 {
-		// Newly added file (never committed): un-manage it and leave it on
-		// disk, as fossil's revert does. It has no committed copy to restore.
-		_, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", id)
-		if err != nil {
-			return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", pathname, err)
-		}
-
-		// Notify callback
-		if callback != nil {
-			if err := callback(pathname, RevertUnmanage); err != nil {
-				return fmt.Errorf("checkout.Revert: callback for %s: %w", pathname, err)
-			}
-		}
-
-		return nil
-	}
-
-	if err := c.restoreCommitted(id, pathname, fullPath, rid); err != nil {
 		return err
 	}
-
-	// Notify callback
-	if callback != nil {
-		if err := callback(pathname, RevertContents); err != nil {
-			return fmt.Errorf("checkout.Revert: callback for %s: %w", pathname, err)
+	for _, r := range rows {
+		if r.Pathname != pathname {
+			continue
 		}
+		inVersion, err := c.versionPaths(vid)
+		if err != nil {
+			return err
+		}
+		return c.revertFile(r, inVersion, callback)
+	}
+	return nil
+}
+
+// versionPaths returns the set of pathnames in checked-out version vid's
+// manifest; empty when nothing is checked out yet.
+func (c *Checkout) versionPaths(vid libfossil.FslID) (map[string]bool, error) {
+	paths := make(map[string]bool)
+	if vid <= 0 {
+		return paths, nil
+	}
+	files, err := manifest.ListFiles(c.repo, vid)
+	if err != nil {
+		return nil, fmt.Errorf("list version files: %w", err)
+	}
+	for _, f := range files {
+		paths[f.Name] = true
+	}
+	return paths, nil
+}
+
+// revertFile reverts one row the way fossil's revert does, by whether the
+// checked-out version has the file (under its name, or its name before a
+// pending rename):
+//   - a pending add (rid=0) is un-managed and left on disk: there is no
+//     committed copy, so deleting it would destroy the only one;
+//   - a file the version lacks but the checkout tracks (one a merge added)
+//     is deleted with its row: its content lives on in the merged-in version;
+//   - anything else gets its committed content back.
+func (c *Checkout) revertFile(
+	r vfile.Row, inVersion map[string]bool,
+	callback func(string, RevertChange) error,
+) error {
+	if inVersion == nil {
+		panic("checkout.revertFile: nil inVersion")
+	}
+	fullPath, err := c.safePath(r.Pathname)
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: path traversal in %s: %w", r.Pathname, err)
 	}
 
+	change := RevertContents
+	switch {
+	case r.IsAdded():
+		change = RevertUnmanage
+		if _, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", r.ID); err != nil {
+			return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", r.Pathname, err)
+		}
+	case !inVersion[r.Pathname] && !inVersion[r.RenamedFrom()]:
+		change = RevertRemove
+		if err := c.removeMergeAdded(r, fullPath); err != nil {
+			return err
+		}
+	default:
+		if err := c.restoreCommitted(r.ID, r.Pathname, fullPath, r.RID); err != nil {
+			return err
+		}
+	}
+	if callback != nil {
+		if err := callback(r.Pathname, change); err != nil {
+			return fmt.Errorf("checkout.Revert: callback for %s: %w", r.Pathname, err)
+		}
+	}
+	return nil
+}
+
+// removeMergeAdded deletes a file the checked-out version does not have,
+// from disk and from vfile.
+func (c *Checkout) removeMergeAdded(r vfile.Row, fullPath string) error {
+	if r.RID <= 0 {
+		panic("checkout.removeMergeAdded: pending add has no merged-in content")
+	}
+	if err := c.env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
+	}
+	if _, err := c.db.Exec("DELETE FROM vfile WHERE id = ?", r.ID); err != nil {
+		return fmt.Errorf("checkout.Revert: delete vfile for %s: %w", r.Pathname, err)
+	}
 	return nil
 }
 

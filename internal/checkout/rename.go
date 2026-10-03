@@ -222,7 +222,7 @@ func (c *Checkout) checkRenameTargetFree(to string) error {
 	_, err = c.env.Storage.Stat(newPath)
 	if err == nil {
 		return fmt.Errorf(
-			"checkout.Rename: cannot move onto %s: another file already exists there", to)
+			"checkout.Rename: cannot move onto %s: something already exists there", to)
 	}
 	if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("checkout.Rename: stat %s: %w", newPath, err)

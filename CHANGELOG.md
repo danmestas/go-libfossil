@@ -25,9 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A dry-run `Extract` or `Update` no longer changes the checkout (#236). Both
   used to replace the checkout's file list and move its version to the
   target, losing pending adds, renames and merge state, even though no file
-  was written. A real `Extract` now also ends any pending merge, as fossil's
-  `checkout` does, so a forced switch can't leave a merge record behind to
-  give the next commit a bogus merge parent.
+  was written. Switching versions with `Extract` now also ends any pending
+  merge, as fossil's `checkout` does, so a forced switch can't leave a merge
+  record behind to give the next commit a bogus merge parent; re-extracting
+  the current version without `Force` keeps it. A forced `Extract` starts the
+  checkout's file list fresh, as `fossil checkout --force` does, so a pending
+  rename or removal no longer survives it.
 
 - The CLI's `add`, `rm`, `rename` and `revert` commands call the library
   instead of writing the checkout database with raw SQL (#234). `rename` now

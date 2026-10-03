@@ -100,9 +100,14 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		extractErr = err
 		return extractErr
 	}
+	prior, _, err := c.Version()
+	if err != nil {
+		extractErr = fmt.Errorf("checkout.Extract: %w", err)
+		return extractErr
+	}
 	if !opts.DryRun {
-		if err := c.LoadVFile(rid, true); err != nil {
-			extractErr = fmt.Errorf("checkout.Extract: %w", err)
+		if err := c.replaceFileList(rid, opts.Force); err != nil {
+			extractErr = err
 			return extractErr
 		}
 	}
@@ -123,13 +128,16 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	if opts.DryRun {
 		return nil
 	}
-	extractErr = c.finalizeExtract(rid)
+	extractErr = c.finalizeExtract(rid, opts.Force || prior != rid)
 	return extractErr
 }
 
 // finalizeExtract looks up the blob UUID for rid and updates the vvar
 // checkout/checkout-hash entries.
-func (c *Checkout) finalizeExtract(rid libfossil.FslID) error {
+// endMerge ends a pending merge: true for a switch to another version or a
+// forced extract, false for a plain re-extract of the version already
+// checked out, which fossil's checkout does not treat as a switch.
+func (c *Checkout) finalizeExtract(rid libfossil.FslID, endMerge bool) error {
 	var uuid string
 	err := c.repo.DB().QueryRow("SELECT uuid FROM blob WHERE rid = ?", int64(rid)).Scan(&uuid)
 	if err != nil {
@@ -142,10 +150,32 @@ func (c *Checkout) finalizeExtract(rid libfossil.FslID) error {
 	if err := setVVar(c.db, "checkout-hash", uuid); err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
-	// The switch ends any pending merge, as fossil's checkout does; a stale
+	if !endMerge {
+		return nil
+	}
+	// A switch ends any pending merge, as fossil's checkout does; a stale
 	// vmerge row would give the next commit a bogus merge parent.
 	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
 		return fmt.Errorf("checkout.Extract: clear vmerge: %w", err)
+	}
+	return nil
+}
+
+// replaceFileList loads version rid into vfile. A forced extract first drops
+// every row, the current version's included, as fossil's checkout --force
+// does, so no pending add, rename or removal survives it; otherwise rows the
+// version already has are kept (LoadVFile).
+func (c *Checkout) replaceFileList(rid libfossil.FslID, force bool) error {
+	if rid <= 0 {
+		panic("checkout.replaceFileList: rid must be positive")
+	}
+	if force {
+		if _, err := c.db.Exec("DELETE FROM vfile"); err != nil {
+			return fmt.Errorf("checkout.Extract: clear vfile: %w", err)
+		}
+	}
+	if err := c.LoadVFile(rid, true); err != nil {
+		return fmt.Errorf("checkout.Extract: %w", err)
 	}
 	return nil
 }

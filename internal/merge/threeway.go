@@ -155,18 +155,27 @@ func handleOverlappingHunks(base []string, lh, rh *hunk, bi int) (lines []string
 	}
 	c.EndLine = bi + max(lh.baseEnd, rh.baseEnd) - bi
 
-	result := []string{"<<<<<<< LOCAL\n"}
-	result = append(result, lh.lines...)
-	if len(lh.lines) > 0 && !strings.HasSuffix(lh.lines[len(lh.lines)-1], "\n") {
-		result = append(result, "\n")
-	}
-	result = append(result, "=======\n")
-	result = append(result, rh.lines...)
-	if len(rh.lines) > 0 && !strings.HasSuffix(rh.lines[len(rh.lines)-1], "\n") {
-		result = append(result, "\n")
-	}
-	result = append(result, ">>>>>>> REMOTE\n")
+	// Fossil's layout: local copy, common ancestor, merged-in content.
+	var result []string
+	result = appendConflictSection(result, markerBegin, lh.lines)
+	result = appendConflictSection(result, markerAncestor, base[start:end])
+	result = appendConflictSection(result, markerMergedIn, rh.lines)
+	result = append(result, markerEnd+"\n")
 	return result, &c
+}
+
+// appendConflictSection appends a marker line and the section's lines, ending
+// the last line with a newline so the next marker starts a line.
+func appendConflictSection(result []string, marker string, lines []string) []string {
+	if marker == "" {
+		panic("merge.appendConflictSection: empty marker")
+	}
+	result = append(result, marker+"\n")
+	result = append(result, lines...)
+	if len(lines) > 0 && !strings.HasSuffix(lines[len(lines)-1], "\n") {
+		result = append(result, "\n")
+	}
+	return result
 }
 
 // merge3 combines two sets of hunks against a common base.

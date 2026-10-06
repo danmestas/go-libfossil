@@ -69,7 +69,7 @@ func TestWouldFork_TrunkNoSymTag(t *testing.T) {
 		t.Fatalf("Extract: %v", err)
 	}
 	co.env.Storage.WriteFile(co.dir+"/fork.txt", []byte("fork"), 0644)
-	_, _, err = co.Commit(CommitOpts{Message: "second commit", User: "test"})
+	_, _, err = co.Commit(CommitOpts{Message: "second commit", User: "test", AllowEmpty: true})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
@@ -107,9 +107,10 @@ func TestWouldFork_DifferentBranch(t *testing.T) {
 	co.env.Storage.WriteFile(co.dir+"/b.txt", []byte("branch"), 0644)
 
 	_, _, err = co.Commit(CommitOpts{
-		Message: "branch commit",
-		User:    "test",
-		Branch:  "feature-x",
+		Message:    "branch commit",
+		User:       "test",
+		Branch:     "feature-x",
+		AllowEmpty: true,
 	})
 	if err != nil {
 		t.Fatalf("Commit: %v", err)

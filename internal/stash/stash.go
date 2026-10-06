@@ -156,6 +156,16 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stash.Save: checkout version %q: %w", vidText, err)
 	}
+	// A merge leaves a vmerge record even for files whose rows look like
+	// plain edits (a clean three-way merge); stashing them would leave the
+	// record naming a merge whose content is no longer in the checkout.
+	var merging bool
+	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM vmerge)").Scan(&merging); err != nil {
+		return nil, fmt.Errorf("stash.Save: query vmerge: %w", err)
+	}
+	if merging {
+		return nil, fmt.Errorf("stash.Save: a merge is pending; commit or revert it first")
+	}
 	rows, err := vfile.Load(tx, vid)
 	if err != nil {
 		return nil, fmt.Errorf("stash.Save: %w", err)

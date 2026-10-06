@@ -339,6 +339,25 @@ func TestSaveRefusesPendingMerge(t *testing.T) {
 	}
 }
 
+// A clean three-way merge leaves a plain edit (chnged=1, mrid=rid) and a
+// vmerge record. Stashing the edit would leave the record naming a merge
+// whose content is gone, and the next commit would claim the merge (#244).
+func TestSaveRefusesCleanThreeWayMerge(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if _, err := ckout.Exec("INSERT INTO vmerge(id, merge, mhash) VALUES(0, 99, 'h')"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Save(ckout, repoDB, dir, "merged")
+	if err == nil || !strings.Contains(err.Error(), "merge") {
+		t.Fatalf("Save during a merge = %v, want a pending-merge refusal", err)
+	}
+	if got := readFile(t, filepath.Join(dir, "a.txt")); got != "hello world" {
+		t.Fatalf("a.txt = %q after refusal, want the merged content kept", got)
+	}
+}
+
 // Save cannot yet stash a rename: it records and restores files by their
 // current name only. It must refuse rather than stash the rename as a plain
 // edit and lose it (#233).

@@ -2,51 +2,57 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
+	"slices"
 )
 
 // RepoMergeResolveCmd marks a file conflict as resolved.
+//
+// A merge conflict needs no marking: as in fossil, a file is in conflict
+// while it holds conflict markers, and editing them out resolves it. So this
+// command refuses a file that still holds markers, and resolves the
+// conflict-fork entries the conflict-fork strategy records.
 type RepoMergeResolveCmd struct {
 	File string `arg:"" help:"File to mark as resolved"`
 	Dir  string `short:"d" help:"Checkout directory" default:"."`
 }
 
-func (c *RepoMergeResolveCmd) Run(g *Globals) error {
-	resolved := false
-
-	// Try standard conflict: reset vfile.chnged from 5 to 1.
-	ckout, err := openCheckout(c.Dir)
-	if err == nil {
-		defer ckout.Close()
-		vid, _ := checkoutVid(ckout)
-		result, err := ckout.Exec("UPDATE vfile SET chnged=1 WHERE pathname=? AND vid=? AND chnged=5", c.File, vid)
-		if err == nil {
-			affected, _ := result.RowsAffected()
-			if affected > 0 {
-				base := filepath.Join(c.Dir, c.File)
-				os.Remove(base + ".LOCAL")
-				os.Remove(base + ".BASELINE")
-				os.Remove(base + ".MERGE")
-				fmt.Printf("resolved: %s (conflict markers)\n", c.File)
-				resolved = true
-			}
+func (c *RepoMergeResolveCmd) Run(g *Globals) (err error) {
+	if _, err := checkoutDBPath(c.Dir); err == nil {
+		conflicted, err := checkoutConflicts(g, c.Dir)
+		if err != nil {
+			return err
+		}
+		if slices.Contains(conflicted, c.File) {
+			return fmt.Errorf("%s still has conflict markers; edit them out to resolve it", c.File)
 		}
 	}
 
-	// Try conflict-fork: delete from conflict table.
 	r, err := g.OpenRepo()
-	if err == nil {
-		defer r.Close()
-		err := r.ResolveConflictFork(c.File)
-		if err == nil {
-			fmt.Printf("resolved: %s (conflict-fork)\n", c.File)
-			resolved = true
-		}
+	if err != nil {
+		return err
 	}
-
-	if !resolved {
+	defer closeWith(r.Close, &err)
+	forks, err := r.ListConflictForks()
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(forks, c.File) {
 		return fmt.Errorf("%s: no conflict found", c.File)
 	}
+	if err := r.ResolveConflictFork(c.File); err != nil {
+		return err
+	}
+	fmt.Printf("resolved: %s (conflict-fork)\n", c.File)
 	return nil
+}
+
+// checkoutConflicts lists the files in the checkout in dir that hold
+// conflict markers.
+func checkoutConflicts(g *Globals, dir string) (conflicted []string, err error) {
+	_, co, done, err := openWorkingCheckout(g, dir)
+	if err != nil {
+		return nil, err
+	}
+	defer closeWith(done, &err)
+	return co.Conflicts()
 }

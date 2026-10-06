@@ -108,7 +108,7 @@ func repoFromCheckout(ckoutPath string) (path string, err error) {
 // checkout records. done closes both and reports the first error.
 func openWorkingCheckout(
 	g *Globals, dir string,
-) (co *libfossil.Checkout, done func() error, err error) {
+) (r *libfossil.Repo, co *libfossil.Checkout, done func() error, err error) {
 	if g == nil {
 		panic("cli.openWorkingCheckout: nil globals")
 	}
@@ -119,22 +119,22 @@ func openWorkingCheckout(
 	if g.Repo == "" {
 		ckoutPath, err := checkoutDBPath(dir)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if g.Repo, err = repoFromCheckout(ckoutPath); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	r, err := g.OpenRepo()
+	r, err = g.OpenRepo()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	co, err = r.OpenCheckout(dir, libfossil.CheckoutOpenOpts{})
 	if err != nil {
 		if cerr := r.Close(); cerr != nil {
-			return nil, nil, fmt.Errorf("%w (closing repository: %v)", err, cerr)
+			return nil, nil, nil, fmt.Errorf("%w (closing repository: %v)", err, cerr)
 		}
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	done = func() error {
 		coErr := co.Close()
@@ -144,7 +144,7 @@ func openWorkingCheckout(
 		}
 		return repoErr
 	}
-	return co, done, nil
+	return r, co, done, nil
 }
 
 // closeWith runs done and keeps its error when the command had none, so a

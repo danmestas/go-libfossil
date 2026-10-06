@@ -175,6 +175,8 @@ type CommitOpts struct {
 	Delta          bool
 	Time           time.Time    // zero → env.Clock.Now()
 	PreCommitCheck func() error // nil = no check; non-nil error aborts commit
+	AllowConflict  bool         // commit files that hold merge conflict markers
+	AllowEmpty     bool         // commit even when nothing changed
 }
 
 // RevertOpts configures reverting file changes.

@@ -5,12 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/merge"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
@@ -430,86 +435,22 @@ func (c *Checkout) restatCommitPerms(
 	return nil
 }
 
-// finalizeCommit updates vvar, reloads vfile, and clears the checkin queue
-// after a successful manifest.Checkin.
-func (c *Checkout) finalizeCommit(newRID libfossil.FslID, newUUID string) error {
-	if err := setVVar(c.db, "checkout", strconv.FormatInt(int64(newRID), 10)); err != nil {
-		return fmt.Errorf("checkout.Commit: set checkout vvar: %w", err)
-	}
-	if err := setVVar(c.db, "checkout-hash", newUUID); err != nil {
-		return fmt.Errorf("checkout.Commit: set checkout-hash vvar: %w", err)
-	}
-	if err := c.LoadVFile(newRID, true); err != nil {
-		return fmt.Errorf("checkout.Commit: reload vfile: %w", err)
-	}
-	c.checkinQueue = nil
-	return nil
-}
+// ErrNothingToCommit refuses a commit that would record nothing: no file
+// changed and no merge pending, or no file at all. CommitOpts.AllowEmpty
+// commits an unchanged checkout anyway.
+var ErrNothingToCommit = errors.New("checkout.Commit: nothing to commit")
 
-// Commit creates a new checkin from staged files in the checkout.
-// Returns the new manifest RID and UUID.
-func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
-	if c == nil {
-		panic("checkout.Commit: nil *Checkout")
-	}
+// ErrUnresolvedConflicts refuses a commit of files that still hold merge
+// conflict markers. CommitOpts.AllowConflict commits them anyway.
+var ErrUnresolvedConflicts = errors.New("checkout.Commit: unresolved merge conflicts")
 
-	parentRID, _, err := c.Version()
-	if err != nil {
-		return 0, "", fmt.Errorf("checkout.Commit: %w", err)
-	}
+// errPartialMergeCommit refuses committing only some files while a merge is
+// pending: the merge parent would be recorded over a half-merged tree, which
+// fossil's commit refuses too.
+var errPartialMergeCommit = errors.New("checkout.Commit: cannot commit some files of a merge")
 
-	if err := c.ScanChanges(ScanHash); err != nil {
-		return 0, "", fmt.Errorf("checkout.Commit: scan: %w", err)
-	}
-
-	if opts.PreCommitCheck != nil {
-		if err := opts.PreCommitCheck(); err != nil {
-			return 0, "", fmt.Errorf("checkout.Commit: pre-commit check: %w", err)
-		}
-	}
-
-	vfEntries, changedFiles, deletedFiles, err := c.collectVFileEntries(parentRID)
-	if err != nil {
-		return 0, "", err
-	}
-
-	queueActive := c.checkinQueue != nil && len(c.checkinQueue) > 0
-	shouldInclude := func(name string) bool {
-		if !queueActive {
-			return true
-		}
-		return c.checkinQueue[name]
-	}
-
-	enqueuedCount := len(changedFiles)
-	if queueActive {
-		enqueuedCount = len(c.checkinQueue)
-	}
-
-	ctx := c.obs.CommitStarted(context.Background(), CommitStart{
-		FilesEnqueued: enqueuedCount,
-		Branch:        opts.Branch,
-		User:          opts.User,
-	})
-
-	var result CommitEnd
-	defer func() { c.obs.CommitCompleted(ctx, result) }()
-
-	commitFiles, err := c.buildCommitFiles(
-		parentRID, vfEntries, changedFiles,
-		deletedFiles, shouldInclude,
-	)
-	if err != nil {
-		result.Err = err
-		return 0, "", err
-	}
-
-	commitTime := opts.Time
-	if commitTime.IsZero() {
-		commitTime = c.env.Clock.Now()
-	}
-
-	// Build T-cards from CommitOpts.Branch and Tags.
+// commitTagCards builds the T-cards for opts.Branch and opts.Tags.
+func commitTagCards(opts CommitOpts) []deck.TagCard {
 	var tagCards []deck.TagCard
 	if opts.Branch != "" {
 		tagCards = append(tagCards, deck.TagCard{
@@ -527,20 +468,98 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 			Type: deck.TagSingleton, Name: t, UUID: "*",
 		})
 	}
+	return tagCards
+}
 
-	checkinOpts := manifest.CheckinOpts{
-		Files:   commitFiles,
-		Comment: opts.Message,
-		User:    opts.User,
-		Parent:  parentRID,
-		Time:    commitTime,
-		Delta:   opts.Delta,
+// mergeParents lists the checkins pending merges bring in, which the next
+// commit records as merge parents: whole-checkout merges (vmerge id 0) and
+// integrates (id -4), as fossil's commit reads them. Per-file rows (id > 0)
+// and cherrypicks or backouts (-1, -2) are not parents.
+func (c *Checkout) mergeParents(parent libfossil.FslID) (parents []libfossil.FslID, err error) {
+	rows, err := c.db.Query(
+		"SELECT DISTINCT merge FROM vmerge WHERE (id=0 OR id<-2) AND merge<>? ORDER BY merge",
+		int64(parent),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: query vmerge: %w", err)
 	}
-	if len(tagCards) > 0 {
-		checkinOpts.Tags = tagCards
+	defer func() {
+		if cerr := rows.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("checkout.Commit: close vmerge query: %w", cerr)
+		}
+	}()
+
+	for rows.Next() {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			return nil, fmt.Errorf("checkout.Commit: scan vmerge: %w", err)
+		}
+		if rid <= 0 {
+			return nil, fmt.Errorf("checkout.Commit: vmerge names invalid rid %d", rid)
+		}
+		parents = append(parents, libfossil.FslID(rid))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("checkout.Commit: read vmerge: %w", err)
+	}
+	return parents, nil
+}
+
+// finalizeCommit updates vvar, reloads vfile, and clears the checkin queue
+// after a successful manifest.Checkin.
+func (c *Checkout) finalizeCommit(newRID libfossil.FslID, newUUID string) error {
+	if err := setVVar(c.db, "checkout", strconv.FormatInt(int64(newRID), 10)); err != nil {
+		return fmt.Errorf("checkout.Commit: set checkout vvar: %w", err)
+	}
+	if err := setVVar(c.db, "checkout-hash", newUUID); err != nil {
+		return fmt.Errorf("checkout.Commit: set checkout-hash vvar: %w", err)
+	}
+	if err := c.LoadVFile(newRID, true); err != nil {
+		return fmt.Errorf("checkout.Commit: reload vfile: %w", err)
+	}
+	// The merges are part of the new checkin now.
+	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
+		return fmt.Errorf("checkout.Commit: clear vmerge: %w", err)
+	}
+	c.checkinQueue = nil
+	return nil
+}
+
+// Commit creates a new checkin from staged files in the checkout.
+// Returns the new manifest RID and UUID.
+func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
+	if c == nil {
+		panic("checkout.Commit: nil *Checkout")
 	}
 
-	newRID, newUUID, err := manifest.Checkin(c.repo, checkinOpts)
+	in, err := c.gatherCommit(opts)
+	if err != nil {
+		return 0, "", err
+	}
+
+	ctx := c.obs.CommitStarted(context.Background(), CommitStart{
+		FilesEnqueued: in.enqueued,
+		Branch:        opts.Branch,
+		User:          opts.User,
+	})
+
+	var result CommitEnd
+	defer func() { c.obs.CommitCompleted(ctx, result) }()
+
+	commitFiles, err := c.buildCommitFiles(
+		in.parent, in.entries, in.changed,
+		in.deleted, in.include,
+	)
+	if err != nil {
+		result.Err = err
+		return 0, "", err
+	}
+	if len(commitFiles) == 0 {
+		result.Err = ErrNothingToCommit
+		return 0, "", result.Err
+	}
+
+	newRID, newUUID, err := manifest.Checkin(c.repo, c.checkinOptions(opts, in, commitFiles))
 	if err != nil {
 		result.Err = fmt.Errorf("checkout.Commit: checkin: %w", err)
 		return 0, "", result.Err
@@ -555,4 +574,221 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 	result.UUID = newUUID
 	result.FilesCommit = len(commitFiles)
 	return newRID, newUUID, nil
+}
+
+// commitInputs is what Commit learns from the checkout before it builds the
+// checkin.
+type commitInputs struct {
+	parent       libfossil.FslID
+	entries      map[string]vfileCommitEntry
+	changed      []string
+	deleted      []string
+	mergeParents []libfossil.FslID
+	include      func(name string) bool // the checkin queue's filter
+	enqueued     int
+}
+
+// gatherCommit scans the checkout, runs the pre-commit check and collects
+// the files, merge parents and queue filter the commit works from.
+func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
+	var in commitInputs
+	var err error
+	if in.parent, _, err = c.Version(); err != nil {
+		return in, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	if err := c.ScanChanges(ScanHash); err != nil {
+		return in, fmt.Errorf("checkout.Commit: scan: %w", err)
+	}
+	if opts.PreCommitCheck != nil {
+		if err := opts.PreCommitCheck(); err != nil {
+			return in, fmt.Errorf("checkout.Commit: pre-commit check: %w", err)
+		}
+	}
+
+	in.entries, in.changed, in.deleted, err = c.collectVFileEntries(in.parent)
+	if err != nil {
+		return in, err
+	}
+	if in.mergeParents, err = c.mergeParents(in.parent); err != nil {
+		return in, err
+	}
+
+	selected, err := c.selectedFiles(in.entries)
+	if err != nil {
+		return in, err
+	}
+	queueActive := selected != nil
+	if queueActive && len(in.mergeParents) > 0 {
+		return in, errPartialMergeCommit
+	}
+	in.include = func(name string) bool {
+		if !queueActive {
+			return true
+		}
+		return selected[name]
+	}
+	in.enqueued = len(in.changed)
+	if queueActive {
+		in.enqueued = len(selected)
+	}
+	return in, c.checkCommittable(opts, in, queueActive)
+}
+
+// selectedFiles resolves the checkin queue the way fossil's commit resolves
+// the files it is given: a name selects the tracked file of that name, or
+// every tracked file under it when it names a directory, and "." selects
+// everything. It returns nil when every file is selected, and refuses a name
+// that selects nothing, as fossil does ("knows nothing about").
+func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[string]bool, error) {
+	if len(c.checkinQueue) == 0 {
+		return nil, nil
+	}
+	selected := make(map[string]bool, len(c.checkinQueue))
+	var unknown []string
+	for queued := range c.checkinQueue {
+		name := path.Clean(filepath.ToSlash(queued))
+		if name == "." {
+			return nil, nil
+		}
+		found := false
+		for tracked := range entries {
+			if tracked == name || strings.HasPrefix(tracked, name+"/") {
+				selected[tracked] = true
+				found = true
+			}
+		}
+		if !found {
+			unknown = append(unknown, queued)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return nil, fmt.Errorf("checkout.Commit: not tracked: %s", strings.Join(unknown, ", "))
+	}
+	if len(selected) == 0 {
+		panic("checkout.selectedFiles: names resolved to no files")
+	}
+	return selected, nil
+}
+
+// checkCommittable refuses, as fossil's commit does, a commit with nothing
+// to record (unless opts.AllowEmpty) and one that includes a file still
+// holding conflict markers (unless opts.AllowConflict). A pending merge is
+// something to record even when no file changed.
+func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActive bool) error {
+	if !opts.AllowEmpty && len(in.mergeParents) == 0 {
+		changed, err := c.hasSelectedChange(in)
+		if err != nil {
+			return err
+		}
+		if !changed && queueActive {
+			return fmt.Errorf("%w: none of the selected files have changed", ErrNothingToCommit)
+		}
+		if !changed {
+			return fmt.Errorf("%w: nothing has changed", ErrNothingToCommit)
+		}
+	}
+	if opts.AllowConflict {
+		return nil
+	}
+	return c.checkNoConflicts(in)
+}
+
+// hasModeDrift reports whether a selected file's executable bit on disk
+// differs from the checkout's record: a chmod the scan does not record,
+// which the commit picks up (see restatCommitPerms).
+func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
+	for name, e := range in.entries {
+		if e.deleted || !in.include(name) {
+			continue
+		}
+		fullPath, err := c.safePath(name)
+		if err != nil {
+			return false, fmt.Errorf("checkout.Commit: %w", err)
+		}
+		info, err := c.env.Storage.Stat(fullPath)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("checkout.Commit: stat %s: %w", fullPath, err)
+		}
+		if info.Mode().IsRegular() && modeIsExecutable(info.Mode()) != e.isexe {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// hasSelectedChange reports whether a selected file is changed, added,
+// removed or renamed, or has had its executable bit changed on disk.
+func (c *Checkout) hasSelectedChange(in commitInputs) (bool, error) {
+	for _, name := range in.changed {
+		if in.include(name) {
+			return true, nil
+		}
+	}
+	for name, e := range in.entries {
+		if !in.include(name) {
+			continue
+		}
+		if e.deleted || e.origname != "" {
+			return true, nil
+		}
+	}
+	return c.hasModeDrift(in)
+}
+
+// checkNoConflicts refuses a commit that includes a file still holding merge
+// conflict markers, as fossil's commit does unless --allow-conflict is given.
+func (c *Checkout) checkNoConflicts(in commitInputs) error {
+	if in.include == nil {
+		panic("checkout.checkNoConflicts: no include filter")
+	}
+	var conflicted []string
+	for _, name := range in.changed {
+		if !in.include(name) {
+			continue
+		}
+		e, ok := in.entries[name]
+		if !ok {
+			panic("checkout.checkNoConflicts: changed file without an entry: " + name)
+		}
+		data, present, err := c.readWorkingFile(vfile.Row{Pathname: e.pathname})
+		if err != nil {
+			return fmt.Errorf("checkout.Commit: %w", err)
+		}
+		if present && merge.HasConflictMarkers(data) {
+			conflicted = append(conflicted, name)
+		}
+	}
+	if len(conflicted) > 0 {
+		return fmt.Errorf("%w: %s", ErrUnresolvedConflicts, strings.Join(conflicted, ", "))
+	}
+	return nil
+}
+
+// checkinOptions assembles the manifest for the commit.
+func (c *Checkout) checkinOptions(
+	opts CommitOpts, in commitInputs, files []manifest.File,
+) manifest.CheckinOpts {
+	commitTime := opts.Time
+	if commitTime.IsZero() {
+		commitTime = c.env.Clock.Now()
+	}
+	checkinOpts := manifest.CheckinOpts{
+		Files:   files,
+		Comment: opts.Message,
+		User:    opts.User,
+		Parent:  in.parent,
+		Time:    commitTime,
+		Delta:   opts.Delta,
+	}
+	if len(in.mergeParents) > 0 {
+		checkinOpts.MergeParents = in.mergeParents
+	}
+	if tagCards := commitTagCards(opts); len(tagCards) > 0 {
+		checkinOpts.Tags = tagCards
+	}
+	return checkinOpts
 }

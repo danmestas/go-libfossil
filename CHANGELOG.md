@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Checkout.Merge` merges another checkin into the checkout, as fossil's
+  `merge` does, and `Checkout.Conflicts` lists the files left in conflict
+  (#244). The merge is recorded the way fossil records one, so fossil reads
+  it and commits it, and the next `Checkin` records the merged-in checkin
+  as a merge parent. A file edited here but deleted in the merged-in
+  version is kept rather than deleted, and a merge that would overwrite an
+  untracked file is refused: go-libfossil has no undo copy to recover them
+  from. A change the merged-in version made to a file's executable bit is
+  taken. Renames are not followed yet.
+- `CheckoutCommitOpts.Files` commits only the named files, and
+  `CheckoutCommitOpts.AllowConflict` commits files that still hold conflict
+  markers (#244).
+
+### Changed
+
+- Merge conflicts use fossil's conflict markers, with the common ancestor
+  shown between the two sides, so fossil sees a conflict go-libfossil wrote,
+  and the other way round (#244). This applies to `Update` as well as
+  `Merge`. A file is in conflict while it holds markers; there is no
+  separate conflict state to clear.
+- The CLI's `merge` command calls `Checkout.Merge` (#244). It merges into
+  the checked-out version; it used to merge against the repository's newest
+  checkin, which made merging a branch that is the newest checkin a no-op.
+  It no longer writes `.LOCAL`, `.BASELINE` and `.MERGE` files beside a
+  conflicted file, since the markers now include the common ancestor.
+  `mark-resolved` refuses a file that still holds markers, and `conflicts`
+  lists the files that hold them.
+- **Breaking (CLI):** `repo ci` commits the checkout, as `fossil commit`
+  does (#244). It used to commit the named files straight to the repository
+  on top of its newest checkin, ignoring the checkout, so it could not
+  record a merge and left the checkout behind. Run it in a checkout (or pass
+  `-d`); with no files named it commits every change. The `--parent` flag
+  is gone, since a checkout always commits onto its own version.
+  `--allow-conflict` commits files that still hold conflict markers, and
+  `--allow-empty` commits when nothing has changed.
+- `Checkout.Checkin` refuses files that still hold merge conflict markers,
+  as fossil's commit does, unless `AllowConflict` is set (#244).
+- **Breaking:** `Checkout.Checkin` refuses a commit with nothing changed and
+  no merge pending ("nothing has changed"), as fossil's commit does, unless
+  `CheckoutCommitOpts.AllowEmpty` is set (#244). It used to record a checkin
+  identical to its parent. A named file the checkout does not track is
+  refused too; a named directory selects the tracked files under it.
+- `stash.Save` refuses while a merge is pending (#244). A cleanly merged
+  file looks like a plain edit; stashing it left the merge record naming
+  content that was no longer in the checkout.
+
+### Fixed
+
+- `Checkout.Checkin` records pending merges as merge parents, including
+  merges made by the fossil binary (#244). It used to drop them, so a
+  merge committed through go-libfossil looked like an ordinary commit.
+  Committing only some files of a merge is refused, as fossil refuses it.
+- `Checkout.Checkin` of a checkout with no version and nothing added
+  returns an error instead of panicking (#244).
+- The CLI's `merge` recorded a conflict as `chnged=5`, which fossil reads as
+  "added by integrate", and recorded no merge parent (#244).
+
 ## [0.10.0] - 2026-10-03
 
 ### Changed

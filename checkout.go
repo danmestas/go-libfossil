@@ -81,6 +81,45 @@ type CheckoutCommitOpts struct {
 	Branch  string   // empty = current branch
 	Tags    []string // additional tag names
 	Delta   bool
+	// Files limits the commit to these checkout-relative paths; empty
+	// commits every change.
+	Files []string
+	// AllowConflict commits files that still hold merge conflict markers,
+	// which Checkin otherwise refuses, as fossil's commit does.
+	AllowConflict bool
+	// AllowEmpty commits even when nothing changed, which Checkin otherwise
+	// refuses, as fossil's commit does.
+	AllowEmpty bool
+}
+
+// CheckoutMergeOpts configures Checkout.Merge.
+type CheckoutMergeOpts struct {
+	Version  int64  // rid of the checkin to merge in; required
+	Strategy string // strategy for every file; "" picks one per file
+	DryRun   bool   // report what the merge would do, changing nothing
+}
+
+// CheckoutMergeResult reports a merge.
+type CheckoutMergeResult struct {
+	Ancestor int64               // the common ancestor the merge diffed against
+	Files    []CheckoutMergeFile // sorted by name; empty when there was nothing to merge
+}
+
+// CheckoutMergeFile reports what a merge did to one file. Action is one of:
+//
+//	"updated"  - only the merged-in version changed it; its content was taken
+//	"merged"   - both sides changed it and the strategy combined them cleanly
+//	"conflict" - merged with conflict markers written into the file
+//	"kept"     - could not be merged; the checkout's copy is unchanged (see Reason)
+//	"forked"   - the conflict-fork strategy recorded every version for later
+//	"added"    - new in the merged-in version
+//	"deleted"  - deleted in the merged-in version, unchanged here
+//	"mode"     - only the merged-in version changed its executable bit; taken
+type CheckoutMergeFile struct {
+	Name     string
+	Action   string
+	Strategy string // the strategy that merged it, when one ran
+	Reason   string // why the file was kept, for "kept"
 }
 
 // CheckoutChange describes a single file change in the checkout.
@@ -254,20 +293,108 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	return nil
 }
 
-// Checkin creates a new checkin from the checkout working directory.
+// Checkin creates a new checkin from the checkout working directory: every
+// change, or only opts.Files (a directory names every tracked file under
+// it). Pending merges become merge parents. Like fossil's commit, it refuses
+// a name it does not track, a commit with nothing changed and no merge
+// pending (unless opts.AllowEmpty), files that still hold merge conflict
+// markers (unless opts.AllowConflict), and committing only some files of a
+// pending merge.
 // Returns the RID and UUID of the new checkin manifest.
-func (c *Checkout) Checkin(opts CheckoutCommitOpts) (int64, string, error) {
-	rid, uuid, err := c.inner.Commit(checkout.CommitOpts{
+func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err error) {
+	if len(opts.Files) > 0 {
+		if err := c.inner.Enqueue(checkout.EnqueueOpts{Paths: opts.Files}); err != nil {
+			return 0, "", fmt.Errorf("libfossil: checkin: %w", err)
+		}
+		// The queue lives only for this call.
+		defer func() {
+			if qerr := c.inner.DiscardQueue(); qerr != nil && err == nil {
+				err = fmt.Errorf("libfossil: checkin: %w", qerr)
+			}
+		}()
+	}
+	innerRID, uuid, err := c.inner.Commit(checkout.CommitOpts{
 		Message: opts.Message,
 		User:    opts.User,
 		Branch:  opts.Branch,
 		Tags:    opts.Tags,
 		Delta:   opts.Delta,
+
+		AllowConflict: opts.AllowConflict,
+		AllowEmpty:    opts.AllowEmpty,
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: checkin: %w", err)
 	}
-	return int64(rid), uuid, nil
+	return int64(innerRID), uuid, nil
+}
+
+// Merge merges another checkin into the checkout, as fossil's merge command
+// does, leaving the result for the next Checkin to commit with the
+// merged-in checkin as a merge parent. A file both sides changed is merged
+// by its strategy; when the strategy cannot reconcile the changes, fossil's
+// conflict markers are written into the file, and the file is in conflict
+// until they are edited out (see Conflicts). A conflicted merge is not an
+// error.
+//
+// Merge refuses, changing nothing, when the repository lacks content it
+// needs or an added file would overwrite an untracked one. A file edited
+// here but deleted in the merged-in version is kept and reported. Renames
+// are not followed. Merging the checkout's own version or one of its
+// ancestors does nothing.
+func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
+	res, err := c.inner.Merge(checkout.MergeOpts{
+		Version:  fsltype.FslID(opts.Version),
+		Strategy: opts.Strategy,
+		DryRun:   opts.DryRun,
+	})
+	if err != nil {
+		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
+	}
+	out := CheckoutMergeResult{Ancestor: int64(res.Ancestor)}
+	for _, f := range res.Files {
+		out.Files = append(out.Files, CheckoutMergeFile{
+			Name:     f.Name,
+			Action:   mergeActionString(f.Action),
+			Strategy: f.Strategy,
+			Reason:   f.Reason,
+		})
+	}
+	return out, nil
+}
+
+// Conflicts lists the files, sorted, that hold merge conflict markers: the
+// files a merge or update left in conflict and nobody has resolved yet.
+func (c *Checkout) Conflicts() ([]string, error) {
+	files, err := c.inner.Conflicts()
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: conflicts: %w", err)
+	}
+	return files, nil
+}
+
+// mergeActionString names a merge action for CheckoutMergeFile.Action.
+func mergeActionString(a checkout.MergeAction) string {
+	switch a {
+	case checkout.MergeUpdated:
+		return "updated"
+	case checkout.MergeMerged:
+		return "merged"
+	case checkout.MergeConflict:
+		return "conflict"
+	case checkout.MergeKept:
+		return "kept"
+	case checkout.MergeForked:
+		return "forked"
+	case checkout.MergeAdded:
+		return "added"
+	case checkout.MergeDeleted:
+		return "deleted"
+	case checkout.MergeMode:
+		return "mode"
+	default:
+		panic(fmt.Sprintf("libfossil: unknown merge action %d", a))
+	}
 }
 
 // WouldFork reports whether committing on the current branch would create

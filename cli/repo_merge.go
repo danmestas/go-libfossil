@@ -2,14 +2,8 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	libfossil "github.com/danmestas/go-libfossil"
-	"github.com/danmestas/go-libfossil/db"
-	"github.com/danmestas/go-libfossil/internal/content"
-	"github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/merge"
 )
 
 // RepoMergeCmd merges a divergent version into the current checkout.
@@ -20,172 +14,71 @@ type RepoMergeCmd struct {
 	Dir      string `short:"d" help:"Checkout directory" default:"."`
 }
 
-func (c *RepoMergeCmd) Run(g *Globals) error {
-	r, err := g.OpenRepo()
+func (c *RepoMergeCmd) Run(g *Globals) (err error) {
+	r, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	defer closeWith(done, &err)
 
-	localRid, err := resolveRID(r, "tip")
+	rid, err := resolveRID(r, c.Version)
 	if err != nil {
-		return fmt.Errorf("resolving local tip: %w", err)
+		return fmt.Errorf("resolving %s: %w", c.Version, err)
 	}
-	remoteRid, err := resolveRID(r, c.Version)
+	res, err := co.Merge(libfossil.CheckoutMergeOpts{
+		Version:  rid,
+		Strategy: c.Strategy,
+		DryRun:   c.DryRun,
+	})
 	if err != nil {
-		return fmt.Errorf("resolving remote version: %w", err)
-	}
-
-	inner := r.Inner()
-	idb := inner.DB()
-
-	ancestorRid, err := r.FindCommonAncestor(localRid, remoteRid)
-	if err != nil {
-		return fmt.Errorf("finding common ancestor: %w", err)
-	}
-
-	var ancestorUUID string
-	idb.QueryRow("SELECT uuid FROM blob WHERE rid=?", ancestorRid).Scan(&ancestorUUID)
-	if len(ancestorUUID) > 10 {
-		ancestorUUID = ancestorUUID[:10]
-	}
-	fmt.Printf("common ancestor: %s (rid=%d)\n", ancestorUUID, ancestorRid)
-
-	baseFiles, err := r.ListFiles(ancestorRid)
-	if err != nil {
-		return fmt.Errorf("listing ancestor files: %w", err)
-	}
-	localFiles, err := r.ListFiles(localRid)
-	if err != nil {
-		return fmt.Errorf("listing local files: %w", err)
-	}
-	remoteFiles, err := r.ListFiles(remoteRid)
-	if err != nil {
-		return fmt.Errorf("listing remote files: %w", err)
-	}
-
-	baseMap := toFileMap(baseFiles)
-	localMap := toFileMap(localFiles)
-	remoteMap := toFileMap(remoteFiles)
-
-	resolver := merge.LoadResolver(inner, fsltype.FslID(localRid))
-
-	ckout, err := openCheckout(c.Dir)
-	if err != nil && !c.DryRun {
 		return err
 	}
-	if ckout != nil {
-		defer ckout.Close()
-	}
-	vid, _ := checkoutVid(ckout)
-
-	merged, conflicts := 0, 0
-
-	allFiles := make(map[string]bool)
-	for name := range localMap {
-		allFiles[name] = true
-	}
-	for name := range remoteMap {
-		allFiles[name] = true
-	}
-
-	for name := range allFiles {
-		localUUID := localMap[name]
-		remoteUUID := remoteMap[name]
-		baseUUID := baseMap[name]
-
-		if localUUID == remoteUUID {
-			continue
-		}
-
-		stratName := c.Strategy
-		if stratName == "" {
-			stratName = resolver.Resolve(name)
-		}
-		strat, ok := merge.StrategyByName(stratName)
-		if !ok {
-			return fmt.Errorf("unknown strategy %q for %s", stratName, name)
-		}
-
-		baseContent := loadBlobByUUID(idb, baseUUID)
-		localContent := loadBlobByUUID(idb, localUUID)
-		remoteContent := loadBlobByUUID(idb, remoteUUID)
-
-		if c.DryRun {
-			fmt.Printf("  [%s] %s\n", stratName, name)
-			continue
-		}
-
-		result, err := strat.Merge(baseContent, localContent, remoteContent)
-		if err != nil {
-			return fmt.Errorf("merging %s: %w", name, err)
-		}
-
-		outPath := filepath.Join(c.Dir, name)
-		os.MkdirAll(filepath.Dir(outPath), 0o755)
-
-		if result.Clean {
-			os.WriteFile(outPath, result.Content, 0o644)
-			if ckout != nil {
-				ckout.Exec("UPDATE vfile SET chnged=1 WHERE pathname=? AND vid=?", name, vid)
-			}
-			fmt.Printf("  [merged]   %s (%s)\n", name, stratName)
-			merged++
-		} else if strat.Name() == "conflict-fork" {
-			baseCheckinRid, localCheckinRid, remoteCheckinRid := int64(0), int64(0), int64(0)
-			if baseUUID != "" {
-				baseCheckinRid = ancestorRid
-			}
-			if localUUID != "" {
-				localCheckinRid = localRid
-			}
-			if remoteUUID != "" {
-				remoteCheckinRid = remoteRid
-			}
-			if err := merge.EnsureConflictTable(inner); err != nil {
-				return fmt.Errorf("ensuring conflict table for %s: %w", name, err)
-			}
-			if err := merge.RecordConflictFork(inner, name, baseCheckinRid, localCheckinRid, remoteCheckinRid); err != nil {
-				return fmt.Errorf("recording conflict fork for %s: %w", name, err)
-			}
-			fmt.Printf("  [fork]     %s (conflict-fork: all versions preserved)\n", name)
-			conflicts++
-		} else {
-			os.WriteFile(outPath, result.Content, 0o644)
-			os.WriteFile(outPath+".LOCAL", localContent, 0o644)
-			os.WriteFile(outPath+".BASELINE", baseContent, 0o644)
-			os.WriteFile(outPath+".MERGE", remoteContent, 0o644)
-			if ckout != nil {
-				ckout.Exec("UPDATE vfile SET chnged=5 WHERE pathname=? AND vid=?", name, vid)
-			}
-			fmt.Printf("  [CONFLICT] %s (%s, %d regions)\n", name, stratName, len(result.Conflicts))
-			conflicts++
-		}
-	}
-
-	fmt.Printf("\n%d files merged, %d conflicts\n", merged, conflicts)
+	printMergeResult(res, c.DryRun)
 	return nil
 }
 
-func toFileMap(files []libfossil.FileEntry) map[string]string {
-	m := make(map[string]string)
-	for _, f := range files {
-		m[f.Name] = f.UUID
-	}
-	return m
+// mergeLabels are the labels fossil's merge prints for each action.
+var mergeLabels = map[string]string{
+	"updated":  "UPDATE",
+	"merged":   "MERGE",
+	"conflict": "MERGE",
+	"kept":     "KEPT",
+	"forked":   "FORK",
+	"added":    "ADDED",
+	"deleted":  "DELETE",
+	"mode":     "MODE",
 }
 
-func loadBlobByUUID(d *db.DB, uuid string) []byte {
-	if uuid == "" {
-		return nil
+// printMergeResult reports a merge the way fossil's merge command does.
+func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
+	if len(res.Files) == 0 {
+		fmt.Println("merge skipped: nothing to merge")
+		return
 	}
-	rid, ok := content.AvailableByUUID(d, uuid)
-	if !ok {
-		return nil
+	conflicts := 0
+	for _, f := range res.Files {
+		label, ok := mergeLabels[f.Action]
+		if !ok {
+			panic("cli.printMergeResult: unknown merge action " + f.Action)
+		}
+		switch f.Action {
+		case "conflict":
+			fmt.Printf("%s %s\n***** merge conflict in %s\n", label, f.Name, f.Name)
+			conflicts++
+		case "kept":
+			fmt.Printf("%s %s (%s)\n", label, f.Name, f.Reason)
+			conflicts++
+		case "forked":
+			fmt.Printf("%s %s (conflict-fork: all versions preserved)\n", label, f.Name)
+			conflicts++
+		default:
+			fmt.Printf("%s %s\n", label, f.Name)
+		}
 	}
-	data, err := content.Expand(d, rid)
-	if err != nil {
-		return nil
+	if conflicts > 0 {
+		fmt.Printf("WARNING: %d merge conflicts\n", conflicts)
 	}
-	return data
+	if dryRun {
+		fmt.Println("REMINDER: this was a dry run - no files were actually changed.")
+	}
 }

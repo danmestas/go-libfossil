@@ -86,18 +86,27 @@ func TestRepoCiPreservesNestedRelativePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	g := &cli.Globals{Repo: repoPath}
+	if err := (&cli.RepoOpenCmd{Dir: work}).Run(g); err != nil {
+		t.Fatalf("RepoOpenCmd.Run: %v", err)
+	}
 	orig, _ := os.Getwd()
 	defer os.Chdir(orig)
 	if err := os.Chdir(work); err != nil {
 		t.Fatal(err)
 	}
 
+	rel := filepath.Join("src", "app.txt")
+	if err := (&cli.RepoAddCmd{Files: []string{rel}, Dir: "."}).Run(g); err != nil {
+		t.Fatalf("RepoAddCmd.Run: %v", err)
+	}
 	cmd := &cli.RepoCiCmd{
 		Message: "initial nested",
-		Files:   []string{filepath.Join("src", "app.txt")},
+		Files:   []string{rel},
 		User:    "test",
+		Dir:     ".",
 	}
-	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err != nil {
+	if err := cmd.Run(g); err != nil {
 		t.Fatalf("RepoCiCmd.Run: %v", err)
 	}
 
@@ -175,6 +184,10 @@ func TestRepoCiRejectsOutsideCurrentDirectory(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("outside\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	g := &cli.Globals{Repo: repoPath}
+	if err := (&cli.RepoOpenCmd{Dir: work}).Run(g); err != nil {
+		t.Fatalf("RepoOpenCmd.Run: %v", err)
+	}
 	orig, _ := os.Getwd()
 	defer os.Chdir(orig)
 	if err := os.Chdir(work); err != nil {
@@ -185,8 +198,9 @@ func TestRepoCiRejectsOutsideCurrentDirectory(t *testing.T) {
 		Message: "outside",
 		Files:   []string{filepath.Join("..", "outside.txt")},
 		User:    "test",
+		Dir:     ".",
 	}
-	if err := cmd.Run(&cli.Globals{Repo: repoPath}); err == nil {
+	if err := cmd.Run(g); err == nil {
 		t.Fatal("RepoCiCmd.Run accepted path outside current directory")
 	}
 }

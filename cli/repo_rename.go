@@ -10,7 +10,7 @@ type RepoRenameCmd struct {
 }
 
 func (c *RepoRenameCmd) Run(g *Globals) (err error) {
-	co, done, err := openWorkingCheckout(g, c.Dir)
+	_, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}

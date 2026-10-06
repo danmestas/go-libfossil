@@ -330,18 +330,18 @@ func TestCommitNoChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Commit with no modifications — manifest.Checkin panics with
-	// empty Files list, so buildCommitFiles returns the full
-	// unchanged set. The commit succeeds but produces an identical
-	// manifest. This documents current behavior.
+	// A commit with nothing changed is refused, as fossil's commit refuses
+	// it ("nothing has changed"), unless AllowEmpty is set.
 	_, _, err = co.Commit(CommitOpts{
 		Message: "empty commit", User: "test",
 	})
-	// The commit should succeed (all files are still present,
-	// just unchanged). If the project later decides to reject
-	// no-change commits, this test should be updated.
-	if err != nil {
-		t.Fatalf("commit with no changes failed: %v", err)
+	if !errors.Is(err, ErrNothingToCommit) {
+		t.Fatalf("commit with no changes: err = %v, want ErrNothingToCommit", err)
+	}
+	if _, _, err := co.Commit(CommitOpts{
+		Message: "empty commit", User: "test", AllowEmpty: true,
+	}); err != nil {
+		t.Fatalf("commit with no changes and AllowEmpty: %v", err)
 	}
 }
 
@@ -562,8 +562,9 @@ func TestPreCommitCheck_Nil(t *testing.T) {
 	co.env.Storage.WriteFile(co.dir+"/ok.txt", []byte("ok"), 0644)
 
 	_, _, err = co.Commit(CommitOpts{
-		Message: "normal commit",
-		User:    "test",
+		Message:    "normal commit",
+		User:       "test",
+		AllowEmpty: true, // ok.txt is untracked: nothing changes
 	})
 	if err != nil {
 		t.Fatalf("Commit with nil PreCommitCheck failed: %v", err)

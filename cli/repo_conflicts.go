@@ -29,39 +29,35 @@ func (c *RepoConflictsLsCmd) Run(g *Globals) error {
 	return (&RepoConflictsCmd{Dir: "."}).list(g)
 }
 
-func (c *RepoConflictsCmd) list(g *Globals) error {
+func (c *RepoConflictsCmd) list(g *Globals) (err error) {
 	found := 0
 
-	// Standard merge conflicts (vfile.chnged=5).
-	ckout, err := openCheckout(c.Dir)
-	if err == nil {
-		defer ckout.Close()
-		vid, _ := checkoutVid(ckout)
-		rows, err := ckout.Query("SELECT pathname FROM vfile WHERE chnged=5 AND vid=?", vid)
-		if err == nil {
-			defer rows.Close()
-			for rows.Next() {
-				var name string
-				rows.Scan(&name)
-				fmt.Printf("CONFLICT  %s\n", name)
-				found++
-			}
+	// Merge conflicts: files in the checkout that hold conflict markers.
+	if _, err := checkoutDBPath(c.Dir); err == nil {
+		conflicted, err := checkoutConflicts(g, c.Dir)
+		if err != nil {
+			return err
+		}
+		for _, name := range conflicted {
+			fmt.Printf("CONFLICT  %s\n", name)
+			found++
 		}
 	}
 
 	// Conflict-fork entries.
 	r, err := g.OpenRepo()
-	if err == nil {
-		defer r.Close()
-		inner := r.Inner()
-		entries, err := listConflictForkDetails(inner)
-		if err == nil {
-			for _, e := range entries {
-				fmt.Printf("FORK      %s  (base=%d local=%d remote=%d)\n",
-					e.filename, e.baseRid, e.localRid, e.remoteRid)
-				found++
-			}
-		}
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+	entries, err := listConflictForkDetails(r.Inner())
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		fmt.Printf("FORK      %s  (base=%d local=%d remote=%d)\n",
+			e.filename, e.baseRid, e.localRid, e.remoteRid)
+		found++
 	}
 
 	if found == 0 {
@@ -80,7 +76,13 @@ type conflictForkEntry struct {
 
 func listConflictForkDetails(r *repo.Repo) ([]conflictForkEntry, error) {
 	var count int
-	if r.DB().QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conflict'").Scan(&count); count == 0 {
+	err := r.DB().QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='conflict'",
+	).Scan(&count)
+	if err != nil {
+		return nil, err
+	}
+	if count == 0 {
 		return nil, nil
 	}
 	rows, err := r.DB().Query("SELECT filename, base_rid, local_rid, remote_rid FROM conflict ORDER BY mtime DESC")
@@ -91,7 +93,9 @@ func listConflictForkDetails(r *repo.Repo) ([]conflictForkEntry, error) {
 	var entries []conflictForkEntry
 	for rows.Next() {
 		var e conflictForkEntry
-		rows.Scan(&e.filename, &e.baseRid, &e.localRid, &e.remoteRid)
+		if err := rows.Scan(&e.filename, &e.baseRid, &e.localRid, &e.remoteRid); err != nil {
+			return nil, err
+		}
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
@@ -325,7 +329,9 @@ func (c *RepoConflictsMergeCmd) Run(g *Globals) error {
 	}
 
 	outPath := filepath.Join(c.Dir, c.File)
-	os.MkdirAll(filepath.Dir(outPath), 0o755)
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return err
+	}
 	if err := os.WriteFile(outPath, result.Content, 0o644); err != nil {
 		return err
 	}
@@ -336,9 +342,6 @@ func (c *RepoConflictsMergeCmd) Run(g *Globals) error {
 		}
 		fmt.Printf("resolved: %s (merged with %s, clean)\n", c.File, c.Strategy)
 	} else {
-		os.WriteFile(outPath+".LOCAL", local, 0o644)
-		os.WriteFile(outPath+".BASELINE", base, 0o644)
-		os.WriteFile(outPath+".MERGE", remote, 0o644)
 		fmt.Printf("merged: %s (%s, %d conflicts remain -- edit and run mark-resolved)\n",
 			c.File, c.Strategy, len(result.Conflicts))
 	}

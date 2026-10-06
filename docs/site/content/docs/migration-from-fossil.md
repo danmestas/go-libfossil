@@ -68,7 +68,8 @@ source tree.
 - `repo rm` — stage files for removal.
 - `repo rename` — rename a tracked file.
 - `repo revert` — undo staging changes.
-- `repo ci` — commit staged changes.
+- `repo ci` — commit the checkout's changes, or only the named files,
+  with any pending merge as a merge parent.
 
 ### History and inspection
 
@@ -87,8 +88,10 @@ source tree.
 - `repo branch` — list/create branches.
 - `repo tag` — tag operations.
 - `repo merge` — merge a divergent version into the current checkout.
-- `repo conflicts` — list unresolved merge conflicts.
-- `repo mark-resolved` — mark a conflict as resolved.
+- `repo conflicts` — list files holding merge conflict markers, and
+  conflict-fork entries.
+- `repo mark-resolved` — resolve a conflict-fork entry. A merge conflict
+  needs no marking: as in fossil, editing the markers out resolves it.
 - `repo bisect` — binary-search commits for bug introductions.
 - `repo undo` / `repo redo` — undo/redo the last operation.
 - `repo stash` — stash working changes.
@@ -127,8 +130,8 @@ not yet exposed by `libfossil`:
   handler exists as `Repo.XferHandler()` for programmatic embedding, but the
   HTML UI, wiki viewer, ticket tracker, and forum are not implemented.
 - **Interactive conflict resolution** — there is no guided merge tool.
-  Conflicts are listed via `repo conflicts` and cleared with
-  `repo mark-resolved`, but resolution itself happens in your editor.
+  Conflicts are listed via `repo conflicts` and resolved in your editor,
+  by editing out fossil's conflict markers.
 - **Full-text search CLI** — `internal/search` contains indexing and query
   primitives, but no CLI command surfaces them. Use the Go API directly.
 - **Ticket and forum subsystems** — not implemented.

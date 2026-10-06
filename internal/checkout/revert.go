@@ -339,13 +339,13 @@ func (c *Checkout) removeRegularFile(fullPath string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("checkout.Revert: stat %s: %w", fullPath, err)
+		return fmt.Errorf("checkout: stat %s: %w", fullPath, err)
 	}
 	if !info.Mode().IsRegular() {
 		return nil
 	}
 	if err := c.env.Storage.Remove(fullPath); err != nil {
-		return fmt.Errorf("checkout.Revert: remove %s: %w", fullPath, err)
+		return fmt.Errorf("checkout: remove %s: %w", fullPath, err)
 	}
 	return nil
 }

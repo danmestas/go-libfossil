@@ -27,3 +27,7 @@ func (OSStorage) ReadFile(path string) ([]byte, error)                         {
 func (OSStorage) WriteFile(path string, data []byte, perm os.FileMode) error  { return os.WriteFile(path, data, perm) }
 func (OSStorage) ReadDir(path string) ([]fs.DirEntry, error)                  { return os.ReadDir(path) }
 func (OSStorage) Chtimes(path string, atime, mtime time.Time) error           { return os.Chtimes(path, atime, mtime) }
+
+// Chmod changes a file's mode. It is not part of Storage, since not every
+// storage has file modes; callers that need it check for it.
+func (OSStorage) Chmod(path string, mode os.FileMode) error { return os.Chmod(path, mode) }

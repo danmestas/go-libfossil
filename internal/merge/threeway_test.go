@@ -94,7 +94,7 @@ func TestThreeWayConflict(t *testing.T) {
 	if len(r.Conflicts) == 0 {
 		t.Fatal("expected at least one conflict")
 	}
-	if !strings.Contains(string(r.Content), "<<<<<<< LOCAL") {
+	if !HasConflictMarkers(r.Content) {
 		t.Fatalf("expected conflict markers, got %q", r.Content)
 	}
 	if !strings.Contains(string(r.Content), "local version") {
@@ -172,5 +172,53 @@ func TestThreeWayBothAddDifferentRegions(t *testing.T) {
 	}
 	if !strings.Contains(string(r.Content), "REMOTE") {
 		t.Fatal("missing remote addition")
+	}
+}
+
+// TestThreeWayConflictUsesFossilMarkers pins the conflict block to fossil's
+// layout: local copy, common ancestor, merged-in content, each introduced by
+// fossil's marker line, so fossil reports the file as a CONFLICT.
+func TestThreeWayConflictUsesFossilMarkers(t *testing.T) {
+	base := []byte("a\nbase\nz\n")
+	local := []byte("a\nlocal\nz\n")
+	remote := []byte("a\nremote\nz\n")
+	r, err := (&ThreeWayText{}).Merge(base, local, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "a\n" +
+		markerBegin + "\n" + "local\n" +
+		markerAncestor + "\n" + "base\n" +
+		markerMergedIn + "\n" + "remote\n" +
+		markerEnd + "\n" + "z\n"
+	if string(r.Content) != want {
+		t.Fatalf("conflict block:\n%s\nwant:\n%s", r.Content, want)
+	}
+}
+
+// TestHasConflictMarkers checks detection the way fossil's
+// contains_merge_marker does it: a marker must start a line, and the closing
+// marker alone does not count.
+func TestHasConflictMarkers(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"empty", "", false},
+		{"plain text", "a\nb\n", false},
+		{"begin at start", markerBegin + "\n", true},
+		{"ancestor mid-file", "x\n" + markerAncestor + "\ny\n", true},
+		{"merged-in without newline", "x\n" + markerMergedIn, true},
+		{"suggested section", markerSuggested + "\n", true},
+		{"end marker alone", markerEnd + "\n", false},
+		{"not at line start", " " + markerBegin + "\n", false},
+		{"git-style marker", "<<<<<<< HEAD\n", false},
+		{"crlf lines", "x\r\n" + markerBegin + "\r\n", true},
+	}
+	for _, tc := range cases {
+		if got := HasConflictMarkers([]byte(tc.data)); got != tc.want {
+			t.Errorf("%s: HasConflictMarkers = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -214,3 +214,70 @@ func TestAnnotateSingleCommit(t *testing.T) {
 		t.Errorf("line 1 text = %q, want %q", lines[1].Text, "line B")
 	}
 }
+
+// checkinChain commits each content in order on one file, each as the child
+// of the previous, and returns the check-in RIDs.
+func checkinChain(t *testing.T, r *repo.Repo, users []string, contents []string) []libfossil.FslID {
+	t.Helper()
+	var rids []libfossil.FslID
+	var parent libfossil.FslID
+	for i, c := range contents {
+		rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+			Files:   []manifest.File{{Name: "file.txt", Content: []byte(c)}},
+			Comment: "commit",
+			User:    users[i],
+			Parent:  parent,
+			Time:    time.Date(2024, 2, 1, 10+i, 0, 0, 0, time.UTC),
+		})
+		if err != nil {
+			t.Fatalf("checkin %d: %v", i+1, err)
+		}
+		rids = append(rids, rid)
+		parent = rid
+	}
+	return rids
+}
+
+// A line is credited to the oldest version in an unbroken chain of versions
+// that contain it, even when edits shift line positions between versions.
+func TestAnnotateShiftedLines(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"alice", "bob", "carol"}, []string{
+		"a\nb\nc\nd\n",
+		"x\nb\nc\nd\n",
+		"b\nc\nd\ny\n",
+	})
+	lines, err := Annotate(r, Options{FilePath: "file.txt", StartRID: rids[2]})
+	if err != nil {
+		t.Fatalf("Annotate: %v", err)
+	}
+	want := map[string]string{"b": "alice", "c": "alice", "d": "alice", "y": "carol"}
+	if len(lines) != len(want) {
+		t.Fatalf("got %d lines, want %d", len(lines), len(want))
+	}
+	for _, l := range lines {
+		if l.Version.User != want[l.Text] {
+			t.Errorf("line %q credited to %s, want %s", l.Text, l.Version.User, want[l.Text])
+		}
+	}
+}
+
+// An ancestor with more lines than the starting version must not index past
+// the result, and lines it shares with the start keep their origin.
+func TestAnnotateAncestorLongerThanStart(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"alice", "bob", "carol"}, []string{
+		"keep1\nold\nkeep2\n",
+		"new1\nnew2\nkeep1\nold\nkeep2\n",
+		"keep1\nkeep2\n",
+	})
+	lines, err := Annotate(r, Options{FilePath: "file.txt", StartRID: rids[2]})
+	if err != nil {
+		t.Fatalf("Annotate: %v", err)
+	}
+	for _, l := range lines {
+		if l.Version.User != "alice" {
+			t.Errorf("line %q credited to %s, want alice", l.Text, l.Version.User)
+		}
+	}
+}

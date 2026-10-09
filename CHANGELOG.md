@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write each line's attribution by its position in an older version, so lines
   were credited to the wrong check-in, and an older version with more lines
   than the starting one panicked with an index out of range.
+- Clone and sync exchanges follow draft-fossil-sync-protocol-00 (#255).
+  A clone reply sends an artifact stored as a delta as a `cfile` naming its
+  source, as fossil does in a version-3 clone; it used to send a `file`
+  card. A clone session stops asking once the server sends
+  `clone_seqno 0`, sending at most one cleanup request with no operation;
+  it used to switch to `pull` to fetch missing artifacts, which the draft
+  forbids. `Clone` now fetches any artifact still missing with a separate
+  pull session afterwards, and a sync now asks for the phantoms a
+  repository already holds from its first round, as fossil's does. Every
+  request ends with a random comment, not only those with a login, and
+  every completed reply ends with fossil's timestamp comment.
 - `Repo.Annotate` credits lines the way `fossil annotate` does (#256, #257).
   It now uses a port of fossil's own line diff and, like fossil, diffs each
   older version against the starting one. Where a line repeats (blank lines,

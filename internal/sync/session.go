@@ -208,6 +208,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 
 	obs := resolveObserver(opts.Observer)
 	s := newSession(r, opts)
+	if err := s.seedPhantoms(); err != nil {
+		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
+	}
 
 	ctx = obs.Started(ctx, SessionStart{
 		Operation:   "sync",

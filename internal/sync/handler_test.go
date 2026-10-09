@@ -337,9 +337,8 @@ func similarCloneArtifacts() ([]byte, []byte) {
 	return []byte(a.String()), []byte(b.String())
 }
 
-// cloneContentCard normalizes the two wire cards a clone uses to carry an
-// artifact -- a compressed cfile (full content) and an uncompressed file
-// (delta content) -- into the fields the #141 ordering tests reason about.
+// cloneContentCard is an artifact-bearing card reduced to the fields the
+// #141 ordering tests reason about.
 type cloneContentCard struct {
 	uuid     string
 	deltaSrc string
@@ -347,10 +346,9 @@ type cloneContentCard struct {
 }
 
 // cloneContentCards flattens a clone response into the artifact-bearing cards
-// in wire order. A clone emits full content as a cfile and delta content as an
-// uncompressed file card (matching canonical fossil's send_delta_native, whose
-// receive path re-frames the delta into fossil's on-disk blob format -- a
-// cfile would be stored verbatim and fail to decompress on a real client).
+// in wire order. A clone sends every artifact as a cfile, a delta naming its
+// source (#255); a file card would be a protocol error here, and is kept so
+// the ordering tests still see it.
 func cloneContentCards(resp *xfer.Message) []cloneContentCard {
 	var out []cloneContentCard
 	for _, c := range resp.Cards {
@@ -375,10 +373,7 @@ func cloneContentCards(resp *xfer.Message) []cloneContentCard {
 // even though that is out of ascending-rid order. That ordering is a real
 // invariant of the send path -- a delta must never forward-reference a card the
 // receiver has not yet seen -- and TestEmitCloneBatchSourcePrecedesDelta guards
-// it across a deeper chain. It is necessary but not sufficient for a real fossil
-// 2.28 client, whose clone is still unusable because full content rides a
-// compressed cfile that go-libfossil frames as bare zlib (separate, pre-existing
-// bug #152); see TestCloneRealFossilWithDeltaChain, which skips against #152.
+// it across a deeper chain.
 func TestEmitCloneBatchSendsDeltifiedRowsAsDelta(t *testing.T) {
 	r := setupSyncTestRepo(t)
 
@@ -853,8 +848,14 @@ func TestHandleEmptyRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
-	if len(resp.Cards) != 0 {
-		t.Fatalf("expected empty response for empty request, got %d cards", len(resp.Cards))
+	// A completed reply carries nothing but the timestamp comment (draft §3).
+	if len(resp.Cards) != 1 {
+		t.Fatalf("empty request: got %d reply cards, want only the timestamp comment",
+			len(resp.Cards))
+	}
+	c, ok := resp.Cards[0].(*xfer.CommentCard)
+	if !ok || !strings.HasPrefix(c.Text, "timestamp ") || !strings.HasSuffix(c.Text, " errors 0") {
+		t.Fatalf("empty request: reply card = %#v, want the timestamp comment", resp.Cards[0])
 	}
 }
 

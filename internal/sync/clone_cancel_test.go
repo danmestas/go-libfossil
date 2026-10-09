@@ -184,6 +184,7 @@ func (t *twoRoundTransport) Exchange(_ context.Context, _ *xfer.Message) (*xfer.
 		return &xfer.Message{Cards: []xfer.Card{
 			&xfer.FileCard{UUID: hash.SHA1(content), Content: content},
 			&xfer.CloneSeqNoCard{SeqNo: 0},
+			&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
 		}}, nil
 	}
 	if t.onLastRound != nil {

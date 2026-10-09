@@ -3,19 +3,9 @@ package db
 import (
 	"testing"
 	"time"
-)
 
-// sqliteJulianDay reproduces the expression SQLite's own julianday() evaluates:
-// it stores an instant as integer milliseconds since julian day 0 (iJD) and
-// returns iJD/86400000.0. That is a different expression from the one
-// TimeToJulian writes with (julianEpoch + ms/86400000.0), and the two land one
-// ulp apart on a real fraction of instants — which is the whole reason the
-// float64 branch of ScanJulianDay must not "canonicalize" what it is handed.
-//
-// 210866760000000 is iJD for the Unix epoch (2440587.5 days * 86400000 ms).
-func sqliteJulianDay(unixMillis int64) float64 {
-	return float64(210866760000000+unixMillis) / millisPerDay
-}
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+)
 
 // TestScanJulianDayFloatBranchIsBitExact is the cursor-safety regression.
 //
@@ -26,43 +16,44 @@ func sqliteJulianDay(unixMillis int64) float64 {
 // silently and in both directions: raise it and the last row of a page repeats
 // as the first row of the next; lower it and rows are skipped entirely.
 //
-// The values that expose this are not exotic — they are every mtime written by
-// upstream Fossil via SQLite's julianday(), i.e. the library's primary
-// real-world input. This test sweeps such values, first asserting the case is
-// genuinely divergent (so it can never pass vacuously) and then asserting
-// ScanJulianDay returns each one verbatim.
+// Two forms of the same millisecond are stored (#258): SQLite's julianday()
+// in tagxref, and fossil's 16-digit text form in event and plink. This test
+// sweeps instants where the two differ — first asserting there are some, so
+// it can never pass vacuously — and asserts both scanners return either form
+// verbatim.
 func TestScanJulianDayFloatBranchIsBitExact(t *testing.T) {
 	base := time.Date(2024, 3, 9, 14, 25, 17, 123_000_000, time.UTC).UnixMilli()
 
 	var divergent int
 	for i := 0; i < 5000; i++ {
 		ms := base + int64(i)*1000
-
-		stored := sqliteJulianDay(ms)
-		if stored != julianDayFromMillis(ms) {
-			// This instant is one where julianday() and TimeToJulian disagree
-			// — exactly the input a millisecond-snapping normalization would
-			// alter, and therefore the input that breaks the cursor.
+		exact, text := julianDayFromMillis(ms), fsltype.TextJulianDayFromMillis(ms)
+		if exact != text {
 			divergent++
 		}
-
-		got, ok := ScanJulianDay(stored)
-		if !ok {
-			t.Fatalf("ScanJulianDay(float64) returned ok=false for %.20f", stored)
-		}
-		if got != stored {
-			t.Fatalf("ScanJulianDay altered a julianday()-computed mtime: got %.20f, want %.20f (bit-exact). "+
-				"The Timeline cursor compares this value against the row it came from; any change repeats or skips rows.",
-				got, stored)
+		for _, stored := range []float64{exact, text} {
+			for name, scan := range map[string]func(any) (float64, bool){
+				"ScanJulianDay": ScanJulianDay, "ScanTextJulianDay": ScanTextJulianDay,
+			} {
+				got, ok := scan(stored)
+				if !ok {
+					t.Fatalf("%s(float64) returned ok=false for %.20f", name, stored)
+				}
+				if got != stored {
+					t.Fatalf("%s altered a stored mtime: got %.20f, want %.20f (bit-exact). "+
+						"The Timeline cursor compares this value against the row it came from.",
+						name, got, stored)
+				}
+			}
 		}
 	}
 
-	// Guard the guard: if julianday() and TimeToJulian ever agreed on every
-	// instant, the sweep above would prove nothing.
+	// Guard the guard: if the two forms agreed on every instant, the sweep
+	// above would prove nothing about values off one grid or the other.
 	if divergent == 0 {
-		t.Fatal("no divergent julianday() values in the sweep — the test would pass vacuously; pick a different range")
+		t.Fatal("no instant where the exact and text forms differ — the test would pass vacuously")
 	}
-	t.Logf("%d of 5000 swept julianday() mtimes differ from the millisecond grid (these are the cursor-breaking inputs)", divergent)
+	t.Logf("%d of 5000 swept instants store differently as julianday() and as text", divergent)
 }
 
 // TestScanJulianDayIsDriverIndependent proves that a value this codebase wrote
@@ -124,6 +115,23 @@ func TestScanJulianDaySentinelZero(t *testing.T) {
 		}
 		if got != 0 {
 			t.Fatalf("ScanJulianDay(%T(0)) = %.20f, want exactly 0", v, got)
+		}
+	}
+}
+
+// ScanTextJulianDay rebuilds the text form fossil stores in event and plink
+// from the time.Time the ncruces driver returns for those columns, through
+// the same sub-millisecond noise ScanJulianDay tolerates.
+func TestScanTextJulianDayFromDriverTime(t *testing.T) {
+	instant := time.Date(2020, 12, 1, 13, 59, 16, 77_000_000, time.UTC)
+	want := fsltype.TextJulianDayFromMillis(instant.UnixMilli())
+	if want == julianDayFromMillis(instant.UnixMilli()) {
+		t.Fatal("test instant does not tell the exact and text forms apart")
+	}
+	for _, noise := range []time.Duration{-13 * time.Microsecond, 0, 13 * time.Microsecond} {
+		got, ok := ScanTextJulianDay(instant.Add(noise))
+		if !ok || got != want {
+			t.Errorf("ScanTextJulianDay(%v) = %.17g, %v; want %.17g", noise, got, ok, want)
 		}
 	}
 }

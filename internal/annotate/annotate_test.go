@@ -2,6 +2,7 @@ package annotate
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -279,5 +280,73 @@ func TestAnnotateAncestorLongerThanStart(t *testing.T) {
 		if l.Version.User != "alice" {
 			t.Errorf("line %q credited to %s, want alice", l.Text, l.Version.User)
 		}
+	}
+}
+
+// usersOf returns each line's text and the user it is credited to.
+func usersOf(t *testing.T, r *repo.Repo, start libfossil.FslID) [][2]string {
+	t.Helper()
+	lines, err := Annotate(r, Options{FilePath: "file.txt", StartRID: start})
+	if err != nil {
+		t.Fatalf("Annotate: %v", err)
+	}
+	var out [][2]string
+	for _, l := range lines {
+		out = append(out, [2]string{l.Text, l.Version.User})
+	}
+	return out
+}
+
+// Repeated lines are credited the way fossil annotate credits them (#256).
+// Both alignments of the two blank lines are equally long; fossil's diff
+// matches the first blank, so the second one is the new line.
+func TestAnnotateRepeatedLinesMatchFossil(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"u0", "u1"}, []string{
+		"\n\nc\n",
+		"\n\na\n\nc\n",
+	})
+	got := usersOf(t, r, rids[1])
+	want := [][2]string{{"", "u0"}, {"", "u1"}, {"a", "u1"}, {"", "u0"}, {"c", "u0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("annotation = %q, want %q (fossil annotate)", got, want)
+	}
+}
+
+// Trailing blank lines are lines (#257): only the final newline ends a line
+// rather than starting one.
+func TestAnnotateKeepsTrailingBlankLines(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"u0", "u1"}, []string{"\n", "b\n\n"})
+	got := usersOf(t, r, rids[1])
+	want := [][2]string{{"b", "u1"}, {"", "u0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("annotation = %q, want %q (fossil annotate)", got, want)
+	}
+}
+
+// A carriage return ending a line and a leading byte-order mark are not
+// part of any line, as fossil annotate reads them, so a version that only
+// changes line endings changes no line.
+func TestAnnotateIgnoresCRAndBOM(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"u0", "u1"}, []string{
+		"a\nb\n",
+		"\xef\xbb\xbfa\r\nb\r\n",
+	})
+	got := usersOf(t, r, rids[1])
+	want := [][2]string{{"a", "u0"}, {"b", "u0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("annotation = %q, want %q", got, want)
+	}
+}
+
+// A file fossil will not diff (a NUL byte) is refused with an error, where
+// fossil annotate prints nothing.
+func TestAnnotateRefusesBinary(t *testing.T) {
+	r := setupTestRepo(t)
+	rids := checkinChain(t, r, []string{"u0"}, []string{"a\x00b\n"})
+	if _, err := Annotate(r, Options{FilePath: "file.txt", StartRID: rids[0]}); err == nil {
+		t.Fatal("Annotate of a binary file succeeded")
 	}
 }

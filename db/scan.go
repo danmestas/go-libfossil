@@ -1,6 +1,10 @@
 package db
 
-import "time"
+import (
+	"time"
+
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+)
 
 // julianEpoch is the Julian Day Number for the Unix epoch (1970-01-01 12:00:00 UTC).
 const julianEpoch = 2440587.5
@@ -30,10 +34,10 @@ const millisPerDay = 86400.0 * 1000.0
 //   - tag propagation's `tagxref.mtime < ?`, where SQLite compares the bound
 //     value against raw stored floats.
 //
-// Neither is hypothetical for values this library did not write: SQLite's own
-// julianday() computes iJD/86400000.0, a different expression from TimeToJulian's
-// julianEpoch + ms/86400000.0, and the two land one ulp apart on a real fraction
-// of instants. Snapping such a value to the millisecond grid changes it.
+// Neither is hypothetical for values this library did not write: a value
+// another writer computed differently, or at finer than millisecond
+// resolution, is not on the grid TimeToJulian writes, and snapping it to that
+// grid changes it.
 //
 // The time.Time branch is the one case where a transform is required rather than
 // harmful — see timeToJulian.
@@ -50,6 +54,18 @@ func ScanJulianDay(v any) (float64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// ScanTextJulianDay is ScanJulianDay for a column fossil writes as SQL text:
+// event, plink, attachment and forumpost times. Those hold the 16-digit form
+// (fsltype.TextJulianDayFromMillis), so a time.Time a driver hands back is
+// converted to that form rather than to the exact julianday() ScanJulianDay
+// gives for tagxref.mtime. A float64 passes through unchanged either way.
+func ScanTextJulianDay(v any) (float64, bool) {
+	if t, ok := v.(time.Time); ok {
+		return fsltype.TextJulianDayFromMillis(t.Round(time.Millisecond).UTC().UnixMilli()), true
+	}
+	return ScanJulianDay(v)
 }
 
 // ScanTime converts a scanned mtime value to time.Time.
@@ -99,10 +115,10 @@ func julianToTime(jd float64) time.Time {
 }
 
 // julianDayFromMillis converts whole milliseconds since the Unix epoch to a
-// Julian Day Number, using the same expression TimeToJulian writes with, so a
+// Julian Day Number with the same function TimeToJulian writes with, so a
 // value recovered through it reproduces the original write bit-for-bit.
 func julianDayFromMillis(millis int64) float64 {
-	return julianEpoch + float64(millis)/millisPerDay
+	return fsltype.JulianDayFromMillis(millis)
 }
 
 // timeToJulian converts a driver-scanned time.Time back to a julian day

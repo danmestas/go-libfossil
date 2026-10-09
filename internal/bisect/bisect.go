@@ -176,7 +176,7 @@ func (s *Session) List(currentRID libfossil.FslID) ([]ListEntry, error) {
 		if err := row.Scan(&uuid, &mtimeRaw); err != nil {
 			uuid = "?"
 		}
-		if mtime, ok := db.ScanJulianDay(mtimeRaw); ok && mtime != 0 {
+		if mtime, ok := db.ScanTextJulianDay(mtimeRaw); ok && mtime != 0 {
 			date = fmt.Sprintf("%.6f", mtime)
 		}
 

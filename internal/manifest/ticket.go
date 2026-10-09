@@ -330,7 +330,7 @@ func ticketEvent(
 
 	if _, err := tx.Exec(
 		"REPLACE INTO event(type, tagid, mtime, objid, user, comment, brief) VALUES('t', ?, ?, ?, ?, ?, ?)",
-		tagID, libfossil.TimeToJulian(d.D), rid, d.U, comment, brief,
+		tagID, libfossil.TimeToTextJulian(d.D), rid, d.U, comment, brief,
 	); err != nil {
 		return fmt.Errorf("ticket event: %w", err)
 	}

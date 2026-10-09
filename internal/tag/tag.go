@@ -130,7 +130,8 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			tagid, opts.TagType, controlRid, opts.TargetRID, opts.Value, mtime, opts.TargetRID,
+			tagid, opts.TagType, controlRid, opts.TargetRID, nullableValue(opts.Value),
+			mtime, opts.TargetRID,
 		); err != nil {
 			return fmt.Errorf("tagxref insert: %w", err)
 		}
@@ -183,7 +184,8 @@ func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
 		if _, err := tx.Exec(
 			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			tagid, opts.TagType, opts.SrcRID, opts.TargetRID, opts.Value, opts.MTime, opts.TargetRID,
+			tagid, opts.TagType, opts.SrcRID, opts.TargetRID, nullableValue(opts.Value),
+			opts.MTime, opts.TargetRID,
 		); err != nil {
 			return fmt.Errorf("tagxref insert: %w", err)
 		}
@@ -233,7 +235,8 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 	if _, err := q.Exec(
 		`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		tagid, opts.TagType, opts.SrcRID, opts.TargetRID, opts.Value, opts.MTime, opts.TargetRID,
+		tagid, opts.TagType, opts.SrcRID, opts.TargetRID, nullableValue(opts.Value),
+		opts.MTime, opts.TargetRID,
 	); err != nil {
 		return fmt.Errorf("tagxref insert: %w", err)
 	}
@@ -327,4 +330,15 @@ func ensureTag(q db.Querier, name string) (int64, error) {
 		return 0, err
 	}
 	return result.LastInsertId()
+}
+
+// nullableValue is the tagxref.value for a tag value: NULL for a tag that has
+// none, as fossil stores it (#258). A T card cannot carry an empty value, so
+// "" always means absent; storing an empty string would read as a tag with
+// an empty value.
+func nullableValue(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
 }

@@ -72,7 +72,7 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		}
 		// mtime is a julianday float. modernc returns float64;
 		// ncruces returns time.Time for DATETIME/TIMESTAMP columns. Handle both.
-		mtime, ok := db.ScanJulianDay(mtimeScanned)
+		mtime, ok := db.ScanTextJulianDay(mtimeScanned)
 		if !ok {
 			return nil, fmt.Errorf("manifest.Log: rid=%d: unexpected mtime type %T", current, mtimeScanned)
 		}

@@ -3,6 +3,7 @@ package manifest
 import (
 	"container/heap"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -984,10 +985,13 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conte
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
-	// event
+	// event. omtime is the check-in's own time, which fossil keeps even when a
+	// date tag later moves mtime.
+	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO event(type, mtime, objid, user, comment) VALUES('ci', ?, ?, ?, ?)",
-		libfossil.TimeToJulian(d.D), rid, d.U, d.C,
+		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime)
+		 VALUES('ci', ?, ?, ?, ?, ?)`,
+		mtime, rid, d.U, d.C, mtime,
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
@@ -1026,7 +1030,7 @@ func insertCheckinPlinks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, baseid an
 		}
 		if _, err := tx.Exec(
 			"INSERT OR IGNORE INTO plink(pid, cid, isprim, mtime, baseid) VALUES(?, ?, ?, ?, ?)",
-			parentRid, rid, isPrim, libfossil.TimeToJulian(d.D), baseid,
+			parentRid, rid, isPrim, libfossil.TimeToTextJulian(d.D), baseid,
 		); err != nil {
 			return fmt.Errorf("plink: %w", err)
 		}
@@ -1239,7 +1243,7 @@ func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck) error {
 	comment := buildControlComment(d)
 	if _, err := tx.Exec(
 		"REPLACE INTO event(type, mtime, objid, user, comment) VALUES('g', ?, ?, ?, ?)",
-		mtime, srcRID, d.U, comment,
+		libfossil.TimeToTextJulian(d.D), srcRID, d.U, comment,
 	); err != nil {
 		return fmt.Errorf("control event: %w", err)
 	}
@@ -1302,7 +1306,7 @@ func addFWTPlink(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		panic("manifest.addFWTPlink: rid must be positive")
 	}
 
-	mtime := libfossil.TimeToJulian(d.D)
+	mtime := libfossil.TimeToTextJulian(d.D)
 
 	for i, parentUUID := range d.P {
 		parentRid, err := ridOrPhantom(tx, parentUUID)
@@ -1389,12 +1393,60 @@ func crosslinkWiki(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 
 	if _, err := tx.Exec(
 		"REPLACE INTO event(type, mtime, objid, user, comment) VALUES('w', ?, ?, ?, ?)",
-		libfossil.TimeToJulian(d.D), rid, d.U, comment,
+		libfossil.TimeToTextJulian(d.D), rid, d.U, comment,
 	); err != nil {
 		return fmt.Errorf("wiki event: %w", err)
 	}
 
 	return nil
+}
+
+// writeTechNoteEvent writes the event row of tech note version rid, the
+// latest crosslinked so far, replacing the row of any earlier version.
+func writeTechNoteEvent(tx *db.Tx, rid libfossil.FslID, tagid int64, d *deck.Deck) error {
+	if d.E == nil {
+		panic("manifest.writeTechNoteEvent: no E card")
+	}
+	if len(d.P) > 0 {
+		if _, err := tx.Exec(`DELETE FROM event WHERE type='e' AND tagid=?
+			AND objid IN (SELECT rid FROM tagxref WHERE tagid=?)`, tagid, tagid); err != nil {
+			return fmt.Errorf("event delete: %w", err)
+		}
+	}
+	var bgcolor any
+	var bgStr string
+	err := tx.QueryRow(`SELECT value FROM tagxref JOIN tag USING(tagid)
+		WHERE tagname='bgcolor' AND rid=?`, rid).Scan(&bgStr)
+	if err == nil {
+		bgcolor = bgStr
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("event bgcolor: %w", err)
+	}
+	if _, err := tx.Exec(`REPLACE INTO event(type, mtime, objid, tagid, user, comment, bgcolor)
+		VALUES('e', ?, ?, ?, ?, ?, ?)`,
+		libfossil.TimeToTextJulian(d.E.Date), rid, tagid, d.U, d.C, bgcolor,
+	); err != nil {
+		return fmt.Errorf("event insert: %w", err)
+	}
+	return nil
+}
+
+// subsequentEventVersion returns a later version of tech note tagid than
+// rid, or 0. Fossil compares against the time as it writes it in SQL text.
+func subsequentEventVersion(
+	tx *db.Tx, tagid int64, rid libfossil.FslID, d *deck.Deck,
+) (int64, error) {
+	if d == nil {
+		panic("manifest.subsequentEventVersion: nil deck")
+	}
+	var subsequent int64
+	err := tx.QueryRow(
+		"SELECT rid FROM tagxref WHERE tagid=? AND mtime>=? AND rid!=? ORDER BY mtime LIMIT 1",
+		tagid, libfossil.TimeToTextJulian(d.D), rid).Scan(&subsequent)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("subsequent event: %w", err)
+	}
+	return subsequent, nil
 }
 
 // crosslinkTicket links one ticket-change artifact: it applies the tkt-<uuid>
@@ -1478,9 +1530,10 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		return fmt.Errorf("event tagid: %w", err)
 	}
 
-	var subsequent int64
-	tx.QueryRow("SELECT rid FROM tagxref WHERE tagid=? AND mtime>=? AND rid!=? ORDER BY mtime LIMIT 1",
-		tagid, mtime, rid).Scan(&subsequent)
+	subsequent, err := subsequentEventVersion(tx, tagid, rid, d)
+	if err != nil {
+		return err
+	}
 
 	// Fossil deletes stale event rows when a newer version of this tech note exists
 	// but no subsequent version has been crosslinked yet. This ensures only the latest
@@ -1494,20 +1547,9 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	// turn comes -- nothing else can have a mtime >= a maximum -- and does
 	// the delete+insert then, even if some earlier-visited, lower-mtime
 	// revision inserted a since-stale event row first.
-	if len(d.P) > 0 && subsequent == 0 {
-		tx.Exec("DELETE FROM event WHERE type='e' AND tagid=? AND objid IN (SELECT rid FROM tagxref WHERE tagid=?)", tagid, tagid)
-	}
 	if subsequent == 0 {
-		var bgcolor any
-		var bgStr string
-		if tx.QueryRow("SELECT value FROM tagxref JOIN tag USING(tagid) WHERE tagname='bgcolor' AND rid=?", rid).Scan(&bgStr) == nil {
-			bgcolor = bgStr
-		}
-		if _, err := tx.Exec(
-			"REPLACE INTO event(type, mtime, objid, tagid, user, comment, bgcolor) VALUES('e', ?, ?, ?, ?, ?, ?)",
-			libfossil.TimeToJulian(d.E.Date), rid, tagid, d.U, d.C, bgcolor,
-		); err != nil {
-			return fmt.Errorf("event insert: %w", err)
+		if err := writeTechNoteEvent(tx, rid, tagid, d); err != nil {
+			return err
 		}
 	}
 	if err := updateAttachmentComments(tx, eventID, 'e'); err != nil {
@@ -1527,7 +1569,7 @@ func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	if d.A == nil {
 		return fmt.Errorf("attachment manifest missing A-card")
 	}
-	mtime := libfossil.TimeToJulian(d.D)
+	mtime := libfossil.TimeToTextJulian(d.D)
 	src, target, filename := d.A.Source, d.A.Target, d.A.Filename
 
 	if _, err := tx.Exec(
@@ -1652,12 +1694,12 @@ func crosslinkForum(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	// Insert forumpost
 	if _, err := tx.Exec(
 		"REPLACE INTO forumpost(fpid, froot, fprev, firt, fmtime) VALUES(?, ?, nullif(?, 0), nullif(?, 0), ?)",
-		rid, froot, fprev, firt, libfossil.TimeToJulian(d.D),
+		rid, froot, fprev, firt, libfossil.TimeToTextJulian(d.D),
 	); err != nil {
 		return fmt.Errorf("forumpost insert: %w", err)
 	}
 
-	mtime := libfossil.TimeToJulian(d.D)
+	mtime := libfossil.TimeToTextJulian(d.D)
 
 	if firt == 0 {
 		return crosslinkForumStarter(tx, rid, d, froot, fprev, mtime)

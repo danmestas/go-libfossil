@@ -117,7 +117,7 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 		if err := rows.Scan(&uuid, &user, &comment, &mtimeScanned, &rid, &kind); err != nil {
 			return nil, fmt.Errorf("manifest.Timeline: scan: %w", err)
 		}
-		mtime, ok := db.ScanJulianDay(mtimeScanned)
+		mtime, ok := db.ScanTextJulianDay(mtimeScanned)
 		if !ok {
 			return nil, fmt.Errorf("manifest.Timeline: rid=%d: unexpected mtime type %T", rid, mtimeScanned)
 		}

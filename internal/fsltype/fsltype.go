@@ -56,9 +56,18 @@ func (k EventKind) Valid() bool {
 
 const julianEpoch = 2440587.5
 
-// TimeToJulian converts a time.Time to a Fossil Julian day number.
+// TimeToJulian converts a time.Time, at millisecond resolution, to SQLite's
+// julianday(): the value fossil stores in tagxref.mtime (see
+// JulianDayFromMillis).
 func TimeToJulian(t time.Time) float64 {
-	return julianEpoch + float64(t.UTC().UnixMilli())/(86400.0*1000.0)
+	return JulianDayFromMillis(t.UTC().UnixMilli())
+}
+
+// TimeToTextJulian converts a time.Time, at millisecond resolution, to the
+// Julian day fossil stores in event, plink, attachment and forumpost times,
+// which it writes as SQL text (see TextJulianDayFromMillis).
+func TimeToTextJulian(t time.Time) float64 {
+	return TextJulianDayFromMillis(t.UTC().UnixMilli())
 }
 
 // JulianToTime converts a Fossil Julian day number to time.Time.

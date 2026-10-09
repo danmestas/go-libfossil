@@ -1,6 +1,9 @@
 package cli
 
-import "fmt"
+import (
+	"database/sql"
+	"fmt"
+)
 
 // RepoTagCmd groups tag operations.
 type RepoTagCmd struct {
@@ -39,10 +42,13 @@ func (c *RepoTagLsCmd) Run(g *Globals) error {
 	defer rows.Close()
 
 	for rows.Next() {
-		var name, value, tagtype string
-		rows.Scan(&name, &value, &tagtype)
-		if value != "" {
-			fmt.Printf("%s%s=%s\n", tagtype, name, value)
+		var name, tagtype string
+		var value sql.NullString // NULL for a tag without a value, as fossil stores it
+		if err := rows.Scan(&name, &value, &tagtype); err != nil {
+			return err
+		}
+		if value.String != "" {
+			fmt.Printf("%s%s=%s\n", tagtype, name, value.String)
 		} else {
 			fmt.Printf("%s%s\n", tagtype, name)
 		}

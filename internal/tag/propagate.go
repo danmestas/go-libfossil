@@ -95,7 +95,11 @@ func propagate(q db.Querier, tagid int64, tagType int, origID libfossil.FslID, m
 				rows.Close()
 				return fmt.Errorf("scan child: %w", err)
 			}
-			childMtime, _ := db.ScanJulianDay(childMtimeRaw)
+			childMtime, ok := db.ScanTextJulianDay(childMtimeRaw) // plink.mtime
+			if !ok {
+				rows.Close()
+				return fmt.Errorf("child %d: unreadable plink.mtime %T", cid, childMtimeRaw)
+			}
 			children = append(children, struct {
 				cid        libfossil.FslID
 				childMtime float64
@@ -115,7 +119,7 @@ func propagate(q db.Querier, tagid int64, tagType int, origID libfossil.FslID, m
 					if _, err := q.Exec(
 						`REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 						 VALUES(?, 2, 0, ?, ?, ?, ?)`,
-						tagid, origID, value, mtime, child.cid,
+						tagid, origID, nullableValue(value), mtime, child.cid,
 					); err != nil {
 						return fmt.Errorf("propagate to %d: %w", child.cid, err)
 					}

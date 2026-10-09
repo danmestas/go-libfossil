@@ -272,7 +272,7 @@ func markPlinkAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID)
 	// plink: one row per parent; primary (isprim=1) is opts.Parent, merge
 	// parents are secondary (isprim=0). Matches the sync-path layout in
 	// crosslink.go so merged history looks identical however it arrived.
-	mtime := libfossil.TimeToJulian(opts.Time)
+	mtime := libfossil.TimeToTextJulian(opts.Time)
 	allParents := collectParents(opts)
 	for i, pid := range allParents {
 		isPrim := 0
@@ -287,10 +287,11 @@ func markPlinkAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID)
 		}
 	}
 
-	// event
+	// event. omtime is the check-in's own time, as fossil keeps it.
 	if _, err := tx.Exec(
-		"INSERT INTO event(type, mtime, objid, user, comment) VALUES('ci', ?, ?, ?, ?)",
-		libfossil.TimeToJulian(opts.Time), manifestRid, opts.User, opts.Comment,
+		`INSERT INTO event(type, mtime, objid, user, comment, omtime)
+		 VALUES('ci', ?, ?, ?, ?, ?)`,
+		mtime, manifestRid, opts.User, opts.Comment, mtime,
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}

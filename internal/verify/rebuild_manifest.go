@@ -84,12 +84,13 @@ func rebuildCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, report *Report
 		panic("rebuildCheckin: nil *deck.Deck")
 	}
 
-	mtime := libfossil.TimeToJulian(d.D)
+	mtime := libfossil.TimeToTextJulian(d.D)
 
 	// Insert event row
 	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO event(type, mtime, objid, user, comment) VALUES('ci', ?, ?, ?, ?)",
-		mtime, rid, d.U, d.C,
+		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime)
+		 VALUES('ci', ?, ?, ?, ?, ?)`,
+		mtime, rid, d.U, d.C, mtime, // omtime: the check-in's own time, as fossil keeps it
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}

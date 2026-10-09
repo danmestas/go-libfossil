@@ -62,6 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write each line's attribution by its position in an older version, so lines
   were credited to the wrong check-in, and an older version with more lines
   than the starting one panicked with an index out of range.
+- Check-in, parent-link and tag rows store the values fossil stores (#258),
+  whether written by a commit, a crosslink or `verify.Rebuild`. Times match
+  bit for bit: tag times are SQLite's `julianday()`, and event, plink,
+  attachment and forumpost times are that value as fossil writes it into
+  SQL text, which keeps 16 digits; they used to differ in the last digits.
+  Fossil's own text conversion depends on the platform it was built for,
+  and this follows the macOS and Windows builds. A check-in's `omtime` is
+  recorded (it was NULL), and a tag without a value is stored as NULL
+  rather than an empty string. The CLI's `repo tag ls` reads such tags,
+  which it used to misprint.
 - Clone and sync exchanges follow draft-fossil-sync-protocol-00 (#255).
   A clone reply sends an artifact stored as a delta as a `cfile` naming its
   source, as fossil does in a version-3 clone; it used to send a `file`

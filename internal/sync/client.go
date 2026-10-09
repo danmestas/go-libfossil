@@ -199,6 +199,10 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 			return nil, fmt.Errorf("buildRequest login: %w", err)
 		}
 		cards = append([]xfer.Card{loginCard}, signed...)
+	} else {
+		// Every request ends with randomness (draft §3); a login card's
+		// signature already covers the one buildLoginCard appends.
+		cards = append(cards, randomComment(s.env.Rand))
 	}
 
 	return &xfer.Message{Cards: cards}, nil

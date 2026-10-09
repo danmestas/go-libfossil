@@ -270,8 +270,11 @@ func TestCloneCancelledContext(t *testing.T) {
 	}
 }
 
-// TestCloneWithPhantoms verifies that delta files with missing sources
-// create phantoms and are resolved via gimme on subsequent rounds.
+// TestCloneWithPhantoms verifies that a delta whose source the clone never
+// delivered leaves a phantom that Clone fetches afterwards with a separate
+// pull session: the clone session itself sends no pull or gimme once
+// clone_seqno 0 arrives (draft §8.2), and a server answers a gimme only
+// within a pull.
 func TestCloneWithPhantoms(t *testing.T) {
 	// Base blob that the delta depends on.
 	baseContent := []byte("this is the base content for delta testing")
@@ -286,35 +289,34 @@ func TestCloneWithPhantoms(t *testing.T) {
 
 	transport := &mockCloneTransport{
 		handler: func(round int, req *xfer.Message) *xfer.Message {
-			// Track gimme cards sent by the client.
+			var pull, clone, wantsBase bool
 			for _, c := range req.Cards {
-				if g, ok := c.(*xfer.GimmeCard); ok {
-					gimmesSeen[g.UUID] = true
+				switch c := c.(type) {
+				case *xfer.GimmeCard:
+					gimmesSeen[c.UUID] = true
+					wantsBase = wantsBase || c.UUID == baseUUID
+				case *xfer.PullCard:
+					pull = true
+				case *xfer.CloneCard:
+					clone = true
 				}
 			}
-
-			switch round {
-			case 0:
-				// Round 0: send delta file BEFORE its base — triggers phantom.
+			switch {
+			case round == 0:
+				// Deliver the delta without its base: a phantom.
 				return &xfer.Message{Cards: []xfer.Card{
-					&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
 					&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
 					&xfer.CloneSeqNoCard{SeqNo: 0},
+					&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
 				}}
-			case 1:
-				// Round 1: seqno=0 so client switches to pull+gimme.
-				// Deliver the base blob that was requested via gimme.
+			case clone:
+				t.Errorf("round %d: clone card after clone_seqno 0", round)
+			case pull && wantsBase:
 				return &xfer.Message{Cards: []xfer.Card{
 					&xfer.FileCard{UUID: baseUUID, Content: baseContent},
-					// Also re-send the delta now that base exists.
-					&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
-					&xfer.CloneSeqNoCard{SeqNo: 0},
-				}}
-			default:
-				return &xfer.Message{Cards: []xfer.Card{
-					&xfer.CloneSeqNoCard{SeqNo: 0},
 				}}
 			}
+			return &xfer.Message{}
 		},
 	}
 

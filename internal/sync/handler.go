@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
@@ -112,6 +113,7 @@ type HandleOpts struct {
 	Buggify      BuggifyChecker // nil in production.
 	Observer     Observer       // nil defaults to no-op.
 	ContentCache *content.Cache // nil = no caching.
+	Clock        simio.Clock    // time for the reply's timestamp comment; nil = real time
 }
 
 // HandleSync processes an incoming xfer request and produces a response.
@@ -135,7 +137,10 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock}
+	if h.clock == nil {
+		h.clock = simio.RealClock{}
+	}
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
@@ -186,6 +191,7 @@ type handler struct {
 	xrowsSent     int                       // table sync rows sent
 	xrowsRecvd    int                       // table sync rows received
 	cache         *content.Cache            // nil = passthrough to content.Expand
+	clock         simio.Clock               // time for the reply's timestamp comment
 	remoteHas     map[string]remoteHasEntry // UUIDs the client announced via igot (mirrors Fossil's onremote table)
 
 	// Auth state
@@ -296,7 +302,25 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		}
 	}
 
+	h.resp = append(h.resp, h.timestampComment())
 	return &xfer.Message{Cards: h.resp}, nil
+}
+
+// timestampComment is the comment that ends a completed reply, as fossil's
+// page_xfer writes it: the server's UTC time and the reply's error count
+// (draft §3). A fail-fast reply goes without it.
+func (h *handler) timestampComment() *xfer.CommentCard {
+	if h.clock == nil {
+		panic("handler.timestampComment: nil clock")
+	}
+	errs := 0
+	for _, c := range h.resp {
+		if _, ok := c.(*xfer.ErrorCard); ok {
+			errs++
+		}
+	}
+	now := h.clock.Now().UTC().Format("2006-01-02T15:04:05")
+	return &xfer.CommentCard{Text: fmt.Sprintf("timestamp %s errors %d", now, errs)}
 }
 
 // processDataCards handles file, igot, gimme, and other data cards in the
@@ -837,17 +861,8 @@ func (h *handler) emitCloneBatch() error {
 		// itself and would not yet have been sent under this loop's ascending
 		// order; buildCloneArtifact walks the chain and emits each source ahead
 		// of its dependent so no delta ever forward-references a card that has
-		// not arrived. The delta rides an uncompressed "file" card (not a
-		// "cfile"), matching canonical fossil's send_delta_native.
-		//
-		// This is a bandwidth win, verified content-identical for
-		// libfossil<->libfossil clones by the self-round-trip tests. It does
-		// NOT by itself make a real fossil client's clone usable: full content
-		// still rides a compressed cfile, which go-libfossil emits as bare zlib
-		// while fossil expects [4-byte size][zlib] framing, so a real fossil
-		// client still decodes full content to garbage and rebuilds to zero
-		// check-ins. That is a separate, pre-existing bug tracked as #152; see
-		// TestCloneRealFossilWithDeltaChain, which skips against it.
+		// not arrived. The delta rides a cfile that names its source, as in
+		// canonical's send_compressed_file.
 		cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, sent)
 		if err != nil {
 			return err
@@ -1040,17 +1055,13 @@ func (h *handler) buildCloneArtifact(
 		if m.priv {
 			cards = append(cards, &xfer.PrivateCard{})
 		}
-		// Full content rides a compressed cfile (the #98/#113 wire-size win). A
-		// delta rides an uncompressed "file" card, matching canonical fossil's
-		// send_delta_native: a real fossil client stores a cfile's payload
-		// verbatim and cannot decompress it without fossil's on-disk
-		// [4-byte size][zlib] framing, which the wire cfile omits, whereas an
-		// uncompressed file card is re-framed by the receiver's own compressor.
-		if m.srcUUID == "" {
-			cards = append(cards, &xfer.CFileCard{UUID: m.uuid, USize: m.usize, Content: data})
-		} else {
-			cards = append(cards, &xfer.FileCard{UUID: m.uuid, DeltaSrc: m.srcUUID, Content: data})
-		}
+		// Every clone artifact rides a cfile, a delta naming its source, as
+		// canonical's send_compressed_file does for clone version 3 and as the
+		// draft requires (§7.1, §8.2). USIZE is the full artifact's size even
+		// for a delta, as fossil sends blob.size.
+		cards = append(cards, &xfer.CFileCard{
+			UUID: m.uuid, DeltaSrc: m.srcUUID, USize: m.usize, Content: data,
+		})
 		rids = append(rids, m.rid)
 		cost += cloneCardOverheadBytes + len(data)
 	}

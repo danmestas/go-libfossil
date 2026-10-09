@@ -28,13 +28,11 @@ import (
 // NEWER one, so a delta's source almost always has a *greater* rid than the
 // delta itself and, under the send loop's ascending-rid order, would not yet
 // have been sent; walking source-first guarantees no delta forward-references
-// a card that has not arrived. The delta rides an uncompressed "file UUID
-// DELTASRC SIZE" card (not a compressed "cfile"), matching canonical fossil's
-// send_delta_native, so the receiver re-frames it into fossil's on-disk blob
-// format. That change is a bandwidth win and is verified content-identical for
-// libfossil<->libfossil clones by the self-round-trip tests.
+// a card that has not arrived. Since #255 the delta rides a "cfile UUID
+// DELTASRC USIZE CSIZE" card, as canonical's send_compressed_file sends it in
+// a version-3 clone, and a real fossil client stores the payload verbatim.
 //
-// Full content rides a compressed "cfile" card. #152 fixed that card's wire
+// Full content rides a plain "cfile" card. #152 fixed the cfile wire
 // framing: the payload is now fossil's on-disk blob format ([4-byte
 // big-endian size][zlib]), the exact bytes blob_compress() produces, so a real
 // fossil client stores it verbatim and later reads it back through

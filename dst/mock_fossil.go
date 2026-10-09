@@ -2,6 +2,7 @@ package dst
 
 import (
 	"context"
+	"github.com/danmestas/go-libfossil/simio"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -16,6 +17,7 @@ import (
 type MockFossil struct {
 	repo    *repo.Repo
 	buggify libsync.BuggifyChecker
+	clock   *simio.SimClock // stamps replies deterministically
 }
 
 // Verify interface compliance at compile time.
@@ -26,7 +28,7 @@ func NewMockFossil(r *repo.Repo) *MockFossil {
 	if r == nil {
 		panic("dst.NewMockFossil: r must not be nil")
 	}
-	return &MockFossil{repo: r}
+	return &MockFossil{repo: r, clock: simio.NewSimClock()}
 }
 
 // SetBuggify configures fault injection for the handler.
@@ -48,6 +50,7 @@ func (f *MockFossil) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Mes
 	}
 	return libsync.HandleSyncWithOpts(ctx, f.repo, req, libsync.HandleOpts{
 		Buggify: f.buggify,
+		Clock:   f.clock,
 	})
 }
 

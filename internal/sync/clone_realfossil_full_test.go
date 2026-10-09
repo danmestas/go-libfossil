@@ -32,7 +32,7 @@ import (
 // This corpus is built so nothing deltifies (independent files, no parent
 // linkage), guaranteeing the source stores only full content -- asserted via
 // the empty delta table -- so the test exercises the full-content cfile path
-// specifically, not the delta path #141 routed onto uncompressed file cards.
+// specifically, not the delta-cfile path.
 func TestCloneRealFossilFullContent(t *testing.T) {
 	bin, err := exec.LookPath("fossil")
 	if err != nil {

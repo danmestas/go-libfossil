@@ -3,6 +3,7 @@ package dst
 import (
 	"context"
 	"fmt"
+	"github.com/danmestas/go-libfossil/simio"
 	"math/rand"
 
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -19,6 +20,7 @@ type PeerNetwork struct {
 	dropRate   float64
 	partitions map[NodeID]bool
 	buggify    libsync.BuggifyChecker
+	clock      *simio.SimClock // stamps replies deterministically
 }
 
 // NewPeerNetwork creates a simulated peer network.
@@ -30,6 +32,7 @@ func NewPeerNetwork(rng *rand.Rand) *PeerNetwork {
 		rng:        rng,
 		peers:      make(map[NodeID]*repo.Repo),
 		partitions: make(map[NodeID]bool),
+		clock:      simio.NewSimClock(),
 	}
 }
 
@@ -95,6 +98,7 @@ func (n *PeerNetwork) exchange(ctx context.Context, source, target NodeID, req *
 
 	return libsync.HandleSyncWithOpts(ctx, r, req, libsync.HandleOpts{
 		Buggify: n.buggify,
+		Clock:   n.clock,
 	})
 }
 

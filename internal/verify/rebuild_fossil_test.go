@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -67,7 +68,27 @@ func fossilHistory(t *testing.T) string {
 	return repoPath
 }
 
+// fossilTextTimesExact reports whether the fossil binary on this machine
+// writes text times the way TimeToTextJulian computes them: its %.17g runs in
+// long double, which is a 64-bit double on macOS arm64 and Windows but wider
+// on Linux and Intel macOS, where the 16th digit can differ.
+func fossilTextTimesExact() bool {
+	return (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") || runtime.GOOS == "windows"
+}
+
+// textTime renders a column fossil writes as SQL text: bit for bit where
+// this machine's fossil computes it as TimeToTextJulian does, otherwise to
+// the millisecond the value stands for.
+func textTime(col string) string {
+	if fossilTextTimesExact() {
+		return "printf('%!.20g', " + col + ")"
+	}
+	return "CAST(round((" + col + " - 2440587.5) * 86400000) AS INTEGER)"
+}
+
 // derivedRows reads the derived tables #258 compares, in a stable order.
+// Tag times are SQLite's julianday() on every platform, so they are compared
+// bit for bit; see textTime for the others.
 func derivedRows(t *testing.T, path string) map[string][]string {
 	t.Helper()
 	d, err := db.OpenSQL(path, db.OpenConfig{}, nil)
@@ -83,9 +104,10 @@ func derivedRows(t *testing.T, path string) map[string][]string {
 		// Check-in events only: Rebuild does not yet recreate the events of
 		// other artifacts (control artifacts, wiki, tickets, forum), a gap
 		// apart from the values #258 is about.
-		"event": `SELECT objid, type, printf('%!.20g', mtime), printf('%!.20g', omtime), user,
-			comment FROM event WHERE type='ci' ORDER BY objid`,
-		"plink": `SELECT pid, cid, isprim, printf('%!.20g', mtime) FROM plink ORDER BY cid, pid`,
+		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
+			", user, comment FROM event WHERE type='ci' ORDER BY objid",
+		"plink": "SELECT pid, cid, isprim, " + textTime("mtime") +
+			" FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, tagtype, quote(value), printf('%!.20g', mtime)
 			FROM tagxref ORDER BY tagid, rid`,
 	}

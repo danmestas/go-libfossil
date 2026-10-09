@@ -106,7 +106,16 @@ func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result [
 	currentRID := opts.StartRID
 	steps := 0
 
-	for {
+	// origin[i] is the start-version line that line i of currentLines traces
+	// back to, or -1 once that line has stopped matching. result is indexed by
+	// start-version line, so every write goes through this mapping.
+	origin := make([]int, len(currentLines))
+	for i := range origin {
+		origin[i] = i
+	}
+	following := len(origin)
+
+	for following > 0 {
 		// Check limit.
 		if opts.Limit > 0 && steps >= opts.Limit {
 			break
@@ -139,15 +148,23 @@ func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result [
 
 		// Compute LCS to find which current lines are unchanged from parent.
 		matches := lcsMatch(parentLines, currentLines)
+		parentOrigin := make([]int, len(parentLines))
+		for i := range parentOrigin {
+			parentOrigin[i] = -1
+		}
+		following = 0
 		for curIdx, parIdx := range matches {
-			if parIdx >= 0 {
+			if parIdx >= 0 && origin[curIdx] >= 0 {
 				// This line exists in the parent — push attribution back.
-				result[curIdx].Version = parentInfo
+				result[origin[curIdx]].Version = parentInfo
+				parentOrigin[parIdx] = origin[curIdx]
+				following++
 			}
 		}
 
 		currentRID = parentRID
 		currentLines = parentLines
+		origin = parentOrigin
 		steps++
 	}
 }

@@ -57,6 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Repo.Annotate` credits each line to the right check-in when edits shift
+  line positions between versions (#253). Past the first parent it used to
+  write each line's attribution by its position in an older version, so lines
+  were credited to the wrong check-in, and an older version with more lines
+  than the starting one panicked with an index out of range.
 - `Checkout.Checkin` records pending merges as merge parents, including
   merges made by the fossil binary (#244). It used to drop them, so a
   merge committed through go-libfossil looked like an ordinary commit.

@@ -592,12 +592,13 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	s.result.FilesRecvd += filesRecvd
 	s.filesRecvdLastRound = filesRecvd
 
-	// Age unresolved phantoms; evict after 3 consecutive rounds without delivery.
+	// Age unresolved phantoms; evict after phantomEvictRounds consecutive
+	// rounds without delivery.
 	// FileCard/CFileCard handlers already delete resolved phantoms from s.phantoms,
 	// so anything still in the map was not delivered this round.
 	for uuid := range s.phantoms {
 		s.phantomAge[uuid]++
-		if s.phantomAge[uuid] >= 3 {
+		if s.phantomAge[uuid] >= phantomEvictRounds {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)
 		}
@@ -913,6 +914,30 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, uuid string, fullCo
 	}
 	return dephantomizedRid, nil
 }
+
+// seedPhantoms asks, in the first round, for the phantoms the repository
+// already holds, as fossil's client does (request_phantoms runs every round
+// of a pull): an interrupted clone or sync leaves them for this one. They
+// are asked for once: a phantom the server cannot supply must not hold the
+// session open (draft §3.7, "Remaining phantoms alone MUST NOT continue"),
+// so each starts one round short of eviction. One the server later
+// announces with igot is a phantom of this session like any other.
+func (s *session) seedPhantoms() error {
+	if len(s.phantoms) != 0 {
+		panic("session.seedPhantoms: phantoms already loaded")
+	}
+	if err := s.loadDBPhantoms(); err != nil {
+		return err
+	}
+	for uuid := range s.phantoms {
+		s.phantomAge[uuid] = phantomEvictRounds - 1
+	}
+	return nil
+}
+
+// phantomEvictRounds is how many consecutive rounds a phantom is asked for
+// without arriving before the session stops asking.
+const phantomEvictRounds = 3
 
 // loadDBPhantoms promotes phantom-table entries into the session's phantom
 // map. This is needed after crosslinking cluster artifacts which create

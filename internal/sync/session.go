@@ -208,10 +208,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 
 	obs := resolveObserver(opts.Observer)
 	s := newSession(r, opts)
-	// Ask for the phantoms the repository already holds from the first
-	// round, as fossil's client does (request_phantoms runs every round of
-	// a pull): an interrupted clone or sync leaves them for this one.
-	if err := s.loadDBPhantoms(); err != nil {
+	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
 	}
 

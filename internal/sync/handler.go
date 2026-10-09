@@ -259,27 +259,9 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return nil, err
 	}
 
-	// Emit PushCard with project-code/server-code so the clone client can
-	// identify the repo. Only in clone mode — sync clients already have
-	// codes, and real Fossil treats server-sent "push" as unknown during sync.
-	//
-	// This must trail the clone batch's clone_seqno card, matching canonical's
-	// order (fossil-scm xfer.c emits the batch, then clone_seqno at :1571, then
-	// push at :1577). A real fossil client re-issues `clone 3 SEQNO` every round
-	// it sees a `push` card while its clone cursor is still positive (xfer.c:2706),
-	// and it learns the cursor hit zero only from the clone_seqno card. Emitting
-	// push ahead of clone_seqno makes the client queue one more clone request
-	// before it sees the terminal clone_seqno 0, so the server serves the whole
-	// repository a second time — the 2.06x end-to-end blow-up of issue #138.
 	if h.cloneMode {
-		var projectCode, serverCode string
-		_ = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&projectCode)
-		_ = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='server-code'").Scan(&serverCode)
-		if projectCode != "" {
-			h.resp = append(h.resp, &xfer.PushCard{
-				ProjectCode: projectCode,
-				ServerCode:  serverCode,
-			})
+		if err := h.emitClonePush(); err != nil {
+			return nil, err
 		}
 	}
 
@@ -304,6 +286,43 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 
 	h.resp = append(h.resp, h.timestampComment())
 	return &xfer.Message{Cards: h.resp}, nil
+}
+
+// emitClonePush emits the push card with project-code and server-code so
+// the clone client can identify the repo. Only in clone mode — sync clients
+// already have codes, and real Fossil treats server-sent "push" as unknown
+// during sync.
+//
+// This must trail the clone batch's clone_seqno card, matching canonical's
+// order (fossil-scm xfer.c emits the batch, then clone_seqno at :1571, then
+// push at :1577). A real fossil client re-issues `clone 3 SEQNO` every round
+// it sees a `push` card while its clone cursor is still positive (xfer.c:2706),
+// and it learns the cursor hit zero only from the clone_seqno card. Emitting
+// push ahead of clone_seqno makes the client queue one more clone request
+// before it sees the terminal clone_seqno 0, so the server serves the whole
+// repository a second time — the 2.06x end-to-end blow-up of issue #138.
+func (h *handler) emitClonePush() error {
+	if !h.cloneMode {
+		panic("handler.emitClonePush: not a clone")
+	}
+	var projectCode, serverCode string
+	err := h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").
+		Scan(&projectCode)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("HandleSync: project-code: %w", err)
+	}
+	err = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='server-code'").
+		Scan(&serverCode)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("HandleSync: server-code: %w", err)
+	}
+	if projectCode != "" {
+		h.resp = append(h.resp, &xfer.PushCard{
+			ProjectCode: projectCode,
+			ServerCode:  serverCode,
+		})
+	}
+	return nil
 }
 
 // timestampComment is the comment that ends a completed reply, as fossil's

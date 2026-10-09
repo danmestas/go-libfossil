@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -28,7 +31,9 @@ type recordingTransport struct {
 	replies  []*xfer.Message
 }
 
-func (rt *recordingTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+func (rt *recordingTransport) Exchange(
+	ctx context.Context, req *xfer.Message,
+) (*xfer.Message, error) {
 	resp, err := HandleSync(ctx, rt.src, req)
 	if err != nil {
 		return nil, err
@@ -156,5 +161,97 @@ func TestSyncRequestsEndWithRandomness(t *testing.T) {
 		if !lastCardIsComment(rt.replies[i], "timestamp ") {
 			t.Errorf("reply %d does not end with the timestamp comment", i)
 		}
+	}
+}
+
+// scriptedTransport answers each request with the next scripted reply, then
+// with empty replies.
+type scriptedTransport struct {
+	replies []*xfer.Message
+	n       int
+}
+
+func (st *scriptedTransport) Exchange(context.Context, *xfer.Message) (*xfer.Message, error) {
+	st.n++
+	if st.n <= len(st.replies) {
+		return st.replies[st.n-1], nil
+	}
+	return &xfer.Message{}, nil
+}
+
+// A clone whose server stops before clone_seqno 0 fails rather than
+// returning a partial repository, whatever the replies lacked: a push card
+// in the first reply, or in a later one.
+func TestCloneThatNeverFinishesFails(t *testing.T) {
+	blob := []byte("one artifact")
+	cases := map[string][]*xfer.Message{
+		"first reply without push": {{}},
+		"refusal without push": {{Cards: []xfer.Card{
+			&xfer.ErrorCard{Message: "not authorized to clone"},
+		}}},
+		"later reply without push": {
+			{Cards: []xfer.Card{
+				&xfer.CloneSeqNoCard{SeqNo: 2},
+				&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
+			}},
+			{Cards: []xfer.Card{
+				&xfer.FileCard{UUID: hash.SHA1(blob), Content: blob},
+				&xfer.CloneSeqNoCard{SeqNo: 9},
+			}},
+		},
+	}
+	for name, replies := range cases {
+		t.Run(name, func(t *testing.T) {
+			dst := filepath.Join(t.TempDir(), "clone.fossil")
+			r, _, err := Clone(context.Background(), dst, &scriptedTransport{replies: replies},
+				CloneOpts{})
+			if err == nil {
+				r.Close()
+				t.Fatal("Clone of an unfinished transfer succeeded")
+			}
+		})
+	}
+}
+
+// A phantom the server cannot supply is asked for once, and does not hold
+// a pull open (draft §3.7: "Remaining phantoms alone MUST NOT continue").
+func TestSyncDoesNotLingerOnUnservablePhantom(t *testing.T) {
+	src := deltaHistoryRepo(t)
+	dst := setupSyncTestRepo(t)
+	projectCode, err := src.Config("project-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Sync(context.Background(), dst, &recordingTransport{src: src}, SyncOpts{
+		Pull: true, ProjectCode: projectCode,
+	}); err != nil {
+		t.Fatalf("first Sync: %v", err)
+	}
+	missing := hash.SHA1([]byte("an artifact no peer has"))
+	if err := dst.WithTx(func(tx *db.Tx) error {
+		_, err := blob.StorePhantom(tx, missing)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := &recordingTransport{src: src}
+	res, err := Sync(context.Background(), dst, rt, SyncOpts{Pull: true, ProjectCode: projectCode})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	asked := 0
+	for _, req := range rt.requests {
+		for _, c := range req.Cards {
+			if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == missing {
+				asked++
+			}
+		}
+	}
+	if asked != 1 {
+		t.Errorf("the missing artifact was asked for %d times, want once", asked)
+	}
+	if res.Rounds != 1 {
+		t.Errorf("Sync took %d rounds, want 1", res.Rounds)
 	}
 }

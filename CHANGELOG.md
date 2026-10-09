@@ -69,8 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `clone_seqno 0`, sending at most one cleanup request with no operation;
   it used to switch to `pull` to fetch missing artifacts, which the draft
   forbids. `Clone` now fetches any artifact still missing with a separate
-  pull session afterwards, and a sync now asks for the phantoms a
-  repository already holds from its first round, as fossil's does. Every
+  pull session afterwards, and still fails if one cannot be had: unlike
+  the draft, which ends a clone with phantoms left, `Clone` returns only a
+  complete repository. A clone the server stops before `clone_seqno 0`
+  fails rather than returning part of a repository. A sync now asks once,
+  in its first round, for the phantoms a repository already holds, as
+  fossil's does, without letting one the server lacks hold it open. Every
   request ends with a random comment, not only those with a login, and
   every completed reply ends with fossil's timestamp comment.
 - `Repo.Annotate` credits lines the way `fossil annotate` does (#256, #257).

@@ -98,14 +98,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		panic("sync.Clone: t must not be nil")
 	}
 
-	env := opts.Env
-	if env == nil {
-		env = simio.RealEnv()
-	}
-	storage := env.Storage
-	if storage == nil {
-		storage = simio.OSStorage{}
-	}
+	env, storage := cloneEnv(opts)
 
 	// Path must not already exist.
 	if _, statErr := storage.Stat(path); statErr == nil {
@@ -134,19 +127,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		}
 	}()
 
-	// Clear project-code — the server will provide its own.
-	if _, execErr := r.DB().Exec("DELETE FROM config WHERE name='project-code'"); execErr != nil {
-		err = fmt.Errorf("sync.Clone: clear project-code: %w", execErr)
-		return
-	}
-
-	// Clear hash-policy for the same reason: a clone adopts its source's
-	// policy, not the sha3 a fresh repo is seeded with, so a clone of a SHA1
-	// repo must not start naming artifacts SHA3. The protocol carries no
-	// config, so dropping the row is what conveys it — an absent row reads
-	// as "auto", which derives the algorithm from the artifacts that arrive.
-	if _, execErr := r.DB().Exec("DELETE FROM config WHERE name='hash-policy'"); execErr != nil {
-		err = fmt.Errorf("sync.Clone: clear hash-policy: %w", execErr)
+	if err = clearInheritedConfig(r); err != nil {
 		return
 	}
 
@@ -167,14 +148,35 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	}
 	cs.obs = resolveObserver(opts.Observer)
 
-	cloneResult, cloneErr := cs.run(ctx, t)
-	if cloneErr != nil {
-		// cloneResult is still meaningful on a stall or round-limit error —
-		// callers inspecting the returned result (e.g. BlobsRecvd) alongside
-		// a *PhantomStallError shouldn't see it silently dropped to nil.
-		result = cloneResult
-		err = cloneErr
+	result, err = cs.complete(ctx, t)
+	if err != nil {
 		return
+	}
+	return r, result, nil
+}
+
+// cloneEnv is the environment a clone runs in and the storage its file
+// lives in.
+func cloneEnv(opts CloneOpts) (*simio.Env, simio.Storage) {
+	env := opts.Env
+	if env == nil {
+		env = simio.RealEnv()
+	}
+	storage := env.Storage
+	if storage == nil {
+		storage = simio.OSStorage{}
+	}
+	return env, storage
+}
+
+// complete runs the clone session, links what it received and fetches any
+// artifact it left missing. The result is meaningful on error too: callers
+// inspecting it (e.g. BlobsRecvd) alongside a *PhantomStallError shouldn't
+// see it dropped to nil.
+func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult, error) {
+	cloneResult, err := cs.run(ctx, t)
+	if err != nil {
+		return cloneResult, err
 	}
 
 	// The receive linker has already handled artifacts as their verified
@@ -183,17 +185,33 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	_, finalizeErr := cs.linker.Finalize(ctx)
 	cloneResult.ArtifactsLinked = cs.linker.Stats().Linked
 	if finalizeErr != nil {
-		result = cloneResult
-		err = fmt.Errorf("sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
-		return
+		return cloneResult, fmt.Errorf(
+			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
+	}
+	return cloneResult, cs.fillPhantoms(ctx, t)
+}
+
+// clearInheritedConfig drops the config rows a fresh repository is seeded
+// with that a clone must take from its source instead.
+func clearInheritedConfig(r *repo.Repo) error {
+	if r == nil {
+		panic("sync.clearInheritedConfig: nil repo")
+	}
+	// Clear project-code — the server will provide its own.
+	if _, execErr := r.DB().Exec("DELETE FROM config WHERE name='project-code'"); execErr != nil {
+		return fmt.Errorf("sync.Clone: clear project-code: %w", execErr)
 	}
 
-	if fillErr := cs.fillPhantoms(ctx, t); fillErr != nil {
-		result = cloneResult
-		err = fillErr
-		return
+	// Clear hash-policy for the same reason: a clone adopts its source's
+	// policy, not the sha3 a fresh repo is seeded with, so a clone of a SHA1
+	// repo must not start naming artifacts SHA3. The protocol carries no
+	// config, so dropping the row is what conveys it — an absent row reads
+	// as "auto", which derives the algorithm from the artifacts that arrive.
+	if _, execErr := r.DB().Exec("DELETE FROM config WHERE name='hash-policy'"); execErr != nil {
+		return fmt.Errorf("sync.Clone: clear hash-policy: %w", execErr)
 	}
-	return r, cloneResult, nil
+
+	return nil
 }
 
 // fillPhantoms fetches artifacts the clone left missing (phantoms) with an
@@ -315,6 +333,11 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 		}
 	}
 
+	if cs.projectCode == "" {
+		err := fmt.Errorf("sync.Clone: server sent no project code")
+		cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)
+		return &cs.result, err
+	}
 	cs.result.ProjectCode = cs.projectCode
 	cs.result.ServerCode = cs.serverCode
 	cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), nil)
@@ -337,7 +360,7 @@ func (cs *cloneSession) continueAfter(cycle int) (bool, error) {
 		panic("cloneSession.continueAfter: negative cycle")
 	}
 	if cycle > 0 && cs.roundRecvd == 0 {
-		if cs.seqno > 0 && !cs.cleanup {
+		if cs.seqno > 0 {
 			return false, fmt.Errorf(
 				"sync.Clone: server stopped sending at clone sequence %d", cs.seqno)
 		}
@@ -455,73 +478,19 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		switch c := card.(type) {
 		case *xfer.PushCard:
 			cs.roundPush = true
-			// Server sends push card with project-code and server-code.
-			if c.ProjectCode != "" && cs.projectCode == "" {
-				cs.projectCode = c.ProjectCode
-				if _, err := cs.repo.DB().Exec(
-					"REPLACE INTO config(name, value) VALUES('project-code', ?)",
-					c.ProjectCode,
-				); err != nil {
-					return fmt.Errorf("sync.Clone: store project-code: %w", err)
-				}
-			}
-			if c.ServerCode != "" && cs.serverCode == "" {
-				cs.serverCode = c.ServerCode
-				if _, err := cs.repo.DB().Exec(
-					"REPLACE INTO config(name, value) VALUES('server-code', ?)",
-					c.ServerCode,
-				); err != nil {
-					return fmt.Errorf("sync.Clone: store server-code: %w", err)
-				}
+			if err := cs.recordCodes(c); err != nil {
+				return err
 			}
 
 		case *xfer.FileCard:
-			content := c.Content
-			// BUGGIFY: 2% chance corrupt file content to test hash verification.
-			// Relies on blob.Store verify-before-commit to catch corruption.
-			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.corruptHash", 0.02) {
-				corrupted := make([]byte, len(content))
-				copy(corrupted, content)
-				if len(corrupted) > 0 {
-					corrupted[0] ^= 0xff
-				}
-				content = corrupted
-			}
-			// BUGGIFY: 5% chance skip storing a received file, creating a phantom.
-			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
-				filesRecvd++
-				continue
-			}
-			if err := cs.handleFile(ctx, c.UUID, c.DeltaSrc, content, nil); err != nil {
+			if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
 				return err
 			}
 			filesRecvd++
 
 		case *xfer.CFileCard:
-			content := c.Content
-			storedBlob := c.StoredBlob
-			// BUGGIFY: 2% chance corrupt file content to test hash verification.
-			// Relies on blob.Store verify-before-commit to catch corruption.
-			// storedBlob must be dropped alongside content: it decodes to
-			// the *original* bytes, so keeping it would let verbatim
-			// storage quietly mask the corruption this path exists to
-			// exercise, instead of the corrupted content being what gets
-			// hash-checked and stored.
-			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.corruptHash", 0.02) {
-				corrupted := make([]byte, len(content))
-				copy(corrupted, content)
-				if len(corrupted) > 0 {
-					corrupted[0] ^= 0xff
-				}
-				content = corrupted
-				storedBlob = nil
-			}
-			// BUGGIFY: 5% chance skip storing a received file, creating a phantom.
-			if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
-				filesRecvd++
-				continue
-			}
-			if err := cs.handleFile(ctx, c.UUID, c.DeltaSrc, content, storedBlob); err != nil {
+			err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
+			if err != nil {
 				return err
 			}
 			filesRecvd++
@@ -538,22 +507,9 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			cs.seqno = c.SeqNo
 
 		case *xfer.ErrorCard:
-			// A clone's first round carries no login card: the signature is
-			// salted with the project code, and the project code is exactly
-			// what this round exists to learn. A server that requires
-			// authentication therefore answers round 0 with its push card —
-			// which supplies that code — followed by "not authorized to
-			// clone". Treating that as fatal ends the clone before the
-			// credentials are ever offered, so round 0 records the message and
-			// carries on; round 1 repeats the request with a login card, and
-			// an error there (a genuinely wrong password, say) is fatal.
-			// Canonical does the same: `(syncFlags & SYNC_CLONE)==0 ||
-			// nCycle>0` guards the abort in xfer.c client_sync.
-			if cycle == 0 {
-				cs.result.Messages = append(cs.result.Messages, c.Message)
-				continue
+			if err := cs.serverError(cycle, c); err != nil {
+				return err
 			}
-			return fmt.Errorf("sync.Clone: server error: %s", c.Message)
 
 		case *xfer.CookieCard:
 			cs.cookie = c.Value
@@ -565,6 +521,81 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 
 	cs.result.BlobsRecvd += filesRecvd
 	return nil
+}
+
+// serverError handles an error card. A clone's first round carries no
+// login card: the signature is salted with the project code, and the project
+// code is exactly what this round exists to learn. A server that requires
+// authentication therefore answers round 0 with its push card — which
+// supplies that code — followed by "not authorized to clone". Treating that
+// as fatal ends the clone before the credentials are ever offered, so round 0
+// records the message and carries on; round 1 repeats the request with a
+// login card, and an error there (a genuinely wrong password, say) is fatal.
+// Canonical does the same: `(syncFlags & SYNC_CLONE)==0 || nCycle>0` guards
+// the abort in xfer.c client_sync.
+func (cs *cloneSession) serverError(cycle int, c *xfer.ErrorCard) error {
+	if c == nil {
+		panic("cloneSession.serverError: nil card")
+	}
+	if cycle == 0 {
+		cs.result.Messages = append(cs.result.Messages, c.Message)
+		return nil
+	}
+	return fmt.Errorf("sync.Clone: server error: %s", c.Message)
+}
+
+// recordCodes stores the project and server codes a push card carries, the
+// first time each arrives.
+func (cs *cloneSession) recordCodes(c *xfer.PushCard) error {
+	if c == nil {
+		panic("cloneSession.recordCodes: nil card")
+	}
+	if c.ProjectCode != "" && cs.projectCode == "" {
+		cs.projectCode = c.ProjectCode
+		if _, err := cs.repo.DB().Exec(
+			"REPLACE INTO config(name, value) VALUES('project-code', ?)",
+			c.ProjectCode,
+		); err != nil {
+			return fmt.Errorf("sync.Clone: store project-code: %w", err)
+		}
+	}
+	if c.ServerCode != "" && cs.serverCode == "" {
+		cs.serverCode = c.ServerCode
+		if _, err := cs.repo.DB().Exec(
+			"REPLACE INTO config(name, value) VALUES('server-code', ?)",
+			c.ServerCode,
+		); err != nil {
+			return fmt.Errorf("sync.Clone: store server-code: %w", err)
+		}
+	}
+	return nil
+}
+
+// receiveContent stores the content a file or cfile card delivered.
+// storedBlob is the cfile's payload in fossil's on-disk format, or nil.
+func (cs *cloneSession) receiveContent(
+	ctx context.Context, uuid, deltaSrc string, content, storedBlob []byte,
+) error {
+	// BUGGIFY: 2% chance corrupt file content to test hash verification.
+	// Relies on blob.Store verify-before-commit to catch corruption.
+	// storedBlob must be dropped alongside content: it decodes to the
+	// *original* bytes, so keeping it would let verbatim storage quietly mask
+	// the corruption this path exists to exercise, instead of the corrupted
+	// content being what gets hash-checked and stored.
+	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.corruptHash", 0.02) {
+		corrupted := make([]byte, len(content))
+		copy(corrupted, content)
+		if len(corrupted) > 0 {
+			corrupted[0] ^= 0xff
+		}
+		content = corrupted
+		storedBlob = nil
+	}
+	// BUGGIFY: 5% chance skip storing a received file, creating a phantom.
+	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
+		return nil
+	}
+	return cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
 }
 
 // handleFile stores a received file. storeReceivedFile now persists a

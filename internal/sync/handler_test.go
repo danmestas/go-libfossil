@@ -850,7 +850,8 @@ func TestHandleEmptyRequest(t *testing.T) {
 	}
 	// A completed reply carries nothing but the timestamp comment (draft §3).
 	if len(resp.Cards) != 1 {
-		t.Fatalf("empty request: got %d reply cards, want only the timestamp comment", len(resp.Cards))
+		t.Fatalf("empty request: got %d reply cards, want only the timestamp comment",
+			len(resp.Cards))
 	}
 	c, ok := resp.Cards[0].(*xfer.CommentCard)
 	if !ok || !strings.HasPrefix(c.Text, "timestamp ") || !strings.HasSuffix(c.Text, " errors 0") {

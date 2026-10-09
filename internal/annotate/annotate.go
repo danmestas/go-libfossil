@@ -1,8 +1,8 @@
 package annotate
 
 import (
+	"bytes"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -60,30 +60,29 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 	// this loop caches can go stale; the cache is dropped when Annotate returns.
 	cache := content.NewCache(annotateCacheBytes)
 
-	// Load file content at StartRID.
 	fileContent, err := loadFileAt(r, opts.StartRID, opts.FilePath, cache)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: load file at start: %w", err)
 	}
-
-	// Get version info for start commit.
 	startInfo, err := versionInfoFor(r, opts.StartRID)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: version info for start: %w", err)
 	}
-
-	// Split into lines and attribute all to start.
-	lines := splitLines(string(fileContent))
-	result := make([]Line, len(lines))
-	for i, l := range lines {
-		result[i] = Line{Text: l, Version: startInfo}
+	start, ok := breakIntoLines(fileContent)
+	if !ok {
+		return nil, fmt.Errorf(
+			"annotate: %s is binary or has a line over %d bytes", opts.FilePath, lengthMask)
 	}
 
-	if len(result) == 0 {
-		return result, nil
+	credit, versions := walkAncestors(r, opts, fileContent, start, startInfo, cache)
+	result := make([]Line, len(start))
+	for i, d := range start {
+		v := credit[i]
+		if v < 0 {
+			v = len(versions) - 1 // in the oldest version the walk reached
+		}
+		result[i] = Line{Text: d.text, Version: versions[v]}
 	}
-
-	walkParentChain(r, opts, lines, result, cache)
 	return result, nil
 }
 
@@ -100,73 +99,84 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 // throughput, and cutting it would buy nothing.
 const annotateCacheBytes = 256 << 20
 
-// walkParentChain walks the primary parent chain from opts.StartRID, pushing
-// line attributions back to the earliest ancestor that contains the same line.
-func walkParentChain(r *repo.Repo, opts Options, currentLines []string, result []Line, cache *content.Cache) {
-	currentRID := opts.StartRID
-	steps := 0
-
-	// origin[i] is the start-version line that line i of currentLines traces
-	// back to, or -1 once that line has stopped matching. result is indexed by
-	// start-version line, so every write goes through this mapping.
-	origin := make([]int, len(currentLines))
-	for i := range origin {
-		origin[i] = i
+// walkAncestors walks the primary parent chain from opts.StartRID the way
+// fossil's annotate does. Each ancestor version of the file is diffed
+// against the starting version, not against the next newer one, and a start
+// line the ancestor lacks is credited to the version just newer than it, the
+// first time that happens. versions lists the versions walked, newest first;
+// credit[i] indexes it, or is -1 for a line every version walked contains.
+//
+// A run of check-ins that leave the file unchanged counts as its oldest
+// check-in, which is where fossil's annotate, reading mlink, sees that
+// version of the file appear.
+func walkAncestors(
+	r *repo.Repo, opts Options, startContent []byte, start []dline,
+	startInfo VersionInfo, cache *content.Cache,
+) (credit []int, versions []VersionInfo) {
+	credit = make([]int, len(start))
+	for i := range credit {
+		credit[i] = -1
 	}
-	following := len(origin)
-
-	for following > 0 {
-		// Check limit.
+	versions = []VersionInfo{startInfo}
+	untagged := len(start)
+	currentRID, currentContent := opts.StartRID, startContent
+	for steps := 0; untagged > 0; steps++ {
 		if opts.Limit > 0 && steps >= opts.Limit {
 			break
 		}
-
-		// Get primary parent.
+		if opts.OriginRID > 0 && currentRID == opts.OriginRID {
+			break
+		}
 		parentRID, err := primaryParent(r, currentRID)
 		if err != nil || parentRID <= 0 {
 			break
 		}
-
-		// Check origin boundary.
-		if opts.OriginRID > 0 && currentRID == opts.OriginRID {
-			break
-		}
-
-		// Load file in parent.
 		parentContent, err := loadFileAt(r, parentRID, opts.FilePath, cache)
 		if err != nil {
-			// File doesn't exist in parent — all remaining lines belong to current.
-			break
+			break // the file is new here: what is left belongs to this version
 		}
-
 		parentInfo, err := versionInfoFor(r, parentRID)
 		if err != nil {
 			break
 		}
-
-		parentLines := splitLines(string(parentContent))
-
-		// Compute LCS to find which current lines are unchanged from parent.
-		matches := lcsMatch(parentLines, currentLines)
-		parentOrigin := make([]int, len(parentLines))
-		for i := range parentOrigin {
-			parentOrigin[i] = -1
+		currentRID = parentRID
+		if bytes.Equal(parentContent, currentContent) {
+			versions[len(versions)-1] = parentInfo
+			continue
 		}
-		following = 0
-		for curIdx, parIdx := range matches {
-			if parIdx >= 0 && origin[curIdx] >= 0 {
-				// This line exists in the parent — push attribution back.
-				result[origin[curIdx]].Version = parentInfo
-				parentOrigin[parIdx] = origin[curIdx]
-				following++
+		currentContent = parentContent
+		if parent, ok := breakIntoLines(parentContent); ok {
+			untagged -= creditInsertions(credit, diffAll(parent, start), len(versions)-1)
+		}
+		versions = append(versions, parentInfo)
+	}
+	return credit, versions
+}
+
+// creditInsertions credits to version v every start line the edit script
+// inserts that has no credit yet, and returns how many it credited: fossil's
+// annotation_step.
+func creditInsertions(credit []int, edit []int, v int) int {
+	if v < 0 {
+		panic("annotate.creditInsertions: negative version")
+	}
+	if len(edit)%3 != 0 {
+		panic("annotate.creditInsertions: edit script is not triples")
+	}
+	credited, line := 0, 0
+	for i := 0; i < len(edit); i += 3 {
+		line += edit[i]
+		for j := 0; j < edit[i+2]; j, line = j+1, line+1 {
+			if credit[line] < 0 {
+				credit[line] = v
+				credited++
 			}
 		}
-
-		currentRID = parentRID
-		currentLines = parentLines
-		origin = parentOrigin
-		steps++
 	}
+	if line > len(credit) {
+		panic("annotate.creditInsertions: edit script runs past the file")
+	}
+	return credited
 }
 
 // loadFileAt loads the content of a file at a given checkin RID, serving both
@@ -235,65 +245,4 @@ func primaryParent(r *repo.Repo, rid libfossil.FslID) (libfossil.FslID, error) {
 		return 0, err
 	}
 	return libfossil.FslID(pid), nil
-}
-
-// splitLines splits text into lines, preserving the trailing newline behavior.
-// A trailing newline does NOT produce an extra empty line.
-func splitLines(s string) []string {
-	if s == "" {
-		return nil
-	}
-	s = strings.TrimRight(s, "\n")
-	if s == "" {
-		return nil
-	}
-	return strings.Split(s, "\n")
-}
-
-// lcsMatch computes a mapping from indices in "cur" to indices in "par"
-// using the longest common subsequence. For each index in cur, the returned
-// slice contains the matching index in par, or -1 if no match.
-func lcsMatch(par, cur []string) []int {
-	m, n := len(par), len(cur)
-	result := make([]int, n)
-	for i := range result {
-		result[i] = -1
-	}
-
-	if m == 0 || n == 0 {
-		return result
-	}
-
-	// Build LCS table.
-	dp := make([][]int, m+1)
-	for i := range dp {
-		dp[i] = make([]int, n+1)
-	}
-	for i := 1; i <= m; i++ {
-		for j := 1; j <= n; j++ {
-			if par[i-1] == cur[j-1] {
-				dp[i][j] = dp[i-1][j-1] + 1
-			} else if dp[i-1][j] >= dp[i][j-1] {
-				dp[i][j] = dp[i-1][j]
-			} else {
-				dp[i][j] = dp[i][j-1]
-			}
-		}
-	}
-
-	// Backtrack to find matching pairs.
-	i, j := m, n
-	for i > 0 && j > 0 {
-		if par[i-1] == cur[j-1] {
-			result[j-1] = i - 1
-			i--
-			j--
-		} else if dp[i-1][j] >= dp[i][j-1] {
-			i--
-		} else {
-			j--
-		}
-	}
-
-	return result
 }

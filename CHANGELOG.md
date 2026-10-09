@@ -62,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write each line's attribution by its position in an older version, so lines
   were credited to the wrong check-in, and an older version with more lines
   than the starting one panicked with an index out of range.
+- `Repo.Annotate` credits lines the way `fossil annotate` does (#256, #257).
+  It now uses a port of fossil's own line diff and, like fossil, diffs each
+  older version against the starting one. Where a line repeats (blank lines,
+  braces), which copy counts as new depends on the diff's tie-breaking, and
+  go-libfossil's diff used to pick differently, crediting such lines to other
+  check-ins. Trailing blank lines are no longer dropped from the result. On
+  the RFC, althttpd, pikchr and wapp repositories every annotated file now
+  matches `fossil annotate` line for line. A line's text no longer includes a
+  trailing carriage return, a leading byte-order mark is ignored, and a file
+  fossil will not diff (one with a NUL byte, or a line over 32,767 bytes)
+  returns an error. Annotate no longer allocates a table the size of both
+  versions at every step.
 - `Checkout.Checkin` records pending merges as merge parents, including
   merges made by the fossil binary (#244). It used to drop them, so a
   merge committed through go-libfossil looked like an ordinary commit.

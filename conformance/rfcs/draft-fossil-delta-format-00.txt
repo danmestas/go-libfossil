@@ -1,0 +1,896 @@
+
+
+
+
+Network Working Group                                    D. R. Hipp, Ed.
+Internet-Draft                                                    Fossil
+Intended status: Standards Track                                 S. Beal
+Expires: 7 January 2027                                        libfossil
+                                                              D. Shearer
+                                                             6 July 2026
+
+
+                        The Fossil Delta Format
+                      draft-fossil-delta-format-00
+
+Abstract
+
+   Fossil is a distributed version-control system that stores content
+   compactly by encoding one byte sequence as a delta against another it
+   resembles.  This document specifies the Fossil delta encoding: a
+   header giving the target byte-count, a sequence of copy and literal
+   segments, and a trailing checksum.  It specifies the procedure for
+   applying a delta to a source to reconstruct the target, the
+   conditions under which a decoder must report an error, and the
+   requirements on delta producers.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 7 January 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 1]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+   2.  Conventions and Terminology . . . . . . . . . . . . . . . . .   3
+   3.  Delta Format  . . . . . . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Integer Encoding  . . . . . . . . . . . . . . . . . . . .   5
+     3.2.  Header  . . . . . . . . . . . . . . . . . . . . . . . . .   5
+     3.3.  Segments  . . . . . . . . . . . . . . . . . . . . . . . .   6
+       3.3.1.  Copy Segment  . . . . . . . . . . . . . . . . . . . .   6
+       3.3.2.  Literal Segment . . . . . . . . . . . . . . . . . . .   6
+     3.4.  Trailer . . . . . . . . . . . . . . . . . . . . . . . . .   6
+   4.  Applying a Delta  . . . . . . . . . . . . . . . . . . . . . .   7
+     4.1.  Target-Size Query . . . . . . . . . . . . . . . . . . . .   9
+     4.2.  Absent Source . . . . . . . . . . . . . . . . . . . . . .   9
+   5.  Encoder Notes . . . . . . . . . . . . . . . . . . . . . . . .   9
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .  10
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  11
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .  11
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .  11
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .  11
+   Appendix A.  Anomalies  . . . . . . . . . . . . . . . . . . . . .  12
+   Appendix B.  Examples . . . . . . . . . . . . . . . . . . . . . .  12
+     B.1.  Worked Example  . . . . . . . . . . . . . . . . . . . . .  12
+     B.2.  Integer Encoding  . . . . . . . . . . . . . . . . . . . .  14
+     B.3.  Checksum Computation  . . . . . . . . . . . . . . . . . .  14
+     B.4.  Empty Target  . . . . . . . . . . . . . . . . . . . . . .  15
+   Appendix C.  Collected ABNF . . . . . . . . . . . . . . . . . . .  15
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  16
+
+1.  Introduction
+
+   Fossil is a distributed version-control system that retains the
+   entire history of a project.  Over its life a project accumulates
+   many versions of the same file, most differing from the previous
+   version by only a few lines; storing every version in full would be
+   needlessly large.  Fossil avoids that by storing some artifacts as a
+   _delta_, a compact description of how to rebuild one byte sequence
+   from another that it closely resembles.  This document specifies the
+   byte format of those deltas and the procedure for applying one to
+   recover the target.
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 2]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   A delta encodes one byte sequence, the target, as a set of
+   instructions for reconstructing it from another byte sequence, the
+   source.  The instructions are of two kinds: copy a run of bytes from
+   the source, and insert a run of literal bytes carried in the delta.
+   Where the target shares long runs with the source, copy instructions
+   make the delta smaller than the target.
+
+   A delta is itself a byte sequence and may be stored and named the
+   same way as any other content.  A delta does not name its source; the
+   source is supplied by the caller.  The association between a delta
+   and its source is recorded by the storage or transfer layer, outside
+   the delta.  The enclosing layer that names stored content and
+   verifies its integrity is the Fossil Artifact Format
+   [FossilArtifact]; a delta held as a stored artifact is named and
+   verified there as well.  This document specifies only the delta bytes
+   and their application.
+
+   Section 3 specifies the format.  Section 4 specifies the application
+   procedure and its rejection conditions.  Section 5 gives informative
+   notes on producers.  Appendix A records errata.  Appendix B gives
+   worked examples.  Appendix C gives the collected grammar in Augmented
+   Backus-Naur Form (ABNF) [RFC5234].
+
+2.  Conventions and Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   Source:  The byte sequence a delta is applied against.
+
+   Target:  The byte sequence a delta reconstructs; its length is
+      declared in the delta header.
+
+   Delta:  The byte sequence specifying how to reconstruct a target from
+      a source.
+
+   Segment:  One instruction in a delta: a copy or a literal.
+
+   Artifact:  As defined in [FossilArtifact].  A delta may be stored and
+      named as an artifact, but a delta's own bytes and application are
+      specified in this document.
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 3]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+3.  Delta Format
+
+   A delta is a header, a sequence of zero or more segments, and a
+   trailer, concatenated with no separator other than the bytes each
+   part defines.  Every integer in a delta is encoded as specified in
+   Section 3.1.  Decoder behavior on malformed input (a truncated or
+   unterminated delta, an unrecognized opcode byte, or output that would
+   exceed the declared target length) is specified in Section 4.
+
+   The byte layout of a delta is shown below.  This figure is an
+   informative overview; the field encodings are specified in the
+   subsections that follow and collected in Appendix C.
+
+      Header:
+
+        +-----------------+------+
+        | target length   |  LF  |
+        | (int)           | 0x0a |
+        +-----------------+------+
+
+      Segment (zero or more), each one of:
+
+        copy     +-------+---+--------+---+
+                 | count | @ | offset | , |
+                 | (int) |   | (int)  |   |
+                 +-------+---+--------+---+
+                 = copy <count> source bytes from <offset>
+
+        literal  +-------+---+-----------------+
+                 | count | : | payload         |
+                 | (int) |   | (<count> bytes) |
+                 +-------+---+-----------------+
+                 = insert <count> literal bytes
+
+      Trailer:
+
+        +-----------------+------+
+        | checksum        |  ;   |
+        | (int)           | 0x3b |
+        +-----------------+------+
+
+      int = base-64 integer (Section 3.1)
+      @ = 0x40   : = 0x3a   , = 0x2c   ; = 0x3b   LF = 0x0a
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 4]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+3.1.  Integer Encoding
+
+   An integer in the canonical producer form is an unsigned value
+   written in base 64, most significant digit first, with no leading
+   zeros; the value zero is the single character 0.  Conforming
+   producers MUST use this form.  The 64 digit characters, in ascending
+   value order from 0 to 63, are:
+
+   0 1 2 3 4 5 6 7 8 9
+   A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+   _
+   a b c d e f g h i j k l m n o p q r s t u v w x y z
+   ~
+
+   Digit values 0 through 9 are the characters 0 through 9; 10 through
+   35 are A through Z; 36 is _; 37 through 62 are a through z; and 63 is
+   ~.
+
+   A reader decoding an integer consumes bytes that are digits and stops
+   at the first byte that is not a digit; that byte is the opcode or
+   separator that follows the integer.  Bytes with values 0x80 through
+   0xFF are not members of the 64-character alphabet and terminate
+   integer accumulation.
+
+   The Appendix C grammar requires each integer to contain at least one
+   digit (integer = 1*DIGIT64), so an integer field with no digits lies
+   outside that grammar; the grammar does not, by itself, exclude a
+   field written with leading zero digits.  The canonical form emitted
+   by a conforming producer additionally carries no leading zeros; both
+   the empty form and the leading-zero form are outside conforming
+   producer output.  Fossil-as-shipped decoders accept these forms; this
+   specification does not require all decoders to do so.  A decoder MAY
+   reject a delta containing either form; a decoder that accepts them
+   treats a field with no digits as the value zero and a field with
+   leading zeros as its decoded value.  Existing implementations differ
+   in their treatment of these forms.
+
+   All integer values emitted by conforming producers MUST be less than
+   2^32.  A decoder MAY reject a delta in which a decoded integer
+   reaches or exceeds 2^32; otherwise, decoder effects for such values
+   are implementation-defined and not interoperable.  This specification
+   does not require or assert uniform rejection of those inputs.
+
+3.2.  Header
+
+   The header is the target length as a base-64 integer, followed by the
+   byte 0x0a (LF):
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 5]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   header = integer LF
+
+   The integer gives the length in bytes of the reconstructed target.  A
+   decoder reads it to determine the size of the output before
+   processing segments.  A decoder MUST reject a delta whose header
+   integer is not immediately followed by 0x0a.
+
+3.3.  Segments
+
+3.3.1.  Copy Segment
+
+   A copy segment names a run of bytes from the source to copy into the
+   target:
+
+   copy = count "@" offset ","
+
+   count and offset are base-64 integers.  The segment copies count
+   bytes from the source beginning at zero-based byte position offset
+   into the target.  A decoder MUST reject a copy segment where the
+   comma (0x2c) is absent.  The count is the exact number of bytes
+   copied; a count of zero copies zero bytes.  A conforming encoder MUST
+   NOT emit a copy segment with a count of zero.  Whether a copy's
+   offset and count lie within the source is checked when the delta is
+   applied (Section 4).
+
+3.3.2.  Literal Segment
+
+   A literal segment carries bytes from the delta directly into the
+   target:
+
+   literal = count ":" payload
+
+   count is a base-64 integer.  The segment copies count bytes from the
+   delta immediately following the colon into the target.
+
+   The payload is opaque bytes.  It MAY contain the byte 0x0a and any
+   other byte; it is located by the count that precedes it and is not
+   delimited by any byte within it.  A reader MUST consume exactly count
+   payload bytes by counting from after the colon and MUST NOT scan the
+   payload for a separator.  The only structural 0x0a byte in a delta is
+   the one that ends the header; a 0x0a byte within a literal payload is
+   data.
+
+3.4.  Trailer
+
+   The delta ends with a trailer opcode:
+
+   trailer = checksum ";"
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 6]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   checksum is a base-64 integer encoding the 32-bit checksum of the
+   reconstructed target.  A producer MUST emit the checksum
+   unconditionally.  This requirement applies even when a decoder elects
+   not to verify it.  A decoder MAY verify the checksum against the
+   target it has reconstructed; a decoder that verifies MUST reject the
+   delta on mismatch.  A decoder that does not verify the checksum still
+   requires the trailer syntax but performs no checksum-mismatch
+   rejection at the delta layer.
+
+   The checksum is computed as follows.  Divide the target byte sequence
+   into successive big-endian 32-bit unsigned words.  Sum all complete
+   four-byte words into a 32-bit unsigned accumulator, letting the
+   accumulator wrap at 2^32.  For any remaining bytes shorter than four
+   (call them z[0], z[1], z[2] in order), add each to the accumulator:
+   z[0] shifted left by 24 bits, z[1] shifted left by 16 bits, and z[2]
+   shifted left by 8 bits.  The resulting 32-bit unsigned value is the
+   checksum.
+
+   A decoder MUST treat the delta as complete upon encountering the
+   trailer opcode; bytes following the trailer in the buffer MAY be
+   ignored.
+
+4.  Applying a Delta
+
+   To reconstruct the target, a reader is given the source bytes and the
+   delta bytes.  Integers are decoded as specified in Section 3.1, and
+   the segment grammar is given in Section 3.3 and collected in
+   Appendix C.  The reader proceeds:
+
+   1.  Reject the delta if it is zero bytes long.
+
+   2.  Read the header integer as the target length.  Reject the delta
+       if the byte after the integer is not 0x0a.  Allocate an output
+       buffer of the target length.  Set the output position to zero.
+
+   3.  While unread delta bytes remain, read the next integer (count)
+       and examine the byte that follows it:
+
+       *  @: Read the offset integer and require a comma (0x2c) after
+          it; reject if absent.  Reject if offset plus count exceeds the
+          source length, using arithmetic that does not overflow for
+          large values.  Reject if the output position plus count would
+          exceed the target length.  Otherwise copy count bytes from the
+          source at offset to the output and advance the output position
+          by count.
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 7]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+       *  :: Reject if count exceeds the bytes remaining in the delta.
+          Reject if the output position plus count would exceed the
+          target length.  Otherwise copy the count payload bytes
+          following the colon to the output, advance the output position
+          by count, and advance past the payload in the delta.
+
+       *  ;: Reject if the output position does not equal the target
+          length from the header.  If the decoder performs checksum
+          verification, verify the count integer as the checksum of the
+          output buffer (Section 3.4), and reject on mismatch.  If the
+          decoder does not verify the checksum, no checksum-mismatch
+          check is performed.  Reconstruction is complete; the output is
+          the target.
+
+       *  Any other byte: Reject.
+
+   4.  If the end of the delta is reached without encountering ;,
+       reject.
+
+   A decoder MUST report a failure indication for each condition that
+   triggers a rejection above.  Beyond the zero-length delta rejected in
+   Section 4 (step 1), these conditions are:
+
+   1.   The header integer is not followed by 0x0a.
+
+   2.   Integer accumulation exhausts the delta buffer mid-field.
+
+   3.   A copy comma (0x2c) is absent.
+
+   4.   A copy count would cause the output position to exceed the
+        target length.
+
+   5.   A copy offset plus count exceeds the source length.
+
+   6.   A literal count would cause the output position to exceed the
+        target length.
+
+   7.   A literal count exceeds the remaining delta bytes.
+
+   8.   A checksum mismatch (applies only to decoders that verify).
+
+   9.   The output position at the trailer does not equal the target
+        length.
+
+   10.  An opcode byte is not in the set {'@', ':', ';'}.
+
+   11.  The delta ends without a ';' trailer.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 8]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   Error granularity (a single failure code versus distinct codes per
+   condition) is implementation-defined.
+
+   The integer compatibility cases described in Section 3.1 -- empty
+   fields, leading-zero fields, and decoded values at or above 2^32 --
+   are not added to this list as unconditional rejection conditions.  A
+   decoder that accepts any of those inputs still applies the structural
+   and bounds checks above to the value it uses.
+
+   A decoder MUST NOT require, or reject a delta based on, a particular
+   segmentation, rolling-hash window size, hash-chain depth, or copy-
+   emission strategy; these are encoder choices and are not part of the
+   format.
+
+4.1.  Target-Size Query
+
+   An implementation MAY read the target byte-count by reading only the
+   header integer and the immediately following 0x0a byte, without
+   reading, requiring, or validating any later segment or trailer bytes.
+   Such a reader MUST return a failure indication when the buffer is
+   empty or when the header integer is not immediately followed by 0x0a.
+   No bytes are required after that terminating 0x0a for the query to
+   succeed.
+
+4.2.  Absent Source
+
+   The decoder operates on resident byte buffers.  It has no mechanism
+   to request or await an absent source; the caller MUST supply the
+   complete source before invoking the decoder.
+
+   An implementation SHOULD verify that the source is available before
+   invoking the decoder.  When a delta source artifact is not held, the
+   repository layer records the dependency and defers reconstruction
+   until the source becomes available.  The mechanisms by which a
+   repository requests and receives missing content from peers are
+   specified in the Fossil Sync Protocol [FossilSync].
+
+5.  Encoder Notes
+
+   This section is informative.
+
+   A producer is given a source and a target and emits a delta whose
+   application to the source yields the target.  Any sequence of copy
+   and literal segments that, when applied, reproduces the target
+   exactly is a valid delta; the format does not require a particular
+   segmentation.  Each segment a producer emits follows the grammar of
+   Section 3.3, and the delta ends with the trailer of Section 3.4.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 9]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   The rolling-hash window size, hash-chain search depth, and copy-
+   emission cost threshold are properties of a specific encoder
+   implementation and are not observable in the delta format.
+
+   When the source is 16 bytes or shorter, no copy segment can produce
+   output more compact than the equivalent literal.  An encoder MAY in
+   this case emit the entire target as one literal segment followed
+   directly by the trailer.
+
+6.  Security Considerations
+
+   The trailer checksum is a 32-bit additive sum.  It detects accidental
+   corruption of a reconstructed target but is not collision-resistant.
+   Integrity of stored content depends on the artifact name, which is a
+   cryptographic hash of the artifact content verified by the layer that
+   holds the artifact.
+
+   A decoder that does not verify the checksum cannot detect corruption
+   of the reconstructed target at the delta layer.  It still consumes
+   the mandatory trailer syntax, but integrity assurance for such a
+   decoder depends on the artifact-hash mechanism of the enclosing
+   protocol.
+
+   A parser MUST NOT read beyond the declared end of the delta buffer;
+   integer accumulation MUST terminate when the buffer boundary is
+   reached.  In particular, a zero-length delta MUST be rejected before
+   any read attempt; the buffer is confirmed non-empty in Section 4,
+   step 1.
+
+   A failed delta application MUST NOT be reported as success.  Callers
+   MUST inspect the return value and MUST discard the output buffer on
+   failure.
+
+   A decoder SHOULD use the target length declared in the header as the
+   maximum bound on per-segment output accumulation before beginning
+   segment processing; implementations that defer this check to the
+   trailer opcode may allow per-segment accumulation to grow beyond the
+   declared size before the running-total check rejects.  Separately,
+   the header-declared target length is itself an untrusted value;
+   implementations in resource-constrained environments SHOULD validate
+   it against application-level limits before allocating.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 10]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   Bytes with values 0x80 through 0xFF are not members of the
+   64-character alphabet and MUST be treated as terminators in integer
+   position.  An implementation that masks the high bit of an integer
+   byte before alphabet lookup silently accepts 64 of these bytes as
+   valid digits, producing a parse result that diverges from conformant
+   implementations on adversarially constructed input.  Well-formed
+   deltas are unaffected, as conformant encoders never emit such bytes.
+
+   Values at or above 2^32 are outside conformant producer output
+   (Section 3.1).  A decoder MAY reject such a delta, but this document
+   does not require or claim uniform rejection.  Decoder behavior is not
+   interoperable: decoders accumulating in 32-bit types can wrap at
+   2^32, while decoders using wider types can accumulate the full value;
+   such deltas have no interoperable meaning.  Conformant deltas do not
+   exercise this path.
+
+7.  IANA Considerations
+
+   This document has no IANA actions.
+
+8.  References
+
+8.1.  Normative References
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/rfc/rfc5234>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+8.2.  Informative References
+
+   [FossilArtifact]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Artifact Format", Work
+              in Progress, Internet-Draft, draft-fossil-artifact-format-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 11]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   [FossilSync]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sync Protocol", Work
+              in Progress, Internet-Draft, draft-fossil-sync-protocol-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
+
+Appendix A.  Anomalies
+
+   The following errata appear in existing Fossil documentation.  This
+   appendix records the erroneous statements and the corresponding
+   behavior specified in the body of this document.
+
+   *Integer byte order.* One passage in the Fossil delta format
+   documentation describes integers as written "LSB first."  This is
+   incorrect.  Integers are written most-significant digit first.  The
+   passage describes the internal order in which digits are collected
+   before reversal during encoding, not the byte order in the emitted
+   delta.  Section 3.1 specifies the emitted order.
+
+   *Checksum modulus.* The Fossil delta format documentation states that
+   the checksum is computed "modulo 2^32-1."  This is incorrect.
+   Section 3.4 specifies an unsigned 32-bit sum with natural wraparound,
+   which is modulo 2^32.
+
+   *Zero copy count.* The Fossil delta format documentation states that
+   a copy count of zero means "copy the rest of the input."  This
+   document does not adopt that statement.  Under Section 4, step 3, a
+   count of zero copies zero bytes, and conforming encoders do not emit
+   zero-count copy segments.
+
+Appendix B.  Examples
+
+   Applying each delta to its source yields the target shown.  Byte
+   lengths are stated.  In text representations, the byte 0x0a is
+   written \n where it must be distinguished from a line break
+   introduced for layout.  In hex dumps, non-printable bytes appear as .
+   in the ASCII column.
+
+B.1.  Worked Example
+
+   This example encodes a 151-byte target from a 102-byte source.  The
+   source (102 bytes) is:
+
+   The quick brown fox jumps over the lazy dog. A Fossil delta
+   encodes byte-level differences compactly.\n
+
+   The target (151 bytes) is:
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 12]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   The quick brown fox jumps over the sleeping fox. A Fossil delta
+   encodes byte-level differences compactly.\n An example delta
+   target with appended tail.\n
+
+   The delta is 79 bytes.  Hex dump (8 bytes per row; 0x0a shown as .):
+
+   00000000: 324e 0a5a 4030 2c43  2N.Z@0,C
+   00000008: 3a73 6c65 6570 696e  :sleepin
+   00000010: 6720 666f 7877 4067  g foxw@g
+   00000018: 2c69 3a20 416e 2065  ,i: An e
+   00000020: 7861 6d70 6c65 2064  xample d
+   00000028: 656c 7461 2074 6172  elta tar
+   00000030: 6765 7420 7769 7468  get with
+   00000038: 2061 7070 656e 6465   appende
+   00000040: 6420 7461 696c 2e0a  d tail..
+   00000048: 3250 3472 7258 3b    2P4rrX;
+
+   Segment-by-segment decode:
+
+   Header (bytes 0-2): 2N followed by 0x0a.
+
+   Digit values: 2 = 2, N = 23.  Target-size = 2 x 64 + 23 = *151*.
+
+   Segment 0 (bytes 3-6): Z@0, (copy).
+
+   Count Z = 35.  Offset 0 = 0.  Copy source[0:35] = The quick brown fox
+   jumps over the (35 bytes).
+
+   Segment 1 (bytes 7-20): C:sleeping fox (literal).
+
+   Count C = 12.  Payload: sleeping fox (12 bytes, no terminator).
+
+   Segment 2 (bytes 21-24): w@g, (copy).
+
+   Count w = 59.  Offset g = 43.  Check: 43 + 59 = 102 = source length.
+   Copy source[43:102] = . A Fossil delta encodes byte-level differences
+   compactly.\n (59 bytes).
+
+   Segment 3 (bytes 25-71): i: followed by 45 bytes (literal).
+
+   Count i = 45.  Payload (45 bytes, contains 0x0a): ` An example delta
+   target with appended tail.\n`.
+
+   Running output total: 35 + 12 + 59 + 45 = *151* = target-size.
+
+   Trailer (bytes 72-78): 2P4rrX;.
+
+   The six-digit integer 2P4rrX decodes (MSB-first):
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 13]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   '2'(2)  v = 2
+   'P'(25) v = 2*64  + 25 = 153
+   '4'(4)  v = 153*64 + 4 = 9796
+   'r'(54) v = 9796*64+54 = 626998
+   'r'(54) v = 626998*64+54 = 40127926
+   'X'(33) v = 40127926*64+33 = 2568187297  (0x99136DA1)
+
+   Checksum = 2568187297.  Section 3.4 applied to the 151-byte target
+   yields the same value (Appendix B.3).  Output position equals target-
+   size; reconstruction is complete.
+
+B.2.  Integer Encoding
+
+   The following table gives the encoding of values drawn from this
+   example.  The 64-character alphabet in ascending value order:
+
+   Index:  0  1  2  3  4  5  6  7  8  9
+   Char:   0  1  2  3  4  5  6  7  8  9
+
+   Index: 10 11 12 13 ... 23 24 25 ... 35
+   Char:   A  B  C  D ...  N  O  P ...  Z
+
+   Index: 36
+   Char:   _
+
+   Index: 37 38 39 ... 43 44 45 ... 59 ... 62 63
+   Char:   a  b  c ...  g  h  i ...  w ...  z  ~
+
+   Encoding examples from the worked delta:
+
+   Value   Encoding  Digit values
+   0       0         0(0)
+   12      C         C(12)
+   35      Z         Z(35)
+   43      g         g(43)
+   45      i         i(45)
+   59      w         w(59)
+   151     2N        2(2), N(23): 2*64+23 = 151
+
+B.3.  Checksum Computation
+
+   The checksum is applied to the 151-byte target of Appendix B.1.
+
+   The target divides into 37 complete 32-bit big-endian words (bytes
+   0-147) and 3 remaining bytes (bytes 148-150: 0x6c, 0x2e, 0x0a).
+
+   Selected words from the summation (all values unsigned 32-bit):
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 14]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+   word[ 0] = 0x54686520  ("The ")
+   word[ 1] = 0x71756963  ("quic")
+   ...
+   Sum after 37 words = 0x2ce563a1
+
+   Remaining 3 bytes (z[0]=0x6c, z[1]=0x2e, z[2]=0x0a):
+
+   Add z[2] << 8  = 0x00000a00 -> 0x2ce56da1
+   Add z[1] << 16 = 0x002e0000 -> 0x2d136da1
+   Add z[0] << 24 = 0x6c000000 -> 0x99136da1
+
+   Checksum = 0x99136DA1 = 2568187297, matching the trailer integer
+   2P4rrX decoded in Appendix B.1.
+
+B.4.  Empty Target
+
+   A delta encoding an empty target (zero bytes) from any source has the
+   form:
+
+   0\n0;
+
+   Hex:
+
+   00000000: 300a 303b  0.0;
+
+   The header 0 declares a target-size of zero.  There are no segments.
+   The trailer integer 0 encodes the checksum of the zero-byte output,
+   which is zero (the sum accumulator is never incremented).  The output
+   position is 0, equal to the target-size, so the delta is accepted.
+
+Appendix C.  Collected ABNF
+
+   The following grammar is in ABNF [RFC5234].  The literal payload and
+   the copied source bytes are opaque bytes located by count (Sections
+   3.3 and 4) and are shown here as a counted rule rather than by
+   content.  This grammar describes the canonical delta form and has no
+   trailing-suffix production; as stated in the body, a decoder MAY
+   ignore bytes that follow the trailer opcode, and where this grammar
+   and the body prose differ on decoder tolerance, the body prose
+   governs.
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 15]
+
+Internet-Draft             Fossil Delta Format                 July 2026
+
+
+delta     = header *segment trailer
+header    = integer LF
+segment   = copy / literal
+copy      = integer "@" integer ","
+literal   = integer ":" payload
+            ; <integer> opaque bytes; MAY contain LF;
+            ; located by count, not by scanning
+trailer   = integer ";"
+integer   = 1*DIGIT64
+DIGIT64   = %x30-39 / %x41-5A / "_" / %x61-7A / "~"
+            ; value 0-9, A-Z=10-35, _=36, a-z=37-62, ~=63
+payload   = *OCTET      ; exactly <count> octets, bound by the preceding
+                          ; integer field; ABNF cannot express this length,
+                          ; so the count governs (Section 3.3)
+LF        = %x0A
+
+Authors' Addresses
+
+   D. Richard Hipp (editor)
+   Fossil
+
+
+   Stephan Beal
+   libfossil
+
+
+   Dan Shearer
+   Email: dan@shearer.org
+   URI:   https://shearer.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 16]

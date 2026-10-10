@@ -1,0 +1,1736 @@
+
+
+
+
+Network Working Group                                    D. R. Hipp, Ed.
+Internet-Draft                                                    Fossil
+Intended status: Standards Track                                 S. Beal
+Expires: 7 January 2027                                        libfossil
+                                                              D. Shearer
+                                                             6 July 2026
+
+
+  The Fossil Distributed Version Control System: Repository State and
+                          Check-in Resolution
+                       draft-fossil-repo-state-00
+
+Abstract
+
+   Fossil is a distributed version-control system that records history
+   as an append-only set of immutable, content-addressed artifacts.
+   Facts such as which check-in is the latest on a branch, or what a tag
+   currently points to, are not stored but derived from that set.  This
+   document specifies how a Fossil repository derives its check-in graph
+   views — branches, tags, leaves, and closed markers — from the
+   crosslinked set of stored structural artifacts, and derives the
+   "current trunk" check-in from those artifacts together with the
+   repository-local main-branch setting.  It defines the parent graph
+   built from manifest parent cards, the crosslink processing that turns
+   tag cards into repository tag state, the propagation of branch and
+   other tags, the enumeration of leaves, and the resolution of a
+   symbolic branch or tag name to a single check-in.  It is a companion
+   to the Fossil Artifact Format [FossilArtifact], which defines the
+   syntax of the cards whose downstream repository-state effect is
+   specified here, and to the Fossil Sync Protocol [FossilSync].
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 7 January 2027.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 1]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .   4
+   2.  Terminology . . . . . . . . . . . . . . . . . . . . . . . . .   5
+   3.  Check-in DAG Construction . . . . . . . . . . . . . . . . . .   8
+     3.1.  Linkage record shape  . . . . . . . . . . . . . . . . . .   8
+     3.2.  Primary parent vs. merge parents  . . . . . . . . . . . .   8
+     3.3.  Ancestry direction and traversal  . . . . . . . . . . . .   9
+   4.  Crosslink Processing  . . . . . . . . . . . . . . . . . . . .   9
+     4.1.  T-card syntax validation  . . . . . . . . . . . . . . . .   9
+     4.2.  Crosslink procedure . . . . . . . . . . . . . . . . . . .  10
+     4.3.  Rejection conditions  . . . . . . . . . . . . . . . . . .  11
+     4.4.  Unclassifiable artifacts  . . . . . . . . . . . . . . . .  12
+     4.5.  Comment rendering of crosslink effects  . . . . . . . . .  12
+     4.6.  Serialization of tag artifacts  . . . . . . . . . . . . .  13
+   5.  Tag Types and Propagation . . . . . . . . . . . . . . . . . .  13
+     5.1.  Tag Type Values . . . . . . . . . . . . . . . . . . . . .  13
+     5.2.  Storage Model . . . . . . . . . . . . . . . . . . . . . .  13
+     5.3.  Direct Application Procedure  . . . . . . . . . . . . . .  14
+     5.4.  Propagation Algorithm . . . . . . . . . . . . . . . . . .  15
+     5.5.  Blocking Conditions . . . . . . . . . . . . . . . . . . .  16
+   6.  Branch Membership and Naming  . . . . . . . . . . . . . . . .  17
+     6.1.  Branch of a check-in  . . . . . . . . . . . . . . . . . .  17
+     6.2.  Branch creation . . . . . . . . . . . . . . . . . . . . .  17
+     6.3.  Enumerating branches  . . . . . . . . . . . . . . . . . .  18
+     6.4.  A note on branch current  . . . . . . . . . . . . . . . .  19
+   7.  Leaves  . . . . . . . . . . . . . . . . . . . . . . . . . . .  19
+     7.1.  Definition  . . . . . . . . . . . . . . . . . . . . . . .  19
+     7.2.  Normative leaf test . . . . . . . . . . . . . . . . . . .  19
+     7.3.  Maintenance algorithm . . . . . . . . . . . . . . . . . .  20
+     7.4.  Open leaves and closed-marker semantics . . . . . . . . .  21
+     7.5.  Leaf-set enumeration and ambiguity  . . . . . . . . . . .  21
+     7.6.  Triggers for re-evaluation  . . . . . . . . . . . . . . .  21
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 2]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+     7.7.  Relationship to name resolution . . . . . . . . . . . . .  22
+   8.  Symbolic Name Resolution  . . . . . . . . . . . . . . . . . .  22
+     8.1.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .  22
+     8.2.  Rule  . . . . . . . . . . . . . . . . . . . . . . . . . .  23
+     8.3.  Procedure . . . . . . . . . . . . . . . . . . . . . . . .  23
+     8.4.  Branch-walk rule  . . . . . . . . . . . . . . . . . . . .  26
+     8.5.  Distinguishing name resolution from open-leaf
+           enumeration . . . . . . . . . . . . . . . . . . . . . . .  26
+   9.  Current Trunk and Forks . . . . . . . . . . . . . . . . . . .  26
+   10. Worked Example: Fork with a Closed Leaf . . . . . . . . . . .  28
+     10.1.  Fork at trunk, one leaf closed . . . . . . . . . . . . .  28
+     10.2.  Edge case: a closed leaf newer than the open leaf  . . .  29
+     10.3.  Generalization . . . . . . . . . . . . . . . . . . . . .  29
+   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  29
+   12. Security Considerations . . . . . . . . . . . . . . . . . . .  29
+   13. Normative References  . . . . . . . . . . . . . . . . . . . .  30
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  31
+
+1.  Introduction
+
+   Fossil is a distributed version-control system.  Like Git, it lets
+   many people track the full history of a project and exchange that
+   history with peers; unlike most, it keeps the entire project — the
+   files, their change history, and the project's wiki, tickets, and
+   forum — in a single file.
+
+   Fossil records history by never changing anything it has already
+   written.  Every check-in, tag, and edit is stored as an immutable,
+   content-addressed _artifact_: a run of bytes named by its own hash,
+   which can be added but never modified or removed.  A project's
+   history is therefore an append-only pile of such artifacts.
+
+   That design gives strong integrity, but the artifacts do not answer
+   everyday questions on their own.  Which check-in is the latest on
+   trunk?  Which branch does a check-in belong to?  Which leaves are
+   still open?  What does a tag point to now?  No artifact records these
+   facts directly.  Each is implied by the whole set of artifacts and
+   must be computed from it, by reading the parent links and tag records
+   spread across the artifacts and resolving them into an ordered
+   picture of what the repository currently contains.
+
+   This document specifies that computation.  The stored artifacts are
+   defined byte-for-byte by the companion Fossil Artifact Format
+   [FossilArtifact].  Given them, this document defines how to derive a
+   repository's _state_: the check-in ancestry graph, branch and tag
+   membership, the set of open leaves, closed markers, and the single
+   check-in that a symbolic name such as a branch name or trunk resolves
+   to at a given moment.  None of these views is stored.  An
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 3]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   implementation recomputes them from the artifacts, and this
+   specification says exactly how, so that two independent
+   implementations reading the same artifacts reach the same answers.
+   The current-trunk check-in is the exception: it is derived from the
+   artifact set together with the repository-local main-branch setting
+   (Section 9), so two repositories that hold the same artifacts but are
+   configured with different main-branch settings can resolve different
+   current-trunk check-ins.
+
+   It is a companion to two other documents.  [FossilArtifact] defines
+   the _syntax_ of the artifacts and cards this document reads; where a
+   rule below names a hash, a card field, or a content type without
+   defining it, the definition is there.  The Fossil Sync Protocol
+   [FossilSync] defines how artifacts move between peers.  This document
+   sits above both.  It defines the _meaning_ a repository computes on
+   top of a given set of artifacts, independent of how they arrived.
+
+1.1.  Scope
+
+   This document is limited to determining _which check-in_ constitutes
+   a given repository state, and how that determination follows from the
+   parent and tag (P/T) card syntax defined in [FossilArtifact].  Parent
+   and tag cards on check-in artifacts establish ancestry, branch
+   membership, and the resolution of named or symbolic references to a
+   specific check-in; this is the downstream repository-state meaning
+   computed over the P-card and T-card syntax that [FossilArtifact]
+   defines and delegates to this document.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 4]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   For its inputs, this document relies on [FossilArtifact] for the
+   byte-level grammar of the P and T cards, the artifact-hash format and
+   permitted lengths, the determination of an artifact's content type,
+   and the resolution of an artifact hash to the stored check-in it
+   names; the check-in modification time (mtime) that orders check-ins
+   is carried by the manifest date defined there.  It relies on
+   [FossilArtifact] for delta-manifest reconstruction (merging a delta
+   manifest's file cards against its baseline manifest), and on
+   [FossilDelta] only for the byte-level content-delta encoding beneath
+   that.  All ordering rules in this document operate on the stored
+   numeric event.mtime and tagxref.mtime values derived from those
+   artifact timestamps.  Accordingly, interoperable repository-state
+   results are reproducible only when the stored D-card timestamp
+   denotes a deterministic instant.  The compatibility-only relative
+   literals now, subsec, and subsecond described in [FossilArtifact] do
+   not meet that condition and are outside the reproducible repository-
+   state semantics specified here.  Given those inputs, this document
+   specifies only the repository-state views computed over them: the
+   parent graph, tag and branch state, leaves, and symbolic-name
+   resolution.  Where a rule below refers to a hash, a card field, or a
+   content type without defining it, that definition is in
+   [FossilArtifact].
+
+   Two things are out of scope.  Reconstruction of the actual file tree
+   belonging to a check-in (walking delta manifests to materialize file
+   contents) is defined by the delta-manifest procedures in
+   [FossilArtifact], not here.  Synchronization of repository state
+   across peers is defined separately in [FossilSync].  This document
+   assumes both as given.
+
+   No normative claims are established in this section.  The terminology
+   and structural rules that follow are normative and use BCP14 keywords
+   where applicable.
+
+2.  Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   This section defines terms used throughout this document and its
+   companion specifications [FossilArtifact], [FossilSync], and
+   [FossilDelta].  The on-artifact syntax this document reads — the
+   notion of a _card_, a _manifest_, and the individual card letters —
+   is defined in [FossilArtifact] and is used here as given.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 5]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Row id (rid):  The local integer identifier assigned to a stored
+      artifact within one repository.  The derived views in this
+      document are computed over rid values: a hash names an artifact
+      globally, while its rid names the same artifact locally.  An rid
+      is local to a repository, is not part of the artifact model, and
+      is not synchronized between peers.
+
+   Check-in DAG:  The directed acyclic graph formed by check-in
+      artifacts connected through parent links.  Each check-in other
+      than an initial commit designates one or more parents,
+      establishing ancestry.
+
+   Primary parent:  The first parent listed on a check-in.  The primary
+      parent determines the check-in's place in the check-in DAG for
+      purposes of branch inheritance and ancestry walks.
+
+   Merge parent:  Any parent listed on a check-in beyond the primary
+      parent.  A check-in with one or more merge parents records the
+      joining of otherwise independent lines of development into a
+      single check-in.
+
+   Tag:  A named annotation associated with a check-in (rid) that either
+      asserts a property of that check-in and its descendants, or
+      revokes a previously asserted property.  Tags are recorded in a
+      tag table indexed by a fixed tagid; tagid 8 denotes the branch tag
+      ("branch") and tagid 9 denotes the closed tag ("closed").
+
+   Tag type:  Every tag application is recorded with a tagtype value
+      that determines its effect: a tagtype of 0 ("-") is a cancel tag,
+      a tagtype of 1 ("+") is a singleton tag, and a tagtype of 2 ("*")
+      is a propagating tag.  A tagtype greater than zero indicates the
+      tag is active, or in effect, for the rid to which it is attached.
+
+   Singleton tag:  A tag (tagtype 1) whose effect applies only to the
+      single check-in it is attached to and does not propagate to
+      descendant check-ins.
+
+   Propagating tag:  A tag (tagtype 2) whose effect applies to the
+      check-in it is attached to and, absent an intervening cancel, to
+      its descendant check-ins along the primary-parent/primary-child
+      chain — not across merge edges (Section 5).  The branch tag is a
+      propagating tag.
+
+   Cancel tag:  A tag (tagtype 0) that revokes a previously propagating
+      or singleton tag of the same name at or below the check-in it is
+      attached to.  A cancel tag is inactive by definition and stops the
+      propagation of the tag it cancels.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 6]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Branch:  The propagating tag of tagid 8 ("branch") and, by extension,
+      the set of check-ins over which that tag is in effect.  A check-
+      in's branch is determined by the innermost active branch tag that
+      reaches it along the primary-parent/primary-child chain — not
+      across merge edges (Section 5).
+
+   Leaf:  A check-in with no child on the same branch.  A check-in MAY
+      have children on other branches and still be a leaf of its own
+      branch; the canonical, normative definition is given in the Leaves
+      section.
+
+   Open leaf:  A leaf that does not have an active closed marker in
+      effect.  Open leaves represent lines of development still eligible
+      to receive new descendant check-ins.
+
+   Closed marker:  The tag of tagid 9 ("closed").  When in effect
+      (tagtype greater than zero) on a leaf, the closed marker indicates
+      that the leaf is not expected to receive further descendants.
+
+   Symbolic name:  A user-facing name for a branch, tag, or other
+      referenceable point in the check-in DAG.  Symbolic names supplied
+      to check-in targeting operations (for example, tag addition or
+      cancellation) are stored internally with a "sym-" prefix; commands
+      that accept a symbolic name MUST prepend "sym-" to the supplied
+      name unless an explicit raw-name option is given, in which case
+      the name is used unprefixed.
+
+   Reserved tag-name prefix:  The prefixes "sym-", "wiki-", "tkt-", and
+      "event-" are reserved and carry implementation-defined meaning
+      distinct from ordinary user tags.  Of these, only "sym-" MAY be
+      produced through ordinary user tagging operations; tags beginning
+      with "wiki-", "tkt-", or "event-" MUST NOT be created directly by
+      users, as they are reserved for internal use.
+
+   Current-trunk:  The check-in obtained by resolving the repository's
+      default branch name — the main-branch configuration setting, whose
+      default value is trunk — through symbolic-name resolution as
+      specified in this document: the check-in carrying that branch's
+      active tag with the greatest modification time (the sym-trunk tag
+      when the default branch is trunk, its usual value).  It is used as
+      the default target for operations that do not otherwise specify a
+      branch or check-in, and is not necessarily an open leaf — when a
+      closed or non-leaf check-in carries the trunk tag with a later
+      modification time, that check-in is the current-trunk.
+
+   The tag, tag-type, and reserved-prefix rules defined above govern the
+   T-card and P-card grammar for tag artifacts and parent references
+   specified in [FossilArtifact].
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 7]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+3.  Check-in DAG Construction
+
+   Each check-in manifest declares its ancestry through its P-card
+   parent references, as defined in [FossilArtifact].  Following that
+   grammar, a manifest MAY carry zero parent references (an initial
+   check-in, whose P card is empty) or several.  A reader reconstructs
+   the check-in DAG by materializing each manifest's parent references
+   as parent/child linkage records.  It traverses those records rather
+   than re-parsing manifest content on every query.
+
+3.1.  Linkage record shape
+
+   Each parent/child relationship is recorded as one row keyed on the
+   pair (parent-id, child-id), together with:
+
+   *  an indicator of whether the parent is the child's primary parent,
+
+   *  the check-in's modification time, and
+
+   *  a baseline id used for delta-manifest reconstruction (see
+      [FossilArtifact]).
+
+   The pair (parent-id, child-id) is unique in the linkage table: a
+   given parent contributes at most one linkage row to a given child.  A
+   manifest MAY name the same parent more than once, because
+   [FossilArtifact] does not require P-card parent references to be
+   sorted or deduplicated.  The linkage table records such repeats as
+   the single row for that pair.
+
+3.2.  Primary parent vs. merge parents
+
+   A check-in manifest's P-card list may name more than one parent hash.
+   When more than one parent is present, exactly one linkage row per
+   child carries the primary-parent indicator set.  This is the row
+   corresponding to the first parent hash listed on the manifest's
+   P-card.  All other parent hashes listed on the same P-card produce
+   linkage rows with the indicator unset, marking them as merge parents.
+   If a check-in names exactly one parent, that sole parent row carries
+   the primary-parent indicator and is the primary parent.
+
+   If a P-card repeats a parent hash, no second linkage row is created.
+   The row retains the primary-parent indicator selected by that hash's
+   first occurrence: a repeated first parent remains primary, and a
+   repeated later parent remains a merge parent.
+
+   A reader constructing the DAG MUST treat the single row per child
+   with the primary-parent indicator set as that child's mainline
+   ancestor for linear-history operations (e.g., "first parent"
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 8]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   traversal, timeline mainline display).  Rows with the indicator unset
+   identify additional ancestors contributed by a merge.  They MUST be
+   included when the reader needs full ancestry (e.g., merge-base
+   computation, ancestor-set membership tests), but they MUST NOT be
+   treated as the mainline predecessor.
+
+3.3.  Ancestry direction and traversal
+
+   The linkage records form directed edges from parent to child.
+   Because manifests reference their parents by hash and are immutable
+   once stored, edge direction is fixed at write time and does not
+   change under later operations.
+
+   Two access patterns are supported by construction:
+
+   *  given a parent id, find all children it links to (forward
+      traversal, in commit order); and
+
+   *  given a child id, find all its parents — both primary and merge —
+      using the linkage index keyed on (child-id, parent-id).
+
+   A reader walking ancestry from a given check-in toward its origins
+   performs child-to-parent lookups using the (child-id, parent-id)
+   index.  A reader walking descent from a given check-in toward its
+   descendants performs parent-to-child lookups using the (parent-id,
+   child-id) key.  Both directions read from the same set of linkage
+   records — there is no separate descendant-only or ancestor-only
+   store.
+
+4.  Crosslink Processing
+
+   This section specifies how a stored structural artifact's tag cards
+   (T-cards) are validated and routed into the repository's tag and
+   branch state.  T-card syntax is defined normatively in
+   [FossilArtifact].  This section covers parse-time validation of that
+   syntax and the crosslinking procedure that converts a validated card
+   into applied tag/branch effects.
+
+4.1.  T-card syntax validation
+
+   Each T-card carries a tag name, an artifact UUID (or the literal
+   self-tag marker), and an optional value.  The following constraints
+   are enforced at parse time, before any crosslinking effect is
+   applied:
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                 [Page 9]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   *  The tag name MUST begin with one of the prefix characters -, +, or
+      *, denoting cancellation, singleton, and propagating tags
+      respectively.  A tag name lacking one of these prefixes is a
+      syntax error and parsing of the manifest fails.
+
+   *  A tag name, after the prefix character is removed, MUST NOT
+      consist entirely of hexadecimal digits at any length — the tag-
+      name validity rule specified by the T-card grammar in
+      [FossilArtifact].  This keeps a tag name from being mistaken for
+      an artifact hash reference; a card violating it is rejected at
+      parse time.
+
+   *  T-cards within a single manifest MUST appear in strictly ascending
+      order, sorted first by tag name and then by UUID.  A T-card that
+      is out of order relative to its predecessor is a syntax error.
+
+   *  A T-card's UUID field may be the literal *, which designates a
+      self-tag: the tag applies to the manifest currently being parsed
+      rather than to some other artifact named by UUID.
+
+   A manifest that fails any of the above checks MUST be rejected in its
+   entirety; no partial tag state is derived from a syntactically
+   invalid card set.
+
+4.2.  Crosslink procedure
+
+   Once a manifest's T-cards have been validated, the crosslink step
+   (manifest_crosslink) converts them into tag/branch state:
+
+   1.  *Target resolution.* For each T-card, the tag's target artifact
+       (rid) is determined as follows.  If the card is a self-tag (the
+       UUID field present and holding the literal *), the target is the
+       artifact being crosslinked; otherwise the target is obtained by
+       resolving the card's UUID to an rid.  If that UUID names an
+       artifact not yet stored, it resolves to a phantom placeholder —
+       an rid that carries no content yet.  The tag effect is recorded
+       against that placeholder and becomes visible in the derived views
+       once the referenced artifact arrives and is crosslinked.
+       Unresolved parent references in the check-in DAG (Section 3) are
+       handled the same way: an absent parent hash yields a phantom
+       placeholder rather than a fatal error.
+
+   2.  *Applicability.* The T-card loop that applies tags (one
+       tag_insert per card) runs only when the manifest's content type
+       is control, manifest, or event.  For artifacts of other types the
+       loop is skipped entirely and no T-card-derived tags are applied
+       from that artifact.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 10]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   3.  *Cluster artifacts.* Artifacts of type cluster are handled
+       outside the T-card loop: an implicit singleton cluster tag is
+       applied directly via tag_insert, independent of any T-cards the
+       artifact may carry.
+
+   4.  *Propagation.* After the T-card loop completes, if the check-in
+       being crosslinked has a resolved primary parent, the parent's tag
+       state MUST be re-propagated to its descendants by invoking the
+       propagation walk of Section 5.4 rooted at the parent.  This step
+       keeps propagating tags consistent across the check-in graph
+       whenever a new crosslink is applied beneath an existing parent.
+       In addition, whenever a T-card in steps 1-3 applies a propagating
+       (*) or cancel (-) tag to a resolved target, the propagation walk
+       of Section 5.4 MUST be invoked rooted at that target, so that the
+       applied or cancelled tag reaches the target's descendants.  A
+       singleton (+) tag affects only its target and triggers no walk.
+
+   5.  *Idempotency.* Crosslinking MUST be idempotent in persisted
+       linkage and event state: a repeat MUST NOT create an additional
+       linkage or event record.  Fossil normally uses the presence of an
+       mlink row for the manifest as its linkage-derivation guard.  A
+       parentless manifest with no file-level mlink rows does not
+       satisfy that guard on a repeat, so Fossil may execute the
+       linkage/event derivation again; its REPLACE INTO event operation
+       nevertheless leaves one event row for the check-in.  An
+       implementation MAY use a different completion marker, but MUST
+       preserve the same idempotent persisted result.  Tag application
+       and propagation in steps 1-4 still execute.
+
+   6.  *Batching.* A sequence of crosslinks MAY be bracketed as a single
+       batch, delimited by matching begin/end operations against
+       temporary tables for the duration of one transaction.  On
+       completion of the batch, any singleton reparent operations
+       recorded during the batch are re-applied, ensuring that a parent
+       changed mid-batch is reflected in the final reparented state
+       rather than an intermediate one.  See [FossilSync] for how
+       batches of crosslinks arise from a synchronization exchange.
+
+4.3.  Rejection conditions
+
+   A T-card, and by extension the manifest containing it, MUST be
+   rejected at parse time, before any crosslink effect, when:
+
+   *  the tag name lacks a -, +, or * prefix;
+
+   *  the tag name, after prefix removal, consists entirely of
+      hexadecimal digits at any length (the tag-name validity rule of
+      [FossilArtifact]); or
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 11]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   *  the T-card sequence within the manifest is not strictly ascending
+      by (name, uuid).
+
+   No crosslink effect (tag_insert, propagation, or linkage derivation)
+   is ever applied on behalf of a manifest that fails these checks.
+
+4.4.  Unclassifiable artifacts
+
+   A repository conforming to [FossilArtifact] may contain stored
+   artifacts that a conformant parser declines to classify; the
+   required-card rule of [FossilArtifact] §5.2 is one such case, and
+   instances of it exist in the reference repository (see
+   [FossilArtifact] Appendix C, _Wiki user card_).
+
+   An artifact whose octets hash to the name under which it is stored
+   has been stored and transmitted correctly, whether or not the reader
+   classifies it.  State assembly MUST NOT treat a classification
+   failure of such an artifact as a failure of the assembly.  The
+   artifact is opaque to repository state: it contributes no check-in
+   linkage, no tag effect, and no branch membership, and assembly
+   proceeds as though it were an artifact of a non-participating type
+   under §4.2 step 2.
+
+   An artifact whose octets do *not* hash to the name under which it is
+   stored is a distinct integrity failure.  This section does not apply
+   to it, and an implementation MUST reject it.
+
+   An implementation SHOULD distinguish these two conditions in any
+   diagnostic it reports.  Reporting a classification failure as
+   repository damage misdirects the operator toward a defect that the
+   verified hash has already excluded.
+
+4.5.  Comment rendering of crosslink effects
+
+   Human-readable comment generation over a crosslink recognizes certain
+   T-card shapes as compound edits rather than independent tag
+   operations:
+
+   *  A T-card whose name is the literal *branch is rendered as a "Move
+      to branch" comment; the paired cancellation/addition of the
+      corresponding sym- tag is suppressed from the rendered comment
+      rather than shown as a separate entry.
+
+   *  T-cards named -sym- and *sym- are rendered individually as "Cancel
+      tag" and "Add propagating tag" respectively, except when paired
+      with a *branch card, in which case they are folded silently into
+      the same "Move to branch" edit rather than appearing twice.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 12]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   This rendering behavior reflects presentation of crosslink effects
+   and does not alter the underlying tag state produced by the procedure
+   above.
+
+4.6.  Serialization of tag artifacts
+
+   A tag or antitag originates as a control artifact containing exactly
+   one T-card of the form T <c><prefix><name> <uuid> [value], where the
+   leading character c is selected according to the tag's type.
+   Producing such an artifact consists of writing this control artifact
+   via content storage and then invoking the crosslink procedure defined
+   above against it.  The newly stored artifact's T-card is then
+   validated and applied using the same rules as any other manifest's
+   T-cards.  See [FossilArtifact] for the control artifact's card
+   grammar.  The byte-level delta encoding used when any artifact,
+   including a tag artifact, is stored or transmitted as a content delta
+   is defined in [FossilDelta].
+
+5.  Tag Types and Propagation
+
+5.1.  Tag Type Values
+
+   Every tag reference is classified into exactly one of three types,
+   encoded as a small integer and persisted per (artifact, tag) pair:
+
+   *  *cancel* (value 0, surface syntax -): removes or blocks a tag's
+      effect.
+
+   *  *singleton* (value 1, surface syntax +): applies the tag to the
+      target artifact only.
+
+   *  *propagating* (value 2, surface syntax *): applies the tag to the
+      target artifact and carries it forward along the artifact's
+      primary-child chain.
+
+   The type is selected from the leading character of a T-card at
+   manifest-parse time: - selects cancel (0), + selects singleton (1),
+   and * selects propagating (2).  Any other leading character on a
+   T-card MUST be treated as a fatal crosslink error and MUST NOT be
+   accepted as a valid tag type.
+
+5.2.  Storage Model
+
+   Per-artifact tag state is recorded in a tagxref relation, keyed
+   uniquely per (artifact, tag).  Each row carries:
+
+   *  the resolved tagtype (0, 1, or 2);
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 13]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   *  a source-artifact identifier (srcid), which is the artifact whose
+      T-card directly applied the tag, or zero if the row instead
+      reflects a value propagated in from an ancestor;
+
+   *  an origin-artifact identifier (origid), naming the artifact that
+      originally holds the propagating tag;
+
+   *  the tag's value payload;
+
+   *  a modification time (mtime); and
+
+   *  the artifact the row describes (rid).  The UNIQUE constraint on
+      (rid, tag) means a given artifact holds at most one live entry per
+      tag at any time — later writes supersede earlier ones for that
+      pair.
+
+5.3.  Direct Application Procedure
+
+   When a tag is applied directly to an artifact:
+
+   1.  If an existing tagxref row for that (tag, artifact) pair already
+       carries an mtime greater than or equal to the incoming tag's
+       mtime, the write MUST be skipped.  Resolution between competing
+       tag applications on the same artifact is by timestamp: a strictly
+       later mtime supersedes an earlier one.  If two competing
+       applications for the same (tag, artifact) pair carry exactly
+       equal mtime, the >= skip rule makes the winner depend on write
+       order, so that equal-mtime case is implementation-defined rather
+       than crosslink-order-independent.
+
+   2.  Otherwise the row is replaced with the raw tag type (0, 1, or 2)
+       supplied by the T-card, srcid set to the artifact carrying the
+       T-card, and both origid and rid set to the target artifact.
+
+   3.  If the resolved type is cancel (0), the tag's value is cleared to
+       null before any further processing, erasing the value from cached
+       state as well as the stored row.
+
+   4.  Before propagation is attempted, a singleton type (1) is
+       downgraded to cancel (0).  A singleton (+) tag never propagates
+       its own value to children and contributes no inherited value to a
+       descendant.  When the tagged artifact is used as a propagation
+       source, the cancel it becomes blocks a same-named tag from
+       propagating through it to its descendants (Section 5.5).  A
+       propagating type (2) passes through unchanged.
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 14]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+5.4.  Propagation Algorithm
+
+   Propagation extends a tag's effect from an artifact to its
+   descendants along primary-parent/primary-child links only.  It MUST
+   NOT traverse merge (non-primary) parent/child links.  A propagating
+   tag introduced anywhere else in the DAG topology (e.g. reached only
+   via a merge edge) has no effect beyond the artifact it names.
+
+   The propagation entry point accepts only two tag types as input:
+   propagate (2) or cancel/block (0), and MUST reject any other value.
+   This restriction is enforced by construction.  When propagation is
+   driven from a parent artifact's full tag set, every singleton (1) tag
+   on that parent is first downgraded to cancel (0), so that a singleton
+   tag on a parent blocks propagation through that artifact rather than
+   propagating past it.
+
+   Given a starting artifact and a tag type of 0 or 2, propagation
+   proceeds as follows:
+
+   1.  Initialize a priority queue of candidate artifacts ordered by
+       mtime, seeded with the starting artifact.
+
+   2.  For each artifact dequeued, enumerate its primary children
+       (children reached via a primary, non-merge link).
+
+   3.  For each primary child, determine whether it qualifies to receive
+       the propagated value ("doit").  Propagation overwrites the
+       child's existing same-tag entry only when that entry has srcid
+       zero AND a modification time strictly earlier than the
+       propagating tag's modification time.  Equivalently, the child's
+       existing entry blocks the propagation whenever EITHER its srcid
+       is nonzero OR its modification time is greater than or equal to
+       the propagating tag's modification time.  A nonzero srcid marks
+       the entry as an origin override — a tag applied directly at that
+       artifact (or at a nearer ancestor) rather than merely inherited —
+       and is never overwritten by propagation.  When the two
+       modification times are exactly equal, the existing entry is
+       retained: propagation does not overwrite it.  A child that
+       currently has no same-tag entry always qualifies.
+
+   4.  For a qualifying child, apply the effect according to tag type:
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 15]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+       *  If the type is propagate (2), replace the child's tagxref row
+          with tagtype 2, srcid 0 (marking the row as propagated rather
+          than directly applied), origid set to the origin artifact of
+          the propagating tag, value set to the propagating tag's value,
+          and mtime set to the propagating tag's mtime.  A propagated
+          row therefore carries the origin tag's value and modification
+          time, not the child's own.
+
+       *  If the type is cancel (0), delete the child's tagxref row
+          entirely and clear its value.
+
+   5.  Each child that receives an update as a result of step 4 is
+       enqueued for further propagation, so that the walk continues
+       transitively down the primary-child chain.
+
+   6.  The walk terminates when the queue is empty — that is, when no
+       further primary child qualifies to receive the tag under the rule
+       in step 3.
+
+5.5.  Blocking Conditions
+
+   Propagation of a * tag along a primary-child chain is halted at any
+   artifact where either of the following holds:
+
+   *  The artifact carries a directly-applied (srcid nonzero) same-tag
+      entry — an explicit re-tag at that point in the chain overrides
+      the inbound propagation regardless of that entry's mtime.  (A
+      nonzero srcid blocks propagation unconditionally; the mtime
+      comparison in Section 5.4 applies only to inherited entries, whose
+      srcid is zero.)
+
+   *  The artifact carries a cancel (-) tag for the same tag name, which
+      deletes any propagated tagxref row at that artifact and prevents
+      the value from reaching that artifact's own primary children.
+
+   A singleton (+) tag never itself propagates, but per the downgrade
+   rule above it acts as a local cancel when present on an artifact
+   being used as a propagation source, which has the same blocking
+   effect as an explicit - tag at that point.
+
+   This algorithm is the complete definition of the "propagation until
+   blocked" behavior referenced, but not specified, elsewhere in this
+   document set.  [FossilArtifact] treats tag semantics at the manifest
+   level and defers to this section for the traversal and blocking rules
+   given here.  Interaction with synchronization transport is described
+   in [FossilSync].
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 16]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+6.  Branch Membership and Naming
+
+6.1.  Branch of a check-in
+
+   Every check-in belongs to exactly one branch.  A check-in's branch is
+   the value of its active sym-<name> designation as recorded through
+   the branch tag mechanism.  Implementations MUST determine branch
+   membership by locating a tagxref row for TAG_BRANCH associated with
+   the check-in whose value equals the branch name and whose tagtype
+   indicates the tag is active (tagtype > 0).  A check-in with no such
+   active tag row is attributed to the repository's default branch.  In
+   a conformant repository the first check-in of every branch —
+   including the initial check-in, which starts the default branch —
+   carries that branch's propagating branch tag and the matching
+   propagating sym-<branch> symbolic tag.  Every later check-in on the
+   branch therefore inherits both an active branch tag and the
+   resolvable symbolic name.  Creating a branch (including the default
+   branch at repository initialization) therefore MUST create the
+   sym-<branch> marker, without which the branch name would not resolve
+   (Section 8).  The default-branch fallback therefore governs only the
+   branch attributed to a check-in that carries no branch tag.  It does
+   not by itself make such a check-in the resolvable tip (Section 8) or
+   the open leaf (Section 7) of that branch, both of which operate on an
+   active branch or symbolic tag.
+
+   The default branch name is the value of the main-branch configuration
+   setting, which itself defaults to trunk when the setting is absent.
+   A conforming implementation MUST read the configured value, and MUST
+   fall back to trunk only when main-branch is unset.  It MUST NOT
+   assume a fixed string in the presence of an explicit setting.  See
+   [FossilArtifact] for the manifest card grammar that carries branch
+   and symbolic-name tags.
+
+6.2.  Branch creation
+
+   Creating a new branch is performed by writing two propagating tag
+   cards onto the branch-root manifest: a branch tag whose value is the
+   new branch name, and a marker sym-<name> tag of the same name.  Both
+   tags propagate forward to descendant check-ins per the propagating-
+   tag rules in Section 5 of this document, which is what causes
+   subsequent check-ins on that line of descent to inherit the branch's
+   identity until superseded.
+
+   Branch creation MUST also cancel every pre-existing active sym-* tag
+   on the branch-root check-in by emitting corresponding - (cancel)
+   cards, because symbolic tags are otherwise inherited from a check-
+   in's parent.  This ensures a newly created branch does not carry
+   forward the parent branch's symbolic names alongside its own.
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 17]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Branch creation MUST NOT succeed if the requested branch name already
+   names an open branch.  An implementation MUST check openness of the
+   candidate name before emitting the branch-root manifest and MUST
+   reject the operation if a branch of that name is already open.
+
+6.3.  Enumerating branches
+
+   The set of known branches is derived, not stored directly.  It is
+   computed by grouping tagxref rows where tag.tagname = 'branch' and
+   tagtype > 0 by their value, yielding one branch entry per distinct
+   value together with the maximum event.mtime and the count of check-
+   ins observed for that value.  The representative check-in of a branch
+   entry — the one whose short identifier and open/closed status a
+   listing reports — is the group member with the greatest event.mtime,
+   with ties resolved as in symbolic-name resolution (Section 8).  This
+   grouped view is the basis for branch listings; see [FossilSync] for
+   how such derived views interact with synchronization state.
+
+   A branch's closed/open status in this derived listing is determined
+   by checking for an active closed tag on a single representative row
+   (rid) chosen for the group, not by inspecting every check-in
+   belonging to the branch.  Implementations reproducing branch-list
+   semantics should be aware that this representative-row check is a
+   property of the grouping procedure and is not equivalent to asserting
+   that all check-ins on the branch carry the closed tag.  This listing
+   determination is deliberately distinct from the semantic branch-open
+   predicate of Section 9, which reports a branch as open exactly when
+   it has at least one open leaf (Section 7).  The two can disagree for
+   a forked branch: when the representative (greatest-mtime) check-in
+   carries an active closed tag while an older leaf on the same branch
+   is still open, the listing reports the branch closed even though an
+   open leaf exists.  Neither result is in error — they answer different
+   questions.  The listing column summarizes the state of the branch's
+   most recent check-in, whereas the Section 9 predicate reports whether
+   any open work remains.  This is the same recency-over-open/closed
+   divergence documented for name resolution in Section 8.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 18]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Branch listings support filtering by open/closed state, by private-
+   branch status, by a name glob, and by merged/unmerged state.  The
+   open/closed filter selects on the representative-row listing status
+   defined above, not on the Section 9 open-leaf predicate: a branch is
+   included in the closed set exactly when its representative row
+   carries an active closed tag.  Because that representative row is the
+   group's greatest-mtime member, with exact-mtime ties resolved as in
+   Section 8, the listing open/closed status of a branch whose top
+   members share an exact mtime is itself implementation-defined.  They
+   also support ordering by name or by modification time, optionally
+   reversed and optionally limited to the most-recently-modified
+   branches.
+
+6.4.  A note on branch current
+
+   Some code paths that report the "current" branch of a checkout look
+   up the tagxref.value for TAG_BRANCH on the checkout's rid without
+   filtering on tagtype > 0, in contrast to the branch-of-check-in
+   procedure defined above, which requires that filter.  This is a
+   textual inconsistency between the two code paths rather than an
+   intended alternate rule.  Implementations conforming to this
+   specification MUST apply the active-tag (tagtype > 0) filter
+   uniformly when determining branch membership, including when
+   reporting the current branch of a checkout, so that branch identity
+   is computed consistently regardless of entry point.
+
+7.  Leaves
+
+7.1.  Definition
+
+   A leaf is a check-in that has no child check-in on the same branch.
+   This set is, in principle, computable at query time by joining the
+   "plink" (parent-link) and "tagxref" (tag-cross-reference) relations,
+   but implementations precompute it into a dedicated leaf table for
+   performance.  The leaf table stores exactly one column, an integer
+   row identifier, and carries no open/closed metadata of its own.
+   Closed status is derived separately, as described below.
+
+7.2.  Normative leaf test
+
+   Implementations MUST determine that a check-in is a leaf if and only
+   if no parent-link row naming it as parent has a corresponding child
+   on the same branch.  This test MUST NOT be filtered by the primary/
+   non-primary (merge) distinction.  A same-branch child reached only
+   via a merge edge (a non-primary parent-link) still disqualifies the
+   check-in as a leaf.  This is the canonical, normative leaf
+   definition.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 19]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Implementations MAY also expose a narrower, primary-only child count
+   (counting only primary same-branch children) for other purposes.
+   Where an implementation's documentation for such a helper describes
+   it as testing whether a check-in "has zero children of any kind,"
+   that description MUST NOT be read as restating the canonical leaf
+   test above.  The canonical test in this section governs, and the
+   narrower helper's own filtered query governs its own semantics.
+
+7.3.  Maintenance algorithm
+
+   The leaf table MUST be kept consistent with the canonical leaf test
+   through the following procedures:
+
+   *  Full rebuild: implementations MUST support recomputing the entire
+      leaf table by selecting every check-in and excluding those that
+      have a same-branch child, with no primary/non-primary filter
+      applied.  The candidate set is every check-in, not only those that
+      appear as a child of some parent-link.  A check-in with no parent
+      at all (for example the sole check-in of a new repository, or any
+      root check-in) is a leaf when it has no same-branch child, and
+      MUST be included.  This is a whole-table recomputation, so its
+      cost scales with repository size.  Implementations SHOULD reserve
+      it for explicit rebuild operations rather than routine updates.
+
+   *  Incremental check: implementations MUST support recomputing leaf
+      membership for a single check-in: if that check-in has a same-
+      branch child (again, with no primary/non-primary filter), it MUST
+      be removed from the leaf table; otherwise it MUST be inserted,
+      tolerating the case where it is already present.
+
+   *  Deferred scheduling: implementations MUST schedule an incremental
+      leaf recheck for the affected check-in and for each of its direct
+      parents when a parent-link is created or a branch tag is applied
+      or propagated.  Establishing a new child can retroactively remove
+      a parent's leaf status.
+
+   *  Batch application: scheduled rechecks MUST be applied — each
+      queued check-in run through the incremental check — and the
+      schedule cleared, before the leaf table is considered consistent
+      for subsequent queries.  This batch-apply step is the point at
+      which a commit's leaf-table effects become visible.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 20]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+7.4.  Open leaves and closed-marker semantics
+
+   A leaf is open if and only if it is a member of the leaf table and
+   does not carry an active "closed" tag.  Determining closed status
+   MUST be done by testing for the existence of an active closed-tag
+   cross-reference row (a tag-cross-reference entry whose tag type
+   indicates an assignment, not a cancellation) on the check-in in
+   question.  Implementations MUST expose both a form suitable for
+   embedding as an existence-test expression, so that callers can negate
+   it to select the open subset directly, and a form that evaluates the
+   same test for a single, specific check-in.
+
+7.5.  Leaf-set enumeration and ambiguity
+
+   Given the open/closed distinction above, implementations MUST
+   enumerate the open leaves of a branch as follows: a check-in is an
+   open leaf of its branch if it is a member of the leaf table, is not
+   closed by the test above, and shares its branch with the check-in
+   under consideration.  When determining whether a specific check-in is
+   an "ambiguous" leaf — i.e., whether propagating from it is
+   underdetermined — implementations MUST first confirm the check-in is
+   itself a leaf, returning a negative result immediately if not.  They
+   MUST then test for the existence of at least one _other_ open leaf
+   sharing the same branch.  This ambiguity test necessarily queries the
+   precomputed leaf table rather than recomputing from parent-links
+   directly, so its correctness is contingent on the leaf table having
+   been kept in sync via the incremental-check and rebuild procedures
+   above.  A leaf table that has drifted out of sync will produce
+   incorrect ambiguity results even though the underlying parent-link
+   data is unchanged.
+
+   Where an implementation reports leaf ambiguity to a user, it SHOULD
+   enumerate every open leaf on the affected branch, ordered by
+   modification time descending, presenting each leaf's identifying
+   hash, timestamp, and internal row identifier.  It SHOULD also mark
+   whichever leaf corresponds to the current checkout, so the user can
+   distinguish the leaf they are already on from the other open leaves
+   competing for the branch tip.
+
+7.6.  Triggers for re-evaluation
+
+   Leaf status MUST be re-evaluated whenever branch topology changes in
+   a way that can add or remove a same-branch child relationship:
+
+   *  Directly applying a branch tag to a check-in MUST trigger a re-
+      evaluation of that check-in's own leaf status, since branch
+      reassignment can change which children are "same-branch."
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 21]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   *  When a branch tag propagates to descendants, each descendant that
+      gains or loses the propagating tag MUST have its leaf status re-
+      evaluated, since the same-branch relationship between it and its
+      parent may change as a result.
+
+   Both cases route through the deferred-scheduling and batch-
+   application procedure described above rather than performing an
+   immediate synchronous recomputation.
+
+7.7.  Relationship to name resolution
+
+   Leaf enumeration, as defined and computed in this section, is a
+   distinct operation from name resolution as specified in this
+   document.  Name resolution answers "what check-in does this name
+   refer to"; leaf enumeration answers "which check-ins on a branch
+   currently have no same-branch descendant, and are any of them still
+   open."  A name resolver MAY consult the leaf table as one candidate
+   source when resolving a symbolic branch-tip reference.  However, the
+   leaf table's consistency guarantees, its rebuild and incremental-
+   check procedures, and its ambiguity semantics are defined
+   independently of, and MUST NOT be conflated with, whatever precedence
+   or fallback rules a name resolver applies among competing candidate
+   check-ins.  See [FossilSync] for how leaf changes interact with
+   synchronization.
+
+8.  Symbolic Name Resolution
+
+8.1.  Scope
+
+   This section specifies the rule and procedure by which a symbolic
+   name (a branch name, tag name, or one of the reserved keywords below)
+   is resolved to a single check-in.  Symbolic name resolution is a
+   distinct operation from open-leaf enumeration: the two answer
+   different questions and MUST NOT be conflated.  Name resolution asks
+   "which check-in does this name currently refer to?" and answers with
+   the check-in carrying the active instance of the corresponding tag
+   that has the greatest event.mtime, as the Rule below specifies.
+   Open-leaf enumeration asks "which check-ins are open and have no
+   children on this branch?" and is an independent, closed/leaf-filtered
+   query.  A name resolves to exactly one check-in even when that check-
+   in is closed, is not a leaf, or both.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 22]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+8.2.  Rule
+
+   For a plain symbolic name N (a bare identifier that is not a hash, a
+   reserved keyword, or a recognized prefixed form), resolution MUST
+   proceed by finding the check-in carrying an active tag "sym-N"
+   (tagtype greater than zero) with the maximum value of event.mtime
+   among all check-ins carrying that active tag.  This is the terminal
+   fallback of name resolution.  If none of the special forms described
+   below match, this rule applies and MUST succeed or fail resolution
+   outright.
+
+   Two conditions explicitly MUST NOT hold for this selection:
+
+   *  Closed-ness of the candidate check-in MUST NOT filter or otherwise
+      affect the selection.  A check-in tagged "closed" is exactly as
+      eligible as one that is not.
+
+   *  Leaf-ness of the candidate check-in MUST NOT filter or otherwise
+      affect the selection.  A check-in that has children (i.e. is not a
+      leaf) is exactly as eligible as one that is.
+
+   The selection query joins only tag, tag-cross-reference, and event
+   data; it carries no join against, or predicate over, leaf status, and
+   no predicate over the "closed" tag.  An implementation MAY apply a
+   fast path that considers only the thirty most recently modified
+   candidates before a full scan over all candidates.  The fast path and
+   the full scan MUST apply identical tagtype-and-maximum-mtime
+   semantics and MUST yield the same result.  The fast path is an
+   optimization only; it has no observable effect on which check-in is
+   selected.
+
+   If two or more check-ins carrying the same active sym-tag share an
+   exactly equal, maximal event.mtime, the tie is broken by underlying
+   row ordering of the query engine and is implementation-defined.  No
+   normative tie-break rule is specified.
+
+8.3.  Procedure
+
+   Name resolution attempts the following forms, in order, before
+   falling through to the plain-name rule above:
+
+   1.  *rid:*DIGITS -- an undocumented form interpreted directly as a
+       numeric RID, optionally validated against the artifact's recorded
+       type.
+
+   2.  *tag:*NAME -- forces literal tag resolution via the same maximum-
+       active-tag-mtime rule described above, bypassing any attempt at
+       hash interpretation.
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 23]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   3.  Reserved keywords, matched by exact string:
+
+       *  *tip* resolves to the check-in (type "ci") having the global
+          maximum event.mtime, independent of any tag, whenever the
+          requested type is unconstrained or is itself a check-in type.
+          An exact-time tie is resolved by the underlying query-engine
+          row order and is implementation-defined.
+
+       *  *current* resolves to the RID of the open local checkout, and
+          is available only when a local checkout is open.
+
+       *  *prev* / *previous* resolves to the open checkout's primary
+          parent (the parent link marked primary).
+
+       *  *next* resolves to a child of the open checkout, ordering
+          candidates by primary-parent marking first and plink.mtime
+          second, both descending.  If candidates remain tied, the
+          underlying query-engine row order selects one and the result
+          is implementation-defined.
+
+       *  *ckout* (only when the requested type is "ci" or a checkout-
+          inclusive type) resolves to the sentinel checkout RID rather
+          than an ordinary artifact RID, and marks that a local checkout
+          is in use.
+
+   4.  *root:*BR -- resolves BR via this same procedure, then rewrites
+       the result to the parent-branch check-in from which BR originally
+       diverged (see the branch-walk rule below, requesting the "first
+       ancestor off branch" variant).
+
+   5.  *start:*BR -- resolves BR via this same procedure, then rewrites
+       the result to the earliest check-in belonging to BR's branch (the
+       branch-walk rule's "earliest still on branch" variant).
+
+   6.  *merge-in:*BR -- resolves BR via this same procedure, then
+       rewrites the result to the youngest ancestor on the branch from
+       which BR diverged, i.e. the most recent merge-in point.
+
+   7.  Date/time forms: an explicit *date:*TIMESTAMP prefix, a bare
+       date-time literal, the deprecated *utc:* prefix, and a
+       NAME*:*TIMESTAMP compound resolve to the most recent event whose
+       mtime is less than or equal to an upper-bound timestamp derived
+       as follows.  A date-only input is treated as YYYY-MM-DD
+       23:59:59.999; a minute-precision input as YYYY-MM-DD
+       HH:MM:59.999; and a whole-second input as YYYY-MM-DD
+       HH:MM:SS.999.  A fractional-second input with one to three digits
+       is copied, padded to three digits with trailing 9 digits, and,
+       unless the resulting millisecond field is already .999, advanced
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 24]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+       by one millisecond before the mtime <= comparison (for example,
+       .1 becomes .200, .12 becomes .130, .123 becomes .124, and .999
+       stays .999).  The deprecated *local:*TIMESTAMP form uses the same
+       mtime <= comparison but passes the timestamp text directly to the
+       underlying julianday() parser, without that upper-bound
+       expansion.  For a NAME*:*TIMESTAMP compound, candidates are
+       limited to events whose check-ins carry an active sym-NAME tag
+       (tagtype > 0); the greatest eligible event.mtime is selected,
+       with an exact-time tie resolved by the underlying query-engine
+       row order and therefore implementation-defined.
+
+   For portable resolution, a timestamp MUST use the absolute form YYYY-
+   MM-DDTHH:MM:SS[.fraction]Z.  Fossil also admits compatibility forms:
+   eight, twelve, or fourteen decimal digits, each optionally suffixed
+   by Z, which expand respectively to a date, minute, or second upper
+   bound; and hyphenated inputs beginning YYYY-MM-DD, whose remaining
+   syntax is accepted only when the underlying SQLite date/time parser
+   accepts it.  The date: form passes such an input through that parser
+   after compact-form expansion; a bare date-time requires the
+   hyphenated prefix; and NAME*:*TIMESTAMP accepts either form.  An
+   omitted Z is interpreted through Fossil's configured display-time
+   mode: as UTC when UTC display is selected, otherwise as local time
+   converted to UTC.  Implementations that support broader SQLite-
+   specific syntax MUST NOT treat it as portable across conforming
+   implementations. 8.  A hexadecimal string of length four up to the
+   maximum artifact-hash length is tried as an artifact-hash prefix,
+   matched against artifact content hashes by pattern.  If more than one
+   artifact hash matches the prefix, resolution MUST reject the name as
+   ambiguous, signaled by returning an RID of -1; it MUST NOT silently
+   pick one of the matches. 9.  The plain-name fallback described in the
+   Rule above.
+
+   If none of the preceding forms match and the name ends in exactly one
+   trailing punctuation character (for example, punctuation incidentally
+   captured when a name is lifted from surrounding prose or a URL),
+   resolution MUST retry recursively with that trailing character
+   stripped.
+
+   Independently of the above dispatch, when the caller's requested type
+   begins with "b" (a branch-type request), the effective type is
+   rewritten to "ci".  After the underlying name resolves by the
+   ordinary procedure, the result RID is post-processed through the
+   branch-walk rule's "earliest still on branch" variant, so that a
+   branch-type request yields the branch's first check-in rather than
+   the check-in the tag most recently pointed to.
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 25]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+8.4.  Branch-walk rule
+
+   The root:/start:/merge-in: forms, and the branch-type post-processing
+   step, all depend on a single walk: starting from a resolved check-in,
+   follow the primary-parent link (the parent link marked primary)
+   recursively toward the repository root, tracking at each step whether
+   the ancestor still carries the same active branch tag as the starting
+   check-in.  Depending on which variant is requested, the walk returns
+   either the earliest ancestor that still carries that same active
+   branch tag ("earliest still on branch"), or the first ancestor
+   encountered that no longer carries it ("first ancestor off branch").
+   This walk is independent of the closed/leaf-neutral selection rule
+   above: it is a parentage traversal, not a repeat of tag-and-mtime
+   selection, though its starting point is ordinarily produced by that
+   selection.
+
+8.5.  Distinguishing name resolution from open-leaf enumeration
+
+   Because closed-ness and leaf-ness are excluded from the selection
+   predicate, name resolution for a branch or tag name can, and in
+   general will, return a check-in that open-leaf enumeration would
+   never surface.  Consider a branch BR with an open, childless check-in
+   C1 recorded at mtime T1, and a later check-in C2 recorded at mtime T2
+   greater than T1, where C2 is closed (tagged "closed") and also
+   carries the active sym-BR tag.  The active sym-BR tag was reassigned
+   onto C2, for instance, by a subsequent commit or retag operation.
+   Resolving the name "BR" MUST return C2: it is the check-in carrying
+   the active sym-BR tag with the maximum event.mtime, and its closed
+   state and non-leaf status (if it has children) are immaterial to
+   selection.  An open-leaf enumeration over the same branch, by
+   contrast, would exclude C2 on the basis of its closed tag (or its
+   non-leaf status) and would instead surface C1 (or some other open,
+   childless check-in) as the branch's leaf.  The two operations are
+   answering different questions and MUST be treated as such by callers.
+   Resolving a name to "the check-in it refers to" is not equivalent to,
+   and MUST NOT be substituted for, asking "what are the open leaves of
+   this branch."  Tag artifacts and the tag data model referenced
+   throughout this section are defined in [FossilArtifact].
+
+9.  Current Trunk and Forks
+
+   The current trunk is determined by resolving the repository's
+   configured default branch name through the symbolic-name resolution
+   procedure defined in this document.  That procedure applies uniformly
+   to any branch name, including the default branch, and does not treat
+   the default branch as a special case.
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 26]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Current-trunk therefore has a repository-local input that the other
+   views do not.  The branch name to resolve comes from the main-branch
+   configuration setting (Section 6), which is a local value: it is not
+   an artifact and is not synchronized between peers.  Given that name,
+   resolution to a specific check-in is entirely artifact-derived.  Two
+   repositories that hold the identical set of artifacts but are
+   configured with different main-branch settings can therefore resolve
+   different current-trunk check-ins.  Current-trunk is thus not a pure
+   function of the artifact set alone; it is a function of the artifact
+   set together with the local main-branch setting.
+
+   A branch MAY have more than one leaf check-in.  A branch with more
+   than one leaf is, for the purposes of this specification, forked.
+   Symbolic-name resolution against a forked branch does not refuse and
+   does not raise an ambiguity error.  The resolution procedure selects
+   exactly one check-in among the candidates by maximum mtime
+   (modification time), and that check-in is returned as the resolution
+   of the branch name.
+
+   Independent of symbolic-name resolution and of the branch-listing
+   closed column (Section 6.3), an implementation determines whether a
+   branch is currently open by locating its open leaf.  A check-in
+   qualifies as a branch's open leaf, and implementations MUST treat it
+   as such, only when all of the following hold:
+
+   *  it carries an active branch tag (tag type greater than zero) whose
+      value equals the branch name;
+
+   *  it is present among the repository's current leaves; and
+
+   *  it does not carry an active closed tag (tag type greater than
+      zero).  A branch lacking any check-in meeting these three
+      conditions has no open leaf.  Branch-status reporting reflects
+      this determination directly.  A report of a branch as open,
+      including its open-as-of date and a short check-in identifier, is
+      produced exactly when a branch has an open leaf by the above test;
+      otherwise the branch is reported as not open.  When a branch has
+      more than one open leaf, any report that must name a single open
+      leaf — supplying one open-as-of date and one short check-in
+      identifier — MUST select the open leaf with the greatest mtime.
+      An exact-mtime tie among open leaves is resolved as in symbolic-
+      name resolution (Section 8) and is therefore implementation-
+      defined.
+
+   A branch's merge target is likewise a single-valued property rather
+   than an aggregate over the branch's leaves.  It is obtained by
+   following, from the branch's representative check-in, at most one
+   parent-child (plink) edge to a child check-in, and reading that
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 27]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   child's active branch-tag value.  A branch therefore has at most one
+   merge target under this procedure, never a set of targets, regardless
+   of how many leaves the branch itself has.  If the representative
+   check-in has more than one child, this document does not define which
+   child's branch-tag value is read.  If an implementation's underlying
+   query can return those children in more than one order, the selected
+   child's branch-tag value is implementation-defined.  This
+   specification therefore records the multi-child case as
+   implementation-defined rather than mandating a cross-implementation
+   rule.
+
+   When two or more candidate check-ins for a branch (or for trunk
+   specifically) share the identical maximum mtime, this specification
+   does not define which one is selected.  If an implementation's
+   underlying storage query can return tied rows in more than one order,
+   the selected check-in is implementation-defined.  A conforming
+   implementation MAY return any of the tied candidates, callers MUST
+   NOT rely on which candidate is returned, and two conforming
+   implementations MAY differ.  This specification deliberately does not
+   mandate a cross-implementation tie-break rule (such as selecting by
+   artifact hash or check-in identifier).  An exact tie is possible only
+   when two check-ins carry identical modification times to full
+   precision.
+
+10.  Worked Example: Fork with a Closed Leaf
+
+   These examples show two repository states in which open-leaf
+   enumeration and symbolic-name resolution diverge over the same graph.
+   In both states, closed filters the default leaves view but does not
+   change which check-in whatis and update resolve for trunk.
+
+10.1.  Fork at trunk, one leaf closed
+
+   In the first repository state, trunk forks after c4 trunk, producing
+   two trunk leaves and one feature-branch leaf.  Here leaves lists the
+   open trunk leaf [4167aef42f] and the open feature leaf [210d9276e4],
+   while omitting the closed trunk sibling [7aa867c048]. leaves --all
+   then restores [7aa867c048] alongside the same two open leaves.  The
+   closed trunk check-in therefore remains a leaf of the DAG and remains
+   on trunk; it is omitted only from the default open-leaf view.
+
+   The same repository state yields one scalar trunk resolution. whatis
+   trunk reports artifact
+   4167aef42fd2eb399b05ae64293a058e86435036f26c7a9262c26454156cda2e, and
+   update trunk checks out that same check-in.  In this state, closed-
+   ness changes leaf enumeration but does not affect branch-name
+   resolution or update targeting.
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 28]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+10.2.  Edge case: a closed leaf newer than the open leaf
+
+   In the second repository state, trunk again forks, but now the
+   surviving open leaf is older than its closed sibling.  Here leaves
+   lists only the older open leaf [b05cbea82b]. leaves --all lists both
+   trunk leaves and places the closed newer leaf [ee3a7eed71] ahead of
+   the older open leaf [b05cbea82b].
+
+   whatis trunk reports artifact
+   ee3a7eed71fb15bd4f468bfa71b8b79a47ad97678a2a226dadaaa23904dafc21,
+   even though the default open-leaf view omitted that check-in. update
+   trunk likewise moves the checkout from
+   b05cbea82bf9e747754eae8cc0eb7c070f87a1f1069c429a990f6ecc92e24580 to
+   ee3a7eed71fb15bd4f468bfa71b8b79a47ad97678a2a226dadaaa23904dafc21.  In
+   this state, leaves identifies the only open leaf, but it does not
+   predict the target that trunk name resolution selects.
+
+10.3.  Generalization
+
+   Taken together, these states show the branch/tag resolution rule
+   documented for name lookup.  Resolving a symbolic name such as trunk
+   is a pure max-mtime selection among the check-ins carrying an active
+   sym-<name> tag.  Closed-ness and leaf-ness are not inputs to that
+   selection, and they are not inputs to update's target computation
+   either. closed has a real effect on repository behavior, but that
+   effect is confined to the open-leaf enumeration view and to the
+   checks a client applies before committing or merging on top of a
+   closed check-in.  It does not filter, and cannot be relied upon to
+   filter, name resolution or update targeting.  Tooling that infers
+   "current" or "latest open work" from leaves output alone, without
+   separately resolving the branch or tag name it cares about, will
+   silently diverge from what update and whatis report whenever a closed
+   check-in is newer than the open leaves.  See [FossilArtifact] for the
+   underlying tag and event representation this resolution walks.
+
+11.  IANA Considerations
+
+   This document has no IANA actions.
+
+12.  Security Considerations
+
+   The crosslink state described in this document is a derived view.  It
+   is computed locally from received artifacts and is never itself
+   transmitted, negotiated, or authenticated as an independent object.
+   Tag and parent claims embedded in an artifact are asserted by the
+   peer that produced the artifact.  A recipient's crosslink state is
+   therefore only as trustworthy as the set of artifacts it has
+   admitted.
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 29]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   Implementations MUST treat crosslink state as derived data with no
+   independent trust basis.  A recipient MUST NOT grant an artifact's
+   tag or parent claims any weight beyond what the admission procedure
+   defined in [FossilArtifact] and [FossilSync] has already established
+   for that artifact.  In particular, a crosslink computed from an
+   artifact MUST be rejected or discarded whenever the artifact itself
+   would be rejected under those admission rules (for example, malformed
+   structure, failed integrity checks, or provenance the recipient does
+   not accept).
+
+   Because the trust boundary sits entirely at artifact admission, this
+   document defines no additional authentication, integrity, or
+   authorization mechanism for crosslink state itself.  Any weakness in
+   the admission checks specified in [FossilArtifact], [FossilSync], or
+   [FossilDelta] propagates directly into the derived crosslink view.
+   Conversely, correct enforcement of those checks is sufficient to
+   bound the trust an implementation extends to the views described
+   here.  Implementations SHOULD recompute crosslink state from the
+   currently admitted artifact set rather than caching it across changes
+   to that set.  This way, a later rejection or retraction of an
+   artifact is reflected in the derived view without requiring separate
+   revocation logic.
+
+13.  Normative References
+
+   [FossilArtifact]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Artifact Format", Work
+              in Progress, Internet-Draft, draft-fossil-artifact-format-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
+
+   [FossilDelta]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Delta Format", Work in Progress, Internet-Draft, draft-
+              fossil-delta-format-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-delta-
+              format-00>.
+
+   [FossilSync]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sync Protocol", Work
+              in Progress, Internet-Draft, draft-fossil-sync-protocol-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 30]
+
+Internet-Draft           Fossil Repository State               July 2026
+
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+Authors' Addresses
+
+   D. Richard Hipp (editor)
+   Fossil
+
+
+   Stephan Beal
+   libfossil
+
+
+   Dan Shearer
+   Email: dan@shearer.org
+   URI:   https://shearer.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.             Expires 7 January 2027                [Page 31]

@@ -88,10 +88,11 @@ func TestHandlePull(t *testing.T) {
 
 func TestHandleIGotGimme(t *testing.T) {
 	r := setupSyncTestRepo(t)
+	r.DB().Exec("UPDATE user SET cap='oix' WHERE login='nobody'")
 	unknownUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
 		&xfer.IGotCard{UUID: unknownUUID},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -1463,7 +1464,7 @@ func TestHandlerIGotPrivate_Authorized(t *testing.T) {
 	unknownUUID := "dddddddddddddddddddddddddddddddddddddd"
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
 		&xfer.PragmaCard{Name: "send-private"},
 		&xfer.IGotCard{UUID: unknownUUID, IsPrivate: true},
 	)

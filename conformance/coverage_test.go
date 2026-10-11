@@ -76,7 +76,8 @@ func parseTable(data []byte) (table, error) {
 			continue
 		}
 		if len(fields) != 3 && len(fields) != 4 {
-			return table{}, fmt.Errorf("line %d: want 3 or 4 tab-separated fields, got %d", lineNumber, len(fields))
+			return table{}, fmt.Errorf("line %d: want 3 or 4 tab-separated fields, got %d",
+				lineNumber, len(fields))
 		}
 		row := requirement{ID: fields[0], Section: fields[1], Text: fields[2]}
 		if len(fields) == 4 {
@@ -141,7 +142,8 @@ func audit(s suite, tbl table) []error {
 			problems = append(problems, fmt.Errorf("case %s names unknown requirement %q", c.ID, c.Req))
 		}
 		if c.Gap != "" && !strings.HasPrefix(c.Gap, "#") {
-			problems = append(problems, fmt.Errorf("case %s: Gap %q must be an issue reference like #270", c.ID, c.Gap))
+			problems = append(problems, fmt.Errorf(
+				"case %s: Gap %q must be an issue reference like #270", c.ID, c.Gap))
 		}
 		// "#0" stands in for an issue not yet filed; it must not reach CI.
 		if c.Gap == "#0" {
@@ -219,7 +221,8 @@ func writeSuiteReport(t *testing.T, report *strings.Builder, s suite, tbl table)
 		byReq[c.Req] = append(byReq[c.Req], c)
 	}
 	counts := map[status]int{}
-	fmt.Fprintf(report, "## %s\n\n| Requirement | Section | Status | Cases | Notes |\n|---|---|---|---|---|\n", s.name)
+	fmt.Fprintf(report, "## %s\n\n| Requirement | Section | Status | Cases | Notes |\n", s.name)
+	report.WriteString("|---|---|---|---|---|\n")
 	for _, row := range tbl.requirements {
 		got, notes := assess(row, byReq[row.ID])
 		counts[got]++

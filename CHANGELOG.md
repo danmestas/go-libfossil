@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A pull-only `Sync` converges when the client holds artifacts the server
+  lacks (#277). The server used to answer the client's `igot` cards with
+  `gimme` for them even though the client was not pushing, so the client
+  never satisfied the request and the pull ran to `exceeded 100 rounds`. The
+  server now asks only a pushing client, as fossil does, and a client that is
+  not pushing ignores any `gimme` it receives.
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

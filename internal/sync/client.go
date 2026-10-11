@@ -528,6 +528,12 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 			}
 
 		case *xfer.GimmeCard:
+			// A session that is not pushing never sends files, so a
+			// gimme from it could not be satisfied and would hold the
+			// pull open forever (#277).
+			if !s.opts.Push {
+				continue
+			}
 			s.pendingSend[c.UUID] = true
 			s.nGimmeRcvd++
 			filesSent++

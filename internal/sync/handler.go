@@ -543,16 +543,11 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 		h.remoteHas[c.UUID] = remoteHasEntry{isPrivate: c.IsPrivate}
 		return nil
 	}
-	// Server requests the missing blob whenever either side has expressed
-	// interest in transferring data. Pre-fix this gate was just !pullOK,
-	// which silently dropped server gimmes when a client called
-	// SyncOpts{Push:true, Pull:false}: the client emits igot cards from
-	// sendUnclustered every round regardless of Pull, so the server
-	// would see the announcements but never request the blobs and the
-	// loop would converge with the server holding only what the client
-	// pushed proactively. Mirrors fossil-scm/c xfer.c, which generates
-	// gimmes from igot cards as long as either direction is active.
-	if !h.pushOK && !h.pullOK {
+	// Only a pushing client can deliver what it announces. Fossil's
+	// page_xfer wraps igot handling in `if( isPush )`; asking a pull-only
+	// client for artifacts it will never send holds its pull open until
+	// MaxRounds (#277).
+	if !h.pushOK {
 		return nil
 	}
 	if c.IsPrivate && !h.syncPrivate {

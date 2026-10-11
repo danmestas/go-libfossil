@@ -1,14 +1,18 @@
 package checkout
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
-// BranchLeaves returns the leaf RIDs for a named branch.
-// A branch with >1 leaf is forked. An empty branch name queries trunk.
+// BranchLeaves returns the open leaf RIDs for a named branch: a leaf whose
+// active branch tag is branch and that carries no 'closed' tag, as fossil's
+// `leaves` lists them (src/leaf.c leaf_is_closed_sql). A branch with >1 open
+// leaf is forked. An empty branch name queries trunk.
 func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 	if r == nil {
 		panic("checkout.BranchLeaves: r must not be nil")
@@ -23,6 +27,13 @@ func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 		WHERE t.tagname = 'branch'
 		  AND tx.value = ?
 		  AND tx.tagtype > 0
+		  AND NOT EXISTS (
+		    SELECT 1 FROM tagxref cx
+		    JOIN tag ct ON ct.tagid = cx.tagid
+		    WHERE ct.tagname = 'closed'
+		      AND cx.rid = l.rid
+		      AND cx.tagtype > 0
+		  )
 	`, branch)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.BranchLeaves: %w", err)
@@ -39,9 +50,11 @@ func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 	return leaves, rows.Err()
 }
 
-// WouldFork reports whether committing on the current branch would
-// create a fork. Returns true when another leaf exists on the same
-// branch that is not the current checkout version.
+// WouldFork reports whether committing on the current branch would create a
+// fork. It is fossil's leaf_ambiguity (src/leaf.c): the current version must
+// itself be an open leaf, and another open leaf must exist on the same
+// branch. A version that is not a leaf (already has a same-branch child), or
+// a closed one, cannot fork by a further commit, so both return false.
 func (c *Checkout) WouldFork() (bool, error) {
 	if c == nil {
 		panic("checkout.WouldFork: nil *Checkout")
@@ -49,6 +62,14 @@ func (c *Checkout) WouldFork() (bool, error) {
 	rid, _, err := c.Version()
 	if err != nil {
 		return false, fmt.Errorf("checkout.WouldFork: %w", err)
+	}
+
+	open, err := isOpenLeaf(c.repo, rid)
+	if err != nil {
+		return false, err
+	}
+	if !open {
+		return false, nil
 	}
 
 	branch, err := c.currentBranch(rid)
@@ -68,8 +89,34 @@ func (c *Checkout) WouldFork() (bool, error) {
 	return false, nil
 }
 
-// currentBranch returns the branch name for the given RID.
-// Falls back to "trunk" if no branch tag exists.
+// isOpenLeaf reports whether rid is in the leaf table and carries no 'closed'
+// tag -- fossil's is_a_leaf(rid) AND NOT leaf_is_closed(rid), the precondition
+// leaf_ambiguity checks before looking for a sibling.
+func isOpenLeaf(r *repo.Repo, rid libfossil.FslID) (bool, error) {
+	var one int
+	err := r.DB().QueryRow(`
+		SELECT 1 FROM leaf
+		WHERE rid = ?
+		  AND NOT EXISTS (
+		    SELECT 1 FROM tagxref cx
+		    JOIN tag ct ON ct.tagid = cx.tagid
+		    WHERE ct.tagname = 'closed'
+		      AND cx.rid = leaf.rid
+		      AND cx.tagtype > 0
+		  )
+	`, int64(rid)).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checkout.isOpenLeaf: %w", err)
+	}
+	return true, nil
+}
+
+// currentBranch returns the branch name for the given RID, "trunk" when the
+// check-in carries no branch tag. A real query error is returned rather than
+// masked as "trunk", so the WouldFork gate above surfaces it.
 func (c *Checkout) currentBranch(rid libfossil.FslID) (string, error) {
 	var branch string
 	err := c.repo.DB().QueryRow(`
@@ -81,8 +128,11 @@ func (c *Checkout) currentBranch(rid libfossil.FslID) (string, error) {
 		ORDER BY tx.mtime DESC
 		LIMIT 1
 	`, int64(rid)).Scan(&branch)
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "trunk", nil // no branch tag → trunk
+	}
+	if err != nil {
+		return "", fmt.Errorf("checkout.currentBranch: %w", err)
 	}
 	return branch, nil
 }

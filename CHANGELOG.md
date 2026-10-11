@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `checkout.BranchLeaves` now returns only the *open* leaves of a branch,
+  skipping any leaf that carries a `closed` tag, as fossil's `leaves` lists
+  them. `(*Checkout).WouldFork` is now fossil's `leaf_ambiguity`: it reports a
+  fork only when the current version is itself an open leaf and another open
+  leaf exists on the same branch, so a non-leaf or closed version no longer
+  reads as a fork (#291).
+
 ## [0.11.1] - 2026-10-11
 
 ### Security

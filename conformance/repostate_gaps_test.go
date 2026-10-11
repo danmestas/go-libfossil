@@ -63,13 +63,6 @@ var repostateGaps = map[string]string{
 	"repostate.8.3.merge-in":         "#290",
 	"repostate.8.3.name-timestamp":   "#290",
 	"repostate.8.3.trailing-punct":   "#290",
-	// checkout.BranchLeaves counts closed leaves (internal/checkout/fork.go:19-26),
-	// and WouldFork, built on it, also skips the leaf pre-check (fork.go:45-68).
-	"repostate.7.4.closed-leaf":           "#291",
-	"repostate.8.5.resolution-not-leaves": "#291",
-	"repostate.9.branch-not-open":         "#291",
-	"repostate.7.5.ambiguity-non-leaf":    "#291",
-	"repostate.7.5.ambiguity-closed":      "#291",
 	// branch.Create does not refuse the name of an open branch
 	// (internal/branch/branch.go:31-120), and branch.List reports a branch
 	// closed when any check-in on it is closed (branch.go:131-138).

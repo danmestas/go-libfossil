@@ -1,0 +1,159 @@
+package conformance
+
+import "testing"
+
+// syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
+// grouped by the code at fault. "#0" stands in for the issue to be filed.
+var syncGaps = map[string]string{
+	// Any card the decoder refuses fails the whole message
+	// (internal/xfer/message.go:288): the server answers HTTP 400
+	// (internal/sync/serve_http.go:112) where the draft has it emit
+	// "bad command" or the handler's error and go on, and the client drops
+	// the whole reply, its valid prefix included.
+	"sync.5.2.wrong-arity-server":   "#0",
+	"sync.5.2.file-handler-failure": "#0",
+	"sync.7.3.flags-negative":       "#0",
+	"sync.9.bare-pragma":            "#0",
+	"sync.9.3.config-signed-size":   "#0",
+	"sync.10.1.status-200":          "#0",
+	"sync.5.2.malformed-prefix":     "#0",
+	// The decoders count every token where the draft lets a receiver see
+	// six and lets igot and private carry surplus ones: igot takes at most
+	// two arguments, private none, uvfile exactly five
+	// (internal/xfer/decode.go:202, :258, :497).
+	"sync.3.9.seventh-token-server":   "#0",
+	"sync.3.9.seventh-token-client":   "#0",
+	"sync.5.2.private-surplus-server": "#0",
+	"sync.5.2.igot-surplus-server":    "#0",
+	"sync.5.2.private-surplus":        "#0",
+	"sync.5.2.igot-surplus":           "#0",
+	// Tokens are split with strings.Fields, which also splits on Unicode
+	// spaces such as U+00A0 (internal/xfer/decode.go:139).
+	"sync.5.2.non-ascii-space": "#0",
+	// The server ignores unknown, wrong-direction and client-sent error
+	// cards: no "bad command", no reset (internal/sync/handler.go:423,
+	// :522; handleControlCard and handleDataCard have no default).
+	"sync.5.2.bad-command":                  "#0",
+	"sync.5.2.bad-command-resets":           "#0",
+	"sync.5.2.client-error-card":            "#0",
+	"sync.10.1.bad-command-keeps-mutations": "#0",
+	// The client records an error card and reads on, and has no case for
+	// an unknown card, so neither ends the reply-card loop
+	// (internal/sync/client.go:544, :480).
+	"sync.5.2.unknown-prefix": "#0",
+	"sync.10.1.error-prefix":  "#0",
+	// Termination is not Section 3.7's: a phantom is asked for until it
+	// has aged three rounds (internal/sync/client.go:605-613), and any
+	// file received continues the session (:620).
+	"sync.3.7.phantom-no-progress": "#0",
+	"sync.3.7.content-alone-stops": "#0",
+	// A gimme the client cannot answer stays in pendingSend
+	// (internal/sync/client.go:537, :332-336), so the session never ends.
+	"sync.3.3.gimme-absent-client": "#0",
+	// An igot's phantom lives only in the session's map, never in the
+	// phantom table (internal/sync/client.go:520-527).
+	"sync.3.3.igot-phantom-persists": "#0",
+	// The phantom scan does not leave out shunned names
+	// (internal/sync/client.go:381).
+	"sync.3.3.gimme-skips-shunned": "#0",
+	// pragma send-private goes after the operation cards in every request
+	// (internal/sync/client.go:120).
+	"sync.3.2.send-private-first": "#0",
+	// A delta's missing basis becomes a public phantom whatever the card's
+	// private marker (internal/sync/client.go:762).
+	"sync.7.4.private-basis-phantom": "#0",
+	// A full cfile's USIZE must equal its inflated size
+	// (internal/xfer/decode.go:467).
+	"sync.7.2.cfile-usize-metadata": "#0",
+	// The byte after a config payload is consumed only when it is LF
+	// (internal/xfer/decode.go:78).
+	"sync.9.3.config-opaque": "#0",
+	// After the first clone round a server error aborts the clone, where
+	// the draft ends the reply-card loop and continues
+	// (internal/sync/clone.go:544).
+	"sync.8.3.later-error": "#0",
+	// The client's unversioned sync: a received uvfile of status 2 is
+	// dropped, not applied as an mtime (internal/sync/client.go:1136),
+	// and tombstones are put in the send table (internal/sync/session.go:152).
+	"sync.7.3.status2-mtime-client":       "#0",
+	"sync.8.5.1.seed-excludes-tombstones": "#0",
+	// The server's unversioned sync: uv-push-ok goes to every peer
+	// (internal/sync/handler_uv.go:29); a uvgimme for an absent name is
+	// answered with a tombstone (:102); a uvfile needs a push card (:134);
+	// one of status 2, or with its content omitted, changes nothing
+	// (:170, :178).
+	"sync.9.2.push-ok-needs-write": "#0",
+	"sync.7.3.uvgimme-absent":      "#0",
+	"sync.7.3.no-push-needed":      "#0",
+	"sync.7.3.status2-mtime":       "#0",
+	"sync.7.3.omitted-content":     "#0",
+	// A received unversioned file is stored under its content's hash by
+	// the repository's policy, not the HASH it came with
+	// (internal/uv/uv.go:57).
+	"sync.7.3.received-hash": "#0",
+	// The server answers gimme whatever the direction: with no pull card,
+	// and with no operation at all (internal/sync/handler.go:590-598).
+	"sync.3.3.gimme-pull-only-server": "#0",
+	"sync.8.2.cleanup-gimme":          "#0",
+	// Push and pull cards are accepted whatever their project code
+	// (internal/sync/handler.go:459-474).
+	"sync.8.5.project-mismatch-pull": "#0",
+	"sync.8.5.project-mismatch-push": "#0",
+	// A clone refusal is appended to the reply, with no reset and no push
+	// card before it (internal/sync/handler.go:474-480), and a SEQNO of -1
+	// restarts the clone at rid 1 (:501-505).
+	"sync.8.2.refusal-shape":       "#0",
+	"sync.10.1.reset-before-error": "#0",
+	"sync.8.1.negative-seqno":      "#0",
+	// Clone replies: each cfile is recompressed from the artifact rather
+	// than sent as stored, with no LF after a payload that does not end in
+	// one (internal/xfer/encode.go:284-310), and the reply is the
+	// compressed application/x-fossil (internal/sync/serve_http.go:150).
+	"sync.7.2.clone-verbatim":     "#0",
+	"sync.5.1.cfile-padding":      "#0",
+	"sync.4.1.clone-uncompressed": "#0",
+	// The server refuses application/x-fossil-debug with HTTP 415
+	// (internal/sync/serve_http.go:101).
+	"sync.4.debug-type-dispatches": "#0",
+	// The HTTP transport uses http.DefaultClient's redirect policy
+	// (transport.go:47): a 302 becomes a GET with no body, ten redirects
+	// are the limit, HTTPS may redirect to HTTP, and /xfer is not stripped.
+	"sync.4.redirect-302-reposts":  "#0",
+	"sync.4.redirect-19-followed":  "#0",
+	"sync.4.redirect-no-downgrade": "#0",
+	"sync.4.redirect-strips-xfer":  "#0",
+	// Any 2xx status is taken as a sync reply (transport.go:94).
+	"sync.4.status-201": "#0",
+	// A reply's media type selects compressed framing only when it is
+	// application/x-fossil; a missing type and a foreign one are both read
+	// as uncompressed cards (internal/xfer/message.go:160-167).
+	"sync.4.missing-content-type": "#0",
+	"sync.4.content-type-foreign": "#0",
+}
+
+// syncDeviations marks the cases where go-libfossil differs from the draft
+// on purpose, by case ID, with the reason.
+var syncDeviations = map[string]string{
+	"sync.5.2.client-clone-seqno": "the server tolerates a client-sent clone_seqno, " +
+		"which no conforming client sends, rather than answering bad command (#255)",
+	"sync.8.2.clone-zero-phantom": "Clone fetches the phantoms a clone leaves with a " +
+		"follow-up pull, so that a clone it reports done is complete (#255)",
+}
+
+// TestSyncGapKeys checks that every marked case exists.
+func TestSyncGapKeys(t *testing.T) {
+	ids := map[string]bool{}
+	for _, c := range syncSuiteCases() {
+		ids[c.ID] = true
+	}
+	for id := range syncGaps {
+		if !ids[id] {
+			t.Errorf("syncGaps names %s, which is not a case", id)
+		}
+	}
+	for id := range syncDeviations {
+		if !ids[id] {
+			t.Errorf("syncDeviations names %s, which is not a case", id)
+		}
+	}
+}

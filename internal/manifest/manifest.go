@@ -3,7 +3,9 @@ package manifest
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -177,10 +179,31 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	return manifestRid, manifestUUID, nil
 }
 
+// checkWriterName refuses a filename the artifact format's writer profile
+// forbids (section 4.6.1): a backslash, or bytes that are not valid UTF-8,
+// which includes surrogates and overlong forms. A parser accepts them, so a
+// manifest naming one would be stored by a reader but is not one a writer
+// may create. The empty name is OldName's "no rename" and passes.
+func checkWriterName(name string) error {
+	if strings.ContainsRune(name, '\\') {
+		return fmt.Errorf("filename %q contains a backslash", name)
+	}
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("filename %q is not valid UTF-8", name)
+	}
+	return nil
+}
+
 func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID, error) {
 	fCards := make([]deck.FileCard, len(files))
 	var rids []libfossil.FslID
 	for i, f := range files {
+		if err := checkWriterName(f.Name); err != nil {
+			return nil, nil, err
+		}
+		if err := checkWriterName(f.OldName); err != nil {
+			return nil, nil, err
+		}
 		rid, uuid, err := blob.Store(tx, f.Content)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)

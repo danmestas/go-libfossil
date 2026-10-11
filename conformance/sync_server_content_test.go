@@ -117,7 +117,26 @@ func serverUVGimmeCases() []syncServerCase {
 		setup: tombstone,
 		body:  []string{"{CV}", pullCard, "uvgimme t.txt", "{R}"},
 		want:  all(completed, withCard("uvfile t.txt {UVT} - 0 1")),
+	}, {
+		// A private repository: nobody may do nothing at all.
+		Case:   Case{ID: "sync.7.3.uvgimme-no-read", Req: "SP-7.3-11"},
+		setup:  []string{noAnonymousCaps("")},
+		body:   []string{"{CV}", "uvgimme u.txt", "{R}"},
+		want:   all(completed, noErrors, noCard("uvfile "), noCard("uvigot ")),
+		fossil: "fossil(1) 2.28 answers uvgimme without checking Read (erratum s7.3)",
+	}, {
+		Case:  Case{ID: "sync.7.3.uvgimme-clone-implies-read", Req: "SP-7.3-12"},
+		setup: []string{noAnonymousCaps("g")},
+		body:  []string{"{CV}", "uvgimme u.txt", "{R}"},
+		want:  all(completed, payloadIs("uvfile u.txt {UVT} {UVH} 11 0", "hello world")),
 	}}
+}
+
+// noAnonymousCaps gives nobody caps and every other built-in user none, as a
+// repository that denies anonymous access is set up.
+func noAnonymousCaps(caps string) string {
+	return "UPDATE user SET cap='' WHERE login IN ('anonymous','reader','developer');" +
+		" UPDATE user SET cap='" + caps + "' WHERE login='nobody'"
 }
 
 // serverCloneCases are Sections 8.1 and 8.2.

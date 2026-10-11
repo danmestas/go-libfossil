@@ -135,7 +135,11 @@ var syncGaps = map[string]string{
 	// A received unversioned file is stored under its content's hash by
 	// the repository's policy, not the HASH it came with
 	// (internal/uv/uv.go:57).
-	"sync.7.3.received-hash": "#308",
+	// The read gates treat only o, i and Admin as Read, where fossil's
+	// trunk and the s7.3 erratum let Clone imply it
+	// (internal/auth/auth.go:42).
+	"sync.7.3.uvgimme-clone-implies-read": "#312",
+	"sync.7.3.received-hash":              "#308",
 	// Push and pull cards are accepted whatever their project code
 	// (internal/sync/handler.go:459-474).
 	"sync.8.5.project-mismatch-pull": "#309",

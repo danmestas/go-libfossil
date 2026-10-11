@@ -1,0 +1,355 @@
+package conformance
+
+import "testing"
+
+// artifactGaps marks the artifact cases go-libfossil is known to fail, by
+// case ID, grouped by the code at fault, each with the issue tracking its fix.
+var artifactGaps = map[string]string{
+	// deck.VerifyZ rejects an artifact too short to hold a Z card, and one
+	// whose last 35 bytes are not a Z card, where Section 6.2 says it reports
+	// the Z card absent; and it requires LF at the last byte, which it must
+	// not read (deck/zcard.go:23, :26). With no framing gates or residue check
+	// of its own, deck.Parse leaves these inputs to that check, so the rule
+	// each case names never runs.
+	"artifact.6.2.verify-missing-z": "#265",
+	"artifact.6.2.verify-too-short": "#265",
+	"artifact.6.2.verify-last-byte": "#265",
+	"artifact.4.1.empty":            "#265",
+	"artifact.4.1.no-final-lf":      "#265",
+	"artifact.4.1.short":            "#265",
+	"artifact.4.2.residual":         "#265",
+	"artifact.4.1.2.sterilized":     "#265",
+	"artifact.4.1.2.signed-guard":   "#265",
+	"artifact.4.1.1.leading-space":  "#265",
+	"artifact.4.1.1.header-short":   "#265",
+	"artifact.4.1.1.missing-blank":  "#265",
+	"artifact.4.7.z-extra-token":    "#265",
+	// Framing: no check that the raw input ends in LF before the wrapper is
+	// stripped (deck/parse.go:40), and a bare C line passes as an empty comment
+	// (parse.go:103, :174).
+	"artifact.4.1.1.outer-no-lf": "#266",
+	"artifact.4.1.first-bare":    "#266",
+	"artifact.4.7.c-missing":     "#266",
+	// The armor match compares all 30 bytes, not 29 (deck/clearsign.go:16, :65).
+	"artifact.4.1.1.pgp-short": "#266",
+	"artifact.4.1.1.ssh-short": "#266",
+	// Tokens: strings.Fields and strings.TrimSpace split or trim on tab and CR,
+	// collapse an empty token, and readLine's caller skips empty lines
+	// (deck/parse.go:54, :171-204, :251).
+	"artifact.4.2.2.blank-line": "#266",
+	"artifact.4.2.double-space": "#266",
+	"artifact.4.2.file-tab":     "#266",
+	"artifact.4.2.hash-cr":      "#266",
+	"artifact.4.2.login-cr":     "#266",
+	// Marshal drops a present but empty C, N or T value, an empty P card and an
+	// empty W body, so the artifact does not re-encode (deck/marshal.go:58, :149,
+	// :153, :194, :205).
+	"artifact.4.7.16.t-empty-value": "#272",
+	"artifact.4.7.18.w-empty":       "#272",
+	"artifact.4.7.c-empty":          "#272",
+	"artifact.4.7.n-empty":          "#272",
+	"artifact.4.7.p-empty":          "#272",
+	// No maximum arity: cards are split with SplitN or taken whole, so an extra
+	// token is absorbed (deck/parse.go:171-204, :215, :250, :289, :308, :323).
+	"artifact.4.2.1.extra-A": "#267",
+	"artifact.4.2.1.extra-B": "#267",
+	"artifact.4.2.1.extra-C": "#267",
+	"artifact.4.2.1.extra-E": "#267",
+	"artifact.4.2.1.extra-F": "#267",
+	"artifact.4.2.1.extra-G": "#267",
+	"artifact.4.2.1.extra-H": "#267",
+	"artifact.4.2.1.extra-I": "#267",
+	"artifact.4.2.1.extra-J": "#267",
+	"artifact.4.2.1.extra-K": "#267",
+	"artifact.4.2.1.extra-L": "#267",
+	"artifact.4.2.1.extra-M": "#267",
+	"artifact.4.2.1.extra-N": "#267",
+	"artifact.4.2.1.extra-Q": "#267",
+	"artifact.4.2.1.extra-R": "#267",
+	"artifact.4.2.1.extra-T": "#267",
+	"artifact.4.2.1.extra-U": "#267",
+	// Escape decoding: the A target and N mimetype are kept raw (deck/parse.go:194,
+	// :220), and an F hash is never validated, so an escaped one passes.
+	"artifact.4.3.1.a-target":              "#268",
+	"artifact.4.3.1.a-target-escaped-hash": "#268",
+	"artifact.4.3.1.hash-raw":              "#268",
+	"artifact.4.3.1.n-mimetype":            "#268",
+	// No pathname predicate on the A filename or the F filename and old-name
+	// (deck/parse.go:215, :250).
+	"artifact.4.6.1.a-double-slash":         "#269",
+	"artifact.4.6.1.a-leading-slash":        "#269",
+	"artifact.4.6.1.f-dot":                  "#269",
+	"artifact.4.6.1.f-dot-element":          "#269",
+	"artifact.4.6.1.f-dot-prefix":           "#269",
+	"artifact.4.6.1.f-dot-tail":             "#269",
+	"artifact.4.6.1.f-dotdot":               "#269",
+	"artifact.4.6.1.f-dotdot-element":       "#269",
+	"artifact.4.6.1.f-dotdot-prefix":        "#269",
+	"artifact.4.6.1.f-dotdot-tail":          "#269",
+	"artifact.4.6.1.f-double-slash":         "#269",
+	"artifact.4.6.1.f-leading-slash":        "#269",
+	"artifact.4.6.1.f-trailing-slash":       "#269",
+	"artifact.4.6.1.old-name-dotdot-prefix": "#269",
+	"artifact.4.6.1.old-name-leading-slash": "#269",
+	// Check-in writes any filename it is given (manifest/manifest.go:180).
+	"artifact.4.6.1.writer-backslash":    "#270",
+	"artifact.4.6.1.writer-invalid-utf8": "#270",
+	"artifact.4.6.1.writer-surrogate":    "#270",
+	// No wiki-name predicate on the L card or the A target (deck/parse.go:189, :220).
+	"artifact.4.6.2.l-101-bytes":      "#269",
+	"artifact.4.6.2.l-double-space":   "#269",
+	"artifact.4.6.2.l-inner-lf":       "#269",
+	"artifact.4.6.2.l-inner-tab":      "#269",
+	"artifact.4.6.2.l-leading-space":  "#269",
+	"artifact.4.6.2.l-leading-tab":    "#269",
+	"artifact.4.6.2.l-trailing-space": "#269",
+	"artifact.4.7.2.a-target-bad":     "#269",
+	// No reserved-filename drop (deck/parse.go:250).
+	"artifact.4.6.3.drop-_fossil_":            "#269",
+	"artifact.4.6.3.drop-_FOSSIL_":            "#269",
+	"artifact.4.6.3.drop-.fslckout":           "#269",
+	"artifact.4.6.3.drop-.FSLCKOUT-SHM":       "#269",
+	"artifact.4.6.3.drop-a_FOSSIL_-wal":       "#269",
+	"artifact.4.6.3.drop-a/_FOSSIL_":          "#269",
+	"artifact.4.6.3.drop-a/.fslckout-journal": "#269",
+	"artifact.4.6.3.drop-not-anchor":          "#269",
+	// parseTimestamp accepts only two time.Parse layouts, so the wider accepted
+	// grammar is rejected, and it rewrites a lowercase t to T (deck/parse.go:420).
+	"artifact.4.6.4.after-epoch":       "#271",
+	"artifact.4.6.4.double-separator":  "#271",
+	"artifact.4.6.4.e-lowercase-t":     "#271",
+	"artifact.4.6.4.hh-mm":             "#271",
+	"artifact.4.6.4.hour-24":           "#271",
+	"artifact.4.6.4.lowercase-t":       "#271",
+	"artifact.4.6.4.no-calendar-check": "#271",
+	"artifact.4.6.4.tab-separator":     "#271",
+	"artifact.4.6.4.zone-lowercase-z":  "#271",
+	"artifact.4.6.4.zone-minus":        "#271",
+	"artifact.4.6.4.zone-plus":         "#271",
+	"artifact.4.6.4.zone-z":            "#271",
+	// Marshal writes D to the millisecond and E to the second, so a longer
+	// fraction the parser accepted is lost (deck/marshal.go:63, :67). Found
+	// by FuzzArtifactRoundTrip.
+	"artifact.4.6.4.fraction-round-trip":   "#272",
+	"artifact.4.6.4.e-fraction-round-trip": "#272",
+	// No hash validation at the A source, B, E, F, G, I, K, M, P or Q positions
+	// (deck/parse.go:171-204, :215, :250, :277, :308); K is not held to 40 digits.
+	"artifact.4.7.1.a-source-long":     "#268",
+	"artifact.4.7.1.a-source-nonhex":   "#268",
+	"artifact.4.7.1.a-source-short":    "#268",
+	"artifact.4.7.1.b-long":            "#268",
+	"artifact.4.7.1.b-nonhex":          "#268",
+	"artifact.4.7.1.b-short":           "#268",
+	"artifact.4.7.1.e-id-long":         "#268",
+	"artifact.4.7.1.e-id-nonhex":       "#268",
+	"artifact.4.7.1.e-id-short":        "#268",
+	"artifact.4.7.1.f-long":            "#268",
+	"artifact.4.7.1.f-nonhex":          "#268",
+	"artifact.4.7.1.f-short":           "#268",
+	"artifact.4.7.1.g-long":            "#268",
+	"artifact.4.7.1.g-nonhex":          "#268",
+	"artifact.4.7.1.g-short":           "#268",
+	"artifact.4.7.1.i-long":            "#268",
+	"artifact.4.7.1.i-nonhex":          "#268",
+	"artifact.4.7.1.i-short":           "#268",
+	"artifact.4.7.1.k-long":            "#268",
+	"artifact.4.7.1.k-nonhex":          "#268",
+	"artifact.4.7.1.k-short":           "#268",
+	"artifact.4.7.1.m-long":            "#268",
+	"artifact.4.7.1.m-nonhex":          "#268",
+	"artifact.4.7.1.m-short":           "#268",
+	"artifact.4.7.1.p-long":            "#268",
+	"artifact.4.7.1.p-nonhex":          "#268",
+	"artifact.4.7.1.p-short":           "#268",
+	"artifact.4.7.1.q-baseline-long":   "#268",
+	"artifact.4.7.1.q-baseline-nonhex": "#268",
+	"artifact.4.7.1.q-baseline-short":  "#268",
+	"artifact.4.7.1.q-target-long":     "#268",
+	"artifact.4.7.1.q-target-nonhex":   "#268",
+	"artifact.4.7.1.q-target-short":    "#268",
+	"artifact.4.7.k-sha3-reject":       "#268",
+	// Single cards: the A filename keeps its directory (deck/parse.go:220), a
+	// baseline F card may lack a hash (:250), any Q sign but - is read as +
+	// (:312), the hex-name check is lowercase only (:17), and an R token is
+	// stored unchecked (:204).
+	"artifact.4.7.16.t-hex-name-uppercase": "#268",
+	"artifact.4.7.2.a-tail":                "#268",
+	"artifact.4.7.f-no-hash-baseline":      "#268",
+	"artifact.4.7.q-invalid-sign":          "#268",
+	"artifact.6.1.r-nonhex":                "#268",
+	"artifact.6.1.r-short":                 "#268",
+	// W size: strconv.Atoi rejects 12x and abc but takes +12, and the byte after
+	// the body is consumed without checking it is LF (deck/parse.go:73-86).
+	"artifact.4.7.18.w-plus-sign":  "#266",
+	"artifact.4.7.w-count-suffix":  "#266",
+	"artifact.4.7.w-missing-lf":    "#266",
+	"artifact.4.7.w-nondigit-zero": "#266",
+	// No card-legality table, required cards or per-type semantic checks:
+	// inferType only picks a type (deck/parse.go:442).
+	"artifact.5.2.attachment-illegal-B":  "#273",
+	"artifact.5.2.attachment-illegal-E":  "#273",
+	"artifact.5.2.attachment-illegal-F":  "#273",
+	"artifact.5.2.attachment-illegal-G":  "#273",
+	"artifact.5.2.attachment-illegal-H":  "#273",
+	"artifact.5.2.attachment-illegal-I":  "#273",
+	"artifact.5.2.attachment-illegal-J":  "#273",
+	"artifact.5.2.attachment-illegal-K":  "#273",
+	"artifact.5.2.attachment-illegal-L":  "#273",
+	"artifact.5.2.attachment-illegal-M":  "#273",
+	"artifact.5.2.attachment-illegal-P":  "#273",
+	"artifact.5.2.attachment-illegal-Q":  "#273",
+	"artifact.5.2.attachment-illegal-R":  "#273",
+	"artifact.5.2.attachment-illegal-T":  "#273",
+	"artifact.5.2.attachment-illegal-W":  "#273",
+	"artifact.5.2.attachment-no-D":       "#273",
+	"artifact.5.2.cluster-illegal-A":     "#273",
+	"artifact.5.2.cluster-illegal-B":     "#273",
+	"artifact.5.2.cluster-illegal-C":     "#273",
+	"artifact.5.2.cluster-illegal-D":     "#273",
+	"artifact.5.2.cluster-illegal-E":     "#273",
+	"artifact.5.2.cluster-illegal-F":     "#273",
+	"artifact.5.2.cluster-illegal-G":     "#273",
+	"artifact.5.2.cluster-illegal-H":     "#273",
+	"artifact.5.2.cluster-illegal-I":     "#273",
+	"artifact.5.2.cluster-illegal-J":     "#273",
+	"artifact.5.2.cluster-illegal-K":     "#273",
+	"artifact.5.2.cluster-illegal-L":     "#273",
+	"artifact.5.2.cluster-illegal-N":     "#273",
+	"artifact.5.2.cluster-illegal-P":     "#273",
+	"artifact.5.2.cluster-illegal-Q":     "#273",
+	"artifact.5.2.cluster-illegal-R":     "#273",
+	"artifact.5.2.cluster-illegal-T":     "#273",
+	"artifact.5.2.cluster-illegal-U":     "#273",
+	"artifact.5.2.cluster-illegal-W":     "#273",
+	"artifact.5.2.cluster-no-M":          "#273",
+	"artifact.5.2.control-illegal-A":     "#273",
+	"artifact.5.2.control-illegal-E":     "#273",
+	"artifact.5.2.control-illegal-G":     "#273",
+	"artifact.5.2.control-illegal-H":     "#273",
+	"artifact.5.2.control-illegal-I":     "#273",
+	"artifact.5.2.control-illegal-J":     "#273",
+	"artifact.5.2.control-illegal-K":     "#273",
+	"artifact.5.2.control-illegal-L":     "#273",
+	"artifact.5.2.control-illegal-M":     "#273",
+	"artifact.5.2.control-illegal-N":     "#273",
+	"artifact.5.2.control-illegal-W":     "#273",
+	"artifact.5.2.control-no-D":          "#273",
+	"artifact.5.2.control-no-T":          "#273",
+	"artifact.5.2.control-no-U":          "#273",
+	"artifact.5.2.event-illegal-A":       "#273",
+	"artifact.5.2.event-illegal-B":       "#273",
+	"artifact.5.2.event-illegal-F":       "#273",
+	"artifact.5.2.event-illegal-G":       "#273",
+	"artifact.5.2.event-illegal-H":       "#273",
+	"artifact.5.2.event-illegal-I":       "#273",
+	"artifact.5.2.event-illegal-J":       "#273",
+	"artifact.5.2.event-illegal-K":       "#273",
+	"artifact.5.2.event-illegal-L":       "#273",
+	"artifact.5.2.event-illegal-M":       "#273",
+	"artifact.5.2.event-illegal-Q":       "#273",
+	"artifact.5.2.event-illegal-R":       "#273",
+	"artifact.5.2.event-no-D":            "#273",
+	"artifact.5.2.event-no-E":            "#273",
+	"artifact.5.2.event-no-W":            "#273",
+	"artifact.5.2.forum-illegal-A":       "#273",
+	"artifact.5.2.forum-illegal-B":       "#273",
+	"artifact.5.2.forum-illegal-C":       "#273",
+	"artifact.5.2.forum-illegal-E":       "#273",
+	"artifact.5.2.forum-illegal-F":       "#273",
+	"artifact.5.2.forum-illegal-J":       "#273",
+	"artifact.5.2.forum-illegal-K":       "#273",
+	"artifact.5.2.forum-illegal-L":       "#273",
+	"artifact.5.2.forum-illegal-M":       "#273",
+	"artifact.5.2.forum-illegal-Q":       "#273",
+	"artifact.5.2.forum-illegal-R":       "#273",
+	"artifact.5.2.forum-illegal-T":       "#273",
+	"artifact.5.2.forum-no-D":            "#273",
+	"artifact.5.2.forum-no-U":            "#273",
+	"artifact.5.2.forum-no-W":            "#273",
+	"artifact.5.2.manifest-illegal-A":    "#273",
+	"artifact.5.2.manifest-illegal-E":    "#273",
+	"artifact.5.2.manifest-illegal-G":    "#273",
+	"artifact.5.2.manifest-illegal-H":    "#273",
+	"artifact.5.2.manifest-illegal-I":    "#273",
+	"artifact.5.2.manifest-illegal-J":    "#273",
+	"artifact.5.2.manifest-illegal-K":    "#273",
+	"artifact.5.2.manifest-illegal-L":    "#273",
+	"artifact.5.2.manifest-illegal-M":    "#273",
+	"artifact.5.2.manifest-illegal-W":    "#273",
+	"artifact.5.2.manifest-no-D":         "#273",
+	"artifact.5.2.ticket-illegal-A":      "#273",
+	"artifact.5.2.ticket-illegal-B":      "#273",
+	"artifact.5.2.ticket-illegal-C":      "#273",
+	"artifact.5.2.ticket-illegal-E":      "#273",
+	"artifact.5.2.ticket-illegal-F":      "#273",
+	"artifact.5.2.ticket-illegal-G":      "#273",
+	"artifact.5.2.ticket-illegal-H":      "#273",
+	"artifact.5.2.ticket-illegal-I":      "#273",
+	"artifact.5.2.ticket-illegal-L":      "#273",
+	"artifact.5.2.ticket-illegal-M":      "#273",
+	"artifact.5.2.ticket-illegal-N":      "#273",
+	"artifact.5.2.ticket-illegal-P":      "#273",
+	"artifact.5.2.ticket-illegal-Q":      "#273",
+	"artifact.5.2.ticket-illegal-R":      "#273",
+	"artifact.5.2.ticket-illegal-T":      "#273",
+	"artifact.5.2.ticket-illegal-W":      "#273",
+	"artifact.5.2.ticket-no-D":           "#273",
+	"artifact.5.2.ticket-no-J":           "#273",
+	"artifact.5.2.ticket-no-K":           "#273",
+	"artifact.5.2.ticket-no-U":           "#273",
+	"artifact.5.2.wiki-illegal-A":        "#273",
+	"artifact.5.2.wiki-illegal-B":        "#273",
+	"artifact.5.2.wiki-illegal-E":        "#273",
+	"artifact.5.2.wiki-illegal-F":        "#273",
+	"artifact.5.2.wiki-illegal-G":        "#273",
+	"artifact.5.2.wiki-illegal-H":        "#273",
+	"artifact.5.2.wiki-illegal-I":        "#273",
+	"artifact.5.2.wiki-illegal-J":        "#273",
+	"artifact.5.2.wiki-illegal-K":        "#273",
+	"artifact.5.2.wiki-illegal-M":        "#273",
+	"artifact.5.2.wiki-illegal-Q":        "#273",
+	"artifact.5.2.wiki-illegal-R":        "#273",
+	"artifact.5.2.wiki-illegal-T":        "#273",
+	"artifact.5.2.wiki-no-D":             "#273",
+	"artifact.5.2.wiki-no-L":             "#273",
+	"artifact.5.2.wiki-no-U":             "#273",
+	"artifact.5.2.wiki-no-W":             "#273",
+	"artifact.5.3.latest-setter-illegal": "#273",
+	"artifact.5.4.control-self":          "#273",
+	"artifact.5.4.event-cancel":          "#273",
+	"artifact.5.4.event-external-tag":    "#273",
+	"artifact.5.4.event-propagating":     "#273",
+	"artifact.5.4.forum-many-parents":    "#273",
+	"artifact.5.4.forum-title-reply":     "#273",
+	// hash/policy.go:81 derives the auto-to-sha3 promotion from the stored
+	// names and never writes the hash-policy setting, so fossil opening the
+	// repository still reads auto and keeps naming new content SHA-1.
+	"artifact.7.4.ratchet-persisted": "#274",
+	// With no hash-policy row an empty repository names new content SHA-1, not
+	// SHA3 (hash/policy.go:68).
+	"artifact.7.2.default-empty": "#274",
+	// ListFiles takes any parseable artifact as the baseline, including a delta
+	// manifest or a control artifact (manifest/files.go:44).
+	"artifact.4.7.3.delta-baseline-invalid": "#275",
+	"artifact.8.3.baseline-not-manifest":    "#275",
+}
+
+// TestArtifactGapKeys checks that every marked case exists, and that every
+// loss the fuzz test forgives is still a marked gap.
+func TestArtifactGapKeys(t *testing.T) {
+	ids := map[string]bool{}
+	for _, c := range artifactSuiteCases() {
+		ids[c.ID] = true
+	}
+	for id := range artifactGaps {
+		if !ids[id] {
+			t.Errorf("artifactGaps names %s, which is not a case", id)
+		}
+	}
+	for _, loss := range knownLosses {
+		if artifactGaps[loss.caseID] == "" {
+			t.Errorf("FuzzArtifactRoundTrip forgives %s, which is no longer a gap; "+
+				"remove it from knownLosses", loss.caseID)
+		}
+	}
+}

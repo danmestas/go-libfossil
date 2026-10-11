@@ -1,0 +1,115 @@
+# Requirements of draft-fossil-artifact-format-00, one per row, written from
+# the draft text. Columns: ID, section, requirement, optional scope note
+# (what the cases leave out). Requirements that cannot be observed in a
+# library (UI, wording, IANA, informative text) are not listed.
+# draft	draft-fossil-artifact-format-00.txt	4ef74167f262f1dac3b7fd73db0b285d3c591da83db22b5a37ea229971811a8c
+# erratum	artifact-format-00-s4.1.2-sterilizer-position.md	519f77a7df0f7796e7ab52631e5d8cb8864981624e2eb29bce74633f56ed21a3
+# erratum	artifact-format-00-s4.2-empty-trailing-token.md	5183e49490059ae933e510c2ff674f2095fc60b58114b9b4457359c218f837ff
+# erratum	artifact-format-00-s4.6.4-field-constraints-scope.md	460310808eb68f9888e4d5cf2a73143ab0f9721b23e542f72c9ebc3f6e19fa0e
+AF-3.1-1	3.1	An artifact's name is the hash of its exact stored bytes, with nothing added, removed or transformed; a signed artifact's name covers its wrapper.
+AF-3.2-1	3.2	A 40-digit name is the SHA-1, and a 64-digit name the SHA3-256 (FIPS 202, not Keccak), of the raw bytes.
+AF-3.2-2	3.2	A candidate name of any length other than 40 or 64 is invalid.
+AF-3.3-1	3.3	Every name an implementation computes or emits is lowercase hexadecimal.
+AF-3.3-2	3.3	A parser that accepts an uppercase-hex name does not case-normalize it.
+AF-3.4-1	3.4	Verification compares a name byte for byte with the lowercase digest its length selects; any other length, an uppercase digit or a mismatch never verifies.
+AF-4.1-1	4.1	The raw input is non-empty and its last byte is LF, checked before any signature wrapper is removed.
+AF-4.1-2	4.1	The stripped content is at least 10 bytes, starts with a letter A-Z, and has a space as its second byte.
+AF-4.1-3	4.1	Bytes left unconsumed after the card loop cause rejection, which is what rejects a sterilized artifact (erratum 4.1.2).
+AF-4.1.1-1	4.1.1	A PGP clearsign wrapper is removed before parsing.
+AF-4.1.1-2	4.1.1	An SSH signed-message wrapper is removed before parsing.
+AF-4.1.1-3	4.1.1	A wrapper is removed only when the first 34 bytes of the input are exactly one of the two header lines.
+AF-4.1.1-4	4.1.1	The body starts after the first blank line (LF LF or LF CR LF); with no blank line nothing is stripped.
+AF-4.1.1-5	4.1.1	The content is cut after the LF that starts the last signature-armor line, and runs to the end of input when there is none.
+AF-4.1.1-6	4.1.1	Only the first 29 bytes of the 30-byte signature-armor literal are compared.
+AF-4.2-1	4.2	The byte after a card letter is exactly a space or LF; any other byte, tab included, makes the card invalid.
+AF-4.2-2	4.2	Tokens are split on space and LF only; tab and CR are ordinary token bytes.
+AF-4.2-3	4.2	A card's last token may be empty (the line ends in a space), giving a present, empty value; an empty token anywhere else is malformed (erratum 4.2).
+AF-4.2.1-1	4.2.1	A card with more tokens than its grammar defines is rejected.
+AF-4.2.2-1	4.2.2	A card letter outside A-Z is rejected.
+AF-4.2.2-2	4.2.2	The undefined letters O, S, V, X and Y are rejected.
+AF-4.3-1	4.3	The eight escapes \n \s \t \r \v \f \0 and \\ decode to LF, space, tab, CR, VT, FF, NUL and backslash.
+AF-4.3-2	4.3	A backslash before any other byte decodes to that byte, and a token's final backslash is kept; neither is an error.
+AF-4.3.1-1	4.3.1	Tokens are decoded at the A filename and target, C comment, F filename and old-name, H title, J value, L title, N mimetype, T name and value, and U login.
+AF-4.3.1-2	4.3.1	No other token is decoded: hashes, checksums, timestamps, the J field name, and the W size and body stay raw.
+AF-4.3.1-3	4.3.1	The A target is decoded before it is validated, so an escaped token that decodes to hex digits is checked as a hash.
+AF-4.4-1	4.4	Each card's letter is greater than or equal to the previous card's letter.
+AF-4.4-2	4.4	An N card directly after a P card is accepted once an E card has been seen, and rejected otherwise.
+AF-4.5.1-1	4.5.1	A second A, B, C, D, E, G, H, I, K, L, N, R, U or W card is rejected.
+AF-4.5.1-2	4.5.1	F, J, M, T, P and Q cards may repeat, each adding to its list.
+AF-4.5.1-3	4.5.1	The Z card has no duplicate guard: an earlier Z line is content covered by the final checksum.
+AF-4.5.2-1	4.5.2	F cards are strictly ascending by decoded filename.
+AF-4.5.2-2	4.5.2	J cards are strictly ascending by field name.
+AF-4.5.2-3	4.5.2	M cards are strictly ascending by hash.
+AF-4.5.2-4	4.5.2	T cards ascend by the full name token, sign included, and strictly by target among equal names.
+AF-4.5.2-5	4.5.2	P tokens keep their order and are not deduplicated.
+AF-4.5.2-6	4.5.2	Q cards are neither ordered nor checked for duplicates.
+AF-4.5.3-1	4.5.3	The canonical comparator compares unsigned bytes with no case folding or normalization; a prefix sorts first and '/' is not special.
+AF-4.6.1-1	4.6.1	A decoded A filename, F filename or F old-name is rejected when empty, starting with '/', '.' or '..' alone, starting with './' or '../', containing '//', ending in '/', or with a '.' or '..' element.
+AF-4.6.1-2	4.6.1	The pathname predicate rejects nothing else: backslashes, spaces, control bytes and invalid UTF-8 pass.
+AF-4.6.1-3	4.6.1	A writer does not create a filename containing a backslash or outside the UTF-8 profile.
+AF-4.6.2-1	4.6.2	A decoded wiki name is rejected when its first byte is 0x20 or below, a later byte is below 0x20, it has two adjacent spaces, it ends in a space, or it is not 1 to 100 bytes long.
+AF-4.6.2-2	4.6.2	A wiki name is otherwise unconstrained: 0x7F, bytes 0x80 and above, and invalid UTF-8 pass.
+AF-4.6.3-1	4.6.3	An F card whose decoded filename is reserved (_FOSSIL_ or .fslckout, whole or after '/', or followed by -wal, -shm or -journal) is dropped, not rejected.
+AF-4.6.3-2	4.6.3	A reserved tail that is neither whole, after '/', nor followed by a sidecar suffix is not reserved, and the old-name is never tested.
+AF-4.6.3-3	4.6.3	The F sort check runs before the drop, and a dropped card never becomes the anchor for the next comparison.
+AF-4.6.4-1	4.6.4	A writer emits D and E timestamps as YYYY-MM-DDTHH:MM:SS with an optional fraction.
+AF-4.6.4-2	4.6.4	A parser accepts a date-time with T or whitespace separators, HH:MM with optional seconds and a fraction of any length, and an optional +HH:MM, -HH:MM, Z or z zone.
+AF-4.6.4-3	4.6.4	A lowercase t separator is rejected.
+AF-4.6.4-4	4.6.4	The year is 4 digits, month 01-12, day 01-31 with no calendar check, hour 00-24, minute and second 00-59 (erratum 4.6.4).
+AF-4.6.4-5	4.6.4	A date on or before -4713-11-24, and a day number of 0 or less, is rejected.
+AF-4.7.1-1	4.7.1	Every hash position (A target as a hash, A source, B, E ID, F hash, G, I, M, P, both Q tokens, T target) holds exactly 40 or 64 hexadecimal digits.
+AF-4.7.1-2	4.7.1	The K ticket ID is exactly 40 hexadecimal digits; 64 is invalid.
+AF-4.7.2-1	4.7.2	Only the final path component of the A filename is kept as the attachment name.
+AF-4.7.2-2	4.7.2	The A target is a valid hash or a well-formed wiki name.
+AF-4.7.2-3	4.7.2	The A source is optional, and empty when absent.
+AF-4.7.3-1	4.7.3	A delta manifest whose baseline is itself a delta manifest is rejected.
+AF-4.7.4-1	4.7.4	A C card with no token at all (a bare C line) is rejected.
+AF-4.7.5-1	4.7.5	An E card carries a timestamp and a technote ID.
+AF-4.7.6-1	4.7.6	In a baseline manifest every F card carries a hash; a hashless F card needs a B card.
+AF-4.7.6-2	4.7.6	The third F token is the raw permission, accepted without validation; only the fourth is the old-name.
+AF-4.7.6-3	4.7.6	A producer that writes an old-name also writes an explicit permission token.
+AF-4.7.8-1	4.7.8	An absent J value is the empty string.
+AF-4.7.9-1	4.7.9	A writer emits the K ticket ID in lowercase.
+AF-4.7.13-1	4.7.13	An empty P card is accepted.
+AF-4.7.14-1	4.7.14	The first Q token is + or - followed by a hash; the optional second is a plain hash, empty when absent.
+AF-4.7.16-1	4.7.16	A T name starts with +, - or *.
+AF-4.7.16-2	4.7.16	A T name is not entirely hexadecimal after its sign, at any length and in either case.
+AF-4.7.16-3	4.7.16	A T target is a hash or exactly '*'.
+AF-4.7.16-4	4.7.16	An absent T value is distinct from a present, empty one (erratum 4.2).
+AF-4.7.17-1	4.7.17	A U card with an empty or omitted login yields the login "anonymous".
+AF-4.7.18-1	4.7.18	The W body is exactly size bytes, may hold any byte including LF, and is not scanned for card boundaries.
+AF-4.7.18-2	4.7.18	The byte after the W body is LF.
+AF-4.7.18-3	4.7.18	A reader takes only the leading digits of the W size token, so 4x is 4 and abc is 0.
+AF-4.7.18-4	4.7.18	A W size beyond the rest of the artifact, or one that overflows, is rejected.
+AF-5.1-1	5.1	Every structural artifact is classified as exactly one of the eight types.
+AF-5.2-1	5.2	An artifact with a card outside its type's allowed set is rejected.
+AF-5.2-2	5.2	An artifact missing a card of its type's required set is rejected.
+AF-5.3-1	5.3	When several type-setting cards appear, the last one processed sets the type.
+AF-5.3-2	5.3	With no type-setting card, an artifact with a C or P card is a manifest, and any other a control artifact.
+AF-5.4-1	5.4	A control artifact has no self-referential T card.
+AF-5.4-2	5.4	Every T card in a technote is self-referential and has the + sign.
+AF-5.4-3	5.4	A forum post does not have both an H card and an I card.
+AF-5.4-4	5.4	A forum post's P card lists at most one parent.
+AF-6.1-1	6.1	The R and Z tokens are exactly 32 hexadecimal digits.
+AF-6.2-1	6.2	An artifact whose Z card does not match is rejected.
+AF-6.2-2	6.2	The Z value is compared, byte for byte, with the lowercase MD5 of the stripped content before its last 35 bytes, so an uppercase digit fails.
+AF-6.2-3	6.2	An artifact without a Z card is rejected.
+AF-6.2-4	6.2	A producer writes the Z card as Z, a space, 32 lowercase digits and LF.
+AF-6.2-5	6.2	The Z verification stage does not itself reject an artifact for lacking a Z card, or for being too short to hold one.
+AF-6.2-6	6.2	The Z verifier neither reads nor requires any value at the artifact's last byte.
+AF-6.3-1	6.3.1	A parser does not check the R value against file content.
+AF-6.3-2	6.3.2	The R value is the MD5 of, for each file in comparator order, its name, a space, its decimal size, LF and its content, written as 32 lowercase digits.
+AF-6.3-3	6.3.3	A delta manifest's R value covers the merged file set, not its own F cards.
+AF-6.3-4	6.3.4	A writer emits the R card as R, a space, 32 lowercase digits and LF.
+AF-6.3-5	6.3.4	At commit time the R card is checked byte for byte against the lowercase digest recomputed from the checkout.
+AF-7.1-1	7.1	New content is named SHA-1 under sha1 and auto, and SHA3-256 under sha3, sha3-only and shun-sha1.
+AF-7.1-2	7.1	Policy value strings match case-sensitively and exactly; an unrecognized value is a fatal error.
+AF-7.2-1	7.2	With no policy set, a repository holding a SHA3 name or no SHA-1 name, including an empty one, defaults to sha3, and otherwise to auto.
+AF-7.4-1	7.4	Under auto, storing an artifact under a name longer than 40 digits promotes the repository to sha3 and persists the change.
+AF-7.5-1	7.5	Under sha1, auto and sha3, content already stored under the other algorithm's name keeps that name and is not stored again.
+AF-7.5-2	7.5	Under sha3-only and shun-sha1, content is named SHA3-256 even when it is already stored under a SHA-1 name.
+AF-7.6-1	7.6	Changing the policy never renames a stored artifact.
+AF-8-1	8	A manifest is a delta manifest exactly when it has a B card, and its file set is the merge with its baseline.
+AF-8.2-1	8.2	In the merge, a delta entry with a hash replaces or adds a file, a hashless entry deletes it, other baseline files carry forward, and an unmatched deletion adds nothing.
+AF-8.3-1	8.3	Enumerating a delta manifest's files fails when its baseline is missing or is not a manifest.
+AF-8.4-1	8.4	Looking up one name in a delta manifest searches the delta first, and a delete marker answers not-found without reading the baseline.

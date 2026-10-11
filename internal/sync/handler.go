@@ -220,6 +220,15 @@ func (h *handler) initAuth() {
 	}
 }
 
+// canRead reports whether the requester may read repository content in this
+// session. fossil's page_xfer() promotes Clone to Read for the whole session
+// (`if( g.perm.Clone ) g.perm.Read = 1;`), so a requester allowed to clone is
+// allowed to read. The unversioned catalog, uv-hash, uvgimme and xtable-hash
+// gates follow that; auth.CanRead keeps its narrower meaning elsewhere.
+func (h *handler) canRead() bool {
+	return auth.CanRead(h.caps) || auth.CanClone(h.caps)
+}
+
 // handleLoginCard verifies a login card and adds the user's capabilities to
 // nobody's, as fossil's check_login does through login_set_capabilities: a
 // login only grants. A refused login is fatal, with the reply reset to
@@ -708,7 +717,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		}
 	case c.Name == "xtable-hash" && len(c.Values) >= 2:
 		// The reply lists every row's key and mtime: readers only.
-		if auth.CanRead(h.caps) {
+		if h.canRead() {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
 	case c.Name == "req-clusters":

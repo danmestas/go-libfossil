@@ -76,6 +76,30 @@ func TestGimmeInCloneSessionIsServed(t *testing.T) {
 	}
 }
 
+// TestUnversionedReadInCloneSession: fossil's page_xfer() promotes Clone to
+// Read for the whole session, so a requester allowed only to clone reads the
+// unversioned catalog and its files (issue #312, requirement SP-7.3-12).
+func TestUnversionedReadInCloneSession(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	writeUV(t, r, "clone.txt", "unversioned clone", 100)
+	setNobodyCaps(t, r, "g")
+	resp := handleReq(t, r,
+		&xfer.CloneCard{},
+		&xfer.PragmaCard{Name: "uv-hash", Values: []string{"wrong"}},
+		versionPragma("client-version"),
+		&xfer.UVGimmeCard{Name: "clone.txt"},
+	)
+	if n := len(findCards[*xfer.UVIGotCard](resp)); n != 1 {
+		t.Errorf("clone session got %d uvigot cards, want 1", n)
+	}
+	if !hasPragma(resp, "uv-pull-only") && !hasPragma(resp, "uv-push-ok") {
+		t.Error("clone session got no uv catalog pragma")
+	}
+	if n := len(findCards[*xfer.UVFileCard](resp)); n != 1 {
+		t.Errorf("clone session got %d uvfile cards, want 1", n)
+	}
+}
+
 func TestUVHashWithoutReadSendsNoCatalog(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	writeUV(t, r, "secret.txt", "unversioned secret", 100)
@@ -189,6 +213,21 @@ func TestXTableHashWithoutReadSendsNothing(t *testing.T) {
 	resp := handleReq(t, r, &xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}})
 	if n := len(findCards[*xfer.XIGotCard](resp)); n != 0 {
 		t.Fatalf("xtable-hash without Read sent %d xigot cards", n)
+	}
+}
+
+// TestXTableHashInCloneSessionSendsRows pins the same Clone-implies-Read rule
+// for table sync, whose catalog fossil also gates on Read (issue #312).
+func TestXTableHashInCloneSessionSendsRows(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	setupKVTable(t, r)
+	setNobodyCaps(t, r, "g")
+	resp := handleReq(t, r,
+		&xfer.CloneCard{},
+		&xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}},
+	)
+	if n := len(findCards[*xfer.XIGotCard](resp)); n != 1 {
+		t.Fatalf("clone session got %d xigot cards, want 1", n)
 	}
 }
 

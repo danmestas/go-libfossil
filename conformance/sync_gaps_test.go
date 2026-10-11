@@ -15,10 +15,6 @@ var syncGaps = map[string]string{
 	// secret, with no fallback for one stored in clear
 	// (internal/auth/verify.go:87).
 	"sync.6.4.cleartext-fallback": "#304",
-	// The read gates treat only o, i and Admin as Read, where fossil's
-	// trunk and the s7.3 erratum let Clone imply it
-	// (internal/auth/auth.go:42).
-	"sync.7.3.uvgimme-clone-implies-read": "#312",
 }
 
 // syncDeviations marks the cases where go-libfossil differs from the draft

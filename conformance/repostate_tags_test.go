@@ -34,11 +34,13 @@ func tagTypeCases() []rsCase {
 		rebuild:  true,
 	}
 	badType := rsCase{
-		Case:     Case{ID: "repostate.5.1.bad-prefix", Req: "RS-5.1-2"},
-		arts:     with(chain()[:2], literal("t", "D "+rsTime(9)+"\nT ~x {c2}\nU u\n")),
-		tables:   []string{"event"},
-		want:     rows("event", "c1 ci @1", "c2 ci @2"),
-		ignoring: []string{"+event: t g @9"},
+		Case:   Case{ID: "repostate.5.1.bad-prefix", Req: "RS-5.1-2"},
+		arts:   with(chain()[:2], literal("t", "D "+rsTime(9)+"\nT ~x {c2}\nU u\n")),
+		tables: []string{"event", "tagxref"},
+		tags:   []string{"x", "~x"},
+		want:   rows("event", "c1 ci @1", "c2 ci @2"),
+		// Read as any type, ~ would give a row for x or ~x on c2.
+		ignoring: []string{"+event: t g @9", "+tagxref: x c2 1 t c2 NULL @9"},
 		rebuild:  true,
 	}
 	return []rsCase{typed, badType,
@@ -79,7 +81,6 @@ func equalFirstWins() rsCase {
 		[]string{"foo c2 2 t1 c2 'v' @9", "foo c3 2 0 c2 'v' @9", "foo c4 2 0 c2 'v' @9"},
 		"-tagxref: foo c2 2 t1 c2 'v' @9", "+tagxref: foo c2 2 t2 c2 'second' @9")
 	c.each, c.rebuild = true, false
-	c.draft = "Section 5.3 makes equal times implementation-defined; fossil keeps the first"
 	return c
 }
 

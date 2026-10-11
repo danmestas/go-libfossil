@@ -8,7 +8,8 @@ import (
 func rsAPICases() []rsAPICase {
 	var all []rsAPICase
 	for _, table := range [][]rsAPICase{
-		resolveCases(), resolveFormCases(), leafAPICases(), branchAPICases(), writerAPICases(),
+		resolveCases(), resolveFormCases(), leafAPICases(), commitLeafCases(),
+		branchAPICases(), writerAPICases(),
 	} {
 		all = append(all, table...)
 	}
@@ -129,6 +130,9 @@ func leafAPICases() []rsAPICase {
 		openLeaves("repostate.7.4.reopened", "RS-7.4-1",
 			with(closedC4, control("t2", 10, "-closed {c4}")), "trunk", "c4", "f"),
 		openLeaves("repostate.7.5.branch-open-leaves", "RS-7.5-1", merged(), "feat", "b1"),
+		// BranchLeaves selects a branch's members by their active branch
+		// row: b2, which inherits feat, is on feat; c2, a leaf too, is not.
+		openLeaves("repostate.6.1.branch-membership", "RS-6.1-1", branched(), "feat", "b2"),
 		openLeaves("repostate.9.branch-not-open", "RS-9-3",
 			with(branched(), control("t", 9, "+closed {b2}")), "feat"),
 		wouldFork("repostate.7.5.ambiguity-non-leaf", "RS-7.5-2", forkedChain, "c3", false),

@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -46,9 +47,10 @@ type rsCase struct {
 	// ".rebuild" case: it stores artifacts of its own. fossil's
 	// per-artifact result is used instead.
 	rebuildWrites string
-	// draft says how the draft text differs from fossil(1), which the
-	// expectation follows, and names the erratum.
-	draft string
+	// fossil is set only when fossil(1) derives other rows than want: the
+	// case follows the draft text, and fossil says why and names the
+	// erratum proposed. The case fails once fossil agrees with want.
+	fossil string
 }
 
 // rsVariant is one way of loading a case's artifacts into go-libfossil.
@@ -64,11 +66,13 @@ func (c rsCase) variants() []rsVariant {
 		crosslink.loads = []rsLoad{loadEach}
 	}
 	crosslink.Gap = repostateGaps[c.ID]
+	crosslink.Deviation = repostateDeviations[c.ID]
 	all := []rsVariant{crosslink}
 	if c.rebuild {
 		rebuilt := rsVariant{Case: c.Case, loads: []rsLoad{loadRebuild}}
 		rebuilt.ID = c.ID + ".rebuild"
 		rebuilt.Gap = repostateGaps[rebuilt.ID]
+		rebuilt.Deviation = repostateDeviations[rebuilt.ID]
 		all = append(all, rebuilt)
 	}
 	return all
@@ -175,7 +179,11 @@ func (c rsCase) fossilAgrees(
 			reference, name = f.rebuilt, "fossil rebuild"
 		}
 	}
-	if d := diffState(c.expected(), reference, "want", name); d != "" {
+	d := diffState(c.expected(), reference, "want", name)
+	switch {
+	case c.fossil != "" && d == "":
+		return expectf("%s now gives want; remove fossil: %q", name, c.fossil)
+	case c.fossil == "" && d != "":
 		return expectf("fossil(1) disagrees with the case: %s", d)
 	}
 	return nil
@@ -229,22 +237,13 @@ func TestRepoStateReasons(t *testing.T) {
 				t.Errorf("%s: ignoring %q is not \"+table: row\" or \"-table: row\"", c.ID, line)
 			case !listed:
 				t.Errorf("%s: ignoring %q names a table the case does not compare", c.ID, line)
-			case sign == "+" && contains(rows, row):
+			case sign == "+" && slices.Contains(rows, row):
 				t.Errorf("%s: ignoring adds %q, which the case already wants", c.ID, row)
-			case sign == "-" && !contains(rows, row):
+			case sign == "-" && !slices.Contains(rows, row):
 				t.Errorf("%s: ignoring drops %q, which the case does not want", c.ID, row)
 			}
 		}
 	}
-}
-
-func contains(rows []string, row string) bool {
-	for _, r := range rows {
-		if r == row {
-			return true
-		}
-	}
-	return false
 }
 
 // repostateSuiteCases is what the coverage test audits for this suite.

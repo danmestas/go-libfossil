@@ -5,7 +5,8 @@ package conformance
 
 func branchCases() []rsCase {
 	return []rsCase{{
-		Case:   Case{ID: "repostate.6.1.branch-membership", Req: "RS-6.1-1"},
+		// b2 inherits feat, and c2 trunk, each from its branch's root.
+		Case:   Case{ID: "repostate.5.4.branch-inherited", Req: "RS-5.4-5"},
 		arts:   branched(),
 		tables: []string{"tagxref"},
 		tags:   []string{"branch", "sym-feat", "sym-trunk"},
@@ -47,16 +48,18 @@ func mergedIntoTrunk() []rsArt {
 }
 
 func leafCases() []rsCase {
+	// Section 7.3 makes a parentless check-in with no same-branch child a
+	// leaf; fossil(1) never makes an untagged one a leaf. The case follows
+	// the draft, and go-libfossil's crosslink, following fossil, is marked
+	// as a deviation.
 	untagged := leaves("repostate.7.3.parentless-untagged", "RS-7.3-1",
-		[]rsArt{checkin("c1", 1, nil)}, nil, "+leaf: c1")
-	untagged.draft = "Section 7.3 makes every parentless check-in without a same-branch " +
-		"child a leaf; fossil 2.28 never makes an untagged one a leaf (erratum candidate)"
-	each := leaves("repostate.7.3.recheck-parents", "RS-7.3-3",
-		mergedIntoTrunk(), []string{"b2", "x"}, "+leaf: c2")
-	each.each = true
-	incremental := leaves("repostate.7.3.incremental", "RS-7.3-2", chain(), []string{"c4"},
-		"+leaf: c3")
-	incremental.each = true
+		[]rsArt{checkin("c1", 1, nil)}, []string{"c1"}, "-leaf: c1")
+	untagged.fossil = "fossil 2.28 never makes an untagged parentless check-in a leaf; " +
+		"erratum candidate against Section 7.3"
+	// c4 carries its own trunk tag, so retagging c3 feat leaves c3 with no
+	// same-branch child: re-evaluating c3 itself makes it a leaf.
+	ownTrunk := with(chain()[:3], checkin("c4", 4, of("c3"), "*branch * trunk"),
+		control("t", 9, "*branch {c3} feat", "*sym-feat {c3}", "-sym-trunk {c3}"))
 	// c4 gains feat by propagation from c3 and so stops being the merge
 	// parent of a same-branch check-in: m stays on trunk.
 	retagged := with(chain(), checkin("m", 5, of("c1", "c4")),
@@ -69,14 +72,8 @@ func leafCases() []rsCase {
 		untagged,
 		leaves("repostate.7.3.sole-root", "RS-7.3-1",
 			[]rsArt{checkin("c1", 1, nil, rsRoot...)}, []string{"c1"}, "-leaf: c1"),
-		incremental,
-		each,
-		leaves("repostate.7.3.batch-applied", "RS-7.3-4", mergedIntoTrunk(),
-			[]string{"b2", "x"}, "+leaf: c2"),
-		leaves("repostate.7.6.retag-branch", "RS-7.6-1",
-			with(chain(), control("t", 9, "*branch {c3} feat", "*sym-feat {c3}",
-				"-sym-trunk {c3}")),
-			[]string{"c2", "c4"}, "-leaf: c2"),
+		leaves("repostate.7.6.retag-branch", "RS-7.6-1", ownTrunk,
+			[]string{"c2", "c3", "c4"}, "-leaf: c3"),
 		leaves("repostate.7.6.propagated-branch", "RS-7.6-2", retagged,
 			[]string{"c2", "c4", "m"}, "-leaf: c4"),
 	}

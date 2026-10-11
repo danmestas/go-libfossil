@@ -92,7 +92,7 @@ func crosslinkCases() []rsCase {
 		tags:   []string{"foo"},
 		want: join(chainPlink,
 			rows("tagxref", "foo c3 2 t c3 'v' @9", "foo c4 2 0 c3 'v' @9")),
-		ignoring: []string{"+phantom: c3", "-plink: c2>c3 1 @3 -"},
+		ignoring: []string{"-tagxref: foo c4 2 0 c3 'v' @9", "+phantom: c3"},
 		rebuild:  true,
 	}, {
 		Case:     Case{ID: "repostate.4.2.technote-tags", Req: "RS-4.2-3"},
@@ -146,8 +146,8 @@ func reparentCase() rsCase {
 			rows("leaf", "c2", "c4"), rows("tagxref", "parent c3 1 t c3 '{c1}' @9")),
 		ignoring: []string{"-plink: c1>c3 1 @3 -", "+plink: c2>c3 1 @3 -", "-leaf: c2"},
 		rebuild:  true,
-		// Probe D5: fossil's per-artifact crosslink rewrites plink but does
-		// not recheck c2, the old parent; its rebuild does, as Section 7.3
+		// fossil's per-artifact crosslink rewrites plink but does not
+		// recheck c2, the old parent; its rebuild does, as Section 7.3
 		// requires.
 		incremental: "fossil's per-artifact crosslink leaves c2, the old parent, out of leaf",
 	}
@@ -168,21 +168,21 @@ func rejectionCases() []rsCase {
 			rebuild:  true,
 		}
 	}
-	unsortedCheckin := literal("x", "C x\nD "+rsTime(5)+"\nP {c2}\nT *zz *\nT *aa *\nU u\n")
-	unsortedControl := literal("x", "D "+rsTime(5)+"\nT *zz {c1} 1\nT *aa {c1} 1\nU u\n")
+	unsortedCheckin := literal("x", "C x\nD "+rsTime(5)+"\nP {c2}\nT *zz *\nT *ax *\nU u\n")
+	unsortedControl := literal("x", "D "+rsTime(5)+"\nT *zz {c1} 1\nT *ax {c1} 1\nU u\n")
 	cases := []rsCase{
 		rejected("repostate.4.1.no-prefix", "RS-4.1-1",
 			literal("x", "C x\nD "+rsTime(5)+"\nP {c2}\nT foo *\nU u\n"), "foo"),
 		rejected("repostate.4.1.hex-name", "RS-4.1-2",
 			literal("x", "C x\nD "+rsTime(5)+"\nP {c2}\nT *beef *\nU u\n"), "beef"),
-		rejected("repostate.4.1.unsorted", "RS-4.1-3", unsortedCheckin, "aa", "zz"),
-		rejected("repostate.4.3.no-effect", "RS-4.3-1", unsortedCheckin, "aa", "zz"),
-		rejected("repostate.4.1.no-partial", "RS-4.1-4", unsortedControl, "aa", "zz"),
+		rejected("repostate.4.1.unsorted", "RS-4.1-3", unsortedCheckin, "ax", "zz"),
+		rejected("repostate.4.3.no-effect", "RS-4.3-1", unsortedCheckin, "ax", "zz"),
+		rejected("repostate.4.1.no-partial", "RS-4.1-4", unsortedControl, "ax", "zz"),
 		rejected("repostate.4.4.opaque-control", "RS-4.4-2",
 			literal("x", "D "+rsTime(9)+"\nT *foo {c1} v\n"), "foo"),
 	}
 	// A control artifact derives no link; ignoring the rules shows as tags.
-	cases[4].ignoring = []string{"+tagxref: aa c1 2 x c1 '1' @5"}
+	cases[4].ignoring = []string{"+tagxref: ax c1 2 x c1 '1' @5"}
 	cases[5].ignoring = []string{"+tagxref: foo c1 2 x c1 'v' @9"}
 	return append(cases, rsCase{
 		// Assembly goes on past the opaque artifact: c3 and c4 still link.

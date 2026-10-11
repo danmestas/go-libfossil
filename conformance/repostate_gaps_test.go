@@ -13,16 +13,19 @@ var repostateGaps = map[string]string{
 	// parent rather than making a phantom (:124, rebuild_manifest.go:114); it
 	// writes no plink baseline (rebuild_manifest.go:131); and its leaf rule
 	// is "no child at all", whatever the branch (rebuild_leaves.go:16-21).
-	"repostate.4.2.cluster.rebuild":             "#0",
-	"repostate.4.2.technote-tags.rebuild":       "#0",
-	"repostate.4.4.opaque-control.rebuild":      "#0",
-	"repostate.4.2.phantom-target.rebuild":      "#0",
-	"repostate.4.2.phantom-parent.rebuild":      "#0",
-	"repostate.3.1.link-metadata.rebuild":       "#0",
-	"repostate.7.2.branch-leaves.rebuild":       "#0",
-	"repostate.7.6.retag-branch.rebuild":        "#0",
-	"repostate.7.6.propagated-branch.rebuild":   "#0",
-	"repostate.7.3.parentless-untagged.rebuild": "#0",
+	"repostate.4.2.cluster.rebuild":           "#0",
+	"repostate.4.2.technote-tags.rebuild":     "#0",
+	"repostate.4.4.opaque-control.rebuild":    "#0",
+	"repostate.4.2.phantom-target.rebuild":    "#0",
+	"repostate.4.2.phantom-parent.rebuild":    "#0",
+	"repostate.3.1.link-metadata.rebuild":     "#0",
+	"repostate.7.2.branch-leaves.rebuild":     "#0",
+	"repostate.7.6.retag-branch.rebuild":      "#0",
+	"repostate.7.6.propagated-branch.rebuild": "#0",
+	// A root check-in's file rows are inserted with no "already derived"
+	// guard, so crosslinking it again adds a second copy of each
+	// (internal/manifest/addmlink.go:605-612).
+	"repostate.4.2.relink-unchanged": "#0",
 	// No parent (reparent) tag handling in the crosslink, tag or rebuild
 	// code: plink keeps the old parent.
 	"repostate.4.2.reparent":         "#0",
@@ -79,6 +82,14 @@ var repostateGaps = map[string]string{
 	"repostate.2.reserved-prefix": "#0",
 }
 
+// repostateDeviations marks the cases where go-libfossil follows fossil(1)
+// rather than the draft text, by case ID.
+var repostateDeviations = map[string]string{
+	"repostate.7.3.parentless-untagged": "follows fossil(1): an untagged parentless " +
+		"check-in is never a leaf, where Section 7.3 makes every check-in without a " +
+		"same-branch child one (erratum candidate)",
+}
+
 // TestRepoStateGapKeys checks that every marked case exists.
 func TestRepoStateGapKeys(t *testing.T) {
 	ids := map[string]bool{}
@@ -88,6 +99,11 @@ func TestRepoStateGapKeys(t *testing.T) {
 	for id := range repostateGaps {
 		if !ids[id] {
 			t.Errorf("repostateGaps names %s, which is not a case", id)
+		}
+	}
+	for id := range repostateDeviations {
+		if !ids[id] {
+			t.Errorf("repostateDeviations names %s, which is not a case", id)
 		}
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,13 +22,12 @@ type fossilRepo struct {
 	checkout string
 }
 
-// run runs fossil(1) in dir as user u and returns its combined output.
+// run runs fossil(1) in dir and returns its combined output.
 func (f *fossilReference) run(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), fossilTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, f.bin, args...)
+	cmd := f.command(ctx, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "USER=u")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output), fmt.Errorf("fossil %s: %v: %s",

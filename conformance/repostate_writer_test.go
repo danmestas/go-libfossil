@@ -271,7 +271,7 @@ func writerAPICases() []rsAPICase {
 			run: mergeAncestry},
 		{Case: Case{ID: "repostate.4.6.tag-artifact", Req: "RS-4.6-1"}, arts: chain(),
 			run: tagArtifact},
-		{Case: Case{ID: "repostate.4.2.rebuild-idempotence", Req: "RS-4.2-7"}, run: idempotence},
+		{Case: Case{ID: "repostate.4.2.relink-unchanged", Req: "RS-4.2-7"}, run: relinkUnchanged},
 	}
 }
 
@@ -440,19 +440,20 @@ func (e *rsEnv) sameTagRows(data []byte, uuid string) error {
 	return nil
 }
 
-// idempotence loads every scripted case both ways, as one sweep and one
-// artifact at a time, and crosslinks the swept repository again: all three
-// must hold the same rows in every table. A case whose order matters, which
-// edits its tables, or which is a known gap is left out: a gap's failure has
-// a cause of its own.
-func idempotence(e *rsEnv) error {
+// relinkUnchanged sweeps every scripted case into go-libfossil, then
+// crosslinks every artifact a second time over the rows the first left: it
+// deletes only what the crosslink takes as an artifact's "already linked"
+// mark, its event row and the tag rows it sourced (crosslink.go:385-386),
+// and sweeps again. Every table must come out as it was. A case whose
+// order matters, which edits its tables, or which is a known gap is left
+// out: a gap's failure has a cause of its own.
+func relinkUnchanged(e *rsEnv) error {
 	var problems []string
 	for _, c := range repostateCases() {
 		if c.each || c.doctor != nil || repostateGaps[c.ID] != "" {
 			continue
 		}
-		script := rsBuild(c.arts)
-		if d, err := idempotent(e, script); err != nil || d != "" {
+		if d, err := relinked(e, rsBuild(c.arts)); err != nil || d != "" {
 			problems = append(problems, fmt.Sprintf("%s: %s%v", c.ID, d, err))
 		}
 	}
@@ -462,40 +463,55 @@ func idempotence(e *rsEnv) error {
 	return nil
 }
 
-func idempotent(e *rsEnv, script rsScript) (string, error) {
-	swept, err := goLoad(e.t, script, loadSweep, nil)
+// relinked is how the tables differ after a second crosslink of every
+// artifact, or "" when they do not.
+func relinked(e *rsEnv, script rsScript) (string, error) {
+	path, err := goLoad(e.t, script, loadSweep, nil)
 	if err != nil {
 		return "", err
 	}
-	each, err := goLoad(e.t, script, loadEach, nil)
+	first, err := readState(path, script.labels, rsAllTables, nil)
 	if err != nil {
 		return "", err
 	}
-	first, err := readState(swept, script.labels, rsAllTables, nil)
+	r, err := repo.Open(path)
 	if err != nil {
 		return "", err
 	}
-	perArtifact, err := readState(each, script.labels, rsAllTables, nil)
-	if err != nil {
-		return "", err
-	}
-	if d := diffState(first, perArtifact, "sweep", "per-artifact"); d != "" {
-		return d, nil
-	}
-	r, err := repo.Open(swept)
-	if err != nil {
-		return "", err
-	}
-	_, err = manifest.Crosslink(r)
+	linked, err := relink(r)
 	if closeErr := r.Close(); err == nil {
 		err = closeErr
 	}
 	if err != nil {
 		return "", err
 	}
-	again, err := readState(swept, script.labels, rsAllTables, nil)
+	if linked.got != linked.want {
+		return fmt.Sprintf("second sweep linked %d artifacts, want %d",
+			linked.got, linked.want), nil
+	}
+	again, err := readState(path, script.labels, rsAllTables, nil)
 	if err != nil {
 		return "", err
 	}
-	return diffState(first, again, "sweep", "second Crosslink"), nil
+	return diffState(first, again, "first crosslink", "second crosslink"), nil
+}
+
+// relinkCount is how many artifacts a second sweep linked, and how many
+// had been linked.
+type relinkCount struct{ got, want int }
+
+func relink(r *repo.Repo) (relinkCount, error) {
+	var count relinkCount
+	err := r.DB().QueryRow("SELECT count(*) FROM (SELECT objid FROM event" +
+		" UNION SELECT srcid FROM tagxref WHERE srcid > 0)").Scan(&count.want)
+	if err != nil {
+		return count, err
+	}
+	for _, clear := range []string{"DELETE FROM event", "DELETE FROM tagxref WHERE srcid > 0"} {
+		if _, err := r.DB().Exec(clear); err != nil {
+			return count, err
+		}
+	}
+	count.got, err = manifest.Crosslink(r)
+	return count, err
 }

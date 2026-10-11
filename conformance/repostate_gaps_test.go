@@ -22,11 +22,6 @@ var repostateGaps = map[string]string{
 	"repostate.7.2.branch-leaves.rebuild":     "#285",
 	"repostate.7.6.retag-branch.rebuild":      "#285",
 	"repostate.7.6.propagated-branch.rebuild": "#285",
-	// Repo.Tag stores the name as given: no sym- prefix, no refusal of the
-	// reserved wiki-, tkt- and event- prefixes (repo_extras.go:39-46,
-	// internal/tag/tag.go:45).
-	"repostate.2.sym-prefix":      "#293",
-	"repostate.2.reserved-prefix": "#293",
 }
 
 // repostateDeviations marks the cases where go-libfossil follows fossil(1)

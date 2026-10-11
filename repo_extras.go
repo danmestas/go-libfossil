@@ -2,12 +2,20 @@ package libfossil
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/uv"
 )
+
+// reservedTagPrefixes are the tag-name prefixes fossil manages internally and
+// refuses from `fossil tag add`/`cancel`, to keep a client from tagging an
+// artifact as, say, a wiki page or ticket (src/tag.c tag_cmd_tagname_check).
+var reservedTagPrefixes = []string{"wiki-", "tkt-", "event-"}
 
 // StashEntry describes a saved stash.
 type StashEntry struct {
@@ -33,12 +41,28 @@ type UVEntry struct {
 	Hash  string
 }
 
-// Tag creates a control artifact that adds a tag to a target checkin.
+// Tag creates a control artifact that adds a tag to a target artifact.
 // Returns the UUID of the tag control artifact.
+//
+// As `fossil tag add` does, a name with a reserved prefix ("wiki-", "tkt-",
+// "event-") is refused, and when the target is a check-in the name is placed
+// in the symbolic namespace with a "sym-" prefix so it resolves as a tag in
+// commands such as update and merge; other artifact types keep the name bare.
+// Pass the raw name: fossil prefixes the raw name, so "x" becomes "sym-x" and
+// "sym-x" becomes "sym-sym-x" on a check-in.
 func (r *Repo) Tag(opts TagOpts) (int64, error) {
+	for _, prefix := range reservedTagPrefixes {
+		if strings.HasPrefix(opts.Name, prefix) {
+			return 0, fmt.Errorf("libfossil: tag: invalid prefix for tag name: %s", opts.Name)
+		}
+	}
+	name := opts.Name
+	if r.targetIsCheckin(fsltype.FslID(opts.TargetID)) {
+		name = "sym-" + name
+	}
 	rid, err := tag.AddTag(r.inner, tag.TagOpts{
 		TargetRID: fsltype.FslID(opts.TargetID),
-		TagName:   opts.Name,
+		TagName:   name,
 		TagType:   tag.TagSingleton,
 		Value:     opts.Value,
 		User:      opts.User,
@@ -48,6 +72,22 @@ func (r *Repo) Tag(opts TagOpts) (int64, error) {
 		return 0, fmt.Errorf("libfossil: tag: %w", err)
 	}
 	return int64(rid), nil
+}
+
+// targetIsCheckin reports whether rid is a check-in manifest, fossil's
+// whatis_rid_type(rid)==CFTYPE_MANIFEST. It reads the artifact's own bytes, so
+// it holds before the blob is crosslinked, and a blob that is absent,
+// unreadable, or not an artifact reads as not a check-in.
+func (r *Repo) targetIsCheckin(rid fsltype.FslID) bool {
+	data, err := content.Expand(r.inner.DB(), rid)
+	if err != nil {
+		return false
+	}
+	d, err := deck.Parse(data)
+	if err != nil {
+		return false
+	}
+	return d.Type == deck.Checkin
 }
 
 // StashSave saves working-tree changes to the stash.

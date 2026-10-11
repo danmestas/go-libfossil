@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,71 @@ func TestTagCommit(t *testing.T) {
 	}
 	if tagRid <= 0 {
 		t.Errorf("Tag returned rid=%d, want > 0", tagRid)
+	}
+}
+
+// tagNamesOn returns the tag names recorded on rid, as "name,name".
+func tagNamesOn(t *testing.T, r *Repo, rid int64) string {
+	t.Helper()
+	rows, err := r.DB().Query(
+		"SELECT tag.tagname FROM tagxref JOIN tag USING(tagid) WHERE rid=? ORDER BY tag.tagname",
+		rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ",")
+}
+
+// TestTagSymPrefix covers issue #293: fossil's tag add puts a check-in tag in
+// the symbolic namespace (sym-), leaves a non-check-in tag bare, and refuses
+// the reserved prefixes.
+func TestTagSymPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.fossil")
+	r, err := Create(path, CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	ciRid, _, err := r.Commit(CommitOpts{
+		Files:   []FileToCommit{{Name: "f.txt", Content: []byte("x\n")}},
+		Comment: "c1", User: "u",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A check-in target gets the sym- prefix.
+	ctrlRid, err := r.Tag(TagOpts{Name: "release", TargetID: ciRid, User: "u", Time: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tagNamesOn(t, r, ciRid); !strings.Contains(got, "sym-release") || strings.Contains(got, ",release") {
+		t.Errorf("check-in tags = %q, want a sym-release and no bare release", got)
+	}
+
+	// A non-check-in target (the control artifact just stored) keeps the name bare.
+	if _, err := r.Tag(TagOpts{Name: "meta", TargetID: ctrlRid, User: "u", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if got := tagNamesOn(t, r, ctrlRid); !strings.Contains(got, "meta") || strings.Contains(got, "sym-meta") {
+		t.Errorf("control-artifact tags = %q, want a bare meta and no sym-meta", got)
+	}
+
+	// Reserved prefixes are refused whatever the target.
+	for _, name := range []string{"wiki-x", "tkt-x", "event-x"} {
+		if _, err := r.Tag(TagOpts{Name: name, TargetID: ciRid, User: "u", Time: time.Now().UTC()}); err == nil {
+			t.Errorf("Tag(%q) succeeded, want a refusal", name)
+		}
 	}
 }
 

@@ -4,26 +4,35 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
-// isHexToken reports whether s is non-empty and consists solely of the
-// lowercase hex digits an artifact hash is built from. §4.7.16 rejects a
-// T-card name that is entirely hex because it is indistinguishable from a
-// hash target.
+// isHexToken reports whether s is non-empty and consists solely of hex
+// digits of either case. §4.7.16 rejects a T-card name that is entirely hex
+// because it is indistinguishable from a hash target; fossil's check
+// (validate16 on the name after its sign) is case-insensitive, so an
+// upper-case all-hex name such as "ABC" is rejected the same as "abc".
 func isHexToken(s string) bool {
-	if s == "" {
-		return false
-	}
+	return s != "" && isHexAnyCase(s)
+}
+
+// isHexAnyCase reports whether every byte of s is a base-16 digit in either
+// case. §3.5 / §4.7.1: artifact-hash tokens are case-insensitive hexadecimal.
+func isHexAnyCase(s string) bool {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		isHexDigit := (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
-		if !isHexDigit {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return false
 		}
 	}
 	return true
+}
+
+// validArtifactHash reports whether s is a syntactically valid artifact-hash
+// token per §4.7.1: exactly 40 or 64 case-insensitive hexadecimal characters.
+// Unlike hash.IsValidHash it never panics, so it is safe on an empty or
+// mangled token straight off the wire.
+func validArtifactHash(s string) bool {
+	return (len(s) == 40 || len(s) == 64) && isHexAnyCase(s)
 }
 
 // manifestScanner tokenizes clearsign-stripped artifact content card by card,
@@ -279,7 +288,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 	case 'A':
 		return parseACard(d, tokens)
 	case 'B':
-		return setStringCard(tokens, &d.B, "hash on B-card", false)
+		return setHashCard(tokens, &d.B, "B-card", false)
 	case 'C':
 		return setStringCard(tokens, &d.C, "comment on C-card", true)
 	case 'D':
@@ -289,27 +298,30 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 	case 'F':
 		return parseFCard(d, tokens)
 	case 'G':
-		return setStringCard(tokens, &d.G, "hash on G-card", false)
+		return setHashCard(tokens, &d.G, "G-card", false)
 	case 'H':
 		return setStringCard(tokens, &d.H, "title on H-card", true)
 	case 'I':
-		return setStringCard(tokens, &d.I, "hash on I-card", false)
+		return setHashCard(tokens, &d.I, "I-card", false)
 	case 'J':
 		return parseJCard(d, tokens)
 	case 'K':
-		return setStringCard(tokens, &d.K, "hash on K-card", false)
+		// §4.7.1: the K-card ticket id is pinned to the 40-character SHA-1
+		// length and never 64, regardless of hash policy.
+		return setHashCard(tokens, &d.K, "K-card", true)
 	case 'L':
 		return setStringCard(tokens, &d.L, "title on L-card", true)
 	case 'M':
 		return parseMCard(d, tokens)
 	case 'N':
-		return setStringCard(tokens, &d.N, "mimetype on N-card", false)
+		// §4.3.1: the N-card mimetype is escape-decoded.
+		return setStringCard(tokens, &d.N, "mimetype on N-card", true)
 	case 'P':
 		return parsePCard(d, tokens)
 	case 'Q':
 		return parseQCard(d, tokens)
 	case 'R':
-		return setStringCard(tokens, &d.R, "checksum on R-card", false)
+		return setChecksumCard(tokens, &d.R, "R-card")
 	case 'T':
 		return parseTCard(d, tokens)
 	case 'U':
@@ -340,18 +352,69 @@ func setStringCard(tokens []string, dst *string, what string, decode bool) error
 	return nil
 }
 
+// setHashCard stores a single-token artifact-hash card (B, G, I, K), checking
+// the token against the §4.7.1 map: exactly 40 or 64 case-insensitive hex, or
+// pinned to 40 for the K-card ticket id. The token is never escape-decoded.
+func setHashCard(tokens []string, dst *string, card string, sha1Only bool) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("%s takes exactly one hash", card)
+	}
+	h := tokens[0]
+	ok := validArtifactHash(h)
+	if sha1Only {
+		ok = len(h) == 40 && isHexAnyCase(h)
+	}
+	if !ok {
+		return fmt.Errorf("invalid hash on %s: %q", card, h)
+	}
+	*dst = h
+	return nil
+}
+
+// setChecksumCard stores a single-token MD5 checksum card (R). §4.7.1 / §6.1:
+// exactly 32 case-insensitive hex, never decoded.
+func setChecksumCard(tokens []string, dst *string, card string) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("%s takes exactly one checksum", card)
+	}
+	if token := tokens[0]; len(token) != 32 || !isHexAnyCase(token) {
+		return fmt.Errorf("invalid checksum on %s: %q", card, token)
+	}
+	*dst = tokens[0]
+	return nil
+}
+
 func parseACard(d *Deck, tokens []string) error {
 	// §4.2.1 / Table 2: filename, target, optional source -- three tokens at
 	// most. An extra token is "extra characters at end of card".
 	if len(tokens) < 2 || len(tokens) > 3 {
 		return fmt.Errorf("A-card takes a filename, a target and an optional source")
 	}
-	ac := &AttachmentCard{Filename: FossilDecode(tokens[0]), Target: tokens[1]}
+	// §4.7.2: the filename is escape-decoded and only its final path component
+	// is kept (fossil's file_tail); the target is escape-decoded -- the one
+	// §4.3.1 hash carve-out -- and its hash-or-wiki-name shape is checked
+	// elsewhere; the source, when present, is a raw artifact hash.
+	ac := &AttachmentCard{
+		Filename: fileTail(FossilDecode(tokens[0])),
+		Target:   FossilDecode(tokens[1]),
+	}
 	if len(tokens) >= 3 {
 		ac.Source = tokens[2]
+		if !validArtifactHash(ac.Source) {
+			return fmt.Errorf("invalid source hash on A-card: %q", ac.Source)
+		}
 	}
 	d.A = ac
 	return nil
+}
+
+// fileTail returns the final path component of name, the part after the last
+// '/'. It mirrors fossil's file_tail for the A-card attachment name.
+func fileTail(name string) string {
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 func parseDCard(d *Deck, tokens []string) error {
@@ -375,6 +438,10 @@ func parseECard(d *Deck, tokens []string) error {
 	if err != nil {
 		return fmt.Errorf("E-card: %w", err)
 	}
+	// §4.7.1: the event identifier is an artifact hash.
+	if !validArtifactHash(tokens[1]) {
+		return fmt.Errorf("invalid hash on E-card: %q", tokens[1])
+	}
 	d.E = &EventCard{Date: t, UUID: tokens[1]}
 	return nil
 }
@@ -395,6 +462,17 @@ func parseFCard(d *Deck, tokens []string) error {
 	if len(tokens) >= 4 {
 		fc.OldName = FossilDecode(tokens[3])
 	}
+	// §4.7.6 / §4.7.1: a hash is required on every F card of a baseline
+	// manifest and must be a valid artifact hash (raw, never decoded). Only a
+	// delta manifest -- one with a B card, which sorts before F and so is
+	// already seen -- may carry a hashless F card, a file deletion.
+	if fc.UUID == "" {
+		if d.B == "" {
+			return fmt.Errorf("missing hash on F-card %q", fc.Name)
+		}
+	} else if !validArtifactHash(fc.UUID) {
+		return fmt.Errorf("invalid hash on F-card %q: %q", fc.Name, fc.UUID)
+	}
 	// §4.5.2: strictly ascending by decoded filename. Decoding has already
 	// happened above, so the check sees the post-decode name the merge walk
 	// and baseline binary search of §8.2 will later rely on.
@@ -412,6 +490,10 @@ func parseMCard(d *Deck, tokens []string) error {
 		return fmt.Errorf("M-card takes exactly one hash")
 	}
 	m := tokens[0]
+	// §4.7.1: each cluster member is an artifact hash.
+	if !validArtifactHash(m) {
+		return fmt.Errorf("invalid hash on M-card: %q", m)
+	}
 	// §4.5.2: strictly ascending by hash.
 	if n := len(d.M); n > 0 {
 		if err := requireAscending('M', d.M[n-1], m); err != nil {
@@ -449,6 +531,12 @@ func parsePCard(d *Deck, tokens []string) error {
 	// semantic, primary parent first. Appending -- not assigning -- is what
 	// makes a second P card add parents rather than replace them (§4.5.1). A
 	// bare P card carries no parents, which is the initial empty baseline.
+	// §4.7.1: every present parent token is an artifact hash.
+	for _, parent := range tokens {
+		if !validArtifactHash(parent) {
+			return fmt.Errorf("invalid hash on P-card: %q", parent)
+		}
+	}
 	d.P = append(d.P, tokens...)
 	return nil
 }
@@ -458,10 +546,21 @@ func parseQCard(d *Deck, tokens []string) error {
 	if len(tokens) == 0 || len(tokens) > 2 || len(tokens[0]) < 1 {
 		return fmt.Errorf("Q-card takes a signed target and an optional baseline")
 	}
-	cp := CherryPick{IsBackout: tokens[0][0] == '-'}
-	cp.Target = tokens[0][1:]
+	// §4.7.14: the first token begins with '+' (cherrypick) or '-' (backout);
+	// §4.7.1: the rest of that token, and the optional baseline, are hashes.
+	sign := tokens[0][0]
+	if sign != '+' && sign != '-' {
+		return fmt.Errorf("Q-card must begin with '+' or '-', got %q", tokens[0][:1])
+	}
+	cp := CherryPick{IsBackout: sign == '-', Target: tokens[0][1:]}
+	if !validArtifactHash(cp.Target) {
+		return fmt.Errorf("invalid target hash on Q-card: %q", cp.Target)
+	}
 	if len(tokens) >= 2 {
 		cp.Baseline = tokens[1]
+		if !validArtifactHash(cp.Baseline) {
+			return fmt.Errorf("invalid baseline hash on Q-card: %q", cp.Baseline)
+		}
 	}
 	d.Q = append(d.Q, cp)
 	return nil
@@ -503,14 +602,9 @@ func parseTCard(d *Deck, tokens []string) error {
 	if isHexToken(tc.Name) {
 		return fmt.Errorf("T-card name %q must not be entirely hexadecimal", tc.Name)
 	}
-	// §4.7.16: the target must be a valid artifact hash or the literal '*'.
-	// hash.IsValidHash panics on an empty string, so the '*' and non-empty
-	// checks come first.
-	validTarget := tc.UUID == "*"
-	if !validTarget && tc.UUID != "" {
-		validTarget = hash.IsValidHash(tc.UUID)
-	}
-	if !validTarget {
+	// §4.7.16 / §4.7.1: the target must be a valid artifact hash (40 or 64
+	// case-insensitive hex) or the literal '*' for a tag on this manifest.
+	if tc.UUID != "*" && !validArtifactHash(tc.UUID) {
 		return fmt.Errorf("T-card target %q is neither a valid artifact hash nor '*'", tc.UUID)
 	}
 	if n := len(d.T); n > 0 {

@@ -43,7 +43,9 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		b.WriteString("A ")
 		b.WriteString(FossilEncode(d.A.Filename))
 		b.WriteString(" ")
-		b.WriteString(d.A.Target)
+		// §4.3.1/§4.7.2: the A target is the one escape-decoded hash position,
+		// so it is escape-encoded on the way out (mirror of parseACard).
+		b.WriteString(FossilEncode(d.A.Target))
 		if d.A.Source != "" {
 			b.WriteString(" ")
 			b.WriteString(d.A.Source)
@@ -147,7 +149,8 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	}
 
 	if d.N != "" {
-		fmt.Fprintf(b, "N %s\n", d.N)
+		// §4.3.1: the N mimetype is escape-decoded on parse, so encode it here.
+		fmt.Fprintf(b, "N %s\n", FossilEncode(d.N))
 	}
 
 	if len(d.P) > 0 {

@@ -143,7 +143,7 @@ func TestCrosslinkRepairsLeafAfterCancelledSweep(t *testing.T) {
 		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
 		U:    deck.User("testuser"),
 		F:    []deck.FileCard{{Name: "file.txt", UUID: fileUUID}},
-		R:    "0000000000000000000000000000000000000000",
+		R:    "00000000000000000000000000000000", // 32-hex MD5 placeholder (crosslink does not verify it)
 		// A root check-in declares its branch -- both fossil's own `init` and
 		// this package's Checkin do -- and leaf only ever considers a check-in
 		// that carries a branch tag. See repairLeafTable.

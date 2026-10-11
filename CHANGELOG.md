@@ -99,6 +99,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` validates every artifact-hash position against the §4.7.1 map:
+  the A source, B, the E identifier, each F hash, G, I, M, every P token, both
+  Q tokens, and the T target must be 40 or 64 case-insensitive hexadecimal
+  characters; the K ticket id is pinned to 40; the R checksum to 32. A hash is
+  required on every F card of a baseline manifest (only a delta manifest may
+  carry a hashless deletion card). The A target and the N mimetype are now
+  escape-decoded on parse and re-encoded on marshal, matching §4.3.1, while
+  the other hash tokens stay raw; the A filename keeps only its final path
+  component. The Q sign must be `+` or `-`, a tag name that is entirely
+  hexadecimal (either case) is rejected, and these checks reject malformed
+  tokens fossil also rejects, such as a hash carrying a stray carriage return
+  (#268).
+
+
 - `deck.Parse` tokenizes artifact cards the way fossil does (its
   `next_token`/`next_card`): tokens are separated by a single space, a card
   ends at LF, and tab and CR are ordinary token bytes rather than

@@ -98,6 +98,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and return `xfer.ErrBodyTooLarge` past it; a server streaming an endless
   reply used to be read into memory whole.
 
+- **Security:** the sync server answered `reqconfig NAME` with any row of the
+  `config` table, to any requester, including one with no capabilities, so
+  it disclosed `project-code`, `server-code` and every local setting. It now
+  answers as fossil does: only a `/GROUP` request, only for a requester with
+  Read, and only with the names fossil transfers in that group. The user and
+  subscriber tables also need Admin, which counts only for a verified login,
+  and concealed addresses need RdAddr (`e`). A refused request gets no cards
+  and no error, so the rest of the exchange goes on. Groups are sent in
+  fossil's encoding, so `fossil clone` and `fossil config pull` against this
+  server now receive the skin, project, ticket, shun and alias settings.
+
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

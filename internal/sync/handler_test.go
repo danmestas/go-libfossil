@@ -647,29 +647,6 @@ func TestHandleClonePagination(t *testing.T) {
 	}
 }
 
-func TestHandleReqConfig(t *testing.T) {
-	r := setupSyncTestRepo(t)
-
-	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.ReqConfigCard{Name: "project-code"},
-	}}
-	resp, err := HandleSync(context.Background(), r, req)
-	if err != nil {
-		t.Fatalf("HandleSync: %v", err)
-	}
-
-	configs := findCards[*xfer.ConfigCard](resp)
-	found := false
-	for _, c := range configs {
-		if c.Name == "project-code" && len(c.Content) > 0 {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expected config card for project-code")
-	}
-}
-
 func TestHandlePushFileStoreFails(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	// File with valid push but bad hash → storeReceivedFile returns error → ErrorCard
@@ -1891,7 +1868,7 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
 		&xfer.CloneCard{Version: 3, SeqNo: 0, SeqNoIsDecimal: true},
-		&xfer.ReqConfigCard{Name: "project-code"}, // must not be parsed
+		&xfer.ReqConfigCard{Name: "/project"}, // must not be parsed
 	}})
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)

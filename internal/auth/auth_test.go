@@ -48,3 +48,26 @@ func TestCanSyncPrivate(t *testing.T) {
 	if CanSyncPrivate("oi") { t.Error("CanSyncPrivate(oi) should be false") }
 	if CanSyncPrivate("as") { t.Error("CanSyncPrivate(as) should be false — x must be explicit") }
 }
+
+func TestFossilImpliedCapabilities(t *testing.T) {
+	tests := []struct {
+		caps                  string
+		read, admin, readAddr bool
+	}{
+		{"", false, false, false},
+		{"g", false, false, false},
+		{"o", true, false, false},
+		{"i", true, false, false},
+		{"e", false, false, true},
+		{"a", true, true, true},
+		{"s", true, true, true},
+	}
+	for _, tt := range tests {
+		if got := CanRead(tt.caps); got != tt.read {
+			t.Errorf("CanRead(%q) = %v, want %v", tt.caps, got, tt.read)
+		}
+		if got := IsAdmin(tt.caps); got != tt.admin {
+			t.Errorf("IsAdmin(%q) = %v, want %v", tt.caps, got, tt.admin)
+		}
+	}
+}

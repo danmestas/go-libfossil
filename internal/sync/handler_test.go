@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -48,18 +46,6 @@ func testProjectCode(t *testing.T, d *db.DB) string {
 		t.Fatalf("project-code: %v", err)
 	}
 	return code
-}
-
-func buildTestLoginCard(user, password, projectCode string, payload []byte) *xfer.LoginCard {
-	nonce := testSHA1Hex(payload)
-	shared := testSHA1Hex([]byte(projectCode + "/" + user + "/" + password))
-	sig := testSHA1Hex([]byte(nonce + shared))
-	return &xfer.LoginCard{User: user, Nonce: nonce, Signature: sig}
-}
-
-func testSHA1Hex(data []byte) string {
-	h := sha1.Sum(data)
-	return hex.EncodeToString(h[:])
 }
 
 func TestHandlePull(t *testing.T) {
@@ -137,7 +123,7 @@ func TestHandleIGotWithoutPushOrPull(t *testing.T) {
 // — without it, push-only clients exit after one round even when the
 // server is missing artifacts the client has just announced.
 func TestHandleIGotWithPushOnly(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	unknownUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	req := &xfer.Message{Cards: []xfer.Card{
@@ -205,7 +191,7 @@ func TestHandleGimmeMissing(t *testing.T) {
 }
 
 func TestHandlePushFile(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("push this")
 	uuid := hash.SHA1(data)
 
@@ -647,29 +633,6 @@ func TestHandleClonePagination(t *testing.T) {
 	}
 }
 
-func TestHandleReqConfig(t *testing.T) {
-	r := setupSyncTestRepo(t)
-
-	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.ReqConfigCard{Name: "project-code"},
-	}}
-	resp, err := HandleSync(context.Background(), r, req)
-	if err != nil {
-		t.Fatalf("HandleSync: %v", err)
-	}
-
-	configs := findCards[*xfer.ConfigCard](resp)
-	found := false
-	for _, c := range configs {
-		if c.Name == "project-code" && len(c.Content) > 0 {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("expected config card for project-code")
-	}
-}
-
 func TestHandlePushFileStoreFails(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	// File with valid push but bad hash → storeReceivedFile returns error → ErrorCard
@@ -694,7 +657,7 @@ func TestHandlePushFileStoreFails(t *testing.T) {
 // The server must store it (see storeDeltaAgainstPhantomBase) and continue,
 // rather than emitting an ErrorCard.
 func TestHandlePushDeltaBeforeBaseDoesNotErrorCard(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 
 	base := []byte("push delta-before-base test, base content long enough to compress")
 	target := []byte("push delta-before-base test, base content long enough to compress, v2")
@@ -741,7 +704,7 @@ func (s alwaysAtSite) Check(site string, _ float64) bool { return string(s) == s
 // (which panic on rid <= 0). The handler should emit an ErrorCard
 // and continue processing.
 func TestHandleFileMissingAfterStore(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("payload that stores cleanly")
 	uuid := hash.SHA1(data)
 
@@ -764,7 +727,7 @@ func TestHandleFileMissingAfterStore(t *testing.T) {
 }
 
 func TestHandleCFileCard(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("cfile content")
 	uuid := hash.SHA1(data)
 
@@ -883,7 +846,7 @@ func TestHandleReqConfigMissing(t *testing.T) {
 // if IGotCard is processed before FileCard, blob.Exists returns false
 // and a spurious GimmeCard is emitted, causing infinite sync loops.
 func TestHandleSyncNoSpuriousGimmeForReceivedFile(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	defer r.Close()
 
 	// Create a blob to push to the handler.
@@ -1170,14 +1133,10 @@ func TestHandleAuthenticatedPush(t *testing.T) {
 	data := []byte("authed push")
 	uuid := hash.SHA1(data)
 
-	// Build a valid login card — nonce is SHA1 of the non-login card payload
-	loginCard := buildTestLoginCard("pusher", "secret", pc, []byte("dummy"))
-
-	req := &xfer.Message{Cards: []xfer.Card{
-		loginCard,
+	req := signedRequest(t, "pusher", "secret", pc,
 		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
 		&xfer.FileCard{UUID: uuid, Content: data},
-	}}
+	)
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
@@ -1363,7 +1322,7 @@ func TestHandlerPrivateCardRejected(t *testing.T) {
 }
 
 func TestHandlerPublicFileClearsPrivate(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("was private now public")
 	uuid := hash.SHA1(data)
 
@@ -1891,7 +1850,7 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
 		&xfer.CloneCard{Version: 3, SeqNo: 0, SeqNoIsDecimal: true},
-		&xfer.ReqConfigCard{Name: "project-code"}, // must not be parsed
+		&xfer.ReqConfigCard{Name: "/project"}, // must not be parsed
 	}})
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)

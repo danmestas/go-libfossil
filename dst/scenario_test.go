@@ -75,6 +75,7 @@ func createMasterRepoAt(t *testing.T, path string) *repo.Repo {
 		t.Fatalf("repo.Create master: %v", err)
 	}
 	t.Cleanup(func() { r.Close() })
+	grantLeavesPush(t, r)
 	return r
 }
 

@@ -231,14 +231,57 @@ func ListSyncedTables(d *db.DB) ([]TableInfo, error) {
 	return tables, rows.Err()
 }
 
+// registeredDef returns the definition registered for tableName, or an error
+// when the name is not an identifier or no such table is registered. The
+// name is validated before the lookup so an unregistered name is refused
+// without ever reaching SQL text.
+func registeredDef(d *db.DB, tableName string) (TableDef, error) {
+	var def TableDef
+	if err := ValidateTableName(tableName); err != nil {
+		return def, err
+	}
+	var columnsJSON string
+	err := d.QueryRow("SELECT columns, conflict FROM _sync_schema WHERE name=?", tableName).
+		Scan(&columnsJSON, &def.Conflict)
+	if err == sql.ErrNoRows {
+		return def, fmt.Errorf("table %q is not registered", tableName)
+	}
+	if err != nil {
+		return def, err
+	}
+	if err := json.Unmarshal([]byte(columnsJSON), &def.Columns); err != nil {
+		return def, fmt.Errorf("table %q: unmarshal columns: %w", tableName, err)
+	}
+	return def, nil
+}
+
+// checkIdentifiers validates the table name and column names a function is
+// about to write into SQL text. Registration validated them once, but a
+// TableDef and a table name can reach these functions from anywhere, so each
+// SQL builder checks what it interpolates rather than trusting its caller.
+func checkIdentifiers(tableName string, def TableDef) error {
+	if err := ValidateTableName(tableName); err != nil {
+		return err
+	}
+	for _, col := range def.Columns {
+		if err := ValidateColumnName(col.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // normalizeValue converts a value to its canonical string representation
 // based on the declared column type. This ensures PK hashes are identical
 // regardless of how the value arrived (JSON unmarshal, SQLite scan, etc.).
+//
+// The panics below are assertions: a row from a peer passes ValidateRow first.
+// The type is matched case-insensitively, as createExtensionTable accepts it.
 func normalizeValue(colType string, v any) string {
 	if v == nil {
 		panic(fmt.Sprintf("repo.normalizeValue: value must not be nil for column type %q", colType))
 	}
-	switch colType {
+	switch strings.ToLower(colType) {
 	case "integer":
 		switch n := v.(type) {
 		case int64:
@@ -288,6 +331,73 @@ func normalizeValue(colType string, v any) string {
 	}
 }
 
+// ValidateRow checks a row a peer sent before it is hashed or stored. Every
+// key must be a column of def, because UpsertXRow writes keys into its SQL as
+// column names; every value must be a JSON scalar; and every primary-key
+// column must hold a value PKHash can normalize, because normalizeValue panics
+// on anything else. A row failing any of these is the peer's error.
+func ValidateRow(def TableDef, row map[string]any) error {
+	if row == nil {
+		return fmt.Errorf("row is not a JSON object")
+	}
+	for k, v := range row {
+		if !hasColumn(def, k) {
+			return fmt.Errorf("column %q is not in the table", k)
+		}
+		switch v.(type) {
+		case nil, bool, string, json.Number, int64, float64:
+		default:
+			return fmt.Errorf("column %q holds a %T, not a scalar", k, v)
+		}
+	}
+	for _, col := range def.Columns {
+		if col.PK && !pkValueNormalizes(col.Type, row[col.Name]) {
+			return fmt.Errorf("primary key column %q holds %T, not a %s value",
+				col.Name, row[col.Name], col.Type)
+		}
+	}
+	return nil
+}
+
+func hasColumn(def TableDef, name string) bool {
+	for _, col := range def.Columns {
+		if col.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// pkValueNormalizes reports whether normalizeValue accepts v for colType,
+// mirroring its cases so ValidateRow can refuse what it would panic on.
+func pkValueNormalizes(colType string, v any) bool {
+	switch strings.ToLower(colType) {
+	case "integer":
+		switch n := v.(type) {
+		case int64, float64, int:
+			return true
+		case json.Number:
+			_, err := n.Int64()
+			return err == nil
+		}
+	case "real":
+		switch n := v.(type) {
+		case float64, int64:
+			return true
+		case json.Number:
+			_, err := n.Float64()
+			return err == nil
+		}
+	case "text":
+		_, ok := v.(string)
+		return ok
+	case "blob":
+		_, ok := v.([]byte)
+		return ok
+	}
+	return false
+}
+
 // PKHash computes a deterministic SHA1 hash of the primary key values.
 // Values are normalized to canonical strings based on declared column types
 // to avoid JSON round-trip coercion issues (e.g., int64 → float64).
@@ -327,6 +437,22 @@ func UpsertXRow(d *db.DB, tableName string, row map[string]any, mtime int64) err
 	if row == nil {
 		panic("repo.UpsertXRow: row must not be nil")
 	}
+	// The table name and row keys are written into the SQL below, so each is
+	// checked against the schema registered for the table rather than
+	// trusted: a key that is not a declared column would be a statement
+	// fragment. Peer rows pass ValidateRow first; this holds for every caller.
+	def, err := registeredDef(d, tableName)
+	if err != nil {
+		return fmt.Errorf("repo.UpsertXRow: %w", err)
+	}
+	// _owner is the column createExtensionTable adds for ownership modes; local
+	// callers set it, while a peer's row cannot carry it past ValidateRow.
+	hasOwner := def.Conflict == "self-write" || def.Conflict == "owner-write"
+	for k := range row {
+		if !hasColumn(def, k) && !(k == "_owner" && hasOwner) {
+			return fmt.Errorf("repo.UpsertXRow: column %q is not in table %q", k, tableName)
+		}
+	}
 
 	// Build column list and placeholders. Sort keys for deterministic SQL.
 	keys := make([]string, 0, len(row))
@@ -353,8 +479,7 @@ func UpsertXRow(d *db.DB, tableName string, row map[string]any, mtime int64) err
 		strings.Join(cols, ", "),
 		strings.Join(placeholders, ", "),
 	)
-	_, err := d.Exec(sql, values...)
-	if err != nil {
+	if _, err := d.Exec(sql, values...); err != nil {
 		return fmt.Errorf("repo.UpsertXRow: %w", err)
 	}
 	return nil
@@ -367,6 +492,9 @@ func ListXRows(d *db.DB, tableName string, def TableDef) ([]map[string]any, []in
 	}
 	if tableName == "" {
 		panic("repo.ListXRows: tableName must not be empty")
+	}
+	if err := checkIdentifiers(tableName, def); err != nil {
+		return nil, nil, fmt.Errorf("repo.ListXRows: %w", err)
 	}
 
 	sql := fmt.Sprintf("SELECT * FROM x_%s ORDER BY mtime", tableName)
@@ -471,6 +599,9 @@ func LookupXRowOwner(d *db.DB, tableName string, def TableDef, pkHash string) (s
 	if pkHash == "" {
 		panic("repo.LookupXRowOwner: pkHash must not be empty")
 	}
+	if err := checkIdentifiers(tableName, def); err != nil {
+		return "", fmt.Errorf("repo.LookupXRowOwner: %w", err)
+	}
 
 	// Only tables with self-write/owner-write conflict have an _owner column.
 	hasOwner := def.Conflict == "self-write" || def.Conflict == "owner-write"
@@ -569,6 +700,9 @@ func DeleteXRowByPKHash(d *db.DB, tableName string, def TableDef, pkHash string,
 	}
 	if len(def.Columns) == 0 {
 		panic("repo.DeleteXRowByPKHash: def.Columns must not be empty")
+	}
+	if err := checkIdentifiers(tableName, def); err != nil {
+		return false, fmt.Errorf("repo.DeleteXRowByPKHash: %w", err)
 	}
 
 	row, currentMtime, err := LookupXRow(d, tableName, def, pkHash)

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Message is a sequence of cards forming one xfer request or response.
@@ -65,6 +67,39 @@ const (
 // the artifact alone -- it no longer depends on what precedes the artifact in
 // its round (issue #109).
 const MaxDecompressedBytes = 64 << 20 // 64 MiB
+
+// MaxBodyBytes caps an xfer reply body a client reads off the wire. Decode
+// can bound only what it is handed, so without this a peer could stream a
+// reply without end and the client would hold all of it before decoding.
+//
+// It is MaxDecompressedBytes plus headroom for the container's framing, so no
+// body Decode would accept is refused: a compressed container decompresses to
+// at most MaxDecompressedBytes, and zlib grows incompressible input by far
+// less than the headroom; an uncompressed clone reply is a round this
+// module's server flushes at DefaultCloneBatchBytes and fossil at its
+// max-download setting (5 MB by default), each plus one artifact. That last
+// artifact is what this bounds: one whose stored form is larger cannot be
+// cloned, as MaxDecompressedBytes already says of a compressed reply. A server
+// bounds the other direction itself (sync.ServeHTTP reads at most 50 MiB).
+const MaxBodyBytes = MaxDecompressedBytes + 1<<20
+
+// ErrBodyTooLarge reports a reply body longer than MaxBodyBytes. It is the
+// peer's fault and resending the same request gets the same reply, so a
+// transport returns it without tagging it retryable.
+var ErrBodyTooLarge = fmt.Errorf("xfer: reply body exceeds %d bytes", MaxBodyBytes)
+
+// ReadBody reads an xfer reply body, refusing one longer than MaxBodyBytes
+// once the cap is passed rather than after holding all of it.
+func ReadBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, ErrBodyTooLarge
+	}
+	return body, nil
+}
 
 // Compile-time guard: the bound must be positive. The subtraction underflows
 // and fails the build if MaxDecompressedBytes is ever set to zero, rather than
@@ -209,17 +244,52 @@ func decompressBounded(data []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// MaxCFileInflateBytes caps the bytes all cfile payloads in one message may
+// inflate to, together. Each cfile is already held to its own USIZE, but USIZE
+// is the sender's claim and zlib inflates about 1000:1, so without a message
+// budget a body of a few megabytes holding many cfiles costs tens of gigabytes
+// -- on a server too, which decodes a request before looking at its cards.
+//
+// Like MaxDecompressedBytes it is a local guard, not a protocol rule. It sits
+// far above a clone round: fossil stops filling a round once its compressed
+// output passes its max-download setting (5 MB by default), and this module's
+// server stops at DefaultCloneBatchBytes of artifact content. A round would
+// need a compression ratio over 200:1 throughout to reach it. A single
+// artifact larger than this cannot be received as a cfile.
+//
+// Why 1 GiB: it is the point between those two pressures. Lower, and rounds of
+// highly compressible content from a stock fossil server start to fail. Higher,
+// and one hostile message buys more memory than a single sync exchange should
+// hold: a body is at most MaxBodyBytes (65 MiB), and this keeps its inflation
+// near sixteen times that, where zlib alone allows about a thousand times.
+const MaxCFileInflateBytes = 1 << 30 // 1 GiB
+
 // DecodeUncompressed decodes cards from uncompressed data.
+//
+// Each login card records the SHA-1 of the bytes after its line, which its
+// nonce must equal (see LoginCard.NonceCoversTail). Only the decoder still
+// has those bytes, and a re-encoding of the parsed cards is not them.
 func DecodeUncompressed(data []byte) (*Message, error) {
-	r := bufio.NewReader(bytes.NewReader(data))
+	return decodeMessage(data, MaxCFileInflateBytes)
+}
+
+// decodeMessage decodes cards from uncompressed data, letting every cfile in
+// it inflate to at most budget bytes in total.
+func decodeMessage(data []byte, budget int64) (*Message, error) {
+	src := bytes.NewReader(data)
+	r := bufio.NewReader(src)
 	msg := &Message{}
 	for {
-		card, err := DecodeCard(r)
+		card, err := decodeCard(r, &budget)
 		if err == io.EOF {
 			return msg, nil
 		}
 		if err != nil {
 			return nil, fmt.Errorf("xfer: decode card %d: %w", len(msg.Cards), err)
+		}
+		if lc, ok := card.(*LoginCard); ok {
+			consumed := len(data) - src.Len() - r.Buffered()
+			lc.tailSHA1 = hash.SHA1(data[consumed:])
 		}
 		msg.Cards = append(msg.Cards, card)
 	}

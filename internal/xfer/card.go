@@ -90,9 +90,24 @@ type LoginCard struct {
 	User      string // plain text (defossilized)
 	Nonce     string
 	Signature string
+
+	// tailSHA1 is the SHA-1 of the message bytes that followed this card's
+	// line, recorded by DecodeUncompressed. Empty for a card built in memory.
+	tailSHA1 string
 }
 
 func (c *LoginCard) Type() CardType { return CardLogin }
+
+// NonceCoversTail reports whether Nonce is the SHA-1 of the decompressed bytes
+// that followed this card's line in the message it was decoded from: "every
+// decompressed body byte after the body login line's LF through body end"
+// (draft §6.2, src/xfer.c check_tail_hash). The signature covers only the
+// nonce, so this check is what binds a login to its body; without it a
+// captured card authenticates any body. A card that was not decoded has no
+// tail and covers nothing.
+func (c *LoginCard) NonceCoversTail() bool {
+	return c.tailSHA1 != "" && c.Nonce == c.tailSHA1
+}
 
 // CommentCard represents a "# ..." line. A receiver ignores it — canonical's
 // card loop skips any line starting with '#', as does this package's decoder,

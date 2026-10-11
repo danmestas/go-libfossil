@@ -95,7 +95,7 @@ func TestHandlerUVGimme(t *testing.T) {
 }
 
 func TestHandlerUVFile_Accepted(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	if err := uv.EnsureSchema(r.DB()); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}

@@ -14,8 +14,18 @@ import (
 
 var ErrAuthFailed = errors.New("authentication failed")
 
-// VerifyLogin validates a login card against the user table.
-// The server does NOT need the raw payload — the nonce is in card.Nonce.
+// VerifyLogin validates a login card against the user table, as fossil's
+// check_tail_hash and check_login do (src/xfer.c, draft §6.4).
+//
+// The card must have been decoded from the request it arrived in: its nonce
+// must be the SHA-1 of the body that followed it (xfer.LoginCard
+// NonceCoversTail). The signature covers only the nonce, so without that
+// check a card captured from one request authenticates any other.
+//
+// nobody and anonymous succeed without a password and carry no capabilities
+// of their own. Any other user needs a non-empty stored password: an empty one
+// would make the signature SHA1(nonce), which anyone can compute.
+//
 // Returns the authenticated User on success, or ErrAuthFailed on any failure.
 // Panics if d or card is nil (TigerStyle preconditions).
 func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, error) {
@@ -28,16 +38,29 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 	if card == nil {
 		panic("auth.VerifyLogin: card must not be nil")
 	}
+	if !card.NonceCoversTail() {
+		return User{}, ErrAuthFailed
+	}
+	if card.User == "nobody" || card.User == "anonymous" {
+		return User{Login: card.User}, nil
+	}
 
-	// 1. Look up user by card.User and retrieve stored password + cexpire
+	// 1. Look up user by card.User and retrieve stored password + cexpire.
+	// The reserved logins are capability templates, never accounts.
 	var storedPW string
 	var cexpire sql.NullString
 	var u User
 	var info sql.NullString
 	var mtimeRaw any
 
+	// An account with no stored password cannot be logged into, as in
+	// fossil's check_login (src/xfer.c, length(pw)>0): with an empty secret
+	// the signature is SHA1(nonce), which anyone can compute. A new
+	// repository's creator starts that way, holding Setup.
 	err := d.QueryRow(
-		"SELECT uid, login, pw, cap, cexpire, info, mtime FROM user WHERE login=?",
+		"SELECT uid, login, pw, cap, cexpire, info, mtime FROM user WHERE login=?"+
+			" AND login NOT IN ('anonymous','nobody','developer','reader')"+
+			" AND length(pw)>0",
 		card.User,
 	).Scan(&u.UID, &u.Login, &storedPW, &u.Cap, &cexpire, &info, &mtimeRaw)
 
@@ -52,26 +75,10 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 
 	// 3. If cexpire is set and in the past → ErrAuthFailed
 	if cexpire.Valid {
-		// Parse cexpire - SQLite may return either "2006-01-02 15:04:05" or ISO 8601 format
-		var expireTime time.Time
-		var err error
-
-		// Try ISO 8601 first (SQLite's preferred format)
-		expireTime, err = time.Parse(time.RFC3339, cexpire.String)
-		if err != nil {
-			// Fall back to space-separated format
-			expireTime, err = time.Parse("2006-01-02 15:04:05", cexpire.String)
-			if err != nil {
-				// If we can't parse the expiry, treat it as expired for safety
-				return User{}, ErrAuthFailed
-			}
-		}
-
-		// Check if expired
-		if time.Now().After(expireTime) {
+		expireTime, ok := parseCExpire(cexpire.String)
+		if !ok || time.Now().After(expireTime) {
 			return User{}, ErrAuthFailed
 		}
-
 		u.CExpire = expireTime
 	}
 
@@ -90,6 +97,17 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 
 	// 7. Return User
 	return u, nil
+}
+
+// parseCExpire parses a user.cexpire value. SQLite may return either ISO 8601
+// or "2006-01-02 15:04:05". An expiry that does not parse reports !ok, which
+// the caller treats as expired for safety.
+func parseCExpire(s string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02 15:04:05", s)
+	}
+	return t, err == nil
 }
 
 func sha1hex(data []byte) string {

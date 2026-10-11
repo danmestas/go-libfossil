@@ -48,3 +48,41 @@ func TestCanSyncPrivate(t *testing.T) {
 	if CanSyncPrivate("oi") { t.Error("CanSyncPrivate(oi) should be false") }
 	if CanSyncPrivate("as") { t.Error("CanSyncPrivate(as) should be false — x must be explicit") }
 }
+
+func TestFossilImpliedCapabilities(t *testing.T) {
+	tests := []struct {
+		caps                  string
+		read, admin, readAddr bool
+	}{
+		{"", false, false, false},
+		{"g", false, false, false},
+		{"o", true, false, false},
+		{"i", true, false, false},
+		{"e", false, false, true},
+		{"a", true, true, true},
+		{"s", true, true, true},
+	}
+	for _, tt := range tests {
+		if got := CanRead(tt.caps); got != tt.read {
+			t.Errorf("CanRead(%q) = %v, want %v", tt.caps, got, tt.read)
+		}
+		if got := IsAdmin(tt.caps); got != tt.admin {
+			t.Errorf("IsAdmin(%q) = %v, want %v", tt.caps, got, tt.admin)
+		}
+	}
+}
+
+// Setup (s) and Admin (a) include check-in, read and clone in fossil
+// (src/login.c login_set_capabilities), but not private sync or unversioned
+// writes, which stay explicit.
+func TestAdminAndSetupImplySyncCaps(t *testing.T) {
+	for _, caps := range []string{"s", "a"} {
+		if !CanPush(caps) || !CanPull(caps) || !CanClone(caps) {
+			t.Errorf("caps %q: push/pull/clone = %v/%v/%v, want all true",
+				caps, CanPush(caps), CanPull(caps), CanClone(caps))
+		}
+		if CanPushUV(caps) || CanSyncPrivate(caps) {
+			t.Errorf("caps %q must not imply y or x", caps)
+		}
+	}
+}

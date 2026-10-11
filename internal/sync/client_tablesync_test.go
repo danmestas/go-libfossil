@@ -38,6 +38,7 @@ func newTableSyncRepoPair(t *testing.T) (server, client *repo.Repo) {
 
 func TestTableSyncEndToEnd(t *testing.T) {
 	serverRepo, clientRepo := newTableSyncRepoPair(t)
+	grantNobodyPush(t, serverRepo)
 
 	// Define and register same table on both sides.
 	def := repo.TableDef{

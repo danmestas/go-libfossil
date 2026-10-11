@@ -263,7 +263,8 @@ func SeedUser(d *DB, login string) error {
 }
 
 // SeedNobody inserts a "nobody" user with the given capabilities.
-// This controls anonymous access policy for the repo.
+// This controls anonymous access policy for the repo. A new repository
+// gets fossil's built-in users from SeedDefaultUsers instead.
 func SeedNobody(d *DB, caps string) error {
 	if d == nil {
 		panic("db.SeedNobody: d must not be nil")
@@ -271,6 +272,35 @@ func SeedNobody(d *DB, caps string) error {
 	_, err := d.Exec(
 		"INSERT OR IGNORE INTO user(login, pw, cap, info) VALUES('nobody', '', ?, '')",
 		caps,
+	)
+	return err
+}
+
+// SeedDefaultUsers inserts the four built-in users `fossil new` creates, with
+// fossil's capabilities (src/db.c db_create_default_users). nobody's set is
+// what every unauthenticated sync request is granted, so it is clone, read
+// and zip only: check-in rights must be granted explicitly. developer and
+// reader are templates other users inherit through v and u. anonymous gets a
+// random password, as fossil gives it; the others have none, so no login can
+// reach them (VerifyLogin requires a stored password).
+func SeedDefaultUsers(d *DB, rng simio.Rand) error {
+	if d == nil {
+		panic("db.SeedDefaultUsers: d must not be nil")
+	}
+	if rng == nil {
+		panic("db.SeedDefaultUsers: rng must not be nil")
+	}
+	anonPW, err := randomHex(8, rng)
+	if err != nil {
+		return fmt.Errorf("db.SeedDefaultUsers: %w", err)
+	}
+	_, err = d.Exec(
+		"INSERT OR IGNORE INTO user(login, pw, cap, info) VALUES"+
+			"('anonymous', upper(?), 'hz', 'Anon'),"+
+			"('nobody', '', 'gjorz', 'Nobody'),"+
+			"('developer', '', 'ei', 'Dev'),"+
+			"('reader', '', 'kptw', 'Reader')",
+		anonPW,
 	)
 	return err
 }

@@ -7,27 +7,63 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
-// readPayload reads exactly size bytes from the reader.
+// maxPayloadSize is the largest size token a card may carry. Fossil parses
+// these tokens into a C int (xfer.c via blob_is_int), so no fossil peer can
+// send or store a larger artifact; a larger token is not a size at all.
+const maxPayloadSize = 1<<31 - 1
+
+// payloadChunk is how much of a payload is allocated before its bytes arrive.
+// A declared size is the peer's claim, so memory grows with bytes actually
+// read rather than with the claim.
+const payloadChunk = 64 << 10
+
+// parseSize parses a card's size token. The sync draft's grammar makes every
+// size `decimal = 1*DIGIT` (Appendix B), and fossil reads it with blob_is_int,
+// which accepts digits only; strconv.Atoi alone would also take a sign. A bad
+// token is the peer's error, returned as one, and never reaches readPayload's
+// assertion.
+func parseSize(tok string) (int, error) {
+	if !isDecimal(tok) {
+		return 0, fmt.Errorf("%q is not a decimal", tok)
+	}
+	n, err := strconv.ParseInt(tok, 10, 64)
+	if err != nil || n > maxPayloadSize {
+		return 0, fmt.Errorf("%q exceeds %d", tok, maxPayloadSize)
+	}
+	return int(n), nil
+}
+
+// readPayload reads exactly size bytes from the reader. Its buffer grows with
+// the bytes read, doubling up to size, so a size that the message does not
+// back fails on a short read after allocating about what was sent.
 func readPayload(r *bufio.Reader, size int) ([]byte, error) {
 	if r == nil {
 		panic("xfer.readPayload: r must not be nil")
 	}
-	if size < 0 {
-		panic("xfer.readPayload: size must not be negative")
+	// Callers pass only sizes from parseSize; a peer cannot reach this.
+	if size < 0 || size > maxPayloadSize {
+		panic("xfer.readPayload: size out of range")
 	}
-	if size == 0 {
-		return []byte{}, nil
-	}
-	buf := make([]byte, size)
-	_, err := io.ReadFull(r, buf)
-	if err != nil {
-		return nil, fmt.Errorf("read payload: %w", err)
+	buf := make([]byte, 0, min(size, payloadChunk))
+	for len(buf) < size {
+		if len(buf) == cap(buf) {
+			buf = slices.Grow(buf, min(size, 2*cap(buf))-len(buf))
+		}
+		n, err := io.ReadFull(r, buf[len(buf):min(size, cap(buf))])
+		buf = buf[:len(buf)+n]
+		if err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, fmt.Errorf("read payload: %w", err)
+		}
 	}
 	return buf, nil
 }
@@ -53,9 +89,20 @@ func uvFileOmitsContent(flags int) bool {
 // DecodeCard reads one card from r. It skips comment lines (starting with #)
 // and empty lines. Returns io.EOF when the reader is exhausted.
 // Unrecognized command words produce an *UnknownCard (not an error).
+// A cfile card may inflate to at most MaxCFileInflateBytes.
 func DecodeCard(r *bufio.Reader) (Card, error) {
+	budget := int64(MaxCFileInflateBytes)
+	return decodeCard(r, &budget)
+}
+
+// decodeCard reads one card as DecodeCard does, charging any cfile payload's
+// inflated size to budget, which the caller shares across a message.
+func decodeCard(r *bufio.Reader, budget *int64) (Card, error) {
 	if r == nil {
-		panic("xfer.DecodeCard: r must not be nil")
+		panic("xfer.decodeCard: r must not be nil")
+	}
+	if budget == nil || *budget < 0 {
+		panic("xfer.decodeCard: budget must be a non-negative count")
 	}
 	for {
 		line, err := r.ReadString('\n')
@@ -78,7 +125,7 @@ func DecodeCard(r *bufio.Reader) (Card, error) {
 			continue
 		}
 
-		card, parseErr := parseLine(r, line)
+		card, parseErr := parseLine(r, line, budget)
 		if parseErr != nil {
 			return nil, parseErr
 		}
@@ -88,7 +135,7 @@ func DecodeCard(r *bufio.Reader) (Card, error) {
 
 // parseLine dispatches a trimmed, non-empty line to the appropriate card parser.
 // The reader r is passed through for payload cards that need to read binary data.
-func parseLine(r *bufio.Reader, line string) (Card, error) {
+func parseLine(r *bufio.Reader, line string, budget *int64) (Card, error) {
 	fields := strings.Fields(line)
 	if len(fields) == 0 {
 		return nil, fmt.Errorf("xfer: empty line after split")
@@ -130,7 +177,7 @@ func parseLine(r *bufio.Reader, line string) (Card, error) {
 	case "file":
 		return parseFile(r, args)
 	case "cfile":
-		return parseCFile(r, args)
+		return parseCFile(r, args, budget)
 	case "config":
 		return parseConfig(r, args)
 	case "uvfile":
@@ -356,7 +403,7 @@ func parseFile(r *bufio.Reader, args []string) (Card, error) {
 	} else {
 		sizeStr = args[1]
 	}
-	size, err := strconv.Atoi(sizeStr)
+	size, err := parseSize(sizeStr)
 	if err != nil {
 		return nil, fmt.Errorf("xfer: file size: %w", err)
 	}
@@ -371,7 +418,7 @@ func parseFile(r *bufio.Reader, args []string) (Card, error) {
 // parseCFile decodes: cfile UUID USIZE CSIZE \n ZCONTENT
 // or: cfile UUID DELTASRC USIZE CSIZE \n ZCONTENT
 // No trailing newline after ZCONTENT.
-func parseCFile(r *bufio.Reader, args []string) (Card, error) {
+func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 	if len(args) != 3 && len(args) != 4 {
 		return nil, fmt.Errorf("xfer: cfile requires 3-4 args, got %d", len(args))
 	}
@@ -385,11 +432,11 @@ func parseCFile(r *bufio.Reader, args []string) (Card, error) {
 		usizeStr = args[1]
 		csizeStr = args[2]
 	}
-	usize, err := strconv.Atoi(usizeStr)
+	usize, err := parseSize(usizeStr)
 	if err != nil {
 		return nil, fmt.Errorf("xfer: cfile usize: %w", err)
 	}
-	csize, err := strconv.Atoi(csizeStr)
+	csize, err := parseSize(csizeStr)
 	if err != nil {
 		return nil, fmt.Errorf("xfer: cfile csize: %w", err)
 	}
@@ -405,10 +452,12 @@ func parseCFile(r *bufio.Reader, args []string) (Card, error) {
 	// into Fossil's on-disk blob format, built without a second zlib pass,
 	// so a receive path can persist storedBlob verbatim instead of
 	// recompressing decompressed content and getting different bytes.
-	decompressed, storedBlob, err := decompressCFile(compressed)
+	limit := min(cfileInflateLimit(usize, c.DeltaSrc != ""), *budget)
+	decompressed, storedBlob, err := decompressCFile(compressed, limit)
 	if err != nil {
 		return nil, err
 	}
+	*budget -= int64(len(decompressed))
 	// For non-delta cfiles, decompressed size == usize (full content).
 	// For delta cfiles, decompressed size is the delta payload size, which
 	// is smaller than usize (the fully expanded content size). Fossil's
@@ -430,7 +479,7 @@ func parseConfig(r *bufio.Reader, args []string) (Card, error) {
 		return nil, fmt.Errorf("xfer: config requires 2 args, got %d", len(args))
 	}
 	name := args[0]
-	size, err := strconv.Atoi(args[1])
+	size, err := parseSize(args[1])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: config size: %w", err)
 	}
@@ -451,11 +500,13 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf("xfer: uvfile mtime: %w", err)
 	}
-	size, err := strconv.Atoi(args[3])
+	size, err := parseSize(args[3])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: uvfile size: %w", err)
 	}
-	flags, err := strconv.Atoi(args[4])
+	// FLAGS share the size grammar: the draft has receivers reject a
+	// negative FLAGS.
+	flags, err := parseSize(args[4])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: uvfile flags: %w", err)
 	}
@@ -476,6 +527,23 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	return c, nil
 }
 
+// cfileInflateLimit bounds how far a cfile payload may inflate. Without it,
+// a few kilobytes of zlib on the wire inflate to gigabytes, since zlib reaches
+// about 1000:1. A full artifact must inflate to exactly usize. A delta is
+// bounded by usize too: fossil's delta_create and this module's delta.Create
+// emit a copy only for a match of 16 bytes or more, which costs no more than
+// the bytes it replaces, so a delta exceeds its target by little more than its
+// header and checksum. The margin below is far wider than that.
+func cfileInflateLimit(usize int, isDelta bool) int64 {
+	if usize < 0 || usize > maxPayloadSize {
+		panic("xfer.cfileInflateLimit: usize out of range")
+	}
+	if !isDelta {
+		return int64(usize)
+	}
+	return int64(usize) + int64(usize)/2 + 64
+}
+
 // decompressCFile decompresses a cfile card's wire payload and also returns
 // storedBlob: the same bytes recast into Fossil's on-disk blob format
 // ([4-byte BE uncompressed-size prefix][zlib data]), built without ever
@@ -483,38 +551,62 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 // as blob.content -- reproducing whatever bytes the sender's own storage
 // held -- instead of decompressing here and recompressing later, which
 // would depend on this process's zlib writer parameters rather than the
-// sender's.
-func decompressCFile(data []byte) (decompressed []byte, storedBlob []byte, err error) {
-	// Try plain zlib (matches our own encoder, which sends no prefix).
-	if zr, zerr := zlib.NewReader(bytes.NewReader(data)); zerr == nil {
-		out, readErr := io.ReadAll(zr)
-		zr.Close()
-		if readErr == nil {
-			// data carries no size prefix. Fossil's on-disk format needs
-			// one, so prepend it -- the zlib bytes themselves pass through
-			// unchanged, so this is bookkeeping, not recompression.
-			var buf bytes.Buffer
-			if err := binary.Write(&buf, binary.BigEndian, uint32(len(out))); err != nil {
-				return nil, nil, fmt.Errorf("xfer: cfile size prefix: %w", err)
-			}
-			buf.Write(data)
-			return out, buf.Bytes(), nil
+// sender's. Neither form may inflate past limit; the prefixed form may not
+// inflate past its prefix either, as fossil's blob_uncompress sizes its
+// output buffer from that prefix.
+func decompressCFile(data []byte, limit int64) (decompressed []byte, storedBlob []byte, err error) {
+	// Try plain zlib, which this module's encoder sent before it adopted
+	// fossil's prefixed form.
+	out, overLimit, readErr := inflateBounded(data, limit)
+	if readErr == nil {
+		// data carries no size prefix. Fossil's on-disk format needs
+		// one, so prepend it -- the zlib bytes themselves pass through
+		// unchanged, so this is bookkeeping, not recompression.
+		var buf bytes.Buffer
+		if err := binary.Write(&buf, binary.BigEndian, uint32(len(out))); err != nil {
+			return nil, nil, fmt.Errorf("xfer: cfile size prefix: %w", err)
 		}
+		buf.Write(data)
+		return out, buf.Bytes(), nil
 	}
 	// Try with 4-byte size prefix skip (Fossil blob format). Fossil's
 	// send_compressed_file transmits the source's own blob.content bytes
 	// unmodified, so data IS already the canonical on-disk form here --
 	// nothing needs to be rebuilt.
 	if len(data) > 4 {
-		if zr, zerr := zlib.NewReader(bytes.NewReader(data[4:])); zerr == nil {
-			out, readErr := io.ReadAll(zr)
-			zr.Close()
-			if readErr == nil {
-				return out, data, nil
-			}
+		prefix := int64(binary.BigEndian.Uint32(data[:4]))
+		out, over, readErr := inflateBounded(data[4:], min(limit, prefix))
+		if readErr == nil {
+			return out, data, nil
 		}
+		overLimit = overLimit || over
 	}
-	return nil, nil, fmt.Errorf("xfer: cfile zlib init: could not decompress payload (%d bytes)", len(data))
+	if overLimit {
+		return nil, nil, fmt.Errorf(
+			"xfer: cfile payload inflates past %d bytes, its declared size or the message budget",
+			limit)
+	}
+	return nil, nil, fmt.Errorf(
+		"xfer: cfile zlib init: could not decompress payload (%d bytes)", len(data))
+}
+
+// inflateBounded inflates one zlib stream, reading at most limit+1 bytes of
+// output so a stream claiming more stops there. overLimit reports that case;
+// a stream that is not zlib, or is corrupt, returns only an error.
+func inflateBounded(data []byte, limit int64) (out []byte, overLimit bool, err error) {
+	zr, err := zlib.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, false, err
+	}
+	defer zr.Close()
+	out, err = io.ReadAll(io.LimitReader(zr, limit+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(out)) > limit {
+		return nil, true, fmt.Errorf("inflates past %d bytes", limit)
+	}
+	return out, false, nil
 }
 
 func parseSchema(r *bufio.Reader, args []string) (Card, error) {
@@ -529,12 +621,12 @@ func parseSchema(r *bufio.Reader, args []string) (Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf("xfer: schema mtime: %w", err)
 	}
-	size, err := strconv.Atoi(args[4])
+	size, err := parseSize(args[4])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: schema size: %w", err)
 	}
 	const maxSchemaSize = 64 << 20 // 64 MiB — schema payloads should be small JSON.
-	if size < 0 || size > maxSchemaSize {
+	if size > maxSchemaSize {
 		return nil, fmt.Errorf("xfer: schema size out of bounds: %d", size)
 	}
 	content, err := readPayloadWithTrailingNewline(r, size)
@@ -570,12 +662,12 @@ func parseXDelete(r *bufio.Reader, args []string) (Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf("xfer: xdelete mtime: %w", err)
 	}
-	size, err := strconv.Atoi(args[3])
+	size, err := parseSize(args[3])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: xdelete size: %w", err)
 	}
 	const maxXDeleteSize = 64 << 20 // 64 MiB — PK data should be tiny JSON
-	if size < 0 || size > maxXDeleteSize {
+	if size > maxXDeleteSize {
 		return nil, fmt.Errorf("xfer: xdelete size out of range: %d", size)
 	}
 	pkData, err := readPayloadWithTrailingNewline(r, size)
@@ -593,12 +685,12 @@ func parseXRow(r *bufio.Reader, args []string) (Card, error) {
 	if err != nil {
 		return nil, fmt.Errorf("xfer: xrow mtime: %w", err)
 	}
-	size, err := strconv.Atoi(args[3])
+	size, err := parseSize(args[3])
 	if err != nil {
 		return nil, fmt.Errorf("xfer: xrow size: %w", err)
 	}
 	const maxXRowSize = 64 << 20 // 64 MiB — row payloads should be small JSON.
-	if size < 0 || size > maxXRowSize {
+	if size > maxXRowSize {
 		return nil, fmt.Errorf("xfer: xrow size out of bounds: %d", size)
 	}
 	content, err := readPayloadWithTrailingNewline(r, size)

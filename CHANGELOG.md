@@ -115,6 +115,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The CLI's `merge` recorded a conflict as `chnged=5`, which fossil reads as
   "added by integrate", and recorded no merge parent (#244).
 
+### Security
+
+- A sync card whose size is not a plain decimal is a decoding error. A
+  negative size, as in `file HASH -1`, used to panic the client or server
+  reading the message, and a signed size such as `+5` was read as a size.
+  Sizes follow draft-fossil-sync-protocol-00's `decimal` grammar and fossil's
+  32-bit limit, and a `uvfile`'s FLAGS take the same rule, so negative FLAGS
+  are rejected as the draft requires. A declared size no longer sets how much
+  memory is allocated before the payload arrives: the buffer grows with the
+  bytes read, so a large size over a short message fails without allocating
+  it. A `cfile` payload may inflate only to its USIZE, or to a margin above
+  USIZE for a delta, and not past its 4-byte size prefix, and all `cfile`
+  payloads in one message may inflate to at most `MaxCFileInflateBytes`
+  (1 GiB) together; a few megabytes of zlib could otherwise inflate to tens
+  of gigabytes. A single artifact larger than that cannot be received as a
+  `cfile` (GHSA-j99p-mw22-69c8).
+
+- An `xrow` payload or `xdelete` PKData must be one JSON object whose values
+  are scalars and whose primary-key values have the column's type; anything
+  else is refused with an error, on the client and the server. JSON `null`
+  used to panic the process, as did a primary-key value of the wrong type or
+  a nested value. A client refuses an `xrow` for a table it has not
+  registered (GHSA-j99p-mw22-69c8).
+
+- A synced table's row can no longer rewrite the SQL that stores it. Keys of
+  an `xrow` payload or `xdelete` PKData were written into `UpsertXRow`'s
+  `INSERT` as column names unchecked, so a peer could choose the statement's
+  columns and values, or select from other tables into a synced one. A
+  peer's row must now use exactly the table's declared columns, and
+  `UpsertXRow` refuses any key the table's registered schema does not
+  declare. Every other function that writes a synced table or column name
+  into SQL validates it first (GHSA-9fq6-h6xw-274g).
+
+- The HTTP transports read at most `xfer.MaxBodyBytes` (65 MiB) of a reply
+  and return `xfer.ErrBodyTooLarge` past it; a server streaming an endless
+  reply used to be read into memory whole (GHSA-j99p-mw22-69c8).
+
+- The sync server answered `reqconfig NAME` with any row of the
+  `config` table, to any requester, including one with no capabilities, so
+  it disclosed `project-code`, `server-code` and every local setting. It now
+  answers as fossil does: only a `/GROUP` request, only for a requester with
+  Read, and only with the names fossil transfers in that group. The user and
+  subscriber tables also need Admin, which counts only for a verified login,
+  and concealed addresses need RdAddr (`e`). A refused request gets no cards
+  and no error, so the rest of the exchange goes on. Groups are sent in
+  fossil's encoding, so `fossil clone` and `fossil config pull` against this
+  server now receive the skin, project, ticket, shun and alias settings (GHSA-p6w4-4xqc-jhq2).
+
+- The sync server checks a login card's nonce against the request body, as
+  fossil does (GHSA-2g5p-q5f3-477p). The nonce must be the SHA-1 of the
+  decompressed bytes after the login line; it was never checked, so a login
+  card captured from one request authenticated any other request body. A
+  refused login now ends the exchange with fossil's `error login failed`
+  instead of carrying on as nobody, and a second login card is refused. A
+  successful login adds the user's capabilities to nobody's instead of
+  replacing them. As in fossil, `nobody` and `anonymous` log in without a
+  password, and accounts with no stored password, `developer` and `reader`
+  cannot be logged into.
+
+- **Breaking:** A new repository gives its built-in users the capabilities
+  `fossil new` gives them. `nobody`, whose capabilities every request
+  without credentials gets, may now clone, read and download (`gjorz`); it
+  used to be granted `cghijknorswy`, which let anyone push check-ins and
+  unversioned files, write wiki pages and tickets, and act with Setup. The
+  repository also gets fossil's `anonymous`, `developer` and `reader` users.
+  The creating user, who holds Setup, can now push and pull once given a
+  password, as Setup includes those rights in fossil. A login is refused
+  for any account with no password stored, as fossil refuses it (GHSA-44p2-whvx-9gwq).
+
+  Migration: new repositories no longer let anonymous users push. To allow
+  it, grant it explicitly, for example `r.SetCaps("nobody", "gijoryz")`, or
+  give clients an account with a password. Existing repositories keep the
+  capabilities already stored in them.
+
 ## [0.10.0] - 2026-10-03
 
 ### Changed

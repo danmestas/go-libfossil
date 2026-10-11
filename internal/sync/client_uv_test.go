@@ -67,6 +67,7 @@ func TestSyncUV_PullFromServer(t *testing.T) {
 
 func TestSyncUV_PushToServer(t *testing.T) {
 	serverRepo, clientRepo := newTestRepoPair(t)
+	grantNobodyPush(t, serverRepo)
 
 	// Client has a UV file.
 	uv.Write(clientRepo.DB(), "data/config.json", []byte(`{"key":"val"}`), 200)
@@ -95,6 +96,7 @@ func TestSyncUV_PushToServer(t *testing.T) {
 
 func TestSyncUV_Bidirectional(t *testing.T) {
 	serverRepo, clientRepo := newTestRepoPair(t)
+	grantNobodyPush(t, serverRepo)
 
 	uv.Write(serverRepo.DB(), "server-file.txt", []byte("from server"), 100)
 	uv.Write(clientRepo.DB(), "client-file.txt", []byte("from client"), 200)

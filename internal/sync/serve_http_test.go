@@ -65,7 +65,7 @@ func TestServeHTTPRoundTrip(t *testing.T) {
 }
 
 func TestServeHTTPPushPull(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	addr := freePort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

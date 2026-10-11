@@ -245,6 +245,10 @@ func (r *Repo) XferHandler() http.HandlerFunc {
 
 // ServeHTTP starts an HTTP server that accepts Fossil xfer requests.
 // Blocks until ctx is cancelled.
+//
+// Requests are authorized against the user table: one without a login card
+// gets nobody's capabilities, which in a new repository allow clone and pull
+// but not push. Grant more with SetCaps.
 func (r *Repo) ServeHTTP(ctx context.Context, addr string) error {
 	return internalsync.ServeHTTP(ctx, addr, r.inner, internalsync.HandleSync)
 }

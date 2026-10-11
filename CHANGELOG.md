@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anonymous requester can no longer learn who holds a lock. This is a
   deliberate departure from fossil, which takes a lock for any requester;
   fossil's own client asks for one only before a commit, which needs Write.
+- The HTTP sync transports follow redirects as fossil does rather than as
+  Go's `net/http` does (GHSA-3f8x-8fr5-mr98). They used to follow a redirect
+  from HTTPS to plain HTTP, which resent the request, login card included, in
+  cleartext. They now refuse it, and follow a 301, 302, 307 or 308 by
+  re-POSTing the same body and Content-Type, with one trailing `/xfer`
+  stripped from the new location, failing on the twentieth redirect. A 301 or
+  302 used to become a GET without the body, and a chain stopped after 10.
+  This applies to `NewHTTPTransport`, whatever `http.Client` it is given.
 
 ## [0.11.0] - 2026-10-10
 

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,12 +51,7 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport encode: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", t.URL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("sync.HTTPTransport request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", xfer.ContentTypeCompressed)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := PostXfer(ctx, http.DefaultClient, t.URL, xfer.ContentTypeCompressed, body)
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
 	}

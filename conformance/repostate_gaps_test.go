@@ -46,23 +46,6 @@ var repostateGaps = map[string]string{
 	// +sym-trunk, where fossil(1) and Section 6.1 write *sym-trunk
 	// (internal/manifest/manifest.go:226).
 	"repostate.6.1.initial-sym": "#289",
-	// ResolveVersion (repo_history.go:267-350) orders by tagxref.mtime, not
-	// event.mtime (:291, :310); falls back to tip when no check-in carries
-	// sym-trunk (:299); tries a name before a hash prefix (:300-320); and has
-	// no rid:, tag:, root:, start:, merge-in: or NAME:TIMESTAMP form and no
-	// trailing-punctuation retry.
-	"repostate.8.2.event-mtime":      "#290",
-	"repostate.8.2.trunk-chain":      "#290",
-	"repostate.8.2.not-leaf":         "#290",
-	"repostate.8.2.no-trunk-sym":     "#290",
-	"repostate.8.3.hash-before-name": "#290",
-	"repostate.8.3.rid":              "#290",
-	"repostate.8.3.tag-prefix":       "#290",
-	"repostate.8.3.root":             "#290",
-	"repostate.8.3.start":            "#290",
-	"repostate.8.3.merge-in":         "#290",
-	"repostate.8.3.name-timestamp":   "#290",
-	"repostate.8.3.trailing-punct":   "#290",
 	// Repo.Tag stores the name as given: no sym- prefix, no refusal of the
 	// reserved wiki-, tkt- and event- prefixes (repo_extras.go:39-46,
 	// internal/tag/tag.go:45).

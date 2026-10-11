@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/annotate"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/diff"
@@ -252,102 +255,443 @@ func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
 
 // ResolveVersion resolves a symbolic version name to a repository artifact RID.
 //
-// Resolution order:
-//  1. "" or "tip"  — newest checkin by mtime from the event table.
-//  2. "trunk"      — tip of the trunk branch via tagxref/tag; falls back to "tip"
-//     if the repository has no trunk tag.
-//  3. Named branch — tag lookup for "sym-<name>" in tagxref/tag (e.g. "feature-x"
-//     resolves via sym-feature-x).
-//  4. Full UUID (≥40 chars) — exact match against blob.uuid.
-//  5. UUID prefix (4–39 chars) — unique-prefix match; returns ErrAmbiguousVersion
-//     if more than one artifact matches.
+// It follows fossil's symbolic_name_to_rid (src/name.c) for the forms
+// go-libfossil supports, in fossil's order:
 //
-// An empty result or no match returns ErrVersionNotFound (wrapped).
-// An ambiguous prefix returns ErrAmbiguousVersion (wrapped).
+//  1. "tip" — newest check-in by event.mtime. "" is treated as "tip".
+//  2. "rid:N" — the literal RID N, when that artifact exists.
+//  3. "tag:NAME" — the check-in carrying sym-NAME with the greatest
+//     event.mtime (forces a tag lookup even for a hex NAME).
+//  4. "root:BR" / "start:BR" / "merge-in:BR" — the origin, first check-in, or
+//     most recent merge-in of branch BR (BR itself resolved recursively).
+//  5. "NAME:TIMESTAMP" — the check-in carrying sym-NAME with the greatest
+//     event.mtime at or before TIMESTAMP (UTC).
+//  6. Artifact hash or 4–64 char hex prefix — unique match against blob.uuid,
+//     tried before a plain tag; more than one match is ambiguous.
+//  7. Plain symbolic name — the check-in carrying sym-NAME with the greatest
+//     event.mtime (resolves "trunk" and branch names).
+//  8. Trailing-punctuation retry — a name pasted from prose that ends in one
+//     or two punctuation characters is retried without them.
+//
+// No match returns ErrVersionNotFound (wrapped); a hex prefix matching more
+// than one artifact returns ErrAmbiguousVersion (wrapped).
 func (r *Repo) ResolveVersion(name string) (int64, error) {
-	db := r.inner.DB()
+	// go-libfossil's contract treats "" as "tip"; fossil treats an empty
+	// name as unresolvable.
+	if name == "" {
+		name = "tip"
+	}
+	rid, err := r.resolveSymbolic(name)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+	}
+	if rid <= 0 {
+		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, ErrVersionNotFound)
+	}
+	return rid, nil
+}
 
-	switch name {
-	case "", "tip":
-		var rid int64
-		err := db.QueryRow(
-			"SELECT objid FROM event WHERE type='ci' ORDER BY mtime DESC LIMIT 1",
-		).Scan(&rid)
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, ErrVersionNotFound)
-		}
-		if err != nil {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-		}
-		return rid, nil
+// start_of_branch modes, fossil's eType argument (src/name.c).
+const (
+	branchOrigin  = 0 // root:   the check-in the branch sprouted from
+	branchFirst   = 1 // start:  the first check-in on the branch
+	branchMergeIn = 2 // merge-in: the most recent merge-in for the branch
+)
 
-	case "trunk":
-		var rid int64
-		err := db.QueryRow(`
-			SELECT tagxref.rid FROM tagxref
-			JOIN tag ON tag.tagid = tagxref.tagid
-			WHERE tag.tagname = 'sym-trunk'
-			  AND tagxref.tagtype > 0
-			ORDER BY tagxref.mtime DESC LIMIT 1`,
-		).Scan(&rid)
-		if err == nil {
-			return rid, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-		}
-		// No trunk tag — fall back to tip.
-		return r.ResolveVersion("tip")
+// resolveSymbolic is ResolveVersion's engine: fossil's symbolic_name_to_rid,
+// as an ordered sequence of attempts. It returns 0 when nothing matches and
+// ErrAmbiguousVersion when a hex prefix matches more than one artifact.
+func (r *Repo) resolveSymbolic(name string) (int64, error) {
+	h := r.inner.DB()
 
-	default:
-		// First try as a named branch ("sym-<name>").
-		var rid int64
-		err := db.QueryRow(`
-			SELECT tagxref.rid FROM tagxref
-			JOIN tag ON tag.tagid = tagxref.tagid
-			WHERE tag.tagname = ?
-			  AND tagxref.tagtype > 0
-			ORDER BY tagxref.mtime DESC LIMIT 1`,
-			"sym-"+name,
-		).Scan(&rid)
-		if err == nil {
-			return rid, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-		}
-
-		// Try as a UUID or UUID prefix.
-		rows, err := db.Query(
-			"SELECT rid FROM blob WHERE uuid LIKE ?", name+"%",
-		)
-		if err != nil {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-		}
-		defer rows.Close()
-
-		var matches []int64
-		for rows.Next() {
-			var id int64
-			if err := rows.Scan(&id); err != nil {
-				return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-			}
-			matches = append(matches, id)
-		}
-		if err := rows.Err(); err != nil {
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
-		}
-
-		switch len(matches) {
-		case 0:
-			return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, ErrVersionNotFound)
-		case 1:
-			return matches[0], nil
-		default:
-			return 0, fmt.Errorf("libfossil: resolve version %q matches %d artifacts: %w",
-				name, len(matches), ErrAmbiguousVersion)
+	if name == "tip" {
+		// fossil's "tip" is the newest check-in, but when there is none it
+		// falls through to the ordinary forms below rather than stopping, so
+		// a literal tag named "tip" could still match. (No sym-tip tag can
+		// exist without a check-in, so this only ever resolves to not-found.)
+		if rid, err := newestCheckin(h); err != nil || rid != 0 {
+			return rid, err
 		}
 	}
+	if rest, ok := strings.CutPrefix(name, "rid:"); ok {
+		return ridLiteral(h, rest)
+	}
+	if rest, ok := strings.CutPrefix(name, "tag:"); ok {
+		return newestWithSymTag(h, rest)
+	}
+	if rest, ok := strings.CutPrefix(name, "root:"); ok {
+		return r.startOfBranchBy(rest, branchOrigin)
+	}
+	if rest, ok := strings.CutPrefix(name, "start:"); ok {
+		return r.startOfBranchBy(rest, branchFirst)
+	}
+	if rest, ok := strings.CutPrefix(name, "merge-in:"); ok {
+		return r.startOfBranchBy(rest, branchMergeIn)
+	}
+	if base, julian, ok := splitNameTimestamp(name); ok {
+		return newestSymTagBefore(h, base, julian)
+	}
+	// A hash prefix is tried before a plain tag, as fossil does; a hex string
+	// that matches no artifact falls through to the tag lookup.
+	if rid, matched, err := hashPrefix(h, name); err != nil || matched {
+		return rid, err
+	}
+	if rid, err := newestWithSymTag(h, name); err != nil || rid != 0 {
+		return rid, err
+	}
+	if trimmed, ok := trimTrailingPunct(name); ok {
+		return r.resolveSymbolic(trimmed)
+	}
+	return 0, nil
+}
+
+// newestCheckin is fossil's "tip": the newest check-in by event.mtime.
+func newestCheckin(h *db.DB) (int64, error) {
+	var rid int64
+	err := h.QueryRow(
+		"SELECT objid FROM event WHERE type='ci' ORDER BY mtime DESC LIMIT 1",
+	).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
+}
+
+// ridLiteral resolves "rid:N" to RID N when that artifact exists.
+func ridLiteral(h *db.DB, digits string) (int64, error) {
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n <= 0 {
+		return 0, nil
+	}
+	var rid int64
+	err = h.QueryRow("SELECT rid FROM blob WHERE rid = ?", n).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
+}
+
+// newestWithSymTag is fossil's most_recent_event_with_tag: the check-in
+// carrying sym-<tag> with the greatest event.mtime, 0 when none does.
+func newestWithSymTag(h *db.DB, tag string) (int64, error) {
+	var rid int64
+	err := h.QueryRow(`
+		SELECT event.objid FROM tag
+		JOIN tagxref ON tagxref.tagid = tag.tagid
+		JOIN event ON event.objid = tagxref.rid
+		WHERE tag.tagname = ?
+		  AND tagxref.tagtype > 0
+		ORDER BY event.mtime DESC LIMIT 1`,
+		"sym-"+tag).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
+}
+
+// newestSymTagBefore is the "NAME:TIMESTAMP" form: the check-in carrying
+// sym-<base> with the greatest event.mtime at or before julian.
+func newestSymTagBefore(h *db.DB, base string, julian float64) (int64, error) {
+	var rid int64
+	err := h.QueryRow(`
+		SELECT event.objid FROM tag
+		JOIN tagxref ON tagxref.tagid = tag.tagid
+		JOIN event ON event.objid = tagxref.rid
+		WHERE tag.tagname = ?
+		  AND tagxref.tagtype > 0
+		  AND event.mtime <= ?
+		ORDER BY event.mtime DESC LIMIT 1`,
+		"sym-"+base, julian).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
+}
+
+// startOfBranchBy resolves branch name BR recursively, then returns the point
+// in BR that mode selects (fossil's root:/start:/merge-in:).
+func (r *Repo) startOfBranchBy(name string, mode int) (int64, error) {
+	rid, err := r.resolveSymbolic(name)
+	if err != nil || rid <= 0 {
+		return rid, err
+	}
+	return startOfBranch(r.inner.DB(), rid, mode)
+}
+
+// startOfBranch is fossil's start_of_branch (src/name.c): walk rid's primary-
+// parent chain while it stays on rid's branch. mode branchOrigin returns the
+// off-branch parent the branch sprang from; branchFirst the deepest on-branch
+// ancestor (the branch's first check-in); branchMergeIn the youngest ancestor,
+// by any parent, that is on the branch the origin's parent is on.
+func startOfBranch(h *db.DB, rid int64, mode int) (int64, error) {
+	br, err := branchOfRID(h, rid)
+	if err != nil {
+		return 0, err
+	}
+	ans := rid
+	var pid int64
+	err = h.QueryRow(`
+		WITH RECURSIVE par(pid, ex, cnt) AS (
+		  SELECT pid,
+		    EXISTS(SELECT 1 FROM tagxref WHERE tagid=(SELECT tagid FROM tag WHERE tagname='branch')
+		            AND tagtype>0 AND value=? AND rid=plink.pid),
+		    1
+		  FROM plink WHERE cid=? AND isprim=1
+		  UNION ALL
+		  SELECT plink.pid,
+		    EXISTS(SELECT 1 FROM tagxref WHERE tagid=(SELECT tagid FROM tag WHERE tagname='branch')
+		            AND tagtype>0 AND value=? AND rid=plink.pid),
+		    1+par.cnt
+		  FROM plink, par
+		  WHERE cid=par.pid AND isprim=1 AND par.ex
+		  LIMIT 100000
+		)
+		SELECT pid FROM par WHERE ex>=? ORDER BY cnt DESC LIMIT 1`,
+		br, rid, br, mode%2).Scan(&pid)
+	switch {
+	case err == nil:
+		ans = pid
+	case errors.Is(err, sql.ErrNoRows):
+		// No primary parent on rid's branch: ans stays rid.
+	default:
+		return 0, err
+	}
+	if mode == branchMergeIn && ans > 0 {
+		br2, err := branchOfRID(h, ans)
+		if err != nil {
+			return 0, err
+		}
+		return youngestAncestorInBranch(h, rid, br2)
+	}
+	return ans, nil
+}
+
+// branchOfRID is fossil's branch_of_rid: rid's active branch, "trunk" when it
+// carries no branch tag.
+func branchOfRID(h *db.DB, rid int64) (string, error) {
+	var br string
+	err := h.QueryRow(`
+		SELECT value FROM tagxref
+		WHERE rid = ?
+		  AND tagid = (SELECT tagid FROM tag WHERE tagname='branch')
+		  AND tagtype > 0`, rid).Scan(&br)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "trunk", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return br, nil
+}
+
+// youngestAncestorInBranch is fossil's compute_youngest_ancestor_in_branch
+// (src/descendants.c): the youngest ancestor of rid, by any parent edge, that
+// is on branch.
+func youngestAncestorInBranch(h *db.DB, rid int64, branch string) (int64, error) {
+	var ans int64
+	err := h.QueryRow(`
+		WITH RECURSIVE ancestor(rid, mtime) AS (
+		  SELECT ?, mtime FROM event WHERE objid=?
+		  UNION
+		  SELECT plink.pid, event.mtime
+		    FROM ancestor, plink, event
+		   WHERE plink.cid=ancestor.rid AND event.objid=plink.pid
+		   ORDER BY mtime DESC
+		)
+		SELECT ancestor.rid FROM ancestor
+		 WHERE EXISTS(SELECT 1 FROM tagxref
+		              WHERE tagid=(SELECT tagid FROM tag WHERE tagname='branch')
+		                AND tagxref.rid=ancestor.rid AND value=? AND tagtype>0)
+		 ORDER BY mtime DESC LIMIT 1`, rid, rid, branch).Scan(&ans)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return ans, nil
+}
+
+// hashPrefix matches name as an artifact hash or 4–64 character hex prefix
+// against blob.uuid, after stripping optional surrounding brackets. matched
+// reports whether name was a hex form that found one or more artifacts: one
+// match returns its rid; more than one returns ErrAmbiguousVersion. A non-hex
+// name, or a hex prefix that matches nothing, returns matched=false so the
+// caller falls through to a tag lookup.
+func hashPrefix(h *db.DB, name string) (rid int64, matched bool, err error) {
+	s := name
+	s = strings.TrimPrefix(s, "[")
+	s = strings.TrimSuffix(s, "]")
+	if len(s) < 4 || len(s) > 64 || !isHex(s) {
+		return 0, false, nil
+	}
+	rows, err := h.Query("SELECT rid FROM blob WHERE uuid GLOB ?", strings.ToLower(s)+"*")
+	if err != nil {
+		return 0, false, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return 0, false, err
+		}
+		ids = append(ids, id)
+		if len(ids) > 1 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, false, err
+	}
+	switch len(ids) {
+	case 0:
+		return 0, false, nil
+	case 1:
+		return ids[0], true, nil
+	default:
+		return 0, true, ErrAmbiguousVersion
+	}
+}
+
+// splitNameTimestamp detects fossil's "NAME:TIMESTAMP" form: the first colon
+// whose suffix is at least seven characters (fossil's i<nTag-8 gate) and
+// parses as a date-time. It returns the base name and the inclusive upper
+// bound of the timestamp as a text Julian day matching event.mtime.
+func splitNameTimestamp(name string) (base string, julian float64, ok bool) {
+	i := strings.IndexByte(name, ':')
+	if i < 0 || len(name)-i-1 < 7 {
+		return "", 0, false
+	}
+	t, ok := parseFossilTimestamp(name[i+1:])
+	if !ok {
+		return "", 0, false
+	}
+	return name[:i], fsltype.TimeToTextJulian(t), true
+}
+
+// parseFossilTimestamp parses the date-time forms fossil accepts and rounds
+// the result UP to the last millisecond of the given precision, as fossil's
+// fossil_roundup_date and fossil_expand_datetime do (src/name.c): a bare date
+// becomes 23:59:59.999, HH:MM becomes :59.999, HH:MM:SS becomes .999. The time
+// is read as UTC, matching fossil's default timeline-utc setting.
+//
+// Supported: the compact YYYYMMDD / YYYYMMDDHHMM / YYYYMMDDHHMMSS forms, the
+// punctuated date / minute / second forms with a 'T' or space separator, a
+// fractional-second suffix of one to three digits, and an optional trailing
+// 'Z'/'z' or 'UTC'. The bare YYYY-MM and hour-only forms are not supported
+// (they do not resolve to a check-in time in fossil either).
+func parseFossilTimestamp(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if n := len(s); n >= 3 && strings.EqualFold(s[n-3:], "utc") {
+		s = strings.TrimSpace(s[:n-3])
+	} else if n >= 1 && (s[n-1] == 'z' || s[n-1] == 'Z') {
+		s = s[:n-1]
+	}
+	if exp, ok := expandCompactDate(s); ok {
+		s = exp
+	}
+	s = strings.Replace(s, "T", " ", 1)
+
+	// Fractional seconds: round up to the last millisecond of the stated
+	// precision, as fossil pads the fraction with 9s and then rounds up.
+	if head, frac, found := strings.Cut(s, "."); found {
+		t, err := time.ParseInLocation("2006-01-02 15:04:05", head, time.UTC)
+		if err != nil || len(frac) == 0 || len(frac) > 3 || !isDigits(frac) {
+			return time.Time{}, false
+		}
+		v, _ := strconv.Atoi(frac + strings.Repeat("9", 3-len(frac)))
+		if v < 999 {
+			v++
+		}
+		return t.Add(time.Duration(v) * time.Millisecond), true
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", s, time.UTC); err == nil {
+		return t.Add(999 * time.Millisecond), true
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04", s, time.UTC); err == nil {
+		return t.Add(59*time.Second + 999*time.Millisecond), true
+	}
+	if t, err := time.ParseInLocation("2006-01-02", s, time.UTC); err == nil {
+		return t.Add(24*time.Hour - time.Millisecond), true
+	}
+	return time.Time{}, false
+}
+
+// expandCompactDate expands fossil's digit-only date forms (src/name.c
+// fossil_expand_datetime): YYYYMMDD, YYYYMMDDHHMM and YYYYMMDDHHMMSS to their
+// punctuated equivalents, leaving parseFossilTimestamp to round them up.
+func expandCompactDate(s string) (string, bool) {
+	if !isDigits(s) {
+		return "", false
+	}
+	switch len(s) {
+	case 8:
+		return s[:4] + "-" + s[4:6] + "-" + s[6:8], true
+	case 12:
+		return s[:4] + "-" + s[4:6] + "-" + s[6:8] + " " + s[8:10] + ":" + s[10:12], true
+	case 14:
+		return s[:4] + "-" + s[4:6] + "-" + s[6:8] + " " +
+			s[8:10] + ":" + s[10:12] + ":" + s[12:14], true
+	}
+	return "", false
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// trimTrailingPunct drops one or two trailing punctuation characters from a
+// name, as fossil does for a name pasted from prose. It returns ok=false when
+// there is nothing fossil would trim.
+func trimTrailingPunct(name string) (string, bool) {
+	n := len(name)
+	if n > 4 && isTrailingPunct(name[n-1]) && !isTrailingPunct(name[n-2]) {
+		return name[:n-1], true
+	}
+	if n > 5 && isTrailingPunct(name[n-1]) && isTrailingPunct(name[n-2]) &&
+		!isTrailingPunct(name[n-3]) {
+		return name[:n-2], true
+	}
+	return "", false
+}
+
+func isTrailingPunct(c byte) bool {
+	switch c {
+	case '.', '_', ')', '>', '!', '?', ',':
+		return true
+	}
+	return false
+}
+
+func isHex(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 // ReadFileAt reads filePath from the checkin identified by a symbolic version

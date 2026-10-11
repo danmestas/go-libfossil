@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Repo.ResolveVersion` now follows fossil's `symbolic_name_to_rid` name
+  resolution (src/name.c): it chooses a tag by the carrying check-in's
+  `event.mtime` rather than `tagxref.mtime`, no longer falls back to the tip
+  when no check-in carries `sym-trunk`, tries an artifact-hash prefix before a
+  plain tag, and accepts the `rid:`, `tag:`, `root:`, `start:`, `merge-in:` and
+  `NAME:TIMESTAMP` forms plus a trailing-punctuation retry. A hex prefix now
+  must be 4–64 characters, as fossil requires (#290).
 - `branch.Create` now refuses a name an open branch already carries, as
   `fossil branch new` does, and stores no artifact when it refuses. `branch.List`
   now reports a branch closed only when its newest check-in carries a `closed`

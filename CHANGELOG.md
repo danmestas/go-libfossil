@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- Cancelling a propagated tag no longer deletes an inherited row that is newer
+  than the cancellation. The cancel walk carried no mtime guard
+  (`COALESCE(srcid=0, 0)`); it now matches fossil's `tag_propagate`
+  (`srcid=0 AND tagxref.mtime < ?`), removing an inherited row only when it is
+  older and halting the descent at a newer one (#288).
+
+
 - The singleton `parent` (reparent) tag is now applied: the tagged check-in's
   plink and mlink rows are rewritten to the parents the tag names, and the
   affected leaves are recomputed, as fossil's `manifest_crosslink_end` does.

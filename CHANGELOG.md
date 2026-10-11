@@ -110,6 +110,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server now receive the skin, project, ticket, shun and alias settings.
 
 
+- The sync server checks a login card's nonce against the request body, as
+  fossil does (GHSA-2g5p-q5f3-477p). The nonce must be the SHA-1 of the
+  decompressed bytes after the login line; it was never checked, so a login
+  card captured from one request authenticated any other request body. A
+  refused login now ends the exchange with fossil's `error login failed`
+  instead of carrying on as nobody, and a second login card is refused. A
+  successful login adds the user's capabilities to nobody's instead of
+  replacing them. As in fossil, `nobody` and `anonymous` log in without a
+  password, and accounts with no stored password, `developer` and `reader`
+  cannot be logged into.
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

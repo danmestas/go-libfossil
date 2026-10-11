@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
@@ -528,5 +529,87 @@ func BenchmarkDecodeCFileCard(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// A login card's nonce is the SHA-1 of the decompressed bytes after the login
+// line's LF (draft §6.2, src/xfer.c check_tail_hash). Only the decoder sees
+// those bytes, so it is the decoder that must say whether the nonce covers
+// them. A captured card placed ahead of any other body must not.
+func TestDecodeLoginNonceCoversTail(t *testing.T) {
+	body := []byte("pull srv proj\n# 0123456789ABCDEF\n")
+	login := "login alice " + hash.SHA1(body) + " " + strings.Repeat("a", 40) + "\n"
+
+	cases := []struct {
+		name string
+		wire []byte
+		want bool
+	}{
+		{"signed body", append([]byte(login), body...), true},
+		{"replayed onto another body", append([]byte(login), "push srv proj\n"...), false},
+		{"body extended", append(append([]byte(login), body...), "push srv proj\n"...), false},
+		{"login line alone", []byte(login), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg, err := DecodeUncompressed(tc.wire)
+			if err != nil {
+				t.Fatalf("DecodeUncompressed: %v", err)
+			}
+			lc := msg.Cards[0].(*LoginCard)
+			if got := lc.NonceCoversTail(); got != tc.want {
+				t.Fatalf("NonceCoversTail() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The tail starts after the login line's LF, so a nonce over the LF and the
+// body is not the nonce fossil computes (src/http.c http_build_login_card
+// hashes the payload alone).
+func TestDecodeLoginNonceExcludesLoginLF(t *testing.T) {
+	body := []byte("pull srv proj\n")
+	nonce := hash.SHA1(append([]byte("\n"), body...))
+	wire := append([]byte("login alice "+nonce+" "+strings.Repeat("a", 40)+"\n"), body...)
+	msg, err := DecodeUncompressed(wire)
+	if err != nil {
+		t.Fatalf("DecodeUncompressed: %v", err)
+	}
+	if msg.Cards[0].(*LoginCard).NonceCoversTail() {
+		t.Fatal("a nonce that covers the login line's LF must not match")
+	}
+}
+
+// The compressed container is the framing every real request uses, and the
+// tail is measured in the bytes it decompresses to.
+func TestDecodeCompressedLoginNonceCoversTail(t *testing.T) {
+	body := &Message{Cards: []Card{
+		&PullCard{ServerCode: "srv", ProjectCode: "proj"},
+		&CommentCard{Text: "0123456789ABCDEF"},
+	}}
+	raw, err := body.EncodeUncompressed()
+	if err != nil {
+		t.Fatalf("EncodeUncompressed: %v", err)
+	}
+	login := &LoginCard{User: "alice", Nonce: hash.SHA1(raw), Signature: strings.Repeat("a", 40)}
+	full := &Message{Cards: append([]Card{login}, body.Cards...)}
+	wire, err := full.Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	msg, err := Decode(wire, ContentTypeCompressed)
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if !msg.Cards[0].(*LoginCard).NonceCoversTail() {
+		t.Fatal("the nonce a client computes over its body must cover the decoded tail")
+	}
+}
+
+// A card built in memory was never on the wire, so it has no tail to cover.
+func TestInMemoryLoginNonceCoversNoTail(t *testing.T) {
+	lc := &LoginCard{User: "alice", Nonce: hash.SHA1([]byte{}), Signature: "x"}
+	if lc.NonceCoversTail() {
+		t.Fatal("a login card that was not decoded must not claim to cover a tail")
 	}
 }

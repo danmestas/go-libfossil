@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"testing"
@@ -48,18 +46,6 @@ func testProjectCode(t *testing.T, d *db.DB) string {
 		t.Fatalf("project-code: %v", err)
 	}
 	return code
-}
-
-func buildTestLoginCard(user, password, projectCode string, payload []byte) *xfer.LoginCard {
-	nonce := testSHA1Hex(payload)
-	shared := testSHA1Hex([]byte(projectCode + "/" + user + "/" + password))
-	sig := testSHA1Hex([]byte(nonce + shared))
-	return &xfer.LoginCard{User: user, Nonce: nonce, Signature: sig}
-}
-
-func testSHA1Hex(data []byte) string {
-	h := sha1.Sum(data)
-	return hex.EncodeToString(h[:])
 }
 
 func TestHandlePull(t *testing.T) {
@@ -1147,14 +1133,10 @@ func TestHandleAuthenticatedPush(t *testing.T) {
 	data := []byte("authed push")
 	uuid := hash.SHA1(data)
 
-	// Build a valid login card — nonce is SHA1 of the non-login card payload
-	loginCard := buildTestLoginCard("pusher", "secret", pc, []byte("dummy"))
-
-	req := &xfer.Message{Cards: []xfer.Card{
-		loginCard,
+	req := signedRequest(t, "pusher", "secret", pc,
 		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
 		&xfer.FileCard{UUID: uuid, Content: data},
-	}}
+	)
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)

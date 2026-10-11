@@ -203,27 +203,26 @@ func TestHandleXDelete_SelfWriteOwnershipCheck(t *testing.T) {
 	pkHash := repo.PKHash(pkColDefs, map[string]any{"peer_id": "alice"})
 
 	// "bob" tries to delete alice's row — should be rejected.
-	aliceLoginCard := buildTestLoginCard("alice", "alicesecret", pc, []byte("dummy"))
-	_ = aliceLoginCard // ensure we build both
-	bobLoginCard := buildTestLoginCard("bob", "bobsecret", pc, []byte("dummy"))
-
-	msg := &xfer.Message{
-		Cards: []xfer.Card{
-			bobLoginCard,
-			&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
-			&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
-			&xfer.XDeleteCard{
-				Table:  "peers",
-				PKHash: pkHash,
-				MTime:  2000,
-				PKData: []byte(`{"peer_id":"alice"}`),
-			},
+	msg := signedRequest(t, "bob", "bobsecret", pc,
+		&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.XDeleteCard{
+			Table:  "peers",
+			PKHash: pkHash,
+			MTime:  2000,
+			PKData: []byte(`{"peer_id":"alice"}`),
 		},
-	}
+	)
 
-	_, err := HandleSync(context.Background(), serverRepo, msg)
+	resp, err := HandleSync(context.Background(), serverRepo, msg)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
+	}
+	// bob's login must succeed, or the row survives for the wrong reason.
+	for _, ec := range findCards[*xfer.ErrorCard](resp) {
+		if ec.Message == "login failed" {
+			t.Fatal("bob's login was refused; the ownership check never ran")
+		}
 	}
 
 	// Row should still be alive — deletion rejected.

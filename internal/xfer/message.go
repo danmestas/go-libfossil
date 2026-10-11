@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // Message is a sequence of cards forming one xfer request or response.
@@ -263,6 +265,10 @@ func decompressBounded(data []byte) ([]byte, error) {
 const MaxCFileInflateBytes = 1 << 30 // 1 GiB
 
 // DecodeUncompressed decodes cards from uncompressed data.
+//
+// Each login card records the SHA-1 of the bytes after its line, which its
+// nonce must equal (see LoginCard.NonceCoversTail). Only the decoder still
+// has those bytes, and a re-encoding of the parsed cards is not them.
 func DecodeUncompressed(data []byte) (*Message, error) {
 	return decodeMessage(data, MaxCFileInflateBytes)
 }
@@ -270,7 +276,8 @@ func DecodeUncompressed(data []byte) (*Message, error) {
 // decodeMessage decodes cards from uncompressed data, letting every cfile in
 // it inflate to at most budget bytes in total.
 func decodeMessage(data []byte, budget int64) (*Message, error) {
-	r := bufio.NewReader(bytes.NewReader(data))
+	src := bytes.NewReader(data)
+	r := bufio.NewReader(src)
 	msg := &Message{}
 	for {
 		card, err := decodeCard(r, &budget)
@@ -279,6 +286,10 @@ func decodeMessage(data []byte, budget int64) (*Message, error) {
 		}
 		if err != nil {
 			return nil, fmt.Errorf("xfer: decode card %d: %w", len(msg.Cards), err)
+		}
+		if lc, ok := card.(*LoginCard); ok {
+			consumed := len(data) - src.Len() - r.Buffered()
+			lc.tailSHA1 = hash.SHA1(data[consumed:])
 		}
 		msg.Cards = append(msg.Cards, card)
 	}

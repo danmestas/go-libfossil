@@ -211,20 +211,53 @@ func (h *handler) initAuth() {
 	}
 }
 
+// handleLoginCard verifies a login card and adds the user's capabilities to
+// nobody's, as fossil's check_login does through login_set_capabilities: a
+// login only grants. A refused login is fatal, with the reply reset to
+// fossil's "error login\sfailed" (src/xfer.c page_xfer): fossil does not go
+// on serving the request as nobody, and nor does this.
 func (h *handler) handleLoginCard(c *xfer.LoginCard) {
 	var projectCode string
-	if err := h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&projectCode); err != nil {
-		h.resp = append(h.resp, &xfer.ErrorCard{Message: "authentication failed"})
-		return
+	err := h.repo.DB().QueryRow(
+		"SELECT value FROM config WHERE name='project-code'").Scan(&projectCode)
+	var u auth.User
+	if err == nil {
+		u, err = auth.VerifyLogin(h.repo.DB(), projectCode, c)
 	}
-	u, err := auth.VerifyLogin(h.repo.DB(), projectCode, c)
 	if err != nil {
-		h.resp = append(h.resp, &xfer.ErrorCard{Message: "authentication failed"})
+		h.fail("login failed")
 		return
 	}
 	h.user = u.Login
-	h.caps = u.Cap
+	h.caps += u.Cap
 	h.authed = true
+}
+
+// login verifies the request's login card, if any. Only one is allowed
+// (§6.1, src/xfer.c "error multiple\slogin\scards").
+func (h *handler) login(req *xfer.Message) {
+	logins := 0
+	for _, card := range req.Cards {
+		lc, ok := card.(*xfer.LoginCard)
+		if !ok {
+			continue
+		}
+		logins++
+		if logins > 1 {
+			h.fail("multiple login cards")
+			return
+		}
+		if h.handleLoginCard(lc); h.fatal {
+			return
+		}
+	}
+}
+
+// fail ends the request with a single error card, discarding the reply built
+// so far, as fossil's cgi_reset_content before an error does.
+func (h *handler) fail(msg string) {
+	h.resp = []xfer.Card{&xfer.ErrorCard{Message: msg}}
+	h.fatal = true
 }
 
 func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -236,11 +269,9 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return nil, err
 	}
 
-	// First pass: resolve login cards before other control cards.
-	for _, card := range req.Cards {
-		if lc, ok := card.(*xfer.LoginCard); ok {
-			h.handleLoginCard(lc)
-		}
+	// First pass: resolve the login card before other control cards.
+	if h.login(req); h.fatal {
+		return &xfer.Message{Cards: h.resp}, nil
 	}
 
 	// Second pass: process other control cards with capability checks.
@@ -459,8 +490,7 @@ func (h *handler) handleControlCard(card xfer.Card) {
 		// obvious candidate, since a lock taken ahead of this card would
 		// survive the abort), this needs a real transaction instead.
 		if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
-			h.resp = []xfer.Card{&xfer.ErrorCard{Message: "invalid clone sequence number"}}
-			h.fatal = true
+			h.fail("invalid clone sequence number")
 			return
 		}
 		h.cloneMode = true

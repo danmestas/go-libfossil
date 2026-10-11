@@ -183,12 +183,12 @@ func TestMockFossilRejectsBadLogin(t *testing.T) {
 
 	foundAuthError := false
 	for _, c := range resp.Cards {
-		if ec, ok := c.(*xfer.ErrorCard); ok && ec.Message == "authentication failed" {
+		if ec, ok := c.(*xfer.ErrorCard); ok && ec.Message == "login failed" {
 			foundAuthError = true
 		}
 	}
 	if !foundAuthError {
-		t.Fatal("expected authentication failed error for bad credentials")
+		t.Fatal("expected login failed error for bad credentials")
 	}
 }
 

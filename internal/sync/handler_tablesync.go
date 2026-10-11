@@ -527,8 +527,9 @@ func bytesReader(b []byte) *bytes.Reader {
 
 // decodeRowJSON decodes a peer's xrow content or xdelete PKData as one row of
 // def. The bytes are the peer's, so anything but a single JSON object that
-// repo.ValidateRow accepts is an error: JSON null decodes to a nil map, and a
-// primary-key value of the wrong type panics PKHash. UseNumber keeps integers above 2^53 exact until
+// repo.ValidateRow accepts is an error: JSON null decodes to a nil map, a key
+// becomes a column name in SQL, and a primary-key value of the wrong type
+// panics PKHash. UseNumber keeps integers above 2^53 exact until
 // coerceJSONNumbers gives them their column's type.
 func decodeRowJSON(data []byte, def repo.TableDef) (map[string]any, error) {
 	dec := json.NewDecoder(bytesReader(data))

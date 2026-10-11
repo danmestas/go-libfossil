@@ -86,6 +86,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to panic the process, as did a primary-key value of the wrong type or
   a nested value. A client refuses an `xrow` for a table it has not
   registered.
+- A synced table's row can no longer rewrite the SQL that stores it. Keys of
+  an `xrow` payload or `xdelete` PKData were written into `UpsertXRow`'s
+  `INSERT` as column names unchecked, so a peer could choose the statement's
+  columns and values, or select from other tables into a synced one. A
+  peer's row must now use exactly the table's declared columns, and
+  `UpsertXRow` refuses any key the table's registered schema does not
+  declare. Every other function that writes a synced table or column name
+  into SQL validates it first.
 - The HTTP transports read at most `xfer.MaxBodyBytes` (65 MiB) of a reply
   and return `xfer.ErrBodyTooLarge` past it; a server streaming an endless
   reply used to be read into memory whole.

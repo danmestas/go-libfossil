@@ -40,7 +40,9 @@ func setupKVRepo(t testing.TB) *repo.Repo {
 }
 
 // hostileRowPayloads are xrow and xdelete payloads a peer can send that are
-// not a JSON object of the table's columns with scalar values.
+// not a JSON object of the table's columns with scalar values. The last two
+// name a column the table does not declare; UpsertXRow writes row keys into
+// its SQL, so such a key is a statement fragment unless it is refused.
 var hostileRowPayloads = []string{
 	`null`,
 	`[]`,
@@ -50,6 +52,8 @@ var hostileRowPayloads = []string{
 	`{"id":{"nested":1}}`,
 	`{"id":["a"]}`,
 	`{"id":"row1","val":{"nested":1}}`,
+	`{"id":"row1","nosuch":"x"}`,
+	`{"id":"row1","val, mtime) VALUES('inj','x',7) --":"x"}`,
 }
 
 // TestHandleXRowRejectsHostilePayload checks that a server handed an xrow

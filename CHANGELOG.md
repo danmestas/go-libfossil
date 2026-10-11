@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- The singleton `parent` (reparent) tag is now applied: the tagged check-in's
+  plink and mlink rows are rewritten to the parents the tag names, and the
+  affected leaves are recomputed, as fossil's `manifest_crosslink_end` does.
+  An old parent left without a child becomes a leaf, matching `fossil rebuild`.
+  Both the crosslink sweep and `verify.Rebuild` apply it (#286).
+
+
 - A technote whose T-card names another artifact, or propagates or cancels,
   is now refused at crosslink time and applies none of its tags, as fossil
   refuses it at parse time. A technote may only carry `+` (singleton) tags on

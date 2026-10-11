@@ -346,6 +346,12 @@ func repairCrosslinkState(r *repo.Repo, linked int, sweepErr error) (int, error)
 		return linked, sweepErr
 	}
 	if err := r.WithTx(func(tx *db.Tx) error {
+		// Reparent first, as fossil's manifest_crosslink_end does before it
+		// propagates tags: the parent tag rewrites plink, and both the
+		// propagation walk and the leaf recompute below must see the new edges.
+		if err := ReparentCheckins(tx); err != nil {
+			return err
+		}
 		if err := repairTagPropagation(tx); err != nil {
 			return err
 		}

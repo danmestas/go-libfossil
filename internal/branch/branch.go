@@ -1,9 +1,12 @@
 package branch
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -43,6 +46,17 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 	}
 	if opts.Time.IsZero() {
 		opts.Time = time.Now().UTC()
+	}
+
+	// Refuse a name an open branch already carries, as `fossil branch new`
+	// does (src/branch.c branch_is_open). Checked before any artifact is
+	// built so a refused Create stores nothing.
+	open, err := branchIsOpen(r.DB(), opts.Name)
+	if err != nil {
+		return 0, "", fmt.Errorf("branch.Create: %w", err)
+	}
+	if open {
+		return 0, "", fmt.Errorf("branch.Create: an open branch named %q already exists", opts.Name)
 	}
 
 	// 1. Get parent's file list.
@@ -120,6 +134,42 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 	return rid, uuid, nil
 }
 
+// branchIsOpen reports whether some open leaf's active branch tag is name:
+// a leaf (in the leaf table) whose propagating branch tag (tagtype=2) has the
+// value name and that carries no singleton closed tag (tagtype=1). This is
+// fossil's branch_is_open (src/branch.c), which uses those exact tag types.
+//
+// q is the handle the check runs on. Create passes the same handle it writes
+// the new branch through so the two see one state; note that go-libfossil's
+// Create is not a single transaction (manifest.Checkin opens its own), so a
+// strict check-then-write window remains under concurrent Create calls --
+// closing it would mean threading this check into the checkin transaction.
+func branchIsOpen(q *db.DB, name string) (bool, error) {
+	var one int
+	err := q.QueryRow(`
+		SELECT 1 FROM tagxref ox
+		JOIN tag t ON t.tagid = ox.tagid
+		WHERE t.tagname = 'branch'
+		  AND ox.value = ?
+		  AND ox.tagtype = 2
+		  AND ox.rid IN (SELECT rid FROM leaf)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM tagxref ix
+		    JOIN tag ct ON ct.tagid = ix.tagid
+		    WHERE ct.tagname = 'closed'
+		      AND ix.rid = ox.rid
+		      AND ix.tagtype = 1
+		  )
+		LIMIT 1`, name).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("branch.branchIsOpen %q: %w", name, err)
+	}
+	return true, nil
+}
+
 func List(r *repo.Repo) ([]Branch, error) {
 	if r == nil {
 		panic("branch.List: r must not be nil")
@@ -130,12 +180,12 @@ func List(r *repo.Repo) ([]Branch, error) {
 			tagxref.value AS branch_name,
 			max(event.mtime) AS last_mtime,
 			count(*) AS checkin_count,
-			(SELECT 1 FROM tagxref tx2 JOIN tag t2 ON tx2.tagid=t2.tagid
-			 WHERE t2.tagname='closed' AND tx2.rid IN
-				(SELECT rid FROM tagxref tx3 JOIN tag t3 ON tx3.tagid=t3.tagid
-				 WHERE t3.tagname='branch' AND tx3.value=tagxref.value AND tx3.tagtype>0)
-			 AND tx2.tagtype>0
-			 LIMIT 1) AS isclosed,
+			(SELECT EXISTS(SELECT 1 FROM tagxref cx JOIN tag ct ON cx.tagid=ct.tagid
+				 WHERE ct.tagname='closed' AND cx.rid=ev.objid AND cx.tagtype>0)
+			 FROM tagxref bx JOIN tag bt ON bx.tagid=bt.tagid
+			 JOIN event ev ON ev.objid=bx.rid
+			 WHERE bt.tagname='branch' AND bx.value=tagxref.value AND bx.tagtype>0
+			 ORDER BY ev.mtime DESC LIMIT 1) AS isclosed,
 			(SELECT b.uuid FROM blob b
 			 JOIN tagxref tx4 ON b.rid=tx4.rid
 			 JOIN tag t4 ON tx4.tagid=t4.tagid

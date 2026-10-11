@@ -42,7 +42,7 @@ func TestHandlerPragmaUVHash_Match(t *testing.T) {
 }
 
 func TestHandlerPragmaUVHash_Mismatch(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	if err := uv.EnsureSchema(r.DB()); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}

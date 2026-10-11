@@ -9,8 +9,16 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+// handlePragmaUVHash answers pragma uv-hash as fossil's page_xfer does: a
+// requester with Read whose hash differs gets the catalog, headed by
+// uv-push-ok if it may write unversioned files (y) and uv-pull-only if not.
+// Anyone else gets nothing, and the pragma is spent either way.
 func (h *handler) handlePragmaUVHash(clientHash string) error {
 	if h.uvCatalogSent {
+		return nil
+	}
+	if !auth.CanRead(h.caps) {
+		h.uvCatalogSent = true
 		return nil
 	}
 	if err := uv.EnsureSchema(h.repo.DB()); err != nil {
@@ -26,7 +34,11 @@ func (h *handler) handlePragmaUVHash(clientHash string) error {
 	}
 
 	h.uvCatalogSent = true
-	h.resp = append(h.resp, &xfer.PragmaCard{Name: "uv-push-ok"})
+	if auth.CanPushUV(h.caps) {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: "uv-push-ok"})
+	} else {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: "uv-pull-only"})
+	}
 
 	entries, err := uv.List(h.repo.DB())
 	if err != nil {
@@ -51,6 +63,11 @@ func (h *handler) handleUVIGot(c *xfer.UVIGotCard) error {
 	if c == nil {
 		panic("handler.handleUVIGot: c must not be nil")
 	}
+	// Fossil's server ignores uvigot; this one answers it, so it holds the
+	// answer to the same rule as uvgimme: nothing for a requester without Read.
+	if !auth.CanRead(h.caps) {
+		return nil
+	}
 	if err := uv.EnsureSchema(h.repo.DB()); err != nil {
 		return fmt.Errorf("handler.handleUVIGot: ensure schema: %w", err)
 	}
@@ -66,6 +83,10 @@ func (h *handler) handleUVIGot(c *xfer.UVIGotCard) error {
 	case status == 0 || status == 1:
 		h.resp = append(h.resp, &xfer.UVGimmeCard{Name: c.Name})
 	case status == 2:
+		// Adopting the client's mtime is an unversioned write.
+		if !auth.CanPushUV(h.caps) {
+			return nil
+		}
 		if _, err := h.repo.DB().Exec("UPDATE unversioned SET mtime=? WHERE name=?", c.MTime, c.Name); err != nil {
 			return fmt.Errorf("handler.handleUVIGot: update mtime %q: %w", c.Name, err)
 		}
@@ -83,6 +104,12 @@ func (h *handler) handleUVIGot(c *xfer.UVIGotCard) error {
 func (h *handler) handleUVGimme(c *xfer.UVGimmeCard) error {
 	if c == nil {
 		panic("handler.handleUVGimme: c must not be nil")
+	}
+	// Fossil 2.28 sends any uvgimme'd file to any requester. Its own client
+	// asks only for files named in a uv-hash catalog, which needs Read, so
+	// requiring Read here costs no interop and closes the direct read.
+	if !auth.CanRead(h.caps) {
+		return nil
 	}
 	if h.buggify != nil && h.buggify.Check("handler.handleUVGimme.skip", 0.05) {
 		return nil

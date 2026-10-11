@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The sync server sends repository content only to a requester allowed to
+  read it (GHSA-mvx3-6793-8x4r). It used to answer `gimme HASH` with the
+  artifact whether or not a pull was accepted, and `pragma uv-hash`,
+  `uvgimme` and `uvigot` with the unversioned catalog and files, to any
+  requester, anonymous ones included. As in fossil's `page_xfer`, `gimme` is
+  now answered only in a session whose `pull` card was accepted, or in a
+  clone, and the unversioned catalog and files go only to a requester with
+  Read (o, i, or Admin). `uv-push-ok` is sent only to a requester who may
+  write unversioned files (y); a reader without it gets `uv-pull-only`, as
+  fossil sends. The same rules apply to table sync: `xgimme` needs an accepted
+  pull and `pragma xtable-hash` needs Read. A `uvigot` no longer updates an
+  unversioned file's mtime for a requester without y, and `pragma ci-lock`
+  takes or reports a check-in lock only for a requester with Write (i), so an
+  anonymous requester can no longer learn who holds a lock. fossil takes a
+  lock for any requester; its own client asks for one only before a commit.
+
 ## [0.11.0] - 2026-10-10
 
 ### Added

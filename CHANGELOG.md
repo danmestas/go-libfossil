@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaf exists on the same branch, so a non-leaf or closed version no longer
   reads as a fork (#291).
 
+- A repository with no `hash-policy` row names new content as fossil's
+  `hname_default_policy` does (#274): SHA3 when it is empty or holds a SHA3
+  artifact, SHA1 (policy `auto`) otherwise. It used to name an empty
+  repository's first artifact with SHA1. And when an `auto` repository takes
+  in its first SHA3-named artifact, the promotion is written to the
+  `hash-policy` setting, as fossil's `content_put` does, so fossil opening
+  the repository agrees. It used to be derived from the stored names only.
+
 - `ListFiles` and crosslink reject a B card whose target is not a baseline
   manifest (#275): a delta manifest or a control artifact used to be accepted
   as the baseline, giving a partial or empty file set instead of an error.

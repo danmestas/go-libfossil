@@ -852,6 +852,10 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, uuid string, fullCo
 			return nil
 		}
 
+		// A received SHA3 name promotes an auto-policy repo, as in fossil.
+		if err := hash.PromoteFor(tx, uuid); err != nil {
+			return fmt.Errorf("storeResolvedContent: hash policy: %w", err)
+		}
 		existingRid, exists := blob.Exists(tx, uuid)
 		if exists {
 			var size int64

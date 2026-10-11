@@ -25,6 +25,9 @@ func setupTestDB(t *testing.T) *db.DB {
 	if err := db.CreateRepoSchema(d); err != nil {
 		t.Fatalf("CreateRepoSchema: %v", err)
 	}
+	// Name content with SHA1, which these tests' expectations assume; a repo
+	// with no hash-policy row would default to SHA3 (artifact format 7.2).
+	setHashPolicy(t, d, "0")
 	t.Cleanup(func() { d.Close() })
 	return d
 }

@@ -63,11 +63,6 @@ var repostateGaps = map[string]string{
 	"repostate.8.3.merge-in":         "#290",
 	"repostate.8.3.name-timestamp":   "#290",
 	"repostate.8.3.trailing-punct":   "#290",
-	// branch.Create does not refuse the name of an open branch
-	// (internal/branch/branch.go:31-120), and branch.List reports a branch
-	// closed when any check-in on it is closed (branch.go:131-138).
-	"repostate.6.2.new-branch-duplicate":  "#292",
-	"repostate.6.3.branch-listing-closed": "#292",
 	// Repo.Tag stores the name as given: no sym- prefix, no refusal of the
 	// reserved wiki-, tkt- and event- prefixes (repo_extras.go:39-46,
 	// internal/tag/tag.go:45).

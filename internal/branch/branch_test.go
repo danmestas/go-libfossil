@@ -137,3 +137,86 @@ func TestClose(t *testing.T) {
 	}
 	t.Error("done-branch not found in List")
 }
+
+// TestCreate_RefusesOpenBranchName checks that creating a second branch with
+// the name of an existing open branch fails and stores nothing, as fossil's
+// `branch new` does.
+func TestCreate_RefusesOpenBranchName(t *testing.T) {
+	r := setupTestRepo(t)
+
+	parentRid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "hello.txt", Content: []byte("hello")}},
+		Comment: "initial commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+
+	if _, _, err := Create(r, CreateOpts{
+		Name: "feature-x", Parent: parentRid, User: "testuser",
+		Time: time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+
+	var before int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&before); err != nil {
+		t.Fatalf("count blobs: %v", err)
+	}
+
+	_, _, err = Create(r, CreateOpts{
+		Name: "feature-x", Parent: parentRid, User: "testuser",
+		Time: time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("second Create of an open branch name = nil error, want a refusal")
+	}
+
+	var after int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&after); err != nil {
+		t.Fatalf("count blobs: %v", err)
+	}
+	if after != before {
+		t.Errorf("blob count %d -> %d; a refused Create must store nothing", before, after)
+	}
+}
+
+// TestCreate_AllowsClosedBranchName checks that a name whose only leaf is
+// closed can be reused, as fossil allows once a branch is closed.
+func TestCreate_AllowsClosedBranchName(t *testing.T) {
+	r := setupTestRepo(t)
+
+	parentRid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "hello.txt", Content: []byte("hello")}},
+		Comment: "initial commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+
+	branchRid, _, err := Create(r, CreateOpts{
+		Name: "feature-x", Parent: parentRid, User: "testuser",
+		Time: time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+
+	// Close the branch's only leaf (tag 9 is 'closed').
+	if _, err := r.DB().Exec(
+		"INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) VALUES(9, 1, ?, ?, NULL, 0, ?)",
+		int64(branchRid), int64(branchRid), int64(branchRid)); err != nil {
+		t.Fatalf("close branch: %v", err)
+	}
+
+	if _, _, err := Create(r, CreateOpts{
+		Name: "feature-x", Parent: parentRid, User: "testuser",
+		Time: time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("Create after close: %v, want success (branch was closed)", err)
+	}
+}

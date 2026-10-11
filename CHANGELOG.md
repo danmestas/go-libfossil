@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `branch.Create` now refuses a name an open branch already carries, as
+  `fossil branch new` does, and stores no artifact when it refuses. `branch.List`
+  now reports a branch closed only when its newest check-in carries a `closed`
+  tag (fossil's branch-list rule), not when any check-in on the branch does
+  (#292).
 - `checkout.BranchLeaves` now returns only the *open* leaves of a branch,
   skipping any leaf that carries a `closed` tag, as fossil's `leaves` lists
   them. `(*Checkout).WouldFork` is now fossil's `leaf_ambiguity`: it reports a

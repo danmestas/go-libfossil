@@ -198,13 +198,7 @@ func TestReqConfigUserNeedsAuthenticatedAdmin(t *testing.T) {
 		t.Fatalf("user mtime: %v", err)
 	}
 	rest := []xfer.Card{&xfer.ReqConfigCard{Name: "/user"}}
-	payload, err := (&xfer.Message{Cards: rest}).EncodeUncompressed()
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
-	login := buildTestLoginCard("adm", "pw", pc, payload)
-	resp, err := HandleSync(context.Background(), r,
-		&xfer.Message{Cards: append([]xfer.Card{login}, rest...)})
+	resp, err := HandleSync(context.Background(), r, signedRequest(t, "adm", "pw", pc, rest...))
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}

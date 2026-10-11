@@ -60,14 +60,9 @@ func TestReqConfigMatchesRealFossil(t *testing.T) {
 	// An authenticated Admin reads the user table too.
 	fossilRun(t, bin, "user", "capabilities", "nobody", "", "-R", repoPath)
 	rest := []xfer.Card{&xfer.ReqConfigCard{Name: "/all"}}
-	payload, err := (&xfer.Message{Cards: rest}).EncodeUncompressed()
-	if err != nil {
-		t.Fatalf("encode: %v", err)
-	}
 	pc := strings.Trim(strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
 		"SELECT value FROM config WHERE name='project-code'")), "'")
-	login := buildTestLoginCard("adm", "pw", pc, payload)
-	req := &xfer.Message{Cards: append([]xfer.Card{login}, rest...)}
+	req := signedRequest(t, "adm", "pw", pc, rest...)
 	got := compareReqConfig(t, bin, repoPath, req, "admin reqconfig /all")
 	if !strings.Contains(strings.Join(got, "\n"), "/user 109 'adm' pw ") {
 		t.Errorf("admin /all carried no user rows: %q", got)

@@ -317,13 +317,6 @@ var artifactGaps = map[string]string{
 	"artifact.5.4.event-propagating":     "#273",
 	"artifact.5.4.forum-many-parents":    "#273",
 	"artifact.5.4.forum-title-reply":     "#273",
-	// hash/policy.go:81 derives the auto-to-sha3 promotion from the stored
-	// names and never writes the hash-policy setting, so fossil opening the
-	// repository still reads auto and keeps naming new content SHA-1.
-	"artifact.7.4.ratchet-persisted": "#274",
-	// With no hash-policy row an empty repository names new content SHA-1, not
-	// SHA3 (hash/policy.go:68).
-	"artifact.7.2.default-empty": "#274",
 }
 
 // TestArtifactGapKeys checks that every marked case exists, and that every

@@ -63,6 +63,11 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 	if len(compressed) == 0 {
 		panic("blob.writeRow: compressed must not be empty")
 	}
+	// Promote before the name is verified against content, as fossil's
+	// content_put_ex does: a received name is trusted until Expand checks it.
+	if err := hash.PromoteFor(q, uuid); err != nil {
+		return 0, fmt.Errorf("hash policy: %w", err)
+	}
 	if rid, ok := Exists(q, uuid); ok {
 		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
 			size, compressed, rid); err != nil {

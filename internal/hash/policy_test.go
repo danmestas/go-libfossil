@@ -84,15 +84,15 @@ func TestNamingForPolicy(t *testing.T) {
 	}
 }
 
-// A repo with no hash-policy row is treated as "auto": legacy repos created
-// before the config row existed keep working off their own artifact names.
+// A repo with no hash-policy row takes fossil's default (7.2): sha3 when empty
+// or holding a SHA3 artifact, auto, so SHA1, when it holds only SHA1 ones.
 func TestNamingForAbsentConfigRow(t *testing.T) {
 	tests := []struct {
 		name     string
 		artifact string
 		want     hash.Alg
 	}{
-		{"empty repo defaults to sha1", "", hash.AlgSHA1},
+		{"empty repo defaults to sha3", "", hash.AlgSHA3},
 		{"sha1 repo stays sha1", sha1Name, hash.AlgSHA1},
 		{"sha3 repo uses sha3", sha3Name, hash.AlgSHA3},
 	}
@@ -125,5 +125,44 @@ func TestAlgOther(t *testing.T) {
 	}
 	if got := hash.AlgSHA3.Other(); got != hash.AlgSHA1 {
 		t.Errorf("AlgSHA3.Other() = %v, want AlgSHA1", got)
+	}
+}
+
+// Under auto, a SHA3 name promotes the repo and the promotion is written to
+// the setting, so fossil opening the repo reads it too (7.4). Nothing else
+// writes the setting.
+func TestPromoteFor(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy string // "" is no row
+		have   string // artifact already in the repo
+		uuid   string
+		want   string // hash-policy row afterwards, "" for none
+	}{
+		{"auto, sha3 name", "1", sha1Name, sha3Name, "2"},
+		{"auto, sha1 name", "1", sha1Name, sha1Name, "1"},
+		{"no row over sha1 artifacts, sha3 name", "", sha1Name, sha3Name, "2"},
+		{"no row, empty repo", "", "", sha3Name, ""},
+		{"sha1, sha3 name", "0", sha1Name, sha3Name, "0"},
+		{"sha3-only, sha3 name", "3", "", sha3Name, "3"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := setupDB(t)
+			if tt.policy != "" {
+				setPolicy(t, d, tt.policy)
+			}
+			if tt.have != "" {
+				insertArtifact(t, d, tt.have)
+			}
+			if err := hash.PromoteFor(d, tt.uuid); err != nil {
+				t.Fatalf("PromoteFor: %v", err)
+			}
+			var got string
+			_ = d.QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&got)
+			if got != tt.want {
+				t.Errorf("hash-policy = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

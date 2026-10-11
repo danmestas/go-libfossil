@@ -22,8 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pull and `pragma xtable-hash` needs Read. A `uvigot` no longer updates an
   unversioned file's mtime for a requester without y, and `pragma ci-lock`
   takes or reports a check-in lock only for a requester with Write (i), so an
-  anonymous requester can no longer learn who holds a lock. fossil takes a
-  lock for any requester; its own client asks for one only before a commit.
+  anonymous requester can no longer learn who holds a lock. This is a
+  deliberate departure from fossil, which takes a lock for any requester;
+  fossil's own client asks for one only before a commit, which needs Write.
 
 ## [0.11.0] - 2026-10-10
 

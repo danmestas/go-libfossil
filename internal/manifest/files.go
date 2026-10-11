@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -33,17 +34,9 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 	if d.B == "" {
 		return fCardsToEntries(d.F), nil
 	}
-	baseRid, ok := content.AvailableByUUID(r.DB(), d.B)
-	if !ok {
-		return nil, fmt.Errorf("manifest.ListFiles: baseline %s not found", d.B)
-	}
-	baseData, err := cache.Expand(r.DB(), baseRid)
+	baseDeck, err := loadBaseline(r.DB(), cache, d)
 	if err != nil {
-		return nil, fmt.Errorf("manifest.ListFiles: expand baseline: %w", err)
-	}
-	baseDeck, err := deck.Parse(baseData)
-	if err != nil {
-		return nil, fmt.Errorf("manifest.ListFiles: parse baseline: %w", err)
+		return nil, fmt.Errorf("manifest.ListFiles: %w", err)
 	}
 	fileMap := make(map[string]FileEntry)
 	for _, f := range baseDeck.F {
@@ -62,6 +55,33 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil
+}
+
+// loadBaseline resolves the B card of delta manifest d to its baseline deck.
+// The target must be a baseline manifest (4.7.3, 8.3): a checkin with no B
+// card of its own. A delta manifest or a control artifact is not one, and
+// would hand back a partial or empty file set as if it were whole. Every
+// reader of a B card goes through here, so the rule has one owner.
+func loadBaseline(q db.Querier, cache *content.Cache, d *deck.Deck) (*deck.Deck, error) {
+	if d.B == "" {
+		panic("manifest.loadBaseline: d has no B card")
+	}
+	baseRid, ok := content.AvailableByUUID(q, d.B)
+	if !ok {
+		return nil, fmt.Errorf("baseline %s not found", d.B)
+	}
+	baseData, err := expandManifestBytes(q, cache, baseRid)
+	if err != nil {
+		return nil, fmt.Errorf("expand baseline: %w", err)
+	}
+	baseDeck, err := deck.Parse(baseData)
+	if err != nil {
+		return nil, fmt.Errorf("parse baseline: %w", err)
+	}
+	if baseDeck.Type != deck.Checkin || baseDeck.B != "" {
+		return nil, fmt.Errorf("baseline %s is not a baseline manifest", d.B)
+	}
+	return baseDeck, nil
 }
 
 func fCardsToEntries(fCards []deck.FileCard) []FileEntry {

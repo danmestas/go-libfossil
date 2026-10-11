@@ -324,10 +324,6 @@ var artifactGaps = map[string]string{
 	// With no hash-policy row an empty repository names new content SHA-1, not
 	// SHA3 (hash/policy.go:68).
 	"artifact.7.2.default-empty": "#274",
-	// ListFiles takes any parseable artifact as the baseline, including a delta
-	// manifest or a control artifact (manifest/files.go:44).
-	"artifact.4.7.3.delta-baseline-invalid": "#275",
-	"artifact.8.3.baseline-not-manifest":    "#275",
 }
 
 // TestArtifactGapKeys checks that every marked case exists, and that every

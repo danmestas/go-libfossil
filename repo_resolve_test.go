@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -154,31 +155,28 @@ func TestResolveVersion_EmptyRepoTipNotFound(t *testing.T) {
 
 func TestResolveVersion_AmbiguousPrefix(t *testing.T) {
 	r := newTestRepo(t)
-	// We cannot force a collision naturally, but we can verify the error type
-	// is returned correctly by inspecting the code path. Instead, confirm that
-	// a single-match prefix does NOT return ErrAmbiguousVersion.
-	_, uuid, err := r.Commit(CommitOpts{
-		Files:   []FileToCommit{{Name: "q.txt", Content: []byte("q\n")}},
-		Comment: "ambiguous test base",
-		User:    "test",
-	})
-	if err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	// Single-character prefix is likely ambiguous in a repo with multiple blobs
-	// (the manifest blob itself plus the file blob), so look for ErrAmbiguousVersion.
-	_, ambigErr := r.ResolveVersion(uuid[:1])
-	// If there's only one match it's fine too; the important thing is the error
-	// type when ambiguity occurs.
-	if ambigErr != nil && !errors.Is(ambigErr, ErrAmbiguousVersion) && !errors.Is(ambigErr, ErrVersionNotFound) {
-		t.Errorf("unexpected error type: %v", ambigErr)
+	// Two artifacts whose hashes share a four-character hex prefix. Inserted
+	// directly, since a natural collision cannot be forced.
+	for _, uuid := range []string{
+		"abcd" + strings.Repeat("0", 36),
+		"abcd" + strings.Repeat("1", 36),
+	} {
+		if _, err := r.inner.DB().Exec(
+			"INSERT INTO blob(uuid, size) VALUES(?, 0)", uuid); err != nil {
+			t.Fatalf("insert blob %s: %v", uuid, err)
+		}
 	}
 
-	// Now we want to explicitly test the ErrAmbiguousVersion sentinel exists and
-	// wraps correctly.
+	_, err := r.ResolveVersion("abcd")
+	if !errors.Is(err, ErrAmbiguousVersion) {
+		t.Fatalf("ResolveVersion(\"abcd\") err = %v, want ErrAmbiguousVersion", err)
+	}
+}
+
+func TestResolveVersion_AmbiguousWraps(t *testing.T) {
 	wrapped := fmt.Errorf("outer: %w", ErrAmbiguousVersion)
 	if !errors.Is(wrapped, ErrAmbiguousVersion) {
-		t.Error("ErrAmbiguousVersion does not unwrap correctly through fmt.Errorf %w")
+		t.Error("ErrAmbiguousVersion does not unwrap through fmt.Errorf %w")
 	}
 }
 
@@ -255,5 +253,86 @@ func TestReadFileAt_ByUUIDPrefix(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "doc content") {
 		t.Errorf("content = %q, want it to contain 'doc content'", data)
+	}
+}
+
+// commitRel commits a check-in carrying sym-rel at time tm, for the
+// NAME:TIMESTAMP tests.
+func commitRel(t *testing.T, r *Repo, parent int64, name string, tm time.Time) int64 {
+	t.Helper()
+	rid, _, err := r.Commit(CommitOpts{
+		ParentID: parent,
+		Files:    []FileToCommit{{Name: name + ".txt", Content: []byte(name)}},
+		Comment:  name,
+		User:     "test",
+		Time:     tm,
+		Tags:     []TagSpec{{Name: "sym-rel", Value: "rel"}},
+	})
+	if err != nil {
+		t.Fatalf("commitRel %q: %v", name, err)
+	}
+	return rid
+}
+
+// TestResolveVersion_NameTimestampRoundsUp checks that "NAME:TIMESTAMP" rounds
+// the boundary UP to the last millisecond of the stated precision (fossil's
+// fossil_roundup_date), for the date-only, minute and second forms, each with
+// a check-in just inside and just outside the window.
+func TestResolveVersion_NameTimestampRoundsUp(t *testing.T) {
+	cases := []struct {
+		query           string
+		inside, outside time.Time
+	}{
+		{ // date-only -> 2026-03-10 23:59:59.999
+			"rel:2026-03-10",
+			time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC),
+			time.Date(2026, 3, 11, 0, 0, 1, 0, time.UTC),
+		},
+		{ // minute -> 2026-03-10 12:30:59.999
+			"rel:2026-03-10T12:30",
+			time.Date(2026, 3, 10, 12, 30, 30, 0, time.UTC),
+			time.Date(2026, 3, 10, 12, 31, 0, 0, time.UTC),
+		},
+		{ // second -> 2026-03-10 12:30:15.999
+			"rel:2026-03-10T12:30:15",
+			time.Date(2026, 3, 10, 12, 30, 15, 500*int(time.Millisecond), time.UTC),
+			time.Date(2026, 3, 10, 12, 30, 16, 0, time.UTC),
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.query, func(t *testing.T) {
+			r := newTestRepo(t)
+			base := commit(t, r, 0, "base", []FileToCommit{{Name: "b.txt", Content: []byte("b")}})
+			inside := commitRel(t, r, base, "inside", c.inside)
+			commitRel(t, r, inside, "outside", c.outside)
+
+			got, err := r.ResolveVersion(c.query)
+			if err != nil {
+				t.Fatalf("ResolveVersion(%q): %v", c.query, err)
+			}
+			if got != inside {
+				t.Errorf("ResolveVersion(%q) = %d, want %d (the check-in inside the window)",
+					c.query, got, inside)
+			}
+		})
+	}
+}
+
+// TestResolveVersion_NameTimestampZulu checks that a trailing Z/UTC designator
+// is accepted and the time is read as UTC.
+func TestResolveVersion_NameTimestampZulu(t *testing.T) {
+	for _, q := range []string{"rel:2026-03-10T12:30:15Z", "rel:2026-03-10T12:30:15 UTC"} {
+		r := newTestRepo(t)
+		base := commit(t, r, 0, "base", []FileToCommit{{Name: "b.txt", Content: []byte("b")}})
+		inside := commitRel(t, r, base, "inside", time.Date(2026, 3, 10, 12, 30, 15, 0, time.UTC))
+		commitRel(t, r, inside, "outside", time.Date(2026, 3, 10, 12, 30, 16, 0, time.UTC))
+
+		got, err := r.ResolveVersion(q)
+		if err != nil {
+			t.Fatalf("ResolveVersion(%q): %v", q, err)
+		}
+		if got != inside {
+			t.Errorf("ResolveVersion(%q) = %d, want %d", q, got, inside)
+		}
 	}
 }

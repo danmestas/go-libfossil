@@ -66,6 +66,39 @@ const (
 // its round (issue #109).
 const MaxDecompressedBytes = 64 << 20 // 64 MiB
 
+// MaxBodyBytes caps an xfer reply body a client reads off the wire. Decode
+// can bound only what it is handed, so without this a peer could stream a
+// reply without end and the client would hold all of it before decoding.
+//
+// It is MaxDecompressedBytes plus headroom for the container's framing, so no
+// body Decode would accept is refused: a compressed container decompresses to
+// at most MaxDecompressedBytes, and zlib grows incompressible input by far
+// less than the headroom; an uncompressed clone reply is a round this
+// module's server flushes at DefaultCloneBatchBytes and fossil at its
+// max-download setting (5 MB by default), each plus one artifact. That last
+// artifact is what this bounds: one whose stored form is larger cannot be
+// cloned, as MaxDecompressedBytes already says of a compressed reply. A server
+// bounds the other direction itself (sync.ServeHTTP reads at most 50 MiB).
+const MaxBodyBytes = MaxDecompressedBytes + 1<<20
+
+// ErrBodyTooLarge reports a reply body longer than MaxBodyBytes. It is the
+// peer's fault and resending the same request gets the same reply, so a
+// transport returns it without tagging it retryable.
+var ErrBodyTooLarge = fmt.Errorf("xfer: reply body exceeds %d bytes", MaxBodyBytes)
+
+// ReadBody reads an xfer reply body, refusing one longer than MaxBodyBytes
+// once the cap is passed rather than after holding all of it.
+func ReadBody(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, MaxBodyBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > MaxBodyBytes {
+		return nil, ErrBodyTooLarge
+	}
+	return body, nil
+}
+
 // Compile-time guard: the bound must be positive. The subtraction underflows
 // and fails the build if MaxDecompressedBytes is ever set to zero, rather than
 // letting a clone fail at runtime on a message this implementation produced.
@@ -221,6 +254,12 @@ func decompressBounded(data []byte) ([]byte, error) {
 // server stops at DefaultCloneBatchBytes of artifact content. A round would
 // need a compression ratio over 200:1 throughout to reach it. A single
 // artifact larger than this cannot be received as a cfile.
+//
+// Why 1 GiB: it is the point between those two pressures. Lower, and rounds of
+// highly compressible content from a stock fossil server start to fail. Higher,
+// and one hostile message buys more memory than a single sync exchange should
+// hold: a body is at most MaxBodyBytes (65 MiB), and this keeps its inflation
+// near sixteen times that, where zlib alone allows about a thousand times.
 const MaxCFileInflateBytes = 1 << 30 // 1 GiB
 
 // DecodeUncompressed decodes cards from uncompressed data.

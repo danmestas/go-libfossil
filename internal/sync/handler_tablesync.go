@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -251,17 +253,13 @@ func (h *handler) verifyXRowPKHash(c *xfer.XRowCard, st *SyncedTable) (map[strin
 	if st == nil {
 		panic("handler.verifyXRowPKHash: st must not be nil")
 	}
-	var row map[string]any
-	dec := json.NewDecoder(bytesReader(c.Content))
-	dec.UseNumber()
-	if err := dec.Decode(&row); err != nil {
+	row, err := decodeRowJSON(c.Content, st.Def)
+	if err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("xrow %s/%s: unmarshal: %v", c.Table, c.PKHash, err),
+			Message: fmt.Sprintf("xrow %s/%s: %v", c.Table, c.PKHash, err),
 		})
 		return nil, false
 	}
-	// Coerce json.Number values to native Go types based on column definitions.
-	coerceJSONNumbers(row, st.Def)
 
 	pkCols := extractPKColumns(st.Def)
 	pkColDefs := extractPKColumnDefs(st.Def)
@@ -527,6 +525,28 @@ func bytesReader(b []byte) *bytes.Reader {
 	return bytes.NewReader(b)
 }
 
+// decodeRowJSON decodes a peer's xrow content or xdelete PKData as one row of
+// def. The bytes are the peer's, so anything but a single JSON object that
+// repo.ValidateRow accepts is an error: JSON null decodes to a nil map, and a
+// primary-key value of the wrong type panics PKHash. UseNumber keeps integers above 2^53 exact until
+// coerceJSONNumbers gives them their column's type.
+func decodeRowJSON(data []byte, def repo.TableDef) (map[string]any, error) {
+	dec := json.NewDecoder(bytesReader(data))
+	dec.UseNumber()
+	var row map[string]any
+	if err := dec.Decode(&row); err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("unmarshal: data after the row object")
+	}
+	if err := repo.ValidateRow(def, row); err != nil {
+		return nil, err
+	}
+	coerceJSONNumbers(row, def)
+	return row, nil
+}
+
 // coerceJSONNumbers converts json.Number values in a row map to native Go types
 // (int64 for "integer" columns, float64 for "real" columns) based on the
 // declared column definitions. This is required after UseNumber decoding to
@@ -545,7 +565,7 @@ func coerceJSONNumbers(row map[string]any, def repo.TableDef) {
 		if !ok {
 			continue
 		}
-		switch col.Type {
+		switch strings.ToLower(col.Type) {
 		case "integer":
 			if i, err := n.Int64(); err == nil {
 				row[col.Name] = i

@@ -3,8 +3,8 @@ package sync
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -69,7 +69,11 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, &StatusError{Code: resp.StatusCode, Status: resp.Status}
 	}
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := xfer.ReadBody(resp.Body)
+	if errors.Is(err, xfer.ErrBodyTooLarge) {
+		// The reply is the peer's, and resending gets the same one.
+		return nil, err
+	}
 	if err != nil {
 		// The reply was cut short on the wire. Nothing has been interpreted
 		// yet, so the same request may safely be sent again.

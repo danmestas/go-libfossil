@@ -234,11 +234,14 @@ func ListSyncedTables(d *db.DB) ([]TableInfo, error) {
 // normalizeValue converts a value to its canonical string representation
 // based on the declared column type. This ensures PK hashes are identical
 // regardless of how the value arrived (JSON unmarshal, SQLite scan, etc.).
+//
+// The panics below are assertions: a row from a peer passes ValidateRow first.
+// The type is matched case-insensitively, as createExtensionTable accepts it.
 func normalizeValue(colType string, v any) string {
 	if v == nil {
 		panic(fmt.Sprintf("repo.normalizeValue: value must not be nil for column type %q", colType))
 	}
-	switch colType {
+	switch strings.ToLower(colType) {
 	case "integer":
 		switch n := v.(type) {
 		case int64:
@@ -288,6 +291,60 @@ func normalizeValue(colType string, v any) string {
 	}
 }
 
+// ValidateRow checks a row a peer sent before it is hashed or stored. Every
+// value must be a JSON scalar, and every primary-key column must hold a value
+// PKHash can normalize, because normalizeValue panics on anything else. A row
+// failing either is the peer's error.
+func ValidateRow(def TableDef, row map[string]any) error {
+	if row == nil {
+		return fmt.Errorf("row is not a JSON object")
+	}
+	for k, v := range row {
+		switch v.(type) {
+		case nil, bool, string, json.Number, int64, float64:
+		default:
+			return fmt.Errorf("column %q holds a %T, not a scalar", k, v)
+		}
+	}
+	for _, col := range def.Columns {
+		if col.PK && !pkValueNormalizes(col.Type, row[col.Name]) {
+			return fmt.Errorf("primary key column %q holds %T, not a %s value",
+				col.Name, row[col.Name], col.Type)
+		}
+	}
+	return nil
+}
+
+// pkValueNormalizes reports whether normalizeValue accepts v for colType,
+// mirroring its cases so ValidateRow can refuse what it would panic on.
+func pkValueNormalizes(colType string, v any) bool {
+	switch strings.ToLower(colType) {
+	case "integer":
+		switch n := v.(type) {
+		case int64, float64, int:
+			return true
+		case json.Number:
+			_, err := n.Int64()
+			return err == nil
+		}
+	case "real":
+		switch n := v.(type) {
+		case float64, int64:
+			return true
+		case json.Number:
+			_, err := n.Float64()
+			return err == nil
+		}
+	case "text":
+		_, ok := v.(string)
+		return ok
+	case "blob":
+		_, ok := v.([]byte)
+		return ok
+	}
+	return false
+}
+
 // PKHash computes a deterministic SHA1 hash of the primary key values.
 // Values are normalized to canonical strings based on declared column types
 // to avoid JSON round-trip coercion issues (e.g., int64 → float64).
@@ -327,7 +384,6 @@ func UpsertXRow(d *db.DB, tableName string, row map[string]any, mtime int64) err
 	if row == nil {
 		panic("repo.UpsertXRow: row must not be nil")
 	}
-
 	// Build column list and placeholders. Sort keys for deterministic SQL.
 	keys := make([]string, 0, len(row))
 	for k := range row {

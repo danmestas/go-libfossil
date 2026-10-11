@@ -1,8 +1,6 @@
 package sync
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -33,13 +31,10 @@ func applyXDeleteLocally(d *db.DB, table string, def repo.TableDef, pkHash strin
 	if len(pkData) == 0 {
 		return nil // No PKData — can't create tombstone.
 	}
-	dec := json.NewDecoder(bytes.NewReader(pkData))
-	dec.UseNumber()
-	var pkValues map[string]any
-	if err := dec.Decode(&pkValues); err != nil {
+	pkValues, err := decodeRowJSON(pkData, def)
+	if err != nil {
 		return fmt.Errorf("applyXDeleteLocally: decode PKData %s/%s: %w", table, pkHash, err)
 	}
-	coerceJSONNumbers(pkValues, def)
 
 	// Verify PKData matches declared PKHash.
 	var pkColDefs []repo.ColumnDef

@@ -289,14 +289,14 @@ func (s *session) handleXRowResponse(c *xfer.XRowCard) error {
 		return fmt.Errorf("handleXRowResponse: get table def %s: %w", c.Table, err)
 	}
 
-	var row map[string]any
-	rowDec := json.NewDecoder(bytesReader(c.Content))
-	rowDec.UseNumber()
-	if err := rowDec.Decode(&row); err != nil {
-		return fmt.Errorf("handleXRowResponse: unmarshal %s/%s: %w", c.Table, c.PKHash, err)
+	if def == nil {
+		// Without a local definition there is nothing to check the row's
+		// columns against, and no table to store it in.
+		return fmt.Errorf("handleXRowResponse: table %q is not registered", c.Table)
 	}
-	if def != nil {
-		coerceJSONNumbers(row, *def)
+	row, err := decodeRowJSON(c.Content, *def)
+	if err != nil {
+		return fmt.Errorf("handleXRowResponse: %s/%s: %w", c.Table, c.PKHash, err)
 	}
 
 	if err := repo.UpsertXRow(s.repo.DB(), c.Table, row, c.MTime); err != nil {

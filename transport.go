@@ -3,11 +3,12 @@ package libfossil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // Transport delivers sync payloads between peers.
@@ -93,7 +94,11 @@ func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return nil, "", &internalsync.StatusError{Code: resp.StatusCode, Status: resp.Status}
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := xfer.ReadBody(resp.Body)
+	if errors.Is(err, xfer.ErrBodyTooLarge) {
+		// The reply is the peer's, and resending gets the same one.
+		return nil, "", err
+	}
 	if err != nil {
 		// The reply was cut short on the wire; nothing has been decoded yet,
 		// so the round loop may safely send this request again. Tagging it

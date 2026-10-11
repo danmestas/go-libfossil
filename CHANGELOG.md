@@ -79,6 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of gigabytes. A single artifact larger than that cannot be received as a
   `cfile`.
 
+
+- An `xrow` payload or `xdelete` PKData must be one JSON object whose values
+  are scalars and whose primary-key values have the column's type; anything
+  else is refused with an error, on the client and the server. JSON `null`
+  used to panic the process, as did a primary-key value of the wrong type or
+  a nested value. A client refuses an `xrow` for a table it has not
+  registered.
+- The HTTP transports read at most `xfer.MaxBodyBytes` (65 MiB) of a reply
+  and return `xfer.ErrBodyTooLarge` past it; a server streaming an endless
+  reply used to be read into memory whole.
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

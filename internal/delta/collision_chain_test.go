@@ -61,7 +61,10 @@ func repetitiveInputs() []struct {
 func TestCreate_RepetitiveInput_RoundTripsByteForByte(t *testing.T) {
 	for _, tc := range repetitiveInputs() {
 		t.Run(tc.name, func(t *testing.T) {
-			d := Create(tc.source, tc.target)
+			d, err := Create(tc.source, tc.target)
+			if err != nil {
+				t.Fatalf("delta.Create: %v", err)
+			}
 
 			got, err := Apply(tc.source, d)
 			if err != nil {
@@ -174,7 +177,10 @@ func TestCreate_LargeRepetitiveInput_RoundTrips(t *testing.T) {
 	target := append([]byte(nil), source...)
 	copy(target[n/2:], []byte("XXXXXXXXXX"))
 
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	got, err := Apply(source, d)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)

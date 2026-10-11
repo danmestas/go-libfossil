@@ -187,7 +187,10 @@ func TestFossilCLI_CreateRoundTrip(t *testing.T) {
 	}
 
 	// Create delta with our code
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	if err := writeFile(deltaFile, d); err != nil {
 		t.Fatal(err)
 	}

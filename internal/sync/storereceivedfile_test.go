@@ -49,7 +49,10 @@ func TestStoreReceivedFileNonHexDeltaSrcReturnsError(t *testing.T) {
 	target := []byte("target content for the non-hex delta source test, padded a bit")
 	targetUUID := hash.SHA1(target)
 	base := []byte("base content for the non-hex delta source test, padded a bit")
-	deltaBytes := delta.Create(base, target)
+	deltaBytes, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	nonHexDeltaSrc := ""
 	for i := 0; i < 40; i++ {
@@ -87,7 +90,10 @@ func TestStoreReceivedFileDeltaBeforeBase(t *testing.T) {
 
 	base := []byte("original file content, long enough to compress reasonably well")
 	target := []byte("original file content, long enough to compress reasonably well, v2")
-	deltaBytes := delta.Create(base, target)
+	deltaBytes, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	baseUUID := hash.SHA1(base)
 	targetUUID := hash.SHA1(target)
 
@@ -179,8 +185,14 @@ func TestStoreReceivedFileDeltaChainBeforeAnyBase(t *testing.T) {
 	midUUID := hash.SHA1(mid)
 	targetUUID := hash.SHA1(target)
 
-	midDelta := delta.Create(base, mid)
-	targetDelta := delta.Create(mid, target)
+	midDelta, err := delta.Create(base, mid)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
+	targetDelta, err := delta.Create(mid, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	// Deliver deepest-first: target's delta references mid, which itself
 	// doesn't exist yet either.
@@ -296,7 +308,10 @@ func TestStoreReceivedFileRejectsContentNotMatchingClaimedUUID(t *testing.T) {
 
 	claimedUUID := hash.SHA1(real) // attacker claims the GOOD uuid
 	baseUUID := hash.SHA1(base)
-	evilDelta := delta.Create(base, evil) // but ships a delta expanding to EVIL
+	evilDelta, err := delta.Create(base, evil) // but ships a delta expanding to EVIL
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	// Guard 1: the delta must actually compress relative to the full evil
 	// content, or this test exercises the wrong code path.
@@ -382,7 +397,10 @@ func TestStoreReceivedFileFillingPhantomCrosslinksDeltaChild(t *testing.T) {
 
 	base := []byte("root content for the dephantomize e2e crosslink test, unrelated to the manifest")
 	baseUUID := hash.SHA1(base)
-	manifestDelta := delta.Create(base, manifestBytes)
+	manifestDelta, err := delta.Create(base, manifestBytes)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	// The checkin manifest arrives first, as a delta against a base that
 	// has never been seen -- create-phantom-if-missing phantomizes the
@@ -457,7 +475,10 @@ func TestIssue214ReceiveLinkerAvoidsFinalSweepWork(t *testing.T) {
 
 	base := []byte("issue 214 delta base, received after its checkin")
 	baseUUID := hash.SHA1(base)
-	checkinDelta := delta.Create(base, checkinBytes)
+	checkinDelta, err := delta.Create(base, checkinBytes)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	// The delta is examined when received, but cannot be linked until its
 	// base and then the checkin's named file become available.

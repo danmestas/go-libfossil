@@ -2,6 +2,7 @@ package delta
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
 	"testing"
 )
@@ -270,7 +271,10 @@ func TestApply_InvalidDelta(t *testing.T) {
 func TestOutputSize(t *testing.T) {
 	source := []byte("original content here")
 	target := []byte("original content modified further")
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	got, err := OutputSize(d)
 	if err != nil {
@@ -348,7 +352,10 @@ func TestCreate_SmallInputs(t *testing.T) {
 			src := []byte(tt.source)
 			tgt := []byte(tt.target)
 
-			d := Create(src, tgt)
+			d, err := Create(src, tgt)
+			if err != nil {
+				t.Fatalf("delta.Create: %v", err)
+			}
 			if len(d) == 0 {
 				t.Fatal("Create returned empty delta")
 			}
@@ -370,7 +377,10 @@ func TestCreate_LargeInput(t *testing.T) {
 	copy(target, source)
 	copy(target[50000:], []byte("CHANGED CONTENT HERE!"))
 
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	if len(d) > len(target)/2 {
 		t.Fatalf("delta too large: %d bytes for %d byte target", len(d), len(target))
@@ -392,7 +402,10 @@ func TestCreate_RoundTrip_FossilValidation(t *testing.T) {
 	source := []byte("original content of the file\nwith multiple lines\nand some data\n")
 	target := []byte("original content of the file\nwith MODIFIED lines\nand some data\nplus new stuff\n")
 
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	got, err := Apply(source, d)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -408,7 +421,10 @@ func TestCreate_RoundTrip_FossilValidation(t *testing.T) {
 func TestApplyInto_NilDstMatchesApply(t *testing.T) {
 	source := bytes.Repeat([]byte("abcdefghij"), 200)
 	target := append(bytes.Repeat([]byte("abcdefghij"), 199), []byte("CHANGED!")...)
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	got, err := ApplyInto(nil, source, d)
 	if err != nil {
@@ -435,7 +451,10 @@ func TestApplyInto_NilDstMatchesApply(t *testing.T) {
 func TestApplyInto_ReusedBufferAllocatesLess(t *testing.T) {
 	source := bytes.Repeat([]byte("abcdefghij"), 200)
 	target := append(bytes.Repeat([]byte("abcdefghij"), 199), []byte("CHANGED!")...)
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	dst := make([]byte, 0, len(target))
 
@@ -478,7 +497,10 @@ func TestApplyInto_PanicsOnNonEmptyDst(t *testing.T) {
 	}()
 	source := []byte("source")
 	target := []byte("target")
-	d := Create(source, target)
+	d, err := Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	_, _ = ApplyInto([]byte("live"), source, d)
 }
 
@@ -638,5 +660,46 @@ func TestApplyInto_ExactSizingReusesAdequateBuffer(t *testing.T) {
 		t.Fatalf("ApplyInto returned a buffer of cap %d, want the supplied %d -- "+
 			"an adequate caller buffer must still be reused",
 			cap(got), cap(scratch))
+	}
+}
+
+// Create refuses sizes the format cannot hold. A direct test would need a
+// 4 GiB input, so the bound check is exercised on lengths.
+func TestCheckSizes(t *testing.T) {
+	const limit = 1 << 32
+	tests := []struct {
+		name           string
+		source, target int
+		wantErr        bool
+	}{
+		{"both small", 10, 10, false},
+		{"largest source", limit - 1, 0, false},
+		{"largest target", 0, limit - 1, false},
+		{"source at limit", limit, 0, true},
+		{"target at limit", 0, limit, true},
+		{"both over", limit + 1, limit + 1, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if runtime.GOARCH == "386" || runtime.GOARCH == "arm" {
+				t.Skip("int is 32 bits")
+			}
+			err := checkSizes(tt.source, tt.target)
+			if tt.wantErr != errors.Is(err, ErrTooLarge) {
+				t.Fatalf("checkSizes(%d, %d) = %v, want ErrTooLarge: %v",
+					tt.source, tt.target, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Apply and Create agree on the limit: a header naming 2^32 is refused, the
+// largest value Create may write is not.
+func TestApplyHeaderBound(t *testing.T) {
+	if _, err := OutputSize([]byte("400000\n")); !errors.Is(err, ErrInvalidDelta) {
+		t.Fatalf("OutputSize of a 2^32 header = %v, want ErrInvalidDelta", err)
+	}
+	if n, err := OutputSize([]byte("3~~~~~\n")); err != nil || n != 1<<32-1 {
+		t.Fatalf("OutputSize of a 2^32-1 header = %d, %v", n, err)
 	}
 }

@@ -11,12 +11,19 @@ var (
 	ErrChecksum     = errors.New("delta: checksum mismatch")
 )
 
-// maxDeltaTargetSize bounds the target length declared in a delta header.
-// It is far larger than any real Fossil artifact — its purpose is to
-// reject an obviously-hostile or malformed claim (wire data, never
-// trusted) before it reaches an allocation or a size column, not to
-// constrain legitimate content.
+// maxDeltaTargetSize bounds the target length declared in a delta header,
+// exclusive: the format holds integers below 2^32 only. It is far larger
+// than any real Fossil artifact — its purpose is to reject an
+// obviously-hostile or malformed claim (wire data, never trusted) before it
+// reaches an allocation or a size column, not to constrain legitimate
+// content. Create refuses inputs at this size too, so what Create writes,
+// Apply reads.
 const maxDeltaTargetSize = 1 << 32 // 4 GiB
+
+// ErrTooLarge reports a source or target Create cannot encode: the format's
+// integers are unsigned 32-bit, so a delta cannot name offsets or a target
+// length of 2^32 or more.
+var ErrTooLarge = errors.New("delta: input too large")
 
 var digits = [128]int{
 	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
@@ -91,7 +98,7 @@ func parseTargetLen(r *reader) (uint64, error) {
 	if term != '\n' {
 		return 0, fmt.Errorf("%w: expected newline after target length", ErrInvalidDelta)
 	}
-	if targetLen > maxDeltaTargetSize {
+	if targetLen >= maxDeltaTargetSize {
 		return 0, fmt.Errorf("%w: target length %d exceeds maximum %d", ErrInvalidDelta, targetLen, uint64(maxDeltaTargetSize))
 	}
 	return targetLen, nil
@@ -455,15 +462,22 @@ type hashEntry struct {
 // Create generates a delta that transforms source into target.
 // Variable naming follows fossil/src/delta.c for cross-reference:
 //   nHash = NHASH, ei = entry index, ml = match length, tPos = target position, sOff = source offset
-func Create(source, target []byte) (result []byte) {
+//
+// It returns ErrTooLarge when source or target is 2^32 bytes or longer; the
+// caller then stores the target whole, as fossil does when a delta is not
+// worthwhile.
+func Create(source, target []byte) (result []byte, err error) {
 	if source == nil {
 		panic("delta.Create: source must not be nil")
 	}
 	if target == nil {
 		panic("delta.Create: target must not be nil")
 	}
+	if err := checkSizes(len(source), len(target)); err != nil {
+		return nil, err
+	}
 	defer func() {
-		if len(result) == 0 {
+		if err == nil && len(result) == 0 {
 			panic("delta.Create: postcondition violated: result is empty")
 		}
 	}()
@@ -474,15 +488,26 @@ func Create(source, target []byte) (result []byte) {
 		buf = append(buf, '\n')
 		buf = appendInt(buf, uint64(Checksum(target)))
 		buf = append(buf, ';')
-		return buf
+		return buf, nil
 	}
 
 	if len(source) < nHash {
-		return createInsertAll(target)
+		return createInsertAll(target), nil
 	}
 
 	heads, entries, mask := buildHashTable(source)
-	return emitMatches(source, target, heads, entries, mask)
+	return emitMatches(source, target, heads, entries, mask), nil
+}
+
+// checkSizes enforces the producer bound of the format (DF-3.1-6): every
+// integer Create writes is an offset into source or a length of target, so
+// both must stay below 2^32.
+func checkSizes(sourceLen, targetLen int) error {
+	if uint64(sourceLen) >= maxDeltaTargetSize || uint64(targetLen) >= maxDeltaTargetSize {
+		return fmt.Errorf("%w: source %d bytes, target %d bytes, limit %d",
+			ErrTooLarge, sourceLen, targetLen, uint64(maxDeltaTargetSize))
+	}
+	return nil
 }
 
 func buildHashTable(source []byte) (heads []int, entries []hashEntry, mask int) {

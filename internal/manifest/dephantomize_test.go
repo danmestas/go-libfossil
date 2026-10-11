@@ -625,10 +625,14 @@ func TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade(t *testing.T) 
 	children := make([]libfossil.FslID, fanout)
 	for i := range children {
 		child := []byte(fmt.Sprintf("cancelled phantom delta child %04d", i))
+		childDelta, err := delta.Create(base, child)
+		if err != nil {
+			t.Fatalf("delta.Create: %v", err)
+		}
 		rid, err := blob.StoreDeltaRaw(
 			r.DB(),
 			repoHash(r, child),
-			delta.Create(base, child),
+			childDelta,
 			baseRID,
 			nil,
 		)
@@ -861,10 +865,14 @@ func TestReceiveLinkerLinkStoredBoundsUncancelledCascadeAndFinalizesRemainder(t 
 	children := make([]libfossil.FslID, fanout)
 	for i := range children {
 		child := marshal(i+1, sourceUUID)
+		childDelta, err := delta.Create(source, child)
+		if err != nil {
+			t.Fatalf("delta.Create: %v", err)
+		}
 		rid, err := blob.StoreDeltaRaw(
 			r.DB(),
 			repoHash(r, child),
-			delta.Create(source, child),
+			childDelta,
 			sourceRID,
 			nil,
 		)

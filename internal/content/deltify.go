@@ -137,7 +137,13 @@ func Deltify(tx *db.Tx, rid, srcRid libfossil.FslID) (saved int, err error) {
 		return 0, nil
 	}
 
-	deltaBytes := delta.Create(src, data)
+	deltaBytes, err := delta.Create(src, data)
+	if errors.Is(err, delta.ErrTooLarge) {
+		return 0, nil // too large for a delta: store whole, as fossil does
+	}
+	if err != nil {
+		return 0, fmt.Errorf("content.Deltify: create delta: %w", err)
+	}
 	if float64(len(deltaBytes)) >= float64(len(data))*deltifyMinRatio {
 		return 0, nil
 	}

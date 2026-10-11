@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaf exists on the same branch, so a non-leaf or closed version no longer
   reads as a fork (#291).
 
+- `delta.Create` refuses a source or target of 2^32 bytes or more with
+  `delta.ErrTooLarge` (#279), as the delta format's producer bound requires;
+  it used to write header and copy integers of 2^32 or more. `Create` now
+  returns an error, and `Deltify` stores such content whole, as fossil does
+  when a delta is not worthwhile. `Apply` now rejects a header naming exactly
+  2^32 as well (the draft leaves that limit implementation-defined), so what
+  `Create` writes and `Apply` reads agree.
+
 - Storing content whose name is a phantom fills the phantom in place, as
   fossil's `content_put` does (#278). `blob.Store` used to return the
   phantom's rid and leave it empty, so a check-in of a file matching a known

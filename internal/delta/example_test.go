@@ -10,7 +10,11 @@ func ExampleCreate() {
 	source := []byte("the quick brown fox jumps over the lazy dog\n")
 	target := []byte("the quick brown fox leaps over the lazy dog\n")
 
-	d := delta.Create(source, target)
+	d, err := delta.Create(source, target)
+	if err != nil {
+		fmt.Println("error:", err)
+		return
+	}
 
 	// Delta is smaller than storing the full target.
 	fmt.Printf("delta smaller: %v\n", len(d) < len(target))

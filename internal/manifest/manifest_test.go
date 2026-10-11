@@ -1524,7 +1524,10 @@ func forceDeltify(t *testing.T, r *repo.Repo, rid, srcRid libfossil.FslID) {
 	if err != nil {
 		t.Fatalf("forceDeltify: expand srcid=%d: %v", srcRid, err)
 	}
-	deltaBytes := delta.Create(src, data)
+	deltaBytes, err := delta.Create(src, data)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	compressed, err := blob.Compress(deltaBytes)
 	if err != nil {
 		t.Fatalf("forceDeltify: compress: %v", err)

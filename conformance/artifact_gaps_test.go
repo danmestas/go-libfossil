@@ -91,10 +91,6 @@ var artifactGaps = map[string]string{
 	"artifact.4.6.1.f-trailing-slash":       "#269",
 	"artifact.4.6.1.old-name-dotdot-prefix": "#269",
 	"artifact.4.6.1.old-name-leading-slash": "#269",
-	// Check-in writes any filename it is given (manifest/manifest.go:180).
-	"artifact.4.6.1.writer-backslash":    "#270",
-	"artifact.4.6.1.writer-invalid-utf8": "#270",
-	"artifact.4.6.1.writer-surrogate":    "#270",
 	// No wiki-name predicate on the L card or the A target (deck/parse.go:189, :220).
 	"artifact.4.6.2.l-101-bytes":      "#269",
 	"artifact.4.6.2.l-double-space":   "#269",

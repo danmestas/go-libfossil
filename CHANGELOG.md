@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaf exists on the same branch, so a non-leaf or closed version no longer
   reads as a fork (#291).
 
+- `Checkin` refuses a filename the artifact format's writer profile forbids
+  (#270): one containing a backslash, or that is not valid UTF-8
+  (surrogates and overlong forms included). It used to write a manifest
+  naming it. fossil's own `add` refuses such names, so fossil never creates
+  that manifest, but its reader still accepts one that arrives from
+  elsewhere. The draft's writer profile also bars characters above U+FFFF,
+  private-use characters and noncharacters; those are not enforced here.
+
 - `delta.Create` refuses a source or target of 2^32 bytes or more with
   `delta.ErrTooLarge` (#279), as the delta format's producer bound requires;
   it used to write header and copy integers of 2^32 or more. `Create` now

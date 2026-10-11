@@ -24,6 +24,9 @@ func TestReqConfigMatchesRealFossil(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	repoPath := filepath.Join(t.TempDir(), "cfg.fossil")
 	fossilRun(t, bin, "new", repoPath)
+	// Each `fossil http` would otherwise detach a backoffice process that
+	// outlives the test by a minute.
+	fossilRun(t, bin, "settings", "backoffice-disable", "1", "-R", repoPath)
 	fossilRun(t, bin, "user", "new", "adm", "admin user", "pw", "-R", repoPath)
 	fossilRun(t, bin, "user", "password", "adm", "pw", "-R", repoPath)
 	fossilRun(t, bin, "user", "capabilities", "adm", "a", "-R", repoPath)

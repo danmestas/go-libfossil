@@ -24,7 +24,9 @@ func withZCard(body string) []byte {
 // carrying an escape must arrive unchanged.
 func TestParseJCardDecodesValueKeepsNameVerbatim(t *testing.T) {
 	d := &Deck{}
-	if err := parseJCard(d, `a\sname a\svalue`); err != nil {
+	// parseJCard now receives the card's tokens, split on single spaces by the
+	// scanner, rather than one raw argument string.
+	if err := parseJCard(d, []string{`a\sname`, `a\svalue`}); err != nil {
 		t.Fatalf("parseJCard: %v", err)
 	}
 	if len(d.J) != 1 {

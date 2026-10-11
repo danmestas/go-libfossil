@@ -13,9 +13,14 @@ var (
 		[]byte("-----BEGIN PGP SIGNED MESSAGE-----"),
 		[]byte("-----BEGIN SSH SIGNED MESSAGE-----"),
 	}
+	// fossil's remove_pgp_signature matches the signature trailer with
+	// strncmp(..., 29): the LF plus the first 28 bytes of the armor line, one
+	// short of its final dash. So a trailing dash mangled to another byte
+	// ("-----BEGIN PGP SIGNATURE----x") is still recognized and stripped.
+	// These markers are those 29 bytes, so bytes.HasPrefix matches the same.
 	clearsignSignatures = [][]byte{
-		[]byte("\n-----BEGIN PGP SIGNATURE-----"),
-		[]byte("\n-----BEGIN SSH SIGNATURE-----"),
+		[]byte("\n-----BEGIN PGP SIGNATURE----"),
+		[]byte("\n-----BEGIN SSH SIGNATURE----"),
 	}
 )
 

@@ -99,6 +99,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` tokenizes artifact cards the way fossil does (its
+  `next_token`/`next_card`): tokens are separated by a single space, a card
+  ends at LF, and tab and CR are ordinary token bytes rather than
+  whitespace to split or trim on. A blank line, an empty token between two
+  others (two spaces in a row), a bare card where a value is required, and
+  trailing residue after the last card are each rejected; a line that ends
+  in a space still carries a present-but-empty last value. The W card's size
+  is read as fossil reads it -- leading decimal digits, with an overflow
+  guard -- and the body must be followed by a newline. The clearsign armor
+  trailer is matched on 29 bytes, as fossil matches it, so a mangled final
+  dash no longer hides the signature. Each card is also held to its exact
+  §4.2.1 arity: a card with more tokens than Table 2 allows is rejected
+  (#266, #267).
+
+
 - `deck.Parse` and `deck.VerifyZ` judge an artifact's framing by the rule it
   breaks. The Z-card check now mirrors fossil's `verify_z_card`: it locates
   the Z card as the last 35 bytes beginning `Z `, never reads the final byte,

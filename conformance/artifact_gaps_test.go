@@ -5,20 +5,6 @@ import "testing"
 // artifactGaps marks the artifact cases go-libfossil is known to fail, by
 // case ID, grouped by the code at fault, each with the issue tracking its fix.
 var artifactGaps = map[string]string{
-	// Framing: a bare C line passes as an empty comment (parse.go:103, :174).
-	// (The raw-final-LF and first-card gates landed with #265.)
-	"artifact.4.7.c-missing": "#266",
-	// The armor match compares all 30 bytes, not 29 (deck/clearsign.go:16, :65).
-	"artifact.4.1.1.pgp-short": "#266",
-	"artifact.4.1.1.ssh-short": "#266",
-	// Tokens: strings.Fields and strings.TrimSpace split or trim on tab and CR,
-	// collapse an empty token, and readLine's caller skips empty lines
-	// (deck/parse.go:54, :171-204, :251).
-	"artifact.4.2.2.blank-line": "#266",
-	"artifact.4.2.double-space": "#266",
-	"artifact.4.2.file-tab":     "#266",
-	"artifact.4.2.hash-cr":      "#266",
-	"artifact.4.2.login-cr":     "#266",
 	// Marshal drops a present but empty C, N or T value, an empty P card and an
 	// empty W body, so the artifact does not re-encode (deck/marshal.go:58, :149,
 	// :153, :194, :205).
@@ -27,25 +13,6 @@ var artifactGaps = map[string]string{
 	"artifact.4.7.c-empty":          "#272",
 	"artifact.4.7.n-empty":          "#272",
 	"artifact.4.7.p-empty":          "#272",
-	// No maximum arity: cards are split with SplitN or taken whole, so an extra
-	// token is absorbed (deck/parse.go:171-204, :215, :250, :289, :308, :323).
-	"artifact.4.2.1.extra-A": "#267",
-	"artifact.4.2.1.extra-B": "#267",
-	"artifact.4.2.1.extra-C": "#267",
-	"artifact.4.2.1.extra-E": "#267",
-	"artifact.4.2.1.extra-F": "#267",
-	"artifact.4.2.1.extra-G": "#267",
-	"artifact.4.2.1.extra-H": "#267",
-	"artifact.4.2.1.extra-I": "#267",
-	"artifact.4.2.1.extra-J": "#267",
-	"artifact.4.2.1.extra-K": "#267",
-	"artifact.4.2.1.extra-L": "#267",
-	"artifact.4.2.1.extra-M": "#267",
-	"artifact.4.2.1.extra-N": "#267",
-	"artifact.4.2.1.extra-Q": "#267",
-	"artifact.4.2.1.extra-R": "#267",
-	"artifact.4.2.1.extra-T": "#267",
-	"artifact.4.2.1.extra-U": "#267",
 	// Escape decoding: the A target and N mimetype are kept raw (deck/parse.go:194,
 	// :220), and an F hash is never validated, so an escaped one passes.
 	"artifact.4.3.1.a-target":              "#268",
@@ -108,6 +75,9 @@ var artifactGaps = map[string]string{
 	"artifact.4.6.4.e-fraction-round-trip": "#272",
 	// No hash validation at the A source, B, E, F, G, I, K, M, P or Q positions
 	// (deck/parse.go:171-204, :215, :250, :277, :308); K is not held to 40 digits.
+	// (artifact.4.2.hash-cr belongs here too: once CR is a token byte the B hash
+	// is 41 bytes, which only the §4.7.1 validation rejects.)
+	"artifact.4.2.hash-cr":             "#268",
 	"artifact.4.7.1.a-source-long":     "#268",
 	"artifact.4.7.1.a-source-nonhex":   "#268",
 	"artifact.4.7.1.a-source-short":    "#268",
@@ -152,12 +122,6 @@ var artifactGaps = map[string]string{
 	"artifact.4.7.q-invalid-sign":          "#268",
 	"artifact.6.1.r-nonhex":                "#268",
 	"artifact.6.1.r-short":                 "#268",
-	// W size: strconv.Atoi rejects 12x and abc but takes +12, and the byte after
-	// the body is consumed without checking it is LF (deck/parse.go:73-86).
-	"artifact.4.7.18.w-plus-sign":  "#266",
-	"artifact.4.7.w-count-suffix":  "#266",
-	"artifact.4.7.w-missing-lf":    "#266",
-	"artifact.4.7.w-nondigit-zero": "#266",
 	// No card-legality table, required cards or per-type semantic checks:
 	// inferType only picks a type (deck/parse.go:442).
 	"artifact.5.2.attachment-illegal-B":  "#273",

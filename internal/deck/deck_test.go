@@ -304,17 +304,17 @@ func TestParseUCardStates(t *testing.T) {
 		t.Fatalf("valued U-card: U = %v, want \"alice\"", valued.U)
 	}
 
-	// Whitespace-only U-card: canonical fossil's next_token() skips leading
-	// whitespace, so "U   " yields zUser==NULL and resolves to "anonymous"
-	// the same as a truly empty U-card — not literal whitespace.
+	// Whitespace-only U-card: fossil's next_token() does NOT skip leading
+	// whitespace -- it splits on single spaces -- so "U   " reads an empty
+	// first token (resolving to "anonymous") and then leaves the remaining
+	// spaces as an unparsable card, which fossil rejects with "extra
+	// characters at end of card". Verified against fossil 2.28. A single
+	// trailing space ("U \n") is the present-but-empty form, accepted above
+	// in spirit; two or more spaces are malformed.
 	wsBody := "D 2024-01-15T10:30:00.000\nU   \n"
 	h = md5.Sum([]byte(wsBody))
-	whitespace, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", wsBody, h)))
-	if err != nil {
-		t.Fatalf("Parse (whitespace-only U-card): %v", err)
-	}
-	if whitespace.U == nil || *whitespace.U != "anonymous" {
-		t.Fatalf("whitespace-only U-card: U = %v, want \"anonymous\"", whitespace.U)
+	if _, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", wsBody, h))); err == nil {
+		t.Fatal("whitespace-only U-card: Parse accepted \"U   \", want rejection")
 	}
 }
 

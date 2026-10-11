@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
-	"strings"
 )
 
 // VerifyZ validates a control artifact's trailing Z-card checksum. The blob
@@ -42,29 +41,6 @@ func verifyZ(body []byte) error {
 	computed := computeZ(body[:n-35])
 	if computed != string(stated) {
 		return fmt.Errorf("deck.VerifyZ: checksum mismatch: stated=%s computed=%s", stated, computed)
-	}
-	return nil
-}
-
-// parseZCard validates a Z card reached inside the artifact body. §4.5.1
-// puts the Z card in neither occurrence class: it has no duplicate guard,
-// because "exactly one Z, last" follows from the checksum framing rather
-// than from a card rule, and an earlier Z line is ordinary content covered
-// by the final checksum VerifyZ has already checked. So this carries no
-// state and imposes no last-card rule.
-//
-// It is still a typed card, not an arbitrary-byte channel: §4.7.19 fixes
-// the payload at exactly 32 hexadecimal characters, never decoded. Without
-// the check we would accept and forward artifacts canonical fossil refuses.
-func parseZCard(args string) error {
-	token := strings.TrimSpace(args)
-	if len(token) != 32 {
-		return fmt.Errorf("Z-card checksum must be 32 characters, got %d", len(token))
-	}
-	for i := 0; i < len(token); i++ {
-		if !isHexDigit(token[i]) {
-			return fmt.Errorf("Z-card checksum is not hexadecimal: %q", token)
-		}
 	}
 	return nil
 }

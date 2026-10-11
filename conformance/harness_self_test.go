@@ -105,10 +105,12 @@ func TestAudit(t *testing.T) {
 		{ID: "y.b", Req: "R-1"},
 		{ID: "x.c", Req: "R-9"},
 		{ID: "x.d", Req: "R-1", Gap: "270"},
+		{ID: "x.e", Req: "R-1", Gap: "#0"},
 	}}
 	problems := audit(s, tbl)
 	for _, want := range []string{"R-1 listed twice", "x.a listed twice", `y.b does not start`,
-		`unknown requirement "R-9"`, "must be an issue reference"} {
+		`unknown requirement "R-9"`, "must be an issue reference",
+		"Gap #0 is a placeholder"} {
 		found := false
 		for _, p := range problems {
 			found = found || strings.Contains(p.Error(), want)

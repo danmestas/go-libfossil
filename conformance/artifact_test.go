@@ -29,6 +29,14 @@ type artifactCase struct {
 	// nonCanonical marks an accepted input Marshal need not reproduce byte
 	// for byte, such as a bare U card that reads back as "U anonymous".
 	nonCanonical bool
+	// zCase marks a rejection that is the Z card's to make. Every other
+	// rejection must pass deck.VerifyZ first, so the rule the case targets,
+	// not the checksum, is what rejects it.
+	zCase bool
+	// fossilSays, when set, is a substring fossil's reason for rejecting
+	// the input must contain, for cases where several rules could reject it.
+	// fossil is pinned at 2.28 in CI, so its wording is stable.
+	fossilSays string
 }
 
 // Hash tokens. Their values only need to be well formed and, where a run of
@@ -178,13 +186,10 @@ func (c artifactCase) conforms(ref *fossilReference) error {
 			return err
 		}
 	}
-	d, err := deck.Parse(c.input)
 	if !c.accept {
-		if err == nil {
-			return expectf("deck.Parse accepted %q, want rejection", c.input)
-		}
-		return nil
+		return c.rejectedByRule()
 	}
+	d, err := deck.Parse(c.input)
 	if err != nil {
 		return expectf("deck.Parse rejected %q: %v", c.input, err)
 	}
@@ -206,6 +211,20 @@ func (c artifactCase) conforms(ref *fossilReference) error {
 	return nil
 }
 
+// rejectedByRule checks that deck.Parse rejects the input, and that the Z
+// check did not do it for the rule the case is about.
+func (c artifactCase) rejectedByRule() error {
+	if !c.zCase {
+		if err := deck.VerifyZ(c.input); err != nil {
+			return expectf("rejected by the Z check, not by the rule: %v", err)
+		}
+	}
+	if _, err := deck.Parse(c.input); err == nil {
+		return expectf("deck.Parse accepted %q, want rejection", c.input)
+	}
+	return nil
+}
+
 // fossilAgrees checks fossil's verdict against the case: the same as accept,
 // or the opposite when the case says why it departs from fossil.
 func (c artifactCase) fossilAgrees(ref *fossilReference) error {
@@ -218,6 +237,9 @@ func (c artifactCase) fossilAgrees(ref *fossilReference) error {
 		expected = !c.accept
 	}
 	if accepted == expected {
+		if !accepted && !strings.Contains(reason, c.fossilSays) {
+			return expectf("fossil(1) rejects for %q, not %q", reason, c.fossilSays)
+		}
 		return nil
 	}
 	if c.fossil != "" {
@@ -280,7 +302,6 @@ func artifactCases() []artifactCase {
 	}
 	for i := range all {
 		all[i].Gap = artifactGaps[all[i].ID]
-		all[i].Deviation = artifactDeviations[all[i].ID]
 	}
 	return all
 }

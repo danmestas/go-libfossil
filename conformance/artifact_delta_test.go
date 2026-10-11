@@ -49,7 +49,7 @@ func deltaTree(rest string, expected ...string) func(*testing.T) error {
 		if err != nil {
 			return err
 		}
-		return equal("file set", set, expected)
+		return want("file set", set, expected)
 	}
 }
 
@@ -76,7 +76,7 @@ func deltaManifestCases() []apiCase {
 			if err != nil {
 				return err
 			}
-			return equal("file set", set, []string{"a.txt=" + h1, "b.txt=" + h2, "c.txt=" + h3})
+			return want("file set", set, []string{"a.txt=" + h1, "b.txt=" + h2, "c.txt=" + h3})
 		}},
 		{Case{ID: "artifact.8.empty-delta", Req: "AF-8-1"}, deltaTree("C delta\nD "+ts+"\nU u\n",
 			"a.txt="+h1, "b.txt="+h2, "c.txt="+h3)},

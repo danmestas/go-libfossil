@@ -143,6 +143,10 @@ func audit(s suite, tbl table) []error {
 		if c.Gap != "" && !strings.HasPrefix(c.Gap, "#") {
 			problems = append(problems, fmt.Errorf("case %s: Gap %q must be an issue reference like #270", c.ID, c.Gap))
 		}
+		// "#0" stands in for an issue not yet filed; it must not reach CI.
+		if c.Gap == "#0" {
+			problems = append(problems, fmt.Errorf("case %s: Gap #0 is a placeholder; file the issue", c.ID))
+		}
 	}
 	return problems
 }

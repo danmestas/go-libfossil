@@ -51,7 +51,6 @@ func apiCases() []apiCase {
 	}
 	for i := range all {
 		all[i].Gap = artifactGaps[all[i].ID]
-		all[i].Deviation = artifactDeviations[all[i].ID]
 	}
 	return all
 }
@@ -72,14 +71,6 @@ const (
 		"Z a7789c6da4c12b8feb6e290f3083f5f0\n"
 )
 
-// equal reports a mismatch between a computed value and the draft's.
-func equal(what string, got, expected any) error {
-	if fmt.Sprint(got) == fmt.Sprint(expected) {
-		return nil
-	}
-	return expectf("%s = %v, want %v", what, got, expected)
-}
-
 var namingCases = []apiCase{
 	{Case{ID: "artifact.3.1.name-covers-wrapper", Req: "AF-3.1-1"}, func(t *testing.T) error {
 		r := newPolicyRepo(t, "2")
@@ -88,19 +79,19 @@ var namingCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("stored name", uuid, hash.SHA3(signed))
+		return want("stored name", uuid, hash.SHA3(signed))
 	}},
 	{Case{ID: "artifact.3.2.sha1-example", Req: "AF-3.2-1"}, func(*testing.T) error {
-		return equal("SHA1(A.1.1)", hash.SHA1([]byte(exampleSHA1)),
+		return want("SHA1(A.1.1)", hash.SHA1([]byte(exampleSHA1)),
 			"a28c83647dfa805f05f3204a7e146eb1f0d90505")
 	}},
 	{Case{ID: "artifact.3.2.sha3-example", Req: "AF-3.2-1"}, func(*testing.T) error {
-		return equal("SHA3(A.1.2)", hash.SHA3([]byte(exampleSHA3)),
+		return want("SHA3(A.1.2)", hash.SHA3([]byte(exampleSHA3)),
 			"2fa494a18a766efe9a8ba706d669b7157d5329e1fbcc2a6d6c15a386d113218d")
 	}},
 	// FIPS 202 SHA3-256 of nothing; Keccak-256 would give c5d2460186f7...
 	{Case{ID: "artifact.3.2.sha3-not-keccak", Req: "AF-3.2-1"}, func(*testing.T) error {
-		return equal("SHA3(empty)", hash.SHA3([]byte{}),
+		return want("SHA3(empty)", hash.SHA3([]byte{}),
 			"a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
 	}},
 	{Case{ID: "artifact.3.2.name-lengths", Req: "AF-3.2-2"}, func(*testing.T) error {
@@ -142,6 +133,17 @@ var namingCases = []apiCase{
 		}
 		return nil
 	}},
+}
+
+// verifyZAccepts checks that deck.VerifyZ lets data through: it has no Z
+// card the verifier could find mismatched.
+func verifyZAccepts(data string) func(*testing.T) error {
+	return func(*testing.T) error {
+		if err := deck.VerifyZ([]byte(data)); err != nil {
+			return expectf("deck.VerifyZ rejected %q: %v", data, err)
+		}
+		return nil
+	}
 }
 
 // verifyCase stores "content" under the name name gives it and checks
@@ -206,6 +208,11 @@ var writerCases = []apiCase{
 		}
 		return nil
 	}},
+	{Case{ID: "artifact.6.2.verify-missing-z", Req: "AF-6.2-5"}, verifyZAccepts(baseControl)},
+	{Case{ID: "artifact.6.2.verify-too-short", Req: "AF-6.2-5"}, verifyZAccepts("D x\n")},
+	// The last byte is not LF; Z verification must not look at it.
+	{Case{ID: "artifact.6.2.verify-last-byte", Req: "AF-6.2-6"},
+		verifyZAccepts(strings.TrimSuffix(signedControl, "\n") + "x")},
 	{Case{ID: "artifact.6.2.writer-z", Req: "AF-6.2-4"}, func(*testing.T) error {
 		d, err := deck.Parse(withZ(baseControl))
 		if err != nil {
@@ -216,7 +223,7 @@ var writerCases = []apiCase{
 			return err
 		}
 		// zCard renders the digest in lowercase, as Section 6.2 requires.
-		return equal("Z card", string(data[len(data)-35:]), zCard(string(data[:len(data)-35])))
+		return want("Z card", string(data[len(data)-35:]), zCard(string(data[:len(data)-35])))
 	}},
 }
 
@@ -264,14 +271,14 @@ var rCardCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("R of Appendix A.3", got, "95feb799536dc053e7968efb7cdd3ec3")
+		return want("R of Appendix A.3", got, "95feb799536dc053e7968efb7cdd3ec3")
 	}},
 	{Case{ID: "artifact.6.3.2.empty-tree", Req: "AF-6.3-2"}, func(*testing.T) error {
 		got, err := computeR()
 		if err != nil {
 			return err
 		}
-		return equal("R of no files", got, "d41d8cd98f00b204e9800998ecf8427e")
+		return want("R of no files", got, "d41d8cd98f00b204e9800998ecf8427e")
 	}},
 	// Given out of order: "a.b" sorts before "a/b" because '.' < '/'.
 	{Case{ID: "artifact.6.3.2.byte-order", Req: "AF-6.3-2"}, func(*testing.T) error {
@@ -279,7 +286,7 @@ var rCardCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("R", got, rCard("a.b", "one\n", "a/b", "two\n"))
+		return want("R", got, rCard("a.b", "one\n", "a/b", "two\n"))
 	}},
 	// Permissions are not part of the R input.
 	{Case{ID: "artifact.6.3.2.permission-only", Req: "AF-6.3-2"}, func(*testing.T) error {
@@ -289,7 +296,21 @@ var rCardCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("R", got, rCard("link", h2[:4], "run.sh", h1[:4]))
+		return want("R", got, rCard("link", h2[:4], "run.sh", h1[:4]))
+	}},
+	{Case{ID: "artifact.6.3.4.writer-r", Req: "AF-6.3-4"}, func(t *testing.T) error {
+		d, err := deltaCheckin(newPolicyRepo(t, "2"))
+		if err != nil {
+			return err
+		}
+		data, err := d.Marshal()
+		if err != nil {
+			return err
+		}
+		if !regexp.MustCompile(`(?m)^R [0-9a-f]{32}$`).Match(data) {
+			return expectf("no R card of the writer form in %q", data)
+		}
+		return nil
 	}},
 	{Case{ID: "artifact.6.3.3.delta-r", Req: "AF-6.3-3"}, func(t *testing.T) error {
 		r := newPolicyRepo(t, "2")
@@ -300,7 +321,7 @@ var rCardCases = []apiCase{
 		if d.B == "" {
 			return expectf("the second check-in is not a delta manifest")
 		}
-		return equal("delta R", d.R, rCard("a.txt", "a2\n", "b.txt", "b\n", "c.txt", "c\n"))
+		return want("delta R", d.R, rCard("a.txt", "a2\n", "b.txt", "b\n", "c.txt", "c\n"))
 	}},
 }
 
@@ -371,7 +392,7 @@ func namesWith(r *repo.Repo, length int) error {
 	if err != nil {
 		return err
 	}
-	return equal("length of the new name", len(uuid), length)
+	return want("length of the new name", len(uuid), length)
 }
 
 func policyCases() []apiCase {
@@ -416,7 +437,7 @@ var policyStateCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("hash-policy after the ratchet", value, "2")
+		return want("hash-policy after the ratchet", value, "2")
 	}},
 	{Case{ID: "artifact.7.5.sha3-keeps-sha1-name", Req: "AF-7.5-1"}, keepsName("0", "2")},
 	{Case{ID: "artifact.7.5.sha1-keeps-sha3-name", Req: "AF-7.5-1"}, keepsName("2", "0")},
@@ -428,7 +449,7 @@ var policyStateCases = []apiCase{
 		if err != nil {
 			return err
 		}
-		return equal("name after the policy change", got, uuid)
+		return want("name after the policy change", got, uuid)
 	}},
 }
 
@@ -459,7 +480,7 @@ func keepsName(first, second string) func(*testing.T) error {
 		if err != nil {
 			return err
 		}
-		return equal("second store", fmt.Sprint(again, " ", name), fmt.Sprint(rid, " ", uuid))
+		return want("second store", fmt.Sprint(again, " ", name), fmt.Sprint(rid, " ", uuid))
 	}
 }
 
@@ -473,6 +494,6 @@ func separateName(strict string) func(*testing.T) error {
 		if err != nil {
 			return err
 		}
-		return equal("second name", name, hash.SHA3(data))
+		return want("second name", name, hash.SHA3(data))
 	}
 }

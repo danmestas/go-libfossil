@@ -69,6 +69,7 @@ AF-4.7.6-1	4.7.6	In a baseline manifest every F card carries a hash; a hashless 
 AF-4.7.6-2	4.7.6	The third F token is the raw permission, accepted without validation; only the fourth is the old-name.
 AF-4.7.6-3	4.7.6	A producer that writes an old-name also writes an explicit permission token.
 AF-4.7.8-1	4.7.8	An absent J value is the empty string.
+AF-4.7.9-1	4.7.9	A writer emits the K ticket ID in lowercase.
 AF-4.7.13-1	4.7.13	An empty P card is accepted.
 AF-4.7.14-1	4.7.14	The first Q token is + or - followed by a hash; the optional second is a plain hash, empty when absent.
 AF-4.7.16-1	4.7.16	A T name starts with +, - or *.
@@ -94,10 +95,15 @@ AF-6.2-1	6.2	An artifact whose Z card does not match is rejected.
 AF-6.2-2	6.2	The Z value is compared, byte for byte, with the lowercase MD5 of the stripped content before its last 35 bytes, so an uppercase digit fails.
 AF-6.2-3	6.2	An artifact without a Z card is rejected.
 AF-6.2-4	6.2	A producer writes the Z card as Z, a space, 32 lowercase digits and LF.
+AF-6.2-5	6.2	The Z verification stage does not itself reject an artifact for lacking a Z card, or for being too short to hold one.
+AF-6.2-6	6.2	The Z verifier neither reads nor requires any value at the artifact's last byte.
 AF-6.3-1	6.3.1	A parser does not check the R value against file content.
 AF-6.3-2	6.3.2	The R value is the MD5 of, for each file in comparator order, its name, a space, its decimal size, LF and its content, written as 32 lowercase digits.
 AF-6.3-3	6.3.3	A delta manifest's R value covers the merged file set, not its own F cards.
+AF-6.3-4	6.3.4	A writer emits the R card as R, a space, 32 lowercase digits and LF.
+AF-6.3-5	6.3.4	At commit time the R card is checked byte for byte against the lowercase digest recomputed from the checkout.
 AF-7.1-1	7.1	New content is named SHA-1 under sha1 and auto, and SHA3-256 under sha3, sha3-only and shun-sha1.
+AF-7.1-2	7.1	Policy value strings match case-sensitively and exactly; an unrecognized value is a fatal error.
 AF-7.2-1	7.2	With no policy set, a repository holding a SHA3 name or no SHA-1 name, including an empty one, defaults to sha3, and otherwise to auto.
 AF-7.4-1	7.4	Under auto, storing an artifact under a name longer than 40 digits promotes the repository to sha3 and persists the change.
 AF-7.5-1	7.5	Under sha1, auto and sha3, content already stored under the other algorithm's name keeps that name and is not stored again.

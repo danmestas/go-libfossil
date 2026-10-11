@@ -1,9 +1,30 @@
 package conformance
 
+import "testing"
+
 // artifactGaps marks the artifact cases go-libfossil is known to fail, by
 // case ID, grouped by the code at fault. "#0" stands in for the issue until
 // one is filed.
 var artifactGaps = map[string]string{
+	// deck.VerifyZ rejects an artifact too short to hold a Z card, and one
+	// whose last 35 bytes are not a Z card, where Section 6.2 says it reports
+	// the Z card absent; and it requires LF at the last byte, which it must
+	// not read (deck/zcard.go:23, :26). With no framing gates or residue check
+	// of its own, deck.Parse leaves these inputs to that check, so the rule
+	// each case names never runs.
+	"artifact.6.2.verify-missing-z": "#0",
+	"artifact.6.2.verify-too-short": "#0",
+	"artifact.6.2.verify-last-byte": "#0",
+	"artifact.4.1.empty":            "#0",
+	"artifact.4.1.no-final-lf":      "#0",
+	"artifact.4.1.short":            "#0",
+	"artifact.4.2.residual":         "#0",
+	"artifact.4.1.2.sterilized":     "#0",
+	"artifact.4.1.2.signed-guard":   "#0",
+	"artifact.4.1.1.leading-space":  "#0",
+	"artifact.4.1.1.header-short":   "#0",
+	"artifact.4.1.1.missing-blank":  "#0",
+	"artifact.4.7.z-extra-token":    "#0",
 	// Framing: no check that the raw input ends in LF before the wrapper is
 	// stripped (deck/parse.go:40), and a bare C line passes as an empty comment
 	// (parse.go:103, :174).
@@ -301,6 +322,10 @@ var artifactGaps = map[string]string{
 	"artifact.5.4.event-propagating":     "#0",
 	"artifact.5.4.forum-many-parents":    "#0",
 	"artifact.5.4.forum-title-reply":     "#0",
+	// hash/policy.go:81 derives the auto-to-sha3 promotion from the stored
+	// names and never writes the hash-policy setting, so fossil opening the
+	// repository still reads auto and keeps naming new content SHA-1.
+	"artifact.7.4.ratchet-persisted": "#0",
 	// With no hash-policy row an empty repository names new content SHA-1, not
 	// SHA3 (hash/policy.go:68).
 	"artifact.7.2.default-empty": "#0",
@@ -310,12 +335,22 @@ var artifactGaps = map[string]string{
 	"artifact.8.3.baseline-not-manifest":    "#0",
 }
 
-// artifactDeviations marks the cases where go-libfossil departs from the
-// draft on purpose, as a comment in its code says.
-var artifactDeviations = map[string]string{
-	// hash/policy.go:81 derives the auto-to-sha3 promotion from the stored
-	// names "without rewriting the config row", so naming ratchets but the
-	// setting is never persisted.
-	"artifact.7.4.ratchet-persisted": "the ratchet is derived from stored names, " +
-		"not written to the hash-policy setting (hash/policy.go:81)",
+// TestArtifactGapKeys checks that every marked case exists, and that every
+// loss the fuzz test forgives is still a marked gap.
+func TestArtifactGapKeys(t *testing.T) {
+	ids := map[string]bool{}
+	for _, c := range artifactSuiteCases() {
+		ids[c.ID] = true
+	}
+	for id := range artifactGaps {
+		if !ids[id] {
+			t.Errorf("artifactGaps names %s, which is not a case", id)
+		}
+	}
+	for _, loss := range knownLosses {
+		if artifactGaps[loss.caseID] == "" {
+			t.Errorf("FuzzArtifactRoundTrip forgives %s, which is no longer a gap; "+
+				"remove it from knownLosses", loss.caseID)
+		}
+	}
 }

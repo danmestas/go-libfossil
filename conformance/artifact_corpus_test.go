@@ -44,28 +44,40 @@ func FuzzArtifactRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("deck.Parse rejects what Marshal wrote, %q: %v", encoded, err)
 		}
-		forgiveKnownLosses(first)
-		forgiveKnownLosses(second)
+		for _, loss := range knownLosses {
+			loss.forgive(first)
+			loss.forgive(second)
+		}
 		if !reflect.DeepEqual(first, second) {
 			t.Fatalf("round trip changed the deck:\n%+v\n%+v", first, second)
 		}
 	})
 }
 
-// forgiveKnownLosses applies to a deck the changes a round trip is already
-// known to make, each tracked by the unit case named beside it, so the fuzz
-// test looks for new ones. Remove a line once its case conforms.
-func forgiveKnownLosses(d *deck.Deck) {
-	// artifact.4.6.4.fraction-round-trip: Marshal writes D to the millisecond.
-	d.D = d.D.Truncate(time.Millisecond)
-	// artifact.4.6.4.e-fraction-round-trip: Marshal writes E to the second.
-	if d.E != nil {
-		d.E.Date = d.E.Date.Truncate(time.Second)
-	}
-	// artifact.4.7.18.w-empty: Marshal drops a W card with an empty body.
-	if len(d.W) == 0 {
-		d.W = nil
-	}
+// knownLosses are the changes a round trip is already known to make, each
+// tracked by a gap case, so the fuzz test looks for new ones.
+// TestArtifactGapKeys fails once a case's gap is removed, so the matching
+// loss is removed with it.
+var knownLosses = []struct {
+	caseID  string
+	forgive func(*deck.Deck)
+}{
+	// Marshal writes D to the millisecond.
+	{"artifact.4.6.4.fraction-round-trip", func(d *deck.Deck) {
+		d.D = d.D.Truncate(time.Millisecond)
+	}},
+	// Marshal writes E to the second.
+	{"artifact.4.6.4.e-fraction-round-trip", func(d *deck.Deck) {
+		if d.E != nil {
+			d.E.Date = d.E.Date.Truncate(time.Second)
+		}
+	}},
+	// Marshal drops a W card with an empty body.
+	{"artifact.4.7.18.w-empty", func(d *deck.Deck) {
+		if len(d.W) == 0 {
+			d.W = nil
+		}
+	}},
 }
 
 // corpusBudget bounds TestArtifactCorpus as a whole.

@@ -1,8 +1,6 @@
 package conformance
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -24,15 +22,23 @@ const (
 // wraps it.
 var signedControl = string(withZ(baseControl))
 
-// zCard is the Z card for data, whatever data is.
-func zCard(data string) string {
-	sum := md5.Sum([]byte(data))
-	return "Z " + hex.EncodeToString(sum[:]) + "\n"
-}
-
 // raw builds a case whose input is used as given, without a Z card added.
 func raw(id, req, input string, accept bool) artifactCase {
 	return artifactCase{Case: Case{ID: id, Req: req}, input: []byte(input), accept: accept}
+}
+
+// says sets the substring fossil's rejection reason must contain.
+func says(c artifactCase, reason string) artifactCase {
+	c.fossilSays = reason
+	return c
+}
+
+// zRejected builds a rejection the Z card itself is meant to cause, so the
+// input need not pass deck.VerifyZ.
+func zRejected(id, req, input string) artifactCase {
+	c := raw(id, req, input, false)
+	c.zCase = true
+	return c
 }
 
 // signedCase builds an accepted signed input; Marshal writes only the
@@ -56,13 +62,17 @@ var framingCases = []artifactCase{
 	rejected("artifact.4.1.first-tab", "AF-4.1-2", edit(baseManifest, "C base", "C\tbase")),
 	rejected("artifact.4.1.leading-space", "AF-4.1-2", " "+baseManifest),
 	rejected("artifact.4.1.guard", "AF-4.1-2", "# inert fixture\n"+baseManifest),
-	raw("artifact.4.2.residual", "AF-4.1-3", signedControl+"garbage\n", false),
-	// Erratum 4.1.2: fossil appends the sterilizing marker after the last
-	// card, so it is the residue rule that rejects it, not the line-1 gate.
-	raw("artifact.4.1.2.sterilized", "AF-4.1-3", string(withZ(baseManifest))+
+	says(raw("artifact.4.2.residual", "AF-4.1-3", signedControl+"garbage\n", false),
+		"extra characters at end of card"),
+	// Erratum 4.1.2 says the residue rule rejects a sterilized artifact, but
+	// fossil reads the trailing marker as a '#' card and rejects it for
+	// card order, after the Z card; the cases follow fossil.
+	says(raw("artifact.4.1.2.sterilized", "AF-4.4-1", string(withZ(baseManifest))+
 		"# Remove this line to create a well-formed Fossil manifest.\n", false),
-	raw("artifact.4.1.2.signed-guard", "AF-4.1-3", pgpHead+signedControl+
+		"cards not in lexicographical order"),
+	says(raw("artifact.4.1.2.signed-guard", "AF-4.4-1", pgpHead+signedControl+
 		"# Remove this line to create a well-formed Fossil control artifact.\n"+pgpSig, false),
+		"cards not in lexicographical order"),
 }
 
 var signatureCases = []artifactCase{
@@ -92,13 +102,15 @@ var signatureCases = []artifactCase{
 	signedCase("artifact.4.1.1.pgp-short", "AF-4.1.1-6",
 		pgpHead+signedControl+"-----BEGIN PGP SIGNATURE----x\nc2lnbmF0dXJl\n"),
 	// The Z card covers the stripped content only, never the wrapper.
-	raw("artifact.6.2.signed-z-outer", "AF-6.2-2",
-		pgpHead+baseControl+zCard(pgpHead+baseControl)+pgpSig, false),
+	zRejected("artifact.6.2.signed-z-outer", "AF-6.2-2",
+		pgpHead+baseControl+zCard(pgpHead+baseControl)+pgpSig),
 }
 
 var grammarCases = []artifactCase{
-	rejected("artifact.4.2.card-tab", "AF-4.2-1", edit(baseManifest, "D 2026", "D\t2026")),
-	rejected("artifact.4.2.card-cr", "AF-4.2-1", edit(baseManifest, "U alice", "U\ralice")),
+	says(rejected("artifact.4.2.card-tab", "AF-4.2-1", edit(baseManifest, "D 2026", "D\t2026")),
+		"extra characters at end of card"),
+	says(rejected("artifact.4.2.card-cr", "AF-4.2-1", edit(baseManifest, "U alice", "U\ralice")),
+		"extra characters at end of card"),
 	loose("artifact.4.2.token-tab", "AF-4.2-2",
 		edit(baseManifest, "C base\\smanifest", "C base\tmanifest"),
 		func(d *deck.Deck) error { return want("C", d.C, "base\tmanifest") }),
@@ -137,11 +149,18 @@ var grammarCases = []artifactCase{
 	rejected("artifact.4.2.2.unknown-X", "AF-4.2.2-2", baseManifest+"X unknown\n"),
 	rejected("artifact.4.2.2.unknown-Y", "AF-4.2.2-2", baseManifest+"Y unknown\n"),
 	rejected("artifact.4.2.2.unknown-a", "AF-4.2.2-1", baseManifest+"a unknown\n"),
-	rejected("artifact.4.2.2.unknown-1", "AF-4.2.2-1", baseManifest+"1 unknown\n"),
-	rejected("artifact.4.2.2.unknown-high", "AF-4.2.2-1", baseManifest+"\xc3 unknown\n"),
+	// '1' sorts below every letter, so its only ordered place is first,
+	// where the line-1 gate is what rejects it.
+	says(rejected("artifact.4.2.2.unknown-1", "AF-4.1-2", "1 unknown\n"+baseManifest),
+		"line 1 not recognized"),
+	// 0x7F sorts above U whether bytes are compared signed or unsigned;
+	// fossil compares them signed, so a byte from 0x80 up sorts first.
+	rejected("artifact.4.2.2.unknown-del", "AF-4.2.2-1", baseManifest+"\x7f unknown\n"),
 	// An empty line is a card whose letter is LF.
-	rejected("artifact.4.2.2.blank-line", "AF-4.2.2-1",
+	// fossil reports the empty line against the card before it.
+	says(rejected("artifact.4.2.2.blank-line", "AF-4.2.2-1",
 		edit(baseManifest, "U alice\n", "\nU alice\n")),
+		"extra characters at end of card"),
 }
 
 // cardIs checks one string field against its decoded value.
@@ -573,11 +592,11 @@ var checksumCases = []artifactCase{
 	accepted("artifact.6.1.r-uppercase", "AF-6.1-1",
 		edit(baseManifest, "R "+md5Token, "R "+strings.ToUpper(md5Token)),
 		cardIs("R", func(d *deck.Deck) string { return d.R }, strings.ToUpper(md5Token))),
-	raw("artifact.6.1.z-short", "AF-6.1-1", baseControl+zCard(baseControl)[:33]+"\n", false),
-	raw("artifact.6.2.mismatch", "AF-6.2-1", baseControl+"Z "+strings.Repeat("0", 32)+"\n", false),
-	raw("artifact.6.2.uppercase", "AF-6.2-2",
-		baseControl+strings.ToUpper(zCard(baseControl)), false),
-	raw("artifact.6.2.missing", "AF-6.2-3", baseControl, false),
+	zRejected("artifact.6.1.z-short", "AF-6.1-1", baseControl+zCard(baseControl)[:33]+"\n"),
+	zRejected("artifact.6.2.mismatch", "AF-6.2-1", baseControl+"Z "+strings.Repeat("0", 32)+"\n"),
+	zRejected("artifact.6.2.uppercase", "AF-6.2-2",
+		baseControl+strings.ToUpper(zCard(baseControl))),
+	zRejected("artifact.6.2.missing", "AF-6.2-3", baseControl),
 	// The Z card covers the escaped wire bytes, not the decoded comment.
 	accepted("artifact.6.2.raw-before-decode", "AF-6.2-2", baseManifest,
 		cardIs("C", func(d *deck.Deck) string { return d.C }, "base manifest")),
@@ -607,8 +626,14 @@ func duplicateCases() []artifactCase {
 	}
 	var cases []artifactCase
 	for _, l := range lines {
-		cases = append(cases, rejected(fmt.Sprintf("artifact.4.5.1.duplicate-%c", l.letter),
-			"AF-4.5.1-1", edit(l.base, l.line, l.line+l.line)))
+		c := rejected(fmt.Sprintf("artifact.4.5.1.duplicate-%c", l.letter),
+			"AF-4.5.1-1", edit(l.base, l.line, l.line+l.line))
+		c.fossilSays = "more than one " + string(l.letter) + "-card"
+		if l.letter == 'A' {
+			// fossil 2.28 rejects a second A card with no message of its own.
+			c.fossilSays = "unknown error on line 2"
+		}
+		cases = append(cases, c)
 	}
 	// No base has an H card: a reply post has I, which H may not join.
 	return append(cases, rejected("artifact.4.5.1.duplicate-H", "AF-4.5.1-1",
@@ -631,8 +656,14 @@ func arityCases() []artifactCase {
 	var cases []artifactCase
 	for _, l := range lines {
 		first := l.line[:strings.IndexByte(l.line, '\n')+1]
-		cases = append(cases, rejected(fmt.Sprintf("artifact.4.2.1.extra-%c", l.letter),
-			"AF-4.2.1-1", edit(l.base, first, strings.TrimSuffix(first, "\n")+" extra\n")))
+		c := rejected(fmt.Sprintf("artifact.4.2.1.extra-%c", l.letter),
+			"AF-4.2.1-1", edit(l.base, first, strings.TrimSuffix(first, "\n")+" extra\n"))
+		c.fossilSays = "extra characters at end of card"
+		if l.letter == 'W' {
+			// fossil reads the size, then finds no body where it expects one.
+			c.fossilSays = "no content after W-card"
+		}
+		cases = append(cases, c)
 	}
 	return append(cases, rejected("artifact.4.2.1.extra-H", "AF-4.2.1-1",
 		edit(baseForum, "I "+h2+"\n", "H title extra\n")))
@@ -700,23 +731,34 @@ func legalityCases() []artifactCase {
 			if !ok || strings.IndexByte(b.allowed, letter) >= 0 {
 				continue
 			}
-			cards := insertCard(b.cards, sample)
-			if draftLegal(cards) {
-				continue
-			}
 			id := fmt.Sprintf("artifact.5.2.%s-illegal-%c", b.name, letter)
-			cases = append(cases, rejected(id, "AF-5.2-1", strings.Join(cards, "")))
+			cases = appendIllegal(cases, id, insertCard(b.cards, sample))
 		}
 		for _, letter := range []byte(strings.TrimSuffix(b.required, "Z")) {
-			cards := removeCards(b.cards, letter)
-			if draftLegal(cards) {
-				continue
-			}
-			cases = append(cases, rejected(fmt.Sprintf("artifact.5.2.%s-no-%c", b.name, letter),
-				"AF-5.2-2", strings.Join(cards, "")))
+			id := fmt.Sprintf("artifact.5.2.%s-no-%c", b.name, letter)
+			cases = appendIllegal(cases, id, removeCards(b.cards, letter))
 		}
 	}
 	return cases
+}
+
+// appendIllegal adds a rejection case for cards when the draft's tables
+// reject them. The requirement is the one the tables break, which is not
+// always the one the edit aimed at: removing a wiki's L card leaves no
+// type-setting card, so the artifact falls back to a manifest and its W
+// card is what is illegal.
+func appendIllegal(cases []artifactCase, id string, cards []string) []artifactCase {
+	req := draftRule(cards)
+	if req == "" {
+		return cases
+	}
+	c := rejected(id, req, strings.Join(cards, ""))
+	// fossil names the first card it finds out of place, or missing.
+	c.fossilSays = "-card in "
+	if req == "AF-5.2-2" {
+		c.fossilSays = "-card missing in "
+	}
+	return append(cases, c)
 }
 
 // insertCard puts card before the first card whose letter sorts after it.
@@ -743,9 +785,11 @@ func removeCards(cards []string, letter byte) []string {
 	return out
 }
 
-// draftLegal applies the draft's type determination (Section 5.3) and card
-// table (Section 5.2) to cards, which carry no Z card yet.
-func draftLegal(cards []string) bool {
+// draftRule applies the draft's type determination (Section 5.3) and card
+// table (Section 5.2) to cards, which carry no Z card yet. It returns the
+// requirement they break, an illegal card before a missing one as fossil
+// checks them, or "" when the tables accept them.
+func draftRule(cards []string) string {
 	setters := map[byte]string{'A': "attachment", 'B': "manifest", 'F': "manifest",
 		'Q': "manifest", 'R': "manifest", 'E': "event", 'G': "forum", 'H': "forum",
 		'I': "forum", 'J': "ticket", 'K': "ticket", 'L': "wiki", 'M': "cluster"}
@@ -768,15 +812,15 @@ func draftLegal(cards []string) bool {
 		}
 		for _, letter := range []byte(present) {
 			if strings.IndexByte(b.allowed, letter) < 0 {
-				return false
+				return "AF-5.2-1"
 			}
 		}
 		for _, letter := range []byte(b.required) {
 			if strings.IndexByte(present, letter) < 0 {
-				return false
+				return "AF-5.2-2"
 			}
 		}
-		return true
+		return ""
 	}
-	panic("conformance: draftLegal: no base for type " + kind)
+	panic("conformance: draftRule: no base for type " + kind)
 }

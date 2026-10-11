@@ -73,6 +73,13 @@ func withZ(body string) []byte {
 	if body != "" && !strings.HasSuffix(body, "\n") {
 		panic("conformance: artifact body must end in a newline")
 	}
-	sum := md5.Sum([]byte(body))
-	return []byte(body + "Z " + hex.EncodeToString(sum[:]) + "\n")
+	return []byte(body + zCard(body))
+}
+
+// zCard is the Z card line for data: "Z", a space, the lowercase MD5 of
+// data, LF. Unlike withZ it accepts any data, for cases that put the Z
+// card somewhere a well-formed artifact would not.
+func zCard(data string) string {
+	sum := md5.Sum([]byte(data))
+	return "Z " + hex.EncodeToString(sum[:]) + "\n"
 }

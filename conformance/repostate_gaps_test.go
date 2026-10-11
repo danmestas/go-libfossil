@@ -22,10 +22,6 @@ var repostateGaps = map[string]string{
 	"repostate.7.2.branch-leaves.rebuild":     "#285",
 	"repostate.7.6.retag-branch.rebuild":      "#285",
 	"repostate.7.6.propagated-branch.rebuild": "#285",
-	// A root check-in's file rows are inserted with no "already derived"
-	// guard, so crosslinking it again adds a second copy of each
-	// (internal/manifest/addmlink.go:605-612).
-	"repostate.4.2.relink-unchanged": "#294",
 	// No parent (reparent) tag handling in the crosslink, tag or rebuild
 	// code: plink keeps the old parent.
 	"repostate.4.2.reparent":         "#286",

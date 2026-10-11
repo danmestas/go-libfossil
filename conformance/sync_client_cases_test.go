@@ -24,6 +24,9 @@ type syncClientCase struct {
 	// fossil is set only when fossil(1)'s client does not do what the
 	// case expects, and says why the case follows the draft.
 	fossil string
+	// deviates, for a case marked Deviation, is what go-libfossil does
+	// instead; a run that is neither is fatal.
+	deviates clientCheck
 }
 
 func (c syncClientCase) peer(fx *syncFixture) *scriptedPeer {
@@ -41,21 +44,31 @@ func (c syncClientCase) peer(fx *syncFixture) *scriptedPeer {
 	return p
 }
 
-func (c syncClientCase) run(fx *syncFixture, ref *fossilReference, dir string) error {
+// run runs fossil(1)'s client, for an fc case, then go-libfossil's. fatal
+// is a fossil(1) disagreement or a harness failure; problem is
+// go-libfossil's departure from the case.
+func (c syncClientCase) run(fx *syncFixture, ref *fossilReference,
+	dir string) (fatal, problem error) {
 	if ref != nil && c.fc {
 		run, err := ref.runFossilClient(fx, c.op, c.setup, c.peer(fx), dir)
 		if err != nil {
-			return err
+			return err, nil
 		}
 		if err := fossilAgrees(c.want(run), c.fossil); err != nil {
-			return expectf("%v (fossil output %.300q)", err, run.output)
+			return expectf("%v (fossil output %.300q)", err, run.output), nil
 		}
 	}
 	run, err := runGoClient(fx, c.op, c.setup, c.peer(fx), dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return c.want(run)
+	problem = c.want(run)
+	if problem != nil && c.deviates != nil {
+		if err := c.deviates(run); err != nil {
+			return expectf("not the deviation the case names: %v", err), nil
+		}
+	}
+	return nil, problem
 }
 
 func TestSyncClient(t *testing.T) {
@@ -64,10 +77,10 @@ func TestSyncClient(t *testing.T) {
 	fx := newSyncFixture(t, top)
 	for _, c := range syncClientCases() {
 		c.Case = markSync(c.Case)
-		check(t, c.Case, func() error {
+		checkSync(t, c.Case, func() (error, error) {
 			dir, err := os.MkdirTemp(top, "case")
 			if err != nil {
-				return err
+				return err, nil
 			}
 			return c.run(fx, ref, dir)
 		})
@@ -79,10 +92,11 @@ func syncClientCases() []syncClientCase {
 	for _, group := range [][]syncClientCase{
 		clientRoundCases(), clientPhantomCases(), clientGimmeCases(), clientTerminationCases(),
 		clientFramingCases(), clientPayloadCases(), clientCardCases(), clientAuthCases(),
-		clientFileCases(),
-		clientCFileCases(), clientUVFileCases(), clientDeltaCases(), clientPrivateCases(),
-		clientCloneCases(), clientCloneErrorCases(), clientUVCases(), clientUVStatusCases(),
-		clientMessageCases(),
+		clientFileCases(), clientCFileCases(), clientUVFileCases(), clientDeltaCases(),
+		clientPrivateCases(), clientCloneCases(), clientCloneStallCases(),
+		clientCloneErrorCases(), clientUVCases(), clientUVStatusCases(), clientMessageCases(),
+		clientGateCases(), clientAdmissionCases(), clientPullOnlyCases(),
+		clientShortUVIGotCases(),
 	} {
 		all = append(all, group...)
 	}

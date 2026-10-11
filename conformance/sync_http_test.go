@@ -110,33 +110,36 @@ type syncHTTPCase struct {
 	want    func(r *httpRun) error
 	// alone, when set, runs the whole case instead, for one that needs a
 	// server of its own.
-	alone  func(fx *syncFixture, dir string) error
-	fc     bool
-	fossil string
+	alone func(fx *syncFixture, dir string) error
+	fc    bool
 }
 
-func (c syncHTTPCase) run(fx *syncFixture, ref *fossilReference, dir string) error {
+// run runs fossil(1)'s client, for an fc case, then go-libfossil's. fatal
+// is a fossil(1) disagreement or a harness failure; problem is
+// go-libfossil's departure from the case.
+func (c syncHTTPCase) run(fx *syncFixture, ref *fossilReference,
+	dir string) (fatal, problem error) {
 	if c.alone != nil {
-		return c.alone(fx, dir)
+		return nil, c.alone(fx, dir)
 	}
 	if ref != nil && c.fc {
 		run, err := c.serve(fx, func(url string) *httpRun {
 			return ref.httpClient(fx, c.op, url, dir)
 		})
 		if err != nil {
-			return err
+			return err, nil
 		}
-		if err := fossilAgrees(c.want(run), c.fossil); err != nil {
-			return expectf("%v (fossil output %.300q)", err, run.output)
+		if err := fossilAgrees(c.want(run), ""); err != nil {
+			return expectf("%v (fossil output %.300q)", err, run.output), nil
 		}
 	}
 	run, err := c.serve(fx, func(url string) *httpRun {
 		return goHTTPClientWith(fx, c.op, url, dir, nil)
 	})
 	if err != nil {
-		return err
+		return err, nil
 	}
-	return c.want(run)
+	return nil, c.want(run)
 }
 
 // serve starts the script's server, runs a client against it, and returns
@@ -207,14 +210,15 @@ func (f *fossilReference) httpClient(fx *syncFixture, op clientOp, url, dir stri
 
 func TestSyncHTTP(t *testing.T) {
 	ref := newFossilReference(t)
+	quietLogs(t)
 	top := t.TempDir()
 	fx := newSyncFixture(t, top)
 	for _, c := range syncHTTPCases() {
 		c.Case = markSync(c.Case)
-		check(t, c.Case, func() error {
+		checkSync(t, c.Case, func() (error, error) {
 			dir, err := os.MkdirTemp(top, "case")
 			if err != nil {
-				return err
+				return err, nil
 			}
 			return c.run(fx, ref, dir)
 		})

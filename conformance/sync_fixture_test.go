@@ -4,6 +4,7 @@ import (
 	"compress/zlib"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,9 @@ func (f *syncFixture) populate(r *libfossil.Repo) error {
 	if err := f.storeArtifacts(r.DB()); err != nil {
 		return err
 	}
+	if err := f.storeCluster(r.DB()); err != nil {
+		return err
+	}
 	if err := f.addUsers(r); err != nil {
 		return err
 	}
@@ -164,6 +168,33 @@ func (f *syncFixture) storeArtifacts(d *db.DB) error {
 		f.setArtifact(a.name, name, a.content)
 	}
 	return nil
+}
+
+// storeCluster stores C, a cluster of the two check-in manifests, tagged
+// as fossil's crosslink tags one (tag 7, "cluster") and, being clustered,
+// left out of unclustered.
+func (f *syncFixture) storeCluster(d *db.DB) error {
+	members := []string{f.vars["M1"], f.vars["M2"]}
+	sort.Strings(members)
+	text := string(withZ("M " + members[0] + "\nM " + members[1] + "\n"))
+	name := hash.SHA3([]byte(text))
+	packed, err := blob.Compress([]byte(text))
+	if err != nil {
+		return err
+	}
+	res, err := d.Exec("INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+		name, len(text), packed)
+	if err != nil {
+		return err
+	}
+	rid, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	_, err = d.Exec("INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)"+
+		" VALUES(7, 1, ?, ?, NULL, 2461041.5, ?)", rid, rid, rid)
+	f.setArtifact("C", name, text)
+	return err
 }
 
 // classify records an artifact stored by storeArtifacts as private or
@@ -237,12 +268,15 @@ func (f *syncFixture) constants() {
 		"U":  sha1Hex("held by nobody 1"),
 		"U2": sha1Hex("held by nobody 2"),
 		"Z1": strings.Repeat("1", 40),
+		"Z2": strings.Repeat("2", 40),
 	}
 	for k, v := range set {
 		f.vars[k] = v
 	}
 	f.absentArtifacts()
 	f.vars["UVT1"] = fmt.Sprint(syncEpoch + 60)
+	// CFGP.data is a scalar setting as Section 9.3 frames it.
+	f.setPayload("CFGP", fmt.Sprint(syncEpoch)+" 'project-name' value 'pushed'")
 	f.vars["LONG"] = strings.Repeat("x", 200000)
 	f.vars["UVCAT"] = sha1Hex("u.txt 2026-01-01 00:00:00 " + f.vars["UVH"] + "\n")
 }

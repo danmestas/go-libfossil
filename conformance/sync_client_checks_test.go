@@ -371,3 +371,17 @@ func mentions(reasons ...string) clientCheck {
 		return expectf("%s did not report one of %q: %.200q", r.who, reasons, text)
 	}
 }
+
+// sentPrefix checks request i has a card line starting with prefix.
+func sentPrefix(i int, prefix string) clientCheck {
+	return func(r *clientRun) error {
+		req, err := r.request(i)
+		if err != nil {
+			return err
+		}
+		if index(req.cards, r.fx.expand(prefix)) < 0 {
+			return expectf("%s: request %d has no %q: %q", r.who, i, prefix, summary(req.cards))
+		}
+		return nil
+	}
+}

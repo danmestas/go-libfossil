@@ -30,7 +30,8 @@ func (t fossilTransport) RoundTrip(ctx context.Context, payload []byte) ([]byte,
 
 func (t fossilTransport) RoundTripFramed(_ context.Context,
 	payload []byte) ([]byte, string, error) {
-	status, ctype, raw, err := t.ref.serveEntity(t.path, "POST", "/", typeCompressed, payload)
+	status, ctype, raw, err := t.ref.serveEntity(t.path,
+		syncRequest{method: "POST", path: "/", ctype: typeCompressed, raw: payload})
 	if err == nil && status != 200 {
 		err = expectf("fossil http answered %d: %.200q", status, raw)
 	}
@@ -52,6 +53,7 @@ func syncInteropCases() []syncInteropCase {
 
 func TestSyncInterop(t *testing.T) {
 	ref := newFossilReference(t)
+	quietLogs(t)
 	if ref == nil {
 		t.Skip("fossil not found")
 	}
@@ -59,12 +61,12 @@ func TestSyncInterop(t *testing.T) {
 	fx := newSyncFixture(t, top)
 	for _, c := range syncInteropCases() {
 		c.Case = markSync(c.Case)
-		check(t, c.Case, func() error {
+		checkSync(t, c.Case, func() (error, error) {
 			dir, err := os.MkdirTemp(top, "case")
 			if err != nil {
-				return err
+				return err, nil
 			}
-			return c.run(fx, ref, dir)
+			return nil, c.run(fx, ref, dir)
 		})
 	}
 }

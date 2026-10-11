@@ -56,6 +56,53 @@ var syncGaps = map[string]string{
 	// The phantom scan does not leave out shunned names
 	// (internal/sync/client.go:381).
 	"sync.3.3.gimme-skips-shunned": "#0",
+	"sync.7.7.shunned-basis":       "#0",
+	// Received artifacts are stored without a shun check: by the server
+	// (internal/sync/handler.go:625) and by the client
+	// (internal/sync/client.go:714).
+	"sync.7.7.shunned-file-server": "#0",
+	"sync.7.7.shunned-file-client": "#0",
+	"sync.7.7.shunned-cfile":       "#0",
+	// The server answers no client-version with a server-version
+	// (internal/sync/handler.go:458).
+	"sync.3.2.server-version-before-clone": "#0",
+	"sync.9.1.server-version-full":         "#0",
+	// No SHA3 peer-version gate where the server sends content: gimme
+	// (internal/sync/handler.go:590), clone (:1070), uvgimme
+	// (internal/sync/handler_uv.go:93).
+	"sync.7.6.server-gate":            "#0",
+	"sync.7.6.server-gate-no-version": "#0",
+	"sync.7.6.clone-gate":             "#0",
+	"sync.7.6.uvgimme-gate":           "#0",
+	"sync.10.1.sha3-gate-appends":     "#0",
+	// The client keeps no peer version from server-version
+	// (internal/sync/client.go:550) and has no SHA3 gate where it sends
+	// content (:357).
+	"sync.7.6.client-gate":          "#0",
+	"sync.9.1.client-records-short": "#0",
+	// The client always logs in in the body (internal/sync/client.go:196),
+	// and the server reads no login cookie (internal/sync/serve_http.go:71).
+	"sync.6.5.cookie-login-after-gate": "#0",
+	"sync.6.5.server-cookie-login":     "#0",
+	// A login is checked against the stored password only as a shared
+	// secret, with no fallback for one stored in clear
+	// (internal/auth/verify.go:87).
+	"sync.6.4.cleartext-fallback": "#0",
+	// The server has no case for a pushed config card
+	// (internal/sync/handler.go:522).
+	"sync.9.3.config-needs-admin": "#0",
+	// Pragmas the server records or ignores: ci-unlock is not handled
+	// (internal/sync/handler.go:427); req-clusters is recorded (:438) but
+	// sendAllClusters (:778) is never called.
+	"sync.9.4.ci-unlock":        "#0",
+	"sync.5.3.cluster-brackets": "#0",
+	// A clone reply carries no unversioned catalog
+	// (internal/sync/handler.go:475).
+	"sync.8.4.clone-uv-catalog": "#0",
+	// A message card is only recorded; "pull only" has no effect
+	// (internal/sync/client.go:547).
+	"sync.10.2.pull-only":       "#0",
+	"sync.10.2.pull-only-gimme": "#0",
 	// pragma send-private goes after the operation cards in every request
 	// (internal/sync/client.go:120).
 	"sync.3.2.send-private-first": "#0",

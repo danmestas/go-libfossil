@@ -69,15 +69,24 @@ func clientCloneCases() []syncClientCase {
 		want:    every(rounds(2), noOperation(2)),
 		fc:      true,
 	}, {
-		// T arrives as a delta against S, which never does: the cleanup
-		// may ask for S, but no pull follows it.
+		// T arrives as a delta against S, which does not: the cleanup may
+		// ask for S, but no pull follows it. go-libfossil's Clone pulls S
+		// in a session of its own, which the third reply answers.
 		Case: Case{ID: "sync.8.2.clone-zero-phantom", Req: "SP-8.2-5"},
 		op:   opClone,
 		replies: [][]string{reply("cfile {T} {S} {T.size} {DTS.zsize}", "{DTS.z}", "{DTS.pad}",
-			"clone_seqno 0", pushCard)},
+			"clone_seqno 0", pushCard), reply(), reply("file {S} {S.size}", "{S.data}")},
 		want: every(rounds(2), noOperation(2)),
-		fc:   true,
-	}, {
+		deviates: every(noFailure, noOperation(2), sentPrefix(3, "pull "), sent(3, "gimme {S}"),
+			notSent(3, "clone "), notSent(3, "push "), expands("T")),
+		fc: true,
+	}}
+}
+
+// clientCloneStallCases are Section 3.7(e)'s stop for a clone that does
+// not advance.
+func clientCloneStallCases() []syncClientCase {
+	return []syncClientCase{{
 		// The second reply stores nothing and repeats the sequence: a
 		// positive sequence alone does not continue.
 		Case: Case{ID: "sync.8.2.clone-stalled-cursor", Req: "SP-3.7-5"},

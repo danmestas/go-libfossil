@@ -28,11 +28,16 @@ type syncRequest struct {
 	method string // POST unless set
 	path   string // "/" unless set
 	ctype  string // typeCompressed unless set
+	cookie string // the Cookie header, if any
 	text   []byte // card text, compressed on the wire when ctype says so
+	raw    []byte // the entity as sent, when set; text is then unused
 }
 
 // entity is the request body as sent.
 func (r syncRequest) entity() []byte {
+	if r.raw != nil {
+		return r.raw
+	}
 	if r.ctype == typeCompressed {
 		return compress(r.text, zlib.DefaultCompression)
 	}
@@ -87,6 +92,9 @@ func serveGo(fx *syncFixture, path string, req syncRequest) (reply *serverReply,
 		}()
 		httpReq := httptest.NewRequest(req.method, req.path, bytes.NewReader(req.entity()))
 		httpReq.Header.Set("Content-Type", req.ctype)
+		if req.cookie != "" {
+			httpReq.Header.Set("Cookie", req.cookie)
+		}
 		r.XferHandler().ServeHTTP(rec, httpReq)
 	}()
 	if closeErr := r.Close(); err == nil {
@@ -107,7 +115,7 @@ func serveGo(fx *syncFixture, path string, req syncRequest) (reply *serverReply,
 // `fossil http`, which reads one raw HTTP request and writes the reply.
 func (f *fossilReference) serve(fx *syncFixture, path string,
 	req syncRequest) (*serverReply, error) {
-	status, ctype, raw, err := f.serveEntity(path, req.method, req.path, req.ctype, req.entity())
+	status, ctype, raw, err := f.serveEntity(path, req)
 	if err != nil {
 		return nil, err
 	}
@@ -118,15 +126,18 @@ func (f *fossilReference) serve(fx *syncFixture, path string,
 	return reply, err
 }
 
-// serveEntity sends one HTTP request with the entity given to fossil(1) on
-// the repository at path, and returns the reply's status, Content-Type and
-// entity.
-func (f *fossilReference) serveEntity(path, method, urlPath, ctype string,
-	entity []byte) (int, string, []byte, error) {
+// serveEntity sends one HTTP request to fossil(1) on the repository at
+// path, and returns the reply's status, Content-Type and entity.
+func (f *fossilReference) serveEntity(path string, req syncRequest) (int, string, []byte, error) {
 	f.count++
 	reqFile := filepath.Join(f.dir, fmt.Sprintf("request-%d", f.count))
+	entity := req.entity()
 	head := fmt.Sprintf("%s %s HTTP/1.0\r\nHost: 127.0.0.1\r\nContent-Type: %s\r\n"+
-		"Content-Length: %d\r\n\r\n", method, urlPath, ctype, len(entity))
+		"Content-Length: %d\r\n", req.method, req.path, req.ctype, len(entity))
+	if req.cookie != "" {
+		head += "Cookie: " + req.cookie + "\r\n"
+	}
+	head += "\r\n"
 	if err := os.WriteFile(reqFile, append([]byte(head), entity...), 0o644); err != nil {
 		return 0, "", nil, err
 	}

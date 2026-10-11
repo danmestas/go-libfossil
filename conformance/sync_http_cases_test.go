@@ -37,7 +37,7 @@ func typed(ctype string) respondFunc {
 }
 
 func syncHTTPCases() []syncHTTPCase {
-	return append(httpRequestCases(), httpReplyCases()...)
+	return append(append(httpRequestCases(), httpReplyCases()...), httpLoginCases()...)
 }
 
 // httpRequestCases are Section 4's rules for the request and for
@@ -195,7 +195,12 @@ func httpReplyCases() []syncHTTPCase {
 		respond: typed("text/html"),
 		want:    httpEvery(httpRounds(1), httpFailsWith("text/html", "server sends error")),
 		fc:      true,
-	}, {
+	}}
+}
+
+// httpLoginCases are Section 6.5's two ways to log in.
+func httpLoginCases() []syncHTTPCase {
+	return []syncHTTPCase{{
 		// Before any server-version, and after one below the gate, the
 		// login rides in the body and no cookie carries one.
 		Case: Case{ID: "sync.6.5.body-login-before-gate", Req: "SP-6.5-2"},
@@ -209,7 +214,32 @@ func httpReplyCases() []syncHTTPCase {
 		},
 		want: bodyLoginOnly,
 		fc:   true,
+	}, {
+		// The first request has seen no server-version, so it logs in in
+		// the body; the reply's server-version passes the gate.
+		Case:    Case{ID: "sync.6.5.cookie-login-after-gate", Req: "SP-6.5-1"},
+		op:      clientOp{pull: true, login: true},
+		respond: typed(typeUncompressed),
+		want:    cookieLoginAfterGate,
+		fc:      true,
 	}}
+}
+
+// cookieLoginAfterGate checks Section 6.5: the second request, sent after
+// a server-version that passes the gate, logs in through the cookie and
+// not in the body.
+func cookieLoginAfterGate(r *httpRun) error {
+	cards, err := r.cards(2)
+	if err != nil {
+		return err
+	}
+	if len(cards) > 0 && cards[0].op() == "login" {
+		return expectf("%s: request 2 logs in in the body", r.who)
+	}
+	if !strings.Contains(r.requests[1].cookie, "x-f-l-c=login+alice+") {
+		return expectf("%s: request 2 Cookie %q has no login", r.who, r.requests[1].cookie)
+	}
+	return nil
 }
 
 func bodyLoginOnly(r *httpRun) error {

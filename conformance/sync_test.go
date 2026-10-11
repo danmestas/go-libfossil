@@ -1,5 +1,12 @@
 package conformance
 
+import (
+	"fmt"
+	"io"
+	"log/slog"
+	"testing"
+)
+
 // The sync suite checks draft-fossil-sync-protocol-00. It drives the real
 // code end to end, with nothing mocked but the far end of the wire:
 //
@@ -14,11 +21,49 @@ package conformance
 //   - an interop case is a whole session between go-libfossil and fossil(1).
 //
 // Every expectation is checked against fossil(1) on every run where it can
-// be, so a case cannot drift from fossil unnoticed; a case that knowingly
-// differs from fossil says why in its fossil field. Each case's input
+// be, so a case cannot drift from fossil unnoticed, and a disagreement is
+// fatal whatever the case's mark; a case that knowingly differs from
+// fossil, or cannot be sent to it, says why in its fossil or notSent
+// field. Each case's input
 // differs from an exchange another case shows to be handled normally in
 // one respect, and each refusal names its reason, so a case fails when
 // something other than its rule decides the outcome.
+
+// checkSync runs one sync case as a subtest. run returns two problems:
+// fatal, which fails the case whatever its mark (fossil(1) disagreeing
+// with the case, a deviation other than the one named, or the harness
+// itself failing), and conforms, go-libfossil's own departure from the
+// case, which the mark judges as check does.
+func checkSync(t *testing.T, c Case, run func() (fatal, conforms error)) {
+	t.Helper()
+	t.Run(c.ID, func(t *testing.T) {
+		t.Helper()
+		fatal, conforms := run()
+		if fatal != nil {
+			t.Fatalf("%s [%s]: %v", c.ID, c.Req, fatal)
+		}
+		result, message := judge(c, conforms)
+		switch result {
+		case outcomePass:
+		case outcomeFail:
+			t.Fatal(message)
+		case outcomeSkip:
+			t.Skip(message)
+		default:
+			panic(fmt.Sprintf("conformance: unknown outcome %d", result))
+		}
+	})
+}
+
+// quietLogs discards the slog output of go-libfossil's server for the rest
+// of a test: it logs every request it refuses, and many cases are refused
+// requests.
+func quietLogs(t *testing.T) {
+	t.Helper()
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+}
 
 // markSync sets a case's Gap or Deviation from the suite's maps.
 func markSync(c Case) Case {

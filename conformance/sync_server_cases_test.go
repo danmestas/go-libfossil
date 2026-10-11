@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -16,17 +17,25 @@ type syncServerCase struct {
 	ctype  string
 	// body is the request's card lines; see syncFixture.body.
 	body []string
-	want replyCheck
-	// fossil is set only when fossil(1) does not do what the case
-	// expects: why the case follows the draft, and the erratum, if any.
-	// The case fails once fossil agrees.
-	fossil string
+	// cookie, when set, is "USER PASSWORD": the request carries a login
+	// cookie for that user over its body (Section 6.5) and no body login.
+	cookie string
+	want   replyCheck
+	// deviates, for a case marked Deviation, is what go-libfossil does
+	// instead; a reply that is neither is fatal, as the mark excuses only
+	// the deviation it names.
+	deviates replyCheck
 	// notSent says why the request is not sent to fossil(1) at all.
 	notSent string
 }
 
 func (c syncServerCase) request(fx *syncFixture) syncRequest {
 	req := syncRequest{method: c.method, path: c.path, ctype: c.ctype, text: fx.body(c.body...)}
+	if c.cookie != "" {
+		user, password, _ := strings.Cut(c.cookie, " ")
+		login := loginLine(fx.vars["PC"], user, password, "", string(req.text))
+		req.cookie = "x-f-l-c=" + strings.ReplaceAll(login, " ", "+")
+	}
 	if req.method == "" {
 		req.method = "POST"
 	}
@@ -40,34 +49,42 @@ func (c syncServerCase) request(fx *syncFixture) syncRequest {
 }
 
 // run sends the request to fossil(1), when present, then to go-libfossil,
-// each on its own copy of F.
-func (c syncServerCase) run(fx *syncFixture, ref *fossilReference, dir string) error {
+// each on its own copy of F. fatal is a fossil(1) disagreement or a
+// harness failure; problem is go-libfossil's departure from the case.
+func (c syncServerCase) run(fx *syncFixture, ref *fossilReference,
+	dir string) (fatal, problem error) {
 	req := c.request(fx)
 	if ref != nil && c.notSent == "" {
 		path, err := prepare(fx, dir, "fossil.fossil", c.setup)
 		if err != nil {
-			return err
+			return err, nil
 		}
 		reply, err := ref.serve(fx, path, req)
 		if err != nil {
-			return err
+			return err, nil
 		}
-		if err := fossilAgrees(c.want(reply), c.fossil); err != nil {
-			return err
+		if err := fossilAgrees(c.want(reply), ""); err != nil {
+			return err, nil
 		}
 	}
 	path, err := prepare(fx, dir, "go.fossil", c.setup)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	reply, err := serveGo(fx, path, req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return c.want(reply)
+	problem = c.want(reply)
+	if problem != nil && c.deviates != nil {
+		if err := c.deviates(reply); err != nil {
+			return expectf("not the deviation the case names: %v", err), nil
+		}
+	}
+	return nil, problem
 }
 
-// fossilAgrees turns fossil(1)'s verdict on a case into the case's problem:
+// fossilAgrees turns fossil(1)'s verdict on a case into a fatal problem:
 // none when fossil does what the case expects, or when it does not and the
 // case says why.
 func fossilAgrees(problem error, differs string) error {
@@ -82,14 +99,15 @@ func fossilAgrees(problem error, differs string) error {
 
 func TestSyncServer(t *testing.T) {
 	ref := newFossilReference(t)
+	quietLogs(t)
 	top := t.TempDir()
 	fx := newSyncFixture(t, top)
 	for _, c := range syncServerCases() {
 		c.Case = markSync(c.Case)
-		check(t, c.Case, func() error {
+		checkSync(t, c.Case, func() (error, error) {
 			dir, err := os.MkdirTemp(top, "case")
 			if err != nil {
-				return err
+				return err, nil
 			}
 			return c.run(fx, ref, dir)
 		})
@@ -102,7 +120,8 @@ func syncServerCases() []syncServerCase {
 		serverRoundCases(), serverTransportCases(), serverCardCases(), serverErrorCases(),
 		serverAuthCases(), serverLoginCases(), serverContentCases(), serverUVCases(),
 		serverUVGimmeCases(), serverCloneCases(), serverDirectionCases(), serverPragmaCases(),
-		serverConfigCases(),
+		serverConfigCases(), serverVersionCases(), serverGateCases(), serverAdmissionCases(),
+		serverPragmaMoreCases(),
 	} {
 		all = append(all, group...)
 	}

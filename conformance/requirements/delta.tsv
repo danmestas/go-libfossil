@@ -8,7 +8,7 @@ DF-3.1-2	3.1	Digits 0-9 have values 0-9, A-Z 10-35, _ 36, a-z 37-62 and ~ 63, an
 DF-3.1-3	3.1	Reading an integer stops at the first byte that is not a digit; that byte is the opcode or separator that follows the integer.
 DF-3.1-4	3.1	A decoder that accepts an integer field with no digits treats it as zero; it may reject such a delta instead.
 DF-3.1-5	3.1	A decoder that accepts an integer field with leading zeros uses its decoded value; it may reject such a delta instead.
-DF-3.1-6	3.1	A producer emits only integer values below 2^32.	Targets and sources of 4 GiB or more are not exercised: they need 4 GiB allocations.
+DF-3.1-6	3.1	A producer emits only integer values below 2^32.	Create has no 2^32 bound (#279); targets and sources of 4 GiB or more are not exercised: they need 4 GiB allocations.
 DF-3.2-1	3.2	A decoder rejects a delta whose header integer is not immediately followed by 0x0a.
 DF-3.3.1-1	3.3.1	A copy segment (count @ offset ,) appends count bytes of the source starting at zero-based byte position offset.
 DF-3.3.1-2	3.3.1	A decoder rejects a copy segment whose offset is not followed by a comma (0x2c).
@@ -40,3 +40,4 @@ DF-6-1	6	A parser never reads past the end of the delta buffer it was given; int
 DF-6-2	6	A failed delta application is never reported as success.
 DF-6-3	6	A caller discards the output buffer when application fails.
 DF-6-4	6	Bytes 0x80 through 0xFF in integer position terminate the integer; they are never decoded as digits (no high-bit masking).
+DF-6-5	6	A decoder treats the header's declared target length as untrusted: it does not allocate in proportion to it before the delta supplies that much output (SHOULD).

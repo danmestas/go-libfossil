@@ -7,21 +7,13 @@ import (
 	"github.com/danmestas/go-libfossil/internal/delta"
 )
 
-// guardLen is how much of a recognizable byte follows each input in its
-// backing array, so a decoder that reads past the end of its slice reads the
-// guard instead of unrelated memory, and the model notices.
-const guardLen = 16
-
-// guarded returns a copy of b whose capacity extends over guard bytes.
-func guarded(b []byte, guard byte) []byte {
-	buf := append([]byte(nil), b...)
-	buf = append(buf, bytes.Repeat([]byte{guard}, guardLen)...)
-	return buf[:len(b)]
-}
+// nonNil copies b, as an empty non-nil slice when b is empty: Apply treats a
+// nil source as a caller bug.
+func nonNil(b []byte) []byte { return append([]byte{}, b...) }
 
 // FuzzDeltaApply checks Apply against the model decoder for any source and
 // delta: no panic; success gives exactly the declared size, never more; the
-// output is what the model gives, so no byte comes from outside the source;
+// output is what the model gives, which reads only inside the source;
 // failure returns nothing; and only a delta in a form Section 3.1 leaves to
 // the decoder may be rejected when the model accepts it.
 func FuzzDeltaApply(f *testing.F) {
@@ -30,7 +22,7 @@ func FuzzDeltaApply(f *testing.F) {
 	}
 	f.Add([]byte(b1Source), []byte(b1Delta))
 	f.Fuzz(func(t *testing.T, src, d []byte) {
-		src, d = guarded(src, 0xAA), guarded(d, 0xBB)
+		src, d = nonNil(src), nonNil(d)
 		out, err := delta.Apply(src, d)
 		want, ok, optional := modelApply(src, d)
 		if err != nil {

@@ -16,6 +16,7 @@ const (
 	ckFF80   = "3~W000" // 0xFF 0x80
 	ckFF8    = "3~~~~z" // eight 0xFF bytes: the sum wraps modulo 2^32
 	ckx64    = "27XtU0" // 64 times "x"
+	ckx65    = "3~XtU0" // 65 times "x"
 )
 
 // The worked example of Appendix B.1.
@@ -34,9 +35,9 @@ func formatCases() []deltaCase {
 		applyOK("delta.B1.worked", "DF-3-1", b1Source, b1Delta, b1Target),
 		applyOK("delta.B4.empty", "DF-3-1", "", "0\n0;", ""),
 		applyOK("delta.B4.empty-any-source", "DF-3-1", "abc", "0\n0;", ""),
-		applyBad("delta.4.reject-01", "DF-3.2-1", "", "1:a;"),
-		applyBad("delta.3.2.space", "DF-3.2-1", "", "1 \n1:A"+ckA+";"),
-		applyBad("delta.3.2.crlf", "DF-3.2-1", "", "1\r\n1:A"+ckA+";"),
+		applyBad("delta.4.reject-01", "DF-3.2-1", "", "1:a;", "expected newline"),
+		applyBad("delta.3.2.space", "DF-3.2-1", "", "1 \n1:A"+ckA+";", "expected newline"),
+		applyBad("delta.3.2.crlf", "DF-3.2-1", "", "1\r\n1:A"+ckA+";", "expected newline"),
 	}
 }
 
@@ -67,8 +68,8 @@ func segmentCases() []deltaCase {
 		applyOK("delta.4.reordered-copies", "DF-3.3.1-1", "AB", "2\n1@1,1@0,"+ckBA+";", "BA"),
 		applyOK("delta.4.repeated-copy", "DF-3.3.1-1", "ab", "6\n2@0,2@0,2@0,"+ckababab+";",
 			"ababab"),
-		applyBad("delta.4.reject-03", "DF-3.3.1-2", "abcdef", "3\n3@0;"),
-		applyBad("delta.4.copy-truncated", "DF-3.3.1-2", "abc", "3\n3@0"),
+		applyBad("delta.4.reject-03", "DF-3.3.1-2", "abcdef", "3\n3@0;", "expected comma"),
+		applyBad("delta.4.copy-truncated", "DF-4-2", "abc", "3\n3@0", "unexpected end"),
 		applyOK("delta.3.3.1.zero-copy", "DF-3.3.1-3", "abc", "0\n0@3,0;", ""),
 		// Appendix A: a zero count copies nothing. A decoder that read it as
 		// "the rest of the source" would write 3 bytes into a 0-byte target.
@@ -89,7 +90,7 @@ func trailerCases() []deltaCase {
 			strings.Repeat("\xff", 8)),
 		// go-libfossil verifies the checksum, which the draft allows but
 		// does not require; fossil(1) does not, and accepts "A".
-		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;").checksumFailure().differs(
+		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;", "").checksumFailure().differs(
 			"fossil never verifies the checksum, which Section 3.4 permits; " +
 				"go-libfossil verifies, so the verifying branch applies"),
 		applyOK("delta.3.4.trailing", "DF-3.4-4", "", "0\n0;ignored", ""),
@@ -110,36 +111,40 @@ func applyCases() []deltaCase {
 
 func rejectBoundsCases() []deltaCase {
 	return []deltaCase{
-		applyBad("delta.4.empty-input", "DF-4-1", "abc", "").notSent(
+		applyBad("delta.4.empty-input", "DF-4-1", "abc", "", "empty delta").notSent(
 			"fossil's delta_apply crashes (SIGSEGV) on a zero-length delta"),
-		applyBad("delta.4.reject-02", "DF-4-2", "", "5\n9"),
-		applyBad("delta.4.reject-02-header", "DF-4-2", "", "2N"),
-		applyBad("delta.4.reject-04", "DF-4-3", "abcdef", "2\n3@0,"+ckabc+";"),
-		applyBad("delta.4.reject-05", "DF-4-4", "abc", "5\n5@0,0;"),
-		applyBad("delta.4.copy-offset", "DF-4-4", "abc", "1\n1@3,0;"),
-		applyBad("delta.4.copy-offset-zero-past", "DF-4-4", "abc", "0\n0@4,0;"),
+		applyBad("delta.4.reject-02", "DF-4-2", "", "5\n9", "unexpected end"),
+		applyBad("delta.4.reject-02-header", "DF-4-2", "", "2N", "unexpected end"),
+		applyBad("delta.4.reject-04", "DF-4-3", "abcdef", "2\n3@0,"+ckabc+";", "during copy"),
+		applyBad("delta.4.reject-05", "DF-4-4", "abc", "5\n5@0,0;", "copy offset/count overflow"),
+		applyBad("delta.4.copy-offset", "DF-4-4", "abc", "1\n1@3,0;", "source bounds"),
+		applyBad("delta.4.copy-offset-zero-past", "DF-4-4", "abc", "0\n0@4,0;",
+			"copy offset/count overflow"),
 		// 2^32-1 + 2 wraps to 1 in 32-bit arithmetic, inside the source.
-		applyBad("delta.4.copy-overflow-32", "DF-4-5", "abc", "2\n2@3~~~~~,"+ckab+";"),
-		// 2^66-1 does not fit in 64 bits either.
-		applyBad("delta.4.copy-overflow-64", "DF-4-5", "abc", "2\n2@~~~~~~~~~~~,"+ckab+";"),
-		applyBad("delta.4.reject-06", "DF-4-6", "", "2\n3:abc"+ckab+";"),
-		applyBad("delta.4.reject-07", "DF-4-7", "", "9\n5:ab"),
-		applyBad("delta.4.reject-09", "DF-4-8", "", "5\n1:A"+ckA+";"),
+		applyBad("delta.4.copy-overflow-32", "DF-4-5", "abc", "2\n2@3~~~~~,"+ckab+";",
+			"copy offset/count overflow"),
+		// 2^66-1 does not fit in 64 bits: a decoder that rejects the integer
+		// itself is applying its checks to a value of 2^32 or more.
+		applyBad("delta.4.copy-overflow-64", "DF-4-11", "abc", "2\n2@~~~~~~~~~~~,"+ckab+";",
+			"integer overflow"),
+		applyBad("delta.4.reject-06", "DF-4-6", "", "2\n3:abc"+ckab+";", "during insert"),
+		applyBad("delta.4.reject-07", "DF-4-7", "", "9\n5:ab", "insert exceeds delta"),
+		applyBad("delta.4.reject-09", "DF-4-8", "", "5\n1:A"+ckA+";", "!= target size"),
 	}
 }
 
 func rejectStructureCases() []deltaCase {
 	return []deltaCase{
-		applyBad("delta.4.reject-10", "DF-4-9", "abc", "3\n3!"),
-		applyBad("delta.4.reject-10-comma", "DF-4-9", "abc", "3\n3,"),
+		applyBad("delta.4.reject-10", "DF-4-9", "abc", "3\n3!", "unknown command"),
+		applyBad("delta.4.reject-10-comma", "DF-4-9", "abc", "3\n3,", "unknown command"),
 		// Only the header's LF is structural; a LF between segments is an
 		// unknown opcode.
-		applyBad("delta.4.reject-10-lf", "DF-4-9", "", "1\n1\nA"+ckA+";"),
-		// fossil stops at a NUL and reports an unterminated delta; it gets
-		// to the same verdict by another road.
-		applyBad("delta.4.reject-10-nul", "DF-4-9", "", "1\n\x00"+"1:A"+ckA+";"),
-		applyBad("delta.4.reject-11", "DF-4-10", "abc", "3\n3@0,"),
-		applyBad("delta.4.reject-11-literal", "DF-4-10", "", "1\n1:A"),
+		applyBad("delta.4.reject-10-lf", "DF-4-9", "", "1\n1\nA"+ckA+";", "unknown command"),
+		// A non-empty count, so the NUL is judged as an opcode. fossil stops
+		// at a NUL and reports an unterminated delta; same verdict, other road.
+		applyBad("delta.4.reject-10-nul", "DF-4-9", "", "1\n1\x00A"+ckA+";", "unknown command"),
+		applyBad("delta.4.reject-11", "DF-4-10", "abc", "3\n3@0,", "missing terminator"),
+		applyBad("delta.4.reject-11-literal", "DF-4-10", "", "1\n1:A", "missing terminator"),
 	}
 }
 
@@ -171,13 +176,17 @@ func highBitCases() []deltaCase {
 	const masks = "fossil masks the high bit and reads 0xB0 as '0'; Section 6 forbids that"
 	return []deltaCase{
 		applyBad("delta.6.high-bit-no-mask", "DF-6-4", "",
-			"1\xb0\n1\xb0:"+strings.Repeat("x", 64)+ckx64+";").differs(masks),
+			"1\xb0\n1\xb0:"+strings.Repeat("x", 64)+ckx64+";", "expected newline").differs(masks),
 		// 0xB0 ends the integer 11 and is then an unknown opcode.
-		applyBad("delta.6.high-bit-checksum", "DF-6-4", "", "1\n1:A11\xb0"+"000;").differs(masks),
-		// Shared with libfossil and zit, but it does not tell a masking
-		// decoder from a conforming one: the masked reading "0@0," also ends
-		// without a trailer. The two cases above are the ones that do.
-		applyBad("delta.6.high-bit-count", "DF-6-4", "abc", "3\n\xb0@0,"),
+		applyBad("delta.6.high-bit-checksum", "DF-6-4", "", "1\n1:A11\xb0"+"000;",
+			"unknown command").differs(masks),
+		// The count 1 is followed by 0xB1, which masked is '1': fossil reads
+		// the count 11 (65), copies 65 bytes and accepts. A conforming decoder
+		// ends the integer at 0xB1, an unknown opcode. libfossil's and zit's
+		// vector for this ("3\n\xb0@0,") also fails to end in a trailer under
+		// masking, so it cannot tell the two apart.
+		applyBad("delta.6.high-bit-count", "DF-6-4", strings.Repeat("x", 65),
+			"11\n1\xb1@0,"+ckx65+";", "unknown command").differs(masks),
 	}
 }
 
@@ -186,11 +195,11 @@ func sizeQueryCases() []deltaCase {
 		sizeOK("delta.4.1.header-only", "DF-4.1-1", "2N\n", 151),
 		sizeOK("delta.4.1.zero", "DF-4.1-1", "0\n", 0),
 		sizeOK("delta.4.1.ignore-tail", "DF-4.1-1", "2N\n!!!", 151),
-		sizeBad("delta.4.1.empty", "DF-4.1-2", "").notSent(
+		sizeBad("delta.4.1.empty", "DF-4.1-2", "", "empty delta").notSent(
 			"fossil's delta_output_size crashes (SIGSEGV) on a zero-length delta"),
-		sizeBad("delta.4.1.space", "DF-4.1-3", "5 \n"),
-		sizeBad("delta.4.1.no-lf", "DF-4.1-3", "2N"),
-		sizeBad("delta.4.1.header-boundary", "DF-4.1-3", "2N\n").truncated(2),
+		sizeBad("delta.4.1.space", "DF-4.1-3", "5 \n", "expected newline"),
+		// The LF is in the backing array but outside the buffer.
+		sizeBad("delta.4.1.no-lf", "DF-4.1-3", "2N\n", "unexpected end").truncated(2),
 	}
 }
 
@@ -199,8 +208,10 @@ func sizeQueryCases() []deltaCase {
 // its buffer finds what completes the delta, and wrongly accepts it.
 func bufferEndCases() []deltaCase {
 	return []deltaCase{
-		applyBad("delta.6.trailer-boundary", "DF-6-1", "", "0\n0;").truncated(3),
-		applyBad("delta.6.literal-boundary", "DF-6-1", "", "1\n1:A"+ckA+";").truncated(4),
-		applyBad("delta.6.integer-boundary", "DF-6-1", "", "1\n1:A"+ckA+";").truncated(9),
+		applyBad("delta.6.trailer-boundary", "DF-6-1", "", "0\n0;", "unexpected end").truncated(3),
+		applyBad("delta.6.literal-boundary", "DF-6-1", "", "1\n1:A"+ckA+";",
+			"insert exceeds delta").truncated(4),
+		applyBad("delta.6.integer-boundary", "DF-6-1", "", "1\n1:A"+ckA+";",
+			"unexpected end").truncated(9),
 	}
 }

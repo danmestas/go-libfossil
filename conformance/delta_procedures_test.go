@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -214,17 +213,11 @@ func generatedCases() []deltaFuncCase {
 		{Case{ID: "delta.3.1.terminators", Req: "DF-3.1-3"}, integerTerminators},
 		{Case{ID: "delta.3.4.checksum-tails", Req: "DF-3.4-2"}, checksumTails},
 		{Case{ID: "delta.3.4.B3", Req: "DF-3.4-2"}, checksumExample},
-		{Case{ID: "delta.3.1.max-target-apply", Req: "DF-4-8"}, hugeHeaderIsCheap},
+		{Case{ID: "delta.3.1.max-target-apply", Req: "DF-6-5"}, hugeHeaderIsCheap},
 		{Case{ID: "delta.6.high-bit-header", Req: "DF-6-4"}, highBitHeaders},
 		{Case{ID: "delta.6.no-false-success", Req: "DF-6-2"}, noFalseSuccess},
 		{Case{ID: "delta.6.applyinto-discard", Req: "DF-6-3"}, applyIntoDiscards},
 	}
-}
-
-// sizeCase wraps a header-only delta as a size-query case.
-func sizeCase(id, req, d, want string, wants deltaWant) deltaCase {
-	c := deltaCase{Case: Case{ID: id, Req: req}, op: opSize, delta: d, output: want, want: wants}
-	return c
 }
 
 // integerValues: each of the 64 digits alone, the examples of Appendix B.2,
@@ -235,7 +228,7 @@ func integerValues(_ *testing.T, ref *fossilReference) error {
 		vectors[deltaDigits[i:i+1]] = uint64(i)
 	}
 	for text, value := range vectors {
-		c := sizeCase("values", "DF-3.1-2", text+"\n", strconv.FormatUint(value, 10), wantOutput)
+		c := sizeOK("delta.3.1.values", "DF-3.1-2", text+"\n", value)
 		if err := c.conforms(ref); err != nil {
 			return expectf("%q: %v", text, err)
 		}
@@ -251,11 +244,12 @@ func integerTerminators(_ *testing.T, ref *fossilReference) error {
 		var c deltaCase
 		switch {
 		case b == '\n':
-			c = sizeCase("t", "DF-3.1-3", "1\n\n", "1", wantOutput)
+			c = sizeOK("delta.3.1.terminators", "DF-3.1-3", "1\n\n", 1)
 		case strings.IndexByte(deltaDigits, byte(b)) >= 0:
 			continue
 		default:
-			c = sizeCase("t", "DF-3.1-3", "1"+string([]byte{byte(b)})+"\n", "", wantReject)
+			c = sizeBad("delta.3.1.terminators", "DF-3.1-3", "1"+string([]byte{byte(b)})+"\n",
+				"expected newline")
 		}
 		if err := c.conforms(ref); err != nil {
 			return expectf("byte %#02x after the digit: %v", b, err)
@@ -270,11 +264,14 @@ func integerTerminators(_ *testing.T, ref *fossilReference) error {
 func highBitHeaders(_ *testing.T, ref *fossilReference) error {
 	for b := 0x80; b <= 0xff; b++ {
 		d := []byte{'1', byte(b), '\n'}
-		if n, err := delta.OutputSize(d); err == nil {
-			return expectf("OutputSize(%q) = %d, want failure", d, n)
+		n, err := delta.OutputSize(d)
+		if err == nil || !strings.Contains(err.Error(), "expected newline") {
+			return expectf("OutputSize(%q) = %d, %v; want failure at the header's LF", d, n, err)
 		}
-		if out, err := delta.Apply([]byte{}, append(d, '0', ';')); err == nil || out != nil {
-			return expectf("Apply with header %q returned (%q, %v), want a rejection", d, out, err)
+		out, err := delta.Apply([]byte{}, append(d, '0', ';'))
+		if out != nil || err == nil || !strings.Contains(err.Error(), "expected newline") {
+			return expectf("Apply with header %q returned (%q, %v); want failure at the LF",
+				d, out, err)
 		}
 	}
 	if ref == nil {
@@ -309,19 +306,25 @@ func checksumExample(*testing.T, *fossilReference) error {
 }
 
 // hugeHeaderIsCheap: a header that declares 2^32-1 bytes, over a delta with
-// none, is rejected without allocating a buffer that size (a SHOULD of
-// Section 6, so the bound is on this case only).
+// none, is rejected without allocating in proportion to the header (DF-6-5,
+// a SHOULD of Section 6). The least of five runs is compared with a margin
+// of 1 MiB, against the 4 GiB a decoder trusting the header would take, so a
+// busy machine's other allocations cannot trip it.
 func hugeHeaderIsCheap(_ *testing.T, ref *fossilReference) error {
 	d := []byte("3~~~~~\n0;")
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	out, err := delta.Apply([]byte{}, d)
-	runtime.ReadMemStats(&after)
-	if err == nil || out != nil {
-		return expectf("Apply(%q) = (%q, %v), want a rejection", d, out, err)
+	least := uint64(1 << 62)
+	for run := 0; run < 5; run++ {
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		out, err := delta.Apply([]byte{}, d)
+		runtime.ReadMemStats(&after)
+		if err == nil || out != nil || !strings.Contains(err.Error(), "!= target size") {
+			return expectf("Apply(%q) = (%q, %v), want the length mismatch", d, out, err)
+		}
+		least = min(least, after.TotalAlloc-before.TotalAlloc)
 	}
-	if grown := after.TotalAlloc - before.TotalAlloc; grown > 1<<20 {
-		return expectf("rejecting a delta of %d bytes allocated %d bytes", len(d), grown)
+	if least > 1<<20 {
+		return expectf("rejecting a delta of %d bytes allocated %d bytes", len(d), least)
 	}
 	if ref == nil {
 		return nil
@@ -396,6 +399,7 @@ func callerCases() []deltaFuncCase {
 	return []deltaFuncCase{
 		{Case{ID: "delta.4.2.absent-source", Req: "DF-4.2-1"}, absentSource},
 		{Case{ID: "delta.6.content-discards", Req: "DF-6-3"}, contentDiscards},
+		{Case{ID: "delta.4.1.store-refuses", Req: "DF-4.1-3"}, storeRefusesBadHeaders},
 	}
 }
 
@@ -410,21 +414,22 @@ func absentSource(t *testing.T, _ *fossilReference) error {
 	if err != nil {
 		return fmt.Errorf("StorePhantom: %v", err)
 	}
-	stored := delta.Create(base, target)
+	// Built against an empty source, the delta is all literals: it needs
+	// nothing from the base, so only the phantom can make Expand fail.
+	stored := delta.Create([]byte{}, target)
 	rid, err := blob.StoreDeltaRaw(r.DB(), hash.SHA1(target), stored, baseRid, nil)
 	if err != nil {
 		return fmt.Errorf("StoreDeltaRaw: %v", err)
 	}
 	out, err := content.Expand(r.DB(), rid)
-	if err == nil || out != nil {
-		return expectf("Expand of a delta on a phantom = (%q, %v), want (nil, an error)", out, err)
+	if err == nil || out != nil || !strings.Contains(err.Error(), "phantom") {
+		return expectf("Expand of a delta on a phantom = (%q, %v), want a phantom error", out, err)
 	}
 	return nil
 }
 
 // contentDiscards: Expand over a stored delta whose trailer checksum is
-// wrong returns nothing, and a header that does not end in LF, or an empty
-// delta, is refused when it is stored.
+// wrong returns nothing but the checksum error.
 func contentDiscards(t *testing.T, _ *fossilReference) error {
 	r := newPolicyRepo(t, "2")
 	base := []byte("fresh original content, long enough to compress well")
@@ -441,13 +446,29 @@ func contentDiscards(t *testing.T, _ *fossilReference) error {
 	if err != nil {
 		return fmt.Errorf("StoreDeltaRaw: %v", err)
 	}
-	if out, err := content.Expand(r.DB(), rid); err == nil || out != nil {
-		return expectf("Expand of a delta with a wrong checksum = (%q, %v)", out, err)
+	out, err := content.Expand(r.DB(), rid)
+	if out != nil || !errors.Is(err, delta.ErrChecksum) {
+		return expectf("Expand of a delta with a wrong checksum = (%q, %v), want ErrChecksum",
+			out, err)
 	}
-	for _, refused := range []string{"1 \n1:x0;", ""} {
-		name := hash.SHA1([]byte("x"))
-		if _, err := blob.StoreDeltaRaw(r.DB(), name, []byte(refused), baseRid, nil); err == nil {
-			return expectf("StoreDeltaRaw stored the delta %q", refused)
+	return nil
+}
+
+// storeRefusesBadHeaders: the store reads each delta's size query before
+// keeping it, so a header that does not end in LF, or an empty delta, never
+// reaches the decoder.
+func storeRefusesBadHeaders(t *testing.T, _ *fossilReference) error {
+	r := newPolicyRepo(t, "2")
+	baseRid, _, err := blob.Store(r.DB(), []byte("a base"))
+	if err != nil {
+		return fmt.Errorf("Store: %v", err)
+	}
+	name := hash.SHA1([]byte("x"))
+	refusals := map[string]string{"1 \n1:x0;": "expected newline", "": "empty delta"}
+	for refused, reason := range refusals {
+		_, err := blob.StoreDeltaRaw(r.DB(), name, []byte(refused), baseRid, nil)
+		if !errors.Is(err, delta.ErrInvalidDelta) || !strings.Contains(err.Error(), reason) {
+			return expectf("StoreDeltaRaw of %q = %v, want a %q refusal", refused, err, reason)
 		}
 	}
 	return nil

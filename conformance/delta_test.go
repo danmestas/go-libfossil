@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/delta"
@@ -47,6 +48,12 @@ type deltaCase struct {
 	output string
 	// sentinel is the error a rejection wraps; ErrInvalidDelta when nil.
 	sentinel error
+	// reason is a substring of go-libfossil's error that a rejection must
+	// carry, so the case fails when another rule rejects the input. Every
+	// rejection case sets it, except the MAY cases, whose rejection branch
+	// is the decoder's choice. internal/delta has only ErrInvalidDelta and
+	// ErrChecksum, so the message is the only way to tell the rules apart.
+	reason string
 	// fossil is set only when fossil(1) does not give the case's verdict;
 	// it says why the case follows the draft and not fossil.
 	fossil string
@@ -58,8 +65,10 @@ func applyOK(id, req, src, d, out string) deltaCase {
 	return deltaCase{Case: Case{ID: id, Req: req}, source: src, delta: d, output: out}
 }
 
-func applyBad(id, req, src, d string) deltaCase {
-	return deltaCase{Case: Case{ID: id, Req: req}, source: src, delta: d, want: wantReject}
+func applyBad(id, req, src, d, reason string) deltaCase {
+	c := deltaCase{Case: Case{ID: id, Req: req}, source: src, delta: d, want: wantReject}
+	c.reason = reason
+	return c
 }
 
 // applyMay is a case the draft leaves to the decoder: reject, or accept
@@ -76,8 +85,8 @@ func sizeOK(id, req, d string, size uint64) deltaCase {
 	return c
 }
 
-func sizeBad(id, req, d string) deltaCase {
-	c := applyBad(id, req, "", d)
+func sizeBad(id, req, d, reason string) deltaCase {
+	c := applyBad(id, req, "", d, reason)
 	c.op = opSize
 	return c
 }
@@ -196,6 +205,12 @@ func (c deltaCase) conforms(ref *fossilReference) error {
 	}
 	if !errors.Is(res.err, sentinel) {
 		return expectf("rejection %q does not wrap %v", res.err, sentinel)
+	}
+	if c.want == wantReject && c.sentinel == nil && c.reason == "" {
+		panic("conformance: rejection case " + c.ID + " names no reason")
+	}
+	if !strings.Contains(res.err.Error(), c.reason) {
+		return expectf("rejected for another reason: %q does not mention %q", res.err, c.reason)
 	}
 	return nil
 }

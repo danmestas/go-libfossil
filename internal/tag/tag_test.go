@@ -741,3 +741,91 @@ func TestApplyTagSingletonBlocksPropagation(t *testing.T) {
 		t.Errorf("A tagtype = %d, want %d (singleton stays singleton at its own artifact)", tagtype, tag.TagSingleton)
 	}
 }
+
+// pValue returns the active "p" value on rid and whether a row exists.
+func pTagRow(t *testing.T, r *repo.Repo, rid int64) (value string, tagtype int, ok bool) {
+	t.Helper()
+	err := r.DB().QueryRow(`SELECT coalesce(value,''), tagtype FROM tagxref
+	        JOIN tag USING(tagid) WHERE tag.tagname='p' AND rid=?`, rid).Scan(&value, &tagtype)
+	if err != nil {
+		return "", 0, false
+	}
+	return value, tagtype, true
+}
+
+// TestCancelSkipsNewerInherited is the issue #288 regression. Cancelling a
+// propagated tag must delete an inherited row only when it is older than the
+// cancellation; an inherited row newer than the cancel survives, and the walk
+// does not descend past it.
+func TestCancelSkipsNewerInherited(t *testing.T) {
+	r := setupTestRepo(t)
+	a := makeCheckin(t, r, 0, "a.txt", "A", "A")
+	b := makeCheckin(t, r, a, "b.txt", "B", "B")
+	c := makeCheckin(t, r, b, "c.txt", "C", "C")
+	d := makeCheckin(t, r, c, "d.txt", "D", "D")
+
+	if _, err := tag.AddTag(r, tag.TagOpts{
+		TargetRID: libfossil.FslID(a), TagName: "p", TagType: tag.TagPropagating,
+		Value: "v", User: "testuser", Time: tagTime(5),
+	}); err != nil {
+		t.Fatalf("AddTag propagating: %v", err)
+	}
+
+	// Make c and d's inherited rows newer than any later cancellation.
+	if _, err := r.DB().Exec(`UPDATE tagxref SET mtime=9999999
+	        WHERE tagid=(SELECT tagid FROM tag WHERE tagname='p') AND rid IN (?, ?)`,
+		c, d); err != nil {
+		t.Fatalf("doctor mtime: %v", err)
+	}
+
+	// Cancel on A, after b's inherited row (tagTime(5)) but long before the
+	// doctored c/d rows.
+	if _, err := tag.AddTag(r, tag.TagOpts{
+		TargetRID: libfossil.FslID(a), TagName: "p", TagType: tag.TagCancel,
+		User: "testuser", Time: tagTime(6),
+	}); err != nil {
+		t.Fatalf("AddTag cancel: %v", err)
+	}
+
+	if _, _, ok := pTagRow(t, r, b); ok {
+		t.Errorf("b still has a p row after cancel, want it deleted (older than cancel)")
+	}
+	if v, tt, ok := pTagRow(t, r, c); !ok || tt != tag.TagPropagating || v != "v" {
+		t.Errorf("c p row = (%q, %d, ok=%v), want the inherited v survives (newer than cancel)", v, tt, ok)
+	}
+	if v, tt, ok := pTagRow(t, r, d); !ok || tt != tag.TagPropagating || v != "v" {
+		t.Errorf("d p row = (%q, %d, ok=%v), want it kept (walk halts at newer c)", v, tt, ok)
+	}
+}
+
+// TestPropagateEqualMtimeKeepsFirst checks the other side of the same guard:
+// re-propagating a tag whose mtime equals the child's inherited row does not
+// overwrite it (mtime < ? is false at equal mtime).
+func TestPropagateEqualMtimeKeepsFirst(t *testing.T) {
+	r := setupTestRepo(t)
+	a := makeCheckin(t, r, 0, "a.txt", "A", "A")
+	b := makeCheckin(t, r, a, "b.txt", "B", "B")
+
+	if _, err := tag.AddTag(r, tag.TagOpts{
+		TargetRID: libfossil.FslID(a), TagName: "p", TagType: tag.TagPropagating,
+		Value: "first", User: "testuser", Time: tagTime(5),
+	}); err != nil {
+		t.Fatalf("AddTag: %v", err)
+	}
+	if v, _, ok := pTagRow(t, r, b); !ok || v != "first" {
+		t.Fatalf("b inherited %q (ok=%v), want first", v, ok)
+	}
+
+	// Change A's own value but keep its mtime, then re-propagate: B's row has
+	// the same mtime, so the guard leaves it as "first".
+	if _, err := r.DB().Exec(`UPDATE tagxref SET value='second'
+	        WHERE tagid=(SELECT tagid FROM tag WHERE tagname='p') AND rid=?`, a); err != nil {
+		t.Fatalf("doctor A value: %v", err)
+	}
+	if err := tag.PropagateAll(r.DB(), libfossil.FslID(a)); err != nil {
+		t.Fatalf("PropagateAll: %v", err)
+	}
+	if v, _, ok := pTagRow(t, r, b); !ok || v != "first" {
+		t.Errorf("b value after equal-mtime re-propagation = %q (ok=%v), want first kept", v, ok)
+	}
+}

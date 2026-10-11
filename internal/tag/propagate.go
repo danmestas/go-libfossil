@@ -53,22 +53,20 @@ func propagate(q db.Querier, tagid int64, tagType int, origID libfossil.FslID, m
 		// inherited row (srcid=0) only when it is OLDER than this tag
 		// (tagxref.mtime < ?); the default when the child has no row for the tag
 		// is 1 for a propagating tag (give it the row) and 0 for a cancel
-		// (nothing to remove). A newer inherited row is left in place and the
-		// walk does not descend past it (#288).
+		// (nothing to remove), bound as a parameter. A newer inherited row is
+		// left in place and the walk does not descend past it (#288).
 		defaultDoit := 0
 		if tagType == TagPropagating {
 			defaultDoit = 1
 		}
-		query := fmt.Sprintf(`
+		const query = `
 			SELECT cid, plink.mtime,
-			       COALESCE(srcid=0 AND tagxref.mtime < ?, %d) AS doit
+			       COALESCE(srcid=0 AND tagxref.mtime < ?, ?) AS doit
 			FROM plink
 			LEFT JOIN tagxref ON cid=tagxref.rid AND tagxref.tagid=?
 			WHERE pid=? AND isprim=1
-		`, defaultDoit)
-		var rows *sql.Rows
-		var err error
-		rows, err = q.Query(query, mtime, tagid, currentRid)
+		`
+		rows, err := q.Query(query, mtime, defaultDoit, tagid, currentRid)
 		if err != nil {
 			return fmt.Errorf("query children of %d: %w", currentRid, err)
 		}

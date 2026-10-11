@@ -557,3 +557,33 @@ func BenchmarkStore(b *testing.B) {
 		Store(d, content)
 	}
 }
+
+// Storing content whose name is a phantom fills that phantom in place:
+// the same rid, readable afterwards, no longer listed in the phantom table.
+func TestStoreFillsPhantom(t *testing.T) {
+	d := setupTestDB(t)
+	content := []byte("content that arrives after it was referenced")
+	phantomRid, err := StorePhantom(d, hash.SHA1(content))
+	if err != nil {
+		t.Fatalf("StorePhantom: %v", err)
+	}
+
+	rid, _, err := Store(d, content)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if rid != phantomRid {
+		t.Fatalf("Store rid = %d, want the phantom's rid %d", rid, phantomRid)
+	}
+	got, err := Load(d, rid)
+	if err != nil {
+		t.Fatalf("Load after Store over phantom: %v", err)
+	}
+	if !bytes.Equal(got, content) {
+		t.Fatalf("Load = %q, want %q", got, content)
+	}
+	var n int
+	if err := d.QueryRow("SELECT count(*) FROM phantom WHERE rid=?", rid).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("phantom rows for rid = %d (err %v), want 0", n, err)
+	}
+}

@@ -134,3 +134,32 @@ func TestStoreEmptyContentHonoursHashPolicy(t *testing.T) {
 		t.Errorf("uuid = %s, want %s", uuid, want)
 	}
 }
+
+// A phantom under the primary name does not hide a stored blob under the
+// legacy one: the content is reused, and the phantom stays a phantom, as in
+// fossil's content_put_ex.
+func TestStoreReusesLegacyNameBesideAPrimaryPhantom(t *testing.T) {
+	d := setupTestDB(t)
+	content := []byte("content held under its SHA1 name")
+	setHashPolicy(t, d, "0")
+	legacyRid, _, err := Store(d, content)
+	if err != nil {
+		t.Fatalf("Store under sha1: %v", err)
+	}
+	setHashPolicy(t, d, "2")
+	phantomRid, err := StorePhantom(d, hash.SHA3(content))
+	if err != nil {
+		t.Fatalf("StorePhantom: %v", err)
+	}
+
+	rid, name, err := Store(d, content)
+	if err != nil {
+		t.Fatalf("Store under sha3: %v", err)
+	}
+	if rid != legacyRid || name != hash.SHA1(content) {
+		t.Fatalf("Store = rid %d name %s, want the stored SHA1 blob rid %d", rid, name, legacyRid)
+	}
+	if !isPhantom(d, phantomRid) {
+		t.Errorf("the SHA3 phantom was filled; want it left alone")
+	}
+}

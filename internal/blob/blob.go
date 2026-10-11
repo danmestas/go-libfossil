@@ -18,11 +18,15 @@ import (
 //
 // Only a stored blob qualifies. A phantom is a name the repo knows of but
 // has no content for, so reusing one would report content as stored that
-// isn't.
+// isn't; callers fall through to writeRow, which fills it.
 func existingName(q db.Querier, naming hash.Naming, uuid string, content []byte) (libfossil.FslID, string, bool) {
-	if rid, ok := Exists(q, uuid); ok {
+	if rid, ok := Exists(q, uuid); ok && !isPhantom(q, rid) {
 		return rid, uuid, true
 	}
+	// A phantom under the primary name does not end the search: fossil's
+	// content_put_ex consults the other algorithm's name first and uses a
+	// stored blob there, so content already held under it is not stored twice
+	// just because the primary name is waiting for it.
 	if !naming.ReuseLegacy {
 		return 0, "", false
 	}
@@ -31,11 +35,56 @@ func existingName(q db.Querier, naming hash.Naming, uuid string, content []byte)
 	if !ok {
 		return 0, "", false
 	}
-	var size int64
-	if err := q.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size); err != nil || size == -1 {
+	if isPhantom(q, rid) {
 		return 0, "", false
 	}
 	return rid, legacy, true
+}
+
+// isPhantom reports whether rid is a placeholder with no content. A row
+// that cannot be read counts as one, so callers never reuse it.
+func isPhantom(q db.Querier, rid libfossil.FslID) bool {
+	var size int64
+	err := q.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size)
+	return err != nil || size == -1
+}
+
+// writeRow stores a blob row for uuid and returns its rid. If uuid is
+// already a phantom the row is filled in place, so every reference to its
+// rid starts resolving; otherwise a new row is inserted. Mirrors the
+// phantom branch of Fossil's content_put_ex (src/content.c:557-620).
+func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfossil.FslID, error) {
+	if q == nil {
+		panic("blob.writeRow: q must not be nil")
+	}
+	if size < 0 {
+		panic("blob.writeRow: size must not be negative")
+	}
+	if len(compressed) == 0 {
+		panic("blob.writeRow: compressed must not be empty")
+	}
+	if rid, ok := Exists(q, uuid); ok {
+		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
+			size, compressed, rid); err != nil {
+			return 0, fmt.Errorf("fill phantom: %w", err)
+		}
+		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
+			return 0, fmt.Errorf("clear phantom: %w", err)
+		}
+		return rid, nil
+	}
+	result, err := q.Exec(
+		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+		uuid, size, compressed,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert: %w", err)
+	}
+	ridInt, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("lastid: %w", err)
+	}
+	return libfossil.FslID(ridInt), nil
 }
 
 func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err error) {
@@ -67,20 +116,10 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 		return 0, "", fmt.Errorf("blob.Store compress: %w", err)
 	}
 
-	result, err := q.Exec(
-		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-		uuid, len(content), compressed,
-	)
+	rid, err = writeRow(q, uuid, int64(len(content)), compressed)
 	if err != nil {
-		return 0, "", fmt.Errorf("blob.Store insert: %w", err)
+		return 0, "", fmt.Errorf("blob.Store: %w", err)
 	}
-
-	ridInt, err := result.LastInsertId()
-	if err != nil {
-		return 0, "", fmt.Errorf("blob.Store lastid: %w", err)
-	}
-
-	rid = libfossil.FslID(ridInt)
 
 	// Verify round-trip: re-read, decompress, re-hash.
 	// Matches Fossil's content_put_pk() post-write verification.
@@ -141,20 +180,10 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 		return 0, "", fmt.Errorf("blob.StoreDelta compress: %w", err)
 	}
 
-	result, err := q.Exec(
-		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-		uuid, len(content), compressed,
-	)
+	rid, err = writeRow(q, uuid, int64(len(content)), compressed)
 	if err != nil {
-		return 0, "", fmt.Errorf("blob.StoreDelta insert blob: %w", err)
+		return 0, "", fmt.Errorf("blob.StoreDelta: %w", err)
 	}
-
-	ridInt, err := result.LastInsertId()
-	if err != nil {
-		return 0, "", fmt.Errorf("blob.StoreDelta lastid: %w", err)
-	}
-
-	rid = libfossil.FslID(ridInt)
 	_, err = q.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid)
 	if err != nil {
 		return 0, "", fmt.Errorf("blob.StoreDelta insert delta: %w", err)
@@ -231,15 +260,8 @@ func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossi
 		}
 	}()
 
-	existingRid, exists := Exists(q, uuid)
-	if exists {
-		var size int64
-		if err := q.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size); err != nil {
-			return 0, fmt.Errorf("blob.StoreDeltaRaw: check existing: %w", err)
-		}
-		if size != -1 {
-			return existingRid, nil // real blob already exists; nothing to do
-		}
+	if existingRid, exists := Exists(q, uuid); exists && !isPhantom(q, existingRid) {
+		return existingRid, nil // real blob already exists; nothing to do
 	}
 
 	// delta.OutputSize rejects empty, malformed, and overflowing/oversized
@@ -254,29 +276,9 @@ func StoreDeltaRaw(q db.Querier, uuid string, deltaBytes []byte, srcRid libfossi
 		return 0, fmt.Errorf("blob.StoreDeltaRaw: compress: %w", err)
 	}
 
-	if exists {
-		// Filling a phantom.
-		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
-			int64(targetSize), compressed, existingRid); err != nil {
-			return 0, fmt.Errorf("blob.StoreDeltaRaw: fill phantom: %w", err)
-		}
-		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
-			return 0, fmt.Errorf("blob.StoreDeltaRaw: clear phantom: %w", err)
-		}
-		rid = existingRid
-	} else {
-		result, err := q.Exec(
-			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-			uuid, int64(targetSize), compressed,
-		)
-		if err != nil {
-			return 0, fmt.Errorf("blob.StoreDeltaRaw: insert: %w", err)
-		}
-		ridInt, err := result.LastInsertId()
-		if err != nil {
-			return 0, fmt.Errorf("blob.StoreDeltaRaw: lastid: %w", err)
-		}
-		rid = libfossil.FslID(ridInt)
+	rid, err = writeRow(q, uuid, int64(targetSize), compressed)
+	if err != nil {
+		return 0, fmt.Errorf("blob.StoreDeltaRaw: %w", err)
 	}
 
 	// Record the delta-to-source link unconditionally — matches

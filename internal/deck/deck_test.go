@@ -104,8 +104,11 @@ func TestVerifyZBadChecksum(t *testing.T) {
 }
 
 func TestVerifyZTooShort(t *testing.T) {
-	if err := VerifyZ([]byte("short")); err == nil {
-		t.Fatal("VerifyZ should fail on short input")
+	// §6.2 (and fossil's verify_z_card): input too short to hold a Z card has
+	// the Z card absent, which VerifyZ reports as success. The absence is the
+	// required-card rule's to judge at parse time, not the checksum's.
+	if err := VerifyZ([]byte("short")); err != nil {
+		t.Fatalf("VerifyZ on too-short input should treat the Z card as absent: %v", err)
 	}
 }
 

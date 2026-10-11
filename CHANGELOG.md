@@ -99,6 +99,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` and `deck.VerifyZ` judge an artifact's framing by the rule it
+  breaks. The Z-card check now mirrors fossil's `verify_z_card`: it locates
+  the Z card as the last 35 bytes beginning `Z `, never reads the final byte,
+  treats a body too short or without a trailing Z card as "Z card absent", and
+  reports only a present-but-wrong checksum. `Parse` gained the §4.1 framing
+  gates fossil applies up front -- a non-empty blob ending in LF, checked on
+  the raw bytes before the signature wrapper is stripped, and a first card
+  that is an upper-case letter followed by a space -- and a missing Z card is
+  now rejected by the required-card rule rather than by the checksum. Artifacts
+  rejected for a missing final LF, residue after the Z card, or a bad first
+  line are no longer blamed on the checksum (#265).
+
 
 ## [0.11.1] - 2026-10-11
 

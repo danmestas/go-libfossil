@@ -28,26 +28,63 @@ func isHexToken(s string) bool {
 	return true
 }
 
+// Parse reads an artifact as a pipeline of stages: frame the raw blob (§4.1
+// framing, wrapper strip, §4.1.1 first card, §6.2 Z checksum), scan the cards
+// (§4.2), then determine the type (§5.3). Each stage is a helper so Parse
+// reads as the pipeline and no stage runs before the one it depends on.
 func Parse(data []byte) (*Deck, error) {
 	if data == nil {
 		panic("deck.Parse: data must not be nil")
 	}
-	// A clearsigned blob carries PGP/SSH framing around the manifest; strip
-	// it once so both the Z-card check and card parsing see the inner content
-	// (the artifact's content-addressed hash, taken over the raw blob
-	// elsewhere, is unaffected). stripClearsign returns data unchanged for the
-	// common non-clearsigned case.
-	content := stripClearsign(data)
-	if err := verifyZ(content); err != nil {
+	content, err := frameArtifact(data)
+	if err != nil {
 		return nil, fmt.Errorf("deck.Parse: %w", err)
 	}
-
-	// body is safe: verifyZ above guarantees len(content) >= 35.
-	body := content[:len(content)-35]
 	d := &Deck{}
+	if err := scanCards(content, d); err != nil {
+		return nil, fmt.Errorf("deck.Parse: %w", err)
+	}
+	d.Type = inferType(d)
+	return d, nil
+}
+
+// frameArtifact validates an artifact's framing and returns the inner content
+// the card scanner reads. It mirrors the order fossil applies these checks in,
+// up front before the card loop (src/manifest.c): §4.1 (non-empty, ends in LF)
+// on the raw blob, the PGP/SSH clearsign wrapper stripped, §4.1.1 (the first
+// card is an upper-case letter and a space), then the §6.2 Z self-checksum.
+// The clearsign strip is a byte-for-byte identity on the common unsigned case,
+// and the artifact's content-addressed hash is taken over the raw blob
+// elsewhere, so this never changes which UUID an artifact resolves to.
+func frameArtifact(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("zero-length artifact")
+	}
+	if data[len(data)-1] != '\n' {
+		return nil, fmt.Errorf("artifact not terminated with a newline")
+	}
+	content := stripClearsign(data)
+	if len(content) < 10 || content[0] < 'A' || content[0] > 'Z' || content[1] != ' ' {
+		return nil, fmt.Errorf("line 1 not recognized")
+	}
+	// verifyZ reports a present-but-wrong checksum; an absent Z card is left to
+	// the card loop and the required-card rule. The Z card itself is parsed
+	// below as an ordinary card, so the whole content is scanned.
+	if err := verifyZ(content); err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+// scanCards runs the §4.2 card loop over content, filling d. Every structural
+// artifact type requires a Z card (§6.2 / §5.2), so a scan reaching the end
+// without one is rejected here; the full per-type required-card table is
+// applied in Parse's later stages.
+func scanCards(content []byte, d *Deck) error {
 	var lastCard byte
 	var seen seenCards
-	reader := bytes.NewReader(body)
+	var sawZ bool
+	reader := bytes.NewReader(content)
 
 	for reader.Len() > 0 {
 		line, err := readLine(reader)
@@ -56,40 +93,33 @@ func Parse(data []byte) (*Deck, error) {
 		}
 
 		card := line[0]
+		if card == 'Z' {
+			sawZ = true
+		}
 
 		// §4.5.1 occurrence classes. The card-type ordering check below
 		// permits equal consecutive letters, so the duplicate guard for
 		// single-occurrence types has to be separate from it. W is
 		// single-occurrence too, so the claim precedes the W branch.
 		if err := seen.claim(card); err != nil {
-			return nil, fmt.Errorf("deck.Parse: %w", err)
+			return err
 		}
 
 		if card == 'W' {
 			if card < lastCard {
-				return nil, fmt.Errorf("deck.Parse: card 'W' out of order (after '%c')", lastCard)
+				return fmt.Errorf("card 'W' out of order (after '%c')", lastCard)
 			}
 			lastCard = card
-			sizeStr := strings.TrimSpace(line[2:])
-			size, err := strconv.Atoi(sizeStr)
+			body, err := readWBody(reader, line)
 			if err != nil {
-				return nil, fmt.Errorf("deck.Parse: bad W size: %w", err)
+				return err
 			}
-			content := make([]byte, size)
-			n, readErr := reader.Read(content)
-			if readErr != nil && n != size {
-				return nil, fmt.Errorf("deck.Parse: W content read: %w", readErr)
-			}
-			if n != size {
-				return nil, fmt.Errorf("deck.Parse: W content: got %d, want %d", n, size)
-			}
-			reader.ReadByte() // trailing newline
-			d.W = content
+			d.W = body
 			continue
 		}
 
 		if card < lastCard && !isLegacyTechnoteNAfterP(d, card, lastCard) {
-			return nil, fmt.Errorf("deck.Parse: card '%c' out of order (after '%c')", card, lastCard)
+			return fmt.Errorf("card '%c' out of order (after '%c')", card, lastCard)
 		}
 		lastCard = card
 
@@ -101,19 +131,44 @@ func Parse(data []byte) (*Deck, error) {
 		// dropped that check-in from crosslink entirely. Cards that do require
 		// arguments still reject the empty string in their own parser.
 		if len(line) > 1 && line[1] != ' ' {
-			return nil, fmt.Errorf("deck.Parse: malformed: %q", line)
+			return fmt.Errorf("malformed: %q", line)
 		}
 		var args string
 		if len(line) > 2 {
 			args = line[2:]
 		}
 		if err := parseCard(d, card, args); err != nil {
-			return nil, fmt.Errorf("deck.Parse: %w", err)
+			return err
 		}
 	}
 
-	d.Type = inferType(d)
-	return d, nil
+	// §6.2 / §5.2: an artifact that reaches here without a Z card is not well
+	// formed. verifyZ treated the absent Z card as "continue"; this is where
+	// its absence is judged.
+	if !sawZ {
+		return fmt.Errorf("Z-card missing")
+	}
+	return nil
+}
+
+// readWBody reads a W card's body given its header line: the size token
+// (§4.7.18) and that many bytes, then the trailing newline.
+func readWBody(reader *bytes.Reader, line string) ([]byte, error) {
+	sizeStr := strings.TrimSpace(line[2:])
+	size, err := strconv.Atoi(sizeStr)
+	if err != nil {
+		return nil, fmt.Errorf("bad W size: %w", err)
+	}
+	body := make([]byte, size)
+	n, readErr := reader.Read(body)
+	if readErr != nil && n != size {
+		return nil, fmt.Errorf("W content read: %w", readErr)
+	}
+	if n != size {
+		return nil, fmt.Errorf("W content: got %d, want %d", n, size)
+	}
+	reader.ReadByte() // trailing newline
+	return body, nil
 }
 
 // isLegacyTechnoteNAfterP reports whether an N-card following a P-card is the

@@ -22,7 +22,9 @@ type suite struct {
 // suites lists every suite the coverage test audits. Each draft's test file
 // adds its suite here.
 func suites() []suite {
-	return []suite{}
+	return []suite{
+		{name: "artifact", table: "requirements/artifact.tsv", cases: artifactSuiteCases()},
+	}
 }
 
 // requirement is one row of a requirements table.

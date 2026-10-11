@@ -129,6 +129,8 @@ func TestCkinLock_SyncRoundTrip(t *testing.T) {
 	// up by expireStaleLocks (which removes locks for non-leaf parents).
 	parentUUID := "abcd0000000000000000000000000000000000ab"
 	insertLeafBlob(t, serverRepo, parentUUID)
+	// Only a requester who may commit takes a lock.
+	grantNobodyPush(t, serverRepo)
 
 	transport := &MockTransport{
 		Handler: func(req *xfer.Message) *xfer.Message {

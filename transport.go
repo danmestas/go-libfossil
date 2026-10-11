@@ -1,7 +1,6 @@
 package libfossil
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -78,12 +77,7 @@ func (t *httpTransport) RoundTripFramed(ctx context.Context, payload []byte) ([]
 }
 
 func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, "POST", t.url, bytes.NewReader(payload))
-	if err != nil {
-		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-fossil")
-	resp, err := t.client.Do(req)
+	resp, err := internalsync.PostXfer(ctx, t.client, t.url, "application/x-fossil", payload)
 	if err != nil {
 		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}

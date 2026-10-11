@@ -170,6 +170,10 @@ func (h *handler) handleXGimme(c *xfer.XGimmeCard) error {
 	if c == nil {
 		panic("handler.handleXGimme: c must not be nil")
 	}
+	// A row goes only to a pulling client, as an artifact does (handleGimme).
+	if !h.pullOK {
+		return nil
+	}
 
 	// BUGGIFY: 5% chance skip sending a row to test client retry.
 	if h.buggify != nil && h.buggify.Check("handler.handleXGimme.skip", 0.05) {

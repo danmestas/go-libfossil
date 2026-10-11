@@ -425,37 +425,7 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	case *xfer.LoginCard:
 		return // Already processed in first pass (initAuth/handleLoginCard).
 	case *xfer.PragmaCard:
-		if c.Name == "uv-hash" && len(c.Values) >= 1 {
-			if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
-				h.resp = append(h.resp, &xfer.ErrorCard{
-					Message: fmt.Sprintf("uv-hash: %v", err),
-				})
-			}
-		} else if c.Name == "xtable-hash" && len(c.Values) >= 2 {
-			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
-		}
-		if c.Name == "req-clusters" {
-			h.reqClusters = true
-		}
-		if c.Name == "ci-lock" && len(c.Values) >= 2 {
-			fail := processCkinLock(h.repo.DB(), c.Values[0], c.Values[1], h.user, DefaultCkinLockTimeout)
-			if fail != nil {
-				h.resp = append(h.resp, &xfer.PragmaCard{
-					Name:   "ci-lock-fail",
-					Values: []string{fail.HeldBy, fmt.Sprintf("%d", fail.Since.Unix())},
-				})
-			}
-		}
-		if c.Name == "send-private" {
-			if auth.CanSyncPrivate(h.caps) {
-				h.syncPrivate = true
-			} else {
-				h.resp = append(h.resp, &xfer.ErrorCard{
-					Message: "not authorized to sync private content",
-				})
-			}
-		}
-		// Acknowledge client-version, ignore other unknown pragmas.
+		h.handlePragma(c)
 	case *xfer.PushCard:
 		if auth.CanPush(h.caps) {
 			h.pushOK = true
@@ -516,6 +486,57 @@ func (h *handler) handleControlCard(card xfer.Card) {
 		}
 	case *xfer.SchemaCard:
 		h.handleSchemaCard(c)
+	}
+}
+
+// handlePragma acts on the pragmas the server understands and ignores the
+// rest, client-version included.
+//
+// Pragmas are handled in card order, before data cards, so a pull card later
+// in the request is not yet known here. The catalogs are therefore gated on
+// the Read capability itself, as fossil's page_xfer gates uv-hash on
+// g.perm.Read, rather than on an accepted pull.
+func (h *handler) handlePragma(c *xfer.PragmaCard) {
+	if c == nil {
+		panic("handler.handlePragma: c must not be nil")
+	}
+	switch {
+	case c.Name == "uv-hash" && len(c.Values) >= 1:
+		if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
+			h.resp = append(h.resp, &xfer.ErrorCard{
+				Message: fmt.Sprintf("uv-hash: %v", err),
+			})
+		}
+	case c.Name == "xtable-hash" && len(c.Values) >= 2:
+		// The reply lists every row's key and mtime: readers only.
+		if auth.CanRead(h.caps) {
+			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
+		}
+	case c.Name == "req-clusters":
+		h.reqClusters = true
+	case c.Name == "ci-lock" && len(c.Values) >= 2:
+		// Fossil takes a lock for any requester. A lock only matters to
+		// someone who can commit, and ci-lock-fail names the holder, so
+		// this server takes and reports locks for writers alone.
+		if !auth.CanPush(h.caps) {
+			return
+		}
+		fail := processCkinLock(h.repo.DB(), c.Values[0], c.Values[1], h.user,
+			DefaultCkinLockTimeout)
+		if fail != nil {
+			h.resp = append(h.resp, &xfer.PragmaCard{
+				Name:   "ci-lock-fail",
+				Values: []string{fail.HeldBy, fmt.Sprintf("%d", fail.Since.Unix())},
+			})
+		}
+	case c.Name == "send-private":
+		if auth.CanSyncPrivate(h.caps) {
+			h.syncPrivate = true
+		} else {
+			h.resp = append(h.resp, &xfer.ErrorCard{
+				Message: "not authorized to sync private content",
+			})
+		}
 	}
 }
 
@@ -590,6 +611,12 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if c == nil {
 		panic("handler.handleGimme: c must not be nil")
+	}
+	// Fossil's page_xfer answers gimme only `if( isPull )`: a pull card the
+	// requester's Read permission accepted, or a clone, which sets isPull
+	// too. Answering any other gimme hands content to whoever names a hash.
+	if !h.pullOK && !h.cloneMode {
+		return nil
 	}
 	// BUGGIFY: 5% chance skip sending a file to test client retry.
 	if h.buggify != nil && h.buggify.Check("handler.handleGimme.skip", 0.05) {

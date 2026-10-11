@@ -1,10 +1,10 @@
 package conformance
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,7 +21,7 @@ func (f *fossilReference) deltaRepo() (string, error) {
 	if _, err := os.Stat(path); err == nil {
 		return path, nil
 	}
-	if output, err := exec.Command(f.bin, "new", path).CombinedOutput(); err != nil {
+	if output, err := f.command(context.Background(), "new", path).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("fossil new: %v: %s", err, output)
 	}
 	return path, nil
@@ -44,7 +44,8 @@ func (f *fossilReference) deltaSQL(expr string) (out string, rejected bool, err 
 	if err != nil {
 		return "", false, err
 	}
-	output, runErr := exec.Command(f.bin, "sql", "-R", repo, "SELECT "+expr+";").CombinedOutput()
+	output, runErr := f.command(context.Background(), "sql", "-R", repo, "SELECT "+expr+";").
+		CombinedOutput()
 	text := strings.TrimSpace(string(output))
 	if strings.Contains(text, "corrupt fossil delta") {
 		return "", true, nil

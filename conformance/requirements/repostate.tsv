@@ -1,0 +1,92 @@
+# Requirements for draft-fossil-repo-state-00, written from the draft text.
+# Erratum 5.4 (cancel halt) is Reported, not accepted; fossil(1) 2.28 behaves as it says,
+# so RS-5.4-4 follows the erratum.
+# draft	draft-fossil-repo-state-00.txt	5428c83209ac09f4b86e908e0a3707d8940ccc91feb944b0cec4f02914084c1d
+# erratum	repo-state-00-s5.4-cancel-halt.md	73a8c01f4a36c00fae2c50ad73dc46bde66aee280607dbbb9827cc9ebf577368
+#
+# id	section	requirement	scope
+RS-2-1	2	An operation that tags a check-in with a user-supplied symbolic name stores it as "sym-" + name unless the caller asks for the raw name.
+RS-2-2	2	Tags whose names begin with "wiki-", "tkt-" or "event-" are never created by a user tagging operation.
+RS-3.1-1	3.1	Each parent named on a check-in's P card yields a linkage row (parent, child) carrying the primary-parent flag, the check-in's mtime and the baseline id.
+RS-3.1-2	3.1	A parent named more than once on one P card yields a single linkage row for that (parent, child) pair.
+RS-3.2-1	3.2	The first parent on the P card is the primary parent (flag set); every other parent is a merge parent (flag unset).
+RS-3.2-2	3.2	A repeated parent keeps the primary flag chosen by its first occurrence.
+RS-3.2-3	3.2	Linear-history operations (first-parent traversal, the prev keyword) follow only the primary-parent row.
+RS-3.2-4	3.2	Full-ancestry operations (merge base, ancestor tests) include merge-parent rows.
+RS-4.1-1	4.1	A manifest with a T-card whose name lacks a -, + or * prefix is rejected.
+RS-4.1-2	4.1	A manifest with a T-card whose name after the prefix is all hexadecimal digits is rejected.
+RS-4.1-3	4.1	A manifest whose T-cards are not strictly ascending by (name, uuid) is rejected.
+RS-4.1-4	4.1	A rejected manifest contributes no tag state at all, not even from its valid T-cards.
+RS-4.2-1	4.2	A T-card naming an artifact not yet stored resolves to a phantom rid; the tag is recorded against it and is in effect once the artifact arrives and is crosslinked.
+RS-4.2-2	4.2	A P-card parent not yet stored yields a phantom rid and a linkage row to it, not an error.
+RS-4.2-3	4.2	T-cards are applied only from control, check-in and technote (event) artifacts.
+RS-4.2-4	4.2	Crosslinking a cluster applies an implicit singleton "cluster" tag to the cluster itself.
+RS-4.2-5	4.2	After a check-in with a resolved primary parent is crosslinked, the parent's tags are re-propagated, so the new check-in inherits them.
+RS-4.2-6	4.2	A propagating or cancel T-card applied to a resolved target runs the propagation walk from that target; a singleton runs none.
+RS-4.2-7	4.2	Crosslinking an artifact again creates no additional linkage or event rows and leaves derived state unchanged.
+RS-4.2-8	4.2	Singleton reparent operations recorded during a crosslink batch are re-applied when the batch ends.	batching is optional; only the end state of a batch that holds a parent tag is checked
+RS-4.3-1	4.3	No tag, propagation or linkage effect is applied on behalf of a manifest that fails the T-card checks.
+RS-4.4-1	4.4	An artifact that hashes to its name but is not classifiable does not make state assembly fail.
+RS-4.4-2	4.4	An unclassifiable artifact contributes no linkage, tag or branch effect.
+RS-4.4-3	4.4	An artifact whose bytes do not hash to its stored name is rejected.
+RS-4.6-1	4.6	A tag or anti-tag operation stores a control artifact with exactly one T-card and derives its state by crosslinking that artifact.
+RS-5.1-1	5.1	A T-card prefix - is stored as tagtype 0, + as 1 and * as 2.
+RS-5.1-2	5.1	Any other leading character on a T-card is a fatal error and is never stored as a tag type.
+RS-5.2-1	5.2	tagxref holds at most one row per (rid, tag), carrying tagtype, srcid, origid, value and mtime.
+RS-5.3-1	5.3	A direct application is skipped when the (tag, rid) row already has an mtime greater than or equal to the incoming one.
+RS-5.3-2	5.3	Otherwise the row is replaced with the card's raw tagtype, srcid = the artifact carrying the card, origid = rid = the target.
+RS-5.3-3	5.3	A cancel application stores a NULL value.
+RS-5.3-4	5.3	A singleton is propagated as a cancel: it removes the inherited same-name rows of the target's descendants.
+RS-5.4-1	5.4	Propagation follows primary-parent links only and never crosses a merge link.
+RS-5.4-2	5.4	Re-propagating a parent's full tag set treats its singleton rows as cancels.
+RS-5.4-3	5.4	A child with a same-tag row qualifies only when that row has srcid 0 and an mtime strictly earlier than the propagating tag's; an equal mtime keeps the row.
+RS-5.4-4	5.4	A child with no same-tag row qualifies for a propagating walk but halts a cancel walk (erratum 5.4).
+RS-5.4-5	5.4	A qualifying child of a propagating walk gets tagtype 2, srcid 0, the origin's origid, value and mtime.
+RS-5.4-6	5.4	A qualifying child of a cancel walk has its same-tag row deleted.
+RS-5.4-7	5.4	Every child updated by the walk is itself walked, so the effect reaches all qualifying primary descendants.
+RS-5.5-1	5.5	A directly applied same-tag row (srcid nonzero) stops propagation regardless of its mtime.
+RS-5.5-2	5.5	A cancel tag on a check-in deletes the inherited row there and keeps the tag from its descendants.
+RS-5.5-3	5.5	A singleton tag on a check-in keeps a same-name propagating tag from its descendants.
+RS-6.1-1	6.1	A check-in's branch is the value of its branch tag row with tagtype greater than 0.
+RS-6.1-2	6.1	A check-in with no active branch tag is attributed to the default branch.
+RS-6.1-3	6.1	Creating a branch, including the default branch of a new repository, creates its sym-<branch> tag, propagating like its branch tag.
+RS-6.1-4	6.1	The default branch is the main-branch setting, and trunk only when that setting is unset.
+RS-6.2-1	6.2	Branch creation writes a propagating branch tag with the name as value and a propagating sym-<name> tag on the branch-root check-in.
+RS-6.2-2	6.2	Branch creation cancels every other sym-* tag active on the branch root.
+RS-6.2-3	6.2	Branch creation fails, before writing anything, when an open branch already has the name.
+RS-6.3-1	6.3	The branch list has one entry per distinct active branch-tag value, with that value's greatest event.mtime and check-in count.
+RS-6.3-2	6.3	A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.
+RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 rule as any branch membership.
+RS-7.2-1	7.2	A check-in is a leaf exactly when no plink child of it, primary or merge, is on the same branch.
+RS-7.3-1	7.3	A full leaf recomputation selects every check-in without a same-branch child, including parentless ones.	disagreement with fossil(1); see cases
+RS-7.3-2	7.3	An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.
+RS-7.3-3	7.3	A new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.
+RS-7.3-4	7.3	Scheduled leaf rechecks have all been applied before the leaf table is read.
+RS-7.4-1	7.4	An open leaf is a leaf without a closed tag row of tagtype greater than 0.
+RS-7.5-1	7.5	A branch's open leaves are its leaf-table members that are not closed and share its branch.
+RS-7.5-2	7.5	The ambiguity test answers no for a check-in that is not itself a leaf.
+RS-7.5-3	7.5	For a leaf, the ambiguity test answers yes exactly when another open leaf shares its branch.
+RS-7.6-1	7.6	Directly applying a branch tag re-evaluates that check-in's leaf status.
+RS-7.6-2	7.6	Each descendant that gains or loses a branch tag by propagation has its leaf status re-evaluated.
+RS-8.2-1	8.2	A plain name N resolves to the check-in carrying an active sym-N tag with the greatest event.mtime.
+RS-8.2-2	8.2	A closed tag on a candidate does not affect name resolution.
+RS-8.2-3	8.2	Whether a candidate is a leaf does not affect name resolution.
+RS-8.2-4	8.2	A name no form matches fails to resolve.
+RS-8.3-1	8.3	"rid:DIGITS" resolves to that rid.
+RS-8.3-2	8.3	"tag:NAME" resolves NAME by the plain-name rule without trying it as a hash.
+RS-8.3-3	8.3	"tip" resolves to the check-in with the greatest event.mtime.
+RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.
+RS-8.3-5	8.3	"root:BR" resolves to the first primary ancestor of BR that is off BR's branch.
+RS-8.3-6	8.3	"start:BR" resolves to the earliest primary ancestor of BR still on BR's branch.
+RS-8.3-7	8.3	"merge-in:BR" resolves to the most recent merge-in point of BR from its parent branch.
+RS-8.3-8	8.3	Date forms and NAME:TIMESTAMP resolve to the latest eligible event with mtime at or below the expanded upper bound.
+RS-8.3-9	8.3	A hexadecimal name of 4 or more digits is tried as a hash prefix before the plain-name rule.
+RS-8.3-10	8.3	A hash prefix matching more than one artifact is rejected as ambiguous.
+RS-8.3-11	8.3	A name that matches nothing and ends in one punctuation character is retried without it.
+RS-8.3-12	8.3	A branch-type request resolves to the first check-in of the branch the name resolves into.
+RS-8.5-1	8.5	Name resolution and open-leaf enumeration stay distinct: a newer closed sym carrier wins resolution while the leaf view omits it.
+RS-9-1	9	The current trunk is the main-branch setting's name resolved by the plain-name rule.
+RS-9-2	9	Resolving a forked branch picks one check-in by greatest mtime and is not an error.
+RS-9-3	9	A branch's open leaf carries its active branch tag, is in the leaf table and is not closed; a branch with none is not open.
+RS-9-4	9	A report naming one open leaf of a branch with several picks the greatest mtime.
+RS-12-1	12	An artifact that the artifact-format rules reject contributes no crosslink state.

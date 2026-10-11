@@ -22,6 +22,12 @@ import (
 // now-childless old parent a leaf. A parent tag whose value is not a
 // well-formed list of artifact hashes is ignored, matching fossil's
 // reparent_abort.
+//
+// Each repair round scans tagxref for parent tags and rewrites only the tagged
+// check-ins, so the pass is O(reparented), not O(repository); a round with no
+// parent tag does one indexed query and returns. This matches fossil's
+// manifest_crosslink_end, which the receive path's repair gate runs once per
+// round rather than once per repository.
 func ReparentCheckins(tx *db.Tx) error {
 	if tx == nil {
 		panic("manifest.ReparentCheckins: tx must not be nil")
@@ -88,13 +94,6 @@ func reparentCheckin(
 		return nil
 	}
 
-	var baseid any
-	if d.B != "" {
-		var baseRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.B).Scan(&baseRid); err == nil {
-			baseid = baseRid
-		}
-	}
 	reparented := *d
 	reparented.P = parents
 
@@ -104,7 +103,7 @@ func reparentCheckin(
 	if _, err := tx.Exec("DELETE FROM mlink WHERE mid=?", rid); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin mlink delete rid=%d: %w", rid, err)
 	}
-	if err := insertCheckinPlinks(tx, rid, &reparented, baseid); err != nil {
+	if err := insertCheckinPlinks(tx, rid, &reparented, checkinBaseid(tx, d)); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin plink rid=%d: %w", rid, err)
 	}
 	if err := insertCheckinMlinks(tx, cache, rid, &reparented); err != nil {

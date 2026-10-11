@@ -1021,22 +1021,28 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 		return fmt.Errorf("event: %w", err)
 	}
 
-	// Resolve baseid for plink if B-card present
-	var baseid any = nil
-	if d.B != "" {
-		var baseRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.B).Scan(&baseRid); err == nil {
-			baseid = baseRid
-		}
-	}
-
-	if err := insertCheckinPlinks(tx, rid, d, baseid); err != nil {
+	if err := insertCheckinPlinks(tx, rid, d, checkinBaseid(tx, d)); err != nil {
 		return err
 	}
 	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
 		return err
 	}
 	return insertCherrypicks(tx, rid, d)
+}
+
+// checkinBaseid resolves a delta check-in's baseline (B-card) to the blob rid
+// the plink baseid column carries, or nil for a baseline manifest or a
+// baseline blob that has not arrived. It is the one place both the normal
+// linkage path and the reparent pass read the baseline from.
+func checkinBaseid(q db.Querier, d *deck.Deck) any {
+	if d.B == "" {
+		return nil
+	}
+	var baseRid int64
+	if err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", d.B).Scan(&baseRid); err != nil {
+		return nil
+	}
+	return baseRid
 }
 
 // insertCheckinPlinks inserts plink rows for each parent (P-card).

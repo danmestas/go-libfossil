@@ -27,6 +27,9 @@ type syncServerCase struct {
 	deviates replyCheck
 	// notSent says why the request is not sent to fossil(1) at all.
 	notSent string
+	// fossil, when set, says why fossil(1) does not do what the case
+	// expects; the case fails once fossil(1) does.
+	fossil string
 }
 
 func (c syncServerCase) request(fx *syncFixture) syncRequest {
@@ -63,7 +66,7 @@ func (c syncServerCase) run(fx *syncFixture, ref *fossilReference,
 		if err != nil {
 			return err, nil
 		}
-		if err := fossilAgrees(c.want(reply), ""); err != nil {
+		if err := fossilAgrees(c.want(reply), c.fossil); err != nil {
 			return err, nil
 		}
 	}

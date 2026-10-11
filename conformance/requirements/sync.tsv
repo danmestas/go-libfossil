@@ -9,6 +9,7 @@
 # draft	draft-fossil-sync-protocol-00.txt	068d7672eedfd82e581821b1aa9130c2d316e0e5c5c52ded1807073d69ed5765
 # erratum	sync-protocol-00-s3.3-content-received-flag.md	3be503a1e411bd7f520b414d9d3bdd058137c0ac8759f7d0f8bff1e7f4717c28
 # erratum	sync-protocol-00-s5.2-bad-command-encoding.md	f3409f04690f3e9bef40468504f4858fa51cdeba1fe751c16942b1611609d3d6
+# erratum	sync-protocol-00-s7.3-uvgimme-read.md	056b4fc6028b1654020be32e87fab7dc765fd941fafe141326dbcb4106ae8834
 SP-3.2-1	3.2	Client: every request carries pragma client-version.
 SP-3.2-2	3.2	Client: pragma client-version precedes every content-requesting card (gimme, uvgimme, reqconfig) in the request.
 SP-3.2-3	3.2	Client: every request ends with a comment line of random bytes.
@@ -97,6 +98,8 @@ SP-7.3-7	7.3	Server: a client uvfile requires UV write permission, and an unauth
 SP-7.3-8	7.3	Server: a uvgimme for an absent NAME emits no card.
 SP-7.3-9	7.3	Server: a uvgimme is answered with uvfile FLAGS 0 for a live file or HASH - SIZE 0 FLAGS 1 for a tombstone.
 SP-7.3-10	7.3	Receiver: for status 0 or 1, a uvfile creates or replaces the row with the received NAME, MTIME, HASH and content.
+SP-7.3-11	7.3	Server: a uvgimme from a requester without Read permission emits neither content nor error (erratum s7.3).
+SP-7.3-12	7.3	Server: for the uvgimme Read check, Clone permission implies Read (erratum s7.3).
 SP-7.4-1	7.4	Receiver: a card for an already verified HASH is consumed and ignored: no replacement, no DELTASRC phantom.	the DELTASRC phantom is not covered: fossil(1) 2.28 makes one and asks for it
 SP-7.4-2	7.4	Receiver: for an unverified target with a missing DELTASRC, the delta is kept under HASH and the DELTASRC phantom carries the card's private classification.
 SP-7.5-1	7.5	Client: private marks the next file or cfile; repetition, comments, other cards and uvfile do not consume it, and it survives a reply boundary.

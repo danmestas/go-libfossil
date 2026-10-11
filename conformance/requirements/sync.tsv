@@ -1,0 +1,162 @@
+# Requirements of draft-fossil-sync-protocol-00, written from the draft text.
+# Each requirement names the role it binds: "Client:", "Server:", "Sender:"
+# (whichever end emits the card) or "Receiver:" (whichever end parses it).
+# Format: <id>\t<section>\t<requirement>[\t<scope note>]
+# Skipped, with reasons, in the suite's report: §12 (IANA), §11.2 (deployment
+# advice), §4 SSH and User-Agent details (no SSH transport), §7.6 SYNC_IFABLE
+# (no autopush mode in the library), §8.2 "MUST NOT infer count" and §8.8
+# non-persistence (not observable), §10.2 display, §8.6.1 (repo-state draft).
+# draft	draft-fossil-sync-protocol-00.txt	068d7672eedfd82e581821b1aa9130c2d316e0e5c5c52ded1807073d69ed5765
+# erratum	sync-protocol-00-s3.3-content-received-flag.md	3be503a1e411bd7f520b414d9d3bdd058137c0ac8759f7d0f8bff1e7f4717c28
+# erratum	sync-protocol-00-s5.2-bad-command-encoding.md	f3409f04690f3e9bef40468504f4858fa51cdeba1fe751c16942b1611609d3d6
+SP-3.2-1	3.2	Client: every request carries pragma client-version.
+SP-3.2-2	3.2	Client: pragma client-version precedes every content-requesting card (gimme, uvgimme, reqconfig) in the request.
+SP-3.2-3	3.2	Client: every request ends with a comment line of random bytes.
+SP-3.2-4	3.2	Client: in private sync, pragma send-private precedes client-version in the first request and follows it in later requests.
+SP-3.2-5	3.2	Client: a push, pull or sync session carries its push and/or pull card in every request until Section 10.2 suppresses push.
+SP-3.2-6	3.2	Client: a returned state cookie follows the fixed operation card, or client-version when there is none.
+SP-3.2-7	3.2	Server: a completed reply ends with the "# timestamp DATETIME errors N" comment.
+SP-3.2-8	3.2	Server: pragma server-version precedes every clone-specific card in a clone reply.
+SP-3.3-1	3.3	Receiver: igot HASH creates a phantom only when HASH is absent and the current direction lets the receiver obtain it (client pull or clone, server push).
+SP-3.3-2	3.3	Receiver: a delta file or cfile whose DELTASRC is absent stores the delta, deletes HASH's phantom and creates a DELTASRC phantom; HASH is not requested again.	erratum s3.3: no per-artifact received state, only the phantom set
+SP-3.3-3	3.3	Client: the phantom scan requests no hash the peer asked for this round, no shunned name and no private hash unless private sync is on.	the peer-lacks filter is not covered: fossil(1) 2.28 asks again for a hash the last reply gimme-d
+SP-3.3-4	3.3	Receiver: a gimme for content the current direction may not send produces neither content nor an error and is not deferred.
+SP-3.3-5	3.3	Receiver: a gimme for an absent hash is silently skipped.
+SP-3.3-6	3.3	Receiver: a gimme for held content that direction and policy permit is answered with that content in this or a later message.
+SP-3.6-1	3.6	Client: a received cookie card replaces the stored cookie.
+SP-3.6-2	3.6	Server: does not depend on a cookie and tolerates foreign and repeated cookie cards.
+SP-3.7-1	3.7	Client: continues when stored content or an igot-created phantom leaves the phantom table non-empty (limb a).
+SP-3.7-2	3.7	Client: continues when processing the reply appended file or delta content to the next request, or the UV upload phase is selected (limb b).
+SP-3.7-3	3.7	Client: continues once when the first request sent a private igot, or a server-version made private inventory eligible and it was appended (limb c).	no case: fossil(1) 2.28 sends its private igots in the first request and takes no further round, so it cannot show the behavior, and go-libfossil does the same
+SP-3.7-4	3.7	Client: continues for uvgimme as limb d states: sent uvgimme with a uvfile reply or round below 3, or a uvgimme appended.
+SP-3.7-5	3.7	Client: a modern clone continues after the first round, after a round that stored content, or while a positive sequence and the raw artifact count advance (limb e).
+SP-3.7-6	3.7	Client: remaining phantoms alone neither continue the session nor cause an error.
+SP-3.7-7	3.7	Client: with no continuation condition true, the session stops without another request.
+SP-3.9-1	3.9	Sender: never emits a card with a seventh token.
+SP-3.9-2	3.9	Receiver: tokens beyond the sixth are invisible to card handlers and create no other card condition.
+SP-4-1	4	Client: posts to the repository URL path unchanged and never appends /xfer.
+SP-4-2	4	Client: every request carries an exact Content-Length and a nonempty body.
+SP-4-3	4	Server: a POST with Content-Type application/x-fossil or application/x-fossil-debug dispatches to sync whatever its path.
+SP-4-4	4	Client: follows at most 19 redirects with status 301, 302, 307 or 308, re-posting the same request body; the twentieth is fatal.	the twentieth redirect being fatal is not covered
+SP-4-5	4	Client: refuses a redirect from HTTPS to HTTP.
+SP-4-6	4	Client: strips trailing /xfer from a redirect target before using it as the new base.	covers one trailing /xfer: fossil(1) 2.28 strips one, not repeatedly
+SP-4-7	4	Client: only HTTP 200 is a protocol reply; any other non-redirect status aborts before card parsing.
+SP-4-8	4	Client: a reply without Content-Type is compressed; an x-fossil-debug or x-fossil-uncompressed prefix is uncompressed; an x-fossil prefix is compressed; any other type is rejected.
+SP-4.1-1	4.1	Sender: the compressed container is the 4-byte big-endian actual input length followed by a zlib stream.
+SP-4.1-2	4.1	Client: production requests use application/x-fossil, never application/x-fossil-debug.
+SP-4.1-3	4.1	Receiver: the advertised container length is a capacity; a shorter decoded body is not rejected for that alone.
+SP-4.1-4	4.1	Receiver: bytes after a successfully decoded zlib stream are ignored.
+SP-4.1-5	4.1	Server: a clone version 3 reply is sent as application/x-fossil-uncompressed.
+SP-4.1-6	4.1	Receiver: decodes the container whatever DEFLATE level it was compressed at.
+SP-4.2-1	4.2	Client: a reply that ends without a terminal card is complete, not an error.
+SP-5.1-1	5.1	Receiver: a byte-counted payload ends only at its declared count and may contain LF and card-like text.	a payload cut short by the end of the body is not covered: fossil(1) 2.28 keeps it when its bytes hash right
+SP-5.1-2	5.1	Sender: a cfile payload not ending in LF is followed by one padding LF, which the receiver consumes as an empty line.
+SP-5.2-1	5.2	Sender: emits canonical cards: one SP between tokens, no leading or trailing whitespace, one LF.
+SP-5.2-2	5.2	Receiver: accepts canonical cards and splits tokens on at most SP, HTAB, VT, FF and CR runs.	other bytes, including UTF-8 spaces, stay in the token
+SP-5.2-3	5.2	Receiver: defossilizes fossilized arguments.
+SP-5.2-4	5.2	Server: an unknown operator resets accumulated output, emits error with fossilized TEXT "bad command: LINE" and continues with later request cards.	erratum s5.2: TEXT is fossilized, one token on the wire
+SP-5.2-5	5.2	Client: an unknown operator records a local warning, sends no error, and ends the reply-card loop; earlier cards stay effective and continuation is evaluated.
+SP-5.2-6	5.2	Server: a defined operator with the wrong arity or received in the wrong direction (including client-sent error and clone_seqno) gets error bad command and later cards are processed.
+SP-5.2-7	5.2	Server: a file, cfile or uvfile handler validation failure resets output, emits the handler's fossilized error, counts it and stops request parsing.
+SP-5.2-8	5.2	Client: a malformed defined card records a warning and ends the reply-card loop; earlier cards stay effective and continuation is evaluated.
+SP-5.2-9	5.2	Receiver: private ignores visible surplus tokens and still sets the marker.
+SP-5.2-10	5.2	Receiver: igot accepts at least two visible tokens; a third token of exactly 1 marks it private, any other third token public, and later tokens are ignored.
+SP-5.2-11	5.2	Receiver: imposes no maximum line length before LF.
+SP-5.3-1	5.3	Receiver: a line beginning with # is not dispatched as a card.
+SP-5.3-2	5.3	Server: the timestamp comment is "# timestamp YYYY-MM-DDTHH:MM:SS errors N" in UTC with N canonical decimal.
+SP-5.3-3	5.3	Server: answering req-clusters, a nonempty run of public cluster igot cards is enclosed by # sending-clusters and # end-of-clusters, and an empty run by neither.
+SP-6.1-1	6.1	Sender: the login card is login USER NONCE SIGNATURE with USER fossilized and NONCE and SIGNATURE 40 lowercase hex characters.
+SP-6.1-2	6.1	Server: a second login in one request is fatal: output is reset and an error emitted.
+SP-6.2-1	6.2	Client: NONCE is the SHA-1 of every decompressed body byte after the login line's LF.
+SP-6.3-1	6.3	Client: the shared secret is SHA1(project-code "/" login "/" password) in lowercase hex.
+SP-6.4-1	6.4	Client: SIGNATURE is SHA1 of the NONCE hex followed by the shared-secret hex.
+SP-6.4-2	6.4	Server: nobody and anonymous logins succeed without a signature check.
+SP-6.4-3	6.4	Server: a named login succeeds when SHA1(NONCE || stored credential) equals SIGNATURE, compared case-sensitively.
+SP-6.4-4	6.4	Server: when that fails and the stored credential is not exactly 40 bytes, the secret is derived from the stored cleartext and retried.
+SP-6.4-5	6.4	Server: NONCE must equal the SHA-1 of the body after the login line, compared case-sensitively.
+SP-6.4-6	6.4	Server: a failed login keeps HTTP 200, discards staged output, emits error login failed and ends card processing.
+SP-6.4-7	6.4	Server: a successful login only adds capabilities to the request's baseline.
+SP-6.5-1	6.5	Client: once the recorded server version passes the gate (VERSION >= 22700 and DATE/TIME at or after 20250727 110500), login goes in Cookie: x-f-l-c=login+USER+NONCE+SIGNATURE and no body login is sent.
+SP-6.5-2	6.5	Client: before server-version is seen, or when the gate is false, a named login uses the body card and never the cookie.
+SP-6.5-3	6.5	Server: accepts body login whatever the gate.
+SP-6.5-4	6.5	Server: accepts a login carried in the x-f-l-c cookie through the body-login path.
+SP-6.6-1	6.6	Server: each card is checked against its capability (o read, i write, g clone, x private, a admin) and an error is emitted when it is lacking.	Admin is checked by the case for SP-9.3-6
+SP-7.1-1	7.1	Receiver: file HASH SIZE and file HASH DELTASRC SIZE carry exactly SIZE payload bytes with no trailing separator.
+SP-7.1-2	7.1	Sender: push and pull transfer content with file cards, not cfile.
+SP-7.2-1	7.2	Receiver: cfile HASH [DELTASRC] USIZE CSIZE carries exactly CSIZE payload bytes.
+SP-7.2-2	7.2	Receiver: USIZE is parsed but not validated against the payload at the transfer layer.
+SP-7.2-3	7.2	Server: a clone cfile payload is the repository's stored compressed blob, retransmitted verbatim.
+SP-7.2-4	7.2	Server: clone version 3 transfers content with cfile cards only.
+SP-7.3-1	7.3	Receiver: uvfile NAME MTIME HASH SIZE FLAGS has a fossilized NAME, carries SIZE payload bytes unless FLAGS has 0x0001 or 0x0004, and HASH is a hash or -.	NAME fossilization is not covered: fossil(1) refuses an unversioned name that needs escaping
+SP-7.3-2	7.3	Receiver: rejects negative FLAGS and ignores reserved FLAGS bits.
+SP-7.3-3	7.3	Sender: emits a deletion as HASH -, SIZE 0 and FLAGS with 0x0001 set, and clears reserved FLAGS bits.
+SP-7.3-4	7.3	Receiver: HASH - with a positive SIZE and no payload-suppressing flag is rejected without storing or deleting.
+SP-7.3-5	7.3	Receiver: before applying a uvfile, recomputes its status from the current row: statuses 3 to 5 change nothing and status 2 updates MTIME only.
+SP-7.3-6	7.3	Receiver: content omitted by FLAGS 0x0004, or SIZE 0, is stored with size zero and NULL content.
+SP-7.3-7	7.3	Server: a client uvfile requires UV write permission, and an unauthorized one is an error.
+SP-7.3-8	7.3	Server: a uvgimme for an absent NAME emits no card.
+SP-7.3-9	7.3	Server: a uvgimme is answered with uvfile FLAGS 0 for a live file or HASH - SIZE 0 FLAGS 1 for a tombstone.
+SP-7.3-10	7.3	Receiver: for status 0 or 1, a uvfile creates or replaces the row with the received NAME, MTIME, HASH and content.
+SP-7.4-1	7.4	Receiver: a card for an already verified HASH is consumed and ignored: no replacement, no DELTASRC phantom.	the DELTASRC phantom is not covered: fossil(1) 2.28 makes one and asks for it
+SP-7.4-2	7.4	Receiver: for an unverified target with a missing DELTASRC, the delta is kept under HASH and the DELTASRC phantom carries the card's private classification.
+SP-7.5-1	7.5	Client: private marks the next file or cfile; repetition, comments, other cards and uvfile do not consume it, and it survives a reply boundary.
+SP-7.5-2	7.5	Server: private sets the marker only for a sender with Private capability; otherwise it emits the private authorization error and leaves no marker.
+SP-7.5-3	7.5	Receiver: entering the file or cfile handler clears the marker, so it applies to one card.
+SP-7.5-4	7.5	Sender: never sends a delta against a private basis to a peer without private authorization; it sends full content.
+SP-7.5-5	7.5	Receiver: an unauthorized igot HASH 1 is not an error and creates no phantom, but reclassifies a held HASH or phantom as private.
+SP-7.5-6	7.5	Server: private content is sent only after a successful send-private.
+SP-7.6-1	7.6	Sender: to a peer whose recorded VERSION is below 20000, a SHA3 file or cfile, or a uvfile with a 64-hex HASH, is replaced by error Fossil version 2.0 or later required., and the rest of the message is still built.
+SP-7.6-2	7.6	Server: the client VERSION is 0 until pragma client-version arrives.
+SP-7.6-3	7.6	Client: the recorded server VERSION starts as the client's own release and is replaced by server-version.
+SP-7.7-1	7.7	Receiver: a non-clone file whose target is in the shun table is consumed and discarded with no error, no content-received and no mutation.
+SP-7.7-2	7.7	Receiver: a cfile with a shunned target is discarded after its payload, even in a clone.
+SP-7.7-3	7.7	Receiver: admission applies to the target hash, not the DELTASRC.
+SP-7.7-4	7.7	Receiver: before commit, every newly stored artifact whose bytes are available is hashed and a mismatch aborts the commit.
+SP-8-1	8	Client: a clone starts with client-version, clone 3 1 and randomness, and no login card.
+SP-8.1-1	8.1	Server: an authorized three-token clone with integer VERSION >= 2 and a digit-only SEQNO of 0 clears output, rolls back, emits error invalid clone sequence number and stops parsing.
+SP-8.2-1	8.2	Server: an accepting clone reply sends cfile cards in RID order from SEQNO, skipping gaps, then clone_seqno NEXT, then push SERVERCODE PROJECTCODE; NEXT 0 marks exhaustion.
+SP-8.2-2	8.2	Client: records a digit-only NEXT; a nondecimal NEXT leaves the sequence unchanged and does not stop parsing.
+SP-8.2-3	8.2	Server: a clone authorization refusal resets output and emits push SERVERCODE PROJECTCODE then error, with no cfile and no clone_seqno.
+SP-8.2-4	8.2	Client: reissues clone 3 NEXT only when the reply carried a well-formed push and NEXT is positive; otherwise it sends the operation-less cleanup.
+SP-8.2-5	8.2	Client: after NEXT 0 no clone, pull or push card is sent; cleanup carries no operation card.
+SP-8.2-6	8.2	Server: in a directionless request, gimme yields neither file, cfile nor error.
+SP-8.2-7	8.2	Server: accepts and ignores igot cards received without push enablement.
+SP-8.3-1	8.3	Client: an error in the first clone reply is not fatal: later cards are parsed, a later push is recorded and the second clone request is made.
+SP-8.4-1	8.4	Client: reqconfig and uv-hash are deferred until after clone round 0.	no case: go-libfossil's Clone sends no reqconfig or uv-hash in any round, having no option for either, so there is nothing to defer
+SP-8.4-2	8.4	Server: with UV sync enabled, an authorized clone reply carries pragma uv-pull-only and the full UV catalog.
+SP-8.5-1	8.5	Server: a push or pull whose PROJECTCODE differs from the repository's is refused.
+SP-8.5.1-1	8.5.1	Client: the UV send table starts with every local row whose hash is non-NULL; tombstones are excluded.
+SP-8.5.1-2	8.5.1	Client: pragma uv-hash is sent exactly once, in the first eligible round, never in clone round 0.
+SP-8.5.1-3	8.5.1	Sender: the UV catalog hash is the SHA-1 of "NAME SP YYYY-MM-DD SP HH:MM:SS SP HASH LF" for each non-tombstone row, sorted by name bytes.
+SP-8.5.1-4	8.5.1	Server: a matching uv-hash gets no catalog; a mismatch with Read gets uv-push-ok or uv-pull-only and one uvigot per entry, tombstones as HASH -.
+SP-8.5.1-5	8.5.1	Client: each uvigot is classified into status 0 to 5 and handled as Table 6 states.
+SP-8.5.1-6	8.5.1	Client: after uv-pull-only, status 4 and 5 names are removed from the send table.
+SP-8.5.1-7	8.5.1	Sender: never emits the short uvigot, NAME MTIME SIZE with an empty HASH, for a tombstone.
+SP-8.6-1	8.6	Client: private igot is held until server-version gives the peer date, and omitted for dates before 2020-04-13.	no case: fossil(1) 2.28 sends private igots in the first request and also to a peer dated before 2020-04-13, so it cannot show the behavior
+SP-9-1	9	Receiver: an unknown pragma name is ignored silently, whatever its arguments.
+SP-9-2	9	Receiver: a known pragma received in the wrong direction is ignored and changes no state.
+SP-9-3	9	Server: a bare pragma with no NAME gets error bad command and later cards are processed.
+SP-9.1-1	9.1	Server: a full client-version replaces the peer VERSION, DATE and TIME and is answered with a full server-version; a short one updates VERSION only and gets no reply.
+SP-9.1-2	9.1	Client: a full server-version replaces the peer VERSION, DATE and TIME; a short one updates VERSION only.
+SP-9.2-1	9.2	Server: on a uv-hash mismatch with Read, sends uv-push-ok when the principal may write unversioned files, otherwise uv-pull-only, exactly once.
+SP-9.3-1	9.3	Server: reqconfig without Read is silently ignored.
+SP-9.3-2	9.3	Server: reqconfig for a name matching no group emits no config card and no error.
+SP-9.3-3	9.3	Sender: a scalar setting is config /config SIZE whose payload is MTIME 'NAME' value 'VALUE', followed by one LF.
+SP-9.3-4	9.3	Receiver: consumes one byte after a config payload without checking that it is LF.
+SP-9.3-5	9.3	Server: a config card whose SIZE is signed or not decimal takes the bad command path.
+SP-9.3-6	9.3	Server: a config card requires Admin; otherwise it emits error not authorized to push configuration and applies nothing.
+SP-9.4-1	9.4	Server: ci-lock for a hash held by a different client emits ci-lock-fail LOGIN MTIME; the same client gets no reply; no live lock writes one, unacknowledged.	the lock row written when none is live is not covered
+SP-9.4-2	9.4	Server: ci-unlock CLIENT-ID deletes that client's locks and emits nothing.
+SP-9.5-1	9.5	Server: send-private without Private capability appends error not authorized to sync private content without resetting output, and parsing continues.
+SP-9.5-2	9.5	Client: sends pragma send-private in every private round.
+SP-9.5-3	9.5	Server: emits no link pragma in reply to a request without req-links.
+SP-9.5-4	9.5	Receiver: stores a link's ARG defossilized and verbatim, and never parses, alters or echoes it.	no case: go-libfossil has no link handling, so no API reaches a received link
+SP-10.1-1	10.1	Client: a server error outside the first clone reply ends the reply-card loop; earlier cards stay committed and continuation is evaluated.
+SP-10.1-2	10.1	Server: at wrong-project, authorization, duplicate-login and unknown-card errors, partial output is discarded before the error.
+SP-10.1-3	10.1	Server: the SHA3 gate and unauthorized send-private append their error without reset, and parsing continues.
+SP-10.1-4	10.1	Server: card errors keep HTTP status 200.
+SP-10.1-5	10.1	Server: only invalid clone sequence number and invalid config record roll back the request; other card errors keep earlier mutations.
+SP-10.2-1	10.2	Receiver: message takes exactly two visible tokens, its TEXT is defossilized and it is not fatal.
+SP-10.2-2	10.2	Client: with push enabled, a message matching "pull only *" clears push: later gimme cards in that reply append no content and later requests omit push.
+SP-10.2-3	10.2	Client: any other message changes no state.
+SP-11.4-1	11.4	Sender: never truncates, renames or re-identifies a SHA3 name as SHA1.

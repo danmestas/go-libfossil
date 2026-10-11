@@ -26,6 +26,7 @@ func suites() []suite {
 		{name: "artifact", table: "requirements/artifact.tsv", cases: artifactSuiteCases()},
 		{name: "delta", table: "requirements/delta.tsv", cases: deltaSuiteCases()},
 		{name: "repostate", table: "requirements/repostate.tsv", cases: repostateSuiteCases()},
+		{name: "sync", table: "requirements/sync.tsv", cases: syncSuiteCases()},
 	}
 }
 

@@ -64,6 +64,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server now asks only a pushing client, as fossil does, and a client that is
   not pushing ignores any `gimme` it receives.
 
+- A sync card whose size is not a plain decimal is a decoding error. A
+  negative size, as in `file HASH -1`, used to panic the client or server
+  reading the message, and a signed size such as `+5` was read as a size.
+  Sizes follow draft-fossil-sync-protocol-00's `decimal` grammar and fossil's
+  32-bit limit, and a `uvfile`'s FLAGS take the same rule, so negative FLAGS
+  are rejected as the draft requires. A declared size no longer sets how much
+  memory is allocated before the payload arrives: the buffer grows with the
+  bytes read, so a large size over a short message fails without allocating
+  it. A `cfile` payload may inflate only to its USIZE, or to a margin above
+  USIZE for a delta, and not past its 4-byte size prefix, and all `cfile`
+  payloads in one message may inflate to at most `MaxCFileInflateBytes`
+  (1 GiB) together; a few megabytes of zlib could otherwise inflate to tens
+  of gigabytes. A single artifact larger than that cannot be received as a
+  `cfile`.
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

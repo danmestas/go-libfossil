@@ -209,12 +209,32 @@ func decompressBounded(data []byte) ([]byte, error) {
 	return raw, nil
 }
 
+// MaxCFileInflateBytes caps the bytes all cfile payloads in one message may
+// inflate to, together. Each cfile is already held to its own USIZE, but USIZE
+// is the sender's claim and zlib inflates about 1000:1, so without a message
+// budget a body of a few megabytes holding many cfiles costs tens of gigabytes
+// -- on a server too, which decodes a request before looking at its cards.
+//
+// Like MaxDecompressedBytes it is a local guard, not a protocol rule. It sits
+// far above a clone round: fossil stops filling a round once its compressed
+// output passes its max-download setting (5 MB by default), and this module's
+// server stops at DefaultCloneBatchBytes of artifact content. A round would
+// need a compression ratio over 200:1 throughout to reach it. A single
+// artifact larger than this cannot be received as a cfile.
+const MaxCFileInflateBytes = 1 << 30 // 1 GiB
+
 // DecodeUncompressed decodes cards from uncompressed data.
 func DecodeUncompressed(data []byte) (*Message, error) {
+	return decodeMessage(data, MaxCFileInflateBytes)
+}
+
+// decodeMessage decodes cards from uncompressed data, letting every cfile in
+// it inflate to at most budget bytes in total.
+func decodeMessage(data []byte, budget int64) (*Message, error) {
 	r := bufio.NewReader(bytes.NewReader(data))
 	msg := &Message{}
 	for {
-		card, err := DecodeCard(r)
+		card, err := decodeCard(r, &budget)
 		if err == io.EOF {
 			return msg, nil
 		}

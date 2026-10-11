@@ -99,6 +99,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` applies fossil's §4.6 name predicates. An F-card filename and
+  old-name, and an A-card filename, must be simple pathnames (§4.6.1): no
+  leading or doubled or trailing slash and no "." or ".." path element, the
+  non-strict form fossil uses, which still admits a backslash or non-UTF-8
+  byte. An L-card title and an A-card target (when not a hash) must be
+  well-formed wiki names (§4.6.2): 1 to 100 bytes, no leading, trailing or
+  doubled space and no control byte. A reserved repository filename
+  (`_FOSSIL_`, `.fslckout`, in either case, with an optional -wal/-shm/-journal
+  suffix, at the root or as a path's last component) is silently dropped from
+  an F-card list after the sort-order check, exactly as fossil does (#269).
+
+
 - `deck.Parse` validates every artifact-hash position against the §4.7.1 map:
   the A source, B, the E identifier, each F hash, G, I, M, every P token, both
   Q tokens, and the T target must be 40 or 64 case-insensitive hexadecimal

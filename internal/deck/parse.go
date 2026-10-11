@@ -310,7 +310,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 		// length and never 64, regardless of hash policy.
 		return setHashCard(tokens, &d.K, "K-card", true)
 	case 'L':
-		return setStringCard(tokens, &d.L, "title on L-card", true)
+		return parseLCard(d, tokens)
 	case 'M':
 		return parseMCard(d, tokens)
 	case 'N':
@@ -390,14 +390,20 @@ func parseACard(d *Deck, tokens []string) error {
 	if len(tokens) < 2 || len(tokens) > 3 {
 		return fmt.Errorf("A-card takes a filename, a target and an optional source")
 	}
-	// §4.7.2: the filename is escape-decoded and only its final path component
-	// is kept (fossil's file_tail); the target is escape-decoded -- the one
-	// §4.3.1 hash carve-out -- and its hash-or-wiki-name shape is checked
-	// elsewhere; the source, when present, is a raw artifact hash.
-	ac := &AttachmentCard{
-		Filename: fileTail(FossilDecode(tokens[0])),
-		Target:   FossilDecode(tokens[1]),
+	// §4.7.2: the filename is escape-decoded, MUST be a simple pathname
+	// (§4.6.1), and only its final path component is kept (fossil's file_tail);
+	// the target is escape-decoded -- the one §4.3.1 hash carve-out -- and MUST
+	// be either an artifact hash or a well-formed wiki name (§4.6.2); the
+	// source, when present, is a raw artifact hash.
+	name := FossilDecode(tokens[0])
+	if !simplePathname(name) {
+		return fmt.Errorf("invalid filename on A-card: %q", name)
 	}
+	target := FossilDecode(tokens[1])
+	if !validArtifactHash(target) && !wikiNameWellformed(target) {
+		return fmt.Errorf("invalid target on A-card: %q", target)
+	}
+	ac := &AttachmentCard{Filename: fileTail(name), Target: target}
 	if len(tokens) >= 3 {
 		ac.Source = tokens[2]
 		if !validArtifactHash(ac.Source) {
@@ -453,6 +459,10 @@ func parseFCard(d *Deck, tokens []string) error {
 		return fmt.Errorf("F-card takes a filename and up to three more fields")
 	}
 	fc := FileCard{Name: FossilDecode(tokens[0])}
+	// §4.6.1: the decoded filename MUST be a simple pathname.
+	if !simplePathname(fc.Name) {
+		return fmt.Errorf("invalid filename on F-card: %q", fc.Name)
+	}
 	if len(tokens) >= 2 {
 		fc.UUID = tokens[1]
 	}
@@ -461,6 +471,10 @@ func parseFCard(d *Deck, tokens []string) error {
 	}
 	if len(tokens) >= 4 {
 		fc.OldName = FossilDecode(tokens[3])
+		// §4.6.1: the decoded old-name MUST be a simple pathname too.
+		if !simplePathname(fc.OldName) {
+			return fmt.Errorf("invalid old-name on F-card: %q", fc.OldName)
+		}
 	}
 	// §4.7.6 / §4.7.1: a hash is required on every F card of a baseline
 	// manifest and must be a valid artifact hash (raw, never decoded). Only a
@@ -481,7 +495,27 @@ func parseFCard(d *Deck, tokens []string) error {
 			return err
 		}
 	}
+	// §4.6.3: a reserved repository filename is silently dropped, AFTER the
+	// sort-order check above, as fossil does (src/manifest.c, nFile--). The
+	// dropped card is never stored, so the next card's sort check compares
+	// against the previous retained file.
+	if fileIsReservedName(fc.Name) {
+		return nil
+	}
 	d.F = append(d.F, fc)
+	return nil
+}
+
+func parseLCard(d *Deck, tokens []string) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("L-card takes exactly one wiki title")
+	}
+	// §4.6.2: the decoded wiki title MUST be a well-formed wiki name.
+	title := FossilDecode(tokens[0])
+	if !wikiNameWellformed(title) {
+		return fmt.Errorf("malformed wiki name on L-card: %q", title)
+	}
+	d.L = title
 	return nil
 }
 

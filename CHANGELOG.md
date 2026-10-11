@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- The first check-in's `sym-trunk` tag is now propagating (`*sym-trunk`),
+  matching `fossil new` and repo-state §6.1, so the trunk alias descends to
+  every check-in on the branch. It used to be written as a singleton
+  (`+sym-trunk`), which stopped at the root (#289).
+
 
 ## [0.11.1] - 2026-10-11
 

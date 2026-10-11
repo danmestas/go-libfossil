@@ -44,6 +44,7 @@ func TestPushOnly_DrainsServerGimmes(t *testing.T) {
 		t.Fatalf("repo.Create server: %v", err)
 	}
 	t.Cleanup(func() { serverRepo.Close() })
+	grantNobodyPush(t, serverRepo)
 
 	transport := &MockTransport{
 		Handler: func(req *xfer.Message) *xfer.Message {
@@ -119,6 +120,7 @@ func TestClusterSync_RoundTrip(t *testing.T) {
 		t.Fatalf("repo.Create server: %v", err)
 	}
 	t.Cleanup(func() { serverRepo.Close() })
+	grantNobodyPush(t, serverRepo)
 
 	// --- Transport: MockTransport wrapping HandleSync ---
 	transport := &MockTransport{

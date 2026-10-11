@@ -20,6 +20,7 @@ func createMockFossil(t *testing.T) *MockFossil {
 		t.Fatalf("repo.Create: %v", err)
 	}
 	t.Cleanup(func() { r.Close() })
+	grantLeavesPush(t, r)
 	return NewMockFossil(r)
 }
 

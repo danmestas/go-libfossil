@@ -63,20 +63,22 @@ func CreateWithEnv(path string, user string, env *simio.Env, projectCode string)
 		return nil, fmt.Errorf("repo.CreateWithEnv seed user: %w", err)
 	}
 
-	if err := db.SeedNobody(d, "cghijknorswy"); err != nil {
-		d.Close()
-		if rmErr := env.Storage.Remove(path); rmErr != nil {
-			return nil, fmt.Errorf("repo.CreateWithEnv: %w (cleanup failed: %v)", err, rmErr)
-		}
-		return nil, fmt.Errorf("repo.CreateWithEnv seed nobody: %w", err)
-	}
-
 	if err := db.SeedConfig(d, env.Rand, projectCode); err != nil {
 		d.Close()
 		if rmErr := env.Storage.Remove(path); rmErr != nil {
 			return nil, fmt.Errorf("repo.CreateWithEnv: %w (cleanup failed: %v)", err, rmErr)
 		}
 		return nil, fmt.Errorf("repo.CreateWithEnv seed config: %w", err)
+	}
+
+	// After SeedConfig, so a seeded Rand still yields the project and server
+	// codes it did before these users were added.
+	if err := db.SeedDefaultUsers(d, env.Rand); err != nil {
+		d.Close()
+		if rmErr := env.Storage.Remove(path); rmErr != nil {
+			return nil, fmt.Errorf("repo.CreateWithEnv: %w (cleanup failed: %v)", err, rmErr)
+		}
+		return nil, fmt.Errorf("repo.CreateWithEnv seed default users: %w", err)
 	}
 
 	return &Repo{db: d, path: path}, nil

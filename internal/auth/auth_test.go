@@ -71,3 +71,18 @@ func TestFossilImpliedCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// Setup (s) and Admin (a) include check-in, read and clone in fossil
+// (src/login.c login_set_capabilities), but not private sync or unversioned
+// writes, which stay explicit.
+func TestAdminAndSetupImplySyncCaps(t *testing.T) {
+	for _, caps := range []string{"s", "a"} {
+		if !CanPush(caps) || !CanPull(caps) || !CanClone(caps) {
+			t.Errorf("caps %q: push/pull/clone = %v/%v/%v, want all true",
+				caps, CanPush(caps), CanPull(caps), CanClone(caps))
+		}
+		if CanPushUV(caps) || CanSyncPrivate(caps) {
+			t.Errorf("caps %q must not imply y or x", caps)
+		}
+	}
+}

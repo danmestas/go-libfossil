@@ -121,6 +121,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password, and accounts with no stored password, `developer` and `reader`
   cannot be logged into.
 
+- **Breaking:** A new repository gives its built-in users the capabilities
+  `fossil new` gives them. `nobody`, whose capabilities every request
+  without credentials gets, may now clone, read and download (`gjorz`); it
+  used to be granted `cghijknorswy`, which let anyone push check-ins and
+  unversioned files, write wiki pages and tickets, and act with Setup. The
+  repository also gets fossil's `anonymous`, `developer` and `reader` users.
+  The creating user, who holds Setup, can now push and pull once given a
+  password, as Setup includes those rights in fossil. A login is refused
+  for any account with no password stored, as fossil refuses it.
+
+  Migration: new repositories no longer let anonymous users push. To allow
+  it, grant it explicitly, for example `r.SetCaps("nobody", "gijoryz")`, or
+  give clients an account with a password. Existing repositories keep the
+  capabilities already stored in them.
+
 - `Repo.Annotate` credits each line to the right check-in when edits shift
   line positions between versions (#253). Past the first parent it used to
   write each line's attribution by its position in an older version, so lines

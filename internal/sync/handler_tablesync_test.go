@@ -74,7 +74,7 @@ func TestHandleXIGotXGimmeXRow(t *testing.T) {
 }
 
 func TestHandleXDelete(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	def := repo.TableDef{
 		Columns:  []repo.ColumnDef{{Name: "id", Type: "text", PK: true}, {Name: "val", Type: "text"}},
 		Conflict: "mtime-wins",
@@ -239,7 +239,7 @@ func TestHandleXDelete_SelfWriteOwnershipCheck(t *testing.T) {
 }
 
 func TestHandleXDelete_PKDataHashMismatch(t *testing.T) {
-	serverRepo := setupSyncTestRepo(t)
+	serverRepo := setupPushableTestRepo(t)
 	def := repo.TableDef{
 		Columns:  []repo.ColumnDef{{Name: "id", Type: "text", PK: true}, {Name: "data", Type: "text"}},
 		Conflict: "mtime-wins",

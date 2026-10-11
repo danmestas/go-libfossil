@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/delta"
@@ -185,6 +186,25 @@ func setupSyncTestRepo(t *testing.T) *repo.Repo {
 		t.Fatalf("repo.Create: %v", err)
 	}
 	t.Cleanup(func() { r.Close() })
+	return r
+}
+
+// grantNobodyPush lets unauthenticated clients push artifacts (i) and
+// unversioned files (y) to r. A new repository grants nobody only fossil's
+// "gjorz", so a test that pushes without a login card has to grant this.
+func grantNobodyPush(t *testing.T, r *repo.Repo) {
+	t.Helper()
+	if err := auth.UpdateCaps(r.DB(), "nobody", "gijoryz"); err != nil {
+		t.Fatalf("grant nobody push: %v", err)
+	}
+}
+
+// setupPushableTestRepo is setupSyncTestRepo for a server that accepts
+// unauthenticated pushes.
+func setupPushableTestRepo(t *testing.T) *repo.Repo {
+	t.Helper()
+	r := setupSyncTestRepo(t)
+	grantNobodyPush(t, r)
 	return r
 }
 

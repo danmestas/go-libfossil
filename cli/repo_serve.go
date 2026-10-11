@@ -13,7 +13,9 @@ import (
 // can clone or sync against it. This is a thin wrapper: all serving logic
 // lives in Repo.ServeHTTP; the command's job is to open the repo, resolve
 // the bind address, and translate process interrupt into the context
-// cancellation that ServeHTTP already honors.
+// cancellation that ServeHTTP already honors. Access follows the user table,
+// as with fossil serve: clients without credentials act as nobody, which may
+// clone and pull a new repository but not push to it.
 type RepoServeCmd struct {
 	Addr string `short:"P" default:"127.0.0.1:8080" help:"Bind address as host:port"`
 }

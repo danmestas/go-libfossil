@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/simio"
@@ -21,7 +22,18 @@ func createMasterRepo(t *testing.T) *repo.Repo {
 		t.Fatalf("repo.Create master: %v", err)
 	}
 	t.Cleanup(func() { r.Close() })
+	grantLeavesPush(t, r)
 	return r
+}
+
+// grantLeavesPush lets the simulated leaves, which sync without a login
+// card, push artifacts (i) and unversioned files (y) to the master. A new
+// repository grants nobody only fossil's "gjorz".
+func grantLeavesPush(t *testing.T, r *repo.Repo) {
+	t.Helper()
+	if err := auth.UpdateCaps(r.DB(), "nobody", "gijoryz"); err != nil {
+		t.Fatalf("grant nobody push: %v", err)
+	}
 }
 
 // TestE2EPullFromMaster seeds artifacts in the mock fossil master,

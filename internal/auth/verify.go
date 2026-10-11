@@ -53,6 +53,10 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 	var info sql.NullString
 	var mtimeRaw any
 
+	// An account with no stored password cannot be logged into, as in
+	// fossil's check_login (src/xfer.c, length(pw)>0): with an empty secret
+	// the signature is SHA1(nonce), which anyone can compute. A new
+	// repository's creator starts that way, holding Setup.
 	err := d.QueryRow(
 		"SELECT uid, login, pw, cap, cexpire, info, mtime FROM user WHERE login=?"+
 			" AND login NOT IN ('anonymous','nobody','developer','reader')"+

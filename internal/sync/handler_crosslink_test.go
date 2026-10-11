@@ -53,7 +53,7 @@ func buildCheckinManifest(t *testing.T, comment string, when time.Time, fileUUID
 // crosslink scanner, so the hub's timeline, fork detection, and clone
 // protocol all observed empty relational state.
 func TestHandleSync_CrosslinksReceivedManifest(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 
 	fileContent := []byte("hello from crosslink test")
 	fileUUID := hash.SHA1(fileContent)
@@ -117,7 +117,7 @@ func TestHandleSync_CrosslinksReceivedManifest(t *testing.T) {
 // child becomes the new tip. This is the operation that produces phantom
 // "WouldFork" reports in v0.4.0 when crosslink is missing.
 func TestHandleSync_LeafTransitionOnChildCheckin(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 
 	parentFileContent := []byte("parent file content")
 	parentFileUUID := hash.SHA1(parentFileContent)

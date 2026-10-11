@@ -106,6 +106,11 @@ result, err := r.Sync(ctx,
 http.Handle("/", r.XferHandler())
 ```
 
+Served repositories enforce the user table the way fossil does. A request
+without credentials runs as `nobody`, which a new repository lets clone and
+pull but not push. Give clients an account, or grant `nobody` more with
+`r.SetCaps("nobody", ...)`.
+
 The `Transport` interface is pluggable — swap HTTP for NATS, WebSocket, libp2p, or anything that delivers bytes round-trip.
 
 ## Embedding the CLI

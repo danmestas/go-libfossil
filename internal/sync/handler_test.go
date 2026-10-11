@@ -123,7 +123,7 @@ func TestHandleIGotWithoutPushOrPull(t *testing.T) {
 // — without it, push-only clients exit after one round even when the
 // server is missing artifacts the client has just announced.
 func TestHandleIGotWithPushOnly(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	unknownUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	req := &xfer.Message{Cards: []xfer.Card{
@@ -191,7 +191,7 @@ func TestHandleGimmeMissing(t *testing.T) {
 }
 
 func TestHandlePushFile(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("push this")
 	uuid := hash.SHA1(data)
 
@@ -657,7 +657,7 @@ func TestHandlePushFileStoreFails(t *testing.T) {
 // The server must store it (see storeDeltaAgainstPhantomBase) and continue,
 // rather than emitting an ErrorCard.
 func TestHandlePushDeltaBeforeBaseDoesNotErrorCard(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 
 	base := []byte("push delta-before-base test, base content long enough to compress")
 	target := []byte("push delta-before-base test, base content long enough to compress, v2")
@@ -704,7 +704,7 @@ func (s alwaysAtSite) Check(site string, _ float64) bool { return string(s) == s
 // (which panic on rid <= 0). The handler should emit an ErrorCard
 // and continue processing.
 func TestHandleFileMissingAfterStore(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("payload that stores cleanly")
 	uuid := hash.SHA1(data)
 
@@ -727,7 +727,7 @@ func TestHandleFileMissingAfterStore(t *testing.T) {
 }
 
 func TestHandleCFileCard(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("cfile content")
 	uuid := hash.SHA1(data)
 
@@ -846,7 +846,7 @@ func TestHandleReqConfigMissing(t *testing.T) {
 // if IGotCard is processed before FileCard, blob.Exists returns false
 // and a spurious GimmeCard is emitted, causing infinite sync loops.
 func TestHandleSyncNoSpuriousGimmeForReceivedFile(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	defer r.Close()
 
 	// Create a blob to push to the handler.
@@ -1322,7 +1322,7 @@ func TestHandlerPrivateCardRejected(t *testing.T) {
 }
 
 func TestHandlerPublicFileClearsPrivate(t *testing.T) {
-	r := setupSyncTestRepo(t)
+	r := setupPushableTestRepo(t)
 	data := []byte("was private now public")
 	uuid := hash.SHA1(data)
 

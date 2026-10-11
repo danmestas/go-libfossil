@@ -265,7 +265,11 @@ func TestVerifyLoginRefusesReservedLogins(t *testing.T) {
 	for _, login := range []string{"developer", "reader"} {
 		secret := sha1Hex([]byte(code + "/" + login + "/pw"))
 		if _, err := d.Exec(
-			"INSERT INTO user(login, pw, cap) VALUES(?, ?, 'oi')", login, secret); err != nil {
+			// New repositories already hold these rows, as fossil's do; give
+			// each a password so only the reserved-name rule can refuse it.
+			"INSERT INTO user(login, pw, cap) VALUES(?, ?, 'oi')"+
+				" ON CONFLICT(login) DO UPDATE SET pw=excluded.pw, cap=excluded.cap",
+			login, secret); err != nil {
 			t.Fatalf("insert %s: %v", login, err)
 		}
 		card := buildLoginCard(login, "pw", code, []byte("pull sc pc\n"))

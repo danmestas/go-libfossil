@@ -33,6 +33,23 @@ func all(checks ...replyCheck) replyCheck {
 	}
 }
 
+// either passes when any of checks passes, and otherwise reports every
+// failure. It is for behavior the draft leaves open and fossil(1) builds
+// resolve differently.
+func either(checks ...replyCheck) replyCheck {
+	return func(r *serverReply) error {
+		var failures []string
+		for _, c := range checks {
+			err := c(r)
+			if err == nil {
+				return nil
+			}
+			failures = append(failures, err.Error())
+		}
+		return expectf("%s", strings.Join(failures, "; or "))
+	}
+}
+
 // syncReply checks that the reply is a sync reply at all: status 200, a
 // sync media type, and cards that parse.
 func syncReply(r *serverReply) error {

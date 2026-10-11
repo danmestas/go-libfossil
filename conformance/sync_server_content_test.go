@@ -132,11 +132,15 @@ func serverCloneCases() []syncServerCase {
 		want: all(syncReply, onlyError("invalid clone sequence number"), held("N1", 0)),
 	}, {
 		// Section 8.1 withholds the fatal from a SEQNO that is not
-		// digit-only and says no more; fossil(1) sends no content and
-		// clone_seqno 0.
+		// digit-only and says no more. fossil(1) 2.28 builds differ: the
+		// macOS build sends clone_seqno 0, the Linux build CI pins sends the
+		// invalid-sequence error alone. Either way no content is sent, which
+		// is what the case holds go-libfossil to.
 		Case: Case{ID: "sync.8.1.negative-seqno", Req: "SP-8.1-1"},
 		body: []string{"{CV}", "clone 3 -1", "{R}"},
-		want: all(completed, noErrors, noCard("cfile "), withCard("clone_seqno 0")),
+		want: all(syncReply, noCard("cfile "), either(
+			all(completed, noErrors, withCard("clone_seqno 0")),
+			all(onlyError("invalid clone sequence number"), nothingBut("error ")))),
 	}, {
 		Case: Case{ID: "sync.8.2.reply-order", Req: "SP-8.2-1"},
 		body: []string{"{CV}", "clone 3 1", "{R}"},

@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaf exists on the same branch, so a non-leaf or closed version no longer
   reads as a fork (#291).
 
+- Storing content whose name is a phantom fills the phantom in place, as
+  fossil's `content_put` does (#278). `blob.Store` used to return the
+  phantom's rid and leave it empty, so a check-in of a file matching a known
+  phantom recorded a manifest pointing at content that was never stored.
+
+
 ## [0.11.1] - 2026-10-11
 
 ### Security

@@ -30,11 +30,6 @@ var repostateGaps = map[string]string{
 	// code: plink keeps the old parent.
 	"repostate.4.2.reparent":         "#286",
 	"repostate.4.2.reparent.rebuild": "#286",
-	// blob.Store returns a phantom's rid as if the content were stored: its
-	// existingName takes any row blob.Exists finds, phantoms included
-	// (internal/blob/blob.go:23), so an artifact that arrives after being
-	// referenced is never stored or crosslinked.
-	"repostate.4.2.phantom-late-target": "#278",
 	// isArtifact accepts a technote with a T-card naming another artifact
 	// (internal/manifest/crosslink.go:583), and crosslinkEvent applies it
 	// (:1510).

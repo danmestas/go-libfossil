@@ -86,17 +86,9 @@ func loadManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (*manif
 	}
 
 	if mf.isDelta {
-		baseRid, ok := content.AvailableByUUID(q, d.B)
-		if !ok {
-			return nil, fmt.Errorf("baseline %s not found", d.B)
-		}
-		baseData, err := expandManifestBytes(q, cache, baseRid)
+		baseDeck, err := loadBaseline(q, cache, d)
 		if err != nil {
-			return nil, fmt.Errorf("expand baseline: %w", err)
-		}
-		baseDeck, err := deck.Parse(baseData)
-		if err != nil {
-			return nil, fmt.Errorf("parse baseline: %w", err)
+			return nil, err
 		}
 		for _, f := range baseDeck.F {
 			if f.UUID == "" {

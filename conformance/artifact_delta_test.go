@@ -108,3 +108,49 @@ func deltaManifestCases() []apiCase {
 			})},
 	}
 }
+
+// Crosslink refuses a B card whose target is not a baseline manifest the same
+// way ListFiles does: the delta gets no mlink rows, where a valid baseline
+// gives it the baseline's files. The files exist, so a refusal cannot be
+// mistaken for a check-in deferred on a missing blob.
+func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
+	tests := []struct {
+		name     string
+		baseline func(t *testing.T, r *repo.Repo, file string) string
+		wantRows bool
+	}{
+		{"baseline manifest", func(t *testing.T, r *repo.Repo, file string) string {
+			_, uuid := storeArtifact(t, r, "C baseline\nD "+ts+"\nF a.txt "+file+"\nU u\n")
+			return uuid
+		}, true},
+		{"delta manifest", func(t *testing.T, r *repo.Repo, file string) string {
+			_, baseline := storeArtifact(t, r, "C baseline\nD "+ts+"\nF a.txt "+file+"\nU u\n")
+			_, uuid := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+"\nU u\n")
+			return uuid
+		}, false},
+		{"control artifact", func(t *testing.T, r *repo.Repo, _ string) string {
+			_, uuid := storeArtifact(t, r, baseControl)
+			return uuid
+		}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newPolicyRepo(t, "2")
+			_, file, err := blob.Store(r.DB(), []byte("file content\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			rid, _ := storeArtifact(t, r, "B "+tt.baseline(t, r, file)+"\nC delta\nD "+ts+"\nF b.txt "+file+"\nU u\n")
+			if _, err := manifest.Crosslink(r); err != nil {
+				t.Fatalf("Crosslink: %v", err)
+			}
+			var n int
+			if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=?", rid).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if (n > 0) != tt.wantRows {
+				t.Fatalf("mlink rows for the delta = %d, want rows: %v", n, tt.wantRows)
+			}
+		})
+	}
+}

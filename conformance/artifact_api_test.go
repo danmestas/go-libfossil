@@ -463,8 +463,11 @@ func ratchet(t *testing.T) (*repo.Repo, error) {
 		return nil, err
 	}
 	target := []byte("source content\nand more\n")
-	if _, err := blob.StoreDeltaRaw(r.DB(), hash.SHA3(target), delta.Create(source, target),
-		srcRid, nil); err != nil {
+	d, err := delta.Create(source, target)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := blob.StoreDeltaRaw(r.DB(), hash.SHA3(target), d, srcRid, nil); err != nil {
 		return nil, err
 	}
 	return r, nil

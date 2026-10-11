@@ -661,7 +661,10 @@ func TestHandlePushDeltaBeforeBaseDoesNotErrorCard(t *testing.T) {
 
 	base := []byte("push delta-before-base test, base content long enough to compress")
 	target := []byte("push delta-before-base test, base content long enough to compress, v2")
-	deltaBytes := delta.Create(base, target)
+	deltaBytes, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	baseUUID := hash.SHA1(base)
 	targetUUID := hash.SHA1(target)
 

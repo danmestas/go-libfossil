@@ -145,7 +145,11 @@ func (f *syncFixture) storeArtifacts(d *db.DB) error {
 		}
 		stored := []byte(a.content)
 		if a.deltaOf != "" {
-			stored = delta.Create([]byte(f.vars[a.deltaOf+".data"]), stored)
+			var err error
+			stored, err = delta.Create([]byte(f.vars[a.deltaOf+".data"]), stored)
+			if err != nil {
+				return err
+			}
 		}
 		packed, err := blob.Compress(stored)
 		if a.fast {
@@ -310,7 +314,11 @@ func (f *syncFixture) absentArtifacts() {
 
 // setDelta records the delta making target from basis as a payload.
 func (f *syncFixture) setDelta(key, basis, target string) {
-	f.setPayload(key, string(delta.Create([]byte(basis), []byte(target))))
+	d, err := delta.Create([]byte(basis), []byte(target))
+	if err != nil {
+		panic(fmt.Sprintf("setDelta %s: %v", key, err)) // fixed small inputs
+	}
+	f.setPayload(key, string(d))
 }
 
 // expand replaces every {NAME} in text with its value. An unknown name is

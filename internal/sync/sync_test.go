@@ -424,7 +424,10 @@ func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
 
 	base := []byte("pull delta-before-base test, content long enough to compress well")
 	target := []byte("pull delta-before-base test, content long enough to compress well, v2")
-	deltaBytes := delta.Create(base, target)
+	deltaBytes, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	baseUUID := hash.SHA1(base)
 	targetUUID := hash.SHA1(target)
 

@@ -256,7 +256,11 @@ func stashRecord(
 	if err != nil {
 		return "", nil, fmt.Errorf("stash.Save: read %s: %w", f.Pathname, err)
 	}
-	return baselineHash, delta.Create(baseline, working), nil
+	d, err := delta.Create(baseline, working)
+	if err != nil {
+		return "", nil, fmt.Errorf("stash.Save: delta %s: %w", f.Pathname, err)
+	}
+	return baselineHash, d, nil
 }
 
 // revertStashedFile undoes f's change: an added file is removed from disk

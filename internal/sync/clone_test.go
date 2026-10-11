@@ -283,7 +283,10 @@ func TestCloneWithPhantoms(t *testing.T) {
 	// Target content and its delta against base.
 	targetContent := []byte("this is the modified content for delta testing")
 	targetUUID := hash.SHA1(targetContent)
-	deltaBytes := delta.Create(baseContent, targetContent)
+	deltaBytes, err := delta.Create(baseContent, targetContent)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	gimmesSeen := make(map[string]bool)
 
@@ -357,7 +360,10 @@ func TestCloneStallReturnsError(t *testing.T) {
 
 	targetContent := []byte("target content delivered as a delta against base")
 	targetUUID := hash.SHA1(targetContent)
-	deltaBytes := delta.Create(baseContent, targetContent)
+	deltaBytes, err := delta.Create(baseContent, targetContent)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 
 	transport := &mockCloneTransport{
 		handler: func(round int, req *xfer.Message) *xfer.Message {

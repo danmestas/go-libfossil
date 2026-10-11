@@ -189,10 +189,13 @@ func TestStoreDelta(t *testing.T) {
 // equal rather than hoping a fixture lands on them.
 func TestLoadInflatesWhenStoredLengthEqualsSize(t *testing.T) {
 	d := setupTestDB(t)
-	deltaBytes := delta.Create(
+	deltaBytes, err := delta.Create(
 		[]byte("the original source content for delta testing purposes here"),
 		[]byte("the original source content for MODIFIED testing purposes here"),
 	)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	compressed, err := Compress(deltaBytes)
 	if err != nil {
 		t.Fatalf("Compress: %v", err)
@@ -266,7 +269,10 @@ func TestStoreDeltaRawAgainstPhantomBase(t *testing.T) {
 
 	source := []byte("original content here, long enough to compress well")
 	target := []byte("original content here, long enough to compress well, and modified")
-	deltaBytes := delta.Create(source, target)
+	deltaBytes, err := delta.Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	targetUUID := hash.SHA1(target)
 	baseUUID := hash.SHA1(source)
 
@@ -338,7 +344,10 @@ func TestStoreDeltaRawExistingRealBlobIsNoOp(t *testing.T) {
 		t.Fatalf("Store source: %v", err)
 	}
 
-	deltaBytes := delta.Create(source, target)
+	deltaBytes, err := delta.Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	targetUUID := hash.SHA1(target)
 
 	gotRid, err := StoreDeltaRaw(d, targetUUID, deltaBytes, srcRid, nil)
@@ -429,7 +438,10 @@ func TestStoreDeltaRawStoresVerbatimBlobWhenGiven(t *testing.T) {
 
 	source := []byte("original content here, long enough to compress well")
 	target := []byte("original content here, long enough to compress well, and modified")
-	deltaBytes := delta.Create(source, target)
+	deltaBytes, err := delta.Create(source, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	targetUUID := hash.SHA1(target)
 	baseUUID := hash.SHA1(source)
 

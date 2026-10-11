@@ -30,7 +30,10 @@ func (c *RepoDeltaCreateCmd) Run(g *Globals) error {
 		return fmt.Errorf("reading target: %w", err)
 	}
 
-	d := delta.Create(src, tgt)
+	d, err := delta.Create(src, tgt)
+	if err != nil {
+		return err
+	}
 
 	if c.Output != "" {
 		return os.WriteFile(c.Output, d, 0o644)

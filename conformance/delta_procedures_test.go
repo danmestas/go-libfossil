@@ -127,7 +127,10 @@ func producerCases() []deltaFuncCase {
 // reachable only through DF-3.1-1.
 func noFindings(pairs []deltaPair, kinds ...string) error {
 	for _, p := range pairs {
-		d := delta.Create(p.src, p.tgt)
+		d, err := delta.Create(p.src, p.tgt)
+		if err != nil {
+			return err
+		}
 		f := producerFinding(p.src, p.tgt, d)
 		if f != nil && slices.Contains(kinds, f.kind) {
 			return expectf("Create(%d bytes, %d bytes) = %q: %s", len(p.src), len(p.tgt), d, f.msg)
@@ -141,7 +144,11 @@ func noFindings(pairs []deltaPair, kinds ...string) error {
 func roundTrip(pairs func() []deltaPair) func(*testing.T, *fossilReference) error {
 	return func(*testing.T, *fossilReference) error {
 		for _, p := range pairs() {
-			got, err := delta.Apply(p.src, delta.Create(p.src, p.tgt))
+			created, err := delta.Create(p.src, p.tgt)
+			if err != nil {
+				return err
+			}
+			got, err := delta.Apply(p.src, created)
 			if err != nil {
 				return expectf("Apply(Create(%d bytes, %d bytes)): %v", len(p.src), len(p.tgt), err)
 			}
@@ -161,7 +168,10 @@ func fossilAppliesCreate(_ *testing.T, ref *fossilReference) error {
 		return nil
 	}
 	for _, p := range interopPairs() {
-		d := delta.Create(p.src, p.tgt)
+		d, err := delta.Create(p.src, p.tgt)
+		if err != nil {
+			return err
+		}
 		got, ok, err := ref.applyDelta(p.src, d)
 		if err != nil {
 			return err
@@ -199,7 +209,10 @@ func goAppliesFossilCreate(_ *testing.T, ref *fossilReference) error {
 // literal the draft allows, so the case asserts the grammar, not the bytes.
 func createEmptyTarget(*testing.T, *fossilReference) error {
 	for _, src := range []string{"", "abc"} {
-		d := delta.Create([]byte(src), []byte{})
+		d, err := delta.Create([]byte(src), []byte{})
+		if err != nil {
+			return err
+		}
 		if f := producerFinding([]byte(src), []byte{}, d); f != nil {
 			return expectf("Create(%q, empty) = %q: %s", src, d, f.msg)
 		}
@@ -341,7 +354,11 @@ func hugeHeaderIsCheap(_ *testing.T, ref *fossilReference) error {
 func noFalseSuccess(*testing.T, *fossilReference) error {
 	r := rand.New(rand.NewSource(0xbad))
 	for _, p := range propertyPairs() {
-		d := damage(r, delta.Create(p.src, p.tgt))
+		created, err := delta.Create(p.src, p.tgt)
+		if err != nil {
+			return err
+		}
+		d := damage(r, created)
 		out, err := delta.Apply(p.src, d)
 		want, ok, optional := modelApply(p.src, d)
 		switch {
@@ -416,7 +433,10 @@ func absentSource(t *testing.T, _ *fossilReference) error {
 	}
 	// Built against an empty source, the delta is all literals: it needs
 	// nothing from the base, so only the phantom can make Expand fail.
-	stored := delta.Create([]byte{}, target)
+	stored, err := delta.Create([]byte{}, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	rid, err := blob.StoreDeltaRaw(r.DB(), hash.SHA1(target), stored, baseRid, nil)
 	if err != nil {
 		return fmt.Errorf("StoreDeltaRaw: %v", err)
@@ -438,7 +458,10 @@ func contentDiscards(t *testing.T, _ *fossilReference) error {
 	if err != nil {
 		return fmt.Errorf("Store: %v", err)
 	}
-	good := delta.Create(base, target)
+	good, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
 	bad := append([]byte(nil), good...)
 	last := strings.IndexByte(deltaDigits, bad[len(bad)-2])
 	bad[len(bad)-2] = deltaDigits[(last+1)%64]

@@ -174,7 +174,10 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 		return 0, "", fmt.Errorf("blob.StoreDelta load source: %w", err)
 	}
 
-	deltaBytes := delta.Create(srcContent, content)
+	deltaBytes, err := delta.Create(srcContent, content)
+	if err != nil {
+		return 0, "", fmt.Errorf("blob.StoreDelta delta: %w", err)
+	}
 	compressed, err := Compress(deltaBytes)
 	if err != nil {
 		return 0, "", fmt.Errorf("blob.StoreDelta compress: %w", err)

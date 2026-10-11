@@ -50,7 +50,10 @@ func FuzzDeltaRoundTrip(f *testing.F) {
 		f.Add(p.src, p.tgt)
 	}
 	f.Fuzz(func(t *testing.T, src, tgt []byte) {
-		d := delta.Create(src, tgt)
+		d, err := delta.Create(src, tgt)
+		if err != nil {
+			t.Fatalf("delta.Create: %v", err)
+		}
 		if finding := producerFinding(src, tgt, d); finding != nil {
 			t.Fatalf("Create(%q, %q) = %q: %s", src, tgt, d, finding.msg)
 		}

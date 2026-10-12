@@ -82,10 +82,11 @@ func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, 
 		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}
 	defer resp.Body.Close()
-	// An error page is not an xfer reply. Reporting the status directly keeps
-	// a peer's outage from surfacing as a framing defect, and lets the sync
-	// round loop tell a 5xx worth retrying from a 4xx that never will be.
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	// Only 200 is a sync reply (§4-7). Any other status, a 2xx included, is not
+	// the protocol answering. Reporting the status directly keeps a peer's
+	// outage from surfacing as a framing defect, and lets the sync round loop
+	// tell a 5xx worth retrying from a 4xx that never will be.
+	if resp.StatusCode != http.StatusOK {
 		return nil, "", &internalsync.StatusError{Code: resp.StatusCode, Status: resp.Status}
 	}
 	body, err := xfer.ReadBody(resp.Body)

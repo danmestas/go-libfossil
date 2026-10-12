@@ -33,6 +33,10 @@ func serverRepo(t *testing.T) (*libfossil.Repo, string) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
+		// HandleSync's reply is the compressed container. §4 has a client
+		// refuse a reply typed as anything else, and net/http would sniff
+		// this body as application/octet-stream.
+		w.Header().Set("Content-Type", "application/x-fossil")
 		_, _ = w.Write(resp)
 	}))
 	t.Cleanup(srv.Close)

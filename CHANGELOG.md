@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Sync HTTP framing now follows §4 (#310). The server dispatches a request
+  typed `application/x-fossil-debug`, which it refused with HTTP 415. The
+  client takes only HTTP 200 as a sync reply, so a 201 or other 2xx is an
+  error, and reads a reply's framing as fossil's `http.c` does: no
+  Content-Type is the compressed container, an `x-fossil-debug` or
+  `x-fossil-uncompressed` prefix is plain cards, any other `x-fossil` prefix
+  is compressed, and a foreign type such as a proxy's HTML page is refused
+  rather than read as cards. A server that writes `HandleSync`'s reply over
+  HTTP must type it `application/x-fossil`.
 - Unknown, wrong-direction and error cards now follow §5.2 and §10 on both
   sides of a sync (#300). The server answers a client-sent `error` or
   `message` card — reply-only cards fossil's `page_xfer` has no branch for —

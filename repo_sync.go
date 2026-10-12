@@ -66,14 +66,15 @@ func (a *transportAdapter) Exchange(ctx context.Context, req *xfer.Message) (*xf
 	}
 	// When the transport can report the reply's framing signal (e.g. an HTTP
 	// Content-Type), decode by that signal — a §4-conforming peer may reply
-	// with either framing, and a real Fossil clone reply is uncompressed. §4
-	// framing selection lives in xfer.Decode.
+	// with either framing, and a real Fossil clone reply is uncompressed. The
+	// §4-8 reply rule lives in xfer.DecodeReply: a missing type is the
+	// compressed container, a foreign type (an HTML error page) is refused.
 	if ft, ok := a.pub.(FramedTransport); ok {
 		respBytes, contentType, err := ft.RoundTripFramed(ctx, payload)
 		if err != nil {
 			return nil, err
 		}
-		return xfer.Decode(respBytes, contentType)
+		return xfer.DecodeReply(respBytes, contentType)
 	}
 	respBytes, err := a.pub.RoundTrip(ctx, payload)
 	if err != nil {

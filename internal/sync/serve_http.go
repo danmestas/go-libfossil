@@ -100,8 +100,9 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 		ct := req.Header.Get("Content-Type")
 		if !xfer.KnownContentType(ct) {
 			slog.Error("serve-http: unsupported content type", "content-type", ct)
-			http.Error(w, fmt.Sprintf("unsupported content type %q: expected %s or %s",
-				ct, xfer.ContentTypeCompressed, xfer.ContentTypeUncompressed),
+			http.Error(w, fmt.Sprintf("unsupported content type %q: expected %s, %s or %s",
+				ct, xfer.ContentTypeCompressed, xfer.ContentTypeUncompressed,
+				xfer.ContentTypeDebug),
 				http.StatusUnsupportedMediaType)
 			return
 		}

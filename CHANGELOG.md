@@ -61,6 +61,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync client ends a session by §3.7's rules, as fossil's `client_sync`
+  does (#301). Stored content or a new phantom continues it only while the
+  phantom table is not empty, so neither received content alone nor
+  phantoms the server cannot supply keep it going; a phantom used to be asked
+  for until it had aged three rounds. A `gimme` for content the client does
+  not hold, or may not send, is dropped where it stayed queued and held the
+  session open until `MaxRounds`. An `igot` for a missing artifact now
+  records a phantom in the phantom table, so a later session still asks for
+  it. After a clone's first round, a server `error` ends that reply and the
+  clone continues as the draft says, with a cleanup round, and `Clone` then
+  fails naming the error. Phantoms a pull fills are crosslinked once per
+  reply instead of in one transaction each.
 - The sync client places `pragma send-private` where fossil's `client_sync`
   does (§3.2, #307): first in its first request and right after
   `client-version` in later ones, where it trailed the content cards. A

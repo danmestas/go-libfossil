@@ -81,6 +81,7 @@ type cloneSession struct {
 	roundRecvd            int    // file/cfile cards the last reply delivered
 	roundPush             bool   // the last reply carried a push card
 	cleanup               bool   // the next request is an operation-less cleanup
+	serverErr             string // a server error after the first round, which fails the clone
 	cookie                string // server-issued snapshot bound; echoed every round so the
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
@@ -291,7 +292,7 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 		default:
 		}
 		if cycle >= MaxRounds {
-			err := fmt.Errorf("sync.Clone: exceeded %d rounds", MaxRounds)
+			err := cs.roundCapError()
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)
 			return &cs.result, err
 		}
@@ -325,6 +326,9 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 		cs.obs.RoundCompleted(roundCtx, cycle, RoundStats{FilesReceived: cs.result.BlobsRecvd - recvdBefore})
 
 		next, nextErr := cs.continueAfter(cycle)
+		if cs.serverErr != "" && (nextErr != nil || !next) {
+			nextErr = fmt.Errorf("sync.Clone: server error: %s", cs.serverErr)
+		}
 		if nextErr != nil {
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), nextErr)
 			return &cs.result, nextErr
@@ -343,6 +347,16 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 	cs.result.ServerCode = cs.serverCode
 	cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), nil)
 	return &cs.result, nil
+}
+
+// roundCapError is the error a clone that ran MaxRounds rounds fails with:
+// the server's own error when it sent one, since a server that errs every
+// round is the cause, not the round cap.
+func (cs *cloneSession) roundCapError() error {
+	if cs.serverErr != "" {
+		return fmt.Errorf("sync.Clone: server error: %s", cs.serverErr)
+	}
+	return fmt.Errorf("sync.Clone: exceeded %d rounds", MaxRounds)
 }
 
 // continueAfter decides, after a reply is processed, whether the clone
@@ -467,6 +481,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 	cs.roundPush = false
 	defer func() { cs.roundRecvd = filesRecvd }()
 
+cardLoop:
 	for i, card := range msg.Cards {
 		if i%processResponseCancelCheckStride == 0 {
 			select {
@@ -510,8 +525,8 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			cs.recordSeqNo(c)
 
 		case *xfer.ErrorCard:
-			if err := cs.serverError(cycle, c); err != nil {
-				return err
+			if cs.serverError(cycle, c) {
+				break cardLoop
 			}
 
 		case *xfer.CookieCard:
@@ -552,25 +567,33 @@ func (cs *cloneSession) recordSeqNo(c *xfer.CloneSeqNoCard) {
 	cs.seqno = c.SeqNo
 }
 
-// serverError handles an error card. A clone's first round carries no
-// login card: the signature is salted with the project code, and the project
-// code is exactly what this round exists to learn. A server that requires
-// authentication therefore answers round 0 with its push card — which
-// supplies that code — followed by "not authorized to clone". Treating that
-// as fatal ends the clone before the credentials are ever offered, so round 0
-// records the message and carries on; round 1 repeats the request with a
-// login card, and an error there (a genuinely wrong password, say) is fatal.
+// serverError handles an error card and reports whether it ends the
+// reply-card loop. A clone's first round carries no login card: the
+// signature is salted with the project code, and the project code is exactly
+// what this round exists to learn. A server that requires authentication
+// therefore answers round 0 with its push card — which supplies that code —
+// followed by "not authorized to clone". Treating that as fatal ends the
+// clone before the credentials are ever offered, so round 0 records the
+// message and carries on; round 1 repeats the request with a login card.
 // Canonical does the same: `(syncFlags & SYNC_CLONE)==0 || nCycle>0` guards
 // the abort in xfer.c client_sync.
-func (cs *cloneSession) serverError(cycle int, c *xfer.ErrorCard) error {
+//
+// After round 0 an error ends the reply-card loop (§10.1): the cards after it
+// are not read, and the session continues by §3.7 on what was stored before
+// it. Clone still fails once the session ends, naming the error, so a clone
+// cut short by the server is never reported complete.
+func (cs *cloneSession) serverError(cycle int, c *xfer.ErrorCard) bool {
 	if c == nil {
 		panic("cloneSession.serverError: nil card")
 	}
+	cs.result.Messages = append(cs.result.Messages, c.Message)
 	if cycle == 0 {
-		cs.result.Messages = append(cs.result.Messages, c.Message)
-		return nil
+		return false
 	}
-	return fmt.Errorf("sync.Clone: server error: %s", c.Message)
+	if cs.serverErr == "" {
+		cs.serverErr = c.Message
+	}
+	return true
 }
 
 // recordCodes stores the project and server codes a push card carries, the

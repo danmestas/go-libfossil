@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1159,5 +1160,27 @@ func TestCloneDropsSeededHashPolicy(t *testing.T) {
 	}
 	if got := hash.NamingFor(r.DB()).New; got != hash.AlgSHA1 {
 		t.Errorf("new-artifact naming = %v, want sha1 to match the cloned artifacts", got)
+	}
+}
+
+// TestCloneServerErrorEveryRound pins that a clone whose server errs every
+// round fails naming the server's error, not the round cap it ran into.
+func TestCloneServerErrorEveryRound(t *testing.T) {
+	data := []byte("sent before every error")
+	transport := &mockCloneTransport{
+		handler: func(round int, req *xfer.Message) *xfer.Message {
+			cards := []xfer.Card{&xfer.CFileCard{UUID: hash.SHA1(data), Content: data}}
+			if round > 0 {
+				cards = append(cards, &xfer.ErrorCard{Message: "boom"})
+			}
+			return &xfer.Message{Cards: append(cards,
+				&xfer.CloneSeqNoCard{SeqNo: 2},
+				&xfer.PushCard{ServerCode: "s", ProjectCode: "p"})}
+		},
+	}
+	path := filepath.Join(t.TempDir(), "erring.fossil")
+	_, _, err := sync.Clone(context.Background(), path, transport, sync.CloneOpts{})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("Clone error = %v, want the server's error", err)
 	}
 }

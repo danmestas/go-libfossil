@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- `Repo.Tag` now places a tag name in the symbolic namespace with a `sym-`
+  prefix and refuses the reserved `wiki-`, `tkt-` and `event-` prefixes, as
+  `fossil tag add` does for a check-in. It used to store the name verbatim, so
+  the tag did not resolve as a branch/tag name. Callers pass the bare name.
+
+
 - Cancelling a propagated tag no longer deletes an inherited row that is newer
   than the cancellation. The cancel walk carried no mtime guard
   (`COALESCE(srcid=0, 0)`); it now matches fossil's `tag_propagate`

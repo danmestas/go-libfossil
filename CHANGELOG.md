@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync server answers three more cards as fossil does (#305). A pushed
+  `config` card from a requester without Admin is refused with `error not
+  authorized to push configuration`, reset and break (§9.3); one from an
+  Admin is refused as unsupported, since this server does not apply pushed
+  configuration, where both were silently ignored. `pragma ci-unlock`
+  releases the client's check-in locks (§9.4), for writers, as `ci-lock` is
+  taken. `pragma req-clusters` is answered with the cluster `igot` cards
+  between `# sending-clusters` and `# end-of-clusters` (§5.3); it was
+  recorded and never answered. This is an access change: as in fossil, any
+  requester, one without Read included, is sent the names of the public
+  cluster artifacts. Their content still needs Read to fetch.
 - Sync exchanges releases and withholds SHA3 content from older peers, as
   fossil does (§7.6, §9.1, #303). The server answers a `pragma
   client-version` that carries DATE and TIME with its own `pragma

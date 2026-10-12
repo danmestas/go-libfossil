@@ -1075,6 +1075,46 @@ func TestEmitIGots_AllBlobs(t *testing.T) {
 
 // TestPragmaReqClusters verifies that pragma req-clusters causes the handler
 // to emit igot cards for cluster artifacts via sendAllClusters.
+// TestBreakDropsClusterIGots pins that a break discards the cluster igots
+// a req-clusters asked for: fossil answers the pragma in place, and the
+// break's reset removes the answer.
+func TestBreakDropsClusterIGots(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	// A clustered artifact tagged cluster (tag 7) is what req-clusters names.
+	rid, _, err := blob.Store(r.DB(), []byte("stands in for a cluster"))
+	if err != nil {
+		t.Fatalf("blob.Store: %v", err)
+	}
+	if _, err := r.DB().Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+		t.Fatalf("uncluster: %v", err)
+	}
+	_, err = r.DB().Exec("INSERT INTO tagxref(tagid, tagtype, srcid, origid, mtime, rid)"+
+		" VALUES(7, 1, 0, ?, 0, ?)", rid, rid)
+	if err != nil {
+		t.Fatalf("tag cluster: %v", err)
+	}
+	bracket := func(cards ...xfer.Card) bool {
+		resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+		if err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+		for _, c := range findCards[*xfer.CommentCard](resp) {
+			if c.Text == "sending-clusters" {
+				return true
+			}
+		}
+		return false
+	}
+	reqClusters := &xfer.PragmaCard{Name: "req-clusters"}
+	if !bracket(reqClusters) {
+		t.Fatal("req-clusters sent no cluster igots; the test has no cluster")
+	}
+	wrong := &xfer.PullCard{ServerCode: "s", ProjectCode: strings.Repeat("0", 40)}
+	if bracket(reqClusters, wrong) {
+		t.Fatal("cluster igots follow a wrong-project break")
+	}
+}
+
 func TestPragmaReqClusters(t *testing.T) {
 	r := setupSyncTestRepo(t)
 

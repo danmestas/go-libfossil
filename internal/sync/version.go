@@ -49,6 +49,20 @@ func peerVersion(c *xfer.PragmaCard) int {
 	return version
 }
 
+// loginCookieGate reports whether a server-version names a release that
+// reads a login card from the x-f-l-c cookie: 2.27 or later, built at or
+// after 2025-07-27 11:05:00, as fossil's xfer_xflc_check decides (§6.5). A
+// server-version without DATE and TIME does not pass.
+func loginCookieGate(c *xfer.PragmaCard) bool {
+	if len(c.Values) < 3 {
+		return false
+	}
+	date, _ := strconv.Atoi(c.Values[1])
+	clock, _ := strconv.Atoi(c.Values[2])
+	return peerVersion(c) >= 22700 &&
+		(date > 20250727 || (date == 20250727 && clock >= 110500))
+}
+
 // sha3Barred reports whether content named name is withheld from a peer of
 // the given release: a SHA3 name, to a peer older than SHA3 support (§7.6).
 func sha3Barred(name string, version int) bool {

@@ -64,14 +64,15 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 		cards = append(cards, randomComment(s.env.Rand))
 	}
 
+	msg := &xfer.Message{Cards: cards, LoginCookieOK: s.loginCookieOK}
+
 	// This request's push card has now been committed. fossil emits the next
 	// request's header before reading the reply that may stop the push, so a
 	// "pull only" seen from here on drops the push card only one request later.
 	if s.pushStopped {
 		s.pushCardDropped = true
 	}
-
-	return &xfer.Message{Cards: cards}, nil
+	return msg, nil
 }
 
 // headerCards are the cards a request opens with, in fossil client_sync's
@@ -714,6 +715,11 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 	switch {
 	case c.Name == "server-version" && len(c.Values) >= 1:
 		s.peerVersion = peerVersion(c)
+		// §6.5: once the server's release passes the gate, later requests
+		// may carry their login in the x-f-l-c cookie.
+		if loginCookieGate(c) {
+			s.loginCookieOK = true
+		}
 	case c.Name == "uv-push-ok":
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":

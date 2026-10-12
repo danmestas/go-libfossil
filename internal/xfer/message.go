@@ -21,6 +21,12 @@ type Message struct {
 	// clone of protocol version 3, whose cfile payloads are compressed
 	// already (§4.1, §8.1). Encode ignores it; an HTTP server reads it.
 	Uncompressed bool
+
+	// LoginCookieOK marks a request whose server reads a login from the
+	// x-f-l-c cookie (§6.5). A transport that can set the cookie moves the
+	// leading login card there (see SplitLoginCookie); any other sends the
+	// message as it is, which the server accepts as well.
+	LoginCookieOK bool
 }
 
 // ContentTypeCompressed and ContentTypeUncompressed are the two §4 media types

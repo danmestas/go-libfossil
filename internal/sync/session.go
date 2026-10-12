@@ -107,6 +107,9 @@ type session struct {
 	// peerVersion is the server's release from server-version; before one
 	// arrives it is this library's own, as in fossil's client_sync (§7.6).
 	peerVersion int
+	// loginCookieOK is set once a server-version passes the §6.5 gate:
+	// later requests may then log in through the x-f-l-c cookie.
+	loginCookieOK bool
 	// sha3Refusals counts gimmes for SHA3 content withheld from an older
 	// server; the next request carries one refusal error card for each.
 	sha3Refusals int

@@ -82,21 +82,29 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 		u.CExpire = expireTime
 	}
 
-	// 4. Recompute: expected = SHA1(card.Nonce + storedPW)
-	// storedPW is already SHA1(projectCode/login/password) from the user table
-	expected := sha1hex([]byte(card.Nonce + storedPW))
-
-	// 5. Compare using crypto/subtle.ConstantTimeCompare
-	expectedBytes := []byte(expected)
-	signatureBytes := []byte(card.Signature)
-
-	// 6. If mismatch → ErrAuthFailed
-	if subtle.ConstantTimeCompare(expectedBytes, signatureBytes) != 1 {
+	// 4. Check the signature against the stored password.
+	if !signatureMatches(card, storedPW, projectCode) {
 		return User{}, ErrAuthFailed
 	}
-
-	// 7. Return User
 	return u, nil
+}
+
+// signatureMatches reports whether card's signature is SHA1(nonce + secret)
+// for the stored password, as fossil's check_login decides it. The stored
+// password is normally the shared secret, SHA1(projectCode/login/password).
+// One that is not 40 characters is a password stored in clear, so the
+// signature is checked again against the shared secret it derives (§6.4).
+// Both comparisons run in constant time.
+func signatureMatches(card *xfer.LoginCard, storedPW, projectCode string) bool {
+	sig := []byte(card.Signature)
+	if subtle.ConstantTimeCompare([]byte(sha1hex([]byte(card.Nonce+storedPW))), sig) == 1 {
+		return true
+	}
+	if len(storedPW) == 40 {
+		return false
+	}
+	secret := hashPassword(projectCode, card.User, storedPW)
+	return subtle.ConstantTimeCompare([]byte(sha1hex([]byte(card.Nonce+secret))), sig) == 1
 }
 
 // parseCExpire parses a user.cexpire value. SQLite may return either ISO 8601

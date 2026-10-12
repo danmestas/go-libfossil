@@ -64,7 +64,7 @@ type httpTransport struct {
 }
 
 func (t *httpTransport) RoundTrip(ctx context.Context, payload []byte) ([]byte, error) {
-	body, _, err := t.roundTrip(ctx, payload)
+	body, _, err := t.roundTrip(ctx, payload, "")
 	return body, err
 }
 
@@ -73,11 +73,25 @@ func (t *httpTransport) RoundTrip(ctx context.Context, payload []byte) ([]byte, 
 // peer that replies uncompressed (e.g. a real Fossil clone reply) is decoded
 // correctly instead of being force-read as the compressed container.
 func (t *httpTransport) RoundTripFramed(ctx context.Context, payload []byte) ([]byte, string, error) {
-	return t.roundTrip(ctx, payload)
+	return t.roundTrip(ctx, payload, "")
 }
 
-func (t *httpTransport) roundTrip(ctx context.Context, payload []byte) ([]byte, string, error) {
-	resp, err := internalsync.PostXfer(ctx, t.client, t.url, "application/x-fossil", payload)
+// loginCookieTransport is a Transport that can carry a login card in the
+// x-f-l-c cookie rather than the body (§6.5), as the HTTP transport can.
+type loginCookieTransport interface {
+	roundTripLoginCookie(ctx context.Context, payload []byte,
+		cookie string) ([]byte, string, error)
+}
+
+func (t *httpTransport) roundTripLoginCookie(ctx context.Context, payload []byte,
+	cookie string) ([]byte, string, error) {
+	return t.roundTrip(ctx, payload, cookie)
+}
+
+func (t *httpTransport) roundTrip(ctx context.Context, payload []byte,
+	cookie string) ([]byte, string, error) {
+	resp, err := internalsync.PostXfer(ctx, t.client, t.url, "application/x-fossil", cookie,
+		payload)
 	if err != nil {
 		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}

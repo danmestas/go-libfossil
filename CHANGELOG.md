@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Sync login follows §6.4 and §6.5 (#304). Once a server's `server-version`
+  names a release that reads it (2.27, built 2025-07-27 11:05 or later), the
+  client's HTTP transports send the login card in the `x-f-l-c` cookie,
+  urlencoded, instead of the body, as fossil's client does; other transports
+  keep it in the body. The server, when a user's stored password is not a
+  40-character shared secret, checks the signature again against the secret
+  that password derives, as fossil's `check_login` does for a password stored
+  in clear. A new `HandleOpts.LoginCookie` field carries the cookie to
+  `HandleSyncWithOpts` for an embedder that serves sync over its own HTTP
+  handler; without it, a client's cookie login reaches such a server as
+  nobody. `XferHandler` and `ServeHTTP` read the cookie themselves.
 - Unversioned sync applies a received `uvfile` as fossil's
   `xfer_accept_unversioned_file` does, on both sides (§7.3, #308). The row
   keeps the HASH the card gave rather than one the repository's hash policy

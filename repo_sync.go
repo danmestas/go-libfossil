@@ -43,6 +43,14 @@ type SyncResult struct {
 type HandleOpts struct {
 	Observer SyncObserver
 	Buggify  BuggifyChecker
+	// LoginCookie is the value of the request's x-f-l-c cookie, which
+	// carries the login card once the client has seen a server-version
+	// that reads it (§6.5). This server announces such a release, so fossil
+	// and go-libfossil clients move their login there after the first
+	// round: an embedder that serves HandleSyncWithOpts over HTTP must pass
+	// the cookie through, or those rounds arrive as nobody. XferHandler and
+	// ServeHTTP read it themselves.
+	LoginCookie string
 }
 
 // CloneOpts configures a clone operation.
@@ -60,6 +68,21 @@ type transportAdapter struct {
 }
 
 func (a *transportAdapter) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	// A transport that can set the login cookie gets the login there once
+	// the server reads it (§6.5); any other sends it in the body.
+	if lt, ok := a.pub.(loginCookieTransport); ok {
+		if sent, cookie := req.SplitLoginCookie(); cookie != "" {
+			payload, err := sent.Encode()
+			if err != nil {
+				return nil, fmt.Errorf("libfossil: transport encode: %w", err)
+			}
+			respBytes, contentType, err := lt.roundTripLoginCookie(ctx, payload, cookie)
+			if err != nil {
+				return nil, err
+			}
+			return xfer.DecodeReply(respBytes, contentType)
+		}
+	}
 	payload, err := req.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: transport encode: %w", err)
@@ -219,7 +242,7 @@ func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error) {
 func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts HandleOpts) ([]byte, error) {
 	// The payload arrives without a Content-Type; a libfossil peer always sends
 	// the §4.1 compressed container (Message.Encode), so the framing is fixed.
-	msg, err := xfer.Decode(payload, xfer.ContentTypeCompressed)
+	msg, err := xfer.DecodeRequest(payload, xfer.ContentTypeCompressed, opts.LoginCookie)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: decode xfer: %w", err)
 	}

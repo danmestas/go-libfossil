@@ -18,17 +18,29 @@ func VerifyZ(data []byte) error {
 }
 
 // verifyZ checks the Z card of already-clearsign-stripped artifact content.
+// It mirrors fossil's verify_z_card (src/manifest.c): the Z card is located
+// as the last 35 bytes beginning "Z ", the checksum covers every byte before
+// it, and the stated digest is the 32 bytes at n-33 -- byte n-1, the final
+// LF, is never read. §6.2: a body too short to hold a Z card, or one whose
+// last 35 bytes are not a Z card, has the Z card absent, which this reports
+// as success and leaves the required-card rule (§5.2) to judge; only a
+// present-but-wrong checksum is an error here. Framing (§4.1) -- the missing
+// final LF, residue after the Z card -- is the caller's to check, so this
+// never rejects an input the rule it breaks should.
 func verifyZ(body []byte) error {
-	if len(body) < 35 {
-		return fmt.Errorf("deck.VerifyZ: manifest too short (%d bytes)", len(body))
+	n := len(body)
+	if n < 35 {
+		return nil // no room for a Z card: absent
 	}
-	tail := body[len(body)-35:]
-	if tail[0] != 'Z' || tail[1] != ' ' || tail[34] != '\n' {
-		return fmt.Errorf("deck.VerifyZ: invalid Z-card format")
+	if body[n-35] != 'Z' || body[n-34] != ' ' {
+		return nil // last 35 bytes are not a Z card: absent
 	}
-	stated := string(tail[2:34])
-	computed := computeZ(body[:len(body)-35])
-	if computed != stated {
+	// §6.2 compares byte-exact against the lowercase computeZ, so an
+	// uppercase digest fails verification even though §6.1's grammar admits
+	// it. body[n-1] is deliberately not read.
+	stated := body[n-33 : n-1]
+	computed := computeZ(body[:n-35])
+	if computed != string(stated) {
 		return fmt.Errorf("deck.VerifyZ: checksum mismatch: stated=%s computed=%s", stated, computed)
 	}
 	return nil

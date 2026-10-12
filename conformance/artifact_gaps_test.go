@@ -5,31 +5,9 @@ import "testing"
 // artifactGaps marks the artifact cases go-libfossil is known to fail, by
 // case ID, grouped by the code at fault, each with the issue tracking its fix.
 var artifactGaps = map[string]string{
-	// deck.VerifyZ rejects an artifact too short to hold a Z card, and one
-	// whose last 35 bytes are not a Z card, where Section 6.2 says it reports
-	// the Z card absent; and it requires LF at the last byte, which it must
-	// not read (deck/zcard.go:23, :26). With no framing gates or residue check
-	// of its own, deck.Parse leaves these inputs to that check, so the rule
-	// each case names never runs.
-	"artifact.6.2.verify-missing-z": "#265",
-	"artifact.6.2.verify-too-short": "#265",
-	"artifact.6.2.verify-last-byte": "#265",
-	"artifact.4.1.empty":            "#265",
-	"artifact.4.1.no-final-lf":      "#265",
-	"artifact.4.1.short":            "#265",
-	"artifact.4.2.residual":         "#265",
-	"artifact.4.1.2.sterilized":     "#265",
-	"artifact.4.1.2.signed-guard":   "#265",
-	"artifact.4.1.1.leading-space":  "#265",
-	"artifact.4.1.1.header-short":   "#265",
-	"artifact.4.1.1.missing-blank":  "#265",
-	"artifact.4.7.z-extra-token":    "#265",
-	// Framing: no check that the raw input ends in LF before the wrapper is
-	// stripped (deck/parse.go:40), and a bare C line passes as an empty comment
-	// (parse.go:103, :174).
-	"artifact.4.1.1.outer-no-lf": "#266",
-	"artifact.4.1.first-bare":    "#266",
-	"artifact.4.7.c-missing":     "#266",
+	// Framing: a bare C line passes as an empty comment (parse.go:103, :174).
+	// (The raw-final-LF and first-card gates landed with #265.)
+	"artifact.4.7.c-missing": "#266",
 	// The armor match compares all 30 bytes, not 29 (deck/clearsign.go:16, :65).
 	"artifact.4.1.1.pgp-short": "#266",
 	"artifact.4.1.1.ssh-short": "#266",

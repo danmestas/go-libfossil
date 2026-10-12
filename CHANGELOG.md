@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify.Rebuild` is atomic again (#335). Since #285 it committed the emptied
+  derived tables before the crosslink sweep ran, so a sweep that failed partway
+  left event, plink, mlink, tagxref, leaf and the rest empty until a later
+  rebuild succeeded. It now empties, re-derives and refills the bookkeeping
+  tables in one transaction, as fossil's `rebuild_db` does, and a failed
+  rebuild rolls back to the state it found. `manifest.CrosslinkRebuild` now
+  takes the caller's transaction and runs candidate discovery, linking and the
+  leaf and tag repair inside it; the incremental `Crosslink` path is unchanged.
+
 - A check-in's `event.mtime` now follows its newest `date` tag, the one-shot
   tag `fossil amend --date` writes, as fossil's `manifest_crosslink` and
   `tag_insert` do (#334). Crosslink used the manifest's D-card time and never

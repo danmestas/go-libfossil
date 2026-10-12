@@ -113,7 +113,7 @@ func newReceiveLinker(r *repo.Repo, cacheBytes int64) (*ReceiveLinker, error) {
 	if cacheBytes <= 0 {
 		panic("manifest.newReceiveLinker: cacheBytes must be > 0")
 	}
-	if err := prepareCrosslinkTables(r); err != nil {
+	if err := prepareCrosslinkTables(r.DB()); err != nil {
 		return nil, err
 	}
 	return &ReceiveLinker{

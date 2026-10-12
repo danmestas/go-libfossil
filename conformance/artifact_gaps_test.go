@@ -13,20 +13,6 @@ var artifactGaps = map[string]string{
 	"artifact.4.7.c-empty":          "#272",
 	"artifact.4.7.n-empty":          "#272",
 	"artifact.4.7.p-empty":          "#272",
-	// parseTimestamp accepts only two time.Parse layouts, so the wider accepted
-	// grammar is rejected, and it rewrites a lowercase t to T (deck/parse.go:420).
-	"artifact.4.6.4.after-epoch":       "#271",
-	"artifact.4.6.4.double-separator":  "#271",
-	"artifact.4.6.4.e-lowercase-t":     "#271",
-	"artifact.4.6.4.hh-mm":             "#271",
-	"artifact.4.6.4.hour-24":           "#271",
-	"artifact.4.6.4.lowercase-t":       "#271",
-	"artifact.4.6.4.no-calendar-check": "#271",
-	"artifact.4.6.4.tab-separator":     "#271",
-	"artifact.4.6.4.zone-lowercase-z":  "#271",
-	"artifact.4.6.4.zone-minus":        "#271",
-	"artifact.4.6.4.zone-plus":         "#271",
-	"artifact.4.6.4.zone-z":            "#271",
 	// Marshal writes D to the millisecond and E to the second, so a longer
 	// fraction the parser accepted is lost (deck/marshal.go:63, :67). Found
 	// by FuzzArtifactRoundTrip.

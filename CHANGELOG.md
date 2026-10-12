@@ -113,6 +113,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` parses D and E timestamps with the §4.6.4 grammar (as amended
+  by the §4.6.4 erratum) instead of two fixed `time.Parse` layouts. It accepts
+  the date-time form with `HH:MM`, `HH:MM:SS` or a fractional second, a `Z`,
+  `z`, `+HH:MM` or `-HH:MM` timezone, one or more whitespace-or-`T` separators,
+  the hour 24 and an unchecked day (`2024-02-31` rolls forward, as SQLite's
+  `julianday()` does), and a date at or after `-4713-11-25`; it applies the
+  exact-digit field ranges (year 4 digits, month 01-12, day 01-31, hour 00-24,
+  minute and second 00-59) and rejects a lowercase `t` separator rather than
+  silently rewriting it to `T` (#271).
+
+
 - `deck.Parse` applies fossil's §4.6 name predicates. An F-card filename and
   old-name, and an A-card filename, must be simple pathnames (§4.6.1): no
   leading or doubled or trailing slash and no "." or ".." path element, the

@@ -188,11 +188,8 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return fmt.Errorf("tagxref insert: %w", err)
 	}
 
-	// Special: bgcolor updates event table.
-	if opts.TagName == "bgcolor" && opts.TagType == TagPropagating {
-		if _, err := q.Exec("UPDATE event SET bgcolor=? WHERE objid=?", opts.Value, opts.TargetRID); err != nil {
-			return fmt.Errorf("bgcolor update: %w", err)
-		}
+	if err := applyEventOverride(q, opts); err != nil {
+		return err
 	}
 
 	if err := applyDateOverride(q, opts); err != nil {
@@ -203,6 +200,36 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return fmt.Errorf("propagate: %w", err)
 	}
 
+	return nil
+}
+
+// eventTagColumns maps the tags that override a check-in's derived event row
+// to the column each one sets, as tag_insert's switch does (src/tag.c).
+var eventTagColumns = map[string]string{
+	"bgcolor": "bgcolor",
+	"user":    "euser",
+	"comment": "ecomment",
+}
+
+// applyEventOverride sets event.bgcolor, euser or ecomment from a bgcolor,
+// user or comment tag that has just won its tagxref row. Like tag_insert it
+// does this for every tag type, writing NULL for a cancel, so a singleton or
+// cancelled bgcolor takes effect too. A check-in crosslinked later reads the
+// same rows back; see crosslinkCheckinTables.
+func applyEventOverride(q db.Querier, opts ApplyOpts) error {
+	col, ok := eventTagColumns[opts.TagName]
+	if !ok {
+		return nil
+	}
+	var value any
+	if opts.TagType != TagCancel {
+		value = opts.Value
+	}
+	// col comes from the fixed map above, never from input.
+	stmt := "UPDATE event SET " + col + "=? WHERE objid=?"
+	if _, err := q.Exec(stmt, value, opts.TargetRID); err != nil {
+		return fmt.Errorf("%s update: %w", opts.TagName, err)
+	}
 	return nil
 }
 

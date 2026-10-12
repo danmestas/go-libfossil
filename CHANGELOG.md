@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A check-in's `event.bgcolor`, `euser` and `ecomment` now follow its
+  `bgcolor`, `user` and `comment` tags as fossil's `tag_insert` and
+  `manifest_crosslink` do (#343). `tag.ApplyTagWithTx` set `event.bgcolor` only
+  for a propagating `bgcolor` tag, so a singleton one did nothing and a cancel
+  left the colour in place, and it never touched `euser` or `ecomment`. It now
+  sets all three for every tag type, writing NULL for a cancel, and crosslinking
+  a check-in reads the three values back from `tagxref`, so a tag that reached
+  the check-in while it was a phantom takes effect.
+
 - `Checkout.WouldFork` again reports a fork when the checkout's version
   already has a child on its own branch (#347), as after a pull brings in a
   child of the checked-out version. Since #291 it was fossil's leaf-ambiguity

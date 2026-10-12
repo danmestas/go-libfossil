@@ -61,6 +61,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync server lets Clone imply Read at its read gates, as fossil's
+  trunk `page_xfer` and the §7.3 erratum do (#312). This is an access
+  change: a requester whose anonymous (nobody) capabilities include Clone
+  (`g`) now receives unversioned files (the catalog, `uvgimme` answers, and
+  the catalog sent with a clone), the `xtable-hash` inventory and read-gated
+  configuration from `reqconfig`. As in fossil, a Clone granted by a login
+  card does not imply Read. Pull still needs Read itself (`o`): fossil
+  trunk's derived Read also lets a Clone-only nobody pull, and this server
+  deliberately does not. One handler check, `canRead`, now decides every
+  read gate; `auth.CanRead` is unchanged.
 - Sync login follows §6.4 and §6.5 (#304). Once a server's `server-version`
   names a release that reads it (2.27, built 2025-07-27 11:05 or later), the
   client's HTTP transports send the login card in the `x-f-l-c` cookie,

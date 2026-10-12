@@ -207,6 +207,9 @@ type handler struct {
 	user   string // verified username ("nobody" if no login card)
 	caps   string // capability string from user table
 	authed bool   // whether login card was verified
+	// cloneRead is Read derived from Clone before any login, as page_xfer
+	// derives it from nobody's capabilities ahead of its card loop.
+	cloneRead bool
 }
 
 func (h *handler) initAuth() {
@@ -218,6 +221,25 @@ func (h *handler) initAuth() {
 	if err == nil {
 		h.caps = caps
 	}
+	h.cloneRead = auth.CanClone(h.caps)
+}
+
+// canRead reports the requester's Read permission for this request, the one
+// owner of that decision for every read gate the handler applies: the
+// unversioned catalog, uvigot and uvgimme answers, xtable-hash and
+// read-gated reqconfig.
+//
+// Clone implies Read for the capabilities a request starts with, nobody's,
+// as fossil's page_xfer sets it (`if( g.perm.Clone ) g.perm.Read = 1;`,
+// xfer.c:1301) before its card loop and the §7.3 erratum states. A Clone
+// that a login card grants does not become Read: check_login only adds the
+// user's capabilities, after that point.
+//
+// Pull is deliberately not one of these gates. fossil trunk's derived Read
+// also lets a Clone-only nobody pull; here a pull still needs o
+// (auth.CanPull), by the owner's decision.
+func (h *handler) canRead() bool {
+	return auth.CanRead(h.caps) || h.cloneRead
 }
 
 // handleLoginCard verifies a login card and adds the user's capabilities to
@@ -708,7 +730,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		}
 	case c.Name == "xtable-hash" && len(c.Values) >= 2:
 		// The reply lists every row's key and mtime: readers only.
-		if auth.CanRead(h.caps) {
+		if h.canRead() {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
 	case c.Name == "req-clusters":
@@ -922,7 +944,7 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 	if c == nil {
 		panic("handler.handleReqConfig: c must not be nil")
 	}
-	mask := configRequestMask(c.Name, h.caps, h.authed)
+	mask := configRequestMask(c.Name, h.caps, h.canRead(), h.authed)
 	if mask == 0 {
 		return nil
 	}

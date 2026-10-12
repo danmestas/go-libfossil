@@ -9,10 +9,6 @@ var syncGaps = map[string]string{
 	// than SHA3 support, where fossil sends the refusal in its place
 	// (internal/sync/client.go buildUVFileCards).
 	"sync.7.6.client-uv-gate": "#303",
-	// The read gates treat only o, i and Admin as Read, where fossil's
-	// trunk and the s7.3 erratum let Clone imply it
-	// (internal/auth/auth.go:42).
-	"sync.7.3.uvgimme-clone-implies-read": "#312",
 }
 
 // syncDeviations marks the cases where go-libfossil differs from the draft

@@ -48,12 +48,20 @@ func TestReqConfigMatchesRealFossil(t *testing.T) {
 		"/all", "/", "/s", "/sh", "/p", "/u", "/user", "/email", "/skinx", "/ticket",
 		"/xfer", "/alias", "/interwiki", "/subscriber", "project-code", "project-name",
 	}
+	// Clone implies Read in fossil's trunk (page_xfer sets g.perm.Read when
+	// g.perm.Clone is set) but not in the 2.28 binary the tests run. Like
+	// trunk, HandleSync gives nobody="g" what fossil 2.28 gives nobody="go".
 	for _, caps := range []string{"", "g", "o", "i", "e", "oe"} {
-		fossilRun(t, bin, "user", "capabilities", "nobody", caps, "-R", repoPath)
 		for _, name := range names {
+			fossilCaps := caps
+			if caps == "g" {
+				fossilCaps = "go"
+			}
+			fossilRun(t, bin, "user", "capabilities", "nobody", fossilCaps,
+				"-R", repoPath)
 			req := &xfer.Message{Cards: []xfer.Card{&xfer.ReqConfigCard{Name: name}}}
 			label := fmt.Sprintf("nobody=%q reqconfig %s", caps, name)
-			compareReqConfig(t, bin, repoPath, req, label)
+			compareReqConfig(t, bin, repoPath, req, label, caps)
 		}
 	}
 
@@ -63,16 +71,17 @@ func TestReqConfigMatchesRealFossil(t *testing.T) {
 	pc := strings.Trim(strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
 		"SELECT value FROM config WHERE name='project-code'")), "'")
 	req := signedRequest(t, "adm", "pw", pc, rest...)
-	got := compareReqConfig(t, bin, repoPath, req, "admin reqconfig /all")
+	got := compareReqConfig(t, bin, repoPath, req, "admin reqconfig /all", "")
 	if !strings.Contains(strings.Join(got, "\n"), "/user 109 'adm' pw ") {
 		t.Errorf("admin /all carried no user rows: %q", got)
 	}
 }
 
 // compareReqConfig sends req to fossil and to HandleSync and fails unless
-// both answer with the same config cards. It returns fossil's.
+// both answer with the same config cards. It returns fossil's. nobodyCaps,
+// when not empty, are nobody's capabilities for HandleSync alone.
 func compareReqConfig(
-	t *testing.T, bin, repoPath string, req *xfer.Message, label string,
+	t *testing.T, bin, repoPath string, req *xfer.Message, label, nobodyCaps string,
 ) []string {
 	t.Helper()
 	want := configLines(fossilHTTPXfer(t, bin, repoPath, req))
@@ -82,6 +91,9 @@ func compareReqConfig(
 		t.Fatalf("repo.Open: %v", err)
 	}
 	defer r.Close()
+	if nobodyCaps != "" {
+		setNobodyCaps(t, r, nobodyCaps)
+	}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("%s: HandleSync: %v", label, err)

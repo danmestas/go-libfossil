@@ -1,11 +1,15 @@
 package sync
 
 import (
+	"bytes"
+	"context"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // The handler sends repository content only to a requester entitled to read
@@ -234,4 +238,91 @@ func TestReaderGetsEverything(t *testing.T) {
 	if n := len(findCards[*xfer.UVFileCard](resp)); n != 1 {
 		t.Errorf("reader got %d uvfile cards, want 1", n)
 	}
+}
+
+// TestCloneImpliesRead pins that Clone counts as Read at every read gate, as
+// fossil's page_xfer grants it: a requester with only g gets the unversioned
+// catalog, a uvgimme'd file, the xtable-hash inventory and read-gated
+// configuration. Pull still needs o, so its pull card is refused.
+func TestCloneImpliesRead(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	writeUV(t, r, "pub.txt", "unversioned public", 100)
+	setupKVTable(t, r)
+	if _, err := r.DB().Exec(
+		"REPLACE INTO config(name, value, mtime) VALUES('project-name', 'p', 0)",
+	); err != nil {
+		t.Fatalf("set project-name: %v", err)
+	}
+	setNobodyCaps(t, r, "g")
+
+	resp := handleReq(t, r,
+		versionPragma("client-version"),
+		&xfer.PragmaCard{Name: "uv-hash", Values: []string{"wrong"}},
+		&xfer.UVGimmeCard{Name: "pub.txt"},
+		&xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}},
+		&xfer.ReqConfigCard{Name: "/project"},
+	)
+	if n := len(findCards[*xfer.UVIGotCard](resp)); n != 1 {
+		t.Errorf("clone-only requester got %d uvigot cards, want 1", n)
+	}
+	if n := len(findCards[*xfer.UVFileCard](resp)); n != 1 {
+		t.Errorf("clone-only requester got %d uvfile cards, want 1", n)
+	}
+	if n := len(findCards[*xfer.XIGotCard](resp)); n == 0 {
+		t.Error("clone-only requester got no xigot cards")
+	}
+	if n := len(findCards[*xfer.ConfigCard](resp)); n == 0 {
+		t.Error("clone-only requester got no configuration")
+	}
+
+	pull := handleReq(t, r, pullCard())
+	if errs := findCards[*xfer.ErrorCard](pull); len(errs) != 1 {
+		t.Errorf("clone-only pull: error cards %v, want the pull refused", errs)
+	}
+}
+
+// TestLoginCloneDoesNotImplyRead pins that a Clone granted by a login card
+// does not become Read, as fossil derives Read from Clone only for nobody's
+// capabilities, ahead of the login.
+func TestLoginCloneDoesNotImplyRead(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	writeUV(t, r, "pub.txt", "unversioned public", 100)
+	setNobodyCaps(t, r, "")
+	if err := auth.CreateUser(r.DB(), testPC, "bob", "pw", "g"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	rest := []xfer.Card{
+		versionPragma("client-version"),
+		&xfer.UVGimmeCard{Name: "pub.txt"},
+		randomComment(simio.CryptoRand{}),
+	}
+	payload, err := encodeCards(rest)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	login := computeLogin("bob", "pw", testPC, payload)
+	req, err := xfer.DecodeUncompressed(append(encodeLine(t, login), payload...))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if errs := findCards[*xfer.ErrorCard](resp); len(errs) != 0 {
+		t.Fatalf("login refused: %v", errs)
+	}
+	if n := len(findCards[*xfer.UVFileCard](resp)); n != 0 {
+		t.Fatalf("a login-granted Clone got %d uvfile cards, want 0", n)
+	}
+}
+
+// encodeLine encodes one card as its wire line.
+func encodeLine(t *testing.T, c xfer.Card) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := xfer.EncodeCard(&buf, c); err != nil {
+		t.Fatalf("encode %T: %v", c, err)
+	}
+	return buf.Bytes()
 }

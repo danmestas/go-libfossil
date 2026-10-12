@@ -47,36 +47,26 @@ func propagate(q db.Querier, tagid int64, tagType int, origID libfossil.FslID, m
 		}
 		visited[currentRid] = true
 
-		// Query primary children via LEFT JOIN with tagxref.
-		// The doit column is 1 if we should propagate/cancel to this child.
-		// For propagating: doit = 1 if (srcid=0 AND tagxref.mtime < ?) OR no tagxref entry
-		// For cancel: doit = 1 if there's any tagxref entry with srcid=0 (propagated tag)
-		var query string
+		// Query primary children via LEFT JOIN with tagxref. doit is whether
+		// to propagate the tag to (type 2) or block it on (type 0) the child.
+		// Both cases carry the same guard as fossil's tag_propagate: act on an
+		// inherited row (srcid=0) only when it is OLDER than this tag
+		// (tagxref.mtime < ?); the default when the child has no row for the tag
+		// is 1 for a propagating tag (give it the row) and 0 for a cancel
+		// (nothing to remove), bound as a parameter. A newer inherited row is
+		// left in place and the walk does not descend past it (#288).
+		defaultDoit := 0
 		if tagType == TagPropagating {
-			query = `
-				SELECT cid, plink.mtime,
-				       COALESCE(srcid=0 AND tagxref.mtime < ?, 1) AS doit
-				FROM plink
-				LEFT JOIN tagxref ON cid=tagxref.rid AND tagxref.tagid=?
-				WHERE pid=? AND isprim=1
-			`
-		} else {
-			// For cancel, we want to delete any propagated tag (srcid=0)
-			query = `
-				SELECT cid, plink.mtime,
-				       COALESCE(srcid=0, 0) AS doit
-				FROM plink
-				LEFT JOIN tagxref ON cid=tagxref.rid AND tagxref.tagid=?
-				WHERE pid=? AND isprim=1
-			`
+			defaultDoit = 1
 		}
-		var rows *sql.Rows
-		var err error
-		if tagType == TagPropagating {
-			rows, err = q.Query(query, mtime, tagid, currentRid)
-		} else {
-			rows, err = q.Query(query, tagid, currentRid)
-		}
+		const query = `
+			SELECT cid, plink.mtime,
+			       COALESCE(srcid=0 AND tagxref.mtime < ?, ?) AS doit
+			FROM plink
+			LEFT JOIN tagxref ON cid=tagxref.rid AND tagxref.tagid=?
+			WHERE pid=? AND isprim=1
+		`
+		rows, err := q.Query(query, mtime, defaultDoit, tagid, currentRid)
 		if err != nil {
 			return fmt.Errorf("query children of %d: %w", currentRid, err)
 		}

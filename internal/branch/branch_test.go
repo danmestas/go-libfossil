@@ -1,7 +1,9 @@
 package branch
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,5 +220,60 @@ func TestCreate_AllowsClosedBranchName(t *testing.T) {
 		Time: time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC),
 	}); err != nil {
 		t.Fatalf("Create after close: %v, want success (branch was closed)", err)
+	}
+}
+
+// TestCreate_ConcurrentSameNameOneWins races several Creates of one name on
+// one repository. The open-name check and the check-in must be one
+// transaction, so exactly one Create commits and the rest are refused.
+func TestCreate_ConcurrentSameNameOneWins(t *testing.T) {
+	const racers = 8
+	r := setupTestRepo(t)
+	parentRid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "hello.txt", Content: []byte("hello")}},
+		Comment: "initial commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+
+	start := make(chan struct{})
+	errs := make([]error, racers)
+	var wg sync.WaitGroup
+	for i := range racers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			// Distinct users give distinct manifests, so no two racers
+			// store the same artifact.
+			_, _, errs[i] = Create(r, CreateOpts{
+				Name: "feature-x", Parent: parentRid, User: fmt.Sprintf("user%d", i),
+				Time: time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	won := 0
+	for _, err := range errs {
+		if err == nil {
+			won++
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d of %d concurrent Creates of one name succeeded, want 1: %v", won, racers, errs)
+	}
+	var leaves int
+	const openLeaves = `SELECT count(*) FROM leaf JOIN tagxref USING(rid)
+		JOIN tag USING(tagid) WHERE tagname='branch' AND value='feature-x'`
+	if err := r.DB().QueryRow(openLeaves).Scan(&leaves); err != nil {
+		t.Fatalf("count feature-x leaves: %v", err)
+	}
+	if leaves != 1 {
+		t.Errorf("feature-x has %d open leaves, want 1", leaves)
 	}
 }

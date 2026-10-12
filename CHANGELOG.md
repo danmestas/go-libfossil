@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `branch.Create` refuses an open branch name inside the check-in's own
+  transaction (#316). The check ran before `manifest.Checkin` opened its
+  transaction, and the branch tags were applied in further transactions after
+  it committed, so concurrent creates of one name could all pass the check and
+  all commit. `manifest.Checkin` now applies its inline tags, parent tag
+  propagation and leaf state inside its transaction, and takes a `Precheck`
+  that runs first in it; `branch.Create` checks the name there, so exactly one
+  of several concurrent creates commits.
+
 - `verify.Rebuild` is atomic again (#335). Since #285 it committed the emptied
   derived tables before the crosslink sweep ran, so a sweep that failed partway
   left event, plink, mlink, tagxref, leaf and the rest empty until a later

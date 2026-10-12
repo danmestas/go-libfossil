@@ -25,6 +25,13 @@ type CheckinOpts struct {
 	Delta        bool
 	Time         time.Time
 	Tags         []deck.TagCard
+	// Precheck, when set, runs first inside the check-in's transaction, and
+	// an error from it aborts the check-in before anything is stored. It makes
+	// a caller's read-then-write decision atomic with the write: branch.Create
+	// refuses an open branch name here, so two concurrent creates of one name
+	// cannot both commit. It must only read: a write would land in the
+	// check-in's transaction.
+	Precheck func(q db.Querier) error
 }
 
 type File struct {
@@ -65,9 +72,12 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		opts.Time = time.Now().UTC()
 	}
 
-	var inlineTCards []deck.TagCard
-
 	err = r.WithTx(func(tx *db.Tx) error {
+		if opts.Precheck != nil {
+			if txErr := opts.Precheck(tx); txErr != nil {
+				return txErr
+			}
+		}
 		fCards, fileRids, txErr := storeFileBlobs(tx, opts.Files)
 		if txErr != nil {
 			return txErr
@@ -77,7 +87,6 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		if txErr != nil {
 			return txErr
 		}
-		inlineTCards = d.T // capture for post-tx tag processing
 
 		cache := content.NewCache(crosslinkCacheBytes)
 		if txErr := preflightCheckinMlinks(tx, cache, d); txErr != nil {
@@ -116,15 +125,24 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			}
 		}
 
-		return nil
+		return linkCheckinTags(tx, opts, manifestRid, d.T)
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
 	}
 
-	// Process inline T-cards (branch, sym-trunk, etc.) after the transaction
-	// completes so the event/plink tables are populated for tag propagation.
-	for _, tc := range inlineTCards {
+	return manifestRid, manifestUUID, nil
+}
+
+// linkCheckinTags derives a new check-in's tag and leaf state on the check-in's
+// own transaction, after its event and plink rows, so the check-in commits
+// with its branch already in effect: a reader never sees it untagged, and a
+// Precheck in a later check-in sees it.
+func linkCheckinTags(
+	tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID, tcards []deck.TagCard,
+) error {
+	// Inline T-cards (branch, sym-trunk, etc.) name the check-in itself.
+	for _, tc := range tcards {
 		if tc.UUID != "*" {
 			continue // non-self T-cards are for control artifacts
 		}
@@ -139,7 +157,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		default:
 			continue
 		}
-		if err := tag.ApplyTag(r, tag.ApplyOpts{
+		if err := tag.ApplyTagWithTx(tx, tag.ApplyOpts{
 			TargetRID: manifestRid,
 			SrcRID:    manifestRid,
 			TagName:   tc.Name,
@@ -147,7 +165,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			Value:     tc.Value,
 			MTime:     libfossil.TimeToJulian(opts.Time),
 		}); err != nil {
-			return 0, "", fmt.Errorf("manifest.Checkin inline tag %q: %w", tc.Name, err)
+			return fmt.Errorf("inline tag %q: %w", tc.Name, err)
 		}
 	}
 
@@ -160,8 +178,8 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	// instead, since candidates there are not visited in parent-before-child
 	// order. Both converge on the same tagxref state.
 	if opts.Parent > 0 {
-		if err := tag.PropagateAll(r.DB(), opts.Parent); err != nil {
-			return 0, "", fmt.Errorf("manifest.Checkin propagate from parent: %w", err)
+		if err := tag.PropagateAll(tx, opts.Parent); err != nil {
+			return fmt.Errorf("propagate from parent: %w", err)
 		}
 	}
 
@@ -171,12 +189,11 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	// leaf_eventually_check(rid) enqueues rid and its parents -- and runs the
 	// checks when the transaction commits.
 	for _, rid := range append([]libfossil.FslID{manifestRid}, collectParents(opts)...) {
-		if err := leafCheck(r.DB(), rid); err != nil {
-			return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
+		if err := leafCheck(tx, rid); err != nil {
+			return err
 		}
 	}
-
-	return manifestRid, manifestUUID, nil
+	return nil
 }
 
 // checkWriterName refuses a filename the artifact format's writer profile

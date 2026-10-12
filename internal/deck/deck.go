@@ -47,6 +47,18 @@ type Deck struct {
 	U    *string
 	W    []byte
 	Z    string
+
+	// cPresent, nPresent and pPresent record that a C, N or P card was present
+	// in the parsed manifest even when its value is empty, so Marshal can
+	// re-emit a present-but-empty C/N comment or a bare P card and the artifact
+	// round-trips. They are unexported because they matter only to the parse ->
+	// marshal round trip: a caller building a Deck sets a non-empty value, which
+	// Marshal still emits on its own, and the W card uses nil versus a non-nil
+	// empty slice for the same distinction. See §4.2 (empty trailing token) and
+	// §4.7.13.
+	cPresent bool
+	nPresent bool
+	pPresent bool
 }
 
 type FileCard struct {
@@ -61,6 +73,10 @@ type TagCard struct {
 	Name  string
 	UUID  string
 	Value string
+	// valuePresent records that a value token was present even when empty, so a
+	// parsed `T +x * ` round-trips with its trailing space. Unexported for the
+	// same reason as Deck.cPresent: Marshal emits a non-empty Value regardless.
+	valuePresent bool
 }
 
 type TagType byte

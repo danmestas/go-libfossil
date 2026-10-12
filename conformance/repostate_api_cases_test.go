@@ -135,8 +135,8 @@ func leafAPICases() []rsAPICase {
 		openLeaves("repostate.6.1.branch-membership", "RS-6.1-1", branched(), "feat", "b2"),
 		openLeaves("repostate.9.branch-not-open", "RS-9-3",
 			with(branched(), control("t", 9, "+closed {b2}")), "feat"),
-		wouldFork("repostate.7.5.ambiguity-non-leaf", "RS-7.5-2", forkedChain, "c3", false),
-		wouldFork("repostate.7.5.ambiguity-open", "RS-7.5-3", forkedChain, "f", true),
-		wouldFork("repostate.7.5.ambiguity-closed", "RS-7.5-3", closedC4, "f", false),
+		leafAmbiguous("repostate.7.5.ambiguity-non-leaf", "RS-7.5-2", forkedChain, "c3", false),
+		leafAmbiguous("repostate.7.5.ambiguity-open", "RS-7.5-3", forkedChain, "f", true),
+		leafAmbiguous("repostate.7.5.ambiguity-closed", "RS-7.5-3", closedC4, "f", false),
 	}
 }

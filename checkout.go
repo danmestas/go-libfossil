@@ -397,8 +397,11 @@ func mergeActionString(a checkout.MergeAction) string {
 	}
 }
 
-// WouldFork reports whether committing on the current branch would create
-// a fork. Returns true when another leaf exists on the same branch.
+// WouldFork reports whether committing on the checkout's version would
+// create a fork: the version already has a child on its own branch (for
+// example after a pull), so the commit would become a second leaf. This is
+// fossil's "Would fork" commit refusal; run Update first, or commit to a new
+// branch. Another open leaf elsewhere on the branch does not count.
 func (c *Checkout) WouldFork() (bool, error) {
 	fork, err := c.inner.WouldFork()
 	if err != nil {

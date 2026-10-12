@@ -932,3 +932,84 @@ func TestRebuild_RejectsOversizedCanonicalMlinkSources(t *testing.T) {
 
 // Rebuild equivalence tests (Go rebuild == fossil rebuild) live in sim/rebuild_test.go.
 // They require the fossil binary and belong with other integration tests.
+
+// TestRebuild_FailedSweepKeepsDerivedState stores a check-in the crosslink
+// sweep refuses (more cherrypick sources than it links) beside a good one.
+// Rebuild must fail as one transaction, as fossil's rebuild_db does, leaving
+// the derived rows it found in place rather than the emptied tables.
+func TestRebuild_FailedSweepKeepsDerivedState(t *testing.T) {
+	r := newTestRepo(t)
+	if _, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "a.txt", Content: []byte("alpha")}},
+		Comment: "first",
+		User:    "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before := derivedSnapshot(t, r)
+	if before == "" {
+		t.Fatal("expected derived rows before Rebuild")
+	}
+
+	cherrypicks := make([]deck.CherryPick, 1025)
+	for i := range cherrypicks {
+		cherrypicks[i] = deck.CherryPick{Target: fmt.Sprintf("%040x", i+1)}
+	}
+	bad, err := (&deck.Deck{
+		Type: deck.Checkin,
+		C:    "too many cherrypick sources",
+		D:    time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
+		P:    []string{fmt.Sprintf("%040x", 2000)},
+		Q:    cherrypicks,
+		U:    deck.User("test"),
+	}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := blob.Store(r.DB(), bad); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := verify.Rebuild(r); err == nil {
+		t.Fatal("Rebuild succeeded over a check-in the sweep refuses")
+	}
+	if after := derivedSnapshot(t, r); after != before {
+		t.Fatalf("failed Rebuild changed derived state:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// derivedSnapshot renders the crosslink-derived rows Rebuild rewrites.
+func derivedSnapshot(t *testing.T, r *repo.Repo) string {
+	t.Helper()
+	var b bytes.Buffer
+	for _, query := range []string{
+		"SELECT objid, type, mtime FROM event ORDER BY objid",
+		"SELECT pid, cid, isprim FROM plink ORDER BY pid, cid",
+		"SELECT mid, fid, fnid FROM mlink ORDER BY mid, fnid",
+		"SELECT rid FROM leaf ORDER BY rid",
+		"SELECT tagid, rid, tagtype, srcid FROM tagxref ORDER BY tagid, rid",
+	} {
+		rows, err := r.DB().Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cols, _ := rows.Columns()
+		for rows.Next() {
+			vals := make([]any, len(cols))
+			ptrs := make([]any, len(cols))
+			for i := range vals {
+				ptrs[i] = &vals[i]
+			}
+			if err := rows.Scan(ptrs...); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			fmt.Fprintf(&b, "%v\n", vals)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		rows.Close()
+	}
+	return b.String()
+}

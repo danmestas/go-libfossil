@@ -35,7 +35,9 @@ var rebuildTableList = append(append([]string{}, crosslinkTables...), bookkeepin
 // tables and runs the same crosslink sweep a clone runs, so derived state has a
 // single owner -- manifest.Crosslink -- rather than a second, partial
 // derivation that diverged from `fossil rebuild`. Finally it refills the
-// sync-bookkeeping tables the sweep does not own.
+// sync-bookkeeping tables the sweep does not own. It holds one write
+// transaction for the whole sweep, so a concurrent writer waits up to
+// busy_timeout and then gets SQLITE_BUSY, as with fossil's rebuild.
 func Rebuild(r *repo.Repo) (*Report, error) {
 	if r == nil {
 		panic("verify.Rebuild: nil *repo.Repo")
@@ -53,28 +55,10 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 		return nil, fmt.Errorf("verify.Rebuild: %w", err)
 	}
 
-	// Phase 2: empty the crosslink-derived tables so every blob owes the sweep
-	// an examination again. The deletes commit before the sweep because
-	// manifest.Crosslink discovers candidates with a read outside any
-	// transaction.
-	if err := r.WithTx(func(tx *db.Tx) error {
-		return clearTables(tx, crosslinkTables)
-	}); err != nil {
-		return nil, fmt.Errorf("verify.Rebuild: %w", err)
-	}
-
-	// Phase 3: crosslink every artifact. The sweep writes event/plink/mlink/
-	// tagxref, creates phantoms for absent targets, parents and file content,
-	// reparents, then repairs leaf and tag-propagation state over the whole plink
-	// graph -- the order `fossil rebuild` uses. CrosslinkRebuild, not Crosslink,
-	// because a rebuild is terminal: a check-in whose content is absent is linked
-	// with phantoms rather than deferred for a blob that will never arrive.
-	if _, err := manifest.CrosslinkRebuild(r); err != nil {
-		return nil, fmt.Errorf("verify.Rebuild: %w", err)
-	}
-
-	// Phase 4: refill the sync-bookkeeping tables the sweep does not own.
-	if err := r.WithTx(rebuildBookkeeping); err != nil {
+	// Everything after the read-only check runs in one transaction, as
+	// fossil's rebuild_db does, so a sweep that fails partway leaves the
+	// derived state Rebuild found rather than emptied tables.
+	if err := r.WithTx(rederive); err != nil {
 		return nil, fmt.Errorf("verify.Rebuild: %w", err)
 	}
 
@@ -87,6 +71,24 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 	}
 
 	return report, nil
+}
+
+// rederive empties the crosslink-derived tables so every blob owes the sweep an
+// examination again, crosslinks every artifact, and refills the sync-bookkeeping
+// tables the sweep does not own. The sweep writes event/plink/mlink/tagxref,
+// creates phantoms for absent targets, parents and file content, reparents,
+// then repairs leaf and tag-propagation state over the whole plink graph -- the
+// order `fossil rebuild` uses. CrosslinkRebuild, not Crosslink, because a
+// rebuild is terminal: a check-in whose content is absent is linked with
+// phantoms rather than deferred for a blob that will never arrive.
+func rederive(tx *db.Tx) error {
+	if err := clearTables(tx, crosslinkTables); err != nil {
+		return err
+	}
+	if _, err := manifest.CrosslinkRebuild(tx); err != nil {
+		return err
+	}
+	return rebuildBookkeeping(tx)
 }
 
 // clearTables deletes all rows from the named tables that exist. A table may be

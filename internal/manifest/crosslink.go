@@ -306,22 +306,40 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 	return linker.Finalize(ctx)
 }
 
-// CrosslinkRebuild crosslinks every artifact for a terminal rebuild: it reuses
-// the one-shot sweep but never defers a check-in whose file or baseline content
-// is absent. A rebuild is the final word on what the repository holds -- nothing
+// CrosslinkRebuild crosslinks every artifact for a terminal rebuild, entirely
+// within the caller's transaction: candidate discovery, linking and the leaf and
+// tag repair all run on tx, so a rebuild that fails partway rolls back to the
+// derived state it started from, as fossil's rebuild_db does in its one
+// transaction. It never defers a check-in whose file or baseline content is
+// absent. A rebuild is the final word on what the repository holds -- nothing
 // more will arrive -- so it reserves a phantom for every referenced blob and
 // links the check-in, matching `fossil rebuild` (src/manifest.c add_one_mlink's
 // uuid_to_rid(...,1)) rather than the receive path's deferral. On a complete
-// repository no check-in is ever deferred, so this is identical to Crosslink;
+// repository no check-in is ever deferred, so this links what Crosslink would;
 // the difference shows only on a repository with missing content.
-func CrosslinkRebuild(r *repo.Repo) (int, error) {
-	if r == nil {
-		panic("manifest.CrosslinkRebuild: r must not be nil")
+func CrosslinkRebuild(tx *db.Tx) (int, error) {
+	if tx == nil {
+		panic("manifest.CrosslinkRebuild: tx must not be nil")
+	}
+	if err := prepareCrosslinkTables(tx); err != nil {
+		return 0, err
+	}
+	candidates, err := collectCrosslinkCandidates(tx)
+	if err != nil {
+		return 0, err
 	}
 	st := newLinkState(crosslinkCacheBytes)
 	st.noDefer = true
-	linked, sweepErr := crosslinkSweepWithState(context.Background(), r, st)
-	return repairCrosslinkState(r, linked, sweepErr)
+	if err := linkBatch(context.Background(), tx, candidates, st); err != nil {
+		return 0, err
+	}
+	if st.linked == 0 {
+		return 0, nil
+	}
+	if err := repairOnTx(tx); err != nil {
+		return st.linked, fmt.Errorf("manifest.CrosslinkRebuild: %w", err)
+	}
+	return st.linked, nil
 }
 
 // crosslinkSweepWithState performs only the candidate pass. The caller owns the
@@ -334,7 +352,7 @@ func crosslinkSweepWithState(ctx context.Context, r *repo.Repo, st *linkState) (
 	if st == nil {
 		panic("manifest.crosslinkSweepWithState: state must not be nil")
 	}
-	if err := prepareCrosslinkTables(r); err != nil {
+	if err := prepareCrosslinkTables(r.DB()); err != nil {
 		return 0, err
 	}
 	candidates, err := collectCrosslinkCandidates(r.DB())
@@ -344,14 +362,14 @@ func crosslinkSweepWithState(ctx context.Context, r *repo.Repo, st *linkState) (
 	return linkCandidatesInOrder(ctx, r, candidates, st)
 }
 
-func prepareCrosslinkTables(r *repo.Repo) error {
-	if r == nil {
-		panic("manifest.prepareCrosslinkTables: r must not be nil")
+func prepareCrosslinkTables(q db.Querier) error {
+	if q == nil {
+		panic("manifest.prepareCrosslinkTables: q must not be nil")
 	}
-	if err := ensureForumPostTable(r.DB()); err != nil {
+	if err := ensureForumPostTable(q); err != nil {
 		return fmt.Errorf("manifest.Crosslink: %w", err)
 	}
-	if err := ensureNonArtifactTable(r.DB()); err != nil {
+	if err := ensureNonArtifactTable(q); err != nil {
 		return fmt.Errorf("manifest.Crosslink: %w", err)
 	}
 	return nil
@@ -363,24 +381,28 @@ func repairCrosslinkState(r *repo.Repo, linked int, sweepErr error) (int, error)
 	if linked == 0 {
 		return linked, sweepErr
 	}
-	if err := r.WithTx(func(tx *db.Tx) error {
-		// Reparent first, as fossil's manifest_crosslink_end does before it
-		// propagates tags: the parent tag rewrites plink, and both the
-		// propagation walk and the leaf recompute below must see the new edges.
-		if err := ReparentCheckins(tx); err != nil {
-			return err
-		}
-		if err := repairTagPropagation(tx); err != nil {
-			return err
-		}
-		return repairLeafTable(tx)
-	}); err != nil {
+	if err := r.WithTx(repairOnTx); err != nil {
 		if sweepErr != nil {
 			return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
 		}
 		return linked, fmt.Errorf("manifest.Crosslink: %w", err)
 	}
 	return linked, sweepErr
+}
+
+// repairOnTx is the repair gate itself: the leaf and tag-propagation state that
+// depends on the whole plink graph rather than on any one artifact.
+func repairOnTx(tx *db.Tx) error {
+	// Reparent first, as fossil's manifest_crosslink_end does before it
+	// propagates tags: the parent tag rewrites plink, and both the
+	// propagation walk and the leaf recompute below must see the new edges.
+	if err := ReparentCheckins(tx); err != nil {
+		return err
+	}
+	if err := repairTagPropagation(tx); err != nil {
+		return err
+	}
+	return repairLeafTable(tx)
 }
 
 // candidateQuerySQL selects every blob that still owes the sweep an
@@ -416,7 +438,8 @@ const candidateQuerySQL = `
 
 // collectCrosslinkCandidates returns every not-yet-crosslinked blob, ordered so
 // that a delta's base is visited before the delta itself (see deltaChainOrder).
-// It is read-only, so it runs on q outside any transaction.
+// It is read-only: the incremental sweep runs it on q outside any transaction,
+// a rebuild inside its own.
 func collectCrosslinkCandidates(q db.Querier) ([]candidate, error) {
 	rows, err := q.Query(candidateQuerySQL)
 	if err != nil {

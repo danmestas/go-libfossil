@@ -13,12 +13,6 @@ var artifactGaps = map[string]string{
 	"artifact.4.7.c-empty":          "#272",
 	"artifact.4.7.n-empty":          "#272",
 	"artifact.4.7.p-empty":          "#272",
-	// Escape decoding: the A target and N mimetype are kept raw (deck/parse.go:194,
-	// :220), and an F hash is never validated, so an escaped one passes.
-	"artifact.4.3.1.a-target":              "#268",
-	"artifact.4.3.1.a-target-escaped-hash": "#268",
-	"artifact.4.3.1.hash-raw":              "#268",
-	"artifact.4.3.1.n-mimetype":            "#268",
 	// No pathname predicate on the A filename or the F filename and old-name
 	// (deck/parse.go:215, :250).
 	"artifact.4.6.1.a-double-slash":         "#269",
@@ -73,55 +67,6 @@ var artifactGaps = map[string]string{
 	// by FuzzArtifactRoundTrip.
 	"artifact.4.6.4.fraction-round-trip":   "#272",
 	"artifact.4.6.4.e-fraction-round-trip": "#272",
-	// No hash validation at the A source, B, E, F, G, I, K, M, P or Q positions
-	// (deck/parse.go:171-204, :215, :250, :277, :308); K is not held to 40 digits.
-	// (artifact.4.2.hash-cr belongs here too: once CR is a token byte the B hash
-	// is 41 bytes, which only the §4.7.1 validation rejects.)
-	"artifact.4.2.hash-cr":             "#268",
-	"artifact.4.7.1.a-source-long":     "#268",
-	"artifact.4.7.1.a-source-nonhex":   "#268",
-	"artifact.4.7.1.a-source-short":    "#268",
-	"artifact.4.7.1.b-long":            "#268",
-	"artifact.4.7.1.b-nonhex":          "#268",
-	"artifact.4.7.1.b-short":           "#268",
-	"artifact.4.7.1.e-id-long":         "#268",
-	"artifact.4.7.1.e-id-nonhex":       "#268",
-	"artifact.4.7.1.e-id-short":        "#268",
-	"artifact.4.7.1.f-long":            "#268",
-	"artifact.4.7.1.f-nonhex":          "#268",
-	"artifact.4.7.1.f-short":           "#268",
-	"artifact.4.7.1.g-long":            "#268",
-	"artifact.4.7.1.g-nonhex":          "#268",
-	"artifact.4.7.1.g-short":           "#268",
-	"artifact.4.7.1.i-long":            "#268",
-	"artifact.4.7.1.i-nonhex":          "#268",
-	"artifact.4.7.1.i-short":           "#268",
-	"artifact.4.7.1.k-long":            "#268",
-	"artifact.4.7.1.k-nonhex":          "#268",
-	"artifact.4.7.1.k-short":           "#268",
-	"artifact.4.7.1.m-long":            "#268",
-	"artifact.4.7.1.m-nonhex":          "#268",
-	"artifact.4.7.1.m-short":           "#268",
-	"artifact.4.7.1.p-long":            "#268",
-	"artifact.4.7.1.p-nonhex":          "#268",
-	"artifact.4.7.1.p-short":           "#268",
-	"artifact.4.7.1.q-baseline-long":   "#268",
-	"artifact.4.7.1.q-baseline-nonhex": "#268",
-	"artifact.4.7.1.q-baseline-short":  "#268",
-	"artifact.4.7.1.q-target-long":     "#268",
-	"artifact.4.7.1.q-target-nonhex":   "#268",
-	"artifact.4.7.1.q-target-short":    "#268",
-	"artifact.4.7.k-sha3-reject":       "#268",
-	// Single cards: the A filename keeps its directory (deck/parse.go:220), a
-	// baseline F card may lack a hash (:250), any Q sign but - is read as +
-	// (:312), the hex-name check is lowercase only (:17), and an R token is
-	// stored unchecked (:204).
-	"artifact.4.7.16.t-hex-name-uppercase": "#268",
-	"artifact.4.7.2.a-tail":                "#268",
-	"artifact.4.7.f-no-hash-baseline":      "#268",
-	"artifact.4.7.q-invalid-sign":          "#268",
-	"artifact.6.1.r-nonhex":                "#268",
-	"artifact.6.1.r-short":                 "#268",
 	// No card-legality table, required cards or per-type semantic checks:
 	// inferType only picks a type (deck/parse.go:442).
 	"artifact.5.2.attachment-illegal-B":  "#273",

@@ -929,7 +929,7 @@ func TestCrosslinkCherrypick(t *testing.T) {
 	}
 
 	// Compute R-card (manifest hash)
-	d.R = "0000000000000000000000000000000000000000" // simplified for test
+	d.R = "00000000000000000000000000000000" // 32-hex MD5 placeholder (crosslink does not verify it)
 
 	// Marshal and store the manifest blob
 	manifestBytes, err := d.Marshal()
@@ -1165,7 +1165,9 @@ func TestCrosslinkAttachment(t *testing.T) {
 		A: &deck.AttachmentCard{
 			Filename: "test.txt",
 			Target:   "TestPage",
-			Source:   "abc123",
+			// A valid 40-hex artifact hash: §4.7.1 requires the source to be a
+			// real hash (fossil rejects a short token like the old "abc123").
+			Source: "1234567890abcdef1234567890abcdef12345678",
 		},
 		U: deck.User("testuser"),
 		D: attachTime,
@@ -1211,8 +1213,8 @@ func TestCrosslinkAttachment(t *testing.T) {
 	if filename != "test.txt" {
 		t.Errorf("filename=%q, want 'test.txt'", filename)
 	}
-	if src != "abc123" {
-		t.Errorf("src=%q, want 'abc123'", src)
+	if src != "1234567890abcdef1234567890abcdef12345678" {
+		t.Errorf("src=%q, want the source hash", src)
 	}
 	isLatest, _ := db.ScanInt(isLatestRaw)
 	if isLatest != 1 {

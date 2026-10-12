@@ -100,8 +100,14 @@ func TestInsertCheckinMlinks_ThreeCasePidRule(t *testing.T) {
 		t.Fatalf("blob.Store(merge-new.txt): %v", err)
 	}
 
+	// A hashless F-card (a deletion) is legal only in a delta manifest, which
+	// fossil's parser enforces (§4.7.6); a baseline manifest must give every
+	// F-card a hash. The merge is expressed as a delta off its primary parent
+	// so the root.txt deletion card is valid, which is also how fossil carries
+	// a deletion into crosslink.
 	mergeDeck := &deck.Deck{
 		Type: deck.Checkin,
+		B:    trunkUUID, // delta baseline = primary parent
 		C:    "merge feature into trunk",
 		D:    time.Date(2026, 5, 1, 14, 0, 0, 0, time.UTC),
 		P:    []string{trunkUUID, featureUUID}, // primary=trunk, merge=feature

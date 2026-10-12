@@ -8,6 +8,7 @@ import (
 	"context"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,5 +139,42 @@ func TestPullOnlyFromRealFossilWhenServerLacksClientArtifacts(t *testing.T) {
 	}
 	if res.FilesSent != 0 {
 		t.Errorf("FilesSent = %d, want 0", res.FilesSent)
+	}
+}
+
+// pullOnlyMessageTransport answers every request with "message pull only",
+// the reply a server sends a client it won't accept a push from.
+type pullOnlyMessageTransport struct{}
+
+func (pullOnlyMessageTransport) Exchange(
+	_ context.Context, _ *xfer.Message,
+) (*xfer.Message, error) {
+	return &xfer.Message{Cards: []xfer.Card{
+		&xfer.MessageCard{Message: "pull only - not authorized to push"},
+	}}, nil
+}
+
+// A push the server refuses with "message pull only" must show up in the
+// result: fossil's own client drops push work silently, but a library caller
+// that asked to push has no other way to learn it didn't happen.
+func TestPushRefusedByPullOnlyIsReported(t *testing.T) {
+	client := setupSyncTestRepo(t)
+	storeBlob(t, client, "content the server will not accept")
+
+	res, err := Sync(context.Background(), client, pullOnlyMessageTransport{}, SyncOpts{
+		Push: true, Pull: true, ProjectCode: "pc",
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	found := false
+	for _, e := range res.Errors {
+		found = found || strings.Contains(e, "pull only")
+	}
+	if !found {
+		t.Fatalf("Errors = %q, want the server's pull-only refusal recorded", res.Errors)
+	}
+	if res.FilesSent != 0 {
+		t.Errorf("FilesSent = %d, want 0 after the server refused the push", res.FilesSent)
 	}
 }

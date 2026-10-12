@@ -56,20 +56,24 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	if srvCode == "" {
 		srvCode = "x"
 	}
-	if s.opts.Push {
-		if projCode == "" {
-			return nil, errNoProjectCode("push")
-		}
-		cards = append(cards, &xfer.PushCard{
-			ProjectCode: projCode,
-			ServerCode:  srvCode,
-		})
-	}
+	// Pull before push, as fossil's client_sync emits them (src/xfer.c): a
+	// server reading the push card decides "not authorized to write" versus
+	// "pull only" on whether it has already seen the pull card, so the order
+	// is load-bearing for a read-only requester (§10.2).
 	if s.opts.Pull {
 		if projCode == "" {
 			return nil, errNoProjectCode("pull")
 		}
 		cards = append(cards, &xfer.PullCard{
+			ProjectCode: projCode,
+			ServerCode:  srvCode,
+		})
+	}
+	if s.pushCard() {
+		if projCode == "" {
+			return nil, errNoProjectCode("push")
+		}
+		cards = append(cards, &xfer.PushCard{
 			ProjectCode: projCode,
 			ServerCode:  srvCode,
 		})
@@ -91,7 +95,7 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 
 	// 4b. Send cluster igots on round 2+ when pushing and remote has requested blobs.
 	// cycle is 0-indexed, so cycle>=1 means round 2+.
-	if cycle >= 1 && s.opts.Push && s.nGimmeRcvd > 0 {
+	if cycle >= 1 && s.pushing() && s.nGimmeRcvd > 0 {
 		clusterCards, err := s.sendAllClusters()
 		if err != nil {
 			return nil, fmt.Errorf("buildRequest cluster igot: %w", err)
@@ -206,6 +210,13 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 		cards = append(cards, randomComment(s.env.Rand))
 	}
 
+	// This request's push card has now been committed. fossil emits the next
+	// request's header before reading the reply that may stop the push, so a
+	// "pull only" seen from here on drops the push card only one request later.
+	if s.pushStopped {
+		s.pushCardDropped = true
+	}
+
 	return &xfer.Message{Cards: cards}, nil
 }
 
@@ -301,8 +312,24 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 	return cards, rows.Err()
 }
 
+// pushing reports whether this session still answers gimme cards: it was
+// asked to push and the server has not said "pull only" (§10.2). It governs
+// answering a gimme now, which fossil gates on the live SYNC_PUSH.
+func (s *session) pushing() bool {
+	return s.opts.Push && !s.pushStopped
+}
+
+// pushCard reports whether the next request carries a push card, which lags
+// pushing by one request (see session.pushCardDropped).
+func (s *session) pushCard() bool {
+	return s.opts.Push && !s.pushCardDropped
+}
+
 // buildFileCards produces file cards from pendingSend and the unsent table,
-// respecting the maxSend byte budget.
+// respecting the maxSend byte budget. It is gated on the configured push
+// option only, not on pushStopped: a gimme answered before "pull only"
+// queued its file, which still goes out, as fossil's send_file had already
+// appended it to the reply before the push stopped.
 func (s *session) buildFileCards() ([]xfer.Card, error) {
 	if !s.opts.Push {
 		return nil, nil
@@ -547,8 +574,9 @@ cardLoop:
 		case *xfer.GimmeCard:
 			// A session that is not pushing never sends files, so a
 			// gimme from it could not be satisfied and would hold the
-			// pull open forever (#277).
-			if !s.opts.Push {
+			// pull open forever (#277). A "pull only" message (§10.2) disables
+			// pushing mid-reply, so a gimme after it is not answered either.
+			if !s.pushing() {
 				continue
 			}
 			s.pendingSend[c.UUID] = true
@@ -559,9 +587,21 @@ cardLoop:
 			s.cookie = c.Value
 
 		case *xfer.ErrorCard:
+			// §10.1: an error card ends the reply-card loop. The cards before
+			// it stand; those after it are not read. The message is recorded
+			// first so it still surfaces. (A clone's first round tolerates an
+			// error card; that path is cloneSession.serverError, not here.)
 			s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+			break cardLoop
 
 		case *xfer.MessageCard:
+			// §10.2: "pull only ..." tells a pushing client to stop sending
+			// content, matching fossil's glob "pull only *". Every message is
+			// still recorded: a caller that asked to push must be able to see
+			// that the server refused it, not just a quietly shorter sync.
+			if s.pushing() && strings.HasPrefix(c.Message, "pull only ") {
+				s.pushStopped = true
+			}
 			s.result.Errors = append(s.result.Errors, "message: "+c.Message)
 
 		case *xfer.PragmaCard:

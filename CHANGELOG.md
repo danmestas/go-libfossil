@@ -24,6 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Unknown, wrong-direction and error cards now follow §5.2 and §10 on both
+  sides of a sync (#300). The server answers a client-sent `error` or
+  `message` card — reply-only cards fossil's `page_xfer` has no branch for —
+  with `bad command`, resetting the reply, rather than ignoring it. The client
+  ends its reply-card loop on an `error` card, keeping the cards before it, as
+  fossil's `client_sync` does. A `message pull only ...` from the server
+  (§10.2) now stops the client pushing: it keeps pulling but answers no
+  further gimme and drops its push card one request later, matching fossil's
+  clearing of `SYNC_PUSH`. To make that reachable, the client now sends its
+  `pull` card before its `push` card (fossil's order), and the server answers
+  a push from a requester who may read but not write with `message pull only -
+  not authorized to push` instead of an error, so the pull still proceeds.
+
 - The xfer card decoder now follows the draft's card grammar instead of
   failing a whole message on one bad card (#299). A line no card rule accepts
   (an unknown operator, a bare `pragma`, a `gimme` with a surplus token, a

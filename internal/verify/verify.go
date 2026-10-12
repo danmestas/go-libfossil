@@ -9,14 +9,13 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
-// verifyCacheBytes bounds the expanded content one Verify or Rebuild pass keeps
-// live. Both passes sweep every blob more than once -- Verify expands each blob
-// in checkBlobs and again in checkCheckins; Rebuild expands each in checkBlobs,
-// rebuildManifests, and twice in rebuildTags -- so a single cache shared across
-// the pass walks each blob's delta chain once instead of once per sweep, and
-// amortizes overlapping chains within each sweep. A miss costs throughput, not
-// correctness; blob content is immutable and neither pass rewrites it, so no
-// cached entry can go stale.
+// verifyCacheBytes bounds the expanded content one Verify or Rebuild blob-check
+// keeps live. checkBlobs expands every blob once; Verify's checkCheckins then
+// re-expands the same blobs, so one cache shared across those sweeps walks each
+// blob's delta chain once instead of once per sweep. Rebuild's own derivation
+// runs through manifest.Crosslink, which carries its own expansion cache. A miss
+// costs throughput, not correctness; blob content is immutable and neither pass
+// rewrites it, so no cached entry can go stale.
 //
 // It was once the same number as manifest.crosslinkCacheBytes and no longer
 // is: that budget was measured down against clone wall time and peak RSS

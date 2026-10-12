@@ -306,6 +306,24 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 	return linker.Finalize(ctx)
 }
 
+// CrosslinkRebuild crosslinks every artifact for a terminal rebuild: it reuses
+// the one-shot sweep but never defers a check-in whose file or baseline content
+// is absent. A rebuild is the final word on what the repository holds -- nothing
+// more will arrive -- so it reserves a phantom for every referenced blob and
+// links the check-in, matching `fossil rebuild` (src/manifest.c add_one_mlink's
+// uuid_to_rid(...,1)) rather than the receive path's deferral. On a complete
+// repository no check-in is ever deferred, so this is identical to Crosslink;
+// the difference shows only on a repository with missing content.
+func CrosslinkRebuild(r *repo.Repo) (int, error) {
+	if r == nil {
+		panic("manifest.CrosslinkRebuild: r must not be nil")
+	}
+	st := newLinkState(crosslinkCacheBytes)
+	st.noDefer = true
+	linked, sweepErr := crosslinkSweepWithState(context.Background(), r, st)
+	return repairCrosslinkState(r, linked, sweepErr)
+}
+
 // crosslinkSweepWithState performs only the candidate pass. The caller owns the
 // one combined leaf/tag repair gate so receive-time links and sweep links repair
 // together, not once each.
@@ -444,6 +462,11 @@ type linkState struct {
 	cache  *content.Cache
 	guard  *checkinDeferralGuard
 	linked int
+	// noDefer links a check-in whose file or baseline content is absent instead
+	// of holding it back. It is set only by a terminal rebuild (CrosslinkRebuild),
+	// where nothing more will arrive, so deferral -- which exists to await an
+	// arriving blob -- would drop a check-in `fossil rebuild` keeps.
+	noDefer bool
 }
 
 func newLinkState(cacheBytes int64) *linkState {
@@ -530,7 +553,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			batchNonArtifact = append(batchNonArtifact, c.rid)
 			continue
 		}
-		if d.Type == deck.Checkin && deferCheckin(tx, c, d, st) {
+		if d.Type == deck.Checkin && !st.noDefer && deferCheckin(tx, c, d, st) {
 			continue
 		}
 		handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)

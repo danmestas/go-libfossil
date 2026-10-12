@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // hashN builds a distinct 40-character lowercase artifact hash whose first
@@ -22,45 +23,76 @@ func parseBody(body string) (*Deck, error) {
 	return Parse([]byte(fmt.Sprintf("%sZ %x\n", body, h)))
 }
 
+// tsFixture is a well-formed D/E timestamp the framing helpers reuse.
+const tsFixture = "2024-01-15T10:30:00.000"
+
+// The helpers below frame a run of cards of one type as a complete, valid
+// artifact of that type, so that a parse rejection a test observes is the
+// occurrence or ordering rule under test rather than §5.2's required-card
+// rule. The run's own cards sort into place because D sorts before the
+// repeatable manifest/control cards and U/K/W after them.
+
+// checkinCards frames manifest-family cards (F, P, Q, ...) as a valid
+// check-in: a D card makes it a manifest, which §5.2 requires only D and Z of.
+func checkinCards(cards string) string { return "D " + tsFixture + "\n" + cards }
+
+// controlCards frames T cards (each targeting another artifact) as a valid
+// control artifact: D, the tags, then U.
+func controlCards(tcards string) string {
+	return "D " + tsFixture + "\n" + tcards + "U cu\n"
+}
+
+// ticketCards frames J cards as a valid ticket: D, the fields, K, then U.
+func ticketCards(jcards string) string {
+	return "D " + tsFixture + "\n" + jcards + "K " + hashN('e') + "\nU tu\n"
+}
+
 // TestSingleOccurrenceCardsRejectDuplicates covers every one of the 14
 // single-occurrence types of draft-fossil-artifact-format-00 §4.5.1. Each
 // case feeds two syntactically valid cards of one type; the card-type
 // ordering rule of §4.4 permits equal consecutive letters, so nothing but
 // the duplicate guard can reject these.
 func TestSingleOccurrenceCardsRejectDuplicates(t *testing.T) {
+	ts := "D " + tsFixture + "\n"
 	cases := []struct {
 		card byte
-		body string
+		// dup holds two cards of the type; the duplicate guard rejects it in
+		// the card loop, before the required-card rule runs, so dup need not be
+		// a complete artifact. single is a complete, valid artifact of the
+		// card's type carrying exactly one such card, so it must parse.
+		dup, single string
 	}{
-		{'A', "A one.txt " + hashN('a') + "\nA two.txt " + hashN('b') + "\n"},
-		{'B', "B " + hashN('a') + "\nB " + hashN('b') + "\n"},
-		{'C', "C first\nC second\n"},
-		{'D', "D 2024-01-15T10:30:00.000\nD 2024-01-16T10:30:00.000\n"},
-		{'E', "E 2024-01-15T10:30:00 " + hashN('a') + "\nE 2024-01-16T10:30:00 " + hashN('b') + "\n"},
-		{'G', "G " + hashN('a') + "\nG " + hashN('b') + "\n"},
-		{'H', "H first\nH second\n"},
-		{'I', "I " + hashN('a') + "\nI " + hashN('b') + "\n"},
-		{'K', "K " + hashN('a') + "\nK " + hashN('b') + "\n"},
-		{'L', "L PageOne\nL PageTwo\n"},
-		{'N', "N text/plain\nN text/x-markdown\n"},
-		{'R', "R " + strings.Repeat("0", 32) + "\nR " + strings.Repeat("1", 32) + "\n"},
-		{'U', "U alice\nU bob\n"},
-		{'W', "W 3\nabc\nW 3\nxyz\n"},
+		{'A', "A one.txt " + hashN('a') + "\nA two.txt " + hashN('b') + "\n",
+			"A one.txt " + hashN('a') + "\n" + ts},
+		{'B', "B " + hashN('a') + "\nB " + hashN('b') + "\n", "B " + hashN('a') + "\n" + ts},
+		{'C', "C first\nC second\n", "C first\n" + ts},
+		{'D', "D 2024-01-15T10:30:00.000\nD 2024-01-16T10:30:00.000\n", "C c\n" + ts},
+		{'E', "E 2024-01-15T10:30:00 " + hashN('a') + "\nE 2024-01-16T10:30:00 " + hashN('b') + "\n",
+			ts + "E 2024-01-15T10:30:00 " + hashN('a') + "\nW 1\nx\n"},
+		{'G', "G " + hashN('a') + "\nG " + hashN('b') + "\n",
+			ts + "G " + hashN('a') + "\nU u\nW 1\nx\n"},
+		{'H', "H first\nH second\n", ts + "H first\nU u\nW 1\nx\n"},
+		{'I', "I " + hashN('a') + "\nI " + hashN('b') + "\n",
+			ts + "I " + hashN('a') + "\nU u\nW 1\nx\n"},
+		{'K', "K " + hashN('a') + "\nK " + hashN('b') + "\n",
+			ts + "J f v\nK " + hashN('a') + "\nU u\n"},
+		{'L', "L PageOne\nL PageTwo\n", ts + "L PageOne\nU u\nW 1\nx\n"},
+		{'N', "N text/plain\nN text/x-markdown\n", "C c\n" + ts + "N text/plain\n"},
+		{'R', "R " + strings.Repeat("0", 32) + "\nR " + strings.Repeat("1", 32) + "\n",
+			ts + "R " + strings.Repeat("0", 32) + "\n"},
+		{'U', "U alice\nU bob\n", "C c\n" + ts + "U alice\n"},
+		{'W', "W 3\nabc\nW 3\nxyz\n", ts + "L P\nU u\nW 3\nabc\n"},
 	}
 	if len(cases) != 14 {
 		t.Fatalf("case count = %d, want 14 single-occurrence types", len(cases))
 	}
 	for _, tc := range cases {
-		if _, err := parseBody(tc.body); err == nil {
+		if _, err := parseBody(tc.dup); err == nil {
 			t.Errorf("duplicate %c card: Parse succeeded, want error", tc.card)
 		}
 		// The single occurrence must still parse, so the guard cannot be a
 		// blanket rejection of the letter.
-		single := strings.SplitAfter(tc.body, "\n")[0]
-		if tc.card == 'W' {
-			single = "W 3\nabc\n"
-		}
-		if _, err := parseBody(single); err != nil {
+		if _, err := parseBody(tc.single); err != nil {
 			t.Errorf("single %c card: Parse: %v", tc.card, err)
 		}
 	}
@@ -83,15 +115,15 @@ func TestDuplicateCardIsErrorNotPanic(t *testing.T) {
 // TestFCardOrdering exercises the strict-ascending F rule of §4.5.2.
 func TestFCardOrdering(t *testing.T) {
 	ascending := "F a.txt " + hashN('a') + "\nF b.txt " + hashN('b') + "\n"
-	if _, err := parseBody(ascending); err != nil {
+	if _, err := parseBody(checkinCards(ascending)); err != nil {
 		t.Fatalf("ascending F run: Parse: %v", err)
 	}
 	descending := "F b.txt " + hashN('a') + "\nF a.txt " + hashN('b') + "\n"
-	if _, err := parseBody(descending); err == nil {
+	if _, err := parseBody(checkinCards(descending)); err == nil {
 		t.Error("descending F run: Parse succeeded, want error")
 	}
 	equal := "F a.txt " + hashN('a') + "\nF a.txt " + hashN('b') + "\n"
-	if _, err := parseBody(equal); err == nil {
+	if _, err := parseBody(checkinCards(equal)); err == nil {
 		t.Error("duplicate F name: Parse succeeded, want error")
 	}
 }
@@ -104,7 +136,7 @@ func TestFCardOrdering(t *testing.T) {
 // descending run and reject the ascending one.
 func TestFCardOrderingUsesDecodedFilename(t *testing.T) {
 	decodedAscending := `F a\sb ` + hashN('a') + "\nF a-b " + hashN('b') + "\n"
-	d, err := parseBody(decodedAscending)
+	d, err := parseBody(checkinCards(decodedAscending))
 	if err != nil {
 		t.Fatalf("decoded-ascending F run: Parse: %v", err)
 	}
@@ -112,20 +144,20 @@ func TestFCardOrderingUsesDecodedFilename(t *testing.T) {
 		t.Fatalf("F = %+v, want decoded [a b, a-b]", d.F)
 	}
 	decodedDescending := "F a-b " + hashN('a') + "\nF a\\sb " + hashN('b') + "\n"
-	if _, err := parseBody(decodedDescending); err == nil {
+	if _, err := parseBody(checkinCards(decodedDescending)); err == nil {
 		t.Error("decoded-descending F run: Parse succeeded, want error")
 	}
 }
 
 // TestJCardOrdering exercises the strict-ascending J rule of §4.5.2.
 func TestJCardOrdering(t *testing.T) {
-	if _, err := parseBody("J alpha 1\nJ beta 2\n"); err != nil {
+	if _, err := parseBody(ticketCards("J alpha 1\nJ beta 2\n")); err != nil {
 		t.Fatalf("ascending J run: Parse: %v", err)
 	}
-	if _, err := parseBody("J beta 1\nJ alpha 2\n"); err == nil {
+	if _, err := parseBody(ticketCards("J beta 1\nJ alpha 2\n")); err == nil {
 		t.Error("descending J run: Parse succeeded, want error")
 	}
-	if _, err := parseBody("J alpha 1\nJ alpha 2\n"); err == nil {
+	if _, err := parseBody(ticketCards("J alpha 1\nJ alpha 2\n")); err == nil {
 		t.Error("duplicate J field name: Parse succeeded, want error")
 	}
 }
@@ -153,24 +185,24 @@ func TestMCardOrdering(t *testing.T) {
 // character, so "f0..." on "+sym-foo" would sort it after "+sym-foobar"
 // and the run would be rejected. Two-level accepts it.
 func TestTCardTwoLevelOrdering(t *testing.T) {
-	if _, err := parseBody("T +sym-foo f" + strings.Repeat("0", 39) +
-		"\nT +sym-foobar " + strings.Repeat("0", 40) + "\n"); err != nil {
+	if _, err := parseBody(controlCards("T +sym-foo f" + strings.Repeat("0", 39) +
+		"\nT +sym-foobar " + strings.Repeat("0", 40) + "\n")); err != nil {
 		t.Fatalf("prefix T names with a high target hash: Parse: %v", err)
 	}
-	if _, err := parseBody("T +alpha " + hashN('a') + "\nT +beta " + hashN('a') + "\n"); err != nil {
+	if _, err := parseBody(controlCards("T +alpha " + hashN('a') + "\nT +beta " + hashN('a') + "\n")); err != nil {
 		t.Fatalf("ascending T names: Parse: %v", err)
 	}
-	if _, err := parseBody("T +beta " + hashN('a') + "\nT +alpha " + hashN('b') + "\n"); err == nil {
+	if _, err := parseBody(controlCards("T +beta " + hashN('a') + "\nT +alpha " + hashN('b') + "\n")); err == nil {
 		t.Error("descending T names: Parse succeeded, want error")
 	}
 	// Equal names: the target hash must strictly increase.
-	if _, err := parseBody("T +alpha " + hashN('a') + "\nT +alpha " + hashN('b') + "\n"); err != nil {
+	if _, err := parseBody(controlCards("T +alpha " + hashN('a') + "\nT +alpha " + hashN('b') + "\n")); err != nil {
 		t.Fatalf("equal T names with ascending hash: Parse: %v", err)
 	}
-	if _, err := parseBody("T +alpha " + hashN('b') + "\nT +alpha " + hashN('a') + "\n"); err == nil {
+	if _, err := parseBody(controlCards("T +alpha " + hashN('b') + "\nT +alpha " + hashN('a') + "\n")); err == nil {
 		t.Error("equal T names with descending hash: Parse succeeded, want error")
 	}
-	if _, err := parseBody("T +alpha " + hashN('a') + "\nT +alpha " + hashN('a') + "\n"); err == nil {
+	if _, err := parseBody(controlCards("T +alpha " + hashN('a') + "\nT +alpha " + hashN('a') + "\n")); err == nil {
 		t.Error("equal T names with equal hash: Parse succeeded, want error")
 	}
 }
@@ -183,11 +215,11 @@ func TestTCardTwoLevelOrdering(t *testing.T) {
 // may contain a space and so reaches the T card as "sym-my\sbranch".
 func TestTCardOrderingUsesDecodedName(t *testing.T) {
 	decodedAscending := `T *sym-a\sb ` + hashN('a') + "\nT *sym-a-c " + hashN('b') + "\n"
-	if _, err := parseBody(decodedAscending); err != nil {
+	if _, err := parseBody(controlCards(decodedAscending)); err != nil {
 		t.Fatalf("decoded-ascending T run: Parse: %v", err)
 	}
 	decodedDescending := "T *sym-a-c " + hashN('a') + "\nT *sym-a\\sb " + hashN('b') + "\n"
-	if _, err := parseBody(decodedDescending); err == nil {
+	if _, err := parseBody(controlCards(decodedDescending)); err == nil {
 		t.Error("decoded-descending T run: Parse succeeded, want error")
 	}
 }
@@ -197,14 +229,14 @@ func TestTCardOrderingUsesDecodedName(t *testing.T) {
 // byte >= 0x80 would expand to two bytes when the ordering key is
 // assembled, silently corrupting the comparison.
 func TestTCardRejectsUnknownSign(t *testing.T) {
-	if _, err := parseBody("T ?alpha " + hashN('a') + "\n"); err == nil {
+	if _, err := parseBody(controlCards("T ?alpha " + hashN('a') + "\n")); err == nil {
 		t.Error("T card with sign '?': Parse succeeded, want error")
 	}
-	if _, err := parseBody("T \xc3alpha " + hashN('a') + "\n"); err == nil {
+	if _, err := parseBody(controlCards("T \xc3alpha " + hashN('a') + "\n")); err == nil {
 		t.Error("T card with a non-ASCII sign byte: Parse succeeded, want error")
 	}
 	for _, sign := range []string{"+", "-", "*"} {
-		if _, err := parseBody("T " + sign + "alpha " + hashN('a') + "\n"); err != nil {
+		if _, err := parseBody(controlCards("T " + sign + "alpha " + hashN('a') + "\n")); err != nil {
 			t.Errorf("T card with sign %q: Parse: %v", sign, err)
 		}
 	}
@@ -215,7 +247,9 @@ func TestTCardRejectsUnknownSign(t *testing.T) {
 // legal content (§4.5.1) but it is still a typed card, not an
 // arbitrary-byte channel.
 func TestZCardTokenValidation(t *testing.T) {
-	prefix := "D 2024-01-15T10:30:00.000\n"
+	// A valid control artifact (D, a tag, U) so the only thing under test is
+	// the early Z line that follows it; the framing Z is appended by parseBody.
+	prefix := controlCards("T +tag " + hashN('a') + "\n")
 	bad := []struct {
 		name  string
 		token string
@@ -247,7 +281,7 @@ func TestZCardTokenValidation(t *testing.T) {
 // deduplicating P would silently break parent resolution.
 func TestPCardsAreNotSortedOrDeduplicated(t *testing.T) {
 	body := "P " + hashN('c') + " " + hashN('a') + "\nP " + hashN('b') + " " + hashN('a') + "\n"
-	d, err := parseBody(body)
+	d, err := parseBody(checkinCards(body))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -266,7 +300,7 @@ func TestPCardsAreNotSortedOrDeduplicated(t *testing.T) {
 // no duplicate guard and no ordering check at all.
 func TestQCardsAreUnorderedRepeatable(t *testing.T) {
 	body := "Q +" + hashN('c') + "\nQ +" + hashN('a') + "\nQ +" + hashN('a') + "\n"
-	d, err := parseBody(body)
+	d, err := parseBody(checkinCards(body))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -283,7 +317,7 @@ func TestQCardsAreUnorderedRepeatable(t *testing.T) {
 // simply content covered by that checksum, so it must not be rejected as a
 // duplicate or as a misplaced last card.
 func TestZCardHasNoDuplicateOrLastCardGuard(t *testing.T) {
-	body := "D 2024-01-15T10:30:00.000\nZ " + strings.Repeat("0", 32) + "\n"
+	body := controlCards("T +tag "+hashN('a')+"\n") + "Z " + strings.Repeat("0", 32) + "\n"
 	if _, err := parseBody(body); err != nil {
 		t.Fatalf("earlier Z line: Parse: %v", err)
 	}
@@ -303,28 +337,42 @@ func TestZCardHasNoDuplicateOrLastCardGuard(t *testing.T) {
 // "+sym-foobar" ahead of "+sym-foo" and produce an artifact the parser
 // rejects.
 func TestMarshalEmitsParseableIntraRunOrder(t *testing.T) {
-	d := &Deck{
+	at := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
+	// A manifest exercises the F and T repeatable runs together -- the T case
+	// is the subtle one described above -- in an artifact §5.2 accepts. Each
+	// run is built in non-ascending order so Marshal must reorder it.
+	manifest := &Deck{
+		D: at,
 		F: []FileCard{
 			{Name: "zeta.txt", UUID: hashN('a')},
 			{Name: "alpha.txt", UUID: hashN('b')},
 		},
-		J: []TicketField{
-			{Name: "title", Value: "Test ticket"},
-			{Name: "status", Value: "Open"},
-		},
-		M: []string{hashN('c'), hashN('a')},
 		T: []TagCard{
 			{Type: TagSingleton, Name: "sym-foo", UUID: "f" + strings.Repeat("0", 39)},
 			{Type: TagSingleton, Name: "sym-foobar", UUID: strings.Repeat("0", 40)},
 		},
 		U: User("alice"),
 	}
-	data, err := d.Marshal()
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	// A ticket exercises the J run, and a cluster the M run; neither card may
+	// share an artifact with F, so each gets its own valid artifact.
+	ticket := &Deck{
+		D: at,
+		J: []TicketField{
+			{Name: "title", Value: "Test ticket"},
+			{Name: "status", Value: "Open"},
+		},
+		K: hashN('e'),
+		U: User("alice"),
 	}
-	if _, err := Parse(data); err != nil {
-		t.Fatalf("Parse of marshalled deck: %v\n%s", err, data)
+	cluster := &Deck{M: []string{hashN('c'), hashN('a')}}
+	for _, d := range []*Deck{manifest, ticket, cluster} {
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		if _, err := Parse(data); err != nil {
+			t.Fatalf("Parse of marshalled deck: %v\n%s", err, data)
+		}
 	}
 }
 
@@ -335,11 +383,14 @@ func TestMarshalEmitsParseableIntraRunOrder(t *testing.T) {
 // escaped wire form ("sym-a\sb") sorts the other way; sorting on the wire
 // form would emit a run the parser rejects.
 func TestMarshalSortsTagsByDecodedName(t *testing.T) {
+	// A valid control artifact: D, the tags (targeting other artifacts), U.
 	d := &Deck{
+		D: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
 		T: []TagCard{
 			{Type: TagPropagating, Name: "sym-a-c", UUID: hashN('b')},
 			{Type: TagPropagating, Name: "sym-a b", UUID: hashN('a')},
 		},
+		U: User("u"),
 	}
 	data, err := d.Marshal()
 	if err != nil {

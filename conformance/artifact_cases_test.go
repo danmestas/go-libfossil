@@ -568,6 +568,11 @@ func typeCases() []artifactCase {
 			"T +bgcolor "+h1+" blue\nT -sym-old "+h2+"\n", "P "+h1+"\n"), wantType(deck.Checkin)),
 		accepted("artifact.5.3.comment-fallback", "AF-5.3-2",
 			edit(baseControl, "D ", "C note\nD "), wantType(deck.Checkin)),
+		// §5.3 / fossil manifest.c:1076: the fallback keys on C-card presence
+		// (zComment != 0), not a non-empty comment, so a present-but-empty C
+		// still makes a tagless D/T/U artifact a check-in, not a control.
+		accepted("artifact.5.3.comment-fallback-empty", "AF-5.3-2",
+			edit(baseControl, "D ", "C \nD "), wantType(deck.Checkin)),
 		accepted("artifact.5.3.control-fallback", "AF-5.3-2", baseControl, wantType(deck.Control)),
 		rejected("artifact.5.4.control-self", "AF-5.4-1",
 			edit(baseControl, "T -sym-old "+h2, "T -sym-old *")),

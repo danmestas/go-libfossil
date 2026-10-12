@@ -718,10 +718,11 @@ func TestReceiveLinkerForumReplyBeforeRootPreservesReservedThreadReferences(t *t
 	}
 	rootUUID := repoHash(r, rootBytes)
 
+	// A reply carries the thread root (G) and the in-reply-to (I) but not a
+	// thread title (H): §5.4 forbids a forum post from carrying both H and I.
 	reply := &deck.Deck{
 		Type: deck.ForumPost,
 		G:    rootUUID,
-		H:    "reply-before-root thread",
 		I:    rootUUID,
 		U:    deck.User("testuser"),
 		W:    []byte("reply received before its root"),

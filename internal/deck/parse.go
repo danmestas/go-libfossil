@@ -164,10 +164,17 @@ func Parse(data []byte) (*Deck, error) {
 		return nil, fmt.Errorf("deck.Parse: %w", err)
 	}
 	d := &Deck{}
-	if err := scanCards(content, d); err != nil {
+	seenMask, err := scanCards(content, d)
+	if err != nil {
 		return nil, fmt.Errorf("deck.Parse: %w", err)
 	}
+	// §5.3: determine the artifact type, then apply §5.2 card legality (the
+	// cards this type allows and requires, which includes the universal Z
+	// card) and the §5.4 per-type semantic checks.
 	d.Type = inferType(d)
+	if err := checkType(d, seenMask); err != nil {
+		return nil, fmt.Errorf("deck.Parse: %w", err)
+	}
 	return d, nil
 }
 
@@ -199,50 +206,50 @@ func frameArtifact(data []byte) ([]byte, error) {
 	return content, nil
 }
 
-// scanCards runs the §4.2 card loop over content, filling d. Every structural
-// artifact type requires a Z card (§6.2 / §5.2), so a scan reaching the end
-// without one is rejected here; the full per-type required-card table is
-// applied in Parse's later stages.
-func scanCards(content []byte, d *Deck) error {
+// scanCards runs the §4.2 card loop over content, filling d, and returns the
+// mask of card types it saw (bit letter-'A' per type) for the §5.2 legality
+// check Parse applies next -- which, since every type requires a Z card,
+// is also what rejects an artifact missing one.
+func scanCards(content []byte, d *Deck) (uint32, error) {
 	s := &manifestScanner{buf: content, atEol: true}
 	var lastCard byte
 	var seen seenCards
-	var sawZ bool
+	var seenMask uint32 // bit (letter-'A') set for every card type seen
 
 	for {
 		card := s.nextCard()
 		if card == 0 {
 			break
 		}
-		if card == 'Z' {
-			sawZ = true
+		if card >= 'A' && card <= 'Z' {
+			seenMask |= 1 << (card - 'A')
 		}
 
 		// §4.5.1 single-occurrence guard, kept separate from the ordering
 		// check below because that one permits equal consecutive letters.
 		if err := seen.claim(card); err != nil {
-			return err
+			return 0, err
 		}
 
 		// §4.4: cards ascend, with the one legacy technote N-after-P exception.
 		if card < lastCard && !isLegacyTechnoteNAfterP(d, card, lastCard) {
-			return fmt.Errorf("card '%c' out of order (after '%c')", card, lastCard)
+			return 0, fmt.Errorf("card '%c' out of order (after '%c')", card, lastCard)
 		}
 		lastCard = card
 
 		if card == 'W' {
 			if err := s.parseW(d); err != nil {
-				return err
+				return 0, err
 			}
 			continue
 		}
 
 		tokens, err := s.cardTokens()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if err := parseCard(d, card, tokens); err != nil {
-			return err
+			return 0, err
 		}
 	}
 
@@ -250,16 +257,9 @@ func scanCards(content []byte, d *Deck) error {
 	// residue, or an extra token that stopped the scan early -- is an error
 	// (fossil's "extra characters at end of card").
 	if s.pos < len(s.buf) {
-		return fmt.Errorf("extra characters at end of card")
+		return 0, fmt.Errorf("extra characters at end of card")
 	}
-
-	// §6.2 / §5.2: an artifact that reaches here without a Z card is not well
-	// formed. verifyZ treated the absent Z card as "continue"; this is where
-	// its absence is judged.
-	if !sawZ {
-		return fmt.Errorf("Z-card missing")
-	}
-	return nil
+	return seenMask, nil
 }
 
 // isLegacyTechnoteNAfterP reports whether an N-card following a P-card is the
@@ -720,32 +720,40 @@ func parseZCard(tokens []string) error {
 
 func inferType(d *Deck) ArtifactType {
 	switch {
+	// The type-setting cards of §5.3, matching fossil's per-card `p->type`
+	// assignments (src/manifest.c): M sets cluster, G/H/I forum, A attachment,
+	// J/K ticket, L wiki, E event, and B/F/Q/R manifest.
 	case len(d.M) > 0:
 		return Cluster
 	case d.G != "" || d.H != "" || d.I != "":
 		return ForumPost
 	case d.A != nil:
 		return Attachment
-	case d.K != "":
+	case len(d.J) > 0 || d.K != "":
 		return Ticket
 	case d.L != "":
 		return Wiki
 	case d.E != nil:
 		return Event
-	// Canonical Fossil settles the remaining ambiguity -- check-in versus
-	// control artifact, both of which are D/T/U/Z-shaped -- on whether the
-	// artifact describes a tree position: a comment, files, or parents
-	// (src/manifest.c, "If the artifact type has not yet been determined").
-	// The C-card is the part that is easy to miss, and it matters: `fossil
-	// merge --integrate` writes a check-in that has a comment and a `T +closed`
-	// card but no F-cards and no P-card, and reading those as control
-	// artifacts lost their tags (issue #193). The R-card is not part of
-	// canonical's test but implies a file tree, so it stays here.
-	case d.C != "" || len(d.F) > 0 || len(d.P) > 0 || d.R != "":
+	case d.B != "" || len(d.F) > 0 || len(d.Q) > 0 || d.R != "":
 		return Checkin
-	case len(d.T) > 0:
-		return Control
+	// No type-setting card: fossil then settles check-in versus control, both
+	// D/T/U/Z-shaped, on whether the artifact describes a tree position -- a
+	// comment or a parent (src/manifest.c:1076, "If the artifact type has not
+	// yet been determined"). fossil keys on card presence (p->zComment != 0,
+	// p->nParent > 0), not a non-empty value, so a present-but-empty C card
+	// still makes it a check-in -- hence d.cPresent, not d.C != "". The C-card
+	// is the easy one to miss, and it matters: `fossil merge --integrate`
+	// writes a check-in with a comment and a `T +closed` card but no F or P
+	// card, and reading that as a control artifact lost its tags (issue #193).
+	// The parent test stays count-based (len(d.P) > 0), matching p->nParent:
+	// a bare P card with no parents does not make a control a check-in.
+	case d.cPresent || len(d.P) > 0:
+		return Checkin
+	// Otherwise it is a control artifact: a D/T/U/Z artifact with no comment or
+	// parent -- including one with only tags -- is a control artifact, not an
+	// empty check-in.
 	default:
-		return Checkin
+		return Control
 	}
 }

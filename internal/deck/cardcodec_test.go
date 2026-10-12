@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // withZCard appends the §4.7.19 Z checksum card to a manifest body so Parse
@@ -56,7 +57,9 @@ func TestMarshalJCardEncodesValueKeepsNameVerbatim(t *testing.T) {
 // TestJCardWireRoundTrip pins that Marshal reproduces the original wire
 // bytes for an unmodified J-card whose value contains spaces (§4.7.8).
 func TestJCardWireRoundTrip(t *testing.T) {
-	wire := withZCard("D 2024-01-15T10:30:00.000\nJ comment a\\svalue\\swith\\sspaces\n")
+	// A valid ticket: §5.2 requires D, J, K, U and Z.
+	wire := withZCard("D 2024-01-15T10:30:00.000\nJ comment a\\svalue\\swith\\sspaces\n" +
+		"K " + strings.Repeat("a", 40) + "\nU u\n")
 	d, err := Parse(wire)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -77,8 +80,13 @@ func TestJCardWireRoundTrip(t *testing.T) {
 // name so "sym-my branch" reaches the wire as "sym-my\sbranch" and parses
 // back to a single name token, not two.
 func TestTCardNameWithSpaceRoundTrips(t *testing.T) {
+	// A branch tag targets its own check-in ("*"), so the artifact is a
+	// check-in (which §5.4 allows self-tags on), not a control artifact.
 	d := &Deck{
+		C: "c",
+		D: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
 		T: []TagCard{{Type: TagPropagating, Name: "sym-my branch", UUID: "*"}},
+		U: User("u"),
 	}
 	out, _ := d.Marshal()
 	if !strings.Contains(string(out), "T *sym-my\\sbranch *\n") {
@@ -122,7 +130,9 @@ func TestTCardTargetHashStaysUnencoded(t *testing.T) {
 // Leaving the value raw made an imported branch literally named
 // "my\sbranch" all the way through crosslink.
 func TestTCardValueWithSpaceRoundTrips(t *testing.T) {
-	wire := withZCard("D 2024-01-15T10:30:00.000\nT *branch * my\\sbranch\n")
+	// The branch property targets the check-in itself ("*"), so this is a
+	// check-in: a comment and a user make it a well-formed one.
+	wire := withZCard("C c\nD 2024-01-15T10:30:00.000\nT *branch * my\\sbranch\nU u\n")
 	d, err := Parse(wire)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -143,7 +153,13 @@ func TestTCardValueWithSpaceRoundTrips(t *testing.T) {
 // value token must not gain one, and decoding must not turn an absent value
 // into a present-but-empty one.
 func TestTCardEmptyValueOmitted(t *testing.T) {
-	d := &Deck{T: []TagCard{{Type: TagPropagating, Name: "sym-x", UUID: "*"}}}
+	// A self-targeting tag ("*") makes this a check-in.
+	d := &Deck{
+		C: "c",
+		D: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		T: []TagCard{{Type: TagPropagating, Name: "sym-x", UUID: "*"}},
+		U: User("u"),
+	}
 	out, err := d.Marshal()
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -196,12 +212,15 @@ func TestParseTCardRejectsInvalidTarget(t *testing.T) {
 // TestParseTCardAcceptsValidTargets guards against over-rejection: a real
 // 40-hex target and the literal '*' must both still parse (§4.7.16).
 func TestParseTCardAcceptsValidTargets(t *testing.T) {
+	// Both are framed as check-ins (a comment and a user): a check-in's T card
+	// may target another artifact by hash or target itself with "*" (§5.4
+	// restricts self-tags only on control artifacts and technotes).
 	target := strings.Repeat("b", 40)
-	wire := withZCard("D 2024-01-15T10:30:00.000\nT +sym-x " + target + "\n")
+	wire := withZCard("C c\nD 2024-01-15T10:30:00.000\nT +sym-x " + target + "\nU u\n")
 	if _, err := Parse(wire); err != nil {
 		t.Fatalf("Parse rejected a valid 40-hex target: %v", err)
 	}
-	wireStar := withZCard("D 2024-01-15T10:30:00.000\nT +sym-x *\n")
+	wireStar := withZCard("C c\nD 2024-01-15T10:30:00.000\nT +sym-x *\nU u\n")
 	if _, err := Parse(wireStar); err != nil {
 		t.Fatalf("Parse rejected the literal '*' target: %v", err)
 	}

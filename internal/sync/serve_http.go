@@ -107,7 +107,7 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 			return
 		}
 
-		msg, err := xfer.Decode(body, ct)
+		msg, err := xfer.DecodeRequest(body, ct, loginCookie(req))
 		if err != nil {
 			slog.Error("serve-http: decode failed", "bytes", len(body), "err", err)
 			http.Error(w, fmt.Sprintf("decode xfer (%d bytes): %v", len(body), err),
@@ -123,6 +123,16 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 
 		writeXferResponse(w, resp)
 	}
+}
+
+// loginCookie returns the value of the request's login cookie (§6.5), or ""
+// when it has none.
+func loginCookie(req *http.Request) string {
+	c, err := req.Cookie(xfer.LoginCookieName)
+	if err != nil {
+		return ""
+	}
+	return c.Value
 }
 
 // writeXferResponse encodes an xfer message and writes it as the HTTP response.

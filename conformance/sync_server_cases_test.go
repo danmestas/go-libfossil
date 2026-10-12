@@ -17,10 +17,13 @@ type syncServerCase struct {
 	ctype  string
 	// body is the request's card lines; see syncFixture.body.
 	body []string
-	// cookie, when set, is "USER PASSWORD": the request carries a login
-	// cookie for that user over its body (Section 6.5) and no body login.
+	// cookie, when set, is "USER PASSWORD [CHANGE]": the request carries a
+	// login cookie for that user over its body (Section 6.5). CHANGE is a
+	// loginLine change, such as "stale" for a nonce over another body.
 	cookie string
-	want   replyCheck
+	// rawCookie, when set, is the request's Cookie header as it stands.
+	rawCookie string
+	want      replyCheck
 	// deviates, for a case marked Deviation, is what go-libfossil does
 	// instead; a reply that is neither is fatal, as the mark excuses only
 	// the deviation it names.
@@ -35,9 +38,12 @@ type syncServerCase struct {
 func (c syncServerCase) request(fx *syncFixture) syncRequest {
 	req := syncRequest{method: c.method, path: c.path, ctype: c.ctype, text: fx.body(c.body...)}
 	if c.cookie != "" {
-		user, password, _ := strings.Cut(c.cookie, " ")
-		login := loginLine(fx.vars["PC"], user, password, "", string(req.text))
+		f := append(strings.Fields(c.cookie), "")
+		login := loginLine(fx.vars["PC"], f[0], f[1], f[2], string(req.text))
 		req.cookie = "x-f-l-c=" + strings.ReplaceAll(login, " ", "+")
+	}
+	if c.rawCookie != "" {
+		req.cookie = c.rawCookie
 	}
 	if req.method == "" {
 		req.method = "POST"
@@ -124,7 +130,7 @@ func syncServerCases() []syncServerCase {
 		serverAuthCases(), serverLoginCases(), serverContentCases(), serverUVCases(),
 		serverUVGimmeCases(), serverCloneCases(), serverDirectionCases(), serverPragmaCases(),
 		serverConfigCases(), serverVersionCases(), serverGateCases(), serverAdmissionCases(),
-		serverPragmaMoreCases(),
+		serverCookieRefusalCases(), serverPragmaMoreCases(),
 	} {
 		all = append(all, group...)
 	}

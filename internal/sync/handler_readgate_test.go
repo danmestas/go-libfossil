@@ -216,7 +216,10 @@ func TestReaderGetsEverything(t *testing.T) {
 	uuid := storeTestBlob(t, r, []byte("public artifact"))
 	writeUV(t, r, "pub.txt", "unversioned public", 100)
 	setNobodyCaps(t, r, "o")
+	// The unversioned file is named by SHA3, which a client that names no
+	// release would be refused (§7.6).
 	resp := handleReq(t, r,
+		versionPragma("client-version"),
 		pullCard(),
 		&xfer.PragmaCard{Name: "uv-hash", Values: []string{"wrong"}},
 		&xfer.GimmeCard{UUID: uuid},

@@ -126,6 +126,12 @@ func (h *handler) sendUVFile(name string) error {
 		return fmt.Errorf("handler.sendUVFile: read %q: %w", name, err)
 	}
 
+	// §7.6: an unversioned file named by SHA3 is withheld from an older
+	// client, as fossil's send_unversioned_file withholds it.
+	if sha3Barred(fileHash, h.peerVersion) {
+		h.resp = append(h.resp, sha3Refusal())
+		return nil
+	}
 	if fileHash == "" {
 		h.resp = append(h.resp, &xfer.UVFileCard{
 			Name:  name,

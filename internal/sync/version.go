@@ -1,0 +1,62 @@
+package sync
+
+import (
+	"strconv"
+
+	"github.com/danmestas/go-libfossil/internal/xfer"
+)
+
+// The release this library announces in pragma client-version and
+// server-version (§9.1): the fossil release whose protocol it speaks, and
+// that release's check-in date and time.
+const (
+	releaseVersion = 22800
+	releaseDate    = "20260315"
+	releaseTime    = "120000"
+)
+
+// sha3Version is the first fossil release that accepts SHA3 artifact names.
+// Content named by SHA3 is withheld from a peer older than this (§7.6).
+const sha3Version = 20000
+
+// sha1NameLen is the length of a SHA1 artifact name; any longer name is SHA3.
+const sha1NameLen = 40
+
+// versionPragma is the pragma that announces this library's release: name is
+// "client-version" or "server-version".
+func versionPragma(name string) *xfer.PragmaCard {
+	return &xfer.PragmaCard{
+		Name:   name,
+		Values: []string{strconv.Itoa(releaseVersion), releaseDate, releaseTime},
+	}
+}
+
+// peerVersion reads the VERSION of a client-version or server-version pragma
+// as fossil's atoi does: leading digits, and 0 when there are none.
+func peerVersion(c *xfer.PragmaCard) int {
+	if len(c.Values) == 0 {
+		panic("sync.peerVersion: pragma has no VERSION")
+	}
+	v := c.Values[0]
+	n := 0
+	for n < len(v) && v[n] >= '0' && v[n] <= '9' {
+		n++
+	}
+	version, err := strconv.Atoi(v[:n])
+	if err != nil {
+		return 0
+	}
+	return version
+}
+
+// sha3Barred reports whether content named name is withheld from a peer of
+// the given release: a SHA3 name, to a peer older than SHA3 support (§7.6).
+func sha3Barred(name string, version int) bool {
+	return len(name) > sha1NameLen && version < sha3Version
+}
+
+// sha3Refusal is the error card that takes the place of SHA3 content withheld
+// from an older peer, worded as fossil's xfer_cannot_send_sha3_error words it.
+func sha3Refusal() *xfer.ErrorCard {
+	return &xfer.ErrorCard{Message: "Fossil version 2.0 or later required."}
+}

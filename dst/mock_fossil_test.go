@@ -68,6 +68,8 @@ func TestMockFossilPullFlow(t *testing.T) {
 
 	// Round 2: client sends gimme — server should respond with file.
 	req2 := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "client-version",
+			Values: []string{"22800", "20260315", "120000"}},
 		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}

@@ -363,7 +363,9 @@ func TestHandleClonePushCardTrailsCloneSeqno(t *testing.T) {
 		storeTestBlob(t, r, []byte(fmt.Sprintf("clone order test %d", i)))
 	}
 
-	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}}
+	req := &xfer.Message{Cards: []xfer.Card{
+		versionPragma("client-version"), &xfer.CloneCard{Version: 3, SeqNo: 1},
+	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
@@ -471,7 +473,9 @@ func TestEmitCloneBatchSendsDeltifiedRowsAsDelta(t *testing.T) {
 		t.Fatalf("deltify setup: %v", err)
 	}
 
-	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 1}}}
+	req := &xfer.Message{Cards: []xfer.Card{
+		versionPragma("client-version"), &xfer.CloneCard{Version: 1},
+	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
@@ -554,7 +558,9 @@ func TestEmitCloneBatchSourcePrecedesDelta(t *testing.T) {
 		t.Fatal("fixture bug: no deltas created -- this test needs a deltified chain to be meaningful")
 	}
 
-	req := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}}
+	req := &xfer.Message{Cards: []xfer.Card{
+		versionPragma("client-version"), &xfer.CloneCard{Version: 3, SeqNo: 1},
+	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)

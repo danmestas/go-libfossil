@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Sync exchanges releases and withholds SHA3 content from older peers, as
+  fossil does (§7.6, §9.1, #303). The server answers a `pragma
+  client-version` that carries DATE and TIME with its own `pragma
+  server-version`, ahead of any content. Both sides now record the peer's
+  release, and where they would send content named by SHA3 to a peer older
+  than fossil 2.0 (a client that announces no release counts as one), they
+  send `error Fossil version 2.0 or later required.` in its place: the
+  server for `gimme`, clone and `uvgimme`, the client for `gimme`. Because a
+  server-version from a current release has fossil's client log in through
+  the `x-f-l-c` cookie, the HTTP server now reads that cookie's login card,
+  its nonce covering the whole body (§6.5).
 - The sync client ends a session by §3.7's rules, as fossil's `client_sync`
   does (#301). Stored content or a new phantom continues it only while the
   phantom table is not empty, so neither received content alone nor

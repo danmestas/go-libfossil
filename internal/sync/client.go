@@ -87,10 +87,7 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 	if s.opts.Private && cycle == 0 {
 		cards = append(cards, sendPrivate)
 	}
-	cards = append(cards, &xfer.PragmaCard{
-		Name:   "client-version",
-		Values: []string{"22800", "20260315", "120000"},
-	})
+	cards = append(cards, versionPragma("client-version"))
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -175,7 +172,11 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
 	}
 
-	// File cards from pendingSend + unsent table, respecting maxSend budget.
+	// Refusals of SHA3 content the server is too old to accept, then file
+	// cards from pendingSend, respecting the maxSend budget.
+	for ; s.sha3Refusals > 0; s.sha3Refusals-- {
+		cards = append(cards, sha3Refusal())
+	}
 	fileCards, err := s.buildFileCards()
 	if err != nil {
 		return nil, fmt.Errorf("buildRequest file: %w", err)
@@ -711,6 +712,8 @@ func (s *session) handleMessage(c *xfer.MessageCard) {
 // handleReplyPragma acts on the pragmas a server sends a sync client.
 func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 	switch {
+	case c.Name == "server-version" && len(c.Values) >= 1:
+		s.peerVersion = peerVersion(c)
 	case c.Name == "uv-push-ok":
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
@@ -1199,9 +1202,11 @@ func (s *session) flushNewPhantoms() (int, error) {
 }
 
 // queueGimme queues the file a server's gimme asks for when the client can
-// answer it. Like fossil's nGimmeRcvd, the count takes every gimme for an
-// artifact the repository has a row for, a phantom or a private one included
-// (xfer.c, rid_from_uuid before send_file).
+// answer it, or, for SHA3 content the server is too old to accept, the
+// refusal fossil's send_file appends in its place (§7.6); a refusal is not a
+// file and does not continue the session. Like fossil's nGimmeRcvd, the count
+// takes every gimme for an artifact the repository has a row for, a phantom
+// or a private one included (xfer.c, rid_from_uuid before send_file).
 func (s *session) queueGimme(uuid string, t *replyTally) {
 	if uuid == "" {
 		panic("session.queueGimme: empty uuid")
@@ -1210,6 +1215,10 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 		s.nGimmeRcvd++
 	}
 	if !s.canSend(uuid) {
+		return
+	}
+	if sha3Barred(uuid, s.peerVersion) {
+		s.sha3Refusals++
 		return
 	}
 	s.pendingSend[uuid] = true

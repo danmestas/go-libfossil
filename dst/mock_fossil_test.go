@@ -15,7 +15,7 @@ import (
 func createMockFossil(t *testing.T) *MockFossil {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "master.fossil")
-	r, err := repo.Create(path, "master", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "master", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestMockFossilPullFlow(t *testing.T) {
 
 	// Round 1: client sends pull — server should respond with igot.
 	req1 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 	}}
 	resp1, err := mf.Exchange(ctx, req1)
 	if err != nil {
@@ -68,7 +68,7 @@ func TestMockFossilPullFlow(t *testing.T) {
 
 	// Round 2: client sends gimme — server should respond with file.
 	req2 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}
 	resp2, err := mf.Exchange(ctx, req2)
@@ -102,8 +102,8 @@ func TestMockFossilPushFlow(t *testing.T) {
 	// HandleSync requires both push AND pull for igot→gimme,
 	// since gimme is a "I need this" response to igot.
 	req1 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PushCard{ServerCode: "sc", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: uuid},
 	}}
 	resp1, err := mf.Exchange(ctx, req1)
@@ -123,7 +123,7 @@ func TestMockFossilPushFlow(t *testing.T) {
 
 	// Round 2: client sends push + file — server should store it.
 	req2 := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PushCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	resp2, err := mf.Exchange(ctx, req2)
@@ -149,7 +149,7 @@ func TestMockFossilPushBadUUID(t *testing.T) {
 	ctx := context.Background()
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PushCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.FileCard{UUID: "0000000000000000000000000000000000000000", Content: []byte("data")},
 	}}
 	resp, err := mf.Exchange(ctx, req)
@@ -175,7 +175,7 @@ func TestMockFossilRejectsBadLogin(t *testing.T) {
 	// Bad credentials should produce an auth error.
 	req := &xfer.Message{Cards: []xfer.Card{
 		&xfer.LoginCard{User: "testuser", Nonce: "abc", Signature: "def"},
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 	}}
 	resp, err := mf.Exchange(ctx, req)
 	if err != nil {
@@ -199,7 +199,7 @@ func TestMockFossilAnonymousPull(t *testing.T) {
 
 	// Anonymous (no login card) should work — nobody user has full caps.
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 	}}
 	resp, err := mf.Exchange(ctx, req)
 	if err != nil {

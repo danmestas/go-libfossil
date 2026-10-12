@@ -43,7 +43,7 @@ func TestServeHTTPRoundTrip(t *testing.T) {
 
 	transport := &HTTPTransport{URL: fmt.Sprintf("http://%s", addr)}
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}
 
@@ -80,7 +80,7 @@ func TestServeHTTPPushPull(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	pushReq := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	pushResp, err := transport.Exchange(ctx, pushReq)
@@ -94,7 +94,7 @@ func TestServeHTTPPushPull(t *testing.T) {
 
 	// Pull it back
 	pullReq := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}
 	pullResp, err := transport.Exchange(ctx, pullReq)
@@ -207,7 +207,7 @@ func TestServeHTTPUnknownContentType(t *testing.T) {
 
 	// A compressed container sent without the media type that identifies it.
 	body, err := (&xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}).Encode()
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -277,7 +277,7 @@ func TestServeHTTPHandlerError(t *testing.T) {
 
 	// Use raw HTTP to check the 500 status directly.
 	body, _ := (&xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}).Encode()
 	resp, err := http.Post(
 		fmt.Sprintf("http://%s/", addr),

@@ -64,7 +64,7 @@ func TestHandleSync_CrosslinksReceivedManifest(t *testing.T) {
 		fileUUID, fileContent, nil)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: fileUUID, Content: fileContent},
 		&xfer.FileCard{UUID: manifestUUID, Content: manifestBytes},
 	}}
@@ -135,7 +135,7 @@ func TestHandleSync_LeafTransitionOnChildCheckin(t *testing.T) {
 
 	// Push the parent first.
 	if _, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: parentFileUUID, Content: parentFileContent},
 		&xfer.FileCard{UUID: parentUUID, Content: parentBytes},
 	}}); err != nil {
@@ -153,7 +153,7 @@ func TestHandleSync_LeafTransitionOnChildCheckin(t *testing.T) {
 
 	// Push the child.
 	if _, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: childFileUUID, Content: childFileContent},
 		&xfer.FileCard{UUID: childUUID, Content: childBytes},
 	}}); err != nil {

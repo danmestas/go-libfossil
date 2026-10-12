@@ -192,7 +192,7 @@ func TestCloneThatNeverFinishesFails(t *testing.T) {
 		"later reply without push": {
 			{Cards: []xfer.Card{
 				&xfer.CloneSeqNoCard{SeqNo: 2},
-				&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
+				&xfer.PushCard{ServerCode: "s1", ProjectCode: testPC},
 			}},
 			{Cards: []xfer.Card{
 				&xfer.FileCard{UUID: hash.SHA1(blob), Content: blob},

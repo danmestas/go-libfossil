@@ -14,7 +14,7 @@ import (
 // requester with Read. These tests set nobody's capabilities directly, so
 // every request is anonymous.
 
-func pullCard() *xfer.PullCard { return &xfer.PullCard{ServerCode: "s", ProjectCode: "p"} }
+func pullCard() *xfer.PullCard { return &xfer.PullCard{ServerCode: "s", ProjectCode: testPC} }
 
 func sentFile(resp *xfer.Message, uuid string) bool {
 	for _, f := range findCards[*xfer.FileCard](resp) {

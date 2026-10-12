@@ -178,10 +178,15 @@ func TestRandomComment(t *testing.T) {
 
 // --- Test helpers ---
 
+// testPC is the project code test repositories are created with. A server
+// refuses a push or pull card naming another project (§8.5), so the
+// repositories a test syncs share it, as a clone shares its origin's.
+const testPC = "77dc1a9065e8b8ff0d35abe4e26498cdf9576d6a"
+
 func setupSyncTestRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.fossil")
-	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}
@@ -221,7 +226,7 @@ func TestBuildRequestPushOnly(t *testing.T) {
 		Push:        true,
 		Pull:        false,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	msg, err := s.buildRequest(0)
 	if err != nil {
@@ -242,7 +247,7 @@ func TestBuildRequestPullOnly(t *testing.T) {
 		Push:        false,
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	msg, err := s.buildRequest(0)
 	if err != nil {
@@ -259,7 +264,7 @@ func TestBuildRequestPullOnly(t *testing.T) {
 }
 
 func TestBuildRequestHasPragmaClientVersion(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 	msg, err := s.buildRequest(0)
 	if err != nil {
 		t.Fatalf("buildRequest: %v", err)
@@ -275,7 +280,7 @@ func TestBuildRequestHasPragmaClientVersion(t *testing.T) {
 }
 
 func TestBuildRequestIGotFromUnclustered(t *testing.T) {
-	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
 
 	// Store a blob — blob.Store auto-marks unclustered.
 	content := []byte("test artifact for igot")
@@ -304,7 +309,7 @@ func TestBuildRequestIGotFromUnclustered(t *testing.T) {
 }
 
 func TestBuildRequestGimmeForPhantoms(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	phantomUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	s.phantoms[phantomUUID] = true
@@ -323,7 +328,7 @@ func TestBuildRequestGimmeForPhantoms(t *testing.T) {
 }
 
 func TestBuildRequestFileForPendingSend(t *testing.T) {
-	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
 
 	// Store a blob and add its UUID to pendingSend
 	content := []byte("file to send over sync")
@@ -354,7 +359,7 @@ func TestBuildRequestWithLogin(t *testing.T) {
 	s, _ := newTestSession(t, SyncOpts{
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 		User:        "alice",
 		Password:    "pass123",
 	})
@@ -384,7 +389,7 @@ func TestBuildRequestWithLogin(t *testing.T) {
 // --- processResponse tests ---
 
 func TestProcessResponseStoresFileCard(t *testing.T) {
-	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	content := []byte("artifact from server")
 	uuid := hash.SHA1(content)
@@ -420,7 +425,7 @@ func TestProcessResponseStoresFileCard(t *testing.T) {
 // phantomized base so it gets gimme'd on a later round, rather than
 // failing the pull outright.
 func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
-	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	base := []byte("pull delta-before-base test, content long enough to compress well")
 	target := []byte("pull delta-before-base test, content long enough to compress well, v2")
@@ -460,7 +465,7 @@ func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
 }
 
 func TestProcessResponseIGotAddsPhantom(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	missingUUID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	resp := &xfer.Message{Cards: []xfer.Card{
@@ -479,7 +484,7 @@ func TestProcessResponseIGotAddsPhantom(t *testing.T) {
 }
 
 func TestProcessResponseIGotNoPhantomWhenExists(t *testing.T) {
-	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	// Store a blob so it exists locally
 	content := []byte("already have this")
@@ -504,7 +509,7 @@ func TestProcessResponseIGotNoPhantomWhenExists(t *testing.T) {
 }
 
 func TestProcessResponseGimmeAddsPendingSend(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
 
 	wantUUID := "cccccccccccccccccccccccccccccccccccccccc"
 	resp := &xfer.Message{Cards: []xfer.Card{
@@ -523,7 +528,7 @@ func TestProcessResponseGimmeAddsPendingSend(t *testing.T) {
 }
 
 func TestProcessResponseCookieCached(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.CookieCard{Value: "session-abc-123"},
@@ -538,7 +543,7 @@ func TestProcessResponseCookieCached(t *testing.T) {
 }
 
 func TestProcessResponseConvergence(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	// Empty response with no pending work = converged
 	resp := &xfer.Message{}
@@ -552,7 +557,7 @@ func TestProcessResponseConvergence(t *testing.T) {
 }
 
 func TestProcessResponseErrorCard(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	s, _ := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.ErrorCard{Message: "access denied"},
@@ -584,7 +589,7 @@ func TestSyncSingleRound(t *testing.T) {
 	result, err := Sync(context.Background(), r, mt, SyncOpts{
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -625,7 +630,7 @@ func TestSyncMultiRound(t *testing.T) {
 	result, err := Sync(context.Background(), r, mt, SyncOpts{
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -656,7 +661,7 @@ func TestSyncContextCancellation(t *testing.T) {
 	_, err := Sync(ctx, r, mt, SyncOpts{
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
@@ -680,7 +685,7 @@ func TestSyncMaxRoundsExceeded(t *testing.T) {
 	result, err := Sync(context.Background(), r, mt, SyncOpts{
 		Push:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 	})
 	if err == nil {
 		t.Fatal("expected error for max rounds exceeded")
@@ -695,7 +700,7 @@ func TestSyncMaxRoundsExceeded(t *testing.T) {
 // BenchmarkBuildRequest benchmarks buildRequest with 100 unclustered artifacts.
 func BenchmarkBuildRequest(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, testPC)
 	if err != nil {
 		b.Fatalf("repo.Create: %v", err)
 	}
@@ -714,7 +719,7 @@ func BenchmarkBuildRequest(b *testing.B) {
 		Push:        true,
 		Pull:        true,
 		ServerCode:  "sc",
-		ProjectCode: "pc",
+		ProjectCode: testPC,
 		User:        "alice",
 		Password:    "secret",
 	})
@@ -731,7 +736,7 @@ func BenchmarkBuildRequest(b *testing.B) {
 // BenchmarkProcessResponse benchmarks processResponse with 50 file cards.
 func BenchmarkProcessResponse(b *testing.B) {
 	path := filepath.Join(b.TempDir(), "bench.fossil")
-	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "benchuser", simio.CryptoRand{}, testPC)
 	if err != nil {
 		b.Fatalf("repo.Create: %v", err)
 	}
@@ -751,14 +756,14 @@ func BenchmarkProcessResponse(b *testing.B) {
 		b.StopTimer()
 		// Each iteration needs a fresh session+repo because processResponse stores blobs
 		bpath := filepath.Join(b.TempDir(), fmt.Sprintf("bench-%d.fossil", i))
-		br, err := repo.Create(bpath, "benchuser", simio.CryptoRand{}, "")
+		br, err := repo.Create(bpath, "benchuser", simio.CryptoRand{}, testPC)
 		if err != nil {
 			b.Fatalf("repo.Create: %v", err)
 		}
 		s := newSession(br, SyncOpts{
 			Pull:        true,
 			ServerCode:  "sc",
-			ProjectCode: "pc",
+			ProjectCode: testPC,
 		})
 		b.StartTimer()
 

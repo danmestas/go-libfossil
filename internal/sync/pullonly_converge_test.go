@@ -45,7 +45,7 @@ func TestPullOnlyConvergesWhenServerLacksClientArtifacts(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	res, err := Sync(ctx, client, rt, SyncOpts{
-		Pull: true, ProjectCode: "pc",
+		Pull: true, ProjectCode: testPC,
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -95,7 +95,7 @@ func TestPullOnlyIgnoresServerGimmes(t *testing.T) {
 	tr := &gimmeForeverTransport{uuid: "dddddddddddddddddddddddddddddddddddddddd"}
 
 	res, err := Sync(context.Background(), client, tr, SyncOpts{
-		Pull: true, ProjectCode: "pc",
+		Pull: true, ProjectCode: testPC,
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -162,7 +162,7 @@ func TestPushRefusedByPullOnlyIsReported(t *testing.T) {
 	storeBlob(t, client, "content the server will not accept")
 
 	res, err := Sync(context.Background(), client, pullOnlyMessageTransport{}, SyncOpts{
-		Push: true, Pull: true, ProjectCode: "pc",
+		Push: true, Pull: true, ProjectCode: testPC,
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)

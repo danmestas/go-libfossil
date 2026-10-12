@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync server refuses a `push` or `pull` card naming another project
+  with `error wrong project`, as fossil's `page_xfer` does (§8.5, #309). It
+  accepted either whatever its project code, so a client of an unrelated
+  repository could pull its artifacts or push into it. The refusal comes
+  before any capability check, resets the reply and ends card processing.
 - Sync HTTP framing now follows §4 (#310). The server dispatches a request
   typed `application/x-fossil-debug`, which it refused with HTTP 415. The
   client takes only HTTP 200 as a sync reply, so a 201 or other 2xx is an

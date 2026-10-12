@@ -99,13 +99,13 @@ func TestSyncCallsObserverHooks(t *testing.T) {
 	serverPath := filepath.Join(t.TempDir(), "server.fossil")
 	env := simio.RealEnv()
 
-	server, err := repo.Create(serverPath, "test", env.Rand, "")
+	server, err := repo.Create(serverPath, "test", env.Rand, testPC)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
 
-	client, err := repo.Create(clientPath, "test", env.Rand, "")
+	client, err := repo.Create(clientPath, "test", env.Rand, testPC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCloneCallsObserverHooks(t *testing.T) {
 				return &xfer.Message{
 					Cards: []xfer.Card{
 						&xfer.PushCard{
-							ProjectCode: "test-project",
+							ProjectCode: testPC,
 							ServerCode:  "test-server",
 						},
 						&xfer.CloneSeqNoCard{SeqNo: 0},

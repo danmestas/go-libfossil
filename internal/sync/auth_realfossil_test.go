@@ -202,7 +202,7 @@ func TestRealFossilPushRequiresCredentials(t *testing.T) {
 	// A repo of ours, cloned by canonical fossil so both ends share a project
 	// code — the value the login signature is derived from.
 	localPath := filepath.Join(dir, "local.fossil")
-	r, err := repo.Create(localPath, "testuser", simio.CryptoRand{}, "")
+	r, err := repo.Create(localPath, "testuser", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

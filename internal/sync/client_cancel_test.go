@@ -167,7 +167,8 @@ func TestProcessResponseThreadsContextToPhantomFillCascade(t *testing.T) {
 	// proving the fixture is fully walkable through processResponse, so any
 	// shortfall in the cancelled run below is the deadline biting, not a broken
 	// graph or a receive path that never triggers the cascade.
-	sLive, rLive := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	sLive, rLive := newTestSession(t,
+		SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 	liveBaseUUID, liveBase, liveChildren := buildPhantomFillFanout(t, rLive, fanout)
 	liveResp := &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: liveBaseUUID, Content: liveBase}}}
 	if _, err := sLive.processResponse(context.Background(), liveResp); err != nil {
@@ -187,7 +188,8 @@ func TestProcessResponseThreadsContextToPhantomFillCascade(t *testing.T) {
 	// and handleFileCard passes context.Background() to storeReceivedFile -- the
 	// cascade never sees the cancellation and crosslinks all fanout children,
 	// failing this assertion.
-	sCancel, rCancel := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: "pc"})
+	sCancel, rCancel := newTestSession(t,
+		SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 	cancelBaseUUID, cancelBase, cancelChildren := buildPhantomFillFanout(t, rCancel, fanout)
 	cancelResp := &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: cancelBaseUUID, Content: cancelBase}}}
 	ctx := newPollCancelCtx(1)

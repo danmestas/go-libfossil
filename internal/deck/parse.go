@@ -1,9 +1,7 @@
 package deck
 
 import (
-	"bytes"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +24,123 @@ func isHexToken(s string) bool {
 		}
 	}
 	return true
+}
+
+// manifestScanner tokenizes clearsign-stripped artifact content card by card,
+// following fossil's next_token/next_card (src/manifest.c). Tokens on a card
+// are separated by a single space; a card ends at LF. Tab and CR are ordinary
+// token bytes, never separators, so a card value may carry them -- the only
+// thing a token cannot contain is a space or an LF. The zero value is not
+// usable: start a scan with atEol true at buf[0].
+type manifestScanner struct {
+	buf   []byte
+	pos   int  // index of the next unread byte
+	atEol bool // true when positioned at the first byte of a card
+}
+
+// nextCard returns the next card's type letter and advances past the letter
+// and the single byte that follows it. A space after the letter means
+// arguments follow (atEol cleared); an LF means a bare card with none (atEol
+// kept). Any other following byte -- or no more cards -- yields 0, leaving pos
+// where the caller's §4.2 residue check will see the unconsumed bytes.
+func (s *manifestScanner) nextCard() byte {
+	if !s.atEol || s.pos >= len(s.buf) {
+		return 0
+	}
+	c := s.buf[s.pos]
+	switch {
+	case s.pos+1 < len(s.buf) && s.buf[s.pos+1] == ' ':
+		s.pos += 2
+		s.atEol = false
+	case s.pos+1 < len(s.buf) && s.buf[s.pos+1] == '\n':
+		s.pos += 2
+		s.atEol = true
+	default:
+		return 0
+	}
+	return c
+}
+
+// nextToken returns the next token on the current card and whether one was
+// present. A token runs to the next space or LF; the delimiter is consumed,
+// and an LF ends the card (atEol set). A card with no arguments, or one whose
+// tokens are exhausted, yields ok=false (fossil's next_token returning NULL).
+func (s *manifestScanner) nextToken() (token string, ok bool) {
+	if s.atEol {
+		return "", false
+	}
+	start := s.pos
+	for s.pos < len(s.buf) && s.buf[s.pos] != ' ' && s.buf[s.pos] != '\n' {
+		s.pos++
+	}
+	token = string(s.buf[start:s.pos])
+	if s.pos < len(s.buf) && s.buf[s.pos] == '\n' {
+		s.atEol = true
+	}
+	s.pos++ // consume the delimiter (space or LF)
+	return token, true
+}
+
+// cardTokens drains and returns every token of the current card. §4.2 with
+// its empty-trailing-token erratum: a token between two others may not be
+// empty -- two spaces in a row -- but the last token may be, carrying a
+// present-but-empty value (an empty comment, J value, N mimetype or T value).
+// fossil has no such explicit rule; its per-card validators reject an interior
+// empty token at whichever field it lands on, and this is their shared form.
+func (s *manifestScanner) cardTokens() ([]string, error) {
+	var tokens []string
+	for {
+		tok, ok := s.nextToken()
+		if !ok {
+			break
+		}
+		tokens = append(tokens, tok)
+	}
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i] == "" {
+			return nil, fmt.Errorf("empty token between two others")
+		}
+	}
+	return tokens, nil
+}
+
+// parseW reads a W card's body. The size is a token fossil parses as its
+// leading decimal digits (W 12x is 12, W abc is 0), which must be the card's
+// only token; then exactly that many raw bytes, which are never decoded,
+// followed by a required LF. Mirrors the W case of manifest_parse.
+func (s *manifestScanner) parseW(d *Deck) error {
+	if d.W != nil {
+		return fmt.Errorf("more than one W-card")
+	}
+	sizeTok, ok := s.nextToken()
+	if !ok {
+		return fmt.Errorf("missing size on W-card")
+	}
+	if !s.atEol {
+		return fmt.Errorf("no content after W-card")
+	}
+	var size uint64
+	for i := 0; i < len(sizeTok) && sizeTok[i] >= '0' && sizeTok[i] <= '9'; i++ {
+		next := size*10 + uint64(sizeTok[i]-'0')
+		if next < size {
+			return fmt.Errorf("size overflow on W-card")
+		}
+		size = next
+	}
+	// fossil requires the body and its terminating LF to leave at least one
+	// more byte before the end, so a W card is never the artifact's last card.
+	if size+1 >= uint64(len(s.buf)-s.pos) {
+		return fmt.Errorf("not enough content after W-card")
+	}
+	n := int(size)
+	if s.buf[s.pos+n] != '\n' {
+		return fmt.Errorf("W-card content not newline terminated")
+	}
+	// Copy so the deck does not alias the input buffer.
+	d.W = append([]byte{}, s.buf[s.pos:s.pos+n]...)
+	s.pos += n + 1
+	s.atEol = true
+	return nil
 }
 
 // Parse reads an artifact as a pipeline of stages: frame the raw blob (§4.1
@@ -81,65 +196,53 @@ func frameArtifact(data []byte) ([]byte, error) {
 // without one is rejected here; the full per-type required-card table is
 // applied in Parse's later stages.
 func scanCards(content []byte, d *Deck) error {
+	s := &manifestScanner{buf: content, atEol: true}
 	var lastCard byte
 	var seen seenCards
 	var sawZ bool
-	reader := bytes.NewReader(content)
 
-	for reader.Len() > 0 {
-		line, err := readLine(reader)
-		if err != nil || len(line) == 0 {
-			continue
+	for {
+		card := s.nextCard()
+		if card == 0 {
+			break
 		}
-
-		card := line[0]
 		if card == 'Z' {
 			sawZ = true
 		}
 
-		// §4.5.1 occurrence classes. The card-type ordering check below
-		// permits equal consecutive letters, so the duplicate guard for
-		// single-occurrence types has to be separate from it. W is
-		// single-occurrence too, so the claim precedes the W branch.
+		// §4.5.1 single-occurrence guard, kept separate from the ordering
+		// check below because that one permits equal consecutive letters.
 		if err := seen.claim(card); err != nil {
 			return err
 		}
 
-		if card == 'W' {
-			if card < lastCard {
-				return fmt.Errorf("card 'W' out of order (after '%c')", lastCard)
-			}
-			lastCard = card
-			body, err := readWBody(reader, line)
-			if err != nil {
-				return err
-			}
-			d.W = body
-			continue
-		}
-
+		// §4.4: cards ascend, with the one legacy technote N-after-P exception.
 		if card < lastCard && !isLegacyTechnoteNAfterP(d, card, lastCard) {
 			return fmt.Errorf("card '%c' out of order (after '%c')", card, lastCard)
 		}
 		lastCard = card
 
-		// A card letter on a line by itself carries no arguments. That is
-		// legal, not malformed: the repeatable cards accept an empty argument
-		// list, and Fossil's own first check-in
-		// (a28c83647dfa805f05f3204a7e146eb1f0d90505, "initial empty baseline")
-		// spells its parentless-ness as a bare "P" card. Rejecting the line
-		// dropped that check-in from crosslink entirely. Cards that do require
-		// arguments still reject the empty string in their own parser.
-		if len(line) > 1 && line[1] != ' ' {
-			return fmt.Errorf("malformed: %q", line)
+		if card == 'W' {
+			if err := s.parseW(d); err != nil {
+				return err
+			}
+			continue
 		}
-		var args string
-		if len(line) > 2 {
-			args = line[2:]
-		}
-		if err := parseCard(d, card, args); err != nil {
+
+		tokens, err := s.cardTokens()
+		if err != nil {
 			return err
 		}
+		if err := parseCard(d, card, tokens); err != nil {
+			return err
+		}
+	}
+
+	// §4.2: any byte left once no card can be read -- a blank line, trailing
+	// residue, or an extra token that stopped the scan early -- is an error
+	// (fossil's "extra characters at end of card").
+	if s.pos < len(s.buf) {
+		return fmt.Errorf("extra characters at end of card")
 	}
 
 	// §6.2 / §5.2: an artifact that reaches here without a Z card is not well
@@ -149,26 +252,6 @@ func scanCards(content []byte, d *Deck) error {
 		return fmt.Errorf("Z-card missing")
 	}
 	return nil
-}
-
-// readWBody reads a W card's body given its header line: the size token
-// (§4.7.18) and that many bytes, then the trailing newline.
-func readWBody(reader *bytes.Reader, line string) ([]byte, error) {
-	sizeStr := strings.TrimSpace(line[2:])
-	size, err := strconv.Atoi(sizeStr)
-	if err != nil {
-		return nil, fmt.Errorf("bad W size: %w", err)
-	}
-	body := make([]byte, size)
-	n, readErr := reader.Read(body)
-	if readErr != nil && n != size {
-		return nil, fmt.Errorf("W content read: %w", readErr)
-	}
-	if n != size {
-		return nil, fmt.Errorf("W content: got %d, want %d", n, size)
-	}
-	reader.ReadByte() // trailing newline
-	return body, nil
 }
 
 // isLegacyTechnoteNAfterP reports whether an N-card following a P-card is the
@@ -188,100 +271,94 @@ func isLegacyTechnoteNAfterP(d *Deck, card, lastCard byte) bool {
 	return card == 'N' && lastCard == 'P' && d.E != nil
 }
 
-func readLine(r *bytes.Reader) (string, error) {
-	var b strings.Builder
-	for {
-		c, err := r.ReadByte()
-		if err != nil {
-			return b.String(), nil
-		}
-		if c == '\n' {
-			return b.String(), nil
-		}
-		b.WriteByte(c)
-	}
-}
-
-func parseCard(d *Deck, card byte, args string) error {
+func parseCard(d *Deck, card byte, tokens []string) error {
 	if d == nil {
 		panic("deck.parseCard: d must not be nil")
 	}
 	switch card {
 	case 'A':
-		return parseACard(d, args)
-	case 'D':
-		return parseDCard(d, args)
-	case 'E':
-		return parseECard(d, args)
-	case 'F':
-		return parseFCard(d, args)
-	case 'J':
-		return parseJCard(d, args)
-	case 'Q':
-		return parseQCard(d, args)
-	case 'T':
-		return parseTCard(d, args)
-	// Simple cards stay inline:
+		return parseACard(d, tokens)
 	case 'B':
-		d.B = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.B, "hash on B-card", false)
 	case 'C':
-		d.C = FossilDecode(args)
-		return nil
+		return setStringCard(tokens, &d.C, "comment on C-card", true)
+	case 'D':
+		return parseDCard(d, tokens)
+	case 'E':
+		return parseECard(d, tokens)
+	case 'F':
+		return parseFCard(d, tokens)
 	case 'G':
-		d.G = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.G, "hash on G-card", false)
 	case 'H':
-		d.H = FossilDecode(args)
-		return nil
+		return setStringCard(tokens, &d.H, "title on H-card", true)
 	case 'I':
-		d.I = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.I, "hash on I-card", false)
+	case 'J':
+		return parseJCard(d, tokens)
 	case 'K':
-		d.K = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.K, "hash on K-card", false)
 	case 'L':
-		d.L = FossilDecode(args)
-		return nil
+		return setStringCard(tokens, &d.L, "title on L-card", true)
 	case 'M':
-		return parseMCard(d, args)
+		return parseMCard(d, tokens)
 	case 'N':
-		d.N = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.N, "mimetype on N-card", false)
 	case 'P':
-		// Repeatable, and neither sorted nor deduplicated (§4.5.2): P
-		// order is semantic, primary parent first. Appending — not
-		// assigning — is what makes a second P card add parents rather
-		// than replace them (§4.5.1).
-		d.P = append(d.P, strings.Fields(args)...)
-		return nil
+		return parsePCard(d, tokens)
+	case 'Q':
+		return parseQCard(d, tokens)
 	case 'R':
-		d.R = strings.TrimSpace(args)
-		return nil
+		return setStringCard(tokens, &d.R, "checksum on R-card", false)
+	case 'T':
+		return parseTCard(d, tokens)
 	case 'U':
-		return parseUCard(d, args)
+		return parseUCard(d, tokens)
 	case 'Z':
-		return parseZCard(args)
+		return parseZCard(tokens)
 	default:
 		return fmt.Errorf("unknown card '%c'", card)
 	}
 }
 
-func parseACard(d *Deck, args string) error {
-	parts := strings.SplitN(args, " ", 3)
-	if len(parts) < 2 {
-		return fmt.Errorf("A-card needs 2+ fields")
+// setStringCard stores a single-token card value. A bare card with no token
+// at all is "missing"; a present-but-empty token -- a card line ending in a
+// space, per the §4.2 erratum -- is kept distinct from that. decode applies
+// §4.3 fossil-decoding to the fields §4.3.1 lists as decoded (C, H, L).
+func setStringCard(tokens []string, dst *string, what string, decode bool) error {
+	if len(tokens) == 0 {
+		return fmt.Errorf("missing %s", what)
 	}
-	ac := &AttachmentCard{Filename: FossilDecode(parts[0]), Target: parts[1]}
-	if len(parts) == 3 {
-		ac.Source = parts[2]
+	if len(tokens) > 1 {
+		return fmt.Errorf("extra characters after %s", what)
+	}
+	value := tokens[0]
+	if decode {
+		value = FossilDecode(value)
+	}
+	*dst = value
+	return nil
+}
+
+func parseACard(d *Deck, tokens []string) error {
+	// §4.2.1 / Table 2: filename, target, optional source -- three tokens at
+	// most. An extra token is "extra characters at end of card".
+	if len(tokens) < 2 || len(tokens) > 3 {
+		return fmt.Errorf("A-card takes a filename, a target and an optional source")
+	}
+	ac := &AttachmentCard{Filename: FossilDecode(tokens[0]), Target: tokens[1]}
+	if len(tokens) >= 3 {
+		ac.Source = tokens[2]
 	}
 	d.A = ac
 	return nil
 }
 
-func parseDCard(d *Deck, args string) error {
-	t, err := parseTimestamp(args)
+func parseDCard(d *Deck, tokens []string) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("D-card takes exactly one timestamp")
+	}
+	t, err := parseTimestamp(tokens[0])
 	if err != nil {
 		return fmt.Errorf("D-card: %w", err)
 	}
@@ -289,33 +366,34 @@ func parseDCard(d *Deck, args string) error {
 	return nil
 }
 
-func parseECard(d *Deck, args string) error {
-	parts := strings.SplitN(args, " ", 2)
-	if len(parts) != 2 {
-		return fmt.Errorf("E-card needs datetime and uuid")
+func parseECard(d *Deck, tokens []string) error {
+	// §4.2.1: exactly a timestamp and an event id.
+	if len(tokens) != 2 {
+		return fmt.Errorf("E-card takes a timestamp and a uuid")
 	}
-	t, err := parseTimestamp(parts[0])
+	t, err := parseTimestamp(tokens[0])
 	if err != nil {
 		return fmt.Errorf("E-card: %w", err)
 	}
-	d.E = &EventCard{Date: t, UUID: parts[1]}
+	d.E = &EventCard{Date: t, UUID: tokens[1]}
 	return nil
 }
 
-func parseFCard(d *Deck, args string) error {
-	parts := strings.Fields(args)
-	if len(parts) == 0 {
-		return fmt.Errorf("empty F-card")
+func parseFCard(d *Deck, tokens []string) error {
+	// §4.2.1 / Table 2: filename, optional hash, permission and old-name --
+	// four tokens at most.
+	if len(tokens) == 0 || len(tokens) > 4 {
+		return fmt.Errorf("F-card takes a filename and up to three more fields")
 	}
-	fc := FileCard{Name: FossilDecode(parts[0])}
-	if len(parts) >= 2 {
-		fc.UUID = parts[1]
+	fc := FileCard{Name: FossilDecode(tokens[0])}
+	if len(tokens) >= 2 {
+		fc.UUID = tokens[1]
 	}
-	if len(parts) >= 3 {
-		fc.Perm = parts[2]
+	if len(tokens) >= 3 {
+		fc.Perm = tokens[2]
 	}
-	if len(parts) >= 4 {
-		fc.OldName = FossilDecode(parts[3])
+	if len(tokens) >= 4 {
+		fc.OldName = FossilDecode(tokens[3])
 	}
 	// §4.5.2: strictly ascending by decoded filename. Decoding has already
 	// happened above, so the check sees the post-decode name the merge walk
@@ -329,26 +407,32 @@ func parseFCard(d *Deck, args string) error {
 	return nil
 }
 
-func parseMCard(d *Deck, args string) error {
-	hash := strings.TrimSpace(args)
+func parseMCard(d *Deck, tokens []string) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("M-card takes exactly one hash")
+	}
+	m := tokens[0]
 	// §4.5.2: strictly ascending by hash.
 	if n := len(d.M); n > 0 {
-		if err := requireAscending('M', d.M[n-1], hash); err != nil {
+		if err := requireAscending('M', d.M[n-1], m); err != nil {
 			return err
 		}
 	}
-	d.M = append(d.M, hash)
+	d.M = append(d.M, m)
 	return nil
 }
 
-func parseJCard(d *Deck, args string) error {
-	parts := strings.SplitN(args, " ", 2)
-	// §4.7.8: the value is escape-decoded, the field name is stored
-	// verbatim (canonical manifest.c defossilizes only zValue and compares
-	// the raw zName).
-	jf := TicketField{Name: parts[0]}
-	if len(parts) == 2 {
-		jf.Value = FossilDecode(parts[1])
+func parseJCard(d *Deck, tokens []string) error {
+	// §4.2.1: a field name and an optional value -- two tokens at most.
+	if len(tokens) == 0 || len(tokens) > 2 {
+		return fmt.Errorf("J-card takes a name and an optional value")
+	}
+	// §4.7.8: the value is escape-decoded, the field name is stored verbatim
+	// (canonical manifest.c defossilizes only zValue and compares the raw
+	// zName).
+	jf := TicketField{Name: tokens[0]}
+	if len(tokens) >= 2 {
+		jf.Value = FossilDecode(tokens[1])
 	}
 	// §4.5.2: strictly ascending by field name.
 	if n := len(d.J); n > 0 {
@@ -360,53 +444,62 @@ func parseJCard(d *Deck, args string) error {
 	return nil
 }
 
-func parseQCard(d *Deck, args string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("Q-card too short")
+func parsePCard(d *Deck, tokens []string) error {
+	// Repeatable, and neither sorted nor deduplicated (§4.5.2): P order is
+	// semantic, primary parent first. Appending -- not assigning -- is what
+	// makes a second P card add parents rather than replace them (§4.5.1). A
+	// bare P card carries no parents, which is the initial empty baseline.
+	d.P = append(d.P, tokens...)
+	return nil
+}
+
+func parseQCard(d *Deck, tokens []string) error {
+	// §4.2.1: a signed target and an optional baseline -- two tokens at most.
+	if len(tokens) == 0 || len(tokens) > 2 || len(tokens[0]) < 1 {
+		return fmt.Errorf("Q-card takes a signed target and an optional baseline")
 	}
-	cp := CherryPick{IsBackout: args[0] == '-'}
-	rest := args[1:]
-	parts := strings.SplitN(rest, " ", 2)
-	cp.Target = parts[0]
-	if len(parts) == 2 {
-		cp.Baseline = parts[1]
+	cp := CherryPick{IsBackout: tokens[0][0] == '-'}
+	cp.Target = tokens[0][1:]
+	if len(tokens) >= 2 {
+		cp.Baseline = tokens[1]
 	}
 	d.Q = append(d.Q, cp)
 	return nil
 }
 
-func parseTCard(d *Deck, args string) error {
-	if len(args) < 2 {
+func parseTCard(d *Deck, tokens []string) error {
+	if len(tokens) == 0 || len(tokens[0]) < 1 {
 		return fmt.Errorf("T-card too short")
 	}
+	nameToken := tokens[0]
 	// §4.7.16: the first character of the name token MUST be +, - or *.
 	// Rejecting anything else also keeps the sign a single byte, so the
 	// ordering key assembled from it cannot silently gain a second byte
 	// through UTF-8 expansion.
-	switch TagType(args[0]) {
+	switch TagType(nameToken[0]) {
 	case TagSingleton, TagPropagating, TagCancel:
 	default:
-		return fmt.Errorf("T-card name must begin with '+', '-' or '*', got %q", args[:1])
+		return fmt.Errorf("T-card name must begin with '+', '-' or '*', got %q", nameToken[:1])
 	}
-	tc := TagCard{Type: TagType(args[0])}
-	parts := strings.SplitN(args[1:], " ", 3)
-	if len(parts) < 2 {
-		return fmt.Errorf("T-card needs name and uuid")
+	// §4.2.1: a signed name, a target and an optional value -- three tokens.
+	if len(tokens) < 2 || len(tokens) > 3 {
+		return fmt.Errorf("T-card takes a name, a target and an optional value")
 	}
+	tc := TagCard{Type: TagType(nameToken[0])}
 	// §4.7.16: the name and value tokens are escape-decoded (canonical
 	// defossilizes both), while the target token is stored verbatim -- never
 	// decoded on the way in, so it is never encoded on the way out. Decoding
 	// the value matters on ordinary input: `fossil branch new 'my branch'`
 	// writes `T *branch * my\sbranch`, and leaving that raw names the branch
 	// literally "my\sbranch" all the way through crosslink.
-	tc.Name = FossilDecode(parts[0])
-	tc.UUID = parts[1]
-	if len(parts) == 3 {
-		tc.Value = FossilDecode(parts[2])
+	tc.Name = FossilDecode(nameToken[1:])
+	tc.UUID = tokens[1]
+	if len(tokens) >= 3 {
+		tc.Value = FossilDecode(tokens[2])
 	}
-	// §4.7.16: a name that after the sign is entirely hex digits is
-	// ambiguous with a hash, so reject it. The escape-decoded name is used;
-	// an all-hex token carries no escapes, so decoding leaves it unchanged.
+	// §4.7.16: a name that after the sign is entirely hex digits is ambiguous
+	// with a hash, so reject it. The escape-decoded name is used; an all-hex
+	// token carries no escapes, so decoding leaves it unchanged.
 	if isHexToken(tc.Name) {
 		return fmt.Errorf("T-card name %q must not be entirely hexadecimal", tc.Name)
 	}
@@ -457,18 +550,39 @@ func requireTagAscending(previous, current TagCard) error {
 // field cannot represent. Resolving here, once, means every downstream
 // crosslink call site can bind d.U directly and get the right SQL value
 // (NULL, "anonymous", or the login) without repeating this logic.
-//
-// args is trimmed before the emptiness check, matching canonical fossil's
-// next_token() (which skips leading whitespace) and every sibling card
-// parser in this file (B/G/I/K/M/N/R all TrimSpace); otherwise a
-// whitespace-only U-card ("U   \n") would store literal whitespace instead
-// of resolving to "anonymous".
-func parseUCard(d *Deck, args string) error {
-	user := FossilDecode(strings.TrimSpace(args))
+func parseUCard(d *Deck, tokens []string) error {
+	// §4.2.1: an optional login -- one token at most.
+	if len(tokens) > 1 {
+		return fmt.Errorf("U-card takes an optional login")
+	}
+	var user string
+	if len(tokens) > 0 {
+		user = FossilDecode(tokens[0])
+	}
 	if user == "" {
 		user = "anonymous"
 	}
 	d.U = &user
+	return nil
+}
+
+// parseZCard validates the trailing Z card as an ordinary card. §4.7.19 fixes
+// its payload at exactly 32 hexadecimal characters (never decoded) and it
+// carries exactly one token; an extra token is "extra characters" the same as
+// on any other card. The Z line's integrity is checked separately by verifyZ.
+func parseZCard(tokens []string) error {
+	if len(tokens) != 1 {
+		return fmt.Errorf("Z-card takes exactly one token")
+	}
+	token := tokens[0]
+	if len(token) != 32 {
+		return fmt.Errorf("Z-card checksum must be 32 characters, got %d", len(token))
+	}
+	for i := 0; i < len(token); i++ {
+		if !isHexDigit(token[i]) {
+			return fmt.Errorf("Z-card checksum is not hexadecimal: %q", token)
+		}
+	}
 	return nil
 }
 

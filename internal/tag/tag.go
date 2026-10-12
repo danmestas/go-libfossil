@@ -107,38 +107,18 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 		}
 		controlRid = rid
 
-		// Ensure tag name exists in tag table
-		tagid, err := ensureTag(tx, opts.TagName)
-		if err != nil {
-			return fmt.Errorf("ensure tag %q: %w", opts.TagName, err)
-		}
-
-		// Insert or replace tagxref row
-		mtime := libfossil.TimeToJulian(opts.Time)
-		skip, err := superseded(tx, tagid, opts.TargetRID, mtime)
-		if err != nil {
+		// Derive the tag the way crosslinking the control artifact would. A
+		// superseded tag leaves tagxref alone, but the control artifact is
+		// still stored and queued for sync.
+		if err := ApplyTagWithTx(tx, ApplyOpts{
+			TargetRID: opts.TargetRID,
+			SrcRID:    controlRid,
+			TagName:   opts.TagName,
+			TagType:   opts.TagType,
+			Value:     opts.Value,
+			MTime:     libfossil.TimeToJulian(opts.Time),
+		}); err != nil {
 			return err
-		}
-		if skip {
-			// The control artifact is still stored and queued for sync --
-			// only the derived tagxref state is left alone.
-			if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", controlRid); err != nil {
-				return fmt.Errorf("tag.AddTag: unsent: %w", err)
-			}
-			return nil
-		}
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
-			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			tagid, opts.TagType, controlRid, opts.TargetRID, nullableValue(opts.Value),
-			mtime, opts.TargetRID,
-		); err != nil {
-			return fmt.Errorf("tagxref insert: %w", err)
-		}
-
-		// Propagate to descendants (matches Fossil's tag_insert → tag_propagate).
-		if err := propagateAfterInsert(tx, tagid, opts.TagType, opts.TargetRID, mtime, opts.Value, opts.TagName); err != nil {
-			return fmt.Errorf("tag propagate: %w", err)
 		}
 
 		// Mark control artifact as unsent so sync pushes it (unclustered is handled by blob.Store).
@@ -168,40 +148,7 @@ func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
 	}
 
 	return r.WithTx(func(tx *db.Tx) error {
-		tagid, err := ensureTag(tx, opts.TagName)
-		if err != nil {
-			return fmt.Errorf("ensure tag %q: %w", opts.TagName, err)
-		}
-
-		skip, err := superseded(tx, tagid, opts.TargetRID, opts.MTime)
-		if err != nil {
-			return err
-		}
-		if skip {
-			return nil
-		}
-
-		if _, err := tx.Exec(
-			`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
-			 VALUES(?, ?, ?, ?, ?, ?, ?)`,
-			tagid, opts.TagType, opts.SrcRID, opts.TargetRID, nullableValue(opts.Value),
-			opts.MTime, opts.TargetRID,
-		); err != nil {
-			return fmt.Errorf("tagxref insert: %w", err)
-		}
-
-		// Special: bgcolor updates event table.
-		if opts.TagName == "bgcolor" && opts.TagType == TagPropagating {
-			if _, err := tx.Exec("UPDATE event SET bgcolor=? WHERE objid=?", opts.Value, opts.TargetRID); err != nil {
-				return fmt.Errorf("bgcolor update: %w", err)
-			}
-		}
-
-		if err := propagateAfterInsert(tx, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName); err != nil {
-			return fmt.Errorf("propagate: %w", err)
-		}
-
-		return nil
+		return ApplyTagWithTx(tx, opts)
 	})
 }
 
@@ -248,10 +195,37 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		}
 	}
 
+	if err := applyDateOverride(q, opts); err != nil {
+		return err
+	}
+
 	if err := propagateAfterInsert(q, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName); err != nil {
 		return fmt.Errorf("propagate: %w", err)
 	}
 
+	return nil
+}
+
+// applyDateOverride moves a check-in's event.mtime to the value of a date tag
+// (`fossil amend --date`) that has just won its tagxref row, keeping the
+// manifest's own time in omtime. It mirrors tag_insert (src/tag.c), which runs
+// this for every tag type: a cancel's NULL value leaves mtime NULL there too.
+// A check-in crosslinked later reads the same row back; see
+// crosslinkCheckinTables.
+func applyDateOverride(q db.Querier, opts ApplyOpts) error {
+	if opts.TagName != "date" {
+		return nil
+	}
+	var value any
+	if opts.TagType != TagCancel {
+		value = nullableValue(opts.Value)
+	}
+	if _, err := q.Exec(
+		`UPDATE event SET mtime=julianday(?), omtime=coalesce(omtime, mtime) WHERE objid=?`,
+		value, opts.TargetRID,
+	); err != nil {
+		return fmt.Errorf("date update: %w", err)
+	}
 	return nil
 }
 

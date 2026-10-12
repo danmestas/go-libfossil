@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A check-in's `event.mtime` now follows its newest `date` tag, the one-shot
+  tag `fossil amend --date` writes, as fossil's `manifest_crosslink` and
+  `tag_insert` do (#334). Crosslink used the manifest's D-card time and never
+  applied the override, so every date-amended check-in sorted at its original
+  time in the timeline, `tip` and branch listings. Crosslinking a check-in now
+  reads a date tag already recorded for it, and applying a date tag later moves
+  the check-in's `event.mtime`, keeping the original in `omtime`. `tag.AddTag`
+  now derives its tag through the same path crosslink uses, so it moves
+  `event.mtime` and `event.bgcolor` too.
+
 - `verify.Rebuild` now derives repository state through the crosslink sweep
   rather than its own partial derivation (#285). It kept a second derivation
   that wrote rows only for check-ins and control artifacts: no cluster, wiki,

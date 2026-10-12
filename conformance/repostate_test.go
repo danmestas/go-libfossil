@@ -101,9 +101,16 @@ func (c rsCase) expected() rsState {
 }
 
 func TestRepoState(t *testing.T) {
+	runRepoStateCases(t, repostateCases())
+}
+
+// runRepoStateCases checks each case's variants against fossil(1) and
+// go-libfossil.
+func runRepoStateCases(t *testing.T, cases []rsCase) {
+	t.Helper()
 	ref := newFossilReference(t)
 	loaded := map[string]*rsFossil{}
-	for _, c := range repostateCases() {
+	for _, c := range cases {
 		script := rsBuild(c.arts)
 		for _, v := range c.variants() {
 			check(t, v.Case, func() error {
@@ -223,7 +230,12 @@ func (c rsCase) fossilLoad(
 // requirement would change, and that the change is visible in the rows it
 // compares: a row it would add is not wanted, one it would lack is.
 func TestRepoStateReasons(t *testing.T) {
-	for _, c := range repostateCases() {
+	checkRepoStateReasons(t, repostateCases())
+}
+
+func checkRepoStateReasons(t *testing.T, cases []rsCase) {
+	t.Helper()
+	for _, c := range cases {
 		if len(c.ignoring) == 0 {
 			t.Errorf("%s: no ignoring rows", c.ID)
 		}

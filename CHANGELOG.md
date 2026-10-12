@@ -61,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Clone replies follow fossil's `page_xfer` (#306). Each `cfile` carries
+  the artifact as the blob table stores it, verbatim, followed by an LF when
+  its payload does not end in one (§5.1, §7.2), where the server
+  recompressed it and never padded. Over HTTP a version 3 clone's reply is
+  `application/x-fossil-uncompressed` (§4.1). With the `uv-sync` setting on,
+  a clone reply carries the unversioned catalog under `pragma uv-pull-only`
+  for a requester with Read (§8.4). A clone refused for want of Clone resets
+  the reply and sends the repository's `push` card ahead of `error not
+  authorized to clone` (§8.2, §10.1), where the error was appended to what
+  the reply held. A clone whose SEQNO is negative gets no content and
+  `clone_seqno 0`, where it restarted at the first artifact.
 - The sync server answers three more cards as fossil does (#305). A pushed
   `config` card from a requester without Admin is refused with `error not
   authorized to push configuration`, reset and break (§9.3); one from an

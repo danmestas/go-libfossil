@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -39,10 +40,45 @@ func (h *handler) handlePragmaUVHash(clientHash string) error {
 	} else {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "uv-pull-only"})
 	}
+	return h.appendUVCatalog()
+}
 
+// sendCloneUVCatalog sends the unversioned catalog with a clone when the
+// repository's uv-sync setting is on, headed by uv-pull-only, as page_xfer's
+// clone branch does (§8.4). fossil lets Clone imply Read here; this server
+// sends the catalog to a requester with Read itself, as it does for uv-hash.
+func (h *handler) sendCloneUVCatalog() error {
+	if h.uvCatalogSent || !auth.CanRead(h.caps) {
+		return nil
+	}
+	var setting string
+	err := h.repo.DB().QueryRow("SELECT value FROM config WHERE name='uv-sync'").Scan(&setting)
+	if err != nil || !isTruth(setting) {
+		return nil
+	}
+	if err := uv.EnsureSchema(h.repo.DB()); err != nil {
+		return fmt.Errorf("handler.sendCloneUVCatalog: ensure schema: %w", err)
+	}
+	h.uvCatalogSent = true
+	h.resp = append(h.resp, &xfer.PragmaCard{Name: "uv-pull-only"})
+	return h.appendUVCatalog()
+}
+
+// isTruth reads a boolean setting as fossil's is_truth does.
+func isTruth(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "on", "yes", "true":
+		return true
+	}
+	return false
+}
+
+// appendUVCatalog appends a uvigot card for every unversioned file, a
+// tombstone included.
+func (h *handler) appendUVCatalog() error {
 	entries, err := uv.List(h.repo.DB())
 	if err != nil {
-		return fmt.Errorf("handler.handlePragmaUVHash: list: %w", err)
+		return fmt.Errorf("handler: list unversioned files: %w", err)
 	}
 	for _, e := range entries {
 		hashVal := e.Hash

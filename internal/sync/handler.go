@@ -184,6 +184,9 @@ type handler struct {
 	fatal         bool                      // a card rule ended the request; resp holds only its error
 	broke         bool                      // card loop broken; the post-loop still runs
 	projectCode   string                    // the repository's project-code
+	serverCode    string                    // the repository's server-code
+	uncompressed  bool                      // reply goes out uncompressed (clone v3)
+	cloneDone     bool                      // clone card has no usable cursor: send nothing
 	peerVersion   int                       // client's release, from client-version
 	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
@@ -320,10 +323,8 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// A login's shared secret and every push and pull card are checked
 	// against the project code. A repository without one leaves it empty,
 	// which no artifact hash matches.
-	err := h.repo.DB().QueryRow(
-		"SELECT value FROM config WHERE name='project-code'").Scan(&h.projectCode)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("HandleSync: project-code: %w", err)
+	if err := h.loadCodes(); err != nil {
+		return nil, err
 	}
 
 	// Load synced tables.
@@ -333,7 +334,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 
 	// First pass: resolve the login card before other control cards.
 	if h.login(req); h.fatal {
-		return &xfer.Message{Cards: h.resp}, nil
+		return h.reply(), nil
 	}
 
 	// Second pass: process other control cards with capability checks.
@@ -343,7 +344,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		}
 		h.handleControlCard(card)
 		if h.fatal {
-			return &xfer.Message{Cards: h.resp}, nil
+			return h.reply(), nil
 		}
 		if h.broke {
 			break
@@ -381,7 +382,30 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 
 	h.resp = append(h.resp, h.timestampComment())
-	return &xfer.Message{Cards: h.resp}, nil
+	return h.reply(), nil
+}
+
+// reply is the message the handler answers with.
+func (h *handler) reply() *xfer.Message {
+	return &xfer.Message{Cards: h.resp, Uncompressed: h.uncompressed}
+}
+
+// loadCodes reads the repository's project and server codes. A login's
+// shared secret and every push and pull card are checked against the project
+// code; a clone's push card carries both. A repository without one leaves it
+// empty, which no artifact hash matches.
+func (h *handler) loadCodes() error {
+	for _, c := range []struct {
+		name string
+		dst  *string
+	}{{"project-code", &h.projectCode}, {"server-code", &h.serverCode}} {
+		err := h.repo.DB().QueryRow(
+			"SELECT value FROM config WHERE name=?", c.name).Scan(c.dst)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("HandleSync: %s: %w", c.name, err)
+		}
+	}
+	return nil
 }
 
 // emitClonePush emits the push card with project-code and server-code so
@@ -401,21 +425,10 @@ func (h *handler) emitClonePush() error {
 	if !h.cloneMode {
 		panic("handler.emitClonePush: not a clone")
 	}
-	var projectCode, serverCode string
-	err := h.repo.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").
-		Scan(&projectCode)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("HandleSync: project-code: %w", err)
-	}
-	err = h.repo.DB().QueryRow("SELECT value FROM config WHERE name='server-code'").
-		Scan(&serverCode)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("HandleSync: server-code: %w", err)
-	}
-	if projectCode != "" {
+	if h.projectCode != "" {
 		h.resp = append(h.resp, &xfer.PushCard{
-			ProjectCode: projectCode,
-			ServerCode:  serverCode,
+			ProjectCode: h.projectCode,
+			ServerCode:  h.serverCode,
 		})
 	}
 	return nil
@@ -513,8 +526,16 @@ func (h *handler) emitInventory() error {
 			return err
 		}
 	}
-	// If clone, emit paginated file cards.
+	// If clone, emit paginated file cards, after the unversioned catalog
+	// page_xfer sends with a clone when uv-sync is on (§8.4).
 	if h.cloneMode {
+		if err := h.sendCloneUVCatalog(); err != nil {
+			return err
+		}
+		if h.cloneDone {
+			h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: 0})
+			return nil
+		}
 		return h.emitCloneBatch()
 	}
 	return nil
@@ -591,9 +612,7 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 // card's SEQNO names.
 func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	if !auth.CanClone(h.caps) {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: "clone denied: insufficient capabilities",
-		})
+		h.refuseClone()
 		return
 	}
 	// §8.1: an otherwise authorized three-token clone with VERSION >= 2
@@ -611,15 +630,37 @@ func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 		return
 	}
 	h.cloneMode = true
+	// §4.1, §8.1: page_xfer sends a version 3 clone's reply uncompressed.
+	h.uncompressed = c.Version >= 3
 	// The pagination cursor rides on the clone card and nowhere else
 	// (§8.1; canonical xfer.c:1553 reads token 2 of `clone VERSION
-	// SEQNO`). A request carrying no usable cursor — a bare `clone`, or
-	// a SEQNO that fails digit-only recognition — starts from the first
-	// rid. §8.1 withholds the fatal above from both of those cases.
+	// SEQNO`). §8.1 withholds the fatal above from a negative SEQNO, which
+	// fails digit-only recognition; page_xfer then has no cursor at all, so
+	// no content is sent and the reply says the clone is done. A bare
+	// `clone` starts from the first rid.
+	if c.Version >= 2 && c.SeqNo < 0 {
+		h.cloneDone = true
+		return
+	}
 	h.cloneSeq = c.SeqNo
 	if h.cloneSeq <= 0 {
 		h.cloneSeq = 1
 	}
+}
+
+// refuseClone answers a clone from a requester without Clone as page_xfer
+// does (§8.2, §10.1): the reply so far is reset, the push card naming the
+// repository goes ahead of the error, and no later card is processed.
+func (h *handler) refuseClone() {
+	h.resetContent()
+	serverCode := h.serverCode
+	if serverCode == "" {
+		serverCode = "x" // db_get("server-code", "x")
+	}
+	h.resp = append(h.resp,
+		&xfer.PushCard{ServerCode: serverCode, ProjectCode: h.projectCode},
+		&xfer.ErrorCard{Message: "not authorized to clone"})
+	h.broke = true
 }
 
 // wrongProject refuses a push or pull card naming another project, ahead of
@@ -1224,11 +1265,12 @@ const maxCloneChainWalk = 4096
 // delta against that source, which buildCloneArtifact guarantees precedes this
 // artifact on the wire.
 type cloneArtifact struct {
-	rid     int
-	uuid    string
-	usize   int
-	priv    bool
-	srcUUID string
+	rid      int
+	uuid     string
+	usize    int
+	priv     bool
+	srcUUID  string
+	expanded bool // stored as a delta but sent as full content
 }
 
 // cloneBlobRow holds the columns walkCloneChain needs to decide whether a
@@ -1254,6 +1296,17 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil
+}
+
+// storedContent returns rid's content as the blob table stores it: the
+// on-disk blob format, compressed, of the full artifact or of its delta.
+func (h *handler) storedContent(rid int) ([]byte, error) {
+	var stored []byte
+	err := h.repo.DB().QueryRow("SELECT content FROM blob WHERE rid = ?", rid).Scan(&stored)
+	if err != nil {
+		return nil, fmt.Errorf("handler: stored content of rid %d: %w", rid, err)
+	}
+	return stored, nil
 }
 
 // walkCloneChain follows rid's delta chain toward its full-content tip and
@@ -1283,6 +1336,7 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
 			(!info.priv || h.syncPrivate)
 		if !forwardable {
+			m.expanded = true
 			return append(chain, m), nil // source unsendable: emit curRID full
 		}
 		m.srcUUID = info.uuid
@@ -1295,6 +1349,7 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 	// Walk cap hit: force the deepest artifact to full content so its delta
 	// does not reference a source we never emitted.
 	chain[len(chain)-1].srcUUID = ""
+	chain[len(chain)-1].expanded = true
 	return chain, nil
 }
 
@@ -1346,8 +1401,17 @@ func (h *handler) buildCloneArtifact(
 		// canonical's send_compressed_file does for clone version 3 and as the
 		// draft requires (§7.1, §8.2). USIZE is the full artifact's size even
 		// for a delta, as fossil sends blob.size.
+		// An artifact sent as it is stored goes out as its stored bytes,
+		// as send_compressed_file sends the blob table's content (§7.2).
+		var stored []byte
+		if !m.expanded {
+			if stored, err = h.storedContent(m.rid); err != nil {
+				return nil, nil, 0, err
+			}
+		}
 		cards = append(cards, &xfer.CFileCard{
 			UUID: m.uuid, DeltaSrc: m.srcUUID, USize: m.usize, Content: data,
+			StoredBlob: stored,
 		})
 		cost += cloneCardOverheadBytes + len(data)
 	}

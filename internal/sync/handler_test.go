@@ -2008,13 +2008,17 @@ func TestHandleCloneZeroSeqNoIsFatal(t *testing.T) {
 // the fatal from: wrong arity, a VERSION below 2, and a SEQNO that fails
 // digit-only recognition. Each must clone normally from the first rid.
 func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
+	// A negative SEQNO leaves page_xfer with no cursor: no content goes out,
+	// and the reply says the clone is done (sync.8.1.negative-seqno).
 	tests := []struct {
-		name string
-		card *xfer.CloneCard
+		name      string
+		card      *xfer.CloneCard
+		wantFiles bool
 	}{
-		{"bare clone", &xfer.CloneCard{}},
-		{"version below 2", &xfer.CloneCard{Version: 1, SeqNo: 0, SeqNoIsDecimal: true}},
-		{"non-digit seqno", &xfer.CloneCard{Version: 3, SeqNo: -1}},
+		{"bare clone", &xfer.CloneCard{}, true},
+		{"version below 2",
+			&xfer.CloneCard{Version: 1, SeqNo: 0, SeqNoIsDecimal: true}, true},
+		{"non-digit seqno", &xfer.CloneCard{Version: 3, SeqNo: -1}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2032,8 +2036,16 @@ func TestHandleCloneNonFatalSeqNoForms(t *testing.T) {
 					t.Fatalf("§8.1 fatal applied to a case it excludes")
 				}
 			}
-			if n := len(findCards[*xfer.CFileCard](resp)); n == 0 {
+			n := len(findCards[*xfer.CFileCard](resp))
+			if tt.wantFiles && n == 0 {
 				t.Errorf("no files sent; request should clone from the first rid")
+			}
+			if !tt.wantFiles && n != 0 {
+				t.Errorf("%d files sent for a clone with no cursor", n)
+			}
+			seqnos := findCards[*xfer.CloneSeqNoCard](resp)
+			if !tt.wantFiles && (len(seqnos) != 1 || seqnos[0].SeqNo != 0) {
+				t.Errorf("clone_seqno cards %v, want one clone_seqno 0", seqnos)
 			}
 		})
 	}

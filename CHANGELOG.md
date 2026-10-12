@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Sync honors the shun list as fossil does (§3.3, §7.7, #302). A received
+  `file` or `cfile` whose hash is shunned is dropped without an error and
+  not counted as received, by the server and the sync client, where each
+  stored it; a clone drops a shunned `cfile` but keeps a shunned `file`, as
+  fossil's `!cloneFlag` exemption does. The client no longer asks for a
+  shunned phantom: the phantom scan, an `igot` and a clone's delta basis all
+  leave shunned names out, so a delta whose basis is shunned is kept and the
+  basis is never requested. `shun.IsShunned` now reports a failed lookup as
+  an error instead of "not shunned".
 - The sync server stores a `uvfile` sent without a `push` card, as
   `fossil uv sync` sends it (§7.3, #296). It answered each one with
   `rejected: no push card`, so pushing unversioned files from fossil failed.

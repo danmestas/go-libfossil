@@ -1,6 +1,8 @@
 package shun
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -46,8 +48,12 @@ func IsShunned(q db.Querier, uuid string) (bool, error) {
 	}
 	var n int
 	err := q.QueryRow("SELECT 1 FROM shun WHERE uuid=?", uuid).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
-		return false, nil // sql.ErrNoRows or real error — treat both as "not shunned"
+		// A failed lookup must not let a shunned artifact through.
+		return false, fmt.Errorf("shun.IsShunned: %w", err)
 	}
 	return true, nil
 }

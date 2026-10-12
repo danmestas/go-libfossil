@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 )
@@ -497,22 +498,16 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			filesRecvd++
 
 		case *xfer.CFileCard:
-			err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
+			stored, err := cs.receiveCFile(ctx, c)
 			if err != nil {
 				return err
 			}
-			filesRecvd++
+			if stored {
+				filesRecvd++
+			}
 
 		case *xfer.CloneSeqNoCard:
-			// BUGGIFY: 5% chance ignore completion signal, forcing extra round.
-			if c.SeqNo == 0 && cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropSeqNo", 0.05) {
-				continue
-			}
-			// The server owns this cursor; the client only reads it. A
-			// non-decimal NEXT never reaches here — the decoder withholds it
-			// per §8.2 so the recorded sequence stays unchanged — and §8.2
-			// bars the client from validating that a positive value advances.
-			cs.seqno = c.SeqNo
+			cs.recordSeqNo(c)
 
 		case *xfer.ErrorCard:
 			if err := cs.serverError(cycle, c); err != nil {
@@ -529,6 +524,32 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 
 	cs.result.BlobsRecvd += filesRecvd
 	return nil
+}
+
+// receiveCFile stores a cfile and reports whether it did. fossil drops a
+// shunned cfile even in a clone, though not a shunned file card (xfer.c:162,
+// !cloneFlag), so a shunned one is skipped and not counted.
+func (cs *cloneSession) receiveCFile(ctx context.Context, c *xfer.CFileCard) (bool, error) {
+	shunned, err := shun.IsShunned(cs.repo.DB(), c.UUID)
+	if err != nil || shunned {
+		return false, err
+	}
+	err = cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
+	return err == nil, err
+}
+
+// recordSeqNo records the clone sequence a clone_seqno card carries. The
+// server owns this cursor; the client only reads it. A non-decimal NEXT never
+// reaches here — the decoder withholds it per §8.2 so the recorded sequence
+// stays unchanged — and §8.2 bars the client from validating that a positive
+// value advances.
+func (cs *cloneSession) recordSeqNo(c *xfer.CloneSeqNoCard) {
+	// BUGGIFY: 5% chance ignore completion signal, forcing extra round.
+	if c.SeqNo == 0 && cs.opts.Buggify != nil &&
+		cs.opts.Buggify.Check("clone.processResponse.dropSeqNo", 0.05) {
+		return
+	}
+	cs.seqno = c.SeqNo
 }
 
 // serverError handles an error card. A clone's first round carries no
@@ -628,7 +649,14 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 			// phantom. Only a confirmed available source is memoized: an
 			// unavailable source can arrive later in this same clone.
 			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
-				cs.phantoms[deltaSrc] = true
+				// request_phantoms never asks for a shunned name.
+				shunned, err := shun.IsShunned(cs.repo.DB(), deltaSrc)
+				if err != nil {
+					return fmt.Errorf("sync.Clone: basis of %s: %w", uuid, err)
+				}
+				if !shunned {
+					cs.phantoms[deltaSrc] = true
+				}
 			} else if len(cs.availableDeltaSources) < cloneAvailableDeltaSourceLimit {
 				cs.availableDeltaSources[deltaSrc] = struct{}{}
 			}

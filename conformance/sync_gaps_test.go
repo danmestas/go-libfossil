@@ -16,16 +16,6 @@ var syncGaps = map[string]string{
 	// An igot's phantom lives only in the session's map, never in the
 	// phantom table (internal/sync/client.go:520-527).
 	"sync.3.3.igot-phantom-persists": "#301",
-	// The phantom scan does not leave out shunned names
-	// (internal/sync/client.go:381).
-	"sync.3.3.gimme-skips-shunned": "#302",
-	"sync.7.7.shunned-basis":       "#302",
-	// Received artifacts are stored without a shun check: by the server
-	// (internal/sync/handler.go:625) and by the client
-	// (internal/sync/client.go:714).
-	"sync.7.7.shunned-file-server": "#302",
-	"sync.7.7.shunned-file-client": "#302",
-	"sync.7.7.shunned-cfile":       "#302",
 	// The server answers no client-version with a server-version
 	// (internal/sync/handler.go:458).
 	"sync.3.2.server-version-before-clone": "#303",

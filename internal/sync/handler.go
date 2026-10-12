@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 
@@ -790,6 +791,16 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("file %s rejected: no push card", uuid),
 		})
+		return nil
+	}
+	// A shunned artifact is dropped on receipt, with no error, as fossil's
+	// xfer_accept_file drops it (§7.7); it is not received.
+	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+	if err != nil {
+		return err
+	}
+	if shunned {
+		h.nextIsPrivate = false
 		return nil
 	}
 	// BUGGIFY: 3% chance reject a valid file to test client re-push.

@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 
@@ -536,16 +537,26 @@ cardLoop:
 		case *xfer.FileCard:
 			// Uncompressed cards never carry a wire-encoded frame to
 			// preserve — storage always compresses payload itself.
-			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil, s.takeVisibility()); err != nil {
+			stored, err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil,
+				s.takeVisibility())
+			if err != nil {
 				return false, err
+			}
+			if !stored {
+				continue // shunned: dropped, and not counted as received
 			}
 			filesRecvd++
 			s.roundStats.BytesReceived += int64(len(c.Content))
 			delete(s.phantoms, c.UUID)
 
 		case *xfer.CFileCard:
-			if err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob, s.takeVisibility()); err != nil {
+			stored, err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content,
+				c.StoredBlob, s.takeVisibility())
+			if err != nil {
 				return false, err
+			}
+			if !stored {
+				continue // shunned: dropped, and not counted as received
 			}
 			filesRecvd++
 			s.roundStats.BytesReceived += int64(len(c.Content))
@@ -563,11 +574,15 @@ cardLoop:
 					visibilityUpdate{rid: rid, vis: visibility(c.IsPrivate)})
 			case c.IsPrivate:
 				if s.opts.Private && s.opts.Pull {
-					s.phantoms[c.UUID] = true
+					if err := s.addPhantom(c.UUID); err != nil {
+						return false, err
+					}
 				}
 			default:
 				if s.opts.Pull {
-					s.phantoms[c.UUID] = true
+					if err := s.addPhantom(c.UUID); err != nil {
+						return false, err
+					}
 				}
 			}
 
@@ -781,7 +796,6 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 	if !hash.IsValidHash(uuid) {
 		return fmt.Errorf("sync: invalid UUID format: %s", uuid)
 	}
-
 	if deltaSrc != "" {
 		// deltaSrc becomes a blob.StorePhantom row under whatever string
 		// arrives on the wire. The blob table's own CHECK constraint only
@@ -1002,6 +1016,20 @@ func (s *session) seedPhantoms() error {
 	return nil
 }
 
+// addPhantom makes uuid a phantom of this session unless it is shunned: as
+// fossil's content_new makes no phantom of a shunned name, the client never
+// asks for one (§3.3, §7.7).
+func (s *session) addPhantom(uuid string) error {
+	shunned, err := shun.IsShunned(s.repo.DB(), uuid)
+	if err != nil {
+		return err
+	}
+	if !shunned {
+		s.phantoms[uuid] = true
+	}
+	return nil
+}
+
 // phantomEvictRounds is how many consecutive rounds a phantom is asked for
 // without arriving before the session stops asking.
 const phantomEvictRounds = 3
@@ -1014,7 +1042,8 @@ func (s *session) loadDBPhantoms() error {
 		return nil
 	}
 	rows, err := s.repo.DB().Query(
-		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0",
+		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
+			" AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)",
 	)
 	if err != nil {
 		return err
@@ -1040,7 +1069,16 @@ func (s *session) loadDBPhantoms() error {
 // storedBlob carries a cfile card's already wire-encoded bytes through to
 // storage (see storeReceivedFile); it is nil for uncompressed "file" cards,
 // which never carry a compressed frame to preserve.
-func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility) error {
+//
+// It reports whether the file was stored: a shunned artifact is dropped on
+// receipt, with no error, as fossil's xfer_accept_file and
+// xfer_accept_compressed_file drop it (§7.7).
+func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, payload []byte,
+	storedBlob []byte, vis visibility) (bool, error) {
+	shunned, err := shun.IsShunned(s.repo.DB(), uuid)
+	if err != nil || shunned {
+		return false, err
+	}
 	// ctx is the sync loop's own deadline context, threaded down from
 	// session.Sync through processResponse (issue #167). It reaches the
 	// mid-round phantom-fill crosslink cascade inside storeReceivedFile, so a
@@ -1048,22 +1086,22 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// caller's deadline -- the same guarantee #166 gave the clone and
 	// server-push receive paths.
 	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis, nil); err != nil {
-		return err
+		return false, err
 	}
 
 	// Promote any new DB phantoms into the session phantom map so gimme
 	// cards are emitted. This covers phantoms created by crosslinking
 	// cluster artifacts in storeReceivedFile.
 	if err := s.loadDBPhantoms(); err != nil {
-		return fmt.Errorf("handleFileCard: loadDBPhantoms: %w", err)
+		return false, fmt.Errorf("handleFileCard: loadDBPhantoms: %w", err)
 	}
 
 	// BUGGIFY: simulate post-store failure to test retry/recovery logic.
 	if s.opts.Buggify != nil && s.opts.Buggify.Check("sync.handleFileCard.reject", 0.03) {
-		return fmt.Errorf("buggify: simulated storage failure for %s", uuid)
+		return false, fmt.Errorf("buggify: simulated storage failure for %s", uuid)
 	}
 
-	return nil
+	return true, nil
 }
 
 // takeVisibility consumes the pending private-card flag and reports the

@@ -244,9 +244,12 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 	if len(opts.Tags) > 0 {
 		d.T = opts.Tags
 	} else if opts.Parent == 0 {
+		// Both tags propagate, matching `fossil new` and repo-state §6.1: the
+		// branch name and its sym- alias descend to every child on the branch.
+		// sym-trunk as a singleton (+) would stop at the root (issue #289).
 		d.T = []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
-			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+			{Type: deck.TagPropagating, Name: "sym-trunk", UUID: "*"},
 		}
 	}
 

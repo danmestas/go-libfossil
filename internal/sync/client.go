@@ -1415,8 +1415,9 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		return nil
 	}
 
-	// Validate hash if content present.
-	if c.Flags&xfer.UVFlagNoPayload == 0 {
+	// Only a card that carries content (sz>0, neither flag 1 nor 4) has its
+	// HASH checked, as in fossil's xfer_accept_unversioned_file.
+	if c.Size > 0 && c.Flags&xfer.UVFlagNoPayload == 0 {
 		if c.Content == nil {
 			panic("session.handleUVFileCard: flags indicate payload but Content is nil")
 		}
@@ -1430,21 +1431,8 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		}
 	}
 
-	// Double-check status.
-	_, localMtime, localHash, err := uv.Read(s.repo.DB(), c.Name)
-	if err != nil {
-		return fmt.Errorf("handleUVFileCard: read %q: %w", c.Name, err)
-	}
-	status := uv.Status(localMtime, localHash, c.MTime, c.Hash)
-	if status >= 2 {
-		return nil
-	}
-
-	if c.Hash == "-" {
-		return uv.Delete(s.repo.DB(), c.Name, c.MTime)
-	}
-	if c.Content != nil {
-		return uv.Write(s.repo.DB(), c.Name, c.Content, c.MTime)
+	if err := uv.Receive(s.repo.DB(), c.Name, c.MTime, c.Hash, c.Content); err != nil {
+		return fmt.Errorf("handleUVFileCard: %w", err)
 	}
 	return nil
 }

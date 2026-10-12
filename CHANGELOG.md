@@ -61,6 +61,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- Unversioned sync applies a received `uvfile` as fossil's
+  `xfer_accept_unversioned_file` does, on both sides (§7.3, #308). The row
+  keeps the HASH the card gave rather than one the repository's hash policy
+  computes, so both catalogs agree; the same content at a later mtime
+  (status 2) moves only the mtime, where it was dropped; and a card that
+  omits its content stores the row with NULL content and size 0, where it
+  changed nothing. The server answers a `uvgimme` for a name it does not
+  hold with no card, where it sent a tombstone. The client no longer seeds
+  its send table with tombstones (§8.5.1). A received deletion of a name the
+  repository does not hold changes nothing, as fossil's update does. A
+  `uvfile` line whose HASH is neither an artifact name nor `-`, or whose
+  NAME is not a strict simple pathname, is malformed and refused, where its
+  HASH was stored as given; and only a card that carries content has its
+  HASH checked, so a deletion or a row stored without content relays.
 - Clone replies follow fossil's `page_xfer` (#306). Each `cfile` carries
   the artifact as the blob table stores it, verbatim, followed by an LF when
   its payload does not end in one (§5.1, §7.2), where the server

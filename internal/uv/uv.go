@@ -55,33 +55,93 @@ func Write(d *db.DB, name string, content []byte, mtime int64) error {
 	// project-code, which is 40 hex characters in every repo whatever the
 	// policy, so it could only ever choose SHA1.
 	contentHash := hash.NamingFor(d).New.Hash(content)
-	sz := len(content)
-
-	// Compress and check 80% threshold.
-	var compressed bytes.Buffer
-	w := zlib.NewWriter(&compressed)
-	w.Write(content)
-	w.Close()
-
-	var encoding int
-	var stored []byte
-	if compressed.Len() <= sz*4/5 { // <= 80%
-		encoding = 1
-		stored = compressed.Bytes()
-	} else {
-		encoding = 0
-		stored = content
-	}
-
-	_, err := d.Exec(
-		`REPLACE INTO unversioned(name, rcvid, mtime, hash, sz, encoding, content)
-		 VALUES(?, 1, ?, ?, ?, ?, ?)`,
-		name, mtime, contentHash, sz, encoding, stored,
-	)
-	if err != nil {
+	if err := storeRow(d, name, mtime, contentHash, content); err != nil {
 		return fmt.Errorf("uv.Write: %w", err)
 	}
 	return InvalidateHash(d)
+}
+
+// Receive applies an unversioned file received in a uvfile card, as fossil's
+// xfer_accept_unversioned_file does (§7.3). The caller has checked HASH
+// against content, which is nil when the card omitted it. Against the local
+// row (see Status), status 3 and above change nothing; status 2, the same
+// content, takes the card's mtime alone. Otherwise a HASH of "-" makes a
+// tombstone, and any other replaces the row under the HASH the card gave,
+// not one this repository's policy computes, so the catalogs of both sides
+// agree. Omitted content is stored as NULL, with size 0.
+func Receive(d *db.DB, name string, mtime int64, fileHash string, content []byte) error {
+	if d == nil {
+		panic("uv.Receive: d must not be nil")
+	}
+	if name == "" || fileHash == "" {
+		panic("uv.Receive: name and hash must not be empty")
+	}
+	_, localMtime, localHash, err := Read(d, name)
+	if err != nil {
+		return fmt.Errorf("uv.Receive: %w", err)
+	}
+	status := Status(localMtime, localHash, mtime, fileHash)
+	switch {
+	case status >= 3:
+		return nil
+	case fileHash == "-":
+		// A received deletion only updates a row the repository holds, as
+		// fossil's UPDATE does; for an absent name it changes nothing.
+		_, err := d.Exec(`UPDATE unversioned SET rcvid=1, mtime=?, hash=NULL, sz=0,
+			encoding=0, content=NULL WHERE name=?`, mtime, name)
+		if err != nil {
+			return fmt.Errorf("uv.Receive: %w", err)
+		}
+	case status == 2:
+		_, err := d.Exec("UPDATE unversioned SET mtime=? WHERE name=?", mtime, name)
+		if err != nil {
+			return fmt.Errorf("uv.Receive: %w", err)
+		}
+	default:
+		if len(content) == 0 {
+			content = nil // fossil stores an empty or omitted payload as NULL
+		}
+		if err := storeRow(d, name, mtime, fileHash, content); err != nil {
+			return fmt.Errorf("uv.Receive: %w", err)
+		}
+	}
+	return InvalidateHash(d)
+}
+
+// storeRow writes name's row under fileHash, compressing content when that
+// saves a fifth or more, as fossil does. nil content is stored as NULL.
+func storeRow(d *db.DB, name string, mtime int64, fileHash string, content []byte) error {
+	if d == nil {
+		panic("uv.storeRow: d must not be nil")
+	}
+	if name == "" || fileHash == "" || fileHash == "-" {
+		panic("uv.storeRow: a row needs a name and a content hash")
+	}
+	sz := len(content)
+	var encoding int
+	stored := content
+	if sz > 0 {
+		var compressed bytes.Buffer
+		w := zlib.NewWriter(&compressed)
+		w.Write(content)
+		w.Close()
+		if compressed.Len() <= sz*4/5 { // <= 80%
+			encoding = 1
+			stored = compressed.Bytes()
+		}
+	}
+	// A nil []byte binds as an empty blob under some drivers (ncruces), not
+	// as NULL, so absent content is bound as an untyped nil.
+	var bound any = stored
+	if stored == nil {
+		bound = nil
+	}
+	_, err := d.Exec(
+		`REPLACE INTO unversioned(name, rcvid, mtime, hash, sz, encoding, content)
+		 VALUES(?, 1, ?, ?, ?, ?, ?)`,
+		name, mtime, fileHash, sz, encoding, bound,
+	)
+	return err
 }
 
 func Delete(d *db.DB, name string, mtime int64) error {

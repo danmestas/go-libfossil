@@ -1201,7 +1201,7 @@ func TestRoundTrip_UVFile(t *testing.T) {
 	c := &UVFileCard{
 		Name:    "data/config.json",
 		MTime:   1700000000,
-		Hash:    "abc123def456",
+		Hash:    "1f09d30c707d53f3d16c530dd73d70a6ce7596a9", // SHA1("hello, world!")
 		Size:    13,
 		Flags:   0,
 		Content: []byte("hello, world!"),
@@ -1247,11 +1247,33 @@ func TestRoundTrip_UVFileDeleted(t *testing.T) {
 	}
 }
 
+// TestDecode_UVFileMalformedNameOrHash pins fossil's uvfile line checks: a
+// HASH that is neither an artifact name nor "-", or a NAME that is not a
+// strict simple pathname, makes the line malformed, so nothing is applied.
+func TestDecode_UVFileMalformedNameOrHash(t *testing.T) {
+	for _, line := range []string{
+		"uvfile n 100 garbage 0 4\n",
+		"uvfile /abs 100 - 0 1\n",
+		"uvfile a/../b 100 - 0 1\n",
+		"uvfile a\\b 100 - 0 1\n",
+		"uvfile \xff 100 - 0 1\n",
+	} {
+		msg, err := DecodeUncompressed([]byte(line))
+		if err != nil {
+			t.Fatalf("%q: %v", line, err)
+		}
+		if _, ok := msg.Cards[0].(*BadFileCard); !ok {
+			t.Errorf("%q decoded as %T, want a malformed uvfile line",
+				line, msg.Cards[0])
+		}
+	}
+}
+
 func TestRoundTrip_UVFileContentOmitted(t *testing.T) {
 	c := &UVFileCard{
 		Name:  "large-file.bin",
 		MTime: 1700000000,
-		Hash:  "abc123",
+		Hash:  "da39a3ee5e6b4b0d3255bfef95601890afd80709",
 		Size:  0,
 		Flags: 0x0004, // content omitted
 	}

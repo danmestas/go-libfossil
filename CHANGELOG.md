@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.WouldFork` again reports a fork when the checkout's version
+  already has a child on its own branch (#347), as after a pull brings in a
+  child of the checked-out version. Since #291 it was fossil's leaf-ambiguity
+  test, which answers no for a version that is not a leaf, so a commit there
+  created a fork. It is now fossil's commit-time "Would fork" check
+  (`!is_a_leaf`); another open leaf elsewhere on the branch no longer counts,
+  since a commit extends the checkout's own leaf. The repo-state §7.5
+  ambiguity test is `checkout.LeafAmbiguous`.
+
 - `branch.Create` refuses an open branch name inside the check-in's own
   transaction (#316). The check ran before `manifest.Checkin` opened its
   transaction, and the branch tags were applied in further transactions after
@@ -104,10 +113,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#292).
 - `checkout.BranchLeaves` now returns only the *open* leaves of a branch,
   skipping any leaf that carries a `closed` tag, as fossil's `leaves` lists
-  them. `(*Checkout).WouldFork` is now fossil's `leaf_ambiguity`: it reports a
-  fork only when the current version is itself an open leaf and another open
-  leaf exists on the same branch, so a non-leaf or closed version no longer
-  reads as a fork (#291).
+  them (#291).
 
 - A repository with no `hash-policy` row names new content as fossil's
   `hname_default_policy` does (#274): SHA3 when it is empty or holds a SHA3

@@ -3,7 +3,6 @@ package conformance
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -245,9 +244,9 @@ func (e *rsEnv) goLeaves(branch string) ([]string, error) {
 	return labels, nil
 }
 
-// wouldFork checks the ambiguity test for a checkout of at: fossil's
-// test-leaf-ambiguity and (*Checkout).WouldFork.
-func wouldFork(id, req string, arts []rsArt, at string, want bool) rsAPICase {
+// leafAmbiguous checks the ambiguity test for at: fossil's
+// test-leaf-ambiguity and checkout.LeafAmbiguous.
+func leafAmbiguous(id, req string, arts []rsArt, at string, want bool) rsAPICase {
 	return rsAPICase{Case: Case{ID: id, Req: req}, arts: arts, run: func(e *rsEnv) error {
 		if e.ref != nil {
 			out, err := e.fossilRun("test-leaf-ambiguity", e.script.hashes[at])
@@ -259,18 +258,18 @@ func wouldFork(id, req string, arts []rsArt, at string, want bool) rsAPICase {
 					at, strings.TrimSpace(out), want)
 			}
 		}
-		got, err := e.goWouldFork(at)
+		got, err := e.goLeafAmbiguous(at)
 		if err != nil {
 			return err
 		}
 		if got != want {
-			return expectf("WouldFork on %s = %v, want %v", at, got, want)
+			return expectf("LeafAmbiguous on %s = %v, want %v", at, got, want)
 		}
 		return nil
 	}}
 }
 
-func (e *rsEnv) goWouldFork(at string) (bool, error) {
+func (e *rsEnv) goLeafAmbiguous(at string) (bool, error) {
 	r, err := e.open()
 	if err != nil {
 		return false, err
@@ -279,13 +278,5 @@ func (e *rsEnv) goWouldFork(at string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	co, err := checkout.Create(r.Inner(), filepath.Join(e.t.TempDir(), "co"), checkout.CreateOpts{})
-	if err != nil {
-		return false, err
-	}
-	defer co.Close()
-	if err := co.Extract(rid, checkout.ExtractOpts{Force: true}); err != nil {
-		return false, err
-	}
-	return co.WouldFork()
+	return checkout.LeafAmbiguous(r.Inner(), rid)
 }

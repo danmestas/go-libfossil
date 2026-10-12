@@ -420,7 +420,7 @@ Version returns the current checkout version \(RID and UUID\).
 func (c *Checkout) WouldFork() (bool, error)
 ```
 
-WouldFork reports whether committing on the current branch would create a fork. Returns true when another leaf exists on the same branch.
+WouldFork reports whether committing on the checkout's version would create a fork: the version already has a child on its own branch \(for example after a pull\), so the commit would become a second leaf. This is fossil's "Would fork" commit refusal; run Update first, or commit to a new branch. Another open leaf elsewhere on the branch does not count.
 
 <a name="CheckoutChange"></a>
 ## type [CheckoutChange](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L87-L90>)

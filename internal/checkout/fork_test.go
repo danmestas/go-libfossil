@@ -54,7 +54,7 @@ func TestWouldFork_SingleLeaf(t *testing.T) {
 	}
 }
 
-func TestWouldFork_TrunkNoSymTag(t *testing.T) {
+func TestLeafAmbiguous_TrunkNoSymTag(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()
 
@@ -82,12 +82,13 @@ func TestWouldFork_TrunkNoSymTag(t *testing.T) {
 		t.Fatalf("insert leaf: %v", err)
 	}
 
-	forked, err := co.WouldFork()
+	rid2, _, _ := co.Version()
+	ambiguous, err := LeafAmbiguous(r, rid2)
 	if err != nil {
-		t.Fatalf("WouldFork: %v", err)
+		t.Fatalf("LeafAmbiguous: %v", err)
 	}
-	if !forked {
-		t.Fatal("WouldFork = false, want true (trunk fork without sym-trunk tag)")
+	if !ambiguous {
+		t.Fatal("LeafAmbiguous = false, want true (trunk fork without sym-trunk tag)")
 	}
 }
 
@@ -115,43 +116,54 @@ func forkTwoTrunkLeaves(t *testing.T, r *repo.Repo) (*Checkout, libfossil.FslID)
 	return co, rid1
 }
 
-func TestWouldFork_OpenSiblingLeaf(t *testing.T) {
+// An open sibling leaf makes the checkout's leaf ambiguous, but a commit on
+// it extends that leaf, so fossil does not refuse it as a fork.
+func TestLeafAmbiguous_OpenSiblingLeaf(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()
 	co, _ := forkTwoTrunkLeaves(t, r)
+	rid2, _, _ := co.Version()
 
+	ambiguous, err := LeafAmbiguous(r, rid2)
+	if err != nil {
+		t.Fatalf("LeafAmbiguous: %v", err)
+	}
+	if !ambiguous {
+		t.Fatal("LeafAmbiguous = false, want true (two open leaves on trunk)")
+	}
 	forked, err := co.WouldFork()
 	if err != nil {
 		t.Fatalf("WouldFork: %v", err)
 	}
-	if !forked {
-		t.Fatal("WouldFork = false, want true (two open leaves on trunk)")
+	if forked {
+		t.Fatal("WouldFork = true, want false (the version is a leaf)")
 	}
 }
 
-func TestWouldFork_ClosedSiblingLeaf(t *testing.T) {
+func TestLeafAmbiguous_ClosedSiblingLeaf(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()
 	co, rid1 := forkTwoTrunkLeaves(t, r)
 
 	// Close the sibling leaf (tag 9 is 'closed'); only the checkout's own
-	// open leaf remains, so a commit would not fork.
+	// open leaf remains, so the leaf is not ambiguous.
 	if _, err := r.DB().Exec(
 		"INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) VALUES(9, 1, ?, ?, NULL, 0, ?)",
 		int64(rid1), int64(rid1), int64(rid1)); err != nil {
 		t.Fatalf("close sibling: %v", err)
 	}
 
-	forked, err := co.WouldFork()
+	rid2, _, _ := co.Version()
+	ambiguous, err := LeafAmbiguous(r, rid2)
 	if err != nil {
-		t.Fatalf("WouldFork: %v", err)
+		t.Fatalf("LeafAmbiguous: %v", err)
 	}
-	if forked {
-		t.Fatal("WouldFork = true, want false (the only sibling leaf is closed)")
+	if ambiguous {
+		t.Fatal("LeafAmbiguous = true, want false (the only sibling leaf is closed)")
 	}
 }
 
-func TestWouldFork_NonLeafParent(t *testing.T) {
+func TestWouldFork_NonLeafVersion(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()
 	co, _ := Create(r, t.TempDir(), CreateOpts{})
@@ -166,7 +178,8 @@ func TestWouldFork_NonLeafParent(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 	// Move the checkout back onto rid1, which now has a same-branch child and
-	// so is no longer a leaf: a commit extends it rather than forking.
+	// so is no longer a leaf: a commit on it would be a second child, a fork.
+	// This is also the state after a pull brings in a child of the checkout.
 	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
 		t.Fatalf("Extract back: %v", err)
 	}
@@ -175,8 +188,15 @@ func TestWouldFork_NonLeafParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WouldFork: %v", err)
 	}
-	if forked {
-		t.Fatal("WouldFork = true, want false (current version is not a leaf)")
+	if !forked {
+		t.Fatal("WouldFork = false, want true (current version is not a leaf)")
+	}
+	ambiguous, err := LeafAmbiguous(r, rid1)
+	if err != nil {
+		t.Fatalf("LeafAmbiguous: %v", err)
+	}
+	if ambiguous {
+		t.Fatal("LeafAmbiguous = true, want false (current version is not a leaf)")
 	}
 }
 
@@ -218,5 +238,53 @@ func TestWouldFork_DifferentBranch(t *testing.T) {
 	}
 	if forked {
 		t.Fatal("WouldFork = true, want false (other leaf is on different branch)")
+	}
+
+	// Back on rid1, whose only child is on feature-x: rid1 is still a trunk
+	// leaf, so a trunk commit on it does not fork.
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatalf("Extract back: %v", err)
+	}
+	forked, err = co.WouldFork()
+	if err != nil {
+		t.Fatalf("WouldFork on rid1: %v", err)
+	}
+	if forked {
+		t.Fatal("WouldFork on rid1 = true, want false (its child is on another branch)")
+	}
+}
+
+// fossil's is_a_leaf counts every plink child, merge children included, so a
+// version merged into a same-branch check-in is no longer a leaf. The test
+// demotes the child's plink row to a merge link (isprim=0) and expects the
+// fork check to hold.
+func TestWouldFork_MergeChild(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, _ := Create(r, t.TempDir(), CreateOpts{})
+	defer co.Close()
+
+	rid1, _, _ := co.Version()
+	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	co.env.Storage.WriteFile(co.dir+"/child.txt", []byte("child"), 0644)
+	commit := CommitOpts{Message: "child", User: "test", AllowEmpty: true}
+	if _, _, err := co.Commit(commit); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := r.DB().Exec("UPDATE plink SET isprim = 0 WHERE pid = ?", int64(rid1)); err != nil {
+		t.Fatalf("demote plink: %v", err)
+	}
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatalf("Extract back: %v", err)
+	}
+
+	forked, err := co.WouldFork()
+	if err != nil {
+		t.Fatalf("WouldFork: %v", err)
+	}
+	if !forked {
+		t.Fatal("WouldFork = false, want true (a merge child makes the version a non-leaf)")
 	}
 }

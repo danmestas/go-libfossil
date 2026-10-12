@@ -129,27 +129,58 @@ func TestHandlerUVFile_Accepted(t *testing.T) {
 	}
 }
 
-func TestHandlerUVFile_Rejected_NoPush(t *testing.T) {
+// helloUVFile is a uvfile card for new.txt holding "hello".
+func helloUVFile() *xfer.UVFileCard {
+	return &xfer.UVFileCard{
+		Name:    "new.txt",
+		MTime:   100,
+		Hash:    "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d", // SHA1("hello")
+		Size:    5,
+		Content: []byte("hello"),
+	}
+}
+
+// TestHandlerUVFile_RefusedWithoutY pins §7.3's write permission: a
+// requester without y is refused a uvfile, with or without a push card, and
+// nothing is stored. The refusal resets the reply and ends the card loop, as
+// fossil's page_xfer does.
+func TestHandlerUVFile_RefusedWithoutY(t *testing.T) {
+	for _, withPush := range []bool{false, true} {
+		r := setupSyncTestRepo(t)
+		if err := uv.EnsureSchema(r.DB()); err != nil {
+			t.Fatalf("EnsureSchema: %v", err)
+		}
+		setNobodyCaps(t, r, "oi")
+		var cards []xfer.Card
+		if withPush {
+			cards = append(cards, &xfer.PushCard{ServerCode: "s", ProjectCode: testPC})
+		}
+		resp := handleReq(t, r, append(cards, helloUVFile())...)
+
+		if n := len(cardsByType(resp, xfer.CardError)); n != 1 {
+			t.Errorf("push card %v: %d error cards, want 1", withPush, n)
+		}
+		if content, _, _, _ := uv.Read(r.DB(), "new.txt"); content != nil {
+			t.Errorf("push card %v: new.txt stored without y", withPush)
+		}
+	}
+}
+
+// TestHandlerUVFile_YAloneAccepted pins that y alone lets a requester store
+// an unversioned file, with no push card and no Write, as fossil allows.
+func TestHandlerUVFile_YAloneAccepted(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	if err := uv.EnsureSchema(r.DB()); err != nil {
 		t.Fatalf("EnsureSchema: %v", err)
 	}
+	setNobodyCaps(t, r, "oy")
+	resp := handleReq(t, r, helloUVFile())
 
-	// No push card — uvfile should be rejected.
-	resp := handleReq(t, r,
-		&xfer.UVFileCard{
-			Name:    "new.txt",
-			MTime:   100,
-			Hash:    "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d",
-			Size:    5,
-			Flags:   0,
-			Content: []byte("hello"),
-		},
-	)
-
-	errors := cardsByType(resp, xfer.CardError)
-	if len(errors) == 0 {
-		t.Error("expected error card for uvfile without push")
+	if errs := cardsByType(resp, xfer.CardError); len(errs) != 0 {
+		t.Fatalf("unexpected error cards: %v", errs)
+	}
+	if content, _, _, _ := uv.Read(r.DB(), "new.txt"); string(content) != "hello" {
+		t.Fatalf("new.txt = %q, want %q", content, "hello")
 	}
 }
 
@@ -171,5 +202,29 @@ func TestHandlerUVIGot_ServerPulls(t *testing.T) {
 	}
 	if gimmes[0].(*xfer.UVGimmeCard).Name != "client.txt" {
 		t.Errorf("wrong gimme name")
+	}
+}
+
+// TestHandlerUVFile_DeletionWithoutFlags pins that a deletion card with no
+// flags, HASH "-" and size 0, is applied: fossil checks a HASH only against
+// content the card carries, and this card carries none.
+func TestHandlerUVFile_DeletionWithoutFlags(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	if err := uv.EnsureSchema(r.DB()); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	if err := uv.Write(r.DB(), "gone.txt", []byte("to delete"), 100); err != nil {
+		t.Fatalf("uv.Write: %v", err)
+	}
+	setNobodyCaps(t, r, "oy")
+	resp := handleReq(t, r, &xfer.UVFileCard{Name: "gone.txt", MTime: 200, Hash: "-"})
+
+	if errs := cardsByType(resp, xfer.CardError); len(errs) != 0 {
+		t.Fatalf("unexpected error cards: %v", errs)
+	}
+	_, mtime, fileHash, err := uv.Read(r.DB(), "gone.txt")
+	if err != nil || mtime != 200 || fileHash != "" {
+		t.Fatalf("gone.txt: mtime %d, hash %q, %v; want a tombstone at 200",
+			mtime, fileHash, err)
 	}
 }

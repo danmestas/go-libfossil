@@ -82,7 +82,6 @@ var syncGaps = map[string]string{
 	// one of status 2, or with its content omitted, changes nothing
 	// (:170, :178).
 	"sync.7.3.uvgimme-absent":  "#308",
-	"sync.7.3.no-push-needed":  "#296",
 	"sync.7.3.status2-mtime":   "#308",
 	"sync.7.3.omitted-content": "#308",
 	// A received unversioned file is stored under its content's hash by

@@ -23,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blob that will never arrive, as `fossil rebuild` does. Its branch-aware leaf
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
+
+- The xfer card decoder now follows the draft's card grammar instead of
+  failing a whole message on one bad card (#299). A line no card rule accepts
+  (an unknown operator, a bare `pragma`, a `gimme` with a surplus token, a
+  `config` with a signed size) decodes to a bad-command card: the server
+  resets its reply, answers `error bad command: <LINE>` and parses on, and the
+  client ends the reply-card loop keeping the cards before it. A `file`,
+  `cfile` or `uvfile` line that cannot be framed decodes to a bad-file card:
+  the receiver emits the handler's message (`malformed file line` and the
+  like) and stops, as fossil's `page_xfer` breaks. Tokens are now split on
+  ASCII whitespace only, within fossil's six-token window, so a no-break space
+  no longer separates tokens and a seventh token is ignored rather than
+  rejected; `igot` and `private` tolerate a surplus token. A full `cfile`'s
+  USIZE is treated as metadata, not checked against the inflated size, and the
+  byte after a `config` payload is consumed whatever it is, both matching
+  fossil.
+
 - `Repo.ResolveVersion` now follows fossil's `symbolic_name_to_rid` name
   resolution (src/name.c): it chooses a tag by the carrying check-in's
   `event.mtime` rather than `tagxref.mtime`, no longer falls back to the tip

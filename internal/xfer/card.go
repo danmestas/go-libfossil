@@ -33,6 +33,8 @@ const (
 	CardXRow                       // 23 — xrow (table sync row payload)
 	CardXDelete                    // 24 — xdelete (table sync row deletion)
 	CardComment                    // 25 — "# ..." comment line
+	CardBadCommand                 // 26 — a line no card rule accepts
+	CardBadFile                    // 27 — a file/cfile/uvfile line that cannot be framed
 )
 
 // Card is the interface implemented by every xfer card type.
@@ -255,3 +257,34 @@ type UnknownCard struct {
 }
 
 func (c *UnknownCard) Type() CardType { return CardUnknown }
+
+// BadCommandCard is a line the decoder could not read as any known card: an
+// unrecognized operator, or a known one whose arguments break its rule (a
+// bare pragma, a gimme with a surplus token, a config with a non-decimal
+// size). It carries no payload, so the decoder reads on past it.
+//
+// §5.2, src/xfer.c page_xfer's final "else": a server resets its reply,
+// answers "error bad\scommand:\s<LINE>" and keeps parsing; a client ends the
+// reply-card loop. Line is the raw line the decoder read, its terminating LF
+// kept, so the error quotes it exactly as fossil's %F(blob_str(&xfer.line)).
+type BadCommandCard struct {
+	Line string
+}
+
+func (c *BadCommandCard) Type() CardType { return CardBadCommand }
+
+// BadFileCard is a file, cfile or uvfile line whose metadata the decoder
+// cannot frame a payload from — a bad arity, hash, size or flags. Because the
+// payload length is then unknown, no later card can be located, so the
+// decoder yields this card and stops.
+//
+// src/xfer.c xfer_accept_file / _compressed_file / _unversioned_file: the
+// receiver writes Message into its error, and page_xfer resets the reply,
+// emits that error and breaks out of the card loop. Message is the handler's
+// own wording ("malformed file line", "malformed cfile line", "malformed
+// uvfile line"), which the draft fossilizes and fossil(1) URL-encodes.
+type BadFileCard struct {
+	Message string
+}
+
+func (c *BadFileCard) Type() CardType { return CardBadFile }

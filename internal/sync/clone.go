@@ -476,6 +476,14 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			}
 		}
 		switch c := card.(type) {
+		// §5.2: a reply card the decoder could not read ends the reply-card
+		// loop. On a clone it is a protocol defect, not a transport fault, so
+		// it aborts the clone without a retry (a retry would only hide it).
+		case *xfer.BadCommandCard:
+			return fmt.Errorf("sync.Clone: bad command in reply: %q", strings.TrimRight(c.Line, "\n"))
+		case *xfer.BadFileCard:
+			return fmt.Errorf("sync.Clone: %s", c.Message)
+
 		case *xfer.PushCard:
 			cs.roundPush = true
 			if err := cs.recordCodes(c); err != nil {

@@ -174,24 +174,23 @@ func TestDecode_SkipCommentAndEmptyLines(t *testing.T) {
 }
 
 func TestDecode_UnknownCard(t *testing.T) {
+	// An unrecognized operator is a bad command (§5.2): the decoder yields a
+	// BadCommandCard carrying the raw line, not an error.
 	input := "foobar arg1 arg2\n"
 	r := bufio.NewReader(strings.NewReader(input))
 	card, err := DecodeCard(r)
 	if err != nil {
 		t.Fatalf("DecodeCard: %v", err)
 	}
-	unk, ok := card.(*UnknownCard)
+	bad, ok := card.(*BadCommandCard)
 	if !ok {
-		t.Fatalf("got %T, want *UnknownCard", card)
+		t.Fatalf("got %T, want *BadCommandCard", card)
 	}
-	if unk.Command != "foobar" {
-		t.Errorf("Command = %q, want %q", unk.Command, "foobar")
+	if bad.Line != input {
+		t.Errorf("Line = %q, want %q", bad.Line, input)
 	}
-	if len(unk.Args) != 2 || unk.Args[0] != "arg1" || unk.Args[1] != "arg2" {
-		t.Errorf("Args = %v, want [arg1 arg2]", unk.Args)
-	}
-	if unk.Type() != CardUnknown {
-		t.Errorf("Type() = %d, want %d", unk.Type(), CardUnknown)
+	if bad.Type() != CardBadCommand {
+		t.Errorf("Type() = %d, want %d", bad.Type(), CardBadCommand)
 	}
 }
 
@@ -248,47 +247,67 @@ func TestDecode_MultipleCards(t *testing.T) {
 
 // --- Payload card arg validation (formerly stubs) ---
 
-func TestDecode_FileBadArgCount(t *testing.T) {
-	// "file" with only 1 arg should fail (needs 2 or 3)
-	r := bufio.NewReader(strings.NewReader("file abc123\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for file with 1 arg")
+// decodeCardStr decodes one card from input, failing the test on an I/O
+// error. A card the decoder refuses is not an error: it comes back as a
+// *BadCommandCard or *BadFileCard (§5.2).
+func decodeCardStr(t *testing.T, input string) Card {
+	t.Helper()
+	card, err := DecodeCard(bufio.NewReader(strings.NewReader(input)))
+	if err != nil {
+		t.Fatalf("DecodeCard(%q): %v", input, err)
 	}
+	return card
+}
+
+// wantBadCommand asserts input decodes to a BadCommandCard quoting it.
+func wantBadCommand(t *testing.T, input string) {
+	t.Helper()
+	card := decodeCardStr(t, input)
+	c, ok := card.(*BadCommandCard)
+	if !ok {
+		t.Fatalf("decode %q: got %T, want *BadCommandCard", input, card)
+	}
+	if c.Line != input {
+		t.Errorf("decode %q: Line = %q, want %q", input, c.Line, input)
+	}
+}
+
+// wantBadFile asserts input decodes to a BadFileCard carrying msg.
+func wantBadFile(t *testing.T, input, msg string) {
+	t.Helper()
+	card := decodeCardStr(t, input)
+	c, ok := card.(*BadFileCard)
+	if !ok {
+		t.Fatalf("decode %q: got %T, want *BadFileCard", input, card)
+	}
+	if c.Message != msg {
+		t.Errorf("decode %q: Message = %q, want %q", input, c.Message, msg)
+	}
+}
+
+func TestDecode_FileBadArgCount(t *testing.T) {
+	// "file" with only 1 arg cannot be framed: a bad file line (§5.2).
+	wantBadFile(t, "file abc123\n", "malformed file line")
 }
 
 func TestDecode_CFileBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("cfile abc123 100\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for cfile with 2 args")
-	}
+	wantBadFile(t, "cfile abc123 100\n", "malformed cfile line")
 }
 
 func TestDecode_ConfigBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("config\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for config with 0 args")
-	}
+	// A config with the wrong arity is a bad command: no payload is read.
+	wantBadCommand(t, "config\n")
 }
 
 func TestDecode_UVFileBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("uvfile name\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for uvfile with 1 arg")
-	}
+	wantBadFile(t, "uvfile name\n", "malformed uvfile line")
 }
 
 // --- Arg count validation ---
 
 func TestDecode_IGotBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("igot\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for igot with 0 args")
-	}
+	// igot needs at least a hash; with none it is a bad command.
+	wantBadCommand(t, "igot\n")
 }
 
 // TestDecode_PushOneArg verifies that "push <code>" (1 arg) is rejected.
@@ -297,10 +316,7 @@ func TestDecode_IGotBadArgCount(t *testing.T) {
 // cloning client adopts and a server validates. Guessing which one a one-arg
 // push meant would put a server code where a project code belongs (#203).
 func TestDecode_PushOneArg(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("push only-one\n"))
-	if _, err := DecodeCard(r); err == nil {
-		t.Error("expected error for push with 1 arg")
-	}
+	wantBadCommand(t, "push only-one\n")
 }
 
 // TestEncode_PushEmptyCodes verifies that encoding a PushCard with empty
@@ -345,30 +361,18 @@ func TestEncode_PullMissingServerCode(t *testing.T) {
 // rejected by the decoder — it was previously accepted as a Go-only extension
 // that masked the encoder bug.
 func TestDecode_PushZeroArgs(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("push\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for bare push with 0 args")
-	}
+	wantBadCommand(t, "push\n")
 }
 
 // TestDecode_PullOneArg verifies that a single-arg "pull <code>\n" is
 // rejected — Fossil C requires both project-code and server-code on pull.
 func TestDecode_PullOneArg(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("pull only-one\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for pull with 1 arg (requires 2)")
-	}
+	wantBadCommand(t, "pull only-one\n")
 }
 
-// TestDecode_PullZeroArgs verifies that a bare "pull\n" is rejected.
+// TestDecode_PullZeroArgs verifies that a bare "pull\n" is a bad command.
 func TestDecode_PullZeroArgs(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("pull\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for bare pull with 0 args")
-	}
+	wantBadCommand(t, "pull\n")
 }
 
 // TestEncode_PushServerCodeOnlyMissing verifies that encoding a PushCard
@@ -447,11 +451,8 @@ func TestDecode_PushCanonicalCapture(t *testing.T) {
 }
 
 func TestDecode_CloneBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("clone 3\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for clone with 1 arg")
-	}
+	// clone takes zero or two tokens; one is a bad command.
+	wantBadCommand(t, "clone 3\n")
 }
 
 // TestDecode_CloneSeqNoNonDecimal pins §3.2 and §8.2: NEXT is recorded only
@@ -713,30 +714,28 @@ func TestEncode_WireFormat_UVIGot(t *testing.T) {
 }
 
 func TestDecode_UVIGotBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("uvigot only-name\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for uvigot with 1 arg")
-	}
+	wantBadCommand(t, "uvigot only-name\n")
 }
 
 func TestDecode_UVIGotBadMTime(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("uvigot name notnum hash 42\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for uvigot with non-numeric mtime")
-	}
+	wantBadCommand(t, "uvigot name notnum hash 42\n")
 }
 
-// Test that UnknownCard round-trips through encode
+// Test that an UnknownCard encodes to its wire form, which a receiver then
+// reads back as a bad command — an unrecognized operator is not round-tripped
+// as an UnknownCard (§5.2). UnknownCard survives decoding only for the clone
+// and clone_seqno tolerance exceptions, which have their own tests.
 func TestRoundTrip_UnknownCard(t *testing.T) {
 	c := &UnknownCard{Command: "newcmd", Args: []string{"x", "y"}}
-	got := roundTrip(t, c).(*UnknownCard)
-	if got.Command != "newcmd" {
-		t.Errorf("Command = %q, want %q", got.Command, "newcmd")
+	var buf bytes.Buffer
+	if err := EncodeCard(&buf, c); err != nil {
+		t.Fatalf("EncodeCard: %v", err)
 	}
-	if len(got.Args) != 2 || got.Args[0] != "x" || got.Args[1] != "y" {
-		t.Errorf("Args = %v, want [x y]", got.Args)
+	if buf.String() != "newcmd x y\n" {
+		t.Fatalf("wire = %q, want %q", buf.String(), "newcmd x y\n")
+	}
+	if _, ok := decodeCardStr(t, buf.String()).(*BadCommandCard); !ok {
+		t.Errorf("decode %q did not yield a BadCommandCard", buf.String())
 	}
 }
 
@@ -784,36 +783,20 @@ func TestRoundTrip_LoginSpacesInUser(t *testing.T) {
 }
 
 func TestDecode_LoginBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("login onlyuser\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for login with 1 arg")
-	}
+	wantBadCommand(t, "login onlyuser\n")
 }
 
 func TestDecode_ErrorBadArgCount(t *testing.T) {
-	// error takes exactly 1 Fossil-encoded token
-	r := bufio.NewReader(strings.NewReader("error\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for error with 0 args")
-	}
+	// error takes exactly 1 Fossil-encoded token; none is a bad command.
+	wantBadCommand(t, "error\n")
 }
 
 func TestDecode_MessageBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("message\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for message with 0 args")
-	}
+	wantBadCommand(t, "message\n")
 }
 
 func TestDecode_PragmaBadArgCount(t *testing.T) {
-	r := bufio.NewReader(strings.NewReader("pragma\n"))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for pragma with 0 args")
-	}
+	wantBadCommand(t, "pragma\n")
 }
 
 // UVIGot with large int64 MTime
@@ -1148,19 +1131,32 @@ func TestEncode_CFileCompression(t *testing.T) {
 }
 
 func TestDecode_CFileUSizeMismatch(t *testing.T) {
-	// Manually construct a cfile with wrong usize
+	// USIZE is metadata, not a frame boundary: fossil's
+	// xfer_accept_compressed_file never checks it against the inflated size,
+	// so a USIZE that disagrees is carried through, not rejected (§7.2). The
+	// content is bound by its hash at storage time instead.
 	content := []byte("hello")
 	var zbuf bytes.Buffer
 	zw := zlib.NewWriter(&zbuf)
 	zw.Write(content)
 	zw.Close()
-	// Claim usize is 999 but actual decompressed size is 5
+	// Claim usize is 999 but actual decompressed size is 5.
 	wire := fmt.Sprintf("cfile abc123 999 %d\n", zbuf.Len())
 	input := append([]byte(wire), zbuf.Bytes()...)
 	r := bufio.NewReader(bytes.NewReader(input))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for cfile usize mismatch")
+	card, err := DecodeCard(r)
+	if err != nil {
+		t.Fatalf("DecodeCard: %v", err)
+	}
+	c, ok := card.(*CFileCard)
+	if !ok {
+		t.Fatalf("got %T, want *CFileCard", card)
+	}
+	if string(c.Content) != "hello" {
+		t.Errorf("Content = %q, want %q", c.Content, "hello")
+	}
+	if c.USize != 999 {
+		t.Errorf("USize = %d, want 999 (carried through verbatim)", c.USize)
 	}
 }
 

@@ -105,12 +105,12 @@ func decodeCard(r *bufio.Reader, budget *int64) (Card, error) {
 		panic("xfer.decodeCard: budget must be a non-negative count")
 	}
 	for {
-		line, err := r.ReadString('\n')
+		rawLine, err := r.ReadString('\n')
 		// Handle final line without trailing newline
 		if err != nil && err != io.EOF {
 			return nil, err
 		}
-		line = strings.TrimRight(line, "\n\r")
+		line := strings.TrimRight(rawLine, "\n\r")
 
 		// EOF with no data left
 		if err == io.EOF && line == "" {
@@ -125,139 +125,164 @@ func decodeCard(r *bufio.Reader, budget *int64) (Card, error) {
 			continue
 		}
 
-		card, parseErr := parseLine(r, line, budget)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		return card, nil
+		// rawLine keeps its terminating LF so a BadCommandCard quotes the
+		// line exactly as fossil's %F(blob_str(&xfer.line)) does.
+		return parseLine(r, rawLine, line, budget)
 	}
 }
 
-// parseLine dispatches a trimmed, non-empty line to the appropriate card parser.
-// The reader r is passed through for payload cards that need to read binary data.
-func parseLine(r *bufio.Reader, line string, budget *int64) (Card, error) {
-	fields := strings.Fields(line)
+// cardTokenWindow is how many tokens a receiver reads from a card line.
+// Canonical fossil tokenizes each line into a fixed Blob aToken[6]
+// (src/xfer.c), so a card is six tokens at most and a seventh and beyond are
+// never seen -- the §3.9 window that makes a surplus token harmless.
+const cardTokenWindow = 6
+
+// isCardSpace reports whether c separates card tokens, matching fossil's
+// fossil_isspace (src/blob.c): ASCII space and the controls \t through \r.
+// A byte at or above 0x80, such as a UTF-8 no-break space, is not a
+// separator, so a token may carry one.
+func isCardSpace(c byte) bool {
+	return c == ' ' || (c >= '\t' && c <= '\r')
+}
+
+// tokenizeCard splits a card line into at most cardTokenWindow tokens on runs
+// of card whitespace, as fossil's blob_tokenize fills aToken[6] with
+// blob_token. Tokens past the sixth are dropped, not merged into the last.
+func tokenizeCard(line string) []string {
+	tokens := make([]string, 0, cardTokenWindow)
+	i, n := 0, len(line)
+	for len(tokens) < cardTokenWindow {
+		for i < n && isCardSpace(line[i]) {
+			i++
+		}
+		if i >= n {
+			break
+		}
+		start := i
+		for i < n && !isCardSpace(line[i]) {
+			i++
+		}
+		tokens = append(tokens, line[start:i])
+	}
+	return tokens
+}
+
+// parseLine dispatches a trimmed, non-empty line to the appropriate card
+// parser, reading at most the §3.9 token window. A line no rule accepts
+// becomes a *BadCommandCard, and a file/cfile/uvfile line that cannot be
+// framed a *BadFileCard; neither is an error, so one malformed card no longer
+// fails the whole message. The reader r is passed through for payload cards.
+func parseLine(r *bufio.Reader, rawLine, line string, budget *int64) (Card, error) {
+	fields := tokenizeCard(line)
 	if len(fields) == 0 {
-		return nil, fmt.Errorf("xfer: empty line after split")
+		return &BadCommandCard{Line: rawLine}, nil
 	}
 	cmd := fields[0]
 	args := fields[1:]
 
 	switch cmd {
+	case "file":
+		return parseFile(r, args)
+	case "cfile":
+		return parseCFile(r, args, budget)
+	case "uvfile":
+		return parseUVFile(r, args)
+	case "config":
+		return parseConfig(r, rawLine, args)
+	case "schema":
+		return parseSchema(r, args)
+	case "xrow":
+		return parseXRow(r, args)
+	case "xdelete":
+		return parseXDelete(r, args)
+	}
+	if c := parseControlCard(cmd, args); c != nil {
+		return c, nil
+	}
+	return &BadCommandCard{Line: rawLine}, nil
+}
+
+// parseControlCard reads a card that carries no payload. It returns nil when
+// the line is a bad command -- an unrecognized operator, or a known one whose
+// arity breaks its rule -- which the caller turns into a *BadCommandCard. The
+// §3.9 window already dropped any token past the sixth, so a card that accepts
+// a fixed arity silently tolerates a surplus token (igot, private).
+func parseControlCard(cmd string, args []string) Card {
+	switch cmd {
 	case "igot":
-		return parseIGot(args)
+		if len(args) < 1 {
+			return nil
+		}
+		c := &IGotCard{UUID: args[0]}
+		if len(args) >= 2 && args[1] == "1" {
+			c.IsPrivate = true
+		}
+		return c
 	case "gimme":
-		return parseGimme(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &GimmeCard{UUID: args[0]}
+	// push/pull: canonical (src/xfer.c) accepts them only at nToken==3 and
+	// reads the project code it validates out of the second argument.
 	case "push":
-		return parsePush(args)
+		if len(args) != 2 {
+			return nil
+		}
+		return &PushCard{ServerCode: args[0], ProjectCode: args[1]}
 	case "pull":
-		return parsePull(args)
+		if len(args) != 2 {
+			return nil
+		}
+		return &PullCard{ServerCode: args[0], ProjectCode: args[1]}
 	case "cookie":
-		return parseCookie(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &CookieCard{Value: args[0]}
 	case "reqconfig":
-		return parseReqConfig(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &ReqConfigCard{Name: args[0]}
 	case "private":
-		return parsePrivate(args)
+		// Canonical matches `private` on its keyword alone; a surplus token
+		// is past the window and harmless.
+		return &PrivateCard{}
 	case "clone":
 		return parseClone(args)
 	case "clone_seqno":
 		return parseCloneSeqNo(args)
 	case "uvgimme":
-		return parseUVGimme(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &UVGimmeCard{Name: args[0]}
 	case "pragma":
 		return parsePragma(args)
 	case "login":
-		return parseLogin(args)
+		if len(args) != 3 {
+			return nil
+		}
+		return &LoginCard{User: deck.FossilDecode(args[0]), Nonce: args[1], Signature: args[2]}
 	case "error":
-		return parseError(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &ErrorCard{Message: deck.FossilDecode(args[0])}
 	case "message":
-		return parseMessage(args)
+		if len(args) != 1 {
+			return nil
+		}
+		return &MessageCard{Message: deck.FossilDecode(args[0])}
 	case "uvigot":
 		return parseUVIGot(args)
-	case "file":
-		return parseFile(r, args)
-	case "cfile":
-		return parseCFile(r, args, budget)
-	case "config":
-		return parseConfig(r, args)
-	case "uvfile":
-		return parseUVFile(r, args)
-	case "schema":
-		return parseSchema(r, args)
 	case "xigot":
 		return parseXIGot(args)
 	case "xgimme":
 		return parseXGimme(args)
-	case "xrow":
-		return parseXRow(r, args)
-	case "xdelete":
-		return parseXDelete(r, args)
-	default:
-		return &UnknownCard{Command: cmd, Args: args}, nil
 	}
-}
-
-func parseIGot(args []string) (Card, error) {
-	if len(args) < 1 || len(args) > 2 {
-		return nil, fmt.Errorf("xfer: igot requires 1-2 args, got %d", len(args))
-	}
-	c := &IGotCard{UUID: args[0]}
-	if len(args) == 2 && args[1] == "1" {
-		c.IsPrivate = true
-	}
-	return c, nil
-}
-
-func parseGimme(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: gimme requires 1 arg, got %d", len(args))
-	}
-	return &GimmeCard{UUID: args[0]}, nil
-}
-
-// parsePush parses "push <server-code> <project-code>".
-//
-// Canonical (src/xfer.c) accepts push and pull only at nToken==3, and reads
-// the project code — the value it validates, and the value a cloning client
-// adopts as its own — out of the second argument. Anything shorter is not a
-// push card canonical would act on, so it is an error here rather than a
-// guess about which code the sender meant.
-func parsePush(args []string) (Card, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("xfer: push requires 2 args (server-code project-code), got %d", len(args))
-	}
-	return &PushCard{ServerCode: args[0], ProjectCode: args[1]}, nil
-}
-
-// parsePull parses "pull <server-code> <project-code>".
-//
-// Same arg order and arity as push; see parsePush.
-func parsePull(args []string) (Card, error) {
-	if len(args) != 2 {
-		return nil, fmt.Errorf("xfer: pull requires 2 args (server-code project-code), got %d", len(args))
-	}
-	return &PullCard{ServerCode: args[0], ProjectCode: args[1]}, nil
-}
-
-func parseCookie(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: cookie requires 1 arg, got %d", len(args))
-	}
-	return &CookieCard{Value: args[0]}, nil
-}
-
-func parseReqConfig(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: reqconfig requires 1 arg, got %d", len(args))
-	}
-	return &ReqConfigCard{Name: args[0]}, nil
-}
-
-func parsePrivate(args []string) (Card, error) {
-	if len(args) != 0 {
-		return nil, fmt.Errorf("xfer: private takes 0 args, got %d", len(args))
-	}
-	return &PrivateCard{}, nil
+	return nil
 }
 
 // isDecimal reports whether s matches the spec's `decimal = 1*DIGIT`
@@ -276,115 +301,68 @@ func isDecimal(s string) bool {
 	return true
 }
 
-func parseClone(args []string) (Card, error) {
+// parseClone returns nil for a line no clone rule accepts, so the caller
+// makes it a bad command. A clone with two tokens neither of which parses as
+// an integer degrades to an *UnknownCard rather than a bad command: §8.1
+// withholds its fatal from a non-decimal SEQNO, and treating the whole
+// message as bad would be harsher still.
+func parseClone(args []string) Card {
 	if len(args) != 0 && len(args) != 2 {
-		return nil, fmt.Errorf("xfer: clone requires 0 or 2 args, got %d", len(args))
+		return nil
 	}
 	if len(args) == 0 {
-		return &CloneCard{}, nil
+		return &CloneCard{}
 	}
-	// §8.1 withholds its fatal from a SEQNO that fails the digit-only rule
-	// (isDecimal below) but a token strconv.Atoi cannot parse at all -- e.g.
-	// "abc" or "3x" -- is rarer still and outside anything §8.1 discusses.
-	// Erroring the whole message for it is harsher than the fatal the spec
-	// was careful to withhold, so degrade the same way parseCloneSeqNo does
-	// for clone_seqno: carry the raw tokens forward as an UnknownCard rather
-	// than failing every later card in the message.
 	v, vErr := strconv.Atoi(args[0])
 	s, sErr := strconv.Atoi(args[1])
 	if vErr != nil || sErr != nil {
-		return &UnknownCard{Command: "clone", Args: args}, nil
+		return &UnknownCard{Command: "clone", Args: args}
 	}
-	return &CloneCard{
-		Version: v,
-		SeqNo:   s,
-		// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds
-		// it from one that fails digit-only recognition, so record whether
-		// this token qualifies rather than only what it parsed to.
-		SeqNoIsDecimal: isDecimal(args[1]),
-	}, nil
+	// §8.1 keys its fatal on a digit-only SEQNO and explicitly withholds it
+	// from one that fails digit-only recognition, so record whether this
+	// token qualifies rather than only what it parsed to.
+	return &CloneCard{Version: v, SeqNo: s, SeqNoIsDecimal: isDecimal(args[1])}
 }
 
-func parseCloneSeqNo(args []string) (Card, error) {
+// parseCloneSeqNo degrades a non-decimal NEXT to an *UnknownCard: §3.2 records
+// NEXT only when it is decimal and §8.2 makes a visible but non-decimal NEXT a
+// receiver-tolerance exception, so the token is kept but denied any effect on
+// the cursor (a CloneSeqNoCard would be recorded).
+func parseCloneSeqNo(args []string) Card {
 	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: clone_seqno requires 1 arg, got %d", len(args))
+		return nil
 	}
 	if !isDecimal(args[0]) {
-		// §3.2 records NEXT only when it is decimal, and §8.2 makes a visible
-		// but non-decimal NEXT a receiver-tolerance exception that leaves the
-		// recorded sequence unchanged without stopping later reply cards.
-		// Surfacing it as an unknown card keeps the token while denying it any
-		// effect on the cursor — a CloneSeqNoCard here would be recorded.
-		return &UnknownCard{Command: "clone_seqno", Args: args}, nil
+		return &UnknownCard{Command: "clone_seqno", Args: args}
 	}
-	s, err := strconv.Atoi(args[0])
-	if err != nil {
-		return nil, fmt.Errorf("xfer: clone_seqno: %w", err)
-	}
-	return &CloneSeqNoCard{SeqNo: s}, nil
+	s, _ := strconv.Atoi(args[0]) // isDecimal guarantees this parses
+	return &CloneSeqNoCard{SeqNo: s}
 }
 
-func parseUVGimme(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: uvgimme requires 1 arg, got %d", len(args))
-	}
-	return &UVGimmeCard{Name: args[0]}, nil
-}
-
-func parsePragma(args []string) (Card, error) {
+func parsePragma(args []string) Card {
 	if len(args) < 1 {
-		return nil, fmt.Errorf("xfer: pragma requires at least 1 arg, got %d", len(args))
+		return nil
 	}
 	c := &PragmaCard{Name: args[0]}
 	if len(args) > 1 {
 		c.Values = args[1:]
 	}
-	return c, nil
+	return c
 }
 
-func parseLogin(args []string) (Card, error) {
-	if len(args) != 3 {
-		return nil, fmt.Errorf("xfer: login requires 3 args, got %d", len(args))
-	}
-	return &LoginCard{
-		User:      deck.FossilDecode(args[0]),
-		Nonce:     args[1],
-		Signature: args[2],
-	}, nil
-}
-
-func parseError(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: error requires 1 arg, got %d", len(args))
-	}
-	return &ErrorCard{Message: deck.FossilDecode(args[0])}, nil
-}
-
-func parseMessage(args []string) (Card, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("xfer: message requires 1 arg, got %d", len(args))
-	}
-	return &MessageCard{Message: deck.FossilDecode(args[0])}, nil
-}
-
-func parseUVIGot(args []string) (Card, error) {
+func parseUVIGot(args []string) Card {
 	if len(args) != 4 {
-		return nil, fmt.Errorf("xfer: uvigot requires 4 args, got %d", len(args))
+		return nil
 	}
 	mtime, err := strconv.ParseInt(args[1], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("xfer: uvigot mtime: %w", err)
+		return nil
 	}
 	size, err := strconv.Atoi(args[3])
 	if err != nil {
-		return nil, fmt.Errorf("xfer: uvigot size: %w", err)
+		return nil
 	}
-	return &UVIGotCard{
-		Name:  args[0],
-		MTime: mtime,
-		Hash:  args[2],
-		Size:  size,
-	}, nil
+	return &UVIGotCard{Name: args[0], MTime: mtime, Hash: args[2], Size: size}
 }
 
 // --- Payload card parsers ---
@@ -393,7 +371,7 @@ func parseUVIGot(args []string) (Card, error) {
 // No trailing newline after CONTENT.
 func parseFile(r *bufio.Reader, args []string) (Card, error) {
 	if len(args) != 2 && len(args) != 3 {
-		return nil, fmt.Errorf("xfer: file requires 2-3 args, got %d", len(args))
+		return &BadFileCard{Message: "malformed file line"}, nil
 	}
 	c := &FileCard{UUID: args[0]}
 	var sizeStr string
@@ -405,7 +383,9 @@ func parseFile(r *bufio.Reader, args []string) (Card, error) {
 	}
 	size, err := parseSize(sizeStr)
 	if err != nil {
-		return nil, fmt.Errorf("xfer: file size: %w", err)
+		// A bad SIZE leaves the payload unframeable: fossil's xfer_accept_file
+		// writes "malformed file line" and page_xfer breaks.
+		return &BadFileCard{Message: "malformed file line"}, nil
 	}
 	content, err := readPayload(r, size)
 	if err != nil {
@@ -420,7 +400,7 @@ func parseFile(r *bufio.Reader, args []string) (Card, error) {
 // No trailing newline after ZCONTENT.
 func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 	if len(args) != 3 && len(args) != 4 {
-		return nil, fmt.Errorf("xfer: cfile requires 3-4 args, got %d", len(args))
+		return &BadFileCard{Message: "malformed cfile line"}, nil
 	}
 	c := &CFileCard{UUID: args[0]}
 	var usizeStr, csizeStr string
@@ -434,11 +414,11 @@ func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 	}
 	usize, err := parseSize(usizeStr)
 	if err != nil {
-		return nil, fmt.Errorf("xfer: cfile usize: %w", err)
+		return &BadFileCard{Message: "malformed cfile line"}, nil
 	}
 	csize, err := parseSize(csizeStr)
 	if err != nil {
-		return nil, fmt.Errorf("xfer: cfile csize: %w", err)
+		return &BadFileCard{Message: "malformed cfile line"}, nil
 	}
 	compressed, err := readPayload(r, csize)
 	if err != nil {
@@ -458,34 +438,44 @@ func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 		return nil, err
 	}
 	*budget -= int64(len(decompressed))
-	// For non-delta cfiles, decompressed size == usize (full content).
-	// For delta cfiles, decompressed size is the delta payload size, which
-	// is smaller than usize (the fully expanded content size). Fossil's
-	// send_compressed_file sets usize = blob.size (full content) regardless.
-	// Only validate for non-delta cards where the sizes must match.
-	if c.DeltaSrc == "" && len(decompressed) != usize {
-		return nil, fmt.Errorf("xfer: cfile usize mismatch: header says %d, got %d", usize, len(decompressed))
-	}
+	// USIZE is metadata, not a frame boundary. fossil's
+	// xfer_accept_compressed_file reads CSIZE bytes and never checks that the
+	// inflated size equals USIZE; the content is bound by its hash at storage
+	// time instead. So a USIZE that disagrees with the inflated size (a sender
+	// counting a trailing byte, say) is carried through, not rejected (§7.2).
 	c.USize = usize
 	c.Content = decompressed
 	c.StoredBlob = storedBlob
 	return c, nil
 }
 
-// parseConfig decodes: config NAME SIZE \n CONTENT \n
-// Note the trailing \n after CONTENT.
-func parseConfig(r *bufio.Reader, args []string) (Card, error) {
+// parseConfig decodes: config NAME SIZE \n CONTENT <1 byte>.
+//
+// Canonical (src/xfer.c) enters its config branch only at nToken==3 with a
+// non-negative integer SIZE; otherwise the line is a bad command and no
+// payload is read -- so a wrong arity or a signed SIZE degrades here to a
+// *BadCommandCard, leaving the next line to the decoder.
+//
+// After the SIZE payload canonical does blob_seek(xfer.pIn, 1, BLOB_SEEK_CUR):
+// it steps over exactly one byte whatever it is, not only a LF. A sender
+// writes a LF there, but the receiver does not require one.
+func parseConfig(r *bufio.Reader, rawLine string, args []string) (Card, error) {
 	if len(args) != 2 {
-		return nil, fmt.Errorf("xfer: config requires 2 args, got %d", len(args))
+		return &BadCommandCard{Line: rawLine}, nil
 	}
 	name := args[0]
 	size, err := parseSize(args[1])
 	if err != nil {
-		return nil, fmt.Errorf("xfer: config size: %w", err)
+		return &BadCommandCard{Line: rawLine}, nil
 	}
-	content, err := readPayloadWithTrailingNewline(r, size)
+	content, err := readPayload(r, size)
 	if err != nil {
 		return nil, fmt.Errorf("xfer: config payload: %w", err)
+	}
+	// Step over the one trailing byte, as canonical does. An EOF here (the
+	// payload ended the message) is fine: there was nothing to step over.
+	if _, err := r.ReadByte(); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("xfer: config trailing byte: %w", err)
 	}
 	return &ConfigCard{Name: name, Content: content}, nil
 }
@@ -493,22 +483,25 @@ func parseConfig(r *bufio.Reader, args []string) (Card, error) {
 // parseUVFile decodes: uvfile NAME MTIME HASH SIZE FLAGS \n CONTENT
 // FLAGS bits: 0x0001 = deleted, 0x0004 = content omitted. When set, no payload follows.
 func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
+	// A malformed uvfile line leaves its payload unframeable: fossil's
+	// xfer_accept_unversioned_file writes "malformed uvfile line" and
+	// page_xfer breaks. Its checks are reproduced here -- arity, a
+	// non-negative MTIME, and SIZE and FLAGS that are non-negative decimals
+	// (parseSize enforces the last).
 	if len(args) != 5 {
-		return nil, fmt.Errorf("xfer: uvfile requires 5 args, got %d", len(args))
+		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
 	mtime, err := strconv.ParseInt(args[1], 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("xfer: uvfile mtime: %w", err)
+	if err != nil || mtime < 0 {
+		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
 	size, err := parseSize(args[3])
 	if err != nil {
-		return nil, fmt.Errorf("xfer: uvfile size: %w", err)
+		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
-	// FLAGS share the size grammar: the draft has receivers reject a
-	// negative FLAGS.
 	flags, err := parseSize(args[4])
 	if err != nil {
-		return nil, fmt.Errorf("xfer: uvfile flags: %w", err)
+		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
 	c := &UVFileCard{
 		Name:  args[0],
@@ -636,22 +629,24 @@ func parseSchema(r *bufio.Reader, args []string) (Card, error) {
 	return &SchemaCard{Table: args[0], Version: version, Hash: args[2], MTime: mtime, Content: content}, nil
 }
 
-func parseXIGot(args []string) (Card, error) {
+// parseXIGot and parseXGimme return nil for a malformed line, which the
+// caller turns into a bad command, as for the other payload-free cards.
+func parseXIGot(args []string) Card {
 	if len(args) != 3 {
-		return nil, fmt.Errorf("xfer: xigot requires 3 args, got %d", len(args))
+		return nil
 	}
 	mtime, err := strconv.ParseInt(args[2], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("xfer: xigot mtime: %w", err)
+		return nil
 	}
-	return &XIGotCard{Table: args[0], PKHash: args[1], MTime: mtime}, nil
+	return &XIGotCard{Table: args[0], PKHash: args[1], MTime: mtime}
 }
 
-func parseXGimme(args []string) (Card, error) {
+func parseXGimme(args []string) Card {
 	if len(args) != 2 {
-		return nil, fmt.Errorf("xfer: xgimme requires 2 args, got %d", len(args))
+		return nil
 	}
-	return &XGimmeCard{Table: args[0], PKHash: args[1]}, nil
+	return &XGimmeCard{Table: args[0], PKHash: args[1]}
 }
 
 func parseXDelete(r *bufio.Reader, args []string) (Card, error) {

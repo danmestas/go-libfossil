@@ -5,43 +5,13 @@ import "testing"
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
 var syncGaps = map[string]string{
-	// Any card the decoder refuses fails the whole message
-	// (internal/xfer/message.go:288): the server answers HTTP 400
-	// (internal/sync/serve_http.go:112) where the draft has it emit
-	// "bad command" or the handler's error and go on, and the client drops
-	// the whole reply, its valid prefix included.
-	"sync.5.2.wrong-arity-server":   "#299",
-	"sync.5.2.file-handler-failure": "#299",
-	"sync.7.3.flags-negative":       "#299",
-	"sync.9.bare-pragma":            "#299",
-	"sync.9.3.config-signed-size":   "#299",
-	"sync.10.1.status-200":          "#299",
-	"sync.5.2.malformed-prefix":     "#299",
-	// The decoders count every token where the draft lets a receiver see
-	// six and lets igot and private carry surplus ones: igot takes at most
-	// two arguments, private none, uvfile exactly five
-	// (internal/xfer/decode.go:202, :258, :497).
-	"sync.3.9.seventh-token-server":   "#299",
-	"sync.3.9.seventh-token-client":   "#299",
-	"sync.5.2.private-surplus-server": "#299",
-	"sync.5.2.igot-surplus-server":    "#299",
-	"sync.5.2.private-surplus":        "#299",
-	"sync.5.2.igot-surplus":           "#299",
-	// Tokens are split with strings.Fields, which also splits on Unicode
-	// spaces such as U+00A0 (internal/xfer/decode.go:139).
-	"sync.5.2.non-ascii-space": "#299",
-	// The server ignores unknown, wrong-direction and client-sent error
-	// cards: no "bad command", no reset (internal/sync/handler.go:423,
-	// :522; handleControlCard and handleDataCard have no default).
-	"sync.5.2.bad-command":                  "#300",
-	"sync.5.2.bad-command-resets":           "#300",
-	"sync.5.2.client-error-card":            "#300",
-	"sync.10.1.bad-command-keeps-mutations": "#300",
-	// The client records an error card and reads on, and has no case for
-	// an unknown card, so neither ends the reply-card loop
-	// (internal/sync/client.go:544, :480).
-	"sync.5.2.unknown-prefix": "#300",
-	"sync.10.1.error-prefix":  "#300",
+	// The server records a client-sent error card and reads on, where fossil
+	// answers it with "bad command" (internal/sync/handler.go handleDataCard
+	// has no ErrorCard case).
+	"sync.5.2.client-error-card": "#300",
+	// The client records an error card and reads on, so it does not end the
+	// reply-card loop (internal/sync/client.go processResponse).
+	"sync.10.1.error-prefix": "#300",
 	// Termination is not Section 3.7's: a phantom is asked for until it
 	// has aged three rounds (internal/sync/client.go:605-613), and any
 	// file received continues the session (:620).
@@ -109,12 +79,6 @@ var syncGaps = map[string]string{
 	// A delta's missing basis becomes a public phantom whatever the card's
 	// private marker (internal/sync/client.go:762).
 	"sync.7.4.private-basis-phantom": "#307",
-	// A full cfile's USIZE must equal its inflated size
-	// (internal/xfer/decode.go:467).
-	"sync.7.2.cfile-usize-metadata": "#299",
-	// The byte after a config payload is consumed only when it is LF
-	// (internal/xfer/decode.go:78).
-	"sync.9.3.config-opaque": "#299",
 	// After the first clone round a server error aborts the clone, where
 	// the draft ends the reply-card loop and continues
 	// (internal/sync/clone.go:544).

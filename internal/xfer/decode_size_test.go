@@ -40,7 +40,11 @@ var sizeCardTemplates = []string{
 // payload-bearing card is held to the draft's decimal grammar. Method: put
 // each bad token into each size position and decode. A negative size used to
 // reach readPayload's assertion and panic the process reading a peer's
-// message; a signed or hex size was read as a size. All must be a decode error.
+// message; a signed or hex size was read as a size. None may be used as a
+// size: the card must not parse as a valid payload card. §5.2 no longer fails
+// the whole message for a bad card, so a file/cfile/uvfile line comes back as
+// a *BadFileCard, a config line as a *BadCommandCard, and schema/xrow/xdelete
+// (go-libfossil's own table-sync cards) still as a decode error.
 func TestDecodeRejectsNonDecimalSizes(t *testing.T) {
 	for _, tmpl := range sizeCardTemplates {
 		for _, tok := range badSizeTokens {
@@ -52,8 +56,18 @@ func TestDecodeRejectsNonDecimalSizes(t *testing.T) {
 						t.Fatalf("Decode panicked: %v", p)
 					}
 				}()
-				if _, err := Decode(data, ContentTypeUncompressed); err == nil {
-					t.Fatalf("Decode accepted size token %q", tok)
+				msg, err := Decode(data, ContentTypeUncompressed)
+				if err != nil {
+					return // a decode error is one valid refusal
+				}
+				if len(msg.Cards) == 0 {
+					t.Fatalf("Decode accepted size token %q with no card", tok)
+				}
+				switch msg.Cards[0].(type) {
+				case *BadFileCard, *BadCommandCard:
+					// refused as a bad card, which is what §5.2 now does
+				default:
+					t.Fatalf("Decode accepted size token %q as %T", tok, msg.Cards[0])
 				}
 			})
 		}

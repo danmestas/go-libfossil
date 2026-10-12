@@ -289,6 +289,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 	case 'B':
 		return setHashCard(tokens, &d.B, "B-card", false)
 	case 'C':
+		d.cPresent = true
 		return setStringCard(tokens, &d.C, "comment on C-card", true)
 	case 'D':
 		return parseDCard(d, tokens)
@@ -314,6 +315,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 		return parseMCard(d, tokens)
 	case 'N':
 		// §4.3.1: the N-card mimetype is escape-decoded.
+		d.nPresent = true
 		return setStringCard(tokens, &d.N, "mimetype on N-card", true)
 	case 'P':
 		return parsePCard(d, tokens)
@@ -564,6 +566,8 @@ func parsePCard(d *Deck, tokens []string) error {
 	// semantic, primary parent first. Appending -- not assigning -- is what
 	// makes a second P card add parents rather than replace them (§4.5.1). A
 	// bare P card carries no parents, which is the initial empty baseline.
+	// pPresent lets Marshal re-emit that bare "P" even with no parents.
+	d.pPresent = true
 	// §4.7.1: every present parent token is an artifact hash.
 	for _, parent := range tokens {
 		if !validArtifactHash(parent) {
@@ -628,6 +632,7 @@ func parseTCard(d *Deck, tokens []string) error {
 	tc.UUID = tokens[1]
 	if len(tokens) >= 3 {
 		tc.Value = FossilDecode(tokens[2])
+		tc.valuePresent = true
 	}
 	// §4.7.16: a name that after the sign is entirely hex digits is ambiguous
 	// with a hash, so reject it. The escape-decoded name is used; an all-hex

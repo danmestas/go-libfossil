@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 func (d *Deck) Marshal() ([]byte, error) {
@@ -28,7 +29,9 @@ func (d *Deck) Marshal() ([]byte, error) {
 	return []byte(fmt.Sprintf("%sZ %s\n", body, zHash)), nil
 }
 
-// marshalCards writes all cards in ASCII order to the builder.
+// marshalCards writes all cards to the builder in strict ASCII order
+// (A B C D E F G H I J K L M N P Q R T U W Z), in contiguous groups so each
+// writer stays small.
 func marshalCards(b *strings.Builder, d *Deck) {
 	if b == nil {
 		panic("deck.marshalCards: b must not be nil")
@@ -36,9 +39,15 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if d == nil {
 		panic("deck.marshalCards: d must not be nil")
 	}
+	marshalCardsABCDE(b, d)
+	marshalCardF(b, d)
+	marshalCardsGHIJKL(b, d)
+	marshalCardsMNPQR(b, d)
+	marshalCardsTUW(b, d)
+}
 
-	// Cards in strict ASCII order: A B C D E F G H I J K L M N P Q R T U W Z
-
+// marshalCardsABCDE writes the A, B, C, D and E cards.
+func marshalCardsABCDE(b *strings.Builder, d *Deck) {
 	if d.A != nil {
 		b.WriteString("A ")
 		b.WriteString(FossilEncode(d.A.Filename))
@@ -57,18 +66,29 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		fmt.Fprintf(b, "B %s\n", d.B)
 	}
 
-	if d.C != "" {
+	// §4.2 erratum: a present-but-empty comment re-emits as "C " + LF, so the
+	// artifact round-trips. A caller that never set a comment leaves C empty
+	// and cPresent false, and no C card is written.
+	if d.C != "" || d.cPresent {
 		fmt.Fprintf(b, "C %s\n", FossilEncode(d.C))
 	}
 
 	if !d.D.IsZero() {
-		fmt.Fprintf(b, "D %s\n", d.D.UTC().Format("2006-01-02T15:04:05.000"))
+		// §4.6.4: the D card is written to at least millisecond precision (its
+		// writer form), extended to keep whatever finer fraction the parser
+		// read, so a sub-millisecond timestamp round-trips.
+		fmt.Fprintf(b, "D %s\n", marshalTimestamp(d.D, 3))
 	}
 
 	if d.E != nil {
-		fmt.Fprintf(b, "E %s %s\n", d.E.Date.UTC().Format("2006-01-02T15:04:05"), d.E.UUID)
+		// The E card's writer form is second precision; a finer fraction the
+		// parser read is kept so it round-trips.
+		fmt.Fprintf(b, "E %s %s\n", marshalTimestamp(d.E.Date, 0), d.E.UUID)
 	}
+}
 
+// marshalCardF writes the F (file) cards, sorted by decoded filename.
+func marshalCardF(b *strings.Builder, d *Deck) {
 	if len(d.F) > 0 {
 		sorted := make([]FileCard, len(d.F))
 		copy(sorted, d.F)
@@ -102,7 +122,10 @@ func marshalCards(b *strings.Builder, d *Deck) {
 			b.WriteString("\n")
 		}
 	}
+}
 
+// marshalCardsGHIJKL writes the G, H, I, J, K and L cards.
+func marshalCardsGHIJKL(b *strings.Builder, d *Deck) {
 	if d.G != "" {
 		fmt.Fprintf(b, "G %s\n", d.G)
 	}
@@ -138,7 +161,10 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if d.L != "" {
 		fmt.Fprintf(b, "L %s\n", FossilEncode(d.L))
 	}
+}
 
+// marshalCardsMNPQR writes the M, N, P, Q and R cards.
+func marshalCardsMNPQR(b *strings.Builder, d *Deck) {
 	if len(d.M) > 0 {
 		sorted := make([]string, len(d.M))
 		copy(sorted, d.M)
@@ -148,13 +174,18 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		}
 	}
 
-	if d.N != "" {
-		// §4.3.1: the N mimetype is escape-decoded on parse, so encode it here.
+	if d.N != "" || d.nPresent {
+		// §4.3.1: the N mimetype is escape-decoded on parse, so encode it here;
+		// a present-but-empty N re-emits as "N " + LF.
 		fmt.Fprintf(b, "N %s\n", FossilEncode(d.N))
 	}
 
 	if len(d.P) > 0 {
 		fmt.Fprintf(b, "P %s\n", strings.Join(d.P, " "))
+	} else if d.pPresent {
+		// §4.7.13: a bare P card (the initial empty baseline) re-emits as "P"
+		// + LF, with no trailing space.
+		b.WriteString("P\n")
 	}
 
 	for _, q := range d.Q {
@@ -172,7 +203,10 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	if d.R != "" {
 		fmt.Fprintf(b, "R %s\n", d.R)
 	}
+}
 
+// marshalCardsTUW writes the T, U and W cards.
+func marshalCardsTUW(b *strings.Builder, d *Deck) {
 	if len(d.T) > 0 {
 		sorted := make([]TagCard, len(d.T))
 		copy(sorted, d.T)
@@ -194,7 +228,8 @@ func marshalCards(b *strings.Builder, d *Deck) {
 			// `T *branch` card); the target token is written verbatim, never
 			// encoded.
 			fmt.Fprintf(b, "T %c%s %s", tag.Type, FossilEncode(tag.Name), tag.UUID)
-			if tag.Value != "" {
+			if tag.Value != "" || tag.valuePresent {
+				// A present-but-empty value re-emits as a trailing space.
 				fmt.Fprintf(b, " %s", FossilEncode(tag.Value))
 			}
 			b.WriteString("\n")
@@ -205,7 +240,35 @@ func marshalCards(b *strings.Builder, d *Deck) {
 		fmt.Fprintf(b, "U %s\n", FossilEncode(*d.U))
 	}
 
-	if len(d.W) > 0 {
+	// §4.7.18: a W card whose body the parser read -- even a zero-length one --
+	// is non-nil, so it re-emits as "W 0" + LF + LF; a wholly absent W card is
+	// nil and writes nothing.
+	if d.W != nil {
 		fmt.Fprintf(b, "W %d\n%s\n", len(d.W), d.W)
 	}
+}
+
+// marshalTimestamp renders a D- or E-card time in the writer form
+// YYYY-MM-DDTHH:MM:SS with a fractional second of at least minFracDigits
+// digits, extended to keep any finer precision the parser read and with
+// trailing zeros past minFracDigits removed. minFracDigits is 3 for the D
+// card and 0 for the E card, matching their writer forms.
+func marshalTimestamp(t time.Time, minFracDigits int) string {
+	t = t.UTC()
+	base := t.Format("2006-01-02T15:04:05")
+	if frac := fractionDigits(t.Nanosecond(), minFracDigits); frac != "" {
+		return base + "." + frac
+	}
+	return base
+}
+
+// fractionDigits formats nsec as decimal fraction digits, keeping at least
+// minDigits and trimming trailing zeros beyond that.
+func fractionDigits(nsec, minDigits int) string {
+	digits := fmt.Sprintf("%09d", nsec)
+	end := len(digits)
+	for end > minDigits && digits[end-1] == '0' {
+		end--
+	}
+	return digits[:end]
 }

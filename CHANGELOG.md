@@ -113,6 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Marshal` re-encodes what `deck.Parse` read, so `Marshal(Parse(x)) == x`
+  for a canonical artifact. A present-but-empty C comment, N mimetype or T
+  value, and a bare P card, are kept distinct from an absent one and re-emitted
+  (an empty W body already was, now via nil versus a non-nil empty slice); the
+  distinction is carried in unexported Deck/TagCard fields, so a caller that
+  builds a deck and sets a non-empty value still has it marshalled and the
+  public API is unchanged. The D and E timestamps are written at their writer
+  precision -- millisecond for D, second for E -- extended to keep any finer
+  fraction the parser read, so a sub-second timestamp round-trips instead of
+  being truncated (#272).
+
+
 - `deck.Parse` parses D and E timestamps with the §4.6.4 grammar (as amended
   by the §4.6.4 erratum) instead of two fixed `time.Parse` layouts. It accepts
   the date-time form with `HH:MM`, `HH:MM:SS` or a fractional second, a `Z`,

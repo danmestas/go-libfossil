@@ -5,19 +5,6 @@ import "testing"
 // artifactGaps marks the artifact cases go-libfossil is known to fail, by
 // case ID, grouped by the code at fault, each with the issue tracking its fix.
 var artifactGaps = map[string]string{
-	// Marshal drops a present but empty C, N or T value, an empty P card and an
-	// empty W body, so the artifact does not re-encode (deck/marshal.go:58, :149,
-	// :153, :194, :205).
-	"artifact.4.7.16.t-empty-value": "#272",
-	"artifact.4.7.18.w-empty":       "#272",
-	"artifact.4.7.c-empty":          "#272",
-	"artifact.4.7.n-empty":          "#272",
-	"artifact.4.7.p-empty":          "#272",
-	// Marshal writes D to the millisecond and E to the second, so a longer
-	// fraction the parser accepted is lost (deck/marshal.go:63, :67). Found
-	// by FuzzArtifactRoundTrip.
-	"artifact.4.6.4.fraction-round-trip":   "#272",
-	"artifact.4.6.4.e-fraction-round-trip": "#272",
 	// No card-legality table, required cards or per-type semantic checks:
 	// inferType only picks a type (deck/parse.go:442).
 	"artifact.5.2.attachment-illegal-B":  "#273",

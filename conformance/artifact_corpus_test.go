@@ -61,24 +61,7 @@ func FuzzArtifactRoundTrip(f *testing.F) {
 var knownLosses = []struct {
 	caseID  string
 	forgive func(*deck.Deck)
-}{
-	// Marshal writes D to the millisecond.
-	{"artifact.4.6.4.fraction-round-trip", func(d *deck.Deck) {
-		d.D = d.D.Truncate(time.Millisecond)
-	}},
-	// Marshal writes E to the second.
-	{"artifact.4.6.4.e-fraction-round-trip", func(d *deck.Deck) {
-		if d.E != nil {
-			d.E.Date = d.E.Date.Truncate(time.Second)
-		}
-	}},
-	// Marshal drops a W card with an empty body.
-	{"artifact.4.7.18.w-empty", func(d *deck.Deck) {
-		if len(d.W) == 0 {
-			d.W = nil
-		}
-	}},
-}
+}{}
 
 // corpusBudget bounds TestArtifactCorpus as a whole.
 const corpusBudget = 20 * time.Minute

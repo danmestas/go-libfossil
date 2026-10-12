@@ -18,8 +18,8 @@ func TestHandleSchemaCard(t *testing.T) {
 	}
 	defJSON, _ := json.Marshal(def)
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.SchemaCard{Table: "test_table", Version: 1, Hash: "abc", MTime: 100, Content: defJSON},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -46,8 +46,8 @@ func TestHandleXIGotXGimmeXRow(t *testing.T) {
 	localPK := repo.PKHash(pkColDefs, map[string]any{"id": "local-key"})
 	remotePK := repo.PKHash(pkColDefs, map[string]any{"id": "remote-key"})
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.XIGotCard{Table: "kv", PKHash: remotePK, MTime: 300},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -90,8 +90,8 @@ func TestHandleXDelete(t *testing.T) {
 	pkHash := repo.PKHash(pkColDefs, map[string]any{"id": "row1"})
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.XDeleteCard{
 			Table:  "kv",
 			PKHash: pkHash,
@@ -140,8 +140,8 @@ func TestHandleXIGotEmitsXDeleteForTombstone(t *testing.T) {
 
 	// Client claims it has the row at old mtime 1000.
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.XIGotCard{Table: "kv", PKHash: pkHash, MTime: 1000},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -204,8 +204,8 @@ func TestHandleXDelete_SelfWriteOwnershipCheck(t *testing.T) {
 
 	// "bob" tries to delete alice's row — should be rejected.
 	msg := signedRequest(t, "bob", "bobsecret", pc,
-		&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
-		&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+		&xfer.PushCard{ServerCode: "sc", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 		&xfer.XDeleteCard{
 			Table:  "peers",
 			PKHash: pkHash,
@@ -253,8 +253,8 @@ func TestHandleXDelete_PKDataHashMismatch(t *testing.T) {
 
 	msg := &xfer.Message{
 		Cards: []xfer.Card{
-			&xfer.PushCard{ServerCode: "sc", ProjectCode: "pc"},
-			&xfer.PullCard{ServerCode: "sc", ProjectCode: "pc"},
+			&xfer.PushCard{ServerCode: "sc", ProjectCode: testPC},
+			&xfer.PullCard{ServerCode: "sc", ProjectCode: testPC},
 			&xfer.XDeleteCard{
 				Table:  "test_tbl",
 				PKHash: realHash,

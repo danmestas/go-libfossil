@@ -93,10 +93,6 @@ var syncGaps = map[string]string{
 	// (internal/auth/auth.go:42).
 	"sync.7.3.uvgimme-clone-implies-read": "#312",
 	"sync.7.3.received-hash":              "#308",
-	// Push and pull cards are accepted whatever their project code
-	// (internal/sync/handler.go:459-474).
-	"sync.8.5.project-mismatch-pull": "#309",
-	"sync.8.5.project-mismatch-push": "#309",
 	// A clone refusal is appended to the reply, with no reset and no push
 	// card before it (internal/sync/handler.go:474-480), and a SEQNO of -1
 	// restarts the clone at rid 1 (:501-505).

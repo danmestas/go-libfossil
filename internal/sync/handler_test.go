@@ -53,7 +53,7 @@ func TestHandlePull(t *testing.T) {
 	uuid := storeTestBlob(t, r, []byte("pull me"))
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
@@ -78,7 +78,7 @@ func TestHandleIGotGimme(t *testing.T) {
 	unknownUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: unknownUUID},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -127,7 +127,7 @@ func TestHandleIGotWithPushOnly(t *testing.T) {
 	unknownUUID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: unknownUUID},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -153,7 +153,7 @@ func TestHandleGimme(t *testing.T) {
 	uuid := storeTestBlob(t, r, data)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -196,7 +196,7 @@ func TestHandlePushFile(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -212,6 +212,89 @@ func TestHandlePushFile(t *testing.T) {
 	_, ok := blob.Exists(r.DB(), uuid)
 	if !ok {
 		t.Fatal("pushed blob not stored")
+	}
+}
+
+// TestHandleWrongProjectEndsClone pins that a wrong-project break ends a
+// clone begun earlier in the request: no cfile, clone_seqno or push card
+// follows the error.
+func TestHandleWrongProjectEndsClone(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	storeTestBlob(t, r, []byte("clone data"))
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: strings.Repeat("0", 40)},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	for _, c := range resp.Cards {
+		switch c.(type) {
+		case *xfer.CFileCard, *xfer.CloneSeqNoCard, *xfer.PushCard:
+			t.Fatalf("clone data %T follows the wrong-project error", c)
+		}
+	}
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "wrong project" {
+		t.Fatalf("error cards %v, want one \"wrong project\"", errs)
+	}
+}
+
+// TestHandleLoginWithoutProjectCode pins that a login against a repository
+// with no project-code is refused as a failed login, not a panic: the shared
+// secret cannot be derived without the code.
+func TestHandleLoginWithoutProjectCode(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	if _, err := r.DB().Exec("DELETE FROM config WHERE name='project-code'"); err != nil {
+		t.Fatalf("delete project-code: %v", err)
+	}
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.LoginCard{User: "testuser", Nonce: strings.Repeat("0", 40), Signature: "sig"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "login failed" {
+		t.Fatalf("error cards %v, want one \"login failed\"", errs)
+	}
+}
+
+// TestHandleWrongProject pins §8.5: a push or pull naming another project is
+// refused with "wrong project" before any capability check, and the cards
+// after it are not processed, though the reply still ends with its timestamp.
+func TestHandleWrongProject(t *testing.T) {
+	r := setupPushableTestRepo(t)
+	data := []byte("wrong project")
+	uuid := hash.SHA1(data)
+	other := strings.Repeat("0", 40)
+
+	for _, first := range []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: other},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: other},
+	} {
+		req := &xfer.Message{Cards: []xfer.Card{
+			first,
+			&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+			&xfer.FileCard{UUID: uuid, Content: data},
+		}}
+		resp, err := HandleSync(context.Background(), r, req)
+		if err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+		errs := findCards[*xfer.ErrorCard](resp)
+		if len(errs) != 1 || errs[0].Message != "wrong project" {
+			t.Fatalf("%T: error cards %v, want one \"wrong project\"", first, errs)
+		}
+		if _, ok := blob.Exists(r.DB(), uuid); ok {
+			t.Fatalf("%T: file after a wrong-project card was stored", first)
+		}
+		if len(findCards[*xfer.CommentCard](resp)) != 1 {
+			t.Fatalf("%T: reply has no timestamp comment", first)
+		}
 	}
 }
 
@@ -638,7 +721,7 @@ func TestHandlePushFileStoreFails(t *testing.T) {
 	// File with valid push but bad hash → storeReceivedFile returns error → ErrorCard
 	badUUID := "cccccccccccccccccccccccccccccccccccccccc"
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: badUUID, Content: []byte("wrong hash content")},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -669,7 +752,7 @@ func TestHandlePushDeltaBeforeBaseDoesNotErrorCard(t *testing.T) {
 	targetUUID := hash.SHA1(target)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.CFileCard{UUID: targetUUID, DeltaSrc: baseUUID, Content: deltaBytes},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -712,7 +795,7 @@ func TestHandleFileMissingAfterStore(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	opts := HandleOpts{Buggify: alwaysAtSite("handler.handleFile.missingAfterStore")}
@@ -735,7 +818,7 @@ func TestHandleCFileCard(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.CFileCard{UUID: uuid, Content: data, USize: len(data)},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -760,7 +843,7 @@ func TestHandleLoginAndPragma(t *testing.T) {
 	req := &xfer.Message{Cards: []xfer.Card{
 		&xfer.PragmaCard{Name: "client-version", Values: []string{"22800"}},
 		&xfer.PragmaCard{Name: "unknown-pragma", Values: []string{"ignored"}},
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
@@ -863,11 +946,11 @@ func TestHandleSyncNoSpuriousGimmeForReceivedFile(t *testing.T) {
 		Cards: []xfer.Card{
 			&xfer.PushCard{
 				ServerCode:  "test-server",
-				ProjectCode: "test-project",
+				ProjectCode: testPC,
 			},
 			&xfer.PullCard{
 				ServerCode:  "test-server",
-				ProjectCode: "test-project",
+				ProjectCode: testPC,
 			},
 			&xfer.IGotCard{UUID: uuid},
 			&xfer.FileCard{UUID: uuid, Content: content},
@@ -931,7 +1014,7 @@ func TestHandlerNoPushCardOnPull(t *testing.T) {
 	r := setupSyncTestRepo(t)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
@@ -970,7 +1053,7 @@ func TestEmitIGots_AllBlobs(t *testing.T) {
 
 	// Send a pull request — handler emits igots for ALL non-phantom blobs.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 	)
 
 	igots := cardsByType(resp, xfer.CardIGot)
@@ -1008,7 +1091,7 @@ func TestPragmaReqClusters(t *testing.T) {
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{
 		Cards: []xfer.Card{
-			&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+			&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 			&xfer.PragmaCard{Name: "req-clusters"},
 		},
 	})
@@ -1058,7 +1141,7 @@ func TestPragmaReqClusters_OldClusters(t *testing.T) {
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{
 		Cards: []xfer.Card{
-			&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+			&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 			&xfer.PragmaCard{Name: "req-clusters"},
 		},
 	})
@@ -1087,7 +1170,7 @@ func TestHandlePushRequiresAuth(t *testing.T) {
 	data := []byte("auth test")
 	uuid := hash.SHA1(data)
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
@@ -1110,7 +1193,7 @@ func TestHandlePullRequiresAuth(t *testing.T) {
 	r.DB().Exec("DELETE FROM user WHERE login='nobody'")
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
@@ -1137,7 +1220,7 @@ func TestHandleAuthenticatedPush(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	req := signedRequest(t, "pusher", "secret", pc,
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	)
 	resp, err := HandleSync(context.Background(), r, req)
@@ -1161,7 +1244,7 @@ func TestHandleNobodyPullOnly(t *testing.T) {
 
 	// Pull should work
 	pullReq := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	pullResp, _ := HandleSync(context.Background(), r, pullReq)
 	igots := findCards[*xfer.IGotCard](pullResp)
@@ -1173,7 +1256,7 @@ func TestHandleNobodyPullOnly(t *testing.T) {
 	data := []byte("nobody push attempt")
 	uuid := hash.SHA1(data)
 	pushReq := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	}}
 	pushResp, _ := HandleSync(context.Background(), r, pushReq)
@@ -1207,7 +1290,7 @@ func TestEmitIGots_ExcludesShunAndPrivate(t *testing.T) {
 	}
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 	}}
 	resp, err := HandleSync(context.Background(), r, req)
 	if err != nil {
@@ -1242,7 +1325,7 @@ func TestHandlerPragmaSendPrivate_Accepted(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	r.DB().Exec("UPDATE user SET cap='oix' WHERE login='nobody'")
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 	)
 	for _, c := range resp.Cards {
@@ -1258,7 +1341,7 @@ func TestHandlerPragmaSendPrivate_Rejected(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	r.DB().Exec("UPDATE user SET cap='oi' WHERE login='nobody'")
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 	)
 	errors := findCards[*xfer.ErrorCard](resp)
@@ -1280,7 +1363,7 @@ func TestHandlerPrivateCardAccepted(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	resp := handleReq(t, r,
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PrivateCard{},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	)
@@ -1307,7 +1390,7 @@ func TestHandlerPrivateCardRejected(t *testing.T) {
 	uuid := hash.SHA1(data)
 
 	resp := handleReq(t, r,
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PrivateCard{},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	)
@@ -1339,7 +1422,7 @@ func TestHandlerPublicFileClearsPrivate(t *testing.T) {
 
 	// Push same blob WITHOUT private card — should clear private.
 	resp := handleReq(t, r,
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.FileCard{UUID: uuid, Content: data},
 	)
 
@@ -1364,7 +1447,7 @@ func TestEmitIGotsExcludesPrivate(t *testing.T) {
 
 	// Pull without send-private pragma — private blob should be excluded.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 	)
 
 	igotUUIDs := make(map[string]bool)
@@ -1393,7 +1476,7 @@ func TestEmitIGotsIncludesPrivateWhenAuthorized(t *testing.T) {
 
 	// Pull WITH send-private pragma and x capability.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 	)
 
@@ -1426,7 +1509,7 @@ func TestHandlerIGotPrivate_Authorized(t *testing.T) {
 	unknownUUID := "dddddddddddddddddddddddddddddddddddddd"
 
 	resp := handleReq(t, r,
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 		&xfer.IGotCard{UUID: unknownUUID, IsPrivate: true},
 	)
@@ -1449,7 +1532,7 @@ func TestHandlerIGotPrivate_Unauthorized(t *testing.T) {
 	unknownUUID := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: unknownUUID, IsPrivate: true},
 	)
 
@@ -1475,7 +1558,7 @@ func TestHandlerIGotDoesNotChangeServerPrivateStatus(t *testing.T) {
 	// Client sends a public igot for the existing blob.
 	// Server is authoritative — this should NOT change the server's private status.
 	handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: uuid, IsPrivate: false},
 	)
 
@@ -1493,7 +1576,7 @@ func TestHandleGimmePrivate_Authorized(t *testing.T) {
 	content.MakePrivate(r.DB(), int64(rid))
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 		&xfer.GimmeCard{UUID: uuid},
 	)
@@ -1524,7 +1607,7 @@ func TestHandleGimmePrivate_Unauthorized(t *testing.T) {
 	content.MakePrivate(r.DB(), int64(rid))
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	)
 
@@ -1607,7 +1690,7 @@ func TestHandlerIGotFiltersEmit(t *testing.T) {
 
 	// Client announces it already has blob 1 and blob 2.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.IGotCard{UUID: uuid1},
 		&xfer.IGotCard{UUID: uuid2},
 	)
@@ -1665,7 +1748,7 @@ func TestSendAllClustersExcludesPrivate(t *testing.T) {
 
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{
 		Cards: []xfer.Card{
-			&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+			&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 			&xfer.PragmaCard{Name: "req-clusters"},
 		},
 	})
@@ -1692,7 +1775,7 @@ func TestHandleGimmeWithContentCache(t *testing.T) {
 	cache := content.NewCache(1 << 20)
 
 	req := &xfer.Message{Cards: []xfer.Card{
-		&xfer.PullCard{ServerCode: "test", ProjectCode: "test"},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
 		&xfer.GimmeCard{UUID: uuid},
 	}}
 	resp, err := HandleSyncWithOpts(context.Background(), r, req, HandleOpts{
@@ -1815,7 +1898,7 @@ func TestHandlerIGotFiltersPrivateEmit(t *testing.T) {
 
 	// Client announces it has the first private blob.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "send-private"},
 		&xfer.IGotCard{UUID: uuid, IsPrivate: true},
 	)

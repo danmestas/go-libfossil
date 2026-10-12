@@ -17,14 +17,14 @@ func newTestRepoPair(t *testing.T) (server, client *repo.Repo) {
 	dir := t.TempDir()
 
 	sPath := filepath.Join(dir, "server.fossil")
-	s, err := repo.Create(sPath, "test", simio.CryptoRand{}, "")
+	s, err := repo.Create(sPath, "test", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("server repo: %v", err)
 	}
 	uv.EnsureSchema(s.DB())
 
 	cPath := filepath.Join(dir, "client.fossil")
-	c, err := repo.Create(cPath, "test", simio.CryptoRand{}, "")
+	c, err := repo.Create(cPath, "test", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("client repo: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestSyncUV_PullFromServer(t *testing.T) {
 	}}
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, UV: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -78,7 +78,7 @@ func TestSyncUV_PushToServer(t *testing.T) {
 	}}
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, UV: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -107,7 +107,7 @@ func TestSyncUV_Bidirectional(t *testing.T) {
 	}}
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, UV: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -140,7 +140,7 @@ func TestSyncUV_Deletion(t *testing.T) {
 	}}
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, UV: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -166,7 +166,7 @@ func TestSyncUV_NoUVFlag_SkipsUV(t *testing.T) {
 	}}
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, UV: false, // UV disabled
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)

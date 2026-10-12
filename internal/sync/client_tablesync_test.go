@@ -16,14 +16,14 @@ func newTableSyncRepoPair(t *testing.T) (server, client *repo.Repo) {
 	dir := t.TempDir()
 
 	sPath := filepath.Join(dir, "server.fossil")
-	s, err := repo.Create(sPath, "test", simio.CryptoRand{}, "")
+	s, err := repo.Create(sPath, "test", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("server repo: %v", err)
 	}
 	repo.EnsureSyncSchema(s.DB())
 
 	cPath := filepath.Join(dir, "client.fossil")
-	c, err := repo.Create(cPath, "test", simio.CryptoRand{}, "")
+	c, err := repo.Create(cPath, "test", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("client repo: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestTableSyncEndToEnd(t *testing.T) {
 
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, XTableSync: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -170,7 +170,7 @@ func TestTableSyncDeletion(t *testing.T) {
 
 	_, err = Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, XTableSync: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
@@ -224,7 +224,7 @@ func TestTableSyncSchemaDeployment(t *testing.T) {
 
 	_, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true, Push: true, XTableSync: true,
-		ProjectCode: "p", ServerCode: "s",
+		ProjectCode: testPC, ServerCode: "s",
 	})
 	if err != nil {
 		t.Fatalf("Sync: %v", err)

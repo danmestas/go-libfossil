@@ -70,7 +70,7 @@ func stepsFor(defaultSteps int) int {
 
 func createMasterRepoAt(t *testing.T, path string) *repo.Repo {
 	t.Helper()
-	r, err := repo.Create(path, "master", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "master", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create master: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestScenarioPeerSync(t *testing.T) {
 	var leafRepos [2]*repo.Repo
 	for i := range 2 {
 		path := filepath.Join(tmpDir, fmt.Sprintf("peer-%d.fossil", i))
-		r, err := repo.Create(path, "peeruser", simRand, "")
+		r, err := repo.Create(path, "peeruser", simRand, testPC)
 		if err != nil {
 			t.Fatalf("create peer-%d: %v", i, err)
 		}
@@ -559,7 +559,7 @@ func TestScenarioClone(t *testing.T) {
 	tmpDir := t.TempDir()
 	leafPath := filepath.Join(tmpDir, "clone-leaf.fossil")
 	simRand := simio.NewSeededRand(seed)
-	leafRepo, err := repo.Create(leafPath, "cloneuser", simRand, "")
+	leafRepo, err := repo.Create(leafPath, "cloneuser", simRand, testPC)
 	if err != nil {
 		t.Fatalf("create leaf: %v", err)
 	}
@@ -1533,7 +1533,7 @@ func TestScenarioPrivateSync(t *testing.T) {
 	simRand := simio.NewSeededRand(seed)
 
 	leafPrivPath := filepath.Join(tmpDir, "leaf-priv.fossil")
-	leafPriv, err := repo.Create(leafPrivPath, "user", simRand, "")
+	leafPriv, err := repo.Create(leafPrivPath, "user", simRand, testPC)
 	if err != nil {
 		t.Fatalf("create leaf-priv: %v", err)
 	}
@@ -1541,7 +1541,7 @@ func TestScenarioPrivateSync(t *testing.T) {
 	leafPriv.DB().Exec("UPDATE config SET value=? WHERE name='project-code'", projCode)
 
 	leafPubPath := filepath.Join(tmpDir, "leaf-pub.fossil")
-	leafPub, err := repo.Create(leafPubPath, "user", simRand, "")
+	leafPub, err := repo.Create(leafPubPath, "user", simRand, testPC)
 	if err != nil {
 		t.Fatalf("create leaf-pub: %v", err)
 	}

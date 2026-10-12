@@ -123,7 +123,7 @@ func TestIntegrationPushToFossilServer(t *testing.T) {
 
 	// 1. Create a Go-managed local repo with a checkin
 	localPath := filepath.Join(dir, "local.fossil")
-	r, err := repo.Create(localPath, "testuser", simio.CryptoRand{}, "")
+	r, err := repo.Create(localPath, "testuser", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create: %v", err)
 	}

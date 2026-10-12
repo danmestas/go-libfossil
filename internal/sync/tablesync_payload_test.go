@@ -66,7 +66,7 @@ func TestHandleXRowRejectsHostilePayload(t *testing.T) {
 		t.Run(payload, func(t *testing.T) {
 			r := setupKVRepo(t)
 			req := &xfer.Message{Cards: []xfer.Card{
-				&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+				&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 				&xfer.XRowCard{Table: "kv", PKHash: kvPKHash("row1"), MTime: 300,
 					Content: []byte(payload)},
 			}}
@@ -90,7 +90,7 @@ func TestHandleXDeleteRejectsHostilePKData(t *testing.T) {
 		t.Run(payload, func(t *testing.T) {
 			r := setupKVRepo(t)
 			req := &xfer.Message{Cards: []xfer.Card{
-				&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+				&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 				&xfer.XDeleteCard{Table: "kv", PKHash: kvPKHash("row1"), MTime: 300,
 					PKData: []byte(payload)},
 			}}
@@ -151,7 +151,7 @@ func FuzzTableSyncPayload(f *testing.F) {
 		}
 		pk := kvPKHash("row1")
 		req := &xfer.Message{Cards: []xfer.Card{
-			&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+			&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 			&xfer.XRowCard{Table: "kv", PKHash: pk, MTime: 300, Content: payload},
 			&xfer.XDeleteCard{Table: "kv", PKHash: pk, MTime: 400, PKData: payload},
 		}}

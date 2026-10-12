@@ -14,10 +14,15 @@ import (
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
+// testPC is the project code test repositories are created with. A server
+// refuses a push or pull card naming another project (§8.5), so the
+// repositories a test syncs share it, as a clone shares its origin's.
+const testPC = "77dc1a9065e8b8ff0d35abe4e26498cdf9576d6a"
+
 func createMasterRepo(t *testing.T) *repo.Repo {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "master.fossil")
-	r, err := repo.Create(path, "master", simio.CryptoRand{}, "")
+	r, err := repo.Create(path, "master", simio.CryptoRand{}, testPC)
 	if err != nil {
 		t.Fatalf("repo.Create master: %v", err)
 	}

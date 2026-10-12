@@ -103,13 +103,20 @@ func New(cfg SimConfig) (*Simulator, error) {
 	}
 	heap.Init(&s.events)
 
+	// Leaves stand for clones of the upstream, so they share its project
+	// code: a server refuses a push or pull naming another project (§8.5).
+	projectCode := ""
+	if mf, ok := cfg.Upstream.(*MockFossil); ok {
+		projectCode = repoProjectCode(mf.Repo())
+	}
+
 	// Create leaf nodes.
 	simRand := simio.NewSeededRand(rng.Int63())
 	for i := range cfg.NumLeaves {
 		id := NodeID(fmt.Sprintf("leaf-%d", i))
 
 		repoPath := filepath.Join(cfg.TmpDir, fmt.Sprintf("%s.fossil", id))
-		r, err := repo.Create(repoPath, "simuser", simRand, "")
+		r, err := repo.Create(repoPath, "simuser", simRand, projectCode)
 		if err != nil {
 			return nil, fmt.Errorf("dst: create repo for %s: %w", id, err)
 		}
@@ -343,4 +350,15 @@ func (s *Simulator) Close() error {
 		}
 	}
 	return firstErr
+}
+
+// repoProjectCode returns r's project-code, or "" when it has none, in which
+// case each leaf is given a fresh one.
+func repoProjectCode(r *repo.Repo) string {
+	var code string
+	if err := r.DB().QueryRow(
+		"SELECT value FROM config WHERE name='project-code'").Scan(&code); err != nil {
+		return ""
+	}
+	return code
 }

@@ -180,6 +180,8 @@ type handler struct {
 	pullOK        bool                      // client sent a valid pull card
 	cloneMode     bool                      // client sent a clone card
 	fatal         bool                      // a card rule ended the request; resp holds only its error
+	broke         bool                      // card loop broken; the post-loop still runs
+	projectCode   string                    // the repository's project-code
 	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent bool                      // true after sending UV catalog
@@ -218,13 +220,15 @@ func (h *handler) initAuth() {
 // fossil's "error login\sfailed" (src/xfer.c page_xfer): fossil does not go
 // on serving the request as nobody, and nor does this.
 func (h *handler) handleLoginCard(c *xfer.LoginCard) {
-	var projectCode string
-	err := h.repo.DB().QueryRow(
-		"SELECT value FROM config WHERE name='project-code'").Scan(&projectCode)
-	var u auth.User
-	if err == nil {
-		u, err = auth.VerifyLogin(h.repo.DB(), projectCode, c)
+	// A login's shared secret is salted with the project code; a repository
+	// without one can verify no login, and fossil's page_xfer stops there
+	// too ("missing project code"). Refuse it rather than ask VerifyLogin,
+	// which takes an empty project code as a programmer error.
+	if h.projectCode == "" {
+		h.fail("login failed")
+		return
 	}
+	u, err := auth.VerifyLogin(h.repo.DB(), h.projectCode, c)
 	if err != nil {
 		h.fail("login failed")
 		return
@@ -291,20 +295,31 @@ func replyOnlyLine(c xfer.Card) string {
 	return buf.String()
 }
 
-// failFileCard answers a file/cfile/uvfile line the decoder could not frame.
-// src/xfer.c resets the reply, emits the handler's own message, and breaks out
-// of the card loop; the caller stops processing later request cards.
-func (h *handler) failFileCard(c *xfer.BadFileCard) {
-	if c == nil {
-		panic("handler.failFileCard: c must not be nil")
-	}
+// breakLoop answers a card with fossil's cgi_reset_content, error and break:
+// the reply so far is reset to one error card and no later request card is
+// processed, but the post-loop work and the timestamp comment still follow,
+// as they do after page_xfer's card loop.
+func (h *handler) breakLoop(msg string) {
 	h.resetContent()
-	h.resp = append(h.resp, &xfer.ErrorCard{Message: c.Message})
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: msg})
+	h.broke = true
+	// The reset also discards the cfiles page_xfer's clone card already
+	// sent, so no clone batch or clone push card follows the error.
+	h.cloneMode = false
 }
 
 func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
 	// Initialize auth state from nobody user.
 	h.initAuth()
+
+	// A login's shared secret and every push and pull card are checked
+	// against the project code. A repository without one leaves it empty,
+	// which no artifact hash matches.
+	err := h.repo.DB().QueryRow(
+		"SELECT value FROM config WHERE name='project-code'").Scan(&h.projectCode)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("HandleSync: project-code: %w", err)
+	}
 
 	// Load synced tables.
 	if err := h.loadSyncedTables(); err != nil {
@@ -324,6 +339,9 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		h.handleControlCard(card)
 		if h.fatal {
 			return &xfer.Message{Cards: h.resp}, nil
+		}
+		if h.broke {
+			break
 		}
 	}
 
@@ -428,27 +446,26 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 	// fossil's page_xfer resets its reply, emits the handler's error and
 	// breaks out of the card loop (§5.2, §7.3). We stop processing the
 	// remaining request cards here too, then still emit the post-loop
-	// inventory below, as fossil does after its break.
-	broke := false
+	// inventory below, as fossil does after its break. A control card may
+	// already have broken out (h.broke), and then no data card is processed.
 	for _, card := range cards {
+		if h.broke {
+			break
+		}
 		switch c := card.(type) {
 		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
 			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
 			}
 		case *xfer.BadFileCard:
-			h.failFileCard(c)
-			broke = true
-		}
-		if broke {
-			break
+			h.breakLoop(c.Message)
 		}
 	}
 	// Remaining data cards (igot, gimme, bad commands, etc.), in request
 	// order so a bad command resets the reply built before it and parsing
 	// goes on past it.
 	for _, card := range cards {
-		if broke {
+		if h.broke {
 			break
 		}
 		switch c := card.(type) {
@@ -493,61 +510,11 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	case *xfer.PragmaCard:
 		h.handlePragma(c)
 	case *xfer.PushCard:
-		if auth.CanPush(h.caps) {
-			h.pushOK = true
-		} else if h.pullOK {
-			// A requester who may read but not write is told to pull only,
-			// not refused, as fossil's page_xfer answers a push card with
-			// "message pull only - not authorized to push" once a pull card
-			// has set isPull. The pull still proceeds (§10.2). The pull card
-			// precedes the push card in a canonical request, so pullOK is set.
-			h.resp = append(h.resp, &xfer.MessageCard{
-				Message: "pull only - not authorized to push",
-			})
-		} else {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: "push denied: insufficient capabilities",
-			})
-		}
+		h.handlePushCard(c)
 	case *xfer.PullCard:
-		if auth.CanPull(h.caps) {
-			h.pullOK = true
-		} else {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: "pull denied: insufficient capabilities",
-			})
-		}
+		h.handlePullCard(c)
 	case *xfer.CloneCard:
-		if !auth.CanClone(h.caps) {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: "clone denied: insufficient capabilities",
-			})
-			return
-		}
-		// §8.1: an otherwise authorized three-token clone with VERSION >= 2
-		// and a digit-only SEQNO of zero or less clears accumulated output,
-		// rolls back, emits this error, and parses no later request card.
-		//
-		// The mandated rollback is satisfied vacuously: no card handled
-		// before processDataCards writes anything, so returning here leaves
-		// nothing to undo. That depends on an ordering nothing enforces —
-		// the day a control card starts writing (§3.5's ci-lock is the
-		// obvious candidate, since a lock taken ahead of this card would
-		// survive the abort), this needs a real transaction instead.
-		if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
-			h.fail("invalid clone sequence number")
-			return
-		}
-		h.cloneMode = true
-		// The pagination cursor rides on the clone card and nowhere else
-		// (§8.1; canonical xfer.c:1553 reads token 2 of `clone VERSION
-		// SEQNO`). A request carrying no usable cursor — a bare `clone`, or
-		// a SEQNO that fails digit-only recognition — starts from the first
-		// rid. §8.1 withholds the fatal above from both of those cases.
-		h.cloneSeq = c.SeqNo
-		if h.cloneSeq <= 0 {
-			h.cloneSeq = 1
-		}
+		h.handleCloneCard(c)
 	case *xfer.CloneSeqNoCard:
 		// Deliberately ignored. clone_seqno is a reply-only card, so no
 		// conforming client sends one; canonical answers `bad command`. We
@@ -562,6 +529,97 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	case *xfer.SchemaCard:
 		h.handleSchemaCard(c)
 	}
+}
+
+// handlePushCard accepts a push from a requester with Write, after the
+// project check.
+func (h *handler) handlePushCard(c *xfer.PushCard) {
+	if h.wrongProject(c.ProjectCode) {
+		return
+	}
+	if auth.CanPush(h.caps) {
+		h.pushOK = true
+	} else if h.pullOK {
+		// A requester who may read but not write is told to pull only,
+		// not refused, as fossil's page_xfer answers a push card with
+		// "message pull only - not authorized to push" once a pull card
+		// has set isPull. The pull still proceeds (§10.2). The pull card
+		// precedes the push card in a canonical request, so pullOK is set.
+		h.resp = append(h.resp, &xfer.MessageCard{
+			Message: "pull only - not authorized to push",
+		})
+	} else {
+		h.resp = append(h.resp, &xfer.ErrorCard{
+			Message: "push denied: insufficient capabilities",
+		})
+	}
+}
+
+// handlePullCard accepts a pull from a requester with Read, after the project
+// check.
+func (h *handler) handlePullCard(c *xfer.PullCard) {
+	if h.wrongProject(c.ProjectCode) {
+		return
+	}
+	if auth.CanPull(h.caps) {
+		h.pullOK = true
+	} else {
+		h.resp = append(h.resp, &xfer.ErrorCard{
+			Message: "pull denied: insufficient capabilities",
+		})
+	}
+}
+
+// handleCloneCard starts a clone for a requester with Clone, at the rid the
+// card's SEQNO names.
+func (h *handler) handleCloneCard(c *xfer.CloneCard) {
+	if !auth.CanClone(h.caps) {
+		h.resp = append(h.resp, &xfer.ErrorCard{
+			Message: "clone denied: insufficient capabilities",
+		})
+		return
+	}
+	// §8.1: an otherwise authorized three-token clone with VERSION >= 2
+	// and a digit-only SEQNO of zero or less clears accumulated output,
+	// rolls back, emits this error, and parses no later request card.
+	//
+	// The mandated rollback is satisfied vacuously: no card handled
+	// before processDataCards writes anything, so returning here leaves
+	// nothing to undo. That depends on an ordering nothing enforces —
+	// the day a control card starts writing (§3.5's ci-lock is the
+	// obvious candidate, since a lock taken ahead of this card would
+	// survive the abort), this needs a real transaction instead.
+	if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
+		h.fail("invalid clone sequence number")
+		return
+	}
+	h.cloneMode = true
+	// The pagination cursor rides on the clone card and nowhere else
+	// (§8.1; canonical xfer.c:1553 reads token 2 of `clone VERSION
+	// SEQNO`). A request carrying no usable cursor — a bare `clone`, or
+	// a SEQNO that fails digit-only recognition — starts from the first
+	// rid. §8.1 withholds the fatal above from both of those cases.
+	h.cloneSeq = c.SeqNo
+	if h.cloneSeq <= 0 {
+		h.cloneSeq = 1
+	}
+}
+
+// wrongProject refuses a push or pull card naming another project, ahead of
+// any capability check, as page_xfer does with "error wrong\sproject" and a
+// break (§8.5). The servercode beside it is informational and not checked.
+//
+// This is deliberately stricter than fossil in one respect. Control cards
+// are handled in a pass before data cards, so the break also stops file
+// cards that came earlier in the request, which fossil, reading cards in
+// order, would already have stored. A conforming client sends push and pull
+// first, so only a malformed request sees the difference.
+func (h *handler) wrongProject(code string) bool {
+	if code == h.projectCode {
+		return false
+	}
+	h.breakLoop("wrong project")
+	return true
 }
 
 // handlePragma acts on the pragmas the server understands and ignores the

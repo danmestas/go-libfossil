@@ -30,7 +30,7 @@ func TestHandlerPragmaUVHash_Match(t *testing.T) {
 
 	// Send matching hash — should get no uvigot back.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "uv-hash", Values: []string{h}},
 	)
 
@@ -51,7 +51,7 @@ func TestHandlerPragmaUVHash_Mismatch(t *testing.T) {
 
 	// Send wrong hash — should get uvigot for each file + pragma uv-push-ok.
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.PragmaCard{Name: "uv-hash", Values: []string{"wrong"}},
 	)
 
@@ -80,7 +80,7 @@ func TestHandlerUVGimme(t *testing.T) {
 	uv.Write(r.DB(), "doc.txt", []byte("document content"), 100)
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.UVGimmeCard{Name: "doc.txt"},
 	)
 
@@ -101,7 +101,7 @@ func TestHandlerUVFile_Accepted(t *testing.T) {
 	}
 
 	resp := handleReq(t, r,
-		&xfer.PushCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.UVFileCard{
 			Name:    "new.txt",
 			MTime:   100,
@@ -161,7 +161,7 @@ func TestHandlerUVIGot_ServerPulls(t *testing.T) {
 	// Server has nothing — client announces a file via uvigot.
 
 	resp := handleReq(t, r,
-		&xfer.PullCard{ServerCode: "s", ProjectCode: "p"},
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.UVIGotCard{Name: "client.txt", MTime: 100, Hash: "abc", Size: 10},
 	)
 

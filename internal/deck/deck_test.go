@@ -274,7 +274,9 @@ func TestParseFossilEncodedFields(t *testing.T) {
 // distinguishable (nil) so crosslink can bind SQL NULL instead of a bare
 // empty string. Regression coverage for issue #50.
 func TestParseUCardStates(t *testing.T) {
-	body := "D 2024-01-15T10:30:00.000\n"
+	// A comment makes each artifact a valid check-in (§5.2 requires only D and
+	// Z of one), so the only variable under test is the U card's presence.
+	body := "C c\nD 2024-01-15T10:30:00.000\n"
 	h := md5.Sum([]byte(body))
 	absent, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", body, h)))
 	if err != nil {
@@ -284,7 +286,7 @@ func TestParseUCardStates(t *testing.T) {
 		t.Fatalf("absent U-card: U = %v, want nil", *absent.U)
 	}
 
-	emptyBody := "D 2024-01-15T10:30:00.000\nU \n"
+	emptyBody := "C c\nD 2024-01-15T10:30:00.000\nU \n"
 	h = md5.Sum([]byte(emptyBody))
 	present, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", emptyBody, h)))
 	if err != nil {
@@ -294,7 +296,7 @@ func TestParseUCardStates(t *testing.T) {
 		t.Fatalf("empty U-card: U = %v, want \"anonymous\"", present.U)
 	}
 
-	valueBody := "D 2024-01-15T10:30:00.000\nU alice\n"
+	valueBody := "C c\nD 2024-01-15T10:30:00.000\nU alice\n"
 	h = md5.Sum([]byte(valueBody))
 	valued, err := Parse([]byte(fmt.Sprintf("%sZ %x\n", valueBody, h)))
 	if err != nil {

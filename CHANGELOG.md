@@ -113,6 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every check-in on the branch. It used to be written as a singleton
   (`+sym-trunk`), which stopped at the root (#289).
 
+- `deck.Parse` applies the §5 structural-type rules once a type is determined:
+  the §5.2 card-legality table (each type's allowed and required cards, from
+  fossil's `manifestCardTypes`), so a card the type disallows or a required
+  card left out is rejected, and the §5.4 semantic checks -- a control
+  artifact's tags may not target itself, a technote's tags are all
+  self-referential singletons, a forum post carries at most one of an H or I
+  card and at most one parent. Type determination now falls back to a control
+  artifact (not an empty check-in) when no card sets a type and there is no
+  comment, file or parent, matching fossil. This also makes a missing Z card a
+  required-card rejection rather than a special case (#273).
+
+
 - `deck.Marshal` re-encodes what `deck.Parse` read, so `Marshal(Parse(x)) == x`
   for a canonical artifact. A present-but-empty C comment, N mimetype or T
   value, and a bare P card, are kept distinct from an absent one and re-emitted

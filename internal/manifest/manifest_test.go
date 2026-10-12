@@ -1264,12 +1264,12 @@ func TestCrosslinkCluster(t *testing.T) {
 		t.Fatalf("blobs not in unclustered: rid1=%d rid2=%d", count1, count2)
 	}
 
-	// Create a cluster manifest with these two blobs as members
-	clusterTime := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+	// Create a cluster manifest with these two blobs as members. A cluster
+	// carries only M cards and its Z checksum (§5.2); a D card is not allowed
+	// in one, so the deck has none.
 	d := &deck.Deck{
 		Type: deck.Cluster,
 		M:    []string{uuid1, uuid2},
-		D:    clusterTime,
 	}
 
 	// Marshal and store the cluster manifest blob

@@ -33,6 +33,30 @@ func FossilBinary() string {
 	return path
 }
 
+// IsolateFossilHome points HOME, FOSSIL_HOME and XDG_CONFIG_HOME at a fresh
+// per-test directory for the rest of the test, and returns it. Fossil keeps
+// a per-user database (~/.fossil or ~/.config/fossil.db) and records every
+// repository and checkout it touches there, never removing the rows; without
+// this, each test run leaks rows into the developer's real config and
+// contends for its lock (#284). Child processes inherit the environment, so
+// every exec.Command in the test is covered without per-call plumbing.
+// RequireFossilBin calls it, so a test that resolves the binary through that
+// gets isolation by default; tests that resolve fossil another way must call
+// it themselves (TestFossilInvocationsIsolateHome enforces this). It cannot
+// be used from a parallel test, because t.Setenv forbids that.
+func IsolateFossilHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, ".config")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatalf("creating isolated fossil home: %v", err)
+	}
+	t.Setenv("HOME", dir)
+	t.Setenv("FOSSIL_HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	return dir
+}
+
 // RequireFossilBin resolves the fossil binary for tests that need canonical
 // Fossil to run. It resolves the same way FossilBinary does (the FOSSIL_BIN
 // override, then PATH). When no binary is found it skips the test, unless
@@ -43,6 +67,7 @@ func FossilBinary() string {
 func RequireFossilBin(t *testing.T) string {
 	t.Helper()
 	if bin := FossilBinary(); bin != "" {
+		IsolateFossilHome(t)
 		return bin
 	}
 	where := "set FOSSIL_BIN or install fossil on PATH"

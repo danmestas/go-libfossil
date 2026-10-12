@@ -168,10 +168,7 @@ func TestMeasureServeWireAmplification(t *testing.T) {
 	if os.Getenv("WIRE_MEASURE") != "1" {
 		t.Skip("set WIRE_MEASURE=1 to run the serve-side wire measurement")
 	}
-	fossilBin, err := exec.LookPath("fossil")
-	if err != nil {
-		t.Skip("no fossil binary on PATH")
-	}
+	fossilBin := testutil.RequireFossilBin(t)
 	moduleRoot := os.Getenv("MODULE_ROOT")
 	if moduleRoot == "" {
 		t.Fatal("set MODULE_ROOT to the go-libfossil checkout root")

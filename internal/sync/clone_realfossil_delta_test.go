@@ -14,6 +14,7 @@ import (
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // TestCloneRealFossilWithDeltaChain drives a fixed corpus (a linear delta
@@ -41,10 +42,7 @@ import (
 // check-ins. This test asserts real usability -- it clones, rebuilds, and
 // requires all six check-ins to materialize.
 func TestCloneRealFossilWithDeltaChain(t *testing.T) {
-	bin, err := exec.LookPath("fossil")
-	if err != nil {
-		t.Skip("no fossil binary on PATH")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	dir := t.TempDir()
 	srcRepo, err := repo.Create(filepath.Join(dir, "source.fossil"), "testuser", simio.CryptoRand{}, "")

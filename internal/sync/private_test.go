@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -217,20 +218,33 @@ func TestSyncPrivateEndToEnd(t *testing.T) {
 		}
 
 		// Sync with Private=true, but server denies it.
-		syncViaHandler(t, serverRepo, clientRepo, SyncOpts{
+		res := syncViaHandler(t, serverRepo, clientRepo, SyncOpts{
 			Pull:    true,
 			Push:    true,
 			Private: true,
 		})
 
-		// Public blob should arrive.
-		if _, ok := blob.Exists(clientRepo.DB(), pubUUID); !ok {
-			t.Error("client missing public blob")
-		}
-
-		// Private blob should NOT arrive (server denied send-private).
+		// The server denies send-private with an error card. §10.1 (and
+		// fossil's client_sync) end the reply-card loop at an error card, and
+		// the server emits the denial before its inventory igots, so a first
+		// --private pull against a server that denies private receives no
+		// content this session. What matters for security is unchanged: the
+		// private blob never reaches a client lacking 'x'.
 		if _, ok := blob.Exists(clientRepo.DB(), uuid); ok {
 			t.Error("client has private blob despite lacking 'x' capability")
+		}
+		if _, ok := blob.Exists(clientRepo.DB(), pubUUID); ok {
+			t.Error("client has public blob; the denial error should end the " +
+				"reply loop before the inventory, as fossil's client does")
+		}
+		reported := false
+		for _, e := range res.Errors {
+			if strings.Contains(e, "not authorized to sync private content") {
+				reported = true
+			}
+		}
+		if !reported {
+			t.Errorf("sync did not surface the send-private denial: %v", res.Errors)
 		}
 	})
 }

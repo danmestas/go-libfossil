@@ -88,6 +88,17 @@ type session struct {
 	nUvFileRcvd         int
 	nGimmeRcvd          int // cumulative gimmes received across all rounds
 	nextIsPrivate       bool // true when a PrivateCard precedes the next file/cfile
+	// pushStopped is set the moment the server's "message pull only ..." is
+	// read (§10.2): the client keeps pulling but answers no further gimme, as
+	// fossil's client_sync clears SYNC_PUSH mid-reply, so a gimme after the
+	// message in the same reply goes unanswered.
+	pushStopped bool
+	// pushCardDropped lags pushStopped by one request. fossil emits the next
+	// request's push card before it reads the reply that stops the push, so
+	// the request built right after the message still carries its push card;
+	// only the one after that drops it. buildRequest promotes pushStopped into
+	// this after emitting each request's push card.
+	pushCardDropped bool
 	// visibilityUpdates buffers this round's igot-announced status changes so
 	// they are written in one transaction rather than one per card.
 	visibilityUpdates []visibilityUpdate

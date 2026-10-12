@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -270,13 +271,24 @@ func (h *handler) resetContent() {
 // badCommand answers a line no card rule accepts. §5.2, src/xfer.c page_xfer's
 // final "else": the reply so far is reset, an "error bad\scommand:\s<LINE>"
 // card is emitted, and parsing goes on -- so a later card still takes effect.
-// c.Line keeps its terminating LF, which the error quotes verbatim.
-func (h *handler) badCommand(c *xfer.BadCommandCard) {
-	if c == nil {
-		panic("handler.badCommand: c must not be nil")
-	}
+// line keeps its terminating LF, which the error quotes verbatim.
+func (h *handler) badCommand(line string) {
 	h.resetContent()
-	h.resp = append(h.resp, &xfer.ErrorCard{Message: "bad command: " + c.Line})
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: "bad command: " + line})
+}
+
+// replyOnlyLine re-encodes a card the server should not have received (error,
+// message -- reply-only in fossil's page_xfer, which has no branch for them)
+// into the wire line it arrived as, so badCommand can quote it the way fossil
+// quotes blob_str(&xfer.line). The LF EncodeCard writes is the one the error
+// text carries.
+func replyOnlyLine(c xfer.Card) string {
+	var buf bytes.Buffer
+	if err := xfer.EncodeCard(&buf, c); err != nil {
+		// error and message cards always encode; this is a programmer error.
+		panic("handler.replyOnlyLine: " + err.Error())
+	}
+	return buf.String()
 }
 
 // failFileCard answers a file/cfile/uvfile line the decoder could not frame.
@@ -443,7 +455,11 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard, *xfer.BadFileCard:
 			continue // Already handled above.
 		case *xfer.BadCommandCard:
-			h.badCommand(c)
+			h.badCommand(c.Line)
+		case *xfer.ErrorCard, *xfer.MessageCard:
+			// error and message are reply-only: a client that sends one gets a
+			// bad command, as fossil's page_xfer has no branch for them (§5.2).
+			h.badCommand(replyOnlyLine(c))
 		default:
 			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
@@ -479,6 +495,15 @@ func (h *handler) handleControlCard(card xfer.Card) {
 	case *xfer.PushCard:
 		if auth.CanPush(h.caps) {
 			h.pushOK = true
+		} else if h.pullOK {
+			// A requester who may read but not write is told to pull only,
+			// not refused, as fossil's page_xfer answers a push card with
+			// "message pull only - not authorized to push" once a pull card
+			// has set isPull. The pull still proceeds (§10.2). The pull card
+			// precedes the push card in a canonical request, so pullOK is set.
+			h.resp = append(h.resp, &xfer.MessageCard{
+				Message: "pull only - not authorized to push",
+			})
 		} else {
 			h.resp = append(h.resp, &xfer.ErrorCard{
 				Message: "push denied: insufficient capabilities",

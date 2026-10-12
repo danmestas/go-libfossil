@@ -5,13 +5,6 @@ import "testing"
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
 var syncGaps = map[string]string{
-	// The server records a client-sent error card and reads on, where fossil
-	// answers it with "bad command" (internal/sync/handler.go handleDataCard
-	// has no ErrorCard case).
-	"sync.5.2.client-error-card": "#300",
-	// The client records an error card and reads on, so it does not end the
-	// reply-card loop (internal/sync/client.go processResponse).
-	"sync.10.1.error-prefix": "#300",
 	// Termination is not Section 3.7's: a phantom is asked for until it
 	// has aged three rounds (internal/sync/client.go:605-613), and any
 	// file received continues the session (:620).
@@ -69,10 +62,6 @@ var syncGaps = map[string]string{
 	// A clone reply carries no unversioned catalog
 	// (internal/sync/handler.go:475).
 	"sync.8.4.clone-uv-catalog": "#306",
-	// A message card is only recorded; "pull only" has no effect
-	// (internal/sync/client.go:547).
-	"sync.10.2.pull-only":       "#300",
-	"sync.10.2.pull-only-gimme": "#300",
 	// pragma send-private goes after the operation cards in every request
 	// (internal/sync/client.go:120).
 	"sync.3.2.send-private-first": "#307",

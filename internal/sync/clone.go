@@ -401,10 +401,7 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 	var cards []xfer.Card
 
 	// Pragma: client-version (every round)
-	cards = append(cards, &xfer.PragmaCard{
-		Name:   "client-version",
-		Values: []string{"22800", "20260315", "120000"},
-	})
+	cards = append(cards, versionPragma("client-version"))
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound

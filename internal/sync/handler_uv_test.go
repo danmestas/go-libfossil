@@ -80,6 +80,7 @@ func TestHandlerUVGimme(t *testing.T) {
 	uv.Write(r.DB(), "doc.txt", []byte("document content"), 100)
 
 	resp := handleReq(t, r,
+		versionPragma("client-version"),
 		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
 		&xfer.UVGimmeCard{Name: "doc.txt"},
 	)

@@ -1,5 +1,7 @@
 package conformance
 
+import "strings"
+
 // More server cases: version negotiation and the SHA3 gate it drives,
 // admission, logins go-libfossil does not take, and the pragmas it does
 // not answer.
@@ -99,6 +101,50 @@ func serverAdmissionCases() []syncServerCase {
 		want: all(completed, onlyError("not authorized to push configuration"),
 			repoCount("SELECT count(*) FROM config WHERE name='project-name'"+
 				" AND value='pushed'", 0)),
+	}}
+}
+
+// serverCookieRefusalCases are Section 6.5's cookie login refused the way a
+// body login is, and cookies that carry no login at all.
+func serverCookieRefusalCases() []syncServerCase {
+	push := []string{"{CV}", pushCard, "file {N1} {N1.size}", "{N1.data}", "{R}"}
+	pull := []string{"{CV}", pullCard, "{R}"}
+	return []syncServerCase{{
+		// The nonce is over another body: a cookie replayed onto this one.
+		Case:   Case{ID: "sync.6.5.cookie-replayed", Req: "SP-6.4-5"},
+		setup:  closed,
+		cookie: "alice secret stale",
+		body:   push,
+		want:   all(syncReply, onlyError("login failed"), held("N1", 0)),
+	}, {
+		Case:   Case{ID: "sync.6.5.cookie-bad-signature", Req: "SP-6.4-3"},
+		setup:  closed,
+		cookie: "alice wrong",
+		body:   push,
+		want:   all(syncReply, onlyError("login failed"), held("N1", 0)),
+	}, {
+		// The cookie is the first login card, so the body's is a second.
+		Case:   Case{ID: "sync.6.5.cookie-and-body-login", Req: "SP-6.1-2"},
+		setup:  closed,
+		cookie: "alice secret",
+		body:   append([]string{"{LOGIN alice secret}"}, push...),
+		want:   all(syncReply, onlyError("multiple login"), held("N1", 0)),
+	}, {
+		// nobody needs no signature, but the nonce is still checked.
+		Case:   Case{ID: "sync.6.5.cookie-nobody-bad-nonce", Req: "SP-6.4-5"},
+		cookie: "nobody x stale",
+		body:   pull,
+		want:   all(syncReply, onlyError("login failed"), noCard("igot ")),
+	}, {
+		Case:      Case{ID: "sync.6.5.cookie-malformed", Req: "SP-6.5-4"},
+		rawCookie: "x-f-l-c=login+alice",
+		body:      pull,
+		want:      all(completed, noErrors, withCard("igot {A1}")),
+	}, {
+		Case:      Case{ID: "sync.6.5.cookie-oversized", Req: "SP-6.5-4"},
+		rawCookie: "x-f-l-c=" + strings.Repeat("a", 6000),
+		body:      pull,
+		want:      all(completed, noErrors, withCard("igot {A1}")),
 	}}
 }
 

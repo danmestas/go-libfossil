@@ -183,6 +183,7 @@ type handler struct {
 	fatal         bool                      // a card rule ended the request; resp holds only its error
 	broke         bool                      // card loop broken; the post-loop still runs
 	projectCode   string                    // the repository's project-code
+	peerVersion   int                       // client's release, from client-version
 	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent bool                      // true after sending UV catalog
@@ -635,6 +636,14 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		panic("handler.handlePragma: c must not be nil")
 	}
 	switch {
+	case c.Name == "client-version" && len(c.Values) >= 1:
+		// §9.1: the client's release gates SHA3 content (§7.6). A
+		// client-version carrying DATE and TIME is answered in place, as
+		// page_xfer answers it, so the answer precedes any content.
+		h.peerVersion = peerVersion(c)
+		if len(c.Values) >= 3 {
+			h.resp = append(h.resp, versionPragma("server-version"))
+		}
 	case c.Name == "uv-hash" && len(c.Values) >= 1:
 		if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -763,6 +772,13 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		return nil // private blob, client not authorized — skip.
+	}
+	// §7.6: SHA3 content is withheld from a client older than SHA3
+	// support, or one that named no release; the refusal is appended, so
+	// what the reply already holds stands (§10.1).
+	if sha3Barred(c.UUID, h.peerVersion) {
+		h.resp = append(h.resp, sha3Refusal())
+		return nil
 	}
 	data, err := h.cache.Expand(h.repo.DB(), rid)
 	if err != nil {
@@ -1255,6 +1271,12 @@ func (h *handler) buildCloneArtifact(
 	// delta that names it.
 	for i := len(chain) - 1; i >= 0; i-- {
 		m := chain[i]
+		rids = append(rids, m.rid)
+		// §7.6, Appendix A.2: the refusal takes a SHA3 artifact's place.
+		if sha3Barred(m.uuid, h.peerVersion) {
+			cards = append(cards, sha3Refusal())
+			continue
+		}
 		var data []byte
 		if m.srcUUID == "" {
 			data, err = content.Expand(h.repo.DB(), libfossil.FslID(m.rid))
@@ -1277,7 +1299,6 @@ func (h *handler) buildCloneArtifact(
 		cards = append(cards, &xfer.CFileCard{
 			UUID: m.uuid, DeltaSrc: m.srcUUID, USize: m.usize, Content: data,
 		})
-		rids = append(rids, m.rid)
 		cost += cloneCardOverheadBytes + len(data)
 	}
 	return cards, rids, cost, nil

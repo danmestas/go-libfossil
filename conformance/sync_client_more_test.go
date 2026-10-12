@@ -36,6 +36,14 @@ func clientGateCases() []syncClientCase {
 		replies: [][]string{{"gimme {A1}", "{TS}"}},
 		want:    every(sent(2, "file {A1} {A1.size}"), notSent(2, "error ")),
 		fc:      true,
+	}, {
+		// UVH is a SHA3 name: an unversioned file goes to an older server
+		// no more than an artifact does. fossil(1) 2.28 fails an assertion
+		// in blob_reset on this exchange, so it does not run.
+		Case:    Case{ID: "sync.7.6.client-uv-gate", Req: "SP-7.6-1"},
+		op:      clientOp{pull: true, push: true, uv: true},
+		replies: [][]string{{"{SV0}", "pragma uv-push-ok", "{TS}"}},
+		want:    every(sent(2, fossilizedRefusal), notSent(2, "uvfile u.txt")),
 	}}
 }
 

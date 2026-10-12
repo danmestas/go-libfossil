@@ -5,27 +5,12 @@ import "testing"
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
 var syncGaps = map[string]string{
-	// The server answers no client-version with a server-version
-	// (internal/sync/handler.go:458).
-	"sync.3.2.server-version-before-clone": "#303",
-	"sync.9.1.server-version-full":         "#303",
-	// No SHA3 peer-version gate where the server sends content: gimme
-	// (internal/sync/handler.go:590), clone (:1070), uvgimme
-	// (internal/sync/handler_uv.go:93).
-	"sync.7.6.server-gate":            "#303",
-	"sync.7.6.server-gate-no-version": "#303",
-	"sync.7.6.clone-gate":             "#303",
-	"sync.7.6.uvgimme-gate":           "#303",
-	"sync.10.1.sha3-gate-appends":     "#303",
-	// The client keeps no peer version from server-version
-	// (internal/sync/client.go:550) and has no SHA3 gate where it sends
-	// content (:357).
-	"sync.7.6.client-gate":          "#303",
-	"sync.9.1.client-records-short": "#303",
-	// The client always logs in in the body (internal/sync/client.go:196),
-	// and the server reads no login cookie (internal/sync/serve_http.go:71).
+	// The client sends an unversioned file named by SHA3 to a server older
+	// than SHA3 support, where fossil sends the refusal in its place
+	// (internal/sync/client.go buildUVFileCards).
+	"sync.7.6.client-uv-gate": "#303",
+	// The client always logs in in the body (internal/sync/client.go:196).
 	"sync.6.5.cookie-login-after-gate": "#304",
-	"sync.6.5.server-cookie-login":     "#304",
 	// A login is checked against the stored password only as a shared
 	// secret, with no fallback for one stored in clear
 	// (internal/auth/verify.go:87).

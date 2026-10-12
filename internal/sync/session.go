@@ -104,6 +104,12 @@ type session struct {
 	visibilityUpdates []visibilityUpdate
 	// newPhantoms buffers this round's igot phantoms for the same reason.
 	newPhantoms []phantomUpdate
+	// peerVersion is the server's release from server-version; before one
+	// arrives it is this library's own, as in fossil's client_sync (§7.6).
+	peerVersion int
+	// sha3Refusals counts gimmes for SHA3 content withheld from an older
+	// server; the next request carries one refusal error card for each.
+	sha3Refusals int
 	// dephantomized buffers the phantoms this reply filled, whose
 	// after-dephantomize cascade runs once at the end of the reply.
 	dephantomized []libfossil.FslID
@@ -146,6 +152,7 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		phantoms:       make(map[string]bool),
 		pendingSend:    make(map[string]bool),
 		phantomAge:     make(map[string]int),
+		peerVersion:    releaseVersion,
 		xTableHashSent: make(map[string]bool),
 		xTableGimmes:   make(map[string]map[string]bool),
 		xTableToSend:   make(map[string]map[string]bool),

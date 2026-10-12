@@ -1023,7 +1023,11 @@ func TestHandleCloneCursorFromCloneCard(t *testing.T) {
 	bug := siteAlways("handler.emitCloneBatch.smallBatch")
 
 	resp, err := sync.HandleSyncWithOpts(context.Background(), srcRepo,
-		&xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 3}}},
+		&xfer.Message{Cards: []xfer.Card{
+			&xfer.PragmaCard{Name: "client-version",
+				Values: []string{"22800", "20260315", "120000"}},
+			&xfer.CloneCard{Version: 3, SeqNo: 3},
+		}},
 		sync.HandleOpts{Buggify: bug})
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)

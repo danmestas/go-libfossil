@@ -402,8 +402,9 @@ func TestProcessResponseStoresFileCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("processResponse: %v", err)
 	}
-	if done {
-		t.Fatal("should not be done (just received a file)")
+	// §3.7: content stored with no phantom left does not continue a session.
+	if !done {
+		t.Fatal("received content alone kept the session going")
 	}
 
 	// Verify blob was stored
@@ -422,7 +423,7 @@ func TestProcessResponseStoresFileCard(t *testing.T) {
 // TestProcessResponseDeltaBeforeBaseDoesNotError is the sync-pull acceptance
 // test for issue #57 (folded into #53): a delta arriving before its base is
 // normal transfer steady state, not a fault. processResponse must succeed
-// and (via storeReceivedFile's loadDBPhantoms call) discover the newly
+// and (via the loadDBPhantoms call that ends each reply) discover the newly
 // phantomized base so it gets gimme'd on a later round, rather than
 // failing the pull outright.
 func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
@@ -457,7 +458,7 @@ func TestProcessResponseDeltaBeforeBaseDoesNotError(t *testing.T) {
 		t.Fatal("target reported available before its base ever arrived")
 	}
 
-	// loadDBPhantoms (already called unconditionally from handleFileCard)
+	// loadDBPhantoms (called once at the end of every reply)
 	// must have discovered the newly phantomized base and queued it for a
 	// gimme card on a later round.
 	if !s.phantoms[baseUUID] {
@@ -510,9 +511,12 @@ func TestProcessResponseIGotNoPhantomWhenExists(t *testing.T) {
 }
 
 func TestProcessResponseGimmeAddsPendingSend(t *testing.T) {
-	s, _ := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
+	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
 
-	wantUUID := "cccccccccccccccccccccccccccccccccccccccc"
+	_, wantUUID, err := blob.Store(r.DB(), []byte("asked for by the server"))
+	if err != nil {
+		t.Fatalf("blob.Store: %v", err)
+	}
 	resp := &xfer.Message{Cards: []xfer.Card{
 		&xfer.GimmeCard{UUID: wantUUID},
 	}}
@@ -525,6 +529,67 @@ func TestProcessResponseGimmeAddsPendingSend(t *testing.T) {
 	}
 	if !s.pendingSend[wantUUID] {
 		t.Fatal("pendingSend should contain the UUID")
+	}
+}
+
+// TestProcessResponseGimmeForAbsentIsDropped pins §3.3: a gimme for content
+// the client does not hold is dropped, as fossil's send_file sends nothing,
+// so it neither queues a file nor holds the session open.
+func TestProcessResponseGimmeForAbsentIsDropped(t *testing.T) {
+	s, _ := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
+
+	absent := "cccccccccccccccccccccccccccccccccccccccc"
+	resp := &xfer.Message{Cards: []xfer.Card{&xfer.GimmeCard{UUID: absent}}}
+	done, err := s.processResponse(context.Background(), resp)
+	if err != nil {
+		t.Fatalf("processResponse: %v", err)
+	}
+	if !done {
+		t.Fatal("a gimme the client cannot answer kept the session going")
+	}
+	if s.pendingSend[absent] {
+		t.Fatal("pendingSend holds a gimme for content the client lacks")
+	}
+	if s.nGimmeRcvd != 0 {
+		t.Fatalf("nGimmeRcvd = %d, want 0: fossil counts only gimmes it answers",
+			s.nGimmeRcvd)
+	}
+}
+
+// TestProcessResponseGimmeForPhantomCounts pins that a gimme for an
+// artifact the client has only a phantom row for counts, as fossil's
+// nGimmeRcvd does, though nothing can be sent for it.
+func TestProcessResponseGimmeForPhantomCounts(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
+	uuid := "dddddddddddddddddddddddddddddddddddddddd"
+	if _, err := blob.StorePhantom(r.DB(), uuid); err != nil {
+		t.Fatalf("StorePhantom: %v", err)
+	}
+	resp := &xfer.Message{Cards: []xfer.Card{&xfer.GimmeCard{UUID: uuid}}}
+	if _, err := s.processResponse(context.Background(), resp); err != nil {
+		t.Fatalf("processResponse: %v", err)
+	}
+	if s.nGimmeRcvd != 1 || s.pendingSend[uuid] {
+		t.Fatalf("nGimmeRcvd = %d, queued %v; want 1 and nothing queued",
+			s.nGimmeRcvd, s.pendingSend[uuid])
+	}
+}
+
+// TestBuildRequestFileLoadFailureIsAnError pins that content the client
+// holds but cannot read is an error, not a file silently left unsent.
+func TestBuildRequestFileLoadFailureIsAnError(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Push: true, ServerCode: "sc", ProjectCode: testPC})
+	_, uuid, err := blob.Store(r.DB(), []byte("stored, then corrupted"))
+	if err != nil {
+		t.Fatalf("blob.Store: %v", err)
+	}
+	_, err = r.DB().Exec("UPDATE blob SET content=x'00010203' WHERE uuid=?", uuid)
+	if err != nil {
+		t.Fatalf("corrupt blob: %v", err)
+	}
+	s.pendingSend[uuid] = true
+	if _, err := s.buildRequest(1); err == nil {
+		t.Fatal("buildRequest sent nothing and reported no error for an unreadable file")
 	}
 }
 
@@ -623,7 +688,6 @@ func TestSyncMultiRound(t *testing.T) {
 					&xfer.FileCard{UUID: fileUUID, Content: fileContent},
 				}}
 			default:
-				// Round 3+: empty = converge
 				return &xfer.Message{}
 			}
 		},
@@ -636,8 +700,10 @@ func TestSyncMultiRound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	if result.Rounds != 3 {
-		t.Fatalf("Rounds = %d, want 3", result.Rounds)
+	// §3.7: round 1's igot made a phantom, so round 2 asks for it; round 2
+	// stores it and leaves no phantom, so the session ends there.
+	if result.Rounds != 2 {
+		t.Fatalf("Rounds = %d, want 2", result.Rounds)
 	}
 	if result.FilesRecvd != 1 {
 		t.Fatalf("FilesRecvd = %d, want 1", result.FilesRecvd)
@@ -674,13 +740,15 @@ func TestSyncContextCancellation(t *testing.T) {
 
 func TestSyncMaxRoundsExceeded(t *testing.T) {
 	r := setupSyncTestRepo(t)
+	_, uuid, err := blob.Store(r.DB(), []byte("asked for every round"))
+	if err != nil {
+		t.Fatalf("blob.Store: %v", err)
+	}
 
-	// Mock that never converges: always returns a gimme card
+	// Mock that never converges: always asks for a file the client holds.
 	mt := &MockTransport{
 		Handler: func(req *xfer.Message) *xfer.Message {
-			return &xfer.Message{Cards: []xfer.Card{
-				&xfer.GimmeCard{UUID: "dddddddddddddddddddddddddddddddddddddddd"},
-			}}
+			return &xfer.Message{Cards: []xfer.Card{&xfer.GimmeCard{UUID: uuid}}}
 		},
 	}
 	result, err := Sync(context.Background(), r, mt, SyncOpts{

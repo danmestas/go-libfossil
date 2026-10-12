@@ -33,6 +33,27 @@ func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) {
 	afterDephantomize(ctx, r, rid, true)
 }
 
+// AfterDephantomizeBatch runs AfterDephantomize's cascade for every rid in
+// one linker, so a sync round that fills many phantoms commits its crosslinks
+// together rather than in one transaction per artifact. A cancelled ctx stops
+// it as it stops AfterDephantomize.
+func AfterDephantomizeBatch(ctx context.Context, r *repo.Repo, rids []libfossil.FslID) {
+	if r == nil {
+		panic("manifest.AfterDephantomizeBatch: r must not be nil")
+	}
+	if len(rids) == 0 {
+		return
+	}
+	cl := newCascadeLinker(r)
+	for _, rid := range rids {
+		if rid > 0 && !cl.walk(ctx, rid, true) {
+			return
+		}
+	}
+	cl.flush(ctx)
+	logDeferredCheckinSummary("AfterDephantomizeBatch", cl.guard, cl.stats.linked)
+}
+
 // afterDephantomize walks the orphan/delta-child graph reachable from rid and
 // crosslinks every artifact it finds, returning how that run executed.
 //

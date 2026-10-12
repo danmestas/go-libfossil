@@ -102,6 +102,11 @@ type session struct {
 	// visibilityUpdates buffers this round's igot-announced status changes so
 	// they are written in one transaction rather than one per card.
 	visibilityUpdates []visibilityUpdate
+	// newPhantoms buffers this round's igot phantoms for the same reason.
+	newPhantoms []phantomUpdate
+	// dephantomized buffers the phantoms this reply filled, whose
+	// after-dephantomize cascade runs once at the end of the reply.
+	dephantomized []libfossil.FslID
 	roundStats          RoundStats
 	xTableHashSent map[string]bool            // table -> true if xtable-hash pragma sent
 	xTableGimmes   map[string]map[string]bool // table -> pkHash -> true

@@ -5,17 +5,6 @@ import "testing"
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
 var syncGaps = map[string]string{
-	// Termination is not Section 3.7's: a phantom is asked for until it
-	// has aged three rounds (internal/sync/client.go:605-613), and any
-	// file received continues the session (:620).
-	"sync.3.7.phantom-no-progress": "#301",
-	"sync.3.7.content-alone-stops": "#301",
-	// A gimme the client cannot answer stays in pendingSend
-	// (internal/sync/client.go:537, :332-336), so the session never ends.
-	"sync.3.3.gimme-absent-client": "#301",
-	// An igot's phantom lives only in the session's map, never in the
-	// phantom table (internal/sync/client.go:520-527).
-	"sync.3.3.igot-phantom-persists": "#301",
 	// The server answers no client-version with a server-version
 	// (internal/sync/handler.go:458).
 	"sync.3.2.server-version-before-clone": "#303",
@@ -52,10 +41,6 @@ var syncGaps = map[string]string{
 	// A clone reply carries no unversioned catalog
 	// (internal/sync/handler.go:475).
 	"sync.8.4.clone-uv-catalog": "#306",
-	// After the first clone round a server error aborts the clone, where
-	// the draft ends the reply-card loop and continues
-	// (internal/sync/clone.go:544).
-	"sync.8.3.later-error": "#301",
 	// The client's unversioned sync: a received uvfile of status 2 is
 	// dropped, not applied as an mtime (internal/sync/client.go:1136),
 	// and tombstones are put in the send table (internal/sync/session.go:152).

@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -388,22 +390,26 @@ func (s *session) buildFileCards() ([]xfer.Card, error) {
 		}
 
 		// Private filtering: check if blob is private.
-		rid, ridOK := blob.Exists(s.repo.DB(), uuid)
-		if ridOK {
-			isPriv := content.IsPrivate(s.repo.DB(), int64(rid))
-			if isPriv && !s.opts.Private {
-				delete(s.pendingSend, uuid)
-				continue
-			}
-			if isPriv {
-				cards = append(cards, &xfer.PrivateCard{})
-			}
+		isPriv := false
+		if rid, ok := blob.Exists(s.repo.DB(), uuid); ok {
+			isPriv = content.IsPrivate(s.repo.DB(), int64(rid))
 		}
-
-		card, size, err := s.loadFileCard(uuid)
-		if err != nil {
-			// Skip files we can't load (phantoms, etc.)
+		if isPriv && !s.opts.Private {
+			delete(s.pendingSend, uuid)
 			continue
+		}
+		card, size, ok, err := s.loadFileCard(uuid)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			// A phantom, or a delta whose basis is one, is not sent, now or
+			// later.
+			delete(s.pendingSend, uuid)
+			continue
+		}
+		if isPriv {
+			cards = append(cards, &xfer.PrivateCard{})
 		}
 		cards = append(cards, card)
 		budget -= size
@@ -425,16 +431,19 @@ func (s *session) buildFileCards() ([]xfer.Card, error) {
 }
 
 // loadFileCard loads a blob by UUID and returns a FileCard plus its payload size.
-func (s *session) loadFileCard(uuid string) (*xfer.FileCard, int, error) {
-	rid, ok := content.AvailableByUUID(s.repo.DB(), uuid)
-	if !ok {
-		return nil, 0, fmt.Errorf("blob %s not found", uuid)
+// It reports !ok, with no error, for content the repository cannot expand:
+// a phantom, or a delta whose basis is one. A failure to read the repository
+// is an error.
+func (s *session) loadFileCard(uuid string) (*xfer.FileCard, int, bool, error) {
+	rid, ok, err := content.CheckAvailableByUUID(s.repo.DB(), uuid)
+	if err != nil || !ok {
+		return nil, 0, false, err
 	}
 	data, err := s.cache.Expand(s.repo.DB(), rid)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	return &xfer.FileCard{UUID: uuid, Content: data}, len(data), nil
+	return &xfer.FileCard{UUID: uuid, Content: data}, len(data), true, nil
 }
 
 // buildGimmeCards produces gimme cards from the phantoms set.
@@ -566,6 +575,20 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	if err := s.flushVisibilityUpdates(); err != nil {
 		return false, fmt.Errorf("sync: record artifact visibility: %w", err)
 	}
+	// The phantoms this reply filled are crosslinked together, before the
+	// phantoms that crosslinking creates are loaded below.
+	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	s.dephantomized = s.dephantomized[:0]
+	created, err := s.flushNewPhantoms()
+	if err != nil {
+		return false, fmt.Errorf("sync: record phantoms: %w", err)
+	}
+	t.newPhantoms = created
+	// Phantoms the round's storage created (a delta's basis, a cluster's
+	// members) join the session's, once per reply rather than per file.
+	if err := s.loadDBPhantoms(); err != nil {
+		return false, fmt.Errorf("sync: load phantoms: %w", err)
+	}
 
 	s.result.FilesRecvd += t.filesRecvd
 	s.filesRecvdLastRound = t.filesRecvd
@@ -575,8 +598,9 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
-	filesRecvd int // file and cfile cards received
-	filesSent  int // files the server asked us to send
+	filesRecvd  int // file and cfile cards received
+	filesSent   int // files queued for the next request on the server's gimme
+	newPhantoms int // phantoms an igot created
 }
 
 // handleReplyCard acts on one reply card. It reports stop when the card ends
@@ -619,9 +643,7 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 		// (#277). A "pull only" message (§10.2) disables pushing mid-reply,
 		// so a gimme after it is not answered either.
 		if s.pushing() {
-			s.pendingSend[c.UUID] = true
-			s.nGimmeRcvd++
-			t.filesSent++
+			s.queueGimme(c.UUID, t)
 		}
 	case *xfer.CookieCard:
 		s.cookie = c.Value
@@ -665,11 +687,11 @@ func (s *session) handleIGot(c *xfer.IGotCard) error {
 			visibilityUpdate{rid: rid, vis: visibility(c.IsPrivate)})
 	case c.IsPrivate:
 		if s.opts.Private && s.opts.Pull {
-			return s.addPhantom(c.UUID)
+			return s.addPhantom(c.UUID, visibilityPrivate)
 		}
 	default:
 		if s.opts.Pull {
-			return s.addPhantom(c.UUID)
+			return s.addPhantom(c.UUID, visibilityPublic)
 		}
 	}
 	return nil
@@ -745,14 +767,24 @@ func (s *session) agePhantoms() {
 	}
 }
 
-// converged reports whether the session is done after a reply: no files
-// moved this round, nothing is owed either way, and no unversioned or table
-// sync work is pending.
+// converged reports whether the session is done after a reply, by §3.7's
+// continuation rules and the client's own unversioned and table sync work.
 func (s *session) converged(t replyTally) (bool, error) {
-	if t.filesRecvd > 0 || t.filesSent > 0 {
-		return false, nil
+	// §3.7 (a): stored content or a new phantom continues the session only
+	// while the phantom table is not empty. Remaining phantoms alone, or
+	// content alone, do not.
+	if t.filesRecvd > 0 || t.newPhantoms > 0 {
+		var one int
+		err := s.repo.DB().QueryRow("SELECT 1 FROM phantom LIMIT 1").Scan(&one)
+		if err == nil {
+			return false, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return false, fmt.Errorf("sync: check phantoms: %w", err)
+		}
 	}
-	if len(s.phantoms) > 0 || len(s.pendingSend) > 0 {
+	// §3.7 (b): files are queued for the next request.
+	if t.filesSent > 0 || len(s.pendingSend) > 0 {
 		return false, nil
 	}
 
@@ -852,32 +884,8 @@ func (s *session) tablesPending() bool {
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
 func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
-	if r == nil {
-		panic("storeReceivedFile: r must not be nil")
-	}
-	if uuid == "" {
-		panic("storeReceivedFile: uuid must not be empty")
-	}
-	if payload == nil {
-		panic("storeReceivedFile: payload must not be nil")
-	}
-	if !hash.IsValidHash(uuid) {
-		return fmt.Errorf("sync: invalid UUID format: %s", uuid)
-	}
-	if deltaSrc != "" {
-		// deltaSrc becomes a blob.StorePhantom row under whatever string
-		// arrives on the wire. The blob table's own CHECK constraint only
-		// bounds uuid length, not hex-ness, so a non-hex value of valid
-		// length (e.g. 40 'z' characters) passes it and would otherwise
-		// create a permanent, unfillable phantom row that loadDBPhantoms
-		// re-requests every sync round forever.
-		if !hash.IsValidHash(deltaSrc) {
-			return fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
-		}
-		return storeDeltaContent(ctx, r, uuid, deltaSrc, payload, storedBlob, vis, linker)
-	}
-
-	dephantomizedRid, err := storeResolvedContent(ctx, r, uuid, payload, storedBlob, vis, linker)
+	dephantomizedRid, err := storeReceived(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
+		linker)
 	if err != nil {
 		return err
 	}
@@ -888,6 +896,42 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
 	}
 	return nil
+}
+
+// storeReceived is storeReceivedFile without the after-dephantomize cascade:
+// it returns the rid of a phantom it filled, for which the caller owes the
+// cascade. The sync client runs those cascades once per reply, so a pull that
+// fills many phantoms does not commit one crosslink transaction per artifact.
+func storeReceived(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte,
+	storedBlob []byte, vis visibility,
+	linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
+	if r == nil {
+		panic("storeReceivedFile: r must not be nil")
+	}
+	if uuid == "" {
+		panic("storeReceivedFile: uuid must not be empty")
+	}
+	if payload == nil {
+		panic("storeReceivedFile: payload must not be nil")
+	}
+	if !hash.IsValidHash(uuid) {
+		return 0, fmt.Errorf("sync: invalid UUID format: %s", uuid)
+	}
+	if deltaSrc != "" {
+		// deltaSrc becomes a blob.StorePhantom row under whatever string
+		// arrives on the wire. The blob table's own CHECK constraint only
+		// bounds uuid length, not hex-ness, so a non-hex value of valid
+		// length (e.g. 40 'z' characters) passes it and would otherwise
+		// create a permanent, unfillable phantom row that loadDBPhantoms
+		// re-requests every sync round forever.
+		if !hash.IsValidHash(deltaSrc) {
+			return 0, fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
+		}
+		return 0, storeDeltaContent(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
+			linker)
+	}
+
+	return storeResolvedContent(ctx, r, uuid, payload, storedBlob, vis, linker)
 }
 
 // storeDeltaContent persists a received delta exactly as given — never
@@ -1094,18 +1138,94 @@ func (s *session) seedPhantoms() error {
 	return nil
 }
 
-// addPhantom makes uuid a phantom of this session unless it is shunned: as
-// fossil's content_new makes no phantom of a shunned name, the client never
-// asks for one (§3.3, §7.7).
-func (s *session) addPhantom(uuid string) error {
+// addPhantom makes uuid, which an igot announced, a phantom unless it is
+// shunned: as fossil's content_new makes no phantom of a shunned name, the
+// client never asks for one (§3.3, §7.7). The phantom goes in the session's
+// set and, at the end of the reply, in the phantom table, which persists it
+// for a later session (Table 1).
+func (s *session) addPhantom(uuid string, vis visibility) error {
+	if uuid == "" {
+		panic("session.addPhantom: empty uuid")
+	}
 	shunned, err := shun.IsShunned(s.repo.DB(), uuid)
 	if err != nil {
 		return err
 	}
 	if !shunned {
 		s.phantoms[uuid] = true
+		s.newPhantoms = append(s.newPhantoms, phantomUpdate{uuid: uuid, vis: vis})
 	}
 	return nil
+}
+
+// phantomUpdate is one phantom an igot announced, buffered until the reply's
+// single phantom transaction.
+type phantomUpdate struct {
+	uuid string
+	vis  visibility
+}
+
+// flushNewPhantoms writes the reply's igot phantoms to the phantom table in
+// one transaction, as fossil's content_new does for each: a private one is
+// marked private. A name stored since its igot is skipped. It returns how
+// many phantoms it created, which §3.7 (a) counts as progress.
+func (s *session) flushNewPhantoms() (int, error) {
+	if len(s.newPhantoms) == 0 {
+		return 0, nil
+	}
+	updates := s.newPhantoms
+	s.newPhantoms = s.newPhantoms[:0]
+	created := 0
+	err := s.repo.WithTx(func(tx *db.Tx) error {
+		created = 0
+		for _, u := range updates {
+			if _, held := blob.Exists(tx, u.uuid); held {
+				continue
+			}
+			rid, err := blob.StorePhantom(tx, u.uuid)
+			if err != nil {
+				return err
+			}
+			if u.vis == visibilityPrivate {
+				if err := content.MakePrivate(tx, int64(rid)); err != nil {
+					return err
+				}
+			}
+			created++
+		}
+		return nil
+	})
+	return created, err
+}
+
+// queueGimme queues the file a server's gimme asks for when the client can
+// answer it. Like fossil's nGimmeRcvd, the count takes every gimme for an
+// artifact the repository has a row for, a phantom or a private one included
+// (xfer.c, rid_from_uuid before send_file).
+func (s *session) queueGimme(uuid string, t *replyTally) {
+	if uuid == "" {
+		panic("session.queueGimme: empty uuid")
+	}
+	if _, ok := blob.Exists(s.repo.DB(), uuid); ok {
+		s.nGimmeRcvd++
+	}
+	if !s.canSend(uuid) {
+		return
+	}
+	s.pendingSend[uuid] = true
+	t.filesSent++
+}
+
+// canSend reports whether the client can answer a gimme for uuid: it holds
+// the content, and the content is public or the session syncs private. A
+// gimme it cannot answer is dropped, as fossil's send_file sends nothing for
+// it, so it neither holds the session open nor costs a file card (§3.3).
+func (s *session) canSend(uuid string) bool {
+	rid, ok := content.AvailableByUUID(s.repo.DB(), uuid)
+	if !ok {
+		return false
+	}
+	return s.opts.Private || !content.IsPrivate(s.repo.DB(), int64(rid))
 }
 
 // phantomEvictRounds is how many consecutive rounds a phantom is asked for
@@ -1163,15 +1283,12 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// long-running cascade on the general push/pull path is interruptible by the
 	// caller's deadline -- the same guarantee #166 gave the clone and
 	// server-push receive paths.
-	if err := storeReceivedFile(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis, nil); err != nil {
+	rid, err := storeReceived(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
+	if err != nil {
 		return false, err
 	}
-
-	// Promote any new DB phantoms into the session phantom map so gimme
-	// cards are emitted. This covers phantoms created by crosslinking
-	// cluster artifacts in storeReceivedFile.
-	if err := s.loadDBPhantoms(); err != nil {
-		return false, fmt.Errorf("handleFileCard: loadDBPhantoms: %w", err)
+	if rid > 0 {
+		s.dephantomized = append(s.dephantomized, rid)
 	}
 
 	// BUGGIFY: simulate post-store failure to test retry/recovery logic.

@@ -260,6 +260,36 @@ func (h *handler) fail(msg string) {
 	h.fatal = true
 }
 
+// resetContent discards the reply built so far, as fossil's cgi_reset_content
+// does before a card-level error. Only the reply is cleared; any blob already
+// stored this round stays (fossil keeps its mutations too, §10.1).
+func (h *handler) resetContent() {
+	h.resp = nil
+}
+
+// badCommand answers a line no card rule accepts. §5.2, src/xfer.c page_xfer's
+// final "else": the reply so far is reset, an "error bad\scommand:\s<LINE>"
+// card is emitted, and parsing goes on -- so a later card still takes effect.
+// c.Line keeps its terminating LF, which the error quotes verbatim.
+func (h *handler) badCommand(c *xfer.BadCommandCard) {
+	if c == nil {
+		panic("handler.badCommand: c must not be nil")
+	}
+	h.resetContent()
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: "bad command: " + c.Line})
+}
+
+// failFileCard answers a file/cfile/uvfile line the decoder could not frame.
+// src/xfer.c resets the reply, emits the handler's own message, and breaks out
+// of the card loop; the caller stops processing later request cards.
+func (h *handler) failFileCard(c *xfer.BadFileCard) {
+	if c == nil {
+		panic("handler.failFileCard: c must not be nil")
+	}
+	h.resetContent()
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: c.Message})
+}
+
 func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
 	// Initialize auth state from nobody user.
 	h.initAuth()
@@ -381,19 +411,39 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 	// IGotCard checks blob.Exists. Without this, a request containing
 	// both IGotCard and FileCard for the same blob produces a spurious
 	// GimmeCard — the IGotCard runs before the FileCard stores it.
+	//
+	// A BadFileCard is a file/cfile/uvfile line the decoder could not frame;
+	// fossil's page_xfer resets its reply, emits the handler's error and
+	// breaks out of the card loop (§5.2, §7.3). We stop processing the
+	// remaining request cards here too, then still emit the post-loop
+	// inventory below, as fossil does after its break.
+	broke := false
 	for _, card := range cards {
-		switch card.(type) {
+		switch c := card.(type) {
 		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
 			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
 			}
+		case *xfer.BadFileCard:
+			h.failFileCard(c)
+			broke = true
+		}
+		if broke {
+			break
 		}
 	}
-	// Remaining data cards (igot, gimme, etc.).
+	// Remaining data cards (igot, gimme, bad commands, etc.), in request
+	// order so a bad command resets the reply built before it and parsing
+	// goes on past it.
 	for _, card := range cards {
-		switch card.(type) {
-		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
+		if broke {
+			break
+		}
+		switch c := card.(type) {
+		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard, *xfer.BadFileCard:
 			continue // Already handled above.
+		case *xfer.BadCommandCard:
+			h.badCommand(c)
 		default:
 			if err := h.handleDataCard(ctx, card); err != nil {
 				return err

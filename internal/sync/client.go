@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -484,8 +485,24 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	filesRecvd := 0
 	filesSent := 0 // files the server asked us to send this round
 
+	// §5.2: a card the decoder could not read (an unrecognized or
+	// wrong-arity line, or a file/cfile/uvfile it could not frame) ends the
+	// reply-card loop. fossil's client sets xfer.err and breaks; cards already
+	// processed stand, cards after the bad one are not read. The error is
+	// recorded, as fossil reports it: a reply cut short by a bad card must not
+	// look like a complete sync.
+cardLoop:
 	for _, card := range msg.Cards {
 		switch c := card.(type) {
+		case *xfer.BadCommandCard:
+			s.result.Errors = append(s.result.Errors,
+				"unknown command: ["+strings.TrimRight(c.Line, "\n")+"]")
+			break cardLoop
+
+		case *xfer.BadFileCard:
+			s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+			break cardLoop
+
 		case *xfer.PrivateCard:
 			s.nextIsPrivate = true
 

@@ -292,5 +292,12 @@ func decodeMessage(data []byte, budget int64) (*Message, error) {
 			lc.tailSHA1 = hash.SHA1(data[consumed:])
 		}
 		msg.Cards = append(msg.Cards, card)
+		// A BadFileCard means a file/cfile/uvfile line could not be framed, so
+		// its payload length is unknown and no later card can be located. Stop
+		// here, as fossil's page_xfer breaks out of its card loop; the caller
+		// acts on the cards decoded so far.
+		if _, bad := card.(*BadFileCard); bad {
+			return msg, nil
+		}
 	}
 }

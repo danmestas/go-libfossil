@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync client places `pragma send-private` where fossil's `client_sync`
+  does (§3.2, #307): first in its first request and right after
+  `client-version` in later ones, where it trailed the content cards. A
+  delta's missing basis received under a `private` card becomes a private
+  phantom, as fossil's `content_new` makes it, where it became public.
 - Sync honors the shun list as fossil does (§3.3, §7.7, #302). A received
   `file` or `cfile` whose hash is shunned is dropped without an error and
   not counted as received, by the server and the sync client, where each

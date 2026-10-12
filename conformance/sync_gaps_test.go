@@ -52,12 +52,6 @@ var syncGaps = map[string]string{
 	// A clone reply carries no unversioned catalog
 	// (internal/sync/handler.go:475).
 	"sync.8.4.clone-uv-catalog": "#306",
-	// pragma send-private goes after the operation cards in every request
-	// (internal/sync/client.go:120).
-	"sync.3.2.send-private-first": "#307",
-	// A delta's missing basis becomes a public phantom whatever the card's
-	// private marker (internal/sync/client.go:762).
-	"sync.7.4.private-basis-phantom": "#307",
 	// After the first clone round a server error aborts the clone, where
 	// the draft ends the reply-card loop and continues
 	// (internal/sync/clone.go:544).

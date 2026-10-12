@@ -152,16 +152,24 @@ func (h *handler) handleUVFile(c *xfer.UVFileCard) error {
 	if c == nil {
 		panic("handler.handleUVFile: c must not be nil")
 	}
-	if !auth.CanPushUV(h.caps) {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("uvfile %s denied: insufficient capabilities", c.Name),
-		})
-		return nil
+	// fossil's xfer_accept_unversioned_file checks the content's HASH, then
+	// the write permission; either refusal resets the reply, answers the
+	// error and breaks out of the card loop, as page_xfer does (§7.3). Only
+	// a card that carries content (sz>0, neither flag 1 nor 4) is checked:
+	// a deletion, HASH "-" and size 0, carries none.
+	if c.Size > 0 && c.Flags&xfer.UVFlagNoPayload == 0 {
+		if c.Content == nil {
+			panic("handler.handleUVFile: flags indicate payload but Content is nil")
+		}
+		if hash.ContentHash(c.Content, c.Hash) != c.Hash {
+			h.breakLoop(fmt.Sprintf("uvfile %s: hash mismatch", c.Name))
+			return nil
+		}
 	}
-	if !h.pushOK {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("uvfile %s rejected: no push card", c.Name),
-		})
+	// The write permission is WrUnver (y) alone, with or without a push card:
+	// `fossil uv sync` sends none.
+	if !auth.CanPushUV(h.caps) {
+		h.breakLoop(fmt.Sprintf("uvfile %s denied: insufficient capabilities", c.Name))
 		return nil
 	}
 
@@ -171,20 +179,6 @@ func (h *handler) handleUVFile(c *xfer.UVFileCard) error {
 
 	if err := uv.EnsureSchema(h.repo.DB()); err != nil {
 		return fmt.Errorf("handler.handleUVFile: ensure schema: %w", err)
-	}
-
-	// Validate hash if content present.
-	if c.Flags&xfer.UVFlagNoPayload == 0 {
-		if c.Content == nil {
-			panic("handler.handleUVFile: flags indicate payload but Content is nil")
-		}
-		computed := hash.ContentHash(c.Content, c.Hash)
-		if computed != c.Hash {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: fmt.Sprintf("uvfile %s: hash mismatch", c.Name),
-			})
-			return nil
-		}
 	}
 
 	// Double-check status.

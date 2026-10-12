@@ -111,7 +111,7 @@ func commitInClone(t *testing.T, bin, work, clonePath, comment string) {
 func fossilRun(bin, dir string, args ...string) (string, error) {
 	cmd := exec.Command(bin, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "FOSSIL_HOME="+dir)
+	cmd.Env = append(os.Environ(), "HOME="+dir, "FOSSIL_HOME="+dir, "XDG_CONFIG_HOME="+dir)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

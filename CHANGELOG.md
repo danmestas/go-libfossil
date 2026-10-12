@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule now follows fossil, so an untagged parentless check-in is no longer a
   leaf (the §7.3 erratum the sweep already observed).
 
+- The sync server stores a `uvfile` sent without a `push` card, as
+  `fossil uv sync` sends it (§7.3, #296). It answered each one with
+  `rejected: no push card`, so pushing unversioned files from fossil failed.
+  This is an access change: a user with only the unversioned-write capability `y`
+  can now push unversioned files, as in fossil; Write is no longer also
+  required. A refused `uvfile` (no `y`, or a HASH that does not match its
+  content) now resets the reply and ends the card loop, as fossil does.
 - The sync server refuses a `push` or `pull` card naming another project
   with `error wrong project`, as fossil's `page_xfer` does (§8.5, #309). It
   accepted either whatever its project code, so a client of an unrelated

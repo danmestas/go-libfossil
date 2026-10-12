@@ -56,11 +56,11 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
 	}
 	defer resp.Body.Close()
-	// An error page is not an xfer reply: report the status rather than
-	// handing HTML to the decoder, which would report the peer's outage as a
-	// framing defect. Whether the status is worth another attempt is
-	// StatusError's to say.
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+	// Only 200 is a sync reply (§4-7). Any other status, a 2xx included, is not
+	// the protocol answering: report it rather than hand its body to the
+	// decoder, which would read the peer's outage as a framing defect. Whether
+	// the status is worth another attempt is StatusError's to say.
+	if resp.StatusCode != http.StatusOK {
 		return nil, &StatusError{Code: resp.StatusCode, Status: resp.Status}
 	}
 	respBody, err := xfer.ReadBody(resp.Body)
@@ -83,5 +83,9 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	// A failure from here on is a protocol fault: the reply arrived whole and
 	// did not parse. It is left untagged so the retry classifier fails it
 	// fast — resending would only make a malformed reply intermittent.
-	return xfer.Decode(respBody, resp.Header.Get("Content-Type"))
+	// §4-8: a reply with no Content-Type is the compressed container, an
+	// x-fossil-debug or x-fossil-uncompressed type is plain cards, x-fossil is
+	// the compressed container, and any foreign type (an HTML error page from a
+	// proxy) is not a sync reply and is refused here.
+	return xfer.DecodeReply(respBody, resp.Header.Get("Content-Type"))
 }

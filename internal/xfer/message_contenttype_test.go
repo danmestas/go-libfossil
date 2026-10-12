@@ -103,3 +103,35 @@ func TestDecodeEmptyBodyIsEmptyMessage(t *testing.T) {
 		}
 	}
 }
+
+// TestDecodeReplyFramingRule pins §4's reply rule, which fossil's http.c
+// applies by case-insensitive prefix: no type is the compressed container, a
+// debug or uncompressed prefix is card text, another x-fossil prefix is the
+// container, and any other type is refused. Method: decode a container and
+// plain cards under each type and check which framing was chosen or that the
+// reply was refused.
+func TestDecodeReplyFramingRule(t *testing.T) {
+	compressed := compressedContainer(t, 4096)
+	plaintext := []byte("igot " + strings.Repeat("a", 40) + "\n")
+	cases := []struct {
+		contentType string
+		body        []byte
+		ok          bool
+	}{
+		{"", compressed, true},
+		{ContentTypeCompressed, compressed, true},
+		{"APPLICATION/X-FOSSIL; x=1", compressed, true},
+		{ContentTypeDebug, plaintext, true},
+		{ContentTypeUncompressed + "; charset=utf-8", plaintext, true},
+		{"Application/X-Fossil-Debug", plaintext, true},
+		{"", plaintext, false},
+		{"text/html", plaintext, false},
+		{"text/plain", plaintext, false},
+	}
+	for _, c := range cases {
+		_, err := DecodeReply(c.body, c.contentType)
+		if (err == nil) != c.ok {
+			t.Errorf("DecodeReply(type %q): err = %v, want ok %v", c.contentType, err, c.ok)
+		}
+	}
+}

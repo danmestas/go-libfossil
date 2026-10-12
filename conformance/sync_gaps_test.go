@@ -110,16 +110,6 @@ var syncGaps = map[string]string{
 	"sync.7.2.clone-verbatim":     "#306",
 	"sync.5.1.cfile-padding":      "#306",
 	"sync.4.1.clone-uncompressed": "#306",
-	// The server refuses application/x-fossil-debug with HTTP 415
-	// (internal/sync/serve_http.go:101).
-	"sync.4.debug-type-dispatches": "#310",
-	// Any 2xx status is taken as a sync reply (transport.go:94).
-	"sync.4.status-201": "#310",
-	// A reply's media type selects compressed framing only when it is
-	// application/x-fossil; a missing type and a foreign one are both read
-	// as uncompressed cards (internal/xfer/message.go:160-167).
-	"sync.4.missing-content-type": "#310",
-	"sync.4.content-type-foreign": "#310",
 }
 
 // syncDeviations marks the cases where go-libfossil differs from the draft

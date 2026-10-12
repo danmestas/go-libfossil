@@ -34,6 +34,11 @@ type Message struct {
 const (
 	ContentTypeCompressed   = "application/x-fossil"
 	ContentTypeUncompressed = "application/x-fossil-uncompressed"
+	// ContentTypeDebug is the §4 debug media type: the same card content as
+	// ContentTypeUncompressed, carried uncompressed so a human can read it. A
+	// server dispatches a request that carries it (§4-3); a client reads a
+	// reply that carries it as plain cards (§4-8).
+	ContentTypeDebug = "application/x-fossil-debug"
 )
 
 // MaxDecompressedBytes caps how far one message may expand during
@@ -174,14 +179,40 @@ func contentTypeIsCompressed(contentType string) bool {
 	return strings.EqualFold(mediaType(contentType), ContentTypeCompressed)
 }
 
-// KnownContentType reports whether a Content-Type is one of the two §4 media
-// types. Decode treats every other type as plain card text, so a server reading
-// bodies from untrusted peers uses this to reject a body that carries no
-// framing signal instead of guessing at its framing.
+// KnownContentType reports whether a Content-Type is a §4 media type a server
+// dispatches a request from: the compressed container, the uncompressed card
+// text, or the debug type (§4-3). Decode treats every other type as plain card
+// text, so a server reading bodies from untrusted peers uses this to reject a
+// body that carries no framing signal instead of guessing at its framing.
 func KnownContentType(contentType string) bool {
 	mt := mediaType(contentType)
 	return strings.EqualFold(mt, ContentTypeCompressed) ||
-		strings.EqualFold(mt, ContentTypeUncompressed)
+		strings.EqualFold(mt, ContentTypeUncompressed) ||
+		strings.EqualFold(mt, ContentTypeDebug)
+}
+
+// DecodeReply decodes a sync reply, selecting its framing by §4's reply rule,
+// which is not a request's. A reply with no Content-Type is the compressed
+// container. A present type is matched as fossil's http.c matches it: by
+// case-insensitive prefix, so parameters and suffixes ride along. An
+// application/x-fossil-debug or -uncompressed prefix is plain card text, any
+// other application/x-fossil prefix is the compressed container, and any other
+// type (a proxy's HTML error page, say) is not a sync reply and is refused.
+func DecodeReply(data []byte, contentType string) (*Message, error) {
+	switch {
+	case hasPrefixFold(contentType, ContentTypeDebug),
+		hasPrefixFold(contentType, ContentTypeUncompressed):
+		return Decode(data, ContentTypeUncompressed)
+	case contentType == "", hasPrefixFold(contentType, ContentTypeCompressed):
+		return Decode(data, ContentTypeCompressed)
+	default:
+		return nil, fmt.Errorf("xfer: reply Content-Type %q is not a sync reply", contentType)
+	}
+}
+
+// hasPrefixFold reports whether s begins with prefix, ignoring letter case.
+func hasPrefixFold(s, prefix string) bool {
+	return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
 }
 
 // mediaType strips any parameters (e.g. "; charset=...") from a Content-Type,

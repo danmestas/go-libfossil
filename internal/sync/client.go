@@ -510,156 +510,14 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	if msg == nil {
 		panic("sync.processResponse: msg must not be nil")
 	}
-	filesRecvd := 0
-	filesSent := 0 // files the server asked us to send this round
-
-	// §5.2: a card the decoder could not read (an unrecognized or
-	// wrong-arity line, or a file/cfile/uvfile it could not frame) ends the
-	// reply-card loop. fossil's client sets xfer.err and breaks; cards already
-	// processed stand, cards after the bad one are not read. The error is
-	// recorded, as fossil reports it: a reply cut short by a bad card must not
-	// look like a complete sync.
-cardLoop:
+	var t replyTally
 	for _, card := range msg.Cards {
-		switch c := card.(type) {
-		case *xfer.BadCommandCard:
-			s.result.Errors = append(s.result.Errors,
-				"unknown command: ["+strings.TrimRight(c.Line, "\n")+"]")
-			break cardLoop
-
-		case *xfer.BadFileCard:
-			s.result.Errors = append(s.result.Errors, "error: "+c.Message)
-			break cardLoop
-
-		case *xfer.PrivateCard:
-			s.nextIsPrivate = true
-
-		case *xfer.FileCard:
-			// Uncompressed cards never carry a wire-encoded frame to
-			// preserve — storage always compresses payload itself.
-			stored, err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content, nil,
-				s.takeVisibility())
-			if err != nil {
-				return false, err
-			}
-			if !stored {
-				continue // shunned: dropped, and not counted as received
-			}
-			filesRecvd++
-			s.roundStats.BytesReceived += int64(len(c.Content))
-			delete(s.phantoms, c.UUID)
-
-		case *xfer.CFileCard:
-			stored, err := s.handleFileCard(ctx, c.UUID, c.DeltaSrc, c.Content,
-				c.StoredBlob, s.takeVisibility())
-			if err != nil {
-				return false, err
-			}
-			if !stored {
-				continue // shunned: dropped, and not counted as received
-			}
-			filesRecvd++
-			s.roundStats.BytesReceived += int64(len(c.Content))
-			delete(s.phantoms, c.UUID)
-
-		case *xfer.IGotCard:
-			s.remoteHas[c.UUID] = true
-			rid, exists := blob.Exists(s.repo.DB(), c.UUID)
-			switch {
-			case exists:
-				// Buffered, not written here: a response announcing tens of
-				// thousands of artifacts would otherwise cost one implicit
-				// transaction per card (issue #200).
-				s.visibilityUpdates = append(s.visibilityUpdates,
-					visibilityUpdate{rid: rid, vis: visibility(c.IsPrivate)})
-			case c.IsPrivate:
-				if s.opts.Private && s.opts.Pull {
-					if err := s.addPhantom(c.UUID); err != nil {
-						return false, err
-					}
-				}
-			default:
-				if s.opts.Pull {
-					if err := s.addPhantom(c.UUID); err != nil {
-						return false, err
-					}
-				}
-			}
-
-		case *xfer.GimmeCard:
-			// A session that is not pushing never sends files, so a
-			// gimme from it could not be satisfied and would hold the
-			// pull open forever (#277). A "pull only" message (§10.2) disables
-			// pushing mid-reply, so a gimme after it is not answered either.
-			if !s.pushing() {
-				continue
-			}
-			s.pendingSend[c.UUID] = true
-			s.nGimmeRcvd++
-			filesSent++
-
-		case *xfer.CookieCard:
-			s.cookie = c.Value
-
-		case *xfer.ErrorCard:
-			// §10.1: an error card ends the reply-card loop. The cards before
-			// it stand; those after it are not read. The message is recorded
-			// first so it still surfaces. (A clone's first round tolerates an
-			// error card; that path is cloneSession.serverError, not here.)
-			s.result.Errors = append(s.result.Errors, "error: "+c.Message)
-			break cardLoop
-
-		case *xfer.MessageCard:
-			// §10.2: "pull only ..." tells a pushing client to stop sending
-			// content, matching fossil's glob "pull only *". Every message is
-			// still recorded: a caller that asked to push must be able to see
-			// that the server refused it, not just a quietly shorter sync.
-			if s.pushing() && strings.HasPrefix(c.Message, "pull only ") {
-				s.pushStopped = true
-			}
-			s.result.Errors = append(s.result.Errors, "message: "+c.Message)
-
-		case *xfer.PragmaCard:
-			if c.Name == "uv-push-ok" {
-				s.uvPushOK = true
-			} else if c.Name == "uv-pull-only" {
-				s.uvPullOnly = true
-			} else if c.Name == "ci-lock-fail" && len(c.Values) >= 2 {
-				mtime, _ := strconv.ParseInt(c.Values[1], 10, 64)
-				s.result.CkinLockFail = &CkinLockFail{
-					HeldBy: c.Values[0],
-					Since:  time.Unix(mtime, 0),
-				}
-			}
-
-		case *xfer.UVIGotCard:
-			if s.opts.UV {
-				if err := s.handleUVIGotCard(c); err != nil {
-					return false, err
-				}
-			}
-
-		case *xfer.UVFileCard:
-			if s.opts.UV {
-				if err := s.handleUVFileCard(c); err != nil {
-					return false, err
-				}
-				s.nUvFileRcvd++
-				s.result.UVFilesRecvd++
-			}
-
-		case *xfer.UVGimmeCard:
-			if s.opts.UV {
-				if s.uvToSend == nil {
-					s.uvToSend = make(map[string]bool)
-				}
-				s.uvToSend[c.Name] = true
-			}
-
-		case *xfer.SchemaCard, *xfer.XIGotCard, *xfer.XGimmeCard, *xfer.XRowCard, *xfer.XDeleteCard:
-			if err := s.processXTableCard(card); err != nil {
-				return false, err
-			}
+		stop, err := s.handleReplyCard(ctx, card, &t)
+		if err != nil {
+			return false, err
+		}
+		if stop {
+			break
 		}
 	}
 
@@ -667,13 +525,170 @@ cardLoop:
 		return false, fmt.Errorf("sync: record artifact visibility: %w", err)
 	}
 
-	s.result.FilesRecvd += filesRecvd
-	s.filesRecvdLastRound = filesRecvd
+	s.result.FilesRecvd += t.filesRecvd
+	s.filesRecvdLastRound = t.filesRecvd
+	s.agePhantoms()
+	return s.converged(t)
+}
 
-	// Age unresolved phantoms; evict after phantomEvictRounds consecutive
-	// rounds without delivery.
-	// FileCard/CFileCard handlers already delete resolved phantoms from s.phantoms,
-	// so anything still in the map was not delivered this round.
+// replyTally counts what one reply carried, for the convergence check.
+type replyTally struct {
+	filesRecvd int // file and cfile cards received
+	filesSent  int // files the server asked us to send
+}
+
+// handleReplyCard acts on one reply card. It reports stop when the card ends
+// the reply-card loop: the cards before it stand and those after it are not
+// read.
+//
+// §5.2: a card the decoder could not read (an unrecognized or wrong-arity
+// line, or a file/cfile/uvfile it could not frame) ends the loop. fossil's
+// client sets xfer.err and breaks. The error is recorded, as fossil reports
+// it: a reply cut short by a bad card must not look like a complete sync.
+func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
+	t *replyTally) (bool, error) {
+	switch c := card.(type) {
+	case *xfer.BadCommandCard:
+		s.result.Errors = append(s.result.Errors,
+			"unknown command: ["+strings.TrimRight(c.Line, "\n")+"]")
+		return true, nil
+	case *xfer.BadFileCard:
+		s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+		return true, nil
+	case *xfer.ErrorCard:
+		// §10.1: an error card ends the reply-card loop. The message is
+		// recorded first so it still surfaces. (A clone's first round
+		// tolerates an error card; that path is cloneSession.serverError.)
+		s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+		return true, nil
+	case *xfer.PrivateCard:
+		s.nextIsPrivate = true
+	case *xfer.FileCard:
+		// Uncompressed cards never carry a wire-encoded frame to
+		// preserve — storage always compresses payload itself.
+		return false, s.receiveFile(ctx, c.UUID, c.DeltaSrc, c.Content, nil, t)
+	case *xfer.CFileCard:
+		return false, s.receiveFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob, t)
+	case *xfer.IGotCard:
+		return false, s.handleIGot(c)
+	case *xfer.GimmeCard:
+		// A session that is not pushing never sends files, so a gimme from
+		// it could not be satisfied and would hold the pull open forever
+		// (#277). A "pull only" message (§10.2) disables pushing mid-reply,
+		// so a gimme after it is not answered either.
+		if s.pushing() {
+			s.pendingSend[c.UUID] = true
+			s.nGimmeRcvd++
+			t.filesSent++
+		}
+	case *xfer.CookieCard:
+		s.cookie = c.Value
+	case *xfer.MessageCard:
+		s.handleMessage(c)
+	case *xfer.PragmaCard:
+		s.handleReplyPragma(c)
+	case *xfer.UVIGotCard, *xfer.UVFileCard, *xfer.UVGimmeCard:
+		return false, s.handleReplyUVCard(card)
+	case *xfer.SchemaCard, *xfer.XIGotCard, *xfer.XGimmeCard, *xfer.XRowCard, *xfer.XDeleteCard:
+		return false, s.processXTableCard(card)
+	}
+	return false, nil
+}
+
+// receiveFile stores a received file or cfile and counts it.
+func (s *session) receiveFile(ctx context.Context, uuid, deltaSrc string,
+	payload, storedBlob []byte, t *replyTally) error {
+	stored, err := s.handleFileCard(ctx, uuid, deltaSrc, payload, storedBlob,
+		s.takeVisibility())
+	if err != nil || !stored {
+		return err // a shunned file is dropped, and not counted as received
+	}
+	t.filesRecvd++
+	s.roundStats.BytesReceived += int64(len(payload))
+	delete(s.phantoms, uuid)
+	return nil
+}
+
+// handleIGot records that the server holds an artifact: a held one has its
+// visibility brought in line, a missing one becomes a phantom when pulling.
+func (s *session) handleIGot(c *xfer.IGotCard) error {
+	s.remoteHas[c.UUID] = true
+	rid, exists := blob.Exists(s.repo.DB(), c.UUID)
+	switch {
+	case exists:
+		// Buffered, not written here: a response announcing tens of
+		// thousands of artifacts would otherwise cost one implicit
+		// transaction per card (issue #200).
+		s.visibilityUpdates = append(s.visibilityUpdates,
+			visibilityUpdate{rid: rid, vis: visibility(c.IsPrivate)})
+	case c.IsPrivate:
+		if s.opts.Private && s.opts.Pull {
+			return s.addPhantom(c.UUID)
+		}
+	default:
+		if s.opts.Pull {
+			return s.addPhantom(c.UUID)
+		}
+	}
+	return nil
+}
+
+// handleMessage records a message card. §10.2: "pull only ..." tells a
+// pushing client to stop sending content, matching fossil's glob "pull only
+// *". Every message is still recorded: a caller that asked to push must be
+// able to see that the server refused it, not just a quietly shorter sync.
+func (s *session) handleMessage(c *xfer.MessageCard) {
+	if s.pushing() && strings.HasPrefix(c.Message, "pull only ") {
+		s.pushStopped = true
+	}
+	s.result.Errors = append(s.result.Errors, "message: "+c.Message)
+}
+
+// handleReplyPragma acts on the pragmas a server sends a sync client.
+func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
+	switch {
+	case c.Name == "uv-push-ok":
+		s.uvPushOK = true
+	case c.Name == "uv-pull-only":
+		s.uvPullOnly = true
+	case c.Name == "ci-lock-fail" && len(c.Values) >= 2:
+		mtime, _ := strconv.ParseInt(c.Values[1], 10, 64)
+		s.result.CkinLockFail = &CkinLockFail{
+			HeldBy: c.Values[0],
+			Since:  time.Unix(mtime, 0),
+		}
+	}
+}
+
+// handleReplyUVCard acts on a uvigot, uvfile or uvgimme card when the session
+// syncs unversioned files, and ignores it otherwise.
+func (s *session) handleReplyUVCard(card xfer.Card) error {
+	if !s.opts.UV {
+		return nil
+	}
+	switch c := card.(type) {
+	case *xfer.UVIGotCard:
+		return s.handleUVIGotCard(c)
+	case *xfer.UVFileCard:
+		if err := s.handleUVFileCard(c); err != nil {
+			return err
+		}
+		s.nUvFileRcvd++
+		s.result.UVFilesRecvd++
+	case *xfer.UVGimmeCard:
+		if s.uvToSend == nil {
+			s.uvToSend = make(map[string]bool)
+		}
+		s.uvToSend[c.Name] = true
+	}
+	return nil
+}
+
+// agePhantoms ages the phantoms still unresolved after a reply and evicts
+// those asked for phantomEvictRounds rounds running. The file handlers
+// already delete resolved phantoms, so anything still in the map was not
+// delivered this round.
+func (s *session) agePhantoms() {
 	for uuid := range s.phantoms {
 		s.phantomAge[uuid]++
 		if s.phantomAge[uuid] >= phantomEvictRounds {
@@ -686,10 +701,13 @@ cardLoop:
 			delete(s.phantomAge, uuid)
 		}
 	}
+}
 
-	// Convergence: done if no files received, no files sent this round,
-	// phantoms empty, pendingSend empty, and unsent table empty.
-	if filesRecvd > 0 || filesSent > 0 {
+// converged reports whether the session is done after a reply: no files
+// moved this round, nothing is owed either way, and no unversioned or table
+// sync work is pending.
+func (s *session) converged(t replyTally) (bool, error) {
+	if t.filesRecvd > 0 || t.filesSent > 0 {
 		return false, nil
 	}
 	if len(s.phantoms) > 0 || len(s.pendingSend) > 0 {
@@ -699,13 +717,12 @@ cardLoop:
 	// If we sent igot cards but the server didn't gimme anything,
 	// clear the unsent table — those artifacts have been announced
 	// and the server either has them or doesn't want them.
-	if s.igotSentThisRound > 0 && filesSent == 0 {
+	if s.igotSentThisRound > 0 && t.filesSent == 0 {
 		if _, err := s.repo.DB().Exec("DELETE FROM unsent"); err != nil {
 			return false, fmt.Errorf("sync: delete unsent: %w", err)
 		}
 	}
 
-	// Check unsent table
 	var unsentCount int
 	err := s.repo.DB().QueryRow("SELECT count(*) FROM unsent").Scan(&unsentCount)
 	if err != nil {
@@ -714,43 +731,52 @@ cardLoop:
 	if unsentCount > 0 {
 		return false, nil
 	}
+	if s.uvPending() {
+		return false, nil
+	}
+	return !s.tablesPending(), nil
+}
 
-	// UV convergence
+// uvPending reports whether unversioned sync has work left, resetting the
+// per-round counters it judges by.
+func (s *session) uvPending() bool {
 	if s.opts.UV && s.nUvGimmeSent > 0 && (s.nUvFileRcvd > 0 || s.result.Rounds < 3) {
 		s.nUvGimmeSent = 0
 		s.nUvFileRcvd = 0
-		return false, nil
+		return true
 	}
 	if s.opts.UV && len(s.uvToSend) > 0 {
-		if !s.uvPushOK {
-			// Server did not grant uv-push-ok — UV hashes match,
-			// nothing to push. Clear stale uvToSend from prior rounds.
-			s.uvToSend = nil
-		} else {
-			return false, nil
+		if s.uvPushOK {
+			return true
 		}
+		// Server did not grant uv-push-ok — UV hashes match,
+		// nothing to push. Clear stale uvToSend from prior rounds.
+		s.uvToSend = nil
 	}
-	if s.opts.UV && s.uvGimmes != nil && len(s.uvGimmes) > 0 {
-		return false, nil
+	if s.opts.UV && len(s.uvGimmes) > 0 {
+		return true
 	}
 	s.nUvGimmeSent = 0
 	s.nUvFileRcvd = 0
+	return false
+}
 
-	// Table sync convergence (only when x-table sync is enabled)
-	if s.opts.XTableSync {
-		for _, gimmes := range s.xTableGimmes {
-			if len(gimmes) > 0 {
-				return false, nil
-			}
-		}
-		for _, sends := range s.xTableToSend {
-			if len(sends) > 0 {
-				return false, nil
-			}
+// tablesPending reports whether x-table sync has rows left to ask for or send.
+func (s *session) tablesPending() bool {
+	if !s.opts.XTableSync {
+		return false
+	}
+	for _, gimmes := range s.xTableGimmes {
+		if len(gimmes) > 0 {
+			return true
 		}
 	}
-
-	return true, nil
+	for _, sends := range s.xTableToSend {
+		if len(sends) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // storeReceivedFile validates and stores a received file/cfile blob. It is

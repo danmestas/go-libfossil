@@ -28,179 +28,30 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 		s.maxSend = 1024
 	}
 
-	var cards []xfer.Card
-
-	// 1. Pragma: client-version (every round)
-	cards = append(cards, &xfer.PragmaCard{
-		Name:   "client-version",
-		Values: []string{"22800", "20260315", "120000"},
-	})
-
-	// 2. Push/Pull cards.
-	//
-	// The project code is required on the wire (Fossil C rejects bare push/pull).
-	// s.projectCode is the caller's code or, failing that, the repo's own —
-	// every repo created by libfossil has a project-code (see db/schema.go).
-	projCode := s.projectCode
-	// Fossil C also reads a cached remote server-code from the local repo
-	// config ('server-code' written by a prior pull). Fall back to that when
-	// SyncOpts.ServerCode is not provided. Both push and pull carry it, and
-	// when none is cached Fossil C sends its own placeholder — `zSCode =
-	// db_get("server-code", "x")` in xfer.c client_sync. The server ignores
-	// the value; only the project code that follows it is validated.
-	srvCode := s.opts.ServerCode
-	if srvCode == "" {
-		_ = s.repo.DB().QueryRow(
-			"SELECT value FROM config WHERE name='server-code'",
-		).Scan(&srvCode)
-	}
-	if srvCode == "" {
-		srvCode = "x"
-	}
-	// Pull before push, as fossil's client_sync emits them (src/xfer.c): a
-	// server reading the push card decides "not authorized to write" versus
-	// "pull only" on whether it has already seen the pull card, so the order
-	// is load-bearing for a read-only requester (§10.2).
-	if s.opts.Pull {
-		if projCode == "" {
-			return nil, errNoProjectCode("pull")
-		}
-		cards = append(cards, &xfer.PullCard{
-			ProjectCode: projCode,
-			ServerCode:  srvCode,
-		})
-	}
-	if s.pushCard() {
-		if projCode == "" {
-			return nil, errNoProjectCode("push")
-		}
-		cards = append(cards, &xfer.PushCard{
-			ProjectCode: projCode,
-			ServerCode:  srvCode,
-		})
-	}
-
-	// 3. Cookie if cached
-	if s.cookie != "" {
-		cards = append(cards, &xfer.CookieCard{Value: s.cookie})
-	}
-
-	// 4. IGot cards: sendUnclustered every round.
-	igotCards, err := s.sendUnclustered()
+	cards, err := s.headerCards(cycle)
 	if err != nil {
-		return nil, fmt.Errorf("buildRequest igot: %w", err)
+		return nil, err
 	}
-	s.igotSentThisRound = len(igotCards)
-	s.roundStats.IgotsSent = len(igotCards)
-	cards = append(cards, igotCards...)
-
-	// 4b. Send cluster igots on round 2+ when pushing and remote has requested blobs.
-	// cycle is 0-indexed, so cycle>=1 means round 2+.
-	if cycle >= 1 && s.pushing() && s.nGimmeRcvd > 0 {
-		clusterCards, err := s.sendAllClusters()
-		if err != nil {
-			return nil, fmt.Errorf("buildRequest cluster igot: %w", err)
-		}
-		s.igotSentThisRound += len(clusterCards)
-		s.roundStats.IgotsSent += len(clusterCards)
-		cards = append(cards, clusterCards...)
-	}
-
-	// 4c. Request cluster catalog on round 2 when pulling.
-	// cycle is 0-indexed, so cycle==1 means round 2.
-	if cycle == 1 && s.opts.Pull {
-		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
-	}
-
-	// 5. File cards from pendingSend + unsent table, respecting maxSend budget
-	fileCards, err := s.buildFileCards()
+	content, err := s.contentCards(cycle)
 	if err != nil {
-		return nil, fmt.Errorf("buildRequest file: %w", err)
+		return nil, err
 	}
-	cards = append(cards, fileCards...)
-
-	// 6. Gimme cards from phantoms (max = max(MaxGimmeBase, filesRecvdLastRound*2))
-	gimmeCards := s.buildGimmeCards()
-	cards = append(cards, gimmeCards...)
-
-	// Private: send pragma every round (handler is stateless per-round).
-	if s.opts.Private {
-		cards = append(cards, &xfer.PragmaCard{Name: "send-private"})
+	cards = append(cards, content...)
+	extra, err := s.extraCards(cycle)
+	if err != nil {
+		return nil, err
 	}
+	cards = append(cards, extra...)
 
-	// Private: send igot cards for private blobs
-	if s.opts.Private {
-		privCards, err := s.sendPrivate()
-		if err != nil {
-			return nil, fmt.Errorf("buildRequest sendPrivate: %w", err)
-		}
-		s.igotSentThisRound += len(privCards)
-		s.roundStats.IgotsSent += len(privCards)
-		cards = append(cards, privCards...)
-	}
-
-	// ci-lock: request check-in lock on first round only.
-	if s.opts.CkinLock != nil && cycle == 0 {
-		cards = append(cards, &xfer.PragmaCard{
-			Name:   "ci-lock",
-			Values: []string{s.opts.CkinLock.ParentUUID, s.opts.CkinLock.ClientID},
-		})
-	}
-
-	// UV: pragma uv-hash on first round
-	if s.opts.UV && !s.uvHashSent {
-		if err := uv.EnsureSchema(s.repo.DB()); err != nil {
-			return nil, fmt.Errorf("buildRequest: uv.EnsureSchema: %w", err)
-		}
-		uvHash, err := uv.ContentHash(s.repo.DB())
-		if err != nil {
-			return nil, fmt.Errorf("buildRequest: uv.ContentHash: %w", err)
-		}
-		cards = append(cards, &xfer.PragmaCard{
-			Name:   "uv-hash",
-			Values: []string{uvHash},
-		})
-		s.uvHashSent = true
-	}
-
-	// UV: gimme cards for requested UV files
-	if s.opts.UV {
-		for name := range s.uvGimmes {
-			cards = append(cards, &xfer.UVGimmeCard{Name: name})
-			s.nUvGimmeSent++
-			s.result.UVGimmesSent++
-			delete(s.uvGimmes, name)
-		}
-	}
-
-	// UV: send uvfile cards from uvToSend (only after uvPushOK)
-	if s.opts.UV && s.uvPushOK {
-		uvCards, err := s.buildUVFileCards()
-		if err != nil {
-			return nil, fmt.Errorf("buildRequest uvfile: %w", err)
-		}
-		s.result.UVFilesSent += len(uvCards)
-		cards = append(cards, uvCards...)
-	}
-
-	// Table sync cards (only between EdgeSync peers, not real Fossil servers)
-	if s.opts.XTableSync {
-		xTableCards, err := s.buildXTableCards()
-		if err != nil {
-			return nil, fmt.Errorf("buildRequest xtable: %w", err)
-		}
-		cards = append(cards, xTableCards...)
-	}
-
-	// 7. Login card computed LAST, prepended to the front.
+	// Login card computed LAST, prepended to the front.
 	// Nonce = SHA1 of all other cards encoded + random comment.
 	//
-	// projCode, not s.opts.ProjectCode: the signature is salted with the
-	// project code, so a login built from an empty one is rejected by every
-	// server. Callers routinely leave SyncOpts.ProjectCode unset and let the
-	// repo's own config supply it, exactly as the push and pull cards above do.
+	// The signature is salted with the project code, so a login built from
+	// an empty one is rejected by every server. Callers routinely leave
+	// SyncOpts.ProjectCode unset and let the repo's own config supply it,
+	// exactly as the push and pull cards do.
 	if s.opts.User != "" {
-		loginCard, signed, err := s.buildLoginCard(cards, projCode)
+		loginCard, signed, err := s.buildLoginCard(cards, s.projectCode)
 		if err != nil {
 			return nil, fmt.Errorf("buildRequest login: %w", err)
 		}
@@ -219,6 +70,197 @@ func (s *session) buildRequest(cycle int) (*xfer.Message, error) {
 	}
 
 	return &xfer.Message{Cards: cards}, nil
+}
+
+// headerCards are the cards a request opens with, in fossil client_sync's
+// order: client-version, then pull before push, then the cookie. pragma
+// send-private goes first of all in the first request and after
+// client-version in the rest, where client_sync puts it (§3.2).
+func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
+	if cycle < 0 {
+		panic("session.headerCards: negative cycle")
+	}
+	var cards []xfer.Card
+	sendPrivate := &xfer.PragmaCard{Name: "send-private"}
+	if s.opts.Private && cycle == 0 {
+		cards = append(cards, sendPrivate)
+	}
+	cards = append(cards, &xfer.PragmaCard{
+		Name:   "client-version",
+		Values: []string{"22800", "20260315", "120000"},
+	})
+	if s.opts.Private && cycle > 0 {
+		cards = append(cards, sendPrivate)
+	}
+
+	// The project code is required on the wire (Fossil C rejects bare
+	// push/pull). s.projectCode is the caller's code or, failing that, the
+	// repo's own — every repo created by libfossil has a project-code.
+	projCode := s.projectCode
+	srvCode := s.serverCode()
+	// Pull before push, as fossil's client_sync emits them (src/xfer.c): a
+	// server reading the push card decides "not authorized to write" versus
+	// "pull only" on whether it has already seen the pull card, so the order
+	// is load-bearing for a read-only requester (§10.2).
+	if s.opts.Pull {
+		if projCode == "" {
+			return nil, errNoProjectCode("pull")
+		}
+		cards = append(cards, &xfer.PullCard{ProjectCode: projCode, ServerCode: srvCode})
+	}
+	if s.pushCard() {
+		if projCode == "" {
+			return nil, errNoProjectCode("push")
+		}
+		cards = append(cards, &xfer.PushCard{ProjectCode: projCode, ServerCode: srvCode})
+	}
+	if s.cookie != "" {
+		cards = append(cards, &xfer.CookieCard{Value: s.cookie})
+	}
+	return cards, nil
+}
+
+// serverCode is the server-code a push or pull card carries. Fossil C reads
+// a cached remote server-code from the local repo config ('server-code'
+// written by a prior pull) when SyncOpts.ServerCode is not provided, and
+// when none is cached sends its own placeholder — `zSCode =
+// db_get("server-code", "x")` in xfer.c client_sync. The server ignores the
+// value; only the project code that follows it is validated.
+func (s *session) serverCode() string {
+	if s.repo == nil {
+		panic("session.serverCode: nil repo")
+	}
+	srvCode := s.opts.ServerCode
+	if srvCode == "" {
+		_ = s.repo.DB().QueryRow(
+			"SELECT value FROM config WHERE name='server-code'",
+		).Scan(&srvCode)
+	}
+	if srvCode == "" {
+		srvCode = "x"
+	}
+	return srvCode
+}
+
+// contentCards announce what the client holds and move content: igot cards,
+// cluster igots, file cards, gimme cards and private igots.
+func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
+	if cycle < 0 {
+		panic("session.contentCards: negative cycle")
+	}
+	// IGot cards: sendUnclustered every round.
+	cards, err := s.sendUnclustered()
+	if err != nil {
+		return nil, fmt.Errorf("buildRequest igot: %w", err)
+	}
+	s.igotSentThisRound = len(cards)
+	s.roundStats.IgotsSent = len(cards)
+
+	// Send cluster igots on round 2+ when pushing and remote has requested
+	// blobs. cycle is 0-indexed, so cycle>=1 means round 2+.
+	if cycle >= 1 && s.pushing() && s.nGimmeRcvd > 0 {
+		clusterCards, err := s.sendAllClusters()
+		if err != nil {
+			return nil, fmt.Errorf("buildRequest cluster igot: %w", err)
+		}
+		s.igotSentThisRound += len(clusterCards)
+		s.roundStats.IgotsSent += len(clusterCards)
+		cards = append(cards, clusterCards...)
+	}
+
+	// Request cluster catalog on round 2 when pulling.
+	if cycle == 1 && s.opts.Pull {
+		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
+	}
+
+	// File cards from pendingSend + unsent table, respecting maxSend budget.
+	fileCards, err := s.buildFileCards()
+	if err != nil {
+		return nil, fmt.Errorf("buildRequest file: %w", err)
+	}
+	cards = append(cards, fileCards...)
+
+	// Gimme cards from phantoms (max = max(MaxGimmeBase, filesRecvdLastRound*2)).
+	cards = append(cards, s.buildGimmeCards()...)
+
+	// Private: send igot cards for private blobs.
+	if s.opts.Private {
+		privCards, err := s.sendPrivate()
+		if err != nil {
+			return nil, fmt.Errorf("buildRequest sendPrivate: %w", err)
+		}
+		s.igotSentThisRound += len(privCards)
+		s.roundStats.IgotsSent += len(privCards)
+		cards = append(cards, privCards...)
+	}
+	return cards, nil
+}
+
+// extraCards are the check-in lock request, unversioned sync and table sync.
+func (s *session) extraCards(cycle int) ([]xfer.Card, error) {
+	if cycle < 0 {
+		panic("session.extraCards: negative cycle")
+	}
+	var cards []xfer.Card
+	// ci-lock: request check-in lock on first round only.
+	if s.opts.CkinLock != nil && cycle == 0 {
+		cards = append(cards, &xfer.PragmaCard{
+			Name:   "ci-lock",
+			Values: []string{s.opts.CkinLock.ParentUUID, s.opts.CkinLock.ClientID},
+		})
+	}
+	if s.opts.UV {
+		uvCards, err := s.uvRequestCards()
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, uvCards...)
+	}
+	// Table sync cards (only between EdgeSync peers, not real Fossil servers)
+	if s.opts.XTableSync {
+		xTableCards, err := s.buildXTableCards()
+		if err != nil {
+			return nil, fmt.Errorf("buildRequest xtable: %w", err)
+		}
+		cards = append(cards, xTableCards...)
+	}
+	return cards, nil
+}
+
+// uvRequestCards are a request's unversioned sync cards: pragma uv-hash in
+// the first request, uvgimme for the files asked for, and uvfile cards once
+// the server has granted uv-push-ok.
+func (s *session) uvRequestCards() ([]xfer.Card, error) {
+	if !s.opts.UV {
+		panic("session.uvRequestCards: unversioned sync is off")
+	}
+	var cards []xfer.Card
+	if !s.uvHashSent {
+		if err := uv.EnsureSchema(s.repo.DB()); err != nil {
+			return nil, fmt.Errorf("buildRequest: uv.EnsureSchema: %w", err)
+		}
+		uvHash, err := uv.ContentHash(s.repo.DB())
+		if err != nil {
+			return nil, fmt.Errorf("buildRequest: uv.ContentHash: %w", err)
+		}
+		cards = append(cards, &xfer.PragmaCard{Name: "uv-hash", Values: []string{uvHash}})
+		s.uvHashSent = true
+	}
+	for name := range s.uvGimmes {
+		cards = append(cards, &xfer.UVGimmeCard{Name: name})
+		s.nUvGimmeSent++
+		s.result.UVGimmesSent++
+		delete(s.uvGimmes, name)
+	}
+	if s.uvPushOK {
+		uvCards, err := s.buildUVFileCards()
+		if err != nil {
+			return nil, fmt.Errorf("buildRequest uvfile: %w", err)
+		}
+		s.result.UVFilesSent += len(uvCards)
+		cards = append(cards, uvCards...)
+	}
+	return cards, nil
 }
 
 // sendUnclustered queries the unclustered table and produces igot cards
@@ -856,9 +898,19 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 // or not srcRid is itself currently available.
 func storeDeltaContent(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
 	return r.WithTx(func(tx *db.Tx) error {
+		_, held := blob.Exists(tx, deltaSrc)
 		srcRid, err := blob.StorePhantom(tx, deltaSrc)
 		if err != nil {
 			return fmt.Errorf("storeDeltaContent: resolve base %s: %w", deltaSrc, err)
+		}
+		// A basis first seen as a private card's delta source is a private
+		// phantom, as fossil's content_new makes it (§7.4): it must not be
+		// announced or asked for as public content.
+		if !held && vis == visibilityPrivate {
+			if err := content.MakePrivate(tx, int64(srcRid)); err != nil {
+				return fmt.Errorf("storeDeltaContent: private base %s: %w",
+					deltaSrc, err)
+			}
 		}
 		rid, err := blob.StoreDeltaRaw(tx, uuid, payload, srcRid, storedBlob)
 		if err != nil {

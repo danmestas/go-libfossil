@@ -1,6 +1,9 @@
 package deck
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // The §4.6 name predicates, ported from fossil so the parser accepts and
 // rejects exactly the names fossil does. They operate on the decoded name,
@@ -30,6 +33,29 @@ func simplePathname(z string) bool {
 		if dotElementAt(z, i+1) {
 			return false
 		}
+	}
+	return true
+}
+
+// StrictPathname reports whether z is a simple pathname as fossil's
+// file_is_simple_pathname(z, 1) decides it (src/file.c), the rule a uvfile
+// NAME must meet: a simple pathname with no backslash, in strict UTF-8 with no
+// character above U+FFFF, no private-use character (U+E000..U+F8FF), no
+// noncharacter (U+FDD0..U+FDEF, U+FFFE, U+FFFF) and no surrogate.
+func StrictPathname(z string) bool {
+	if !simplePathname(z) || strings.IndexByte(z, '\\') >= 0 {
+		return false
+	}
+	for i := 0; i < len(z); {
+		r, n := utf8.DecodeRuneInString(z[i:])
+		if r == utf8.RuneError && n <= 1 {
+			return false // invalid or overlong UTF-8, or a surrogate
+		}
+		if r > 0xFFFF || (r >= 0xE000 && r <= 0xF8FF) || (r >= 0xFDD0 && r <= 0xFDEF) ||
+			r >= 0xFFFE {
+			return false
+		}
+		i += n
 	}
 	return true
 }

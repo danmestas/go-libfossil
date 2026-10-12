@@ -108,7 +108,13 @@ func Save(ckout *sql.DB, dir string, pathnames []string) error {
 				return fmt.Errorf("undo.Save: read %s: %w", pathname, readErr)
 			}
 		}
-		if _, err := ins.Exec(pathname, data, exists, isExec, isLink); err != nil {
+		// A nil []byte binds as an empty blob under some drivers (ncruces),
+		// so a missing file's content is bound as an untyped nil, NULL.
+		var content any = data
+		if !exists {
+			content = nil
+		}
+		if _, err := ins.Exec(pathname, content, exists, isExec, isLink); err != nil {
 			return fmt.Errorf("undo.Save: insert undo row: %w", err)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
 // maxPayloadSize is the largest size token a card may carry. Fossil parses
@@ -485,10 +486,12 @@ func parseConfig(r *bufio.Reader, rawLine string, args []string) (Card, error) {
 func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	// A malformed uvfile line leaves its payload unframeable: fossil's
 	// xfer_accept_unversioned_file writes "malformed uvfile line" and
-	// page_xfer breaks. Its checks are reproduced here -- arity, a
-	// non-negative MTIME, and SIZE and FLAGS that are non-negative decimals
-	// (parseSize enforces the last).
-	if len(args) != 5 {
+	// page_xfer breaks. Its checks are reproduced here -- arity, a NAME that
+	// is a strict simple pathname, a non-negative MTIME, a HASH that is an
+	// artifact name or "-", and SIZE and FLAGS that are non-negative
+	// decimals (parseSize enforces the last).
+	if len(args) != 5 || !deck.StrictPathname(args[0]) ||
+		(args[2] != "-" && !hash.IsValidHash(args[2])) {
 		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
 	mtime, err := strconv.ParseInt(args[1], 10, 64)

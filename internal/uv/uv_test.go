@@ -185,3 +185,60 @@ func TestInvalidateHash(t *testing.T) {
 		t.Error("hash should differ after invalidate + mtime change")
 	}
 }
+
+// TestReceive pins §7.3's handling of a received uvfile, as fossil's
+// xfer_accept_unversioned_file applies it: the row keeps the HASH the card
+// gave, the same content at a later mtime moves only the mtime, and omitted
+// content is stored as NULL with size 0.
+func TestReceive(t *testing.T) {
+	d := openTestDB(t)
+	sha1Name := "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed" // SHA1("hello world")
+
+	if err := Receive(d, "a.txt", 100, sha1Name, []byte("hello world")); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	content, mtime, got, err := Read(d, "a.txt")
+	if err != nil || got != sha1Name || mtime != 100 || string(content) != "hello world" {
+		t.Fatalf("a.txt = %q, %d, %q, %v; want the card's HASH", content, mtime, got, err)
+	}
+
+	if err := Receive(d, "a.txt", 200, sha1Name, nil); err != nil {
+		t.Fatalf("Receive status 2: %v", err)
+	}
+	content, mtime, _, _ = Read(d, "a.txt")
+	if mtime != 200 || string(content) != "hello world" {
+		t.Fatalf("after status 2: mtime %d, content %q; want 200 and the content kept",
+			mtime, content)
+	}
+
+	if err := Receive(d, "w.txt", 100, sha1Name, nil); err != nil {
+		t.Fatalf("Receive omitted: %v", err)
+	}
+	var sz int
+	var isNull bool
+	err = d.QueryRow("SELECT sz, content IS NULL FROM unversioned WHERE name='w.txt'").
+		Scan(&sz, &isNull)
+	if err != nil || sz != 0 || !isNull {
+		t.Fatalf("omitted content: sz %d, NULL %v, %v; want 0 and NULL", sz, isNull, err)
+	}
+}
+
+// TestReceiveDeletionOfAbsentName pins that a received deletion for a name
+// the repository does not hold changes nothing, as fossil's UPDATE does,
+// while a local Delete still records a tombstone.
+func TestReceiveDeletionOfAbsentName(t *testing.T) {
+	d := openTestDB(t)
+	if err := Receive(d, "never.txt", 100, "-", nil); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+	var n int
+	if err := d.QueryRow("SELECT count(*) FROM unversioned").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rows after a received deletion of an absent name: %d, %v; want 0", n, err)
+	}
+	if err := Delete(d, "never.txt", 100); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := d.QueryRow("SELECT count(*) FROM unversioned").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("rows after a local Delete: %d, %v; want 1", n, err)
+	}
+}

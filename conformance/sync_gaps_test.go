@@ -15,26 +15,10 @@ var syncGaps = map[string]string{
 	// secret, with no fallback for one stored in clear
 	// (internal/auth/verify.go:87).
 	"sync.6.4.cleartext-fallback": "#304",
-	// The client's unversioned sync: a received uvfile of status 2 is
-	// dropped, not applied as an mtime (internal/sync/client.go:1136),
-	// and tombstones are put in the send table (internal/sync/session.go:152).
-	"sync.7.3.status2-mtime-client":       "#308",
-	"sync.8.5.1.seed-excludes-tombstones": "#308",
-	// The server's unversioned sync: a uvgimme for an absent name is
-	// answered with a tombstone (:102); a uvfile needs a push card (:134);
-	// one of status 2, or with its content omitted, changes nothing
-	// (:170, :178).
-	"sync.7.3.uvgimme-absent":  "#308",
-	"sync.7.3.status2-mtime":   "#308",
-	"sync.7.3.omitted-content": "#308",
-	// A received unversioned file is stored under its content's hash by
-	// the repository's policy, not the HASH it came with
-	// (internal/uv/uv.go:57).
 	// The read gates treat only o, i and Admin as Read, where fossil's
 	// trunk and the s7.3 erratum let Clone imply it
 	// (internal/auth/auth.go:42).
 	"sync.7.3.uvgimme-clone-implies-read": "#312",
-	"sync.7.3.received-hash":              "#308",
 }
 
 // syncDeviations marks the cases where go-libfossil differs from the draft

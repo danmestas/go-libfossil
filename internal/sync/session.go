@@ -159,7 +159,10 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		cache:          opts.ContentCache,
 	}
 
-	// Pre-populate uvToSend with all local non-tombstone UV files.
+	// Pre-populate uvToSend with the local files, tombstones left out, as
+	// fossil seeds uv_tosend from rows whose hash is not NULL (§8.5.1). A
+	// local deletion newer than the server's copy is queued when its
+	// uvigot shows that.
 	if opts.UV {
 		if err := uv.EnsureSchema(r.DB()); err != nil {
 			panic(fmt.Sprintf("sync.newSession: uv.EnsureSchema: %v", err))
@@ -171,8 +174,9 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		s.uvToSend = make(map[string]bool)
 		s.uvGimmes = make(map[string]bool)
 		for _, e := range entries {
-			// Include both live files and tombstones so deletions propagate.
-			s.uvToSend[e.Name] = true
+			if e.Hash != "" {
+				s.uvToSend[e.Name] = true
+			}
 		}
 	}
 

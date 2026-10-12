@@ -157,6 +157,14 @@ func (h *handler) sendUVFile(name string) error {
 	if name == "" {
 		panic("handler.sendUVFile: name must not be empty")
 	}
+	var held int
+	if err := h.repo.DB().QueryRow(
+		"SELECT count(*) FROM unversioned WHERE name=?", name).Scan(&held); err != nil {
+		return fmt.Errorf("handler.sendUVFile: look up %q: %w", name, err)
+	}
+	if held == 0 {
+		return nil // §7.3: a name the server does not hold gets no card
+	}
 	content, mtime, fileHash, err := uv.Read(h.repo.DB(), name)
 	if err != nil {
 		return fmt.Errorf("handler.sendUVFile: read %q: %w", name, err)
@@ -223,23 +231,8 @@ func (h *handler) handleUVFile(c *xfer.UVFileCard) error {
 		return fmt.Errorf("handler.handleUVFile: ensure schema: %w", err)
 	}
 
-	// Double-check status.
-	_, localMtime, localHash, err := uv.Read(h.repo.DB(), c.Name)
-	if err != nil {
-		return fmt.Errorf("handler.handleUVFile: read %q: %w", c.Name, err)
-	}
-
-	status := uv.Status(localMtime, localHash, c.MTime, c.Hash)
-	if status >= 2 {
-		return nil
-	}
-
-	// Apply.
-	if c.Hash == "-" {
-		return uv.Delete(h.repo.DB(), c.Name, c.MTime)
-	}
-	if c.Content != nil {
-		return uv.Write(h.repo.DB(), c.Name, c.Content, c.MTime)
+	if err := uv.Receive(h.repo.DB(), c.Name, c.MTime, c.Hash, c.Content); err != nil {
+		return fmt.Errorf("handler.handleUVFile: %w", err)
 	}
 	return nil
 }

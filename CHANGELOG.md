@@ -61,6 +61,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- Crosslinking a root check-in a second time no longer duplicates its mlink
+  rows. The root-file path inserted each row with no "already derived" guard,
+  so a re-crosslink (as the relink path does after clearing event/tagxref)
+  doubled them; it now skips the block when the rows are already present, as
+  `manifest_crosslink` is idempotent (#294).
+
+
 - The first check-in's `sym-trunk` tag is now propagating (`*sym-trunk`),
   matching `fossil new` and repo-state §6.1, so the trunk alias descends to
   every check-in on the branch. It used to be written as a singleton

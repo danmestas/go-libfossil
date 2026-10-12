@@ -597,6 +597,17 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 	if len(d.P) == 0 {
 		// A root check-in has no transition to diff, so every file it carries is
 		// new: canonical's `if( nParent==0 )` block, with pmid and pid both 0.
+		//
+		// addOneMlink's primary path has no "already derived" guard, unlike
+		// addMlink's early-out (pmid>0), so crosslinking a root a second time --
+		// which the relink path does after clearing event/tagxref -- would insert
+		// a second copy of each file row (issue #294). A pmid of 0 occurs only for
+		// a root, and its rows are inserted as a unit, so if any one is present
+		// they all are: skip the block.
+		var one int
+		if tx.QueryRow("SELECT 1 FROM mlink WHERE mid=? AND pmid=0", rid).Scan(&one) == nil {
+			return nil
+		}
 		for _, f := range d.F {
 			if f.UUID == "" {
 				continue

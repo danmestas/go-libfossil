@@ -288,3 +288,64 @@ func TestCrosslinkCheckinTagTargetingAnotherArtifact(t *testing.T) {
 		t.Errorf("closed tag srcid = %d, want %d (the check-in carrying the card)", gotSrc, closer)
 	}
 }
+
+// TestCrosslinkRootMlinkIdempotent is the issue #294 regression. Crosslinking
+// a root check-in a second time -- over the mlink rows a first crosslink left,
+// as the relink path does after clearing event and tagxref -- used to insert a
+// second copy of every root-file row, because the root-file path had no
+// "already derived" guard.
+func TestCrosslinkRootMlinkIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "root.fossil")
+	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	rid, _, err := Checkin(r, CheckinOpts{
+		Files: []File{
+			{Name: "a.txt", Content: []byte("a\n")},
+			{Name: "b.txt", Content: []byte("b\n")},
+		},
+		Comment: "root", User: "testuser",
+		Time: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("repo.Close: %v", err)
+	}
+
+	r2, err := repo.Open(path)
+	if err != nil {
+		t.Fatalf("repo.Open: %v", err)
+	}
+	defer r2.Close()
+
+	countRoot := func() int {
+		var n int
+		if err := r2.DB().QueryRow(
+			"SELECT count(*) FROM mlink WHERE mid=?", rid).Scan(&n); err != nil {
+			t.Fatalf("count mlink: %v", err)
+		}
+		return n
+	}
+
+	first := countRoot()
+	if first == 0 {
+		t.Fatal("the root check-in derived no mlink rows; the test proves nothing")
+	}
+
+	// Clear only the marks a crosslink reads as "already linked", as the relink
+	// path does, leaving mlink in place, then crosslink again.
+	for _, clear := range []string{"DELETE FROM event", "DELETE FROM tagxref WHERE srcid > 0"} {
+		if _, err := r2.DB().Exec(clear); err != nil {
+			t.Fatalf("clear: %v", err)
+		}
+	}
+	if _, err := Crosslink(r2); err != nil {
+		t.Fatalf("second Crosslink: %v", err)
+	}
+	if second := countRoot(); second != first {
+		t.Errorf("root mlink rows after relink = %d, want %d (unchanged)", second, first)
+	}
+}

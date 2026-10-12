@@ -26,14 +26,11 @@ func rawCheckinManifest(userLine string) []byte {
 	return []byte(fmt.Sprintf("%sZ %x\n", body, h))
 }
 
-// TestRebuild_UCardPresenceStates covers the rebuild path
-// (internal/verify/rebuild_manifest.go's rebuildCheckin) with the same
+// TestRebuild_UCardPresenceStates covers the rebuild path with the same
 // three-state U-card coverage as manifest.TestCrosslink_UCardPresenceStates.
-// rebuildCheckin binds d.U into event.user the same way crosslink.go does
-// (rebuild_manifest.go:91 is byte-identical to crosslink.go:242), but had
-// no dedicated regression test — a future edit adding a stray
-// deck.User("") default or a deref here would silently collapse SQL NULL
-// back into "" on the rebuild path with nothing to catch it.
+// verify.Rebuild now derives event through manifest.Crosslink, so the U-card
+// binding is crosslink's; this exercises it from the rebuild entry point so a
+// future edit that collapses SQL NULL back into "" on either path is caught.
 func TestRebuild_UCardPresenceStates(t *testing.T) {
 	r := newTestRepo(t)
 
@@ -50,8 +47,8 @@ func TestRebuild_UCardPresenceStates(t *testing.T) {
 		t.Fatalf("blob.Store(valued): %v", err)
 	}
 
-	// Rebuild drops and reconstructs event (and friends) from raw blob
-	// content, exercising rebuildManifests -> rebuildCheckin directly.
+	// Rebuild empties the derived tables and reconstructs event (and friends)
+	// from raw blob content through the crosslink sweep.
 	if _, err := verify.Rebuild(r); err != nil {
 		t.Fatalf("verify.Rebuild: %v", err)
 	}

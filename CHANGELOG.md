@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify.Rebuild` now derives repository state through the crosslink sweep
+  rather than its own partial derivation (#285). It kept a second derivation
+  that wrote rows only for check-ins and control artifacts: no cluster, wiki,
+  ticket, technote or forum events, applied tags from artifacts the crosslink
+  would refuse, skipped absent tag targets and parents instead of reserving
+  phantoms, wrote no plink `baseid`, and computed leaves by "no child at all"
+  regardless of branch. Rebuild now empties the derived tables and runs the
+  same sweep a clone runs, so derived state has one owner and matches
+  `fossil rebuild` in event, plink, mlink, tagxref, leaf and phantom. A new
+  `manifest.CrosslinkRebuild` runs that sweep in a terminal mode that links a
+  check-in whose content is absent with phantoms rather than deferring it for a
+  blob that will never arrive, as `fossil rebuild` does. Its branch-aware leaf
+  rule now follows fossil, so an untagged parentless check-in is no longer a
+  leaf (the §7.3 erratum the sweep already observed).
 - `Repo.ResolveVersion` now follows fossil's `symbolic_name_to_rid` name
   resolution (src/name.c): it chooses a tag by the carrying check-in's
   `event.mtime` rather than `tagxref.mtime`, no longer falls back to the tip

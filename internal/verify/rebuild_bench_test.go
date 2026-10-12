@@ -21,10 +21,10 @@ import (
 // Methodology: commit `revisions` versions of two ~26 KB files, each changing a
 // strided subset of lines off the previous, so Checkin deltifies every older
 // file blob into a backward chain against its successor. Rebuild then sweeps
-// every blob more than once -- checkBlobs, rebuildManifests, and two passes in
-// rebuildTags -- each of which would, uncached, replay every blob's whole delta
-// chain from its whole tip: O(revisions^2) per sweep, times the sweep count.
-// The shared cache walks each chain once for the entire rebuild.
+// every blob through checkBlobs and again through the manifest.Crosslink
+// derivation, each of which would, uncached, replay every blob's whole delta
+// chain from its whole tip: O(revisions^2) per sweep. Each sweep's content
+// cache walks each chain once.
 func BenchmarkRebuildDeepHistory(b *testing.B) {
 	for _, revisions := range []int{20, 60, 150} {
 		b.Run(fmt.Sprintf("revisions=%d", revisions), func(b *testing.B) {

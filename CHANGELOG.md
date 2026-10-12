@@ -61,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom's rid and leave it empty, so a check-in of a file matching a known
   phantom recorded a manifest pointing at content that was never stored.
 
+- A technote whose T-card names another artifact, or propagates or cancels,
+  is now refused at crosslink time and applies none of its tags, as fossil
+  refuses it at parse time. A technote may only carry `+` (singleton) tags on
+  itself (#287).
+
+
 - Crosslinking a root check-in a second time no longer duplicates its mlink
   rows. The root-file path inserted each row with no "already derived" guard,
   so a re-crosslink (as the relink path does after clearing event/tagxref)

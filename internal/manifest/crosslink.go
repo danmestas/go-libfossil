@@ -581,7 +581,13 @@ func isArtifact(d *deck.Deck) bool {
 	case deck.Attachment:
 		return !d.D.IsZero() && d.A != nil
 	case deck.Event:
-		return !d.D.IsZero() && d.E != nil && d.W != nil
+		// Required: D, E, W, Z -- and every T-card a '+' (singleton) tag on the
+		// technote itself. A technote whose T-card names another artifact, or
+		// propagates or cancels, is refused outright; fossil rejects it at parse
+		// time (src/manifest.c, "non-self-referential T-card in technote" and
+		// "T-card with '*' or '-' in technote"). We gate it here so a technote the
+		// parser accepts applies none of its tags (issue #287).
+		return !d.D.IsZero() && d.E != nil && d.W != nil && technoteTagsSelf(d)
 	case deck.ForumPost:
 		return !d.D.IsZero() && d.U != nil && d.W != nil
 	default:
@@ -597,6 +603,19 @@ func hasSelfTag(d *deck.Deck) bool {
 		}
 	}
 	return false
+}
+
+// technoteTagsSelf reports whether every T-card on a technote is a '+'
+// (singleton) tag applied to the technote itself ('*'). fossil requires both
+// of a CFTYPE_EVENT artifact (src/manifest.c): a technote may only tag itself,
+// and only with singleton tags.
+func technoteTagsSelf(d *deck.Deck) bool {
+	for _, tc := range d.T {
+		if tc.Type != deck.TagSingleton || tc.UUID != "*" {
+			return false
+		}
+	}
+	return true
 }
 
 // linkArtifact writes the derived rows for one parsed artifact on tx. handled

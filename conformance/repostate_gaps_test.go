@@ -26,10 +26,6 @@ var repostateGaps = map[string]string{
 	// code: plink keeps the old parent.
 	"repostate.4.2.reparent":         "#286",
 	"repostate.4.2.reparent.rebuild": "#286",
-	// isArtifact accepts a technote with a T-card naming another artifact
-	// (internal/manifest/crosslink.go:583), and crosslinkEvent applies it
-	// (:1510).
-	"repostate.12.technote-non-self": "#287",
 	// The cancel walk deletes an inherited row whatever its mtime: the query
 	// is COALESCE(srcid=0, 0), without AND tagxref.mtime < ? (tag/propagate.go:67).
 	"repostate.5.4.cancel-skips-newer-inherited": "#288",

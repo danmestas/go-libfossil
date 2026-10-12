@@ -6,6 +6,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -49,6 +50,11 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 		}
 		if err := rebuildTags(r, tx, report, cache); err != nil {
 			return fmt.Errorf("rebuild tags: %w", err)
+		}
+		// Apply parent (reparent) tags now that control tags are in tagxref and
+		// before leaves are computed, so a reparented old parent reads as a leaf.
+		if err := manifest.ReparentCheckins(tx); err != nil {
+			return fmt.Errorf("rebuild reparent: %w", err)
 		}
 		if err := rebuildLeaves(tx); err != nil {
 			return fmt.Errorf("rebuild leaves: %w", err)

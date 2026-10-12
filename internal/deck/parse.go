@@ -3,7 +3,6 @@ package deck
 import (
 	"fmt"
 	"strings"
-	"time"
 )
 
 // isHexToken reports whether s is non-empty and consists solely of hex
@@ -712,28 +711,6 @@ func parseZCard(tokens []string) error {
 		}
 	}
 	return nil
-}
-
-func parseTimestamp(s string) (time.Time, error) {
-	s = strings.TrimSpace(s)
-	for _, layout := range []string{
-		"2006-01-02T15:04:05.000",
-		"2006-01-02T15:04:05",
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	s = strings.Replace(s, "t", "T", 1)
-	for _, layout := range []string{
-		"2006-01-02T15:04:05.000",
-		"2006-01-02T15:04:05",
-	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("cannot parse timestamp %q", s)
 }
 
 func inferType(d *Deck) ArtifactType {

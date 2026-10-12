@@ -27,6 +27,13 @@ func configKey(parentUUID string) string {
 	return "libfossil-ci-lock-" + parentUUID
 }
 
+// releaseCkinLocks drops the check-in locks clientID holds, and any lock
+// whose record is not JSON, as fossil's pragma ci-unlock does (§9.4).
+func releaseCkinLocks(d *db.DB, clientID string) {
+	d.Exec("DELETE FROM config WHERE name LIKE 'libfossil-ci-lock-%'"+
+		" AND (NOT json_valid(value) OR json_extract(value, '$.clientid')=?)", clientID)
+}
+
 // processCkinLock handles a ci-lock pragma request.
 // Returns non-nil CkinLockFail if another client holds the lock.
 func processCkinLock(d *db.DB, parentUUID, clientID, user string, timeout time.Duration) *CkinLockFail {

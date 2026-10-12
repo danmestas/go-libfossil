@@ -15,14 +15,6 @@ var syncGaps = map[string]string{
 	// secret, with no fallback for one stored in clear
 	// (internal/auth/verify.go:87).
 	"sync.6.4.cleartext-fallback": "#304",
-	// The server has no case for a pushed config card
-	// (internal/sync/handler.go:522).
-	"sync.9.3.config-needs-admin": "#305",
-	// Pragmas the server records or ignores: ci-unlock is not handled
-	// (internal/sync/handler.go:427); req-clusters is recorded (:438) but
-	// sendAllClusters (:778) is never called.
-	"sync.9.4.ci-unlock":        "#305",
-	"sync.5.3.cluster-brackets": "#305",
 	// A clone reply carries no unversioned catalog
 	// (internal/sync/handler.go:475).
 	"sync.8.4.clone-uv-catalog": "#306",

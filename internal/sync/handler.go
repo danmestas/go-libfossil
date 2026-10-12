@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/shun"
@@ -306,8 +307,10 @@ func (h *handler) breakLoop(msg string) {
 	h.resp = append(h.resp, &xfer.ErrorCard{Message: msg})
 	h.broke = true
 	// The reset also discards the cfiles page_xfer's clone card already
-	// sent, so no clone batch or clone push card follows the error.
+	// sent, so no clone batch or clone push card follows the error, and the
+	// cluster igots it answered req-clusters with in place.
 	h.cloneMode = false
+	h.reqClusters = false
 }
 
 func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -486,6 +489,21 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 		}
 	}
 
+	return h.emitInventory()
+}
+
+// emitInventory sends what follows the card loop: the cluster igots a
+// req-clusters asked for, the igot inventory of a pull, and a clone's batch.
+func (h *handler) emitInventory() error {
+	// pragma req-clusters is answered with the cluster igots, ahead of the
+	// inventory as page_xfer answers it in card order. Like fossil, any
+	// requester gets them: they name public artifacts and carry no content,
+	// which a gimme still needs Read to fetch.
+	if h.reqClusters {
+		if err := h.sendAllClusters(); err != nil {
+			return err
+		}
+	}
 	// If pull was requested, emit igot for all non-phantom blobs.
 	if h.pullOK {
 		if err := h.emitIGots(); err != nil {
@@ -495,12 +513,9 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 			return err
 		}
 	}
-
 	// If clone, emit paginated file cards.
 	if h.cloneMode {
-		if err := h.emitCloneBatch(); err != nil {
-			return err
-		}
+		return h.emitCloneBatch()
 	}
 	return nil
 }
@@ -672,6 +687,12 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 				Values: []string{fail.HeldBy, fmt.Sprintf("%d", fail.Since.Unix())},
 			})
 		}
+	case c.Name == "ci-unlock" && len(c.Values) == 1 && hash.IsValidHash(c.Values[0]):
+		// fossil drops CLIENT-ID's check-in locks for any requester; as with
+		// ci-lock, this server lets only writers touch locks.
+		if auth.CanPush(h.caps) {
+			releaseCkinLocks(h.repo.DB(), c.Values[0])
+		}
 	case c.Name == "send-private":
 		if auth.CanSyncPrivate(h.caps) {
 			h.syncPrivate = true
@@ -705,6 +726,9 @@ func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
 		return nil
 	case *xfer.ReqConfigCard:
 		return h.handleReqConfig(c)
+	case *xfer.ConfigCard:
+		h.handleConfigPush()
+		return nil
 	case *xfer.UVIGotCard:
 		return h.handleUVIGot(c)
 	case *xfer.UVGimmeCard:
@@ -978,6 +1002,7 @@ func (h *handler) sendAllClusters() error {
 	}
 	defer rows.Close()
 
+	bracketed := false
 	for rows.Next() {
 		var uuid string
 		if err := rows.Scan(&uuid); err != nil {
@@ -987,9 +1012,34 @@ func (h *handler) sendAllClusters() error {
 		if e, ok := h.remoteHas[uuid]; ok && !e.isPrivate {
 			continue
 		}
+		if !bracketed {
+			h.resp = append(h.resp, &xfer.CommentCard{Text: "sending-clusters"})
+			bracketed = true
+		}
 		h.resp = append(h.resp, &xfer.IGotCard{UUID: uuid})
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// fossil's send_all_clusters brackets the cluster igots with comments,
+	// and sends neither when there is no cluster to announce (§5.3).
+	if bracketed {
+		h.resp = append(h.resp, &xfer.CommentCard{Text: "end-of-clusters"})
+	}
+	return nil
+}
+
+// handleConfigPush answers a pushed config card. fossil's page_xfer refuses
+// one from a requester without Admin with a reset, this error and a break
+// (§9.3). It applies an Admin's through configure_receive, which this server
+// does not implement, so it refuses that too, naming why, rather than drop
+// the configuration while the push appears to succeed.
+func (h *handler) handleConfigPush() {
+	if !auth.IsAdmin(h.caps) {
+		h.breakLoop("not authorized to push configuration")
+		return
+	}
+	h.breakLoop("configuration push is not supported by this server")
 }
 
 func (h *handler) emitCloneBatch() error {

@@ -169,6 +169,14 @@ func serverPragmaMoreCases() []syncServerCase {
 		want: all(completed, before("# sending-clusters", "igot {C}"),
 			before("igot {C}", "# end-of-clusters"), count("# sending-clusters", 1)),
 	}, {
+		// fossil(1) answers req-clusters for any requester: cluster names
+		// are no content, which a gimme still needs Read to fetch.
+		Case:  Case{ID: "sync.5.3.cluster-brackets-without-read", Req: "SP-5.3-3"},
+		setup: closed,
+		body:  []string{"{CV}", "pragma req-clusters", "{R}"},
+		want: all(completed, before("# sending-clusters", "igot {C}"),
+			before("igot {C}", "# end-of-clusters")),
+	}, {
 		// With C's tag gone there is no cluster to announce.
 		Case:  Case{ID: "sync.5.3.cluster-brackets-empty", Req: "SP-5.3-3"},
 		setup: []string{"DELETE FROM tagxref WHERE tagid=7"},

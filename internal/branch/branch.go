@@ -48,17 +48,6 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 		opts.Time = time.Now().UTC()
 	}
 
-	// Refuse a name an open branch already carries, as `fossil branch new`
-	// does (src/branch.c branch_is_open). Checked before any artifact is
-	// built so a refused Create stores nothing.
-	open, err := branchIsOpen(r.DB(), opts.Name)
-	if err != nil {
-		return 0, "", fmt.Errorf("branch.Create: %w", err)
-	}
-	if open {
-		return 0, "", fmt.Errorf("branch.Create: an open branch named %q already exists", opts.Name)
-	}
-
 	// 1. Get parent's file list.
 	entries, err := manifest.ListFiles(r, opts.Parent)
 	if err != nil {
@@ -112,7 +101,11 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 		tags = append(tags, deck.TagCard{Type: deck.TagPropagating, Name: "bgcolor", UUID: "*", Value: opts.Color})
 	}
 
-	// 4. Create checkin with branch tags.
+	// 4. Create the checkin with its branch tags. Checkin applies them in its
+	// own transaction, and refuses there a name an open branch already
+	// carries, as `fossil branch new` does (src/branch.c branch_is_open): the
+	// check and the write are one transaction, so of two concurrent Creates of
+	// one name only the first commits, and a refused Create stores nothing.
 	rid, uuid, err := manifest.Checkin(r, manifest.CheckinOpts{
 		Files:   files,
 		Comment: fmt.Sprintf("Create branch %s", opts.Name),
@@ -120,17 +113,20 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 		Parent:  opts.Parent,
 		Time:    opts.Time,
 		Tags:    tags,
+		Precheck: func(q db.Querier) error {
+			open, err := branchIsOpen(q, opts.Name)
+			if err != nil {
+				return err
+			}
+			if open {
+				return fmt.Errorf("an open branch named %q already exists", opts.Name)
+			}
+			return nil
+		},
 	})
 	if err != nil {
-		return 0, "", fmt.Errorf("branch.Create checkin: %w", err)
+		return 0, "", fmt.Errorf("branch.Create: %w", err)
 	}
-
-	// 5. Process inline T-cards to apply tags.
-	// Checkin already inserted event/plink/mlink, so we just need to process tags.
-	if err := processInlineTags(r, rid, tags, opts.Time); err != nil {
-		return 0, "", fmt.Errorf("branch.Create process tags: %w", err)
-	}
-
 	return rid, uuid, nil
 }
 
@@ -139,12 +135,9 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 // value name and that carries no singleton closed tag (tagtype=1). This is
 // fossil's branch_is_open (src/branch.c), which uses those exact tag types.
 //
-// q is the handle the check runs on. Create passes the same handle it writes
-// the new branch through so the two see one state; note that go-libfossil's
-// Create is not a single transaction (manifest.Checkin opens its own), so a
-// strict check-then-write window remains under concurrent Create calls --
-// closing it would mean threading this check into the checkin transaction.
-func branchIsOpen(q *db.DB, name string) (bool, error) {
+// Create runs it on the check-in's own transaction (CheckinOpts.Precheck), so
+// the check and the new branch's write see one state.
+func branchIsOpen(q db.Querier, name string) (bool, error) {
 	var one int
 	err := q.QueryRow(`
 		SELECT 1 FROM tagxref ox
@@ -244,38 +237,6 @@ func Close(r *repo.Repo, name string, user string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("branch.Close: add closed tag: %w", err)
-	}
-	return nil
-}
-
-func processInlineTags(r *repo.Repo, rid libfossil.FslID, tags []deck.TagCard, mtime time.Time) error {
-	julianMtime := libfossil.TimeToJulian(mtime)
-	for _, tc := range tags {
-		if tc.UUID != "*" {
-			continue // only process inline tags (UUID="*" means this checkin)
-		}
-		var tagType int
-		switch tc.Type {
-		case deck.TagPropagating:
-			tagType = tag.TagPropagating
-		case deck.TagSingleton:
-			tagType = tag.TagSingleton
-		case deck.TagCancel:
-			tagType = tag.TagCancel
-		default:
-			continue
-		}
-
-		if err := tag.ApplyTag(r, tag.ApplyOpts{
-			TargetRID: rid,
-			SrcRID:    rid, // inline: checkin is its own source
-			TagName:   tc.Name,
-			TagType:   tagType,
-			Value:     tc.Value,
-			MTime:     julianMtime,
-		}); err != nil {
-			return fmt.Errorf("apply tag %q: %w", tc.Name, err)
-		}
 	}
 	return nil
 }

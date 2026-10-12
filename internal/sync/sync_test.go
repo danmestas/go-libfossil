@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -774,5 +775,26 @@ func BenchmarkProcessResponse(b *testing.B) {
 
 		b.StopTimer()
 		br.Close()
+	}
+}
+
+// TestProcessResponseShunnedFileNotCounted pins that a shunned file is
+// dropped and not counted as received (§7.7).
+func TestProcessResponseShunnedFileNotCounted(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
+	data := []byte("shunned on arrival")
+	uuid := hash.SHA1(data)
+	if err := shun.Add(r.DB(), uuid, ""); err != nil {
+		t.Fatalf("shun.Add: %v", err)
+	}
+	resp := &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: uuid, Content: data}}}
+	if _, err := s.processResponse(context.Background(), resp); err != nil {
+		t.Fatalf("processResponse: %v", err)
+	}
+	if _, ok := blob.Exists(r.DB(), uuid); ok {
+		t.Fatal("a shunned file was stored")
+	}
+	if s.result.FilesRecvd != 0 {
+		t.Fatalf("FilesRecvd = %d, want 0", s.result.FilesRecvd)
 	}
 }

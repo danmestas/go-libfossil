@@ -295,3 +295,16 @@ func TestPurgeCorruptDeltaRollback(t *testing.T) {
 		t.Error("blob B should still exist after failed purge")
 	}
 }
+
+// TestIsShunnedReportsLookupFailure pins that a failed lookup is an error,
+// not "not shunned": a database fault must not let a shunned artifact in.
+func TestIsShunnedReportsLookupFailure(t *testing.T) {
+	d := setupDB(t)
+	if _, err := d.Exec("DROP TABLE shun"); err != nil {
+		t.Fatalf("drop shun: %v", err)
+	}
+	const uuid = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+	if shunned, err := shun.IsShunned(d, uuid); err == nil {
+		t.Fatalf("IsShunned without a shun table = %v, nil; want an error", shunned)
+	}
+}

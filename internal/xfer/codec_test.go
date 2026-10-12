@@ -938,6 +938,10 @@ func splitCFileWire(t *testing.T, wire []byte) (usize, csize int, payload []byte
 	if csize, err = strconv.Atoi(fields[3]); err != nil {
 		t.Fatalf("CSIZE parse %q: %v", fields[3], err)
 	}
+	// fossil pads a payload that does not end in LF with one (§5.1).
+	if len(payload) == csize+1 && payload[csize] == '\n' {
+		payload = payload[:csize]
+	}
 	return usize, csize, payload
 }
 

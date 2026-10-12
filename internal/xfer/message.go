@@ -15,6 +15,12 @@ import (
 // Message is a sequence of cards forming one xfer request or response.
 type Message struct {
 	Cards []Card
+
+	// Uncompressed marks a reply that goes out as ContentTypeUncompressed
+	// card text rather than the compressed container: fossil's reply to a
+	// clone of protocol version 3, whose cfile payloads are compressed
+	// already (§4.1, §8.1). Encode ignores it; an HTTP server reads it.
+	Uncompressed bool
 }
 
 // ContentTypeCompressed and ContentTypeUncompressed are the two §4 media types

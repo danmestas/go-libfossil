@@ -282,17 +282,13 @@ func encodeFile(w *bytes.Buffer, c *FileCard) error {
 // caller, where the two quantities coincide -- leave it zero and get the old
 // len(Content) behaviour.
 func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
-	// Fossil on-disk blob format: [4-byte BE uncompressed size][zlib stream].
-	var payload bytes.Buffer
-	if err := binary.Write(&payload, binary.BigEndian, uint32(len(c.Content))); err != nil {
-		return fmt.Errorf("xfer: cfile size prefix: %w", err)
-	}
-	zw := zlib.NewWriter(&payload)
-	if _, err := zw.Write(c.Content); err != nil {
-		return fmt.Errorf("xfer: cfile zlib write: %w", err)
-	}
-	if err := zw.Close(); err != nil {
-		return fmt.Errorf("xfer: cfile zlib close: %w", err)
+	// The payload is Fossil's on-disk blob format: [4-byte BE uncompressed
+	// size][zlib stream]. Stored bytes go out verbatim, as fossil's
+	// send_compressed_file sends the blob table's content (§7.2); only a
+	// card without them is compressed here.
+	payload, err := cfilePayload(c)
+	if err != nil {
+		return err
 	}
 	usize := c.USize
 	if usize == 0 {
@@ -304,10 +300,34 @@ func encodeCFile(w *bytes.Buffer, c *CFileCard) error {
 		w.WriteByte(' ')
 		w.WriteString(c.DeltaSrc)
 	}
-	fmt.Fprintf(w, " %d %d\n", usize, payload.Len())
-	w.Write(payload.Bytes())
-	// NO trailing newline
+	fmt.Fprintf(w, " %d %d\n", usize, len(payload))
+	w.Write(payload)
+	// A payload that does not end in LF is followed by one, as fossil pads
+	// it (§5.1); the decoder skips it as an empty line.
+	if len(payload) == 0 || payload[len(payload)-1] != '\n' {
+		w.WriteByte('\n')
+	}
 	return nil
+}
+
+// cfilePayload is a cfile card's payload: its StoredBlob when it has one,
+// otherwise Content compressed into the on-disk blob format.
+func cfilePayload(c *CFileCard) ([]byte, error) {
+	if c.StoredBlob != nil {
+		return c.StoredBlob, nil
+	}
+	var payload bytes.Buffer
+	if err := binary.Write(&payload, binary.BigEndian, uint32(len(c.Content))); err != nil {
+		return nil, fmt.Errorf("xfer: cfile size prefix: %w", err)
+	}
+	zw := zlib.NewWriter(&payload)
+	if _, err := zw.Write(c.Content); err != nil {
+		return nil, fmt.Errorf("xfer: cfile zlib write: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("xfer: cfile zlib close: %w", err)
+	}
+	return payload.Bytes(), nil
 }
 
 // encodeConfig writes: config NAME SIZE \n CONTENT \n

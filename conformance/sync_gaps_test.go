@@ -15,9 +15,6 @@ var syncGaps = map[string]string{
 	// secret, with no fallback for one stored in clear
 	// (internal/auth/verify.go:87).
 	"sync.6.4.cleartext-fallback": "#304",
-	// A clone reply carries no unversioned catalog
-	// (internal/sync/handler.go:475).
-	"sync.8.4.clone-uv-catalog": "#306",
 	// The client's unversioned sync: a received uvfile of status 2 is
 	// dropped, not applied as an mtime (internal/sync/client.go:1136),
 	// and tombstones are put in the send table (internal/sync/session.go:152).
@@ -38,19 +35,6 @@ var syncGaps = map[string]string{
 	// (internal/auth/auth.go:42).
 	"sync.7.3.uvgimme-clone-implies-read": "#312",
 	"sync.7.3.received-hash":              "#308",
-	// A clone refusal is appended to the reply, with no reset and no push
-	// card before it (internal/sync/handler.go:474-480), and a SEQNO of -1
-	// restarts the clone at rid 1 (:501-505).
-	"sync.8.2.refusal-shape":       "#306",
-	"sync.10.1.reset-before-error": "#306",
-	"sync.8.1.negative-seqno":      "#306",
-	// Clone replies: each cfile is recompressed from the artifact rather
-	// than sent as stored, with no LF after a payload that does not end in
-	// one (internal/xfer/encode.go:284-310), and the reply is the
-	// compressed application/x-fossil (internal/sync/serve_http.go:150).
-	"sync.7.2.clone-verbatim":     "#306",
-	"sync.5.1.cfile-padding":      "#306",
-	"sync.4.1.clone-uncompressed": "#306",
 }
 
 // syncDeviations marks the cases where go-libfossil differs from the draft

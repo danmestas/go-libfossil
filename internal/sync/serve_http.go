@@ -153,12 +153,16 @@ func writeXferResponse(w http.ResponseWriter, msg *xfer.Message) {
 		panic("writeXferResponse: msg must not be nil")
 	}
 
-	respBytes, err := msg.Encode()
+	encode, contentType := msg.Encode, xfer.ContentTypeCompressed
+	if msg.Uncompressed {
+		encode, contentType = msg.EncodeUncompressed, xfer.ContentTypeUncompressed
+	}
+	respBytes, err := encode()
 	if err != nil {
 		http.Error(w, "encode response: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", xfer.ContentTypeCompressed)
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(respBytes)))
 
 	n, err := w.Write(respBytes)

@@ -1033,13 +1033,18 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conte
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
-	// event. omtime is the check-in's own time, which fossil keeps even when a
-	// date tag later moves mtime.
+	// event. A date tag already recorded for the check-in (one that reached
+	// it while it was a phantom, or a rebuild that linked the tag first)
+	// overrides the D-card time, as manifest_crosslink does; a tag arriving
+	// later moves it in tag.ApplyTagWithTx. omtime is always the check-in's
+	// own time.
 	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime)
-		 VALUES('ci', ?, ?, ?, ?, ?)`,
-		mtime, rid, d.U, d.C, mtime,
+		 VALUES('ci', coalesce((SELECT julianday(value) FROM tagxref
+		   WHERE rid=?2 AND tagid=(SELECT tagid FROM tag WHERE tagname='date')), ?1),
+		   ?2, ?3, ?4, ?1)`,
+		mtime, rid, d.U, d.C,
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}

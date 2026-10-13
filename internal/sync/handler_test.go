@@ -2196,3 +2196,43 @@ func TestCountedErrors(t *testing.T) {
 		t.Fatalf("comment %q, want errors 2", text)
 	}
 }
+
+// TestHandleGimmePrivateIGot pins §8.6: outside a private sync, a gimme for
+// private content is answered with igot HASH 1 when the peer's client-version
+// dates it 2020-04-13 or later, and with nothing for an earlier or unknown
+// date (fossil's send_file, src/xfer.c).
+func TestHandleGimmePrivateIGot(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	uuid := storeTestBlob(t, r, []byte("private blob a gimme names"))
+	rid, _ := blob.Exists(r.DB(), uuid)
+	content.MakePrivate(r.DB(), int64(rid))
+	for _, tc := range []struct {
+		name    string
+		version []string
+		want    bool
+	}{
+		{"dated on the day", []string{"21000", "20200413", "000000"}, true},
+		{"dated before", []string{"21000", "20200412", "235959"}, false},
+		{"undated", []string{"21000"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := handleReq(t, r,
+				&xfer.PragmaCard{Name: "client-version", Values: tc.version},
+				&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
+				&xfer.GimmeCard{UUID: uuid},
+			)
+			got := false
+			for _, ig := range findCards[*xfer.IGotCard](resp) {
+				if ig.UUID == uuid {
+					got = got || ig.IsPrivate
+				}
+			}
+			if got != tc.want {
+				t.Fatalf("igot %s 1 sent = %v, want %v", uuid, got, tc.want)
+			}
+			if files := findCards[*xfer.FileCard](resp); len(files) != 0 {
+				t.Fatalf("private content sent outside a private sync: %v", files)
+			}
+		})
+	}
+}

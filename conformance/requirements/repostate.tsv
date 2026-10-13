@@ -93,8 +93,8 @@ RS-8.3-10	8.3	A hash prefix matching more than one artifact is rejected as ambig
 RS-8.3-11	8.3	A name that matches nothing is retried without one trailing . _ ) > ! ? or , when longer than four characters, or without two when longer than five; three or more are never stripped.
 RS-8.3-12	8.3	A branch-type request resolves to the first check-in of the branch the name resolves into.
 RS-8.5-1	8.5	Name resolution and open-leaf enumeration stay distinct: a newer closed sym carrier wins resolution while the leaf view omits it.
-RS-9-1	9	The current trunk is the main-branch setting's name resolved by the plain-name rule.	not checkable: go-libfossil has no current-trunk operation; CreateCheckout starts at tip and Update with no target moves to the newest leaf descended from the checkout on its branch
+RS-9-1	9	The current trunk is the main-branch setting's name resolved by the Section 8 symbolic-name procedure.
 RS-9-2	9	Resolving a forked branch picks one check-in by greatest mtime and is not an error.
 RS-9-3	9	A branch's open leaf carries its active branch tag, is in the leaf table and is not closed; a branch with none is not open.
-RS-9-4	9	A report naming one open leaf of a branch with several picks the greatest mtime.	not checkable: go-libfossil has no report that names one open leaf; checkout.BranchLeaves returns them all, unordered
+RS-9-4	9	A report naming one open leaf of a branch with several picks the greatest mtime.
 RS-12-1	12	An artifact that the artifact-format rules reject contributes no crosslink state.

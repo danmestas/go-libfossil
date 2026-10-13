@@ -18,28 +18,11 @@ func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 	if r == nil {
 		panic("checkout.BranchLeaves: r must not be nil")
 	}
-	if branch == "" {
-		name, err := repo.MainBranch(r.DB())
-		if err != nil {
-			return nil, fmt.Errorf("checkout.BranchLeaves: %w", err)
-		}
-		branch = name
+	branch, err := branchOrMain(r, branch)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.BranchLeaves: %w", err)
 	}
-	rows, err := r.DB().Query(`
-		SELECT l.rid FROM leaf l
-		JOIN tagxref tx ON tx.rid = l.rid
-		JOIN tag t ON t.tagid = tx.tagid
-		WHERE t.tagname = 'branch'
-		  AND tx.value = ?
-		  AND tx.tagtype > 0
-		  AND NOT EXISTS (
-		    SELECT 1 FROM tagxref cx
-		    JOIN tag ct ON ct.tagid = cx.tagid
-		    WHERE ct.tagname = 'closed'
-		      AND cx.rid = l.rid
-		      AND cx.tagtype > 0
-		  )
-	`, branch)
+	rows, err := r.DB().Query("SELECT l.rid "+openLeavesSQL, branch)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.BranchLeaves: %w", err)
 	}
@@ -54,6 +37,58 @@ func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 	}
 	return leaves, rows.Err()
 }
+
+// BranchOpenLeaf names one open leaf of branch, as BranchLeaves defines
+// them: the one with the greatest event mtime, which repo-state-01 Section 9
+// requires of any report that names a single open leaf. open is false when
+// the branch has no open leaf, that is, when it is not open. An exact mtime
+// tie, which the draft leaves implementation-defined, goes to the greater
+// rid. An empty branch name queries the default branch.
+func BranchOpenLeaf(r *repo.Repo, branch string) (rid libfossil.FslID, open bool, err error) {
+	if r == nil {
+		panic("checkout.BranchOpenLeaf: r must not be nil")
+	}
+	branch, err = branchOrMain(r, branch)
+	if err != nil {
+		return 0, false, fmt.Errorf("checkout.BranchOpenLeaf: %w", err)
+	}
+	var id int64
+	err = r.DB().QueryRow(`SELECT l.rid `+openLeavesSQL+`
+		ORDER BY (SELECT mtime FROM event WHERE objid = l.rid) DESC, l.rid DESC
+		LIMIT 1`, branch).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("checkout.BranchOpenLeaf: %w", err)
+	}
+	return libfossil.FslID(id), true, nil
+}
+
+// branchOrMain is branch, or the main-branch setting when branch is empty.
+func branchOrMain(r *repo.Repo, branch string) (string, error) {
+	if branch != "" {
+		return branch, nil
+	}
+	return repo.MainBranch(r.DB())
+}
+
+// openLeavesSQL selects, as l, the open leaves of the branch named by its
+// one parameter: Section 9's three conditions, an active branch tag with
+// that value, a row in the leaf table and no active closed tag.
+const openLeavesSQL = `FROM leaf l
+		JOIN tagxref tx ON tx.rid = l.rid
+		JOIN tag t ON t.tagid = tx.tagid
+		WHERE t.tagname = 'branch'
+		  AND tx.value = ?
+		  AND tx.tagtype > 0
+		  AND NOT EXISTS (
+		    SELECT 1 FROM tagxref cx
+		    JOIN tag ct ON ct.tagid = cx.tagid
+		    WHERE ct.tagname = 'closed'
+		      AND cx.rid = l.rid
+		      AND cx.tagtype > 0
+		  )`
 
 // WouldFork reports whether committing on the checkout's version would
 // create a fork: the version already has a child on its own branch, so a new

@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   branch name does not shadow the branch.
   The `repostate.8.3` checkout and branch-type cases now run against these
   and pass (RS-8.3-4, RS-8.3-12; tracked in #386).
+- `Repo.CurrentTrunk` returns the current trunk of repo-state-01 §9: the
+  `main-branch` setting's name (`trunk` when unset) resolved as
+  `ResolveVersion` resolves it, as fossil does for `update` outside a checkout
+  and `open` with no version. Only check-ins can answer, so a technote tagged
+  with the name does not.
+- `Repo.BranchOpenLeaf` names one open leaf of a branch, the one with the
+  greatest mtime, or reports the branch not open (repo-state-01 §9). It
+  follows the draft where fossil 2.28 differs: fossil's `branch info` takes
+  whichever open leaf its query meets first. An empty name is an error, as in
+  `BranchTip`. `BranchTip` is unchanged and still returns the newest check-in on the branch, leaf or not.
+  RS-9-1 and RS-9-4 now have cases (`repostate.9.current-trunk*`,
+  `repostate.9.open-leaf-*`) and are no longer out of scope.
 
 ### Changed
 

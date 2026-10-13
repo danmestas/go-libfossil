@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // maxRedirects is fossil's MAX_REDIRECTS (src/xfer.c). http_exchange
@@ -33,7 +35,10 @@ var ErrRedirectLimit = errors.New("sync: redirect limit exceeded")
 // The client's own redirect policy is replaced for these requests only, so
 // a caller's client is used as given but cannot loosen these rules. A redirect
 // without a Location is returned as is, for the caller to report its status.
-func PostXfer(ctx context.Context, client *http.Client, target, contentType string,
+//
+// loginCookie, when not empty, goes in the x-f-l-c cookie of every request,
+// as fossil rebuilds a cookie login for each redirect target (§4, §6.5).
+func PostXfer(ctx context.Context, client *http.Client, target, contentType, loginCookie string,
 	body []byte) (*http.Response, error) {
 	if client == nil {
 		panic("sync.PostXfer: client must not be nil")
@@ -49,6 +54,9 @@ func PostXfer(ctx context.Context, client *http.Client, target, contentType stri
 			return nil, err
 		}
 		req.Header.Set("Content-Type", contentType)
+		if loginCookie != "" {
+			req.Header.Set("Cookie", xfer.LoginCookieName+"="+loginCookie)
+		}
 		resp, err := c.Do(req)
 		if err != nil {
 			return nil, err

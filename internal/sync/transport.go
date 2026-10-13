@@ -47,11 +47,13 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if req == nil {
 		panic("sync.HTTPTransport.Exchange: req must not be nil")
 	}
-	body, err := req.Encode()
+	sent, cookie := req.SplitLoginCookie()
+	body, err := sent.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport encode: %w", err)
 	}
-	resp, err := PostXfer(ctx, http.DefaultClient, t.URL, xfer.ContentTypeCompressed, body)
+	resp, err := PostXfer(ctx, http.DefaultClient, t.URL, xfer.ContentTypeCompressed, cookie,
+		body)
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
 	}

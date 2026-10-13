@@ -111,7 +111,7 @@ func TestPostXferRefusesDowngrade(t *testing.T) {
 	defer secure.Close()
 
 	_, err := PostXfer(context.Background(), secure.Client(), secure.URL,
-		xfer.ContentTypeCompressed, []byte("login card"))
+		xfer.ContentTypeCompressed, "", []byte("login card"))
 	if !errors.Is(err, ErrRedirectDowngrade) {
 		t.Fatalf("err = %v, want ErrRedirectDowngrade", err)
 	}

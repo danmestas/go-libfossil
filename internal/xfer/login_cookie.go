@@ -37,6 +37,23 @@ func DecodeRequest(data []byte, contentType, loginCookie string) (*Message, erro
 	return msg, nil
 }
 
+// SplitLoginCookie returns the message to send as the body and the
+// LoginCookieName cookie value to send beside it. When m is LoginCookieOK and
+// opens with a login card, that card leaves the body for the cookie. Its
+// nonce, computed over the cards after it, then covers the whole body, as a
+// cookie login's must (§6.5). Otherwise m goes as it is, with no cookie.
+func (m *Message) SplitLoginCookie() (*Message, string) {
+	if !m.LoginCookieOK || len(m.Cards) == 0 {
+		return m, ""
+	}
+	lc, ok := m.Cards[0].(*LoginCard)
+	if !ok {
+		return m, ""
+	}
+	line := "login " + deck.FossilEncode(lc.User) + " " + lc.Nonce + " " + lc.Signature
+	return &Message{Cards: m.Cards[1:]}, url.QueryEscape(line)
+}
+
 // parseLoginCookie reads a login card from a cookie value: URL-encoded, as
 // fossil's %T writes it, then "login USER NONCE SIGNATURE" split on white
 // space, as page_xfer tokenizes it. It returns nil for anything else.

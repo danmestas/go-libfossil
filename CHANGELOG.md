@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets all three for every tag type, writing NULL for a cancel, and crosslinking
   a check-in reads the three values back from `tagxref`, so a tag that reached
   the check-in while it was a phantom takes effect.
+- The sync client's per-request `gimme` limit now follows fossil's
+  `mxPhantomReq` exactly (#350). The cap itself (200, or twice the files the
+  last round received) was already in place, but it was recomputed every
+  round; fossil assigns it only when a round continues for its phantoms and
+  otherwise keeps the earlier value, so a round that continues to send files
+  no longer drops a raised limit back to 200. Tests pin the 200 start and the
+  growth rule.
+
 - The sync server no longer asks for a shunned artifact (#349). `handleIGot`
   answered an `igot` for a shunned hash with `gimme`; fossil's `content_new`
   returns 0 for a shunned name, so it makes no phantom and requests nothing.

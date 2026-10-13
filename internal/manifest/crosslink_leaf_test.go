@@ -228,3 +228,32 @@ func TestRepairLeafTableKeepsParentlessCheckin(t *testing.T) {
 		t.Fatalf("plink rows = %d, want 0 (fixture must have no parent edges)", plinks)
 	}
 }
+
+// TestCheckinOntoSingletonBranchKeepsVerdicts pins draft-fossil-repo-state-01
+// Section 7.3 on the local commit path: a commit is rechecked, with its
+// parents, only when a branch row lands on it. c1's branch row is a
+// singleton, so c2 inherits none and nothing is scheduled: c1 keeps its leaf
+// row although c2 is on the default branch with it, and c2 is no leaf, as in
+// fossil's commit (issue #426).
+func TestCheckinOntoSingletonBranchKeepsVerdicts(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	c1, _, err := Checkin(r, CheckinOpts{
+		Comment: "c1-singleton-root", User: "tester", Time: base,
+		Files: []File{{Name: "f.txt", Content: []byte("one")}},
+		Tags: []deck.TagCard{
+			{Type: deck.TagSingleton, Name: "branch", UUID: "*", Value: "trunk"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Checkin c1: %v", err)
+	}
+	assertLeaves(t, r, "after c1", []string{"c1-singleton-root"})
+	if _, _, err := Checkin(r, CheckinOpts{
+		Comment: "c2-untagged", User: "tester", Time: base.Add(time.Minute),
+		Parent: c1, Files: []File{{Name: "f.txt", Content: []byte("two")}},
+	}); err != nil {
+		t.Fatalf("Checkin c2: %v", err)
+	}
+	assertLeaves(t, r, "after c2", []string{"c1-singleton-root"})
+}

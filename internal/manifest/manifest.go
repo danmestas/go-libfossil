@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
@@ -145,6 +146,10 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 func linkCheckinTags(
 	tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID, tcards []deck.TagCard,
 ) error {
+	// The check-in's transaction is the batch: the rechecks its branch rows
+	// schedule are applied before it commits, as fossil's commit applies
+	// them at the end of its transaction (src/db.c, leaf_do_pending_checks).
+	leaves := leaf.NewPending()
 	// Inline T-cards (branch, sym-trunk, etc.) name the check-in itself.
 	for _, tc := range tcards {
 		if tc.UUID != "*" {
@@ -168,6 +173,7 @@ func linkCheckinTags(
 			TagType:   tagType,
 			Value:     tc.Value,
 			MTime:     libfossil.TimeToJulian(opts.Time),
+			Leaves:    leaves,
 		}); err != nil {
 			return fmt.Errorf("inline tag %q: %w", tc.Name, err)
 		}
@@ -182,22 +188,17 @@ func linkCheckinTags(
 	// instead, since candidates there are not visited in parent-before-child
 	// order. Both converge on the same tagxref state.
 	if opts.Parent > 0 {
-		if err := tag.PropagateAll(tx, opts.Parent); err != nil {
+		if err := tag.PropagateAllLeaves(tx, opts.Parent, leaves); err != nil {
 			return fmt.Errorf("propagate from parent: %w", err)
 		}
 	}
 
-	// Leaf state last, once every branch tag it reads is in place: this checkin
-	// is a new leaf, and each parent stops being one only if this checkin
-	// landed on the parent's own branch. Fossil queues the same set --
-	// leaf_eventually_check(rid) enqueues rid and its parents -- and runs the
-	// checks when the transaction commits.
-	for _, rid := range append([]libfossil.FslID{manifestRid}, collectParents(opts)...) {
-		if err := leafCheck(tx, rid); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Leaf state last, once every branch tag it reads is in place. Only what
+	// the branch writes above scheduled is checked (draft-fossil-repo-state-01
+	// Section 7.3): the check-in and its parents when it declares or inherits
+	// a branch row. A check-in whose parent's branch row is a singleton, or
+	// absent, inherits none, so neither is rechecked, as in fossil's commit.
+	return leaves.Apply(tx)
 }
 
 // checkWriterName refuses a filename the artifact format's writer profile
@@ -399,7 +400,7 @@ func markPlinkAndEvent(tx *db.Tx, opts CheckinOpts, manifestRid libfossil.FslID)
 	// edge, and this checkin's own branch tag is not applied until after the
 	// transaction commits -- so Checkin runs the leaf check once the tag work
 	// is done, the same deferral fossil gets from running its pending leaf
-	// checks at commit time (see leafCheck).
+	// checks at commit time (see leaf.Pending).
 
 	// Mark manifest as unsent so sync pushes it (unclustered is handled by blob.Store).
 	if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", manifestRid); err != nil {

@@ -210,6 +210,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The leaf table is maintained incrementally, as repo-state-01 §7.3
+  (RS-7.3-3) and fossil(1) do, instead of being recomputed at the end of
+  every crosslink batch. A check-in and its parents, merge parents
+  included, are rechecked only when a branch tag of any type is written to
+  it or tag propagation updates or deletes its branch row; crosslinking a
+  check-in, adding a plink edge or reparenting schedules nothing. The
+  rechecks run at the end of the batch: the closing repair of a sweep,
+  clone or sync session, the end of each phantom-fill cascade transaction,
+  and the end of a commit's or a tag's own transaction. A check-in
+  therefore keeps its verdict when an untagged child arrives in a later
+  batch (`repostate.7.3.recheck-untagged-child` passes and is no longer a
+  gap, tracked in #426), a commit onto a parent whose branch row is a
+  singleton leaves both verdicts as they were, and a branch tag added by a
+  tag control artifact now rechecks its target and parents, which it did
+  not before. `verify.Rebuild` still recomputes the whole table, the
+  single-batch result §7.3 defines, and the corpus parity tests still match
+  `fossil rebuild` row for row. The reparent case is split:
+  `repostate.4.2.reparent` loads in one batch, and the new
+  `repostate.7.3.reparent-no-recheck` loads per artifact, where the old
+  parent keeps its verdict, as in fossil's own crosslink.
 - A check-in that a sync linked through the phantom-fill cascade now gets its
   leaf row and propagated tags (#414). A pulled check-in arrives as an
   announced phantom filled the next round, so the cascade links it, and the

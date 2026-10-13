@@ -457,11 +457,12 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 // and with which capabilities, are acted on. When the walk ends in the
 // fatal, its reply is the answer and no card has written anything.
 //
-// The walk stores no file, so a file card that fails validation does not
-// break it as it breaks the real loop. A request that pushes a bad file
-// ahead of an invalid clone card therefore gets the clone error where
-// fossil sends the file's; no conforming client sends push and clone
-// together (§8.5).
+// The walk stores no file, so a file card that fails on storage (a hash
+// mismatch) does not break it as it breaks the real loop. A request that
+// pushes such a file ahead of an invalid clone card therefore gets the
+// clone error where fossil sends the file's; no conforming client sends
+// push and clone together (§8.5). A file refused for its name or for lack
+// of write access is modelled, as it needs no storage.
 func (h *handler) probeCloneFatal(cards []xfer.Card) bool {
 	if !hasInvalidCloneSeq(cards) {
 		return false
@@ -511,14 +512,25 @@ func (h *handler) probeCard(card xfer.Card) {
 		h.handlePullCard(c)
 	case *xfer.CloneCard:
 		h.handleCloneCard(c)
-	case *xfer.FileCard, *xfer.CFileCard:
-		if !h.pushOK {
-			h.breakLoop("not authorized to write")
-		}
+	case *xfer.FileCard:
+		h.probeFile(c.UUID, c.DeltaSrc, false)
+	case *xfer.CFileCard:
+		h.probeFile(c.UUID, c.DeltaSrc, true)
 	case *xfer.BadFileCard:
 		h.breakLoop(c.Message)
 	case *xfer.ConfigCard:
 		h.handleConfigPush()
+	}
+}
+
+// probeFile models the side-effect-free refusals of handleFile for the
+// clone-fatal probe: no write access, or a name that is no artifact name.
+func (h *handler) probeFile(uuid, deltaSrc string, compressed bool) {
+	switch {
+	case !h.pushOK:
+		h.breakLoop("not authorized to write")
+	case !hash.IsValidHash(uuid) || (deltaSrc != "" && !hash.IsValidHash(deltaSrc)):
+		h.breakLoop(malformedFileLine(compressed))
 	}
 }
 
@@ -1201,6 +1213,14 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.breakLoop(wrongHashText(uuid))
 		return nil
 	}
+	// Departure from fossil and sync-protocol-01 Section 7.5, which verifies
+	// only a reconstructable non-clone file before storage and leaves a
+	// cfile to a commit hook that aborts on mismatch: a cfile whose content
+	// is not its HASH is refused here, before storage, with the same reset
+	// and error as a file. The cost is that the request's earlier changes
+	// stay applied where a commit abort would roll them back; the gain is
+	// that this handler never stores an artifact under a name it does not
+	// have.
 	if msg := h.storeFile(ctx, uuid, deltaSrc, payload, storedBlob, vis); msg != "" {
 		h.breakLoop(msg)
 		return nil

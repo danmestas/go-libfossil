@@ -211,6 +211,23 @@ func clientLinkStoreCases() []syncClientCase {
 			clientRows("SELECT count(*) FROM config WHERE name GLOB 'link:*'", 1)),
 		fc: true,
 	}, {
+		// Acceptance does not depend on the request that carried req-links:
+		// a link in round 2 is kept too.
+		Case: Case{ID: "sync.9.5.link-later-round", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("igot {U}"),
+			reply("pragma link https://example.com/r opaque 100")},
+		want: every(sent(2, "gimme {U}"),
+			clientRows(linkRow("https://example.com/r", "opaque", 100), 1)),
+		fc: true,
+	}, {
+		// A push+pull session still asks for links.
+		Case:    Case{ID: "sync.9.5.req-links-push-pull", Req: "SP-9.5-6"},
+		op:      clientOp{pull: true, push: true, shareLinks: true},
+		replies: [][]string{reply("igot {U}")},
+		want:    sent(1, "pragma req-links"),
+		fc:      true,
+	}, {
 		// A link already held is replaced only by a strictly newer one:
 		// a is older than its link, b newer and c the same age.
 		Case: Case{ID: "sync.9.5.link-newer-mtime", Req: "SP-9.5-4"},

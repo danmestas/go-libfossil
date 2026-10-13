@@ -34,7 +34,8 @@ func (s *session) sendsReqLinks(cycle int) bool {
 		return true
 	}
 	own, _ := s.repo.Config("project-code")
-	return s.opts.ProjectCode == own
+	// fossil compares with sqlite3_stricmp (xfer.c), so case does not matter.
+	return strings.EqualFold(s.opts.ProjectCode, own)
 }
 
 // handleLink keeps a pragma link URL ARG MTIME as config link:URL = ARG,

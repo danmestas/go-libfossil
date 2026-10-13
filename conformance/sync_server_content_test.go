@@ -181,7 +181,7 @@ func serverCloneCases() []syncServerCase {
 		Case:  Case{ID: "sync.8.2.refusal-shape", Req: "SP-8.2-3"},
 		setup: closed,
 		body:  []string{"{CV}", "clone 3 1", "{R}"},
-		want: all(completed, onlyError("not authorized to clone", "clone denied"),
+		want: all(completed, onlyError("not authorized to clone"),
 			before("push {SC} {PC}", "error "), nothingBut("push ", "error ", "pragma ")),
 	}, {
 		Case: Case{ID: "sync.8.2.cleanup-gimme", Req: "SP-8.2-6"},

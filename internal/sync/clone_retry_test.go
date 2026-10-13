@@ -239,9 +239,12 @@ func (s *alwaysServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // TestCloneProtocolErrorFailsWithoutRetry requires a reply that arrived intact
-// but does not parse to abort on its first occurrence. Retrying a malformed
-// reply would hide the defect that produced it, so the classification has to
-// discriminate this from a severed connection.
+// but holds a card that does not parse to fail the clone, not to be retried.
+// Retrying a malformed reply would hide the defect that produced it, so the
+// classification has to discriminate this from a severed connection. The
+// card ends the reply-card loop (§5.2), and the session goes on by §3.7: the
+// clone's mandatory second round is made once, as a cleanup, and is answered
+// with the same card, so the peer sees two requests and no third.
 func TestCloneProtocolErrorFailsWithoutRetry(t *testing.T) {
 	// "pull" takes two arguments; one is a parse error, not a transport fault.
 	peer := &alwaysServer{status: http.StatusOK, contentType: xfer.ContentTypeUncompressed, body: []byte("pull onearg\n")}
@@ -251,11 +254,12 @@ func TestCloneProtocolErrorFailsWithoutRetry(t *testing.T) {
 	clonePath := filepath.Join(t.TempDir(), "clone.fossil")
 	_, _, err := sync.Clone(context.Background(), clonePath,
 		&sync.HTTPTransport{URL: front.URL}, sync.CloneOpts{})
-	if err == nil {
-		t.Fatal("Clone against a peer replying with an unparsable body returned nil error")
+	if err == nil || !strings.Contains(err.Error(), "pull onearg") {
+		t.Fatalf("Clone against a peer replying with an unparsable card: err = %v, "+
+			"want one naming the card", err)
 	}
-	if got := peer.count(); got != 1 {
-		t.Errorf("peer saw %d requests, want 1: a malformed reply must not be retried", got)
+	if got := peer.count(); got != 2 {
+		t.Errorf("peer saw %d requests, want 2: the clone round and its cleanup", got)
 	}
 }
 

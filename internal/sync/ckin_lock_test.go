@@ -139,7 +139,12 @@ func TestCkinLock_SyncRoundTrip(t *testing.T) {
 		},
 	}
 
+	// The client holds the parent it locks, as a client committing on top
+	// of it does. The server's copy has no content to send, and the error a
+	// gimme for it would draw ends the reply before the ci-lock-fail that
+	// follows it in card order.
 	clientRepo := newCkinLockTestRepo(t)
+	insertLeafBlob(t, clientRepo, parentUUID)
 	result, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
 		Pull: true,
 		CkinLock: &CkinLockReq{

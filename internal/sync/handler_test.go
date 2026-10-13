@@ -1579,7 +1579,7 @@ func TestEmitIGotsIncludesPrivateWhenAuthorized(t *testing.T) {
 func TestHandlerIGotPrivate_Authorized(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	r.DB().Exec("UPDATE user SET cap='oix' WHERE login='nobody'")
-	unknownUUID := "dddddddddddddddddddddddddddddddddddddd"
+	unknownUUID := "dddddddddddddddddddddddddddddddddddddddd"
 
 	resp := handleReq(t, r,
 		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
@@ -2234,5 +2234,69 @@ func TestHandleGimmePrivateIGot(t *testing.T) {
 				t.Fatalf("private content sent outside a private sync: %v", files)
 			}
 		})
+	}
+}
+
+// An igot whose name is not an artifact name is a bad command, as page_xfer
+// reads igot only with blob_is_hname, and makes no phantom.
+func TestHandlerIGotNotHashIsBadCommand(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	grantNobodyPush(t, r)
+	resp := handleReq(t, r,
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.IGotCard{UUID: "not-a-hash"},
+	)
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "bad command: igot not-a-hash\n" {
+		t.Fatalf("errors = %+v, want one bad command for the igot", errs)
+	}
+	if n := len(findCards[*xfer.GimmeCard](resp)); n != 0 {
+		t.Fatalf("got %d gimme cards, want none", n)
+	}
+}
+
+// A gimme whose name is not an artifact name is a bad command, as page_xfer
+// reads gimme only with blob_is_hname.
+func TestHandlerGimmeNotHashIsBadCommand(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	grantNobodyPush(t, r)
+	resp := handleReq(t, r,
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.GimmeCard{UUID: "not-a-hash"},
+	)
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "bad command: gimme not-a-hash\n" {
+		t.Fatalf("errors = %+v, want one bad command for the gimme", errs)
+	}
+}
+
+// A gimme the client sends is excluded from the server's phantom gimmes, and
+// the bound counts only the gimmes sent.
+func TestHandlerPhantomGimmeSkipsPeerLacks(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	grantNobodyPush(t, r)
+	var names []string
+	for i := range maxPhantomGimme + 2 {
+		name := fmt.Sprintf("%040x", i+1)
+		if _, err := blob.StorePhantom(r.DB(), name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	resp := handleReq(t, r,
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.GimmeCard{UUID: names[0]},
+	)
+	gimmes := findCards[*xfer.GimmeCard](resp)
+	if len(gimmes) != maxPhantomGimme {
+		t.Fatalf("got %d gimme cards, want %d", len(gimmes), maxPhantomGimme)
+	}
+	for _, g := range gimmes {
+		if g.UUID == names[0] {
+			t.Fatalf("gimme for %s, which the client asked for", g.UUID)
+		}
+	}
+	if last := gimmes[len(gimmes)-1].UUID; last != names[maxPhantomGimme] {
+		t.Fatalf("last gimme %s, want %s", last, names[maxPhantomGimme])
 	}
 }

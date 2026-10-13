@@ -60,7 +60,7 @@ func serverRefusalCases() []syncServerCase {
 		Case:  Case{ID: "sync.6.6.push-refused-continues", Req: "SP-6.6-2"},
 		setup: readOnly,
 		body:  []string{"{CV}", pushCard, pullCard, "gimme {A1}", "{R}"},
-		want: all(completed, onlyError("not authorized to write", "push denied"),
+		want: all(completed, onlyError("not authorized to write"),
 			withCard("file {A1} {A1.size}")),
 	}, {
 		// The file card after the refused push ends card processing: the
@@ -69,7 +69,7 @@ func serverRefusalCases() []syncServerCase {
 		setup: readOnly,
 		body: []string{"{CV}", pullCard, pushCard, "file {N1} {N1.size}", "{N1.data}",
 			"gimme {A1}", "{R}"},
-		want: all(completed, onlyError("not authorized to write", "push denied"),
+		want: all(completed, onlyError("not authorized to write"),
 			held("N1", 0), noCard("file {A1}"), withCard("igot {A1}")),
 	}}...)
 }
@@ -83,7 +83,7 @@ func serverErrorCountCases() []syncServerCase {
 		Case:  Case{ID: "sync.5.3.errors-counts-reset", Req: "SP-5.3-4"},
 		setup: closed,
 		body:  []string{"{CV}", pushCard, "file {N1} {N1.size}", "{N1.data}", "{R}"},
-		want: all(completed, onlyError("not authorized to write", "push denied"),
+		want: all(completed, onlyError("not authorized to write"),
 			errorsCount("2")),
 	}, {
 		Case: Case{ID: "sync.5.3.errors-skips-bad-command", Req: "SP-5.3-4"},

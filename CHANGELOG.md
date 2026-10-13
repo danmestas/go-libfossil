@@ -49,6 +49,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   card's checksum (Section 6.3.4) in lowercase, as those sections require of a
   writer, even when the deck came from an artifact whose parser-accepted card
   was uppercase.
+- The sync server handles request cards in request order, as fossil's
+  `page_xfer` does (#385). Before this, the login card was verified first and
+  every control card was handled ahead of the data cards. So a file card
+  sent before its push card was stored, and cards sent before a successful
+  login got the login's capabilities. Now that file card is refused with
+  `not authorized to write`, and cards before the login get nobody's
+  capabilities. fossil rolls back the whole request when it reaches an
+  invalid clone sequence (sync-protocol-01 Section 8.1). Here a request that
+  holds such a clone card is first walked without side effects, so no
+  earlier card writes before the fatal.
+- A push refused without an earlier pull now resets the reply and is
+  answered `error not authorized to write`, and card processing continues.
+  A refused pull resets, is answered `error not authorized to read` and ends
+  card processing. These are the sync-protocol-01 Section 6.6 texts. They
+  replace `push denied: insufficient capabilities` and `pull denied:
+  insufficient capabilities`, which neither reset nor stopped (#385).
+- After an accepted push the server now asks for its own phantoms, as
+  fossil's `request_phantoms(&xfer, 500)` does. It sends at most 500 gimme
+  cards, ahead of a pull's igot inventory, and also after a broken card
+  loop (Section 6.4). Phantoms the client asked for this round, shunned names
+  and private ones outside a private sync are left out. A pushed igot now
+  makes a phantom, as Section 8.5 says, instead of drawing a gimme on the
+  spot. So a file card later in the same request fills the phantom without
+  being asked for. An igot or gimme whose name is not an artifact name
+  is a bad command, as in fossil (#385). Unlike fossil's validate16, an
+  uppercase hex name is refused too, since the blob table only holds
+  lowercase names. A run of igot cards stores its phantoms in one
+  transaction. Still open: #389, #390, #391.
+- A clone no longer aborts on a reply card it cannot read (Sections 5.2 and
+  10.1). An unknown or malformed card ends the reply-card loop, and the
+  cards before it are kept. The session continues, including the mandatory
+  second clone round, and then fails naming the card, as the pull path
+  already does after #373 (#385).
 - `deck.Parse` accepts every Julian-day spelling artifact-format-01 Section
   4.6.4 form 5 allows: a sign, an exponent, a leading point and a trailing
   point. Hex, `inf`, `nan` and `_` stay rejected, and the bound is now

@@ -109,7 +109,10 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 		}
 	}()
 
-	naming := hash.NamingFor(q)
+	naming, err := hash.NamingFor(q)
+	if err != nil {
+		return 0, "", fmt.Errorf("blob: %w", err)
+	}
 	uuid = naming.New.Hash(content)
 
 	if rid, name, ok := existingName(q, naming, uuid, content); ok {
@@ -167,7 +170,10 @@ func StoreDelta(q db.Querier, content []byte, srcRid libfossil.FslID) (rid libfo
 		}
 	}()
 
-	naming := hash.NamingFor(q)
+	naming, err := hash.NamingFor(q)
+	if err != nil {
+		return 0, "", fmt.Errorf("blob: %w", err)
+	}
 	uuid = naming.New.Hash(content)
 
 	if rid, name, ok := existingName(q, naming, uuid, content); ok {

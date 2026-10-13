@@ -36,7 +36,7 @@ func setupTestRepo(t *testing.T) *repo.Repo {
 // manifests by hand have to agree with what blob.Store will write for the
 // same bytes, so they ask the repo instead of assuming SHA1.
 func repoHash(r *repo.Repo, content []byte) string {
-	return hash.NamingFor(r.DB()).New.Hash(content)
+	return hash.MustNamingFor(r.DB()).New.Hash(content)
 }
 
 func TestCheckinBasic(t *testing.T) {

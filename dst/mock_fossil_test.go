@@ -32,7 +32,7 @@ func TestMockFossilStoreArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StoreArtifact: %v", err)
 	}
-	expected := hash.NamingFor(mf.repo.DB()).New.Hash(data)
+	expected := hash.MustNamingFor(mf.repo.DB()).New.Hash(data)
 	if uuid != expected {
 		t.Fatalf("UUID = %q, want %q", uuid, expected)
 	}
@@ -96,7 +96,7 @@ func TestMockFossilPushFlow(t *testing.T) {
 	mf := createMockFossil(t)
 
 	data := []byte("artifact from client push")
-	uuid := hash.NamingFor(mf.repo.DB()).New.Hash(data)
+	uuid := hash.MustNamingFor(mf.repo.DB()).New.Hash(data)
 
 	ctx := context.Background()
 

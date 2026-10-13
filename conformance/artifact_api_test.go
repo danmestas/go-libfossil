@@ -336,6 +336,21 @@ var rCardCases = []apiCase{
 		}
 		return nil
 	}},
+	// The accepting side of the commit-time check: a check-in goes through, and
+	// its stored R card is the lowercase digest of the tree read back from the
+	// repository. A mismatch cannot be fed through manifest.Checkin (it builds R
+	// and the cards from one file list), so the rejecting side is exercised
+	// below that seam, by TestVerifyRCard* in internal/manifest.
+	{Case{ID: "artifact.6.3.5.commit-r-matches-tree", Req: "AF-6.3-5"}, func(t *testing.T) error {
+		d, err := deltaCheckin(newPolicyRepo(t, "2"))
+		if err != nil {
+			return err
+		}
+		if !regexp.MustCompile(`^[0-9a-f]{32}$`).MatchString(d.R) {
+			return expectf("stored R card %q is not 32 lowercase digits", d.R)
+		}
+		return want("stored R", d.R, rCard("a.txt", "a2\n", "b.txt", "b\n", "c.txt", "c\n"))
+	}},
 	{Case{ID: "artifact.6.3.3.delta-r", Req: "AF-6.3-3"}, func(t *testing.T) error {
 		r := newPolicyRepo(t, "2")
 		d, err := deltaCheckin(r)
@@ -430,7 +445,43 @@ func policyCases() []apiCase {
 			},
 		})
 	}
+	// The setting holds the ordinal (7.1), so an unrecognized value is a stored
+	// one that is not 0 through 4: a policy name, in any case, included.
+	for _, value := range []string{"banana", "SHA3", "sha3", "5", "-1", ""} {
+		cases = append(cases, apiCase{
+			Case{ID: "artifact.7.1.unrecognized-" + policyCaseSlug(value), Req: "AF-7.1-2"},
+			func(t *testing.T) error {
+				_, _, err := blob.Store(newPolicyRepoRaw(t, value).DB(), []byte("x"))
+				if err == nil {
+					return expectf("blob.Store named content under hash-policy %q", value)
+				}
+				return nil
+			},
+		})
+	}
 	return append(cases, policyStateCases...)
+}
+
+// policyCaseSlug makes a stored policy value usable in a case ID.
+func policyCaseSlug(value string) string {
+	switch value {
+	case "":
+		return "empty"
+	case "-1":
+		return "negative"
+	}
+	return value
+}
+
+// newPolicyRepoRaw is newPolicyRepo that stores value even when it is empty,
+// where newPolicyRepo reads empty as "no row".
+func newPolicyRepoRaw(t *testing.T, value string) *repo.Repo {
+	t.Helper()
+	r := newPolicyRepo(t, "2")
+	if err := r.SetConfig("hash-policy", value); err != nil {
+		t.Fatalf("setting hash-policy %q: %v", value, err)
+	}
+	return r
 }
 
 var policyStateCases = []apiCase{

@@ -1162,7 +1162,7 @@ func TestCloneDropsSeededHashPolicy(t *testing.T) {
 	if err == nil {
 		t.Errorf("clone kept a hash-policy row (%q); it must follow its source instead", policy)
 	}
-	if got := hash.NamingFor(r.DB()).New; got != hash.AlgSHA1 {
+	if got := hash.MustNamingFor(r.DB()).New; got != hash.AlgSHA1 {
 		t.Errorf("new-artifact naming = %v, want sha1 to match the cloned artifacts", got)
 	}
 }

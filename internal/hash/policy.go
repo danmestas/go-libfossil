@@ -1,6 +1,7 @@
 package hash
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -63,12 +64,20 @@ const sha1Len = 40
 // Read failures fall back the same way rather than being reported: a missing
 // row is the ordinary case and cannot be told apart from a broken read here,
 // and a genuinely broken database fails on the caller's very next query.
-func NamingFor(q db.Querier) Naming {
+//
+// A stored value that is not one of the five policy ordinals is an error, not
+// a reason to fall back: artifact-format-01 7.1 (AF-7.1-2) makes an
+// unrecognized policy value fatal. Guessing a default would name new content
+// with an algorithm the repo's owner never chose.
+func NamingFor(q db.Querier) (Naming, error) {
 	if q == nil {
 		panic("hash.NamingFor: q must not be nil")
 	}
 
-	policy, fromRow := policyFor(q)
+	policy, fromRow, err := policyFor(q)
+	if err != nil {
+		return Naming{}, err
+	}
 	n := Naming{New: AlgSHA1, ReuseLegacy: policy < db.HashPolicySHA3Only}
 	switch {
 	case policy >= db.HashPolicySHA3:
@@ -78,30 +87,44 @@ func NamingFor(q db.Querier) Naming {
 		// carries "auto" next to its SHA3 artifacts; they decide.
 		n.New = AlgSHA3
 	}
+	return n, nil
+}
+
+// MustNamingFor is NamingFor for fixtures that build the repo themselves: a
+// policy value they did not write is a programmer error, so it panics.
+func MustNamingFor(q db.Querier) Naming {
+	n, err := NamingFor(q)
+	if err != nil {
+		panic(err)
+	}
 	return n
 }
 
 // effectivePolicy is the hash-policy in force: the stored row, or fossil's
 // default when there is none.
-func effectivePolicy(q db.Querier) int {
-	policy, _ := policyFor(q)
-	return policy
+func effectivePolicy(q db.Querier) (int, error) {
+	policy, _, err := policyFor(q)
+	return policy, err
 }
 
 // policyFor is effectivePolicy that also reports whether a stored row
 // decided it. A default that comes out auto has already established that no
 // SHA3 artifact exists, so only a stored auto needs the scan again.
-func policyFor(q db.Querier) (policy int, fromRow bool) {
+//
+// A stored value outside the ordinals 0 through 4 is an error (AF-7.1-2).
+func policyFor(q db.Querier) (policy int, fromRow bool, err error) {
 	var raw string
 	if err := q.QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&raw); err == nil {
-		if n, err := strconv.Atoi(raw); err == nil {
-			return n, true
+		n, convErr := strconv.Atoi(raw)
+		if convErr != nil || n < db.HashPolicySHA1 || n > db.HashPolicyShunSHA1 {
+			return 0, true, fmt.Errorf("hash-policy %q is not a recognized policy value (0-4)", raw)
 		}
+		return n, true, nil
 	}
 	if hasSHA3Artifact(q) || !hasSHA1Artifact(q) {
-		return db.HashPolicySHA3, false
+		return db.HashPolicySHA3, false, nil
 	}
-	return db.HashPolicyAuto, false
+	return db.HashPolicyAuto, false, nil
 }
 
 // PromoteFor is called before an artifact named uuid enters the repo. Under
@@ -113,10 +136,17 @@ func PromoteFor(q db.Querier, uuid string) error {
 	if q == nil {
 		panic("hash.PromoteFor: q must not be nil")
 	}
-	if len(uuid) <= sha1Len || effectivePolicy(q) != db.HashPolicyAuto {
+	if len(uuid) <= sha1Len {
 		return nil
 	}
-	_, err := q.Exec(
+	policy, err := effectivePolicy(q)
+	if err != nil {
+		return err
+	}
+	if policy != db.HashPolicyAuto {
+		return nil
+	}
+	_, err = q.Exec(
 		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES('hash-policy', ?, strftime('%s','now'))",
 		strconv.Itoa(db.HashPolicySHA3),
 	)

@@ -74,7 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fossil-scm check-in, imported without its history. Its file transitions are
   derived when the parent arrives, against phantoms for files still absent,
   as fossil's do. A check-in on a present parent is still deferred for its
-  files. New case: `repostate.4.2.phantom-parent-absent-file`.
+  files. New case: `repostate.4.2.phantom-parent-absent-file`. Fossil also
+  links a root check-in, or one on a present parent, whose files are absent;
+  go-libfossil still defers those to protect `Checkout.Update`, a deviation
+  tracked in #406 with the gap case `repostate.4.2.root-absent-file`.
 
 - `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
   target as fossil's `update` does when no version is named: the newest open

@@ -90,6 +90,14 @@ func crosslinkCases() []rsCase {
 		rebuild:       true,
 		rebuildWrites: "the phantom root has no branch tag, so fossil rebuild tags it trunk",
 	}, {
+		// A root check-in whose file is absent: fossil links it against a
+		// phantom file; go-libfossil still defers it (#406).
+		Case:     Case{ID: "repostate.4.2.root-absent-file", Req: "RS-4.2-2"},
+		arts:     []rsArt{literal("c1", "C c1\nD "+rsTime(1)+"\nF a.txt {fa}\nU u\n")},
+		tables:   []string{"event"},
+		want:     rows("event", "c1 ci @1"),
+		ignoring: []string{"-event: c1 ci @1"},
+	}, {
 		Case:     Case{ID: "repostate.4.2.phantom-target", Req: "RS-4.2-1"},
 		arts:     with(chain()[:2], control("t", 9, "*foo {c3} v")),
 		tables:   []string{"phantom", "tagxref"},

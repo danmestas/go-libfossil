@@ -972,3 +972,77 @@ func TestReceiveLinkerLinkStoredPreservesCrosslinkErrorAfterRollback(t *testing.
 		t.Errorf("LinkStored error = %q, want receive_artifact rollback context", err)
 	}
 }
+
+// TestReceiveLinkerChildBeforeParentLeavesFilePhantoms pins the convergence
+// the missingCheckinRefs exemption relies on (#398): a check-in linked
+// before its parent and files arrive gets its mlink row from the parent's
+// link, against a phantom file that is filled when the blob arrives.
+func TestReceiveLinkerChildBeforeParentLeavesFilePhantoms(t *testing.T) {
+	r := setupTestRepo(t)
+	parent := &deck.Deck{
+		Type: deck.Checkin, C: "parent", U: deck.User("testuser"),
+		D: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+		},
+	}
+	parentBytes, err := parent.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal parent: %v", err)
+	}
+	fileBytes := []byte("arrives last")
+	child := &deck.Deck{
+		Type: deck.Checkin, C: "child", U: deck.User("testuser"),
+		D: time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC),
+		P: []string{repoHash(r, parentBytes)},
+		F: []deck.FileCard{{Name: "late.txt", UUID: repoHash(r, fileBytes)}},
+	}
+	childBytes, err := child.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal child: %v", err)
+	}
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	link := func(content []byte) libfossil.FslID {
+		t.Helper()
+		rid, uuid, err := blob.Store(r.DB(), content)
+		if err != nil {
+			t.Fatalf("blob.Store: %v", err)
+		}
+		if err := r.WithTx(func(tx *db.Tx) error {
+			return linker.LinkStored(context.Background(), tx, rid, uuid, content)
+		}); err != nil {
+			t.Fatalf("LinkStored: %v", err)
+		}
+		return rid
+	}
+
+	childRID := link(childBytes)
+	assertCounts(t, r, childRID, 1, 0, 0, "child before parent")
+	link(parentBytes)
+	var mlinks int
+	if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=?", childRID).
+		Scan(&mlinks); err != nil || mlinks != 1 {
+		t.Fatalf("after parent mlink rows = %d, %v; want 1", mlinks, err)
+	}
+
+	var fid libfossil.FslID
+	if err := r.DB().QueryRow("SELECT fid FROM mlink WHERE mid=?", childRID).
+		Scan(&fid); err != nil {
+		t.Fatalf("read mlink fid: %v", err)
+	}
+	var phantoms int
+	if err := r.DB().QueryRow("SELECT count(*) FROM phantom WHERE rid=?", fid).
+		Scan(&phantoms); err != nil || phantoms != 1 {
+		t.Fatalf("file rid %d phantom rows = %d, %v; want 1", fid, phantoms, err)
+	}
+	if _, _, err := blob.Store(r.DB(), fileBytes); err != nil {
+		t.Fatalf("blob.Store file: %v", err)
+	}
+	if err := r.DB().QueryRow("SELECT count(*) FROM phantom WHERE rid=?", fid).
+		Scan(&phantoms); err != nil || phantoms != 0 {
+		t.Fatalf("after file arrival phantom rows = %d, %v; want 0", phantoms, err)
+	}
+}

@@ -996,6 +996,11 @@ func repairTagPropagation(q db.Querier) error {
 //     primary parent's content is itself absent: no mlink row depends on
 //     them until it arrives (see the comment in the body).
 //
+// When the parent is absent and its manifest arrives later, the child's
+// files are phantoms that sync requests, so the Checkout.Update protection
+// then relies on sync converging. A root check-in or a check-in on a present
+// parent is still held for its files, which fossil does not do (#406).
+//
 // Empty result means crosslink is safe to run; non-empty means defer
 // to a later sweep that will discover the manifest again (no event row
 // was written, so the candidate query re-selects this rid).

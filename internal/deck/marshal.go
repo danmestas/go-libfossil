@@ -156,7 +156,9 @@ func marshalCardsGHIJKL(b *strings.Builder, d *Deck) {
 	}
 
 	if d.K != "" {
-		fmt.Fprintf(b, "K %s\n", d.K)
+		// §4.7.9: a parser may accept an uppercase ticket ID, a writer emits
+		// lowercase.
+		fmt.Fprintf(b, "K %s\n", strings.ToLower(d.K))
 	}
 	if d.L != "" {
 		fmt.Fprintf(b, "L %s\n", FossilEncode(d.L))
@@ -201,7 +203,9 @@ func marshalCardsMNPQR(b *strings.Builder, d *Deck) {
 	}
 
 	if d.R != "" {
-		fmt.Fprintf(b, "R %s\n", d.R)
+		// §6.3.4: the checksum is always rendered lowercase, though the
+		// parse grammar is case-insensitive.
+		fmt.Fprintf(b, "R %s\n", strings.ToLower(d.R))
 	}
 }
 

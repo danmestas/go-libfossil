@@ -711,23 +711,23 @@ func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error) {
 // that as "empty side" for diff purposes. Errors surface only for real I/O
 // or consistency problems (unknown RID, missing blob for a listed UUID).
 func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
-	files, err := manifest.ListFiles(r.inner, fsltype.FslID(checkinRID))
+	if filePath == "" {
+		return nil, nil
+	}
+	f, found, err := manifest.LookupFile(r.inner, fsltype.FslID(checkinRID), filePath)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range files {
-		if f.Name != filePath {
-			continue
-		}
-		rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
-		if !ok {
-			return nil, fmt.Errorf("blob not found for uuid %s", f.UUID)
-		}
-		// Bare Expand: Diff is pairwise (two named checkins), not a walk over a
-		// file's whole history, so each side's blob is expanded once. There is
-		// no deep overlapping delta chain here for content.Cache to amortize --
-		// that pattern lives in annotate, which is cached.
-		return content.Expand(r.DB(), rid)
+	if !found {
+		return nil, nil
 	}
-	return nil, nil
+	rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
+	if !ok {
+		return nil, fmt.Errorf("blob not found for uuid %s", f.UUID)
+	}
+	// Bare Expand: Diff is pairwise (two named checkins), not a walk over a
+	// file's whole history, so each side's blob is expanded once. There is
+	// no deep overlapping delta chain here for content.Cache to amortize --
+	// that pattern lives in annotate, which is cached.
+	return content.Expand(r.DB(), rid)
 }

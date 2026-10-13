@@ -508,3 +508,18 @@ func BenchmarkParse(b *testing.B) {
 		Parse(data)
 	}
 }
+
+// A parser may accept an uppercase K ticket ID (§4.7.9), a writer emits it
+// lowercase.
+func TestMarshalKLowercase(t *testing.T) {
+	d := &Deck{Type: Ticket, D: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		K: "0123456789ABCDEF0123456789ABCDEF01234567", U: User("u"),
+		J: []TicketField{{Name: "status", Value: "Open"}}}
+	data, err := d.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "K 0123456789abcdef0123456789abcdef01234567\n") {
+		t.Fatalf("Marshal wrote %q, want a lowercase K card", data)
+	}
+}

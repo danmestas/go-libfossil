@@ -23,9 +23,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step 6, where go-libfossil, like fossil, stores no time or a time of 0;
   those cases are marked as deviations. The draft non-conformances the
   re-pin exposes are tracked in #370, #371, #372, #373, #374 and #375.
+- More conformance cases for the artifact and delta suites: single-name
+  lookup in a delta manifest (8.4), a lowercase K and R card from the writer
+  (4.7.9, 6.3.4), date-only timestamps (4.6.4), mismatching delta checksums
+  beyond the first (3.4), and the 2^32 limit on delta sizes (3.1), checked
+  with an unread 4 GiB mapping (skipped where it cannot be mapped).
+  AF-4.7.9-1, AF-8.4-1, DF-3-2, DF-3.1-6 and DF-3.4-3 are now covered.
+  AF-6.3-5 stays uncovered (go-libfossil does not check the R card at commit,
+  tracked in #387), and so does AF-7.1-2 (no hash-policy value-string surface
+  to drive). Artifact-format-01 Section 4.6.4 lets a reader accept the
+  time-only and now/subsec forms (a reader MAY accept forms 2 through 5), so
+  `deck.Parse` keeps rejecting them while fossil(1) and the date-tag path
+  (SQLite julianday) accept them.
 
 ### Fixed
 
+- Looking up one file in a delta manifest follows artifact-format-01 Section
+  8.4: the delta's own F cards are searched first, and a delete marker answers
+  not-found without reading the baseline, so a deleted name no longer fails
+  when the baseline is missing. A name the delta does not mention still
+  needs the baseline and fails without it. The new `manifest.LookupFile`
+  serves `Repo.ReadFile`, `manifest.FileAt`, annotate, the merge resolver and
+  conflict-file reads, and no longer lists the whole file set for one name.
+- `deck.Deck.Marshal` writes the K card's ticket ID (Section 4.7.9) and the R
+  card's checksum (Section 6.3.4) in lowercase, as those sections require of a
+  writer, even when the deck came from an artifact whose parser-accepted card
+  was uppercase.
 - `deck.Parse` accepts every Julian-day spelling artifact-format-01 Section
   4.6.4 form 5 allows: a sign, an exponent, a leading point and a trailing
   point. Hex, `inf`, `nan` and `_` stay rejected, and the bound is now

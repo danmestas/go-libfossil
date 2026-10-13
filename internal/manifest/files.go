@@ -141,3 +141,68 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 	}
 	return merged, nil
 }
+
+// LookupFile resolves one filename in a check-in's file set, as
+// artifact-format-01 8.4 orders the search: a delta manifest's own F cards
+// first, and only a name absent from them goes to the baseline. found is false
+// when no file has the name or the delta deletes it; a delete marker answers
+// without reading the baseline, so a missing baseline does not fail it. A name
+// that needs the baseline fails when it cannot be resolved (8.3). The search
+// uses the baseline's own F cards and does not follow a B card it carries.
+func LookupFile(r *repo.Repo, rid libfossil.FslID, name string) (FileEntry, bool, error) {
+	return LookupFileCached(r, rid, name, nil)
+}
+
+// LookupFileCached is LookupFile that serves the manifest and baseline through
+// cache; a nil cache is exactly LookupFile. Like ListFilesCached it pays off
+// only for a caller resolving one name across many overlapping revisions.
+func LookupFileCached(
+	r *repo.Repo, rid libfossil.FslID, name string, cache *content.Cache,
+) (FileEntry, bool, error) {
+	if r == nil {
+		panic("manifest.LookupFile: r must not be nil")
+	}
+	if name == "" {
+		panic("manifest.LookupFile: name must not be empty")
+	}
+	d, err := GetManifestCached(r, rid, cache)
+	if err != nil {
+		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
+	}
+	if card, ok := findFileCard(d.F, name); ok {
+		return fileCardEntry(card)
+	}
+	if d.B == "" {
+		return FileEntry{}, false, nil
+	}
+	baseDeck, err := loadBaseline(r.DB(), cache, d)
+	if err != nil {
+		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
+	}
+	// A delete marker in the baseline is not a file.
+	if card, ok := findFileCard(baseDeck.F, name); ok {
+		return fileCardEntry(card)
+	}
+	return FileEntry{}, false, nil
+}
+
+// findFileCard binary-searches cards, which a parsed deck keeps in comparator
+// order (4.5.2), for name.
+func findFileCard(cards []deck.FileCard, name string) (deck.FileCard, bool) {
+	i := sort.Search(len(cards), func(i int) bool {
+		return deck.Compare(cards[i].Name, name) >= 0
+	})
+	if i < len(cards) && cards[i].Name == name {
+		return cards[i], true
+	}
+	return deck.FileCard{}, false
+}
+
+// fileCardEntry turns a found F card into LookupFile's answer: a delete
+// marker (no hash) reads as not found.
+func fileCardEntry(card deck.FileCard) (FileEntry, bool, error) {
+	if card.UUID == "" {
+		return FileEntry{}, false, nil
+	}
+	return FileEntry{Name: card.Name, UUID: card.UUID, Perm: card.Perm}, true, nil
+}

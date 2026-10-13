@@ -2,13 +2,13 @@
 # written from the draft text. There are no delta errata.
 # draft	draft-fossil-delta-format-00.txt	6a28ee7e2e146f806350161875068e496af0b9ff3d2f92c1c729242f1b1a781b
 DF-3-1	3	A delta is a header, zero or more segments and a trailer, concatenated with nothing between them (delta = header *segment trailer); a decoder accepts every such delta whose bounds hold.
-DF-3-2	3	Applying a delta a producer emitted for a source and target to that source yields the target exactly.	Section 5 states this informatively; every producer requirement presupposes it, so the cases check it as the producer's baseline.
+DF-3-2	3	Applying a delta a producer emitted for a source and target to that source yields the target exactly.
 DF-3.1-1	3.1	A producer writes every integer in canonical form: base 64, most significant digit first, no leading zeros, and zero as the single digit 0.
 DF-3.1-2	3.1	Digits 0-9 have values 0-9, A-Z 10-35, _ 36, a-z 37-62 and ~ 63, and a multi-digit integer is read most significant digit first.
 DF-3.1-3	3.1	Reading an integer stops at the first byte that is not a digit; that byte is the opcode or separator that follows the integer.
 DF-3.1-4	3.1	A decoder that accepts an integer field with no digits treats it as zero; it may reject such a delta instead.
 DF-3.1-5	3.1	A decoder that accepts an integer field with leading zeros uses its decoded value; it may reject such a delta instead.
-DF-3.1-6	3.1	A producer emits only integer values below 2^32.	Create refuses a source or target of 2^32 bytes or more with ErrTooLarge (#279); unit test TestCheckSizes in internal/delta covers the bound on lengths. No conformance case: a direct one needs a 4 GiB input.
+DF-3.1-6	3.1	A producer emits only integer values below 2^32.
 DF-3.2-1	3.2	A decoder rejects a delta whose header integer is not immediately followed by 0x0a.
 DF-3.3.1-1	3.3.1	A copy segment (count @ offset ,) appends count bytes of the source starting at zero-based byte position offset.
 DF-3.3.1-2	3.3.1	A decoder rejects a copy segment whose offset is not followed by a comma (0x2c).
@@ -18,7 +18,7 @@ DF-3.3.2-1	3.3.2	A literal segment (count : payload) appends the count bytes tha
 DF-3.3.2-2	3.3.2	A reader consumes exactly count payload bytes without scanning them for a separator; any byte in a payload, 0x0a included, is data.
 DF-3.4-1	3.4	A producer always ends a delta with a trailer (checksum ;) carrying the checksum of the target, including when the target is empty.
 DF-3.4-2	3.4	The checksum is the sum modulo 2^32 of the target's big-endian 32-bit words, plus any 1 to 3 trailing bytes added as z[0]<<24, z[1]<<16 and z[2]<<8.
-DF-3.4-3	3.4	A decoder that verifies the checksum rejects a delta whose trailer does not match the reconstructed target.	go-libfossil always verifies; the non-verifying branch of the draft is not exercised.
+DF-3.4-3	3.4	A decoder that verifies the checksum rejects a delta whose trailer does not match the reconstructed target.
 DF-3.4-4	3.4	A decoder treats the delta as complete at the trailer opcode; bytes after it are not read as segments.
 DF-4-1	4	A decoder rejects a zero-length delta before attempting any read (also section 6).
 DF-4-2	4	A decoder rejects a delta that ends inside an integer field.

@@ -196,6 +196,10 @@ var writerCases = []apiCase{
 		}
 		return nil
 	}},
+	// Section 4.7.9: a parser may accept an uppercase K, but a writer emits it
+	// lowercase, so a re-written ticket artifact carries a lowercase ID.
+	{Case{ID: "artifact.4.7.9.writer-lowercase", Req: "AF-4.7.9-1"},
+		writerLowercases(baseTicket, "K "+h1+"\n", "K "+strings.ToUpper(h1)+"\n")},
 	{Case{ID: "artifact.4.7.6.writer-permission", Req: "AF-4.7.6-3"}, func(*testing.T) error {
 		d := &deck.Deck{D: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 			F: []deck.FileCard{{Name: "new.txt", UUID: h1, OldName: "old.txt"}}}
@@ -225,6 +229,26 @@ var writerCases = []apiCase{
 		// zCard renders the digest in lowercase, as Section 6.2 requires.
 		return want("Z card", string(data[len(data)-35:]), zCard(string(data[:len(data)-35])))
 	}},
+}
+
+// writerLowercases parses base with the line lower replaced by upper, as a
+// reader may accept it, and checks that Marshal writes the line lower back.
+func writerLowercases(base, lower, upper string) func(*testing.T) error {
+	return func(*testing.T) error {
+		d, err := deck.Parse(withZ(edit(base, lower, upper)))
+		if err != nil {
+			return expectf("deck.Parse rejects the uppercase form: %v", err)
+		}
+		data, err := d.Marshal()
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(data), lower) {
+			return expectf("Marshal wrote %q, want the line %q",
+				data, strings.TrimSuffix(lower, "\n"))
+		}
+		return nil
+	}
 }
 
 // writerRefuses checks that a check-in refuses to create the filename.

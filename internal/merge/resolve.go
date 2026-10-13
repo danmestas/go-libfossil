@@ -37,20 +37,13 @@ func LoadResolver(r *repo.Repo, tipRid libfossil.FslID) *Resolver {
 	}
 
 	if tipRid > 0 {
-		files, err := manifest.ListFiles(r, tipRid)
-		if err == nil {
-			for _, f := range files {
-				if f.Name == ".libfossil-merge" {
-					rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
-					if ok {
-						// Bare Expand: one config file (.libfossil-merge) at one
-						// version, read once. No revision walk to cache.
-						data, err := content.Expand(r.DB(), rid)
-						if err == nil {
-							res.patterns = parseMergeFile(data)
-						}
-					}
-					break
+		f, found, err := manifest.LookupFile(r, tipRid, ".libfossil-merge")
+		if err == nil && found {
+			if rid, ok := content.AvailableByUUID(r.DB(), f.UUID); ok {
+				// Bare Expand: one config file (.libfossil-merge) at one
+				// version, read once. No revision walk to cache.
+				if data, err := content.Expand(r.DB(), rid); err == nil {
+					res.patterns = parseMergeFile(data)
 				}
 			}
 		}

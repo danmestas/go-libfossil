@@ -186,12 +186,8 @@ func FileAt(r *repo.Repo, checkinRID libfossil.FslID, path string) (libfossil.Fs
 	}
 
 	q := r.DB()
-	_, files, err := loadCheckinManifest(q, nil, checkinRID)
-	if err != nil {
-		return 0, false
-	}
-	file, ok := files.seek(path)
-	if !ok || file.UUID == "" {
+	file, found, err := LookupFile(r, checkinRID, path)
+	if err != nil || !found {
 		return 0, false
 	}
 	return content.AvailableByUUID(q, file.UUID)

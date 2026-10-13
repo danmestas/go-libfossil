@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -118,6 +119,38 @@ func producerCases() []deltaFuncCase {
 		findings("delta.3.4.create-trailer", "DF-3.4-1", findTrailer),
 		findings("delta.3.create-grammar", "DF-3-1", findGrammar),
 		{Case{ID: "delta.B4.generated-empty", Req: "DF-3.4-1"}, createEmptyTarget},
+		{Case{ID: "delta.3.1.refuse-source-2-32", Req: "DF-3.1-6"}, refusesHuge(true)},
+		{Case{ID: "delta.3.1.refuse-target-2-32", Req: "DF-3.1-6"}, refusesHuge(false)},
+	}
+}
+
+// refusesHuge: the target length opens the delta and every copy offset is a
+// source offset, so a source or target of 2^32 bytes would need an integer
+// the format does not allow. Create must refuse it instead of writing a
+// wrapped value. The input is mapped, never read: a producer that checks
+// the sizes first answers at once.
+func refusesHuge(inSource bool) func(*testing.T, *fossilReference) error {
+	return func(t *testing.T, _ *fossilReference) error {
+		// A skip, not a pass: a run that could not build the input checked
+		// nothing. TestCheckSizes covers the bound without the mapping.
+		if strconv.IntSize < 64 {
+			t.Skip("needs a 64-bit int to name a 4 GiB input")
+		}
+		huge, release, err := untouchedBuffer(1 << 32)
+		if err != nil {
+			t.Skipf("cannot map 4 GiB here: %v", err)
+		}
+		defer release()
+		source, target := huge, []byte{}
+		if !inSource {
+			source, target = target, huge
+		}
+		created, err := delta.Create(source, target)
+		if !errors.Is(err, delta.ErrTooLarge) {
+			return expectf("Create of a %d-byte source and %d-byte target = %.20q, %v; "+
+				"want delta.ErrTooLarge", len(source), len(target), created, err)
+		}
+		return nil
 	}
 }
 

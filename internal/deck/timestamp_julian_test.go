@@ -21,12 +21,17 @@ func TestScanJulianNumber(t *testing.T) {
 // TestParseJulianTimestampRange checks the bound is applied after rounding to
 // the millisecond and that huge exponents cannot overflow the conversion.
 func TestParseJulianTimestampRange(t *testing.T) {
-	for _, s := range []string{"1e-10", "5373484.5", "1e300", "0", "-1", "+0.0"} {
+	for _, s := range []string{"1e-10", "5373484.5", "1e300", "0", "-1", "+0.0",
+		"0.00000000001", "5373484.499999995"} {
 		if _, matched, err := parseJulianTimestamp(s); !matched || err == nil {
 			t.Errorf("parseJulianTimestamp(%q): matched=%v err=%v, want rejection", s, matched, err)
 		}
 	}
 	if _, _, err := parseJulianTimestamp("+2461042.5"); err != nil {
 		t.Errorf("signed Julian day rejected: %v", err)
+	}
+	// 5.8e-9 days rounds to one millisecond, the smallest accepted value.
+	if _, _, err := parseJulianTimestamp("5.8e-9"); err != nil {
+		t.Errorf("one-millisecond Julian day rejected: %v", err)
 	}
 }

@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Tests that run `fossil server` no longer flake with "directory not empty"
+  during temp-dir cleanup (#352). Fossil forks a child per connection, and
+  killing only the parent let a child write into the directory while it was
+  being removed. They now share `testutil.StartServer`, which puts the server
+  in its own process group and kills the whole group before reaping it.
 - A check-in's `event.bgcolor`, `euser` and `ecomment` now follow its
   `bgcolor`, `user` and `comment` tags as fossil's `tag_insert` and
   `manifest_crosslink` do (#343). `tag.ApplyTagWithTx` set `event.bgcolor` only

@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -40,6 +41,12 @@ type ApplyOpts struct {
 	TagType int // TagCancel, TagSingleton, or TagPropagating.
 	Value   string
 	MTime   float64 // Julian day.
+	// Leaves is the batch's leaf-recheck schedule. A branch tag, and the
+	// propagation walk it starts, schedule the check-ins whose branch row
+	// they write (draft-fossil-repo-state-01 Section 7.3); the caller applies
+	// the schedule before its batch ends. ApplyTagWithTx requires it for a
+	// branch tag; ApplyTag supplies its own when it is nil.
+	Leaves *leaf.Pending
 }
 
 // AddTag creates a control artifact that adds or cancels a tag on a target checkin.
@@ -65,38 +72,9 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	var controlRid libfossil.FslID
 
 	err := r.WithTx(func(tx *db.Tx) error {
-		// Look up target UUID
-		var targetUUID string
-		if err := tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", opts.TargetRID).Scan(&targetUUID); err != nil {
-			return fmt.Errorf("target uuid lookup: %w", err)
-		}
-
-		// Map our integer tag type to deck.TagType byte
-		var deckTagType deck.TagType
-		switch opts.TagType {
-		case TagCancel:
-			deckTagType = deck.TagCancel
-		case TagSingleton:
-			deckTagType = deck.TagSingleton
-		case TagPropagating:
-			deckTagType = deck.TagPropagating
-		default:
-			return fmt.Errorf("invalid tag type: %d", opts.TagType)
-		}
-
-		// Build control artifact deck
-		d := &deck.Deck{
-			Type: deck.Control,
-			D:    opts.Time,
-			T: []deck.TagCard{
-				{
-					Type:  deckTagType,
-					Name:  opts.TagName,
-					UUID:  targetUUID,
-					Value: opts.Value,
-				},
-			},
-			U: deck.User(opts.User),
+		d, err := controlDeck(tx, opts)
+		if err != nil {
+			return err
 		}
 
 		// Marshal and store as blob
@@ -112,7 +90,10 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 
 		// Derive the tag the way crosslinking the control artifact would. A
 		// superseded tag leaves tagxref alone, but the control artifact is
-		// still stored and queued for sync.
+		// still stored and queued for sync. The leaf rechecks a branch tag
+		// schedules are applied before this transaction commits, as fossil
+		// applies them at the end of its own (src/db.c, leaf_do_pending_checks).
+		leaves := leaf.NewPending()
 		if err := ApplyTagWithTx(tx, ApplyOpts{
 			TargetRID: opts.TargetRID,
 			SrcRID:    controlRid,
@@ -120,7 +101,11 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 			TagType:   opts.TagType,
 			Value:     opts.Value,
 			MTime:     libfossil.TimeToJulian(opts.Time),
+			Leaves:    leaves,
 		}); err != nil {
+			return err
+		}
+		if err := leaves.Apply(tx); err != nil {
 			return err
 		}
 
@@ -137,6 +122,36 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	return controlRid, nil
 }
 
+// controlDeck builds the control artifact AddTag stores: one T card naming
+// the target by its hash.
+func controlDeck(q db.Querier, opts TagOpts) (*deck.Deck, error) {
+	var targetUUID string
+	const lookup = "SELECT uuid FROM blob WHERE rid=?"
+	if err := q.QueryRow(lookup, opts.TargetRID).Scan(&targetUUID); err != nil {
+		return nil, fmt.Errorf("target uuid lookup: %w", err)
+	}
+	// Map our integer tag type to deck.TagType byte
+	var deckTagType deck.TagType
+	switch opts.TagType {
+	case TagCancel:
+		deckTagType = deck.TagCancel
+	case TagSingleton:
+		deckTagType = deck.TagSingleton
+	case TagPropagating:
+		deckTagType = deck.TagPropagating
+	default:
+		return nil, fmt.Errorf("invalid tag type: %d", opts.TagType)
+	}
+	return &deck.Deck{
+		Type: deck.Control,
+		D:    opts.Time,
+		T: []deck.TagCard{{
+			Type: deckTagType, Name: opts.TagName, UUID: targetUUID, Value: opts.Value,
+		}},
+		U: deck.User(opts.User),
+	}, nil
+}
+
 // ApplyTag inserts a tagxref row and propagates without creating a control artifact.
 // Used by Crosslink to process existing control artifacts.
 func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
@@ -151,7 +166,16 @@ func ApplyTag(r *repo.Repo, opts ApplyOpts) error {
 	}
 
 	return r.WithTx(func(tx *db.Tx) error {
-		return ApplyTagWithTx(tx, opts)
+		if opts.Leaves != nil {
+			return ApplyTagWithTx(tx, opts)
+		}
+		// The transaction is the batch: its rechecks are applied before it
+		// commits.
+		opts.Leaves = leaf.NewPending()
+		if err := ApplyTagWithTx(tx, opts); err != nil {
+			return err
+		}
+		return opts.Leaves.Apply(tx)
 	})
 }
 
@@ -173,6 +197,9 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 	if err != nil {
 		return fmt.Errorf("ensure tag %q: %w", opts.TagName, err)
 	}
+	if tagid == leaf.BranchTagID && opts.Leaves == nil {
+		panic("tag.ApplyTagWithTx: a branch tag needs opts.Leaves")
+	}
 
 	skip, err := superseded(q, tagid, opts.TargetRID, opts.MTime)
 	if err != nil {
@@ -182,6 +209,10 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return nil
 	}
 
+	reach, err := replacesPropagatingBranch(q, tagid, opts)
+	if err != nil {
+		return err
+	}
 	if _, err := q.Exec(
 		`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -189,6 +220,13 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		opts.MTime, opts.TargetRID,
 	); err != nil {
 		return fmt.Errorf("tagxref insert: %w", err)
+	}
+	// tag_insert schedules the check-in and its parents once its branch row
+	// is written (src/tag.c:195), whatever the tag type.
+	if tagid == leaf.BranchTagID {
+		if err := opts.Leaves.Schedule(q, opts.TargetRID); err != nil {
+			return err
+		}
 	}
 
 	if err := applyEventOverride(q, opts); err != nil {
@@ -199,7 +237,7 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return err
 	}
 
-	if err := propagateAfterInsert(q, tagid, opts.TagType, opts.TargetRID, opts.MTime, opts.Value, opts.TagName); err != nil {
+	if err := propagateAfterInsert(q, tagid, opts, reach); err != nil {
 		return fmt.Errorf("propagate: %w", err)
 	}
 
@@ -337,11 +375,43 @@ func superseded(q db.Querier, tagid int64, rid libfossil.FslID, mtime float64) (
 // deleting the copies descendants had inherited. Confirmed against fossil
 // 2.28: applying `tag add --raw zz A v2` over an inherited `zz` removes the
 // child's row.
-func propagateAfterInsert(q db.Querier, tagid int64, tagType int, rid libfossil.FslID, mtime float64, value, tagName string) error {
+func propagateAfterInsert(
+	q db.Querier, tagid int64, opts ApplyOpts, reachAbsent bool,
+) error {
+	tagType := opts.TagType
 	if tagType == TagSingleton {
 		tagType = TagCancel
 	}
-	return propagate(q, tagid, tagType, rid, mtime, value, tagName, rid)
+	pr := propagation{
+		tagid: tagid, tagType: tagType, origID: opts.TargetRID, mtime: opts.MTime,
+		value: opts.Value, tagName: opts.TagName, leaves: opts.Leaves,
+		reachAbsent: reachAbsent && tagType == TagCancel,
+	}
+	return pr.propagate(q, opts.TargetRID)
+}
+
+// replacesPropagatingBranch is whether this write replaces a propagating
+// branch row with a cancel or a singleton. The row it replaces was handed down
+// the primary children when it landed, in fossil, and the walk deletes those
+// copies and rechecks each (src/tag.c:100-102). A crosslink batch defers
+// propagation to its repair gate, so the copies may not exist yet; the walk
+// then reaches the children that hold none (propagation.reachAbsent), which are
+// the check-ins fossil would have rechecked (Section 7.3, RS-7.3-3). Only a
+// branch tag matters: no other tag schedules a recheck.
+func replacesPropagatingBranch(q db.Querier, tagid int64, opts ApplyOpts) (bool, error) {
+	if tagid != leaf.BranchTagID || opts.TagType == TagPropagating {
+		return false, nil
+	}
+	var old int
+	err := q.QueryRow("SELECT tagtype FROM tagxref WHERE tagid=? AND rid=?",
+		tagid, opts.TargetRID).Scan(&old)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("tagxref branch row: %w", err)
+	}
+	return old == TagPropagating, nil
 }
 
 // ensureTag returns the tagid for the given tag name, creating it if it doesn't exist.

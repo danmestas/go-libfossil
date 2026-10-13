@@ -18,9 +18,12 @@ import (
 // and re-derived against the tag's parents instead of its own P-card.
 //
 // It runs after the candidate sweep and before tag propagation, as fossil
-// does, so the caller's repairLeafTable sees the rewritten plink and makes a
-// now-childless old parent a leaf. A parent tag whose value is not a
-// well-formed list of artifact hashes is ignored, matching fossil's
+// does, so the propagation walk and the batch's leaf rechecks see the
+// rewritten plink. Like fossil's, the rewrite schedules no leaf recheck of its
+// own (draft-fossil-repo-state-01 Section 7.3): an old parent left without a
+// child is rechecked only when a branch write in the batch reaches it, and an
+// explicit rebuild (leaf.Rebuild) always reaches it. A parent tag whose value
+// is not a well-formed list of artifact hashes is ignored, matching fossil's
 // reparent_abort.
 //
 // Each repair round scans tagxref for parent tags and rewrites only the tagged

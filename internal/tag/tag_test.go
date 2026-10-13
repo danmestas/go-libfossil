@@ -8,6 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
@@ -430,7 +431,7 @@ func TestPropagateAllOrderingAdjacentMillisecond(t *testing.T) {
 
 	// Re-propagate from A. The `?` in `tagxref.mtime < ?` now comes from
 	// ScanJulianDay(A.mtime).
-	if err := tag.PropagateAll(r.DB(), libfossil.FslID(ridA)); err != nil {
+	if err := tag.PropagateAllLeaves(r.DB(), libfossil.FslID(ridA), leaf.NewPending()); err != nil {
 		t.Fatalf("tag.PropagateAll: %v", err)
 	}
 
@@ -520,7 +521,7 @@ func TestPropagateAll(t *testing.T) {
 	}
 
 	// Call PropagateAll on A to re-propagate
-	if err := tag.PropagateAll(r.DB(), libfossil.FslID(ridA)); err != nil {
+	if err := tag.PropagateAllLeaves(r.DB(), libfossil.FslID(ridA), leaf.NewPending()); err != nil {
 		t.Fatalf("tag.PropagateAll: %v", err)
 	}
 
@@ -822,7 +823,7 @@ func TestPropagateEqualMtimeKeepsFirst(t *testing.T) {
 	        WHERE tagid=(SELECT tagid FROM tag WHERE tagname='p') AND rid=?`, a); err != nil {
 		t.Fatalf("doctor A value: %v", err)
 	}
-	if err := tag.PropagateAll(r.DB(), libfossil.FslID(a)); err != nil {
+	if err := tag.PropagateAllLeaves(r.DB(), libfossil.FslID(a), leaf.NewPending()); err != nil {
 		t.Fatalf("PropagateAll: %v", err)
 	}
 	if v, _, ok := pTagRow(t, r, b); !ok || v != "first" {

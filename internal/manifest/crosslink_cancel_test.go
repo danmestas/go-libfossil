@@ -146,7 +146,7 @@ func TestCrosslinkRepairsLeafAfterCancelledSweep(t *testing.T) {
 		R:    "00000000000000000000000000000000", // 32-hex MD5 placeholder (crosslink does not verify it)
 		// A root check-in declares its branch -- both fossil's own `init` and
 		// this package's Checkin do -- and leaf only ever considers a check-in
-		// that carries a branch tag. See repairLeafTable.
+		// that carries a branch tag. See leaf.Rebuild.
 		T: []deck.TagCard{
 			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
 			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},

@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
@@ -285,9 +286,10 @@ func (h *ridHeap) Pop() any {
 // whole-repository sweep's working set is bounded by how many delta chains
 // are in flight rather than by repository size. Writing event/plink/mlink/
 // tagxref-origin rows during that reordered pass is safe because each row
-// is a pure function of its own artifact; leaf and tag-propagation state,
-// which depend on the whole plink graph rather than any one artifact, are
-// deferred to repairLeafTable and repairTagPropagation at the end.
+// is a pure function of its own artifact; tag-propagation state, which
+// depends on the whole plink graph rather than any one artifact, is deferred
+// to repairTagPropagation at the end, and so are the leaf rechecks the
+// sweep's branch rows schedule (leaf.Pending, applied by repairOnTx).
 // Crosslink runs the sweep with no cancellation, supplying its own background
 // context. It is the historical entry point; callers that can be interrupted
 // (a clone bounded by a deadline) should use CrosslinkContext instead.
@@ -305,10 +307,12 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 // CrosslinkAfterCascades is CrosslinkContext closing a session whose
 // phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) linked
 // cascaded artifacts between its rounds. A cascade links each artifact's own
-// rows only; the leaf and tag-propagation repair depends on the whole plink
-// graph, so it runs here, once, when the sweep or the cascades linked anything
-// (draft-fossil-repo-state-01 Section 7.3: every scheduled leaf recheck is
-// applied before the leaf table is read). Without the count, a session whose
+// rows, and applies the leaf rechecks its own branch rows schedule, before it
+// commits; tag propagation depends on the whole plink graph, so it runs here,
+// once, when the sweep or the cascades linked anything, and the rechecks its
+// branch rows schedule are applied with it (draft-fossil-repo-state-01
+// Section 7.3: every scheduled leaf recheck is applied before the leaf table
+// is read). Without the count, a session whose
 // cascades linked everything ended in a sweep that linked nothing and skipped
 // the repair, leaving a pulled check-in with no leaf row (issue #414). It
 // returns what the sweep alone linked.
@@ -331,11 +335,12 @@ func CrosslinkAfterCascades(ctx context.Context, r *repo.Repo, cascaded int) (in
 // within the caller's transaction: candidate discovery, linking and the leaf and
 // tag repair all run on tx, so a rebuild that fails partway rolls back to the
 // derived state it started from, as fossil's rebuild_db does in its one
-// transaction. It links exactly what Crosslink would: a check-in whose file
-// content or parent is absent is linked against phantoms, and a delta manifest
-// whose baseline is absent is refused and filed under its baseline in orphan,
-// as `fossil rebuild` does (src/manifest.c fetch_baseline; see
-// missingBaseline).
+// transaction. The leaf table is the batch's own schedule applied once, which
+// is Section 7.3's single-batch result. It links
+// exactly what Crosslink would: a check-in whose file content or parent is
+// absent is linked against phantoms, and a delta manifest whose baseline is
+// absent is refused and filed under its baseline in orphan, as
+// `fossil rebuild` does (src/manifest.c fetch_baseline; see missingBaseline).
 func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if tx == nil {
 		panic("manifest.CrosslinkRebuild: tx must not be nil")
@@ -354,7 +359,13 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if st.linked == 0 {
 		return 0, nil
 	}
-	if err := repairOnTx(tx); err != nil {
+	if err := repairPlinkAndTags(tx, st.leaves); err != nil {
+		return st.linked, fmt.Errorf("manifest.CrosslinkRebuild: %w", err)
+	}
+	// The batch's own schedule, not leaf.Rebuild: it is the single-batch
+	// result Section 7.3 defines, and it reaches a check-in whose inherited
+	// branch row a cancel deleted, which a scan of surviving rows cannot.
+	if err := st.leaves.Apply(tx); err != nil {
 		return st.linked, fmt.Errorf("manifest.CrosslinkRebuild: %w", err)
 	}
 	return st.linked, nil
@@ -394,12 +405,27 @@ func prepareCrosslinkTables(q db.Querier) error {
 }
 
 // repairCrosslinkState runs the single order-sensitive repair gate after every
-// derivation that the caller owns has committed.
-func repairCrosslinkState(r *repo.Repo, linked int, sweepErr error) (int, error) {
+// derivation that the caller owns has committed. leaves is the batch's leaf
+// schedule: cleared once the gate commits, and returned to its extent before
+// the gate when the gate rolls back, so a retry neither loses a recheck nor
+// keeps one only the rolled-back propagation scheduled.
+func repairCrosslinkState(
+	r *repo.Repo, leaves *leaf.Pending, linked int, sweepErr error,
+) (int, error) {
+	if leaves == nil {
+		panic("manifest.repairCrosslinkState: leaves must not be nil")
+	}
 	if linked == 0 {
 		return linked, sweepErr
 	}
-	if err := r.WithTx(repairOnTx); err != nil {
+	mark := leaves.Mark()
+	err := r.WithTx(func(tx *db.Tx) error { return repairOnTx(tx, leaves) })
+	if err == nil {
+		leaves.Reset()
+	} else {
+		leaves.Rollback(mark)
+	}
+	if err != nil {
 		if sweepErr != nil {
 			return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
 		}
@@ -408,19 +434,34 @@ func repairCrosslinkState(r *repo.Repo, linked int, sweepErr error) (int, error)
 	return linked, sweepErr
 }
 
-// repairOnTx is the repair gate itself: the leaf and tag-propagation state that
-// depends on the whole plink graph rather than on any one artifact.
-func repairOnTx(tx *db.Tx) error {
+// repairOnTx is the repair gate itself: the tag-propagation state that depends
+// on the whole plink graph rather than on any one artifact, then the batch's
+// scheduled leaf rechecks (draft-fossil-repo-state-01 Section 7.3, batch
+// application). Only the check-ins a branch write scheduled are checked, so a
+// check-in no branch write reached keeps the verdict an earlier batch gave it
+// (issue #426), and the work is bounded by the batch, not the repository.
+func repairOnTx(tx *db.Tx, leaves *leaf.Pending) error {
+	if err := repairPlinkAndTags(tx, leaves); err != nil {
+		return err
+	}
+	return leaves.Apply(tx)
+}
+
+// repairPlinkAndTags reparents and propagates, scheduling on leaves the
+// rechecks the propagation's branch writes call for.
+func repairPlinkAndTags(tx *db.Tx, leaves *leaf.Pending) error {
+	if leaves == nil {
+		panic("manifest.repairPlinkAndTags: leaves must not be nil")
+	}
 	// Reparent first, as fossil's manifest_crosslink_end does before it
 	// propagates tags: the parent tag rewrites plink, and both the
-	// propagation walk and the leaf recompute below must see the new edges.
+	// propagation walk and the leaf checks after it must see the new edges.
+	// Like fossil's manifest_reparent_checkin, rewriting plink schedules no
+	// recheck of its own.
 	if err := ReparentCheckins(tx); err != nil {
 		return err
 	}
-	if err := repairTagPropagation(tx); err != nil {
-		return err
-	}
-	return repairLeafTable(tx)
+	return repairTagPropagation(tx, leaves)
 }
 
 // candidateQuerySQL selects every blob that still owes the sweep an
@@ -503,6 +544,9 @@ type linkState struct {
 	cache  *content.Cache
 	guard  *checkinDeferralGuard
 	linked int
+	// leaves is the batch's leaf-recheck schedule, applied by the repair
+	// gate. A ReceiveLinker's batch is everything it links until Finalize.
+	leaves *leaf.Pending
 }
 
 func newLinkState(cacheBytes int64) *linkState {
@@ -510,8 +554,9 @@ func newLinkState(cacheBytes int64) *linkState {
 		panic("manifest.newLinkState: cacheBytes must be > 0")
 	}
 	return &linkState{
-		cache: content.NewCache(cacheBytes),
-		guard: newCheckinDeferralGuard(),
+		cache:  content.NewCache(cacheBytes),
+		guard:  newCheckinDeferralGuard(),
+		leaves: leaf.NewPending(),
 	}
 }
 
@@ -534,9 +579,11 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 		if end > len(candidates) {
 			end = len(candidates)
 		}
+		mark := st.leaves.Mark()
 		if err := r.WithTx(func(tx *db.Tx) error {
 			return linkBatch(ctx, tx, candidates[start:end], st)
 		}); err != nil {
+			st.leaves.Rollback(mark)
 			return st.linked - startLinked, err
 		}
 	}
@@ -598,7 +645,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 				continue
 			}
 		}
-		handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)
+		handled, linkErr := linkArtifact(tx, c.rid, d, st.cache, st.leaves)
 		if linkErr != nil {
 			return fmt.Errorf("manifest.Crosslink rid=%d type=%d: %w", c.rid, d.Type, linkErr)
 		}
@@ -691,17 +738,24 @@ func technoteTagsSelf(d *deck.Deck) bool {
 
 // linkArtifact writes the derived rows for one parsed artifact on tx. handled
 // is false for artifact types the sweep does not link (so the caller does not
-// count them), matching the old switch's `default: continue`.
-func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) (handled bool, err error) {
+// count them), matching the old switch's `default: continue`. leaves receives
+// the leaf rechecks the artifact's branch tags schedule; the caller applies
+// them when its batch ends.
+func linkArtifact(
+	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache, leaves *leaf.Pending,
+) (handled bool, err error) {
+	if leaves == nil {
+		panic("manifest.linkArtifact: leaves must not be nil")
+	}
 	switch d.Type {
 	case deck.Checkin:
-		return true, crosslinkCheckin(tx, rid, d, cache)
+		return true, crosslinkCheckin(tx, rid, d, cache, leaves)
 	case deck.Wiki:
 		return true, crosslinkWiki(tx, rid, d)
 	case deck.Ticket:
 		return true, crosslinkTicket(tx, rid, d, cache)
 	case deck.Event:
-		return true, crosslinkEvent(tx, rid, d)
+		return true, crosslinkEvent(tx, rid, d, leaves)
 	case deck.Attachment:
 		return true, crosslinkAttachment(tx, rid, d)
 	case deck.Cluster:
@@ -709,7 +763,7 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 	case deck.ForumPost:
 		return true, crosslinkForum(tx, rid, d)
 	case deck.Control:
-		return true, crosslinkControl(tx, rid, d)
+		return true, crosslinkControl(tx, rid, d, leaves)
 	}
 	return false, nil
 }
@@ -990,7 +1044,11 @@ func sampledList(items []string, total int) string {
 // checkin was linked, which depended on ancestors being crosslinked before
 // their descendants -- true for an ascending-rid sweep, false for delta-chain
 // order (see applyInlineTags and addFWTPlink).
-func repairTagPropagation(q db.Querier) error {
+//
+// Re-propagating from a parent whose children already hold its rows writes
+// nothing (the strict mtime test above), so only a real change to a branch
+// row schedules a leaf recheck on leaves.
+func repairTagPropagation(q db.Querier, leaves *leaf.Pending) error {
 	if q == nil {
 		panic("manifest.repairTagPropagation: q must not be nil")
 	}
@@ -1014,7 +1072,7 @@ func repairTagPropagation(q db.Querier) error {
 	}
 
 	for _, pid := range parents {
-		if err := tag.PropagateAll(q, pid); err != nil {
+		if err := tag.PropagateAllLeaves(q, pid, leaves); err != nil {
 			return fmt.Errorf("repairTagPropagation propagate rid=%d: %w", pid, err)
 		}
 	}
@@ -1161,7 +1219,9 @@ func recordBaselineGap(tx *db.Tx, rid libfossil.FslID, baseline string) error {
 // phantom-fill cascade; insertCheckinMlinks uses it to expand the parent
 // manifest at most once per parent across the run. A nil cache is legal and
 // expands every parent from scratch, but no caller passes one.
-func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
+func crosslinkCheckin(
+	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache, leaves *leaf.Pending,
+) error {
 	if tx == nil {
 		panic("crosslinkCheckin: tx must not be nil")
 	}
@@ -1178,11 +1238,13 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conte
 	if _, err := tx.Exec("DELETE FROM orphan WHERE rid=?", rid); err != nil {
 		return fmt.Errorf("orphan: %w", err)
 	}
-	return applyInlineTags(tx, rid, d)
+	return applyInlineTags(tx, rid, d, leaves)
 }
 
 // crosslinkCheckinTables populates event/plink/mlink/cherrypick on tx. leaf is
-// deliberately not touched here -- see repairLeafTable. tx is the whole
+// deliberately not touched here: adding a plink row schedules no recheck
+// (draft-fossil-repo-state-01 Section 7.3); only a branch row does, through
+// applyInlineTags and the repair gate's propagation. tx is the whole
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
@@ -1374,7 +1436,7 @@ func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 // order. repairTagPropagation now does this once, for every self-declared
 // tag origin, after the whole sweep's plink edges are in place; see there
 // for why running it once per origin in any order still converges.
-func applyInlineTags(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+func applyInlineTags(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, leaves *leaf.Pending) error {
 	mtime := libfossil.TimeToJulian(d.D)
 	for _, tc := range d.T {
 		targetRID := rid
@@ -1410,6 +1472,7 @@ func applyInlineTags(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 			TagType:   tagType,
 			Value:     tc.Value,
 			MTime:     mtime,
+			Leaves:    leaves,
 		}); err != nil {
 			return fmt.Errorf("inline tag %q: %w", tc.Name, err)
 		}
@@ -1418,7 +1481,7 @@ func applyInlineTags(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	return nil
 }
 
-func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck) error {
+func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck, leaves *leaf.Pending) error {
 	if tx == nil {
 		panic("crosslinkControl: tx must not be nil")
 	}
@@ -1456,6 +1519,7 @@ func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck) error {
 			TagType:   tagType,
 			Value:     tc.Value,
 			MTime:     mtime,
+			Leaves:    leaves,
 		}); err != nil {
 			return fmt.Errorf("apply tag %q to rid=%d: %w", tc.Name, targetRID, err)
 		}
@@ -1710,7 +1774,7 @@ func crosslinkTicket(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conten
 	return nil
 }
 
-func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, leaves *leaf.Pending) error {
 	if tx == nil {
 		panic("crosslinkEvent: tx must not be nil")
 	}
@@ -1729,7 +1793,7 @@ func crosslinkEvent(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	// (src/manifest.c, CFTYPE_CONTROL || CFTYPE_MANIFEST || CFTYPE_EVENT). This
 	// has to happen before the event row is written below, because that row
 	// reads the technote's own bgcolor tag back out of tagxref.
-	if err := applyInlineTags(tx, rid, d); err != nil {
+	if err := applyInlineTags(tx, rid, d, leaves); err != nil {
 		return fmt.Errorf("event tags: %w", err)
 	}
 

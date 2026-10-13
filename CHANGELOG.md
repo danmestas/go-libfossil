@@ -128,10 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SP-9.5-7 and SP-10.1-8 are new. The §7.3 and §8.3 cases that were marked
   as deviations, because go-libfossil already followed fossil, now pass as
   written, and new cases cover arrival order for a date tag, an untagged
-  chain, one-batch leaf derivation and a merge parent's recheck. One
-  non-conformance remains: the leaf table is recomputed per crosslink batch,
-  so a parent whose untagged child arrives in a later batch loses the verdict
-  §7.3 keeps (`repostate.7.3.recheck-untagged-child`, tracked in #426).
+  chain, one-batch leaf derivation and a merge parent's recheck.
 - A pull that receives a `uvfile` whose content does not match its hash now
   records the error, commits the cards before it and evaluates the continuation
   rules, as sync-protocol-01 Section 10.1 and fossil(1) do (SP-10.1-7), where it
@@ -210,6 +207,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The leaf table is maintained incrementally, as repo-state-01 §7.3
+  (RS-7.3-3) and fossil(1) do, instead of being recomputed at the end of
+  every crosslink batch. A check-in and its parents, merge parents
+  included, are rechecked only when a branch tag of any type is written to
+  it or tag propagation updates or deletes its branch row; crosslinking a
+  check-in, adding a plink edge or reparenting schedules nothing. The
+  rechecks run at the end of the batch: the closing repair of a sweep,
+  clone or sync session, the end of each phantom-fill cascade transaction,
+  and the end of a commit's or a tag's own transaction. A check-in
+  therefore keeps its verdict when an untagged child arrives in a later
+  batch (`repostate.7.3.recheck-untagged-child` passes and is no longer a
+  gap, tracked in #426), a commit onto a parent whose branch row is a
+  singleton leaves both verdicts as they were, and a branch tag added by a
+  tag control artifact now rechecks its target and parents, which it did
+  not before. A cancel or singleton that replaces a propagating branch row
+  rechecks the descendants that row reached, even in a sweep that has not
+  yet handed them the row, so `verify.Rebuild` and a sweep give the table
+  `fossil rebuild` gives (`repostate.7.3.cancel-propagation-recheck`).
+  `verify.Rebuild` applies the batch's own schedule, the single-batch result
+  §7.3 defines, and the corpus parity tests still match `fossil rebuild` row
+  for row. One departure from fossil, which follows the draft: a recheck also
+  covers the parents a check-in has when the schedule runs, not only those it
+  had when scheduled, so a tag applied before its target is linked, or a
+  reparent inside the batch, gives the same table in any link order. The
+  reparent case is split:
+  `repostate.4.2.reparent` loads in one batch, and the new
+  `repostate.7.3.reparent-no-recheck` loads per artifact, where the old
+  parent keeps its verdict, as in fossil's own crosslink.
 - A check-in that a sync linked through the phantom-fill cascade now gets its
   leaf row and propagated tags (#414). A pulled check-in arrives as an
   announced phantom filled the next round, so the cascade links it, and the

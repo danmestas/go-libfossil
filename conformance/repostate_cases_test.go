@@ -221,11 +221,13 @@ func crosslinkCases() []rsCase {
 			"foo c3 1 t2 c3 's' @9"),
 		ignoring: []string{"+tagxref: foo c4 2 0 c1 'v' @8"},
 		rebuild:  true,
-	}, reparentCase(), reparentFirstCase()}
+	}, reparentCase(), reparentEachCase(), reparentFirstCase()}
 }
 
 // reparentCase moves c3 from c2 to c1 with a parent tag, which leaves c2
-// without a child, so a leaf.
+// without a child. Crosslinked in one batch, c2's own inherited branch row
+// schedules its recheck, which runs after the reparent, so c2 is a leaf. Per
+// artifact, see reparentEachCase.
 func reparentCase() rsCase {
 	return rsCase{
 		Case:   Case{ID: "repostate.4.2.reparent", Req: "RS-4.2-8"},
@@ -235,12 +237,26 @@ func reparentCase() rsCase {
 		want: join(rows("plink", "c1>c2 1 @2 -", "c1>c3 1 @3 -", "c3>c4 1 @4 -"),
 			rows("leaf", "c2", "c4"), rows("tagxref", "parent c3 1 t c3 '{c1}' @9")),
 		ignoring: []string{"-plink: c1>c3 1 @3 -", "+plink: c2>c3 1 @3 -", "-leaf: c2"},
+		batch:    true,
 		rebuild:  true,
-		// fossil's per-artifact crosslink rewrites plink but does not
-		// recheck c2, the old parent; its rebuild does, as Section 7.3
-		// requires.
-		incremental: "fossil's per-artifact crosslink leaves c2, the old parent, out of leaf",
+		incremental: "fossil's per-artifact crosslink links t in a later transaction than " +
+			"c3, so nothing rechecks c2 (reparent-no-recheck); fossil rebuild links them " +
+			"in one, as the case does",
 	}
+}
+
+// reparentEachCase is reparentCase one artifact at a time. The parent tag
+// arrives last, in a batch of its own: it is no branch tag, and rewriting
+// c3's plink row schedules no recheck (Section 7.3), so c2 keeps the verdict
+// it had while c3 was its child.
+func reparentEachCase() rsCase {
+	c := reparentCase()
+	c.ID, c.Req = "repostate.7.3.reparent-no-recheck", "RS-7.3-3"
+	c.want = join(rows("plink", "c1>c2 1 @2 -", "c1>c3 1 @3 -", "c3>c4 1 @4 -"),
+		rows("leaf", "c4"), rows("tagxref", "parent c3 1 t c3 '{c1}' @9"))
+	c.ignoring = []string{"+leaf: c2"}
+	c.each, c.batch, c.rebuild, c.incremental = true, false, false, ""
+	return c
 }
 
 // reparentFirstCase is reparentCase with the parent tag arriving before c3,
@@ -250,6 +266,9 @@ func reparentFirstCase() rsCase {
 	c := reparentCase()
 	c.ID = "repostate.4.2.reparent-before-target"
 	c.arts = with(chain()[:2], control("t", 9, "+parent {c3} {c1}"), chain()[2], chain()[3])
+	// Per artifact too: c2's verdict is settled before c3 links to it, and
+	// the reparent at the end of c3's batch removes that link again.
+	c.batch = false
 	// Section 4.2 re-applies a reparent at the end of the batch that
 	// recorded it. fossil's test-crosslink links each artifact on its own,
 	// so t and c3 never share a batch there; its rebuild links them in one.

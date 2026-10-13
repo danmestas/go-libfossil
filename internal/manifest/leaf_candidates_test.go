@@ -6,12 +6,13 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 )
 
-// TestRepairLeafTableOnlyHoldsCheckins pins Section 7.1: a leaf is a check-in.
+// TestLeafRebuildOnlyHoldsCheckins pins Section 7.1: a leaf is a check-in.
 // fossil writes plink rows for forum posts and wiki edits that carry a P-card,
 // so a candidate set drawn from plink children alone puts them in the table.
-func TestRepairLeafTableOnlyHoldsCheckins(t *testing.T) {
+func TestLeafRebuildOnlyHoldsCheckins(t *testing.T) {
 	r := setupTestRepo(t)
 	base := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	c1 := storeCheckin(t, r, "c1", "trunk", base)
@@ -38,8 +39,8 @@ func TestRepairLeafTableOnlyHoldsCheckins(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repairLeafTable(r.DB()); err != nil {
-		t.Fatalf("repairLeafTable: %v", err)
+	if err := leaf.Rebuild(r.DB()); err != nil {
+		t.Fatalf("leaf.Rebuild: %v", err)
 	}
 	var n int
 	if err := r.DB().QueryRow("SELECT count(*) FROM leaf JOIN event ON objid=rid " +
@@ -54,7 +55,7 @@ func TestRepairLeafTableOnlyHoldsCheckins(t *testing.T) {
 
 // TestLeafUntaggedChildUsesMainBranch pins Section 6.1: with main-branch set,
 // a check-in with no branch tag is on that branch, so it joins its parent
-// there and the parent is no leaf, by the table recompute and by leafCheck.
+// there and the parent is no leaf, by leaf.Rebuild and by leaf.Check.
 func TestLeafUntaggedChildUsesMainBranch(t *testing.T) {
 	r := setupTestRepo(t)
 	if err := r.SetConfig("main-branch", "main"); err != nil {
@@ -69,10 +70,10 @@ func TestLeafUntaggedChildUsesMainBranch(t *testing.T) {
 	// Propagation gave c2 the branch; drop it so c2 carries no active branch
 	// row, as a check-in with a non-propagating parent tag does.
 	if _, err := r.DB().Exec("DELETE FROM tagxref WHERE tagid=? AND rid=("+
-		"SELECT objid FROM event WHERE comment='c2')", branchTagID); err != nil {
+		"SELECT objid FROM event WHERE comment='c2')", leaf.BranchTagID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repairLeafTable(r.DB()); err != nil {
+	if err := leaf.Rebuild(r.DB()); err != nil {
 		t.Fatal(err)
 	}
 	// c2 is never rechecked (it has no tag, as in fossil), so only c1's
@@ -86,10 +87,10 @@ func TestLeafUntaggedChildUsesMainBranch(t *testing.T) {
 	if _, err := r.DB().Exec("INSERT OR IGNORE INTO leaf(rid) VALUES(?)", rid); err != nil {
 		t.Fatal(err)
 	}
-	if err := leafCheck(r.DB(), libfossil.FslID(rid)); err != nil {
+	if err := leaf.Check(r.DB(), libfossil.FslID(rid)); err != nil {
 		t.Fatal(err)
 	}
-	assertLeaves(t, r, "after leafCheck", nil)
+	assertLeaves(t, r, "after leaf.Check", nil)
 }
 
 // TestInitialCheckinStartsMainBranch pins Section 6.1: the initial check-in

@@ -5,11 +5,7 @@ import "testing"
 // repostateGaps marks the repository-state cases go-libfossil is known to
 // fail, by case ID, grouped by the code at fault, each with the issue
 // tracking its fix.
-var repostateGaps = map[string]string{
-	// internal/manifest: the leaf table is recomputed per crosslink batch, so
-	// a later batch revisits a verdict Section 7.3 keeps.
-	"repostate.7.3.recheck-untagged-child": "#426",
-}
+var repostateGaps = map[string]string{}
 
 // repostateDeviations marks the cases where go-libfossil follows fossil(1)
 // rather than the draft text, by case ID.

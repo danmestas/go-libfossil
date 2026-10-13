@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/simio"
 )
@@ -118,9 +119,14 @@ func relinkDerived(t *testing.T, path string) {
 }
 
 // TestReparent is the issue #286 regression. A singleton parent tag moves c3
-// off c2 and onto c1: its plink and mlink are rewritten, and c2, left without
-// a child, becomes a leaf. The rewrite must be idempotent across a second
-// crosslink of the same artifacts.
+// off c2 and onto c1: its plink and mlink are rewritten. The rewrite must be
+// idempotent across a second crosslink of the same artifacts.
+//
+// c2, left without a child, keeps the verdict it had: the parent tag is no
+// branch tag and rewriting plink schedules no leaf recheck
+// (draft-fossil-repo-state-01 Section 7.3), as in fossil's own crosslink of a
+// parent tag. An explicit full rebuild, which is the single-batch result,
+// makes it a leaf.
 func TestReparent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "reparent.fossil")
 	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
@@ -164,27 +170,32 @@ func TestReparent(t *testing.T) {
 		t.Fatalf("repo.Close: %v", err)
 	}
 
-	assertAfter := func(stage string) {
+	assertAfter := func(stage string, rebuild bool, wantLeaves ...string) {
 		rr, err := repo.Open(path)
 		if err != nil {
 			t.Fatalf("repo.Open: %v", err)
 		}
 		defer rr.Close()
+		if rebuild {
+			if err := leaf.Rebuild(rr.DB()); err != nil {
+				t.Fatalf("leaf.Rebuild: %v", err)
+			}
+		}
 		if got := plinkParents(t, rr.DB(), c3); len(got) != 1 || got[0] != u1 {
 			t.Errorf("%s: plink parents of c3 = %v, want [%s] (c1)", stage, got, u1)
 		}
-		want := []string{u2, u3}
-		sort.Strings(want)
-		if got := leafUUIDs(t, rr.DB()); strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("%s: leaves = %v, want %v (old parent c2 and tip c3)", stage, got, want)
+		sort.Strings(wantLeaves)
+		if got := leafUUIDs(t, rr.DB()); strings.Join(got, ",") != strings.Join(wantLeaves, ",") {
+			t.Errorf("%s: leaves = %v, want %v", stage, got, wantLeaves)
 		}
 		if got := mlinkPrimaryParent(t, rr.DB(), c3); got != int64(c1) {
 			t.Errorf("%s: c3 primary mlink pmid = %d, want %d (c1)", stage, got, c1)
 		}
 	}
-	assertAfter("after reparent")
+	assertAfter("after reparent", false, u3)
 	relinkDerived(t, path)
-	assertAfter("after relink (idempotent)")
+	assertAfter("after relink (idempotent)", false, u3)
+	assertAfter("after leaf.Rebuild", true, u2, u3)
 }
 
 // TestReparentPhantomTarget covers a parent tag that names a parent not yet in

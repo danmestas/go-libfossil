@@ -76,6 +76,12 @@ func leafCases() []rsCase {
 		leaves("repostate.7.6.propagated-branch", "RS-7.6-2", retagged,
 			[]string{"c2", "c4", "m"}, "-leaf: c4"),
 		cancelled,
+		// c1's cancel deletes the trunk row c2..c4 inherited, which schedules
+		// each of them: c4, with no child, becomes a leaf however the
+		// artifacts load.
+		leaves("repostate.7.3.cancel-propagation-recheck", "RS-7.3-3",
+			with(chain(), control("t", 9, "-branch {c1}")), []string{"c4"},
+			"-leaf: c4"),
 		pulledChild(), pulledRetag(),
 	}, untaggedLeafCases()...)
 }

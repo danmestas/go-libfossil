@@ -13,6 +13,7 @@ import (
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // TestCloneRealFossilFullContent is the direct regression test for issue #152:
@@ -34,10 +35,7 @@ import (
 // the empty delta table -- so the test exercises the full-content cfile path
 // specifically, not the delta-cfile path.
 func TestCloneRealFossilFullContent(t *testing.T) {
-	bin, err := exec.LookPath("fossil")
-	if err != nil {
-		t.Skip("no fossil binary on PATH")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	dir := t.TempDir()
 	srcRepo, err := repo.Create(filepath.Join(dir, "source.fossil"), "testuser", simio.CryptoRand{}, "")

@@ -148,13 +148,7 @@ func TestFossilBinaryReadsCrosslinkedRepo(t *testing.T) {
 // commit inherits its tag from the primary parent rather than the merged-in
 // one.
 func TestFossilBinaryReadsCrosslinkedRepoBranchAndMerge(t *testing.T) {
-	bin, err := exec.LookPath("fossil")
-	if err != nil {
-		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
-			t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH: %v", err)
-		}
-		t.Skip("fossil binary not on PATH; cannot verify canonical readability")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	path := filepath.Join(t.TempDir(), "branchmerge.fossil")
 	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")
@@ -361,13 +355,7 @@ func branchAndMergeHistory(t *testing.T, r *repo.Repo) libfossil.FslID {
 // still succeed, recreating the table the way canonical would if a forum
 // artifact showed up.
 func TestCrosslinkAfterFossilRebuild(t *testing.T) {
-	bin, err := exec.LookPath("fossil")
-	if err != nil {
-		if os.Getenv("REQUIRE_FOSSIL_BIN") == "1" {
-			t.Fatalf("REQUIRE_FOSSIL_BIN=1 but no fossil binary on PATH: %v", err)
-		}
-		t.Skip("fossil binary not on PATH; cannot verify against canonical rebuild")
-	}
+	bin := testutil.RequireFossilBin(t)
 
 	path := filepath.Join(t.TempDir(), "rebuilt.fossil")
 	r, err := repo.Create(path, "testuser", simio.CryptoRand{}, "")

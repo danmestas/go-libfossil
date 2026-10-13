@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a check-in reads the three values back from `tagxref`, so a tag that reached
   the check-in while it was a phantom takes effect.
 
+- Tests that run the fossil binary no longer write into the developer's
+  global fossil config (`~/.fossil` or `~/.config/fossil.db`) (#284). Each
+  `fossil new`, `open`, `clone` and `serve` on a temporary repository left a
+  `repo:` or `ckout:` row there that was never removed, and parallel package
+  runs contended for that file's lock. `testutil.RequireFossilBin` now points
+  `HOME`, `FOSSIL_HOME` and `XDG_CONFIG_HOME` at a per-test directory through
+  the new `testutil.IsolateFossilHome`, and the tests that resolved fossil
+  with `exec.LookPath` use it. `TestFossilInvocationsIsolateHome` fails when a
+  Go file runs `exec.Command` without one of these.
+
 - `Checkout.WouldFork` again reports a fork when the checkout's version
   already has a child on its own branch (#347), as after a pull brings in a
   child of the checked-out version. Since #291 it was fossil's leaf-ambiguity

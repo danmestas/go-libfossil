@@ -18,7 +18,7 @@ func (h *handler) handlePragmaUVHash(clientHash string) error {
 	if h.uvCatalogSent {
 		return nil
 	}
-	if !auth.CanRead(h.caps) {
+	if !h.canRead() {
 		h.uvCatalogSent = true
 		return nil
 	}
@@ -45,10 +45,9 @@ func (h *handler) handlePragmaUVHash(clientHash string) error {
 
 // sendCloneUVCatalog sends the unversioned catalog with a clone when the
 // repository's uv-sync setting is on, headed by uv-pull-only, as page_xfer's
-// clone branch does (§8.4). fossil lets Clone imply Read here; this server
-// sends the catalog to a requester with Read itself, as it does for uv-hash.
+// clone branch does (§8.4), to a requester with Read, which Clone implies.
 func (h *handler) sendCloneUVCatalog() error {
-	if h.uvCatalogSent || !auth.CanRead(h.caps) {
+	if h.uvCatalogSent || !h.canRead() {
 		return nil
 	}
 	var setting string
@@ -101,7 +100,7 @@ func (h *handler) handleUVIGot(c *xfer.UVIGotCard) error {
 	}
 	// Fossil's server ignores uvigot; this one answers it, so it holds the
 	// answer to the same rule as uvgimme: nothing for a requester without Read.
-	if !auth.CanRead(h.caps) {
+	if !h.canRead() {
 		return nil
 	}
 	if err := uv.EnsureSchema(h.repo.DB()); err != nil {
@@ -144,7 +143,7 @@ func (h *handler) handleUVGimme(c *xfer.UVGimmeCard) error {
 	// Fossil 2.28 sends any uvgimme'd file to any requester. Its own client
 	// asks only for files named in a uv-hash catalog, which needs Read, so
 	// requiring Read here costs no interop and closes the direct read.
-	if !auth.CanRead(h.caps) {
+	if !h.canRead() {
 		return nil
 	}
 	if h.buggify != nil && h.buggify.Check("handler.handleUVGimme.skip", 0.05) {

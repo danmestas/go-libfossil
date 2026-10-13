@@ -133,15 +133,16 @@ var configTables = []configTable{
 
 // configRequestMask returns the groups a reqconfig NAME may read for a
 // requester holding caps, or 0 when it reads nothing. Like fossil, it needs
-// Read and a "/"-prefixed group name; it matches the first group the name
+// Read (read, as the handler's canRead decides it) and a "/"-prefixed group
+// name; it matches the first group the name
 // prefixes; and it withholds the user and subscriber tables without Admin
 // and concealed addresses without RdAddr.
 //
 // fossil grants Admin to any principal holding a or s. Here it counts only
 // for a verified login, so password hashes and subscriber addresses never go
 // to an anonymous requester, whatever capabilities nobody has been given.
-func configRequestMask(name, caps string, authed bool) int {
-	if !auth.CanRead(caps) || !strings.HasPrefix(name, "/") {
+func configRequestMask(name, caps string, read, authed bool) int {
+	if !read || !strings.HasPrefix(name, "/") {
 		return 0
 	}
 	mask := 0

@@ -276,13 +276,54 @@ func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
 //
 // No match returns ErrVersionNotFound (wrapped); a hex prefix matching more
 // than one artifact returns ErrAmbiguousVersion (wrapped).
+//
+// The names relative to an open checkout ("current", "prev", "next") are
+// ordinary names here, as in fossil outside a checkout; Checkout's
+// ResolveVersion resolves them.
 func (r *Repo) ResolveVersion(name string) (int64, error) {
+	return resolveVersion(r.inner.DB(), name, 0, false)
+}
+
+// ResolveBranchStart resolves name as ResolveVersion does, then returns the
+// first check-in of the branch the result is on: fossil's branch-type ("br")
+// request (repo-state-01 Section 8.3), the start of the branch rather than
+// the check-in its name most recently points at. As Section 8.3 requires, the
+// request is rewritten to a check-in request first: only check-ins can match,
+// so a technote tagged with the branch name does not shadow the branch.
+//
+// Section 8.3 walks back from the result of every form. fossil(1) walks only
+// from a "tag:NAME" or plain-name result (symbolic_name_to_rid, src/name.c),
+// so there a hash, "tip" or a date names the check-in itself; this follows
+// the draft.
+func (r *Repo) ResolveBranchStart(name string) (int64, error) {
+	h := r.inner.DB()
+	rid, err := resolveVersion(h, name, 0, true)
+	if err != nil {
+		return 0, err
+	}
+	first, err := startOfBranch(h, rid, branchFirst)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: resolve branch start %q: %w", name, err)
+	}
+	return first, nil
+}
+
+// resolveVersion is ResolveVersion with the open checkout's version, ckout,
+// or 0 when no checkout is open. ciOnly restricts every lookup to check-ins,
+// as fossil's "ci" request type does (src/name.c).
+func resolveVersion(h *db.DB, name string, ckout int64, ciOnly bool) (int64, error) {
+	if h == nil {
+		panic("libfossil: resolveVersion: nil db")
+	}
+	if ckout < 0 {
+		panic("libfossil: resolveVersion: negative checkout rid")
+	}
 	// go-libfossil's contract treats "" as "tip"; fossil treats an empty
 	// name as unresolvable.
 	if name == "" {
 		name = "tip"
 	}
-	rid, err := r.resolveSymbolic(name)
+	rid, err := resolver{h: h, ckout: ckout, ciOnly: ciOnly}.resolve(name)
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
 	}
@@ -299,11 +340,22 @@ const (
 	branchMergeIn = 2 // merge-in: the most recent merge-in for the branch
 )
 
-// resolveSymbolic is ResolveVersion's engine: fossil's symbolic_name_to_rid,
-// as an ordered sequence of attempts. It returns 0 when nothing matches and
-// ErrAmbiguousVersion when a hex prefix matches more than one artifact.
-func (r *Repo) resolveSymbolic(name string) (int64, error) {
-	h := r.inner.DB()
+// resolver is fossil's symbolic_name_to_rid for one request. ckout is the
+// open checkout's version, 0 when none is open; it is carried into the
+// recursive forms, as fossil's global checkout is.
+type resolver struct {
+	h     *db.DB
+	ckout int64
+	// ciOnly is fossil's "ci" request type: only check-ins can match, so a
+	// technote or wiki page carrying the same sym- tag is never the answer.
+	ciOnly bool
+}
+
+// resolve is ResolveVersion's engine, as an ordered sequence of attempts.
+// It returns 0 when nothing matches and ErrAmbiguousVersion when a hex
+// prefix matches more than one artifact.
+func (rv resolver) resolve(name string) (int64, error) {
+	h := rv.h
 
 	if name == "tip" {
 		// fossil's "tip" is the newest check-in, but when there is none it
@@ -314,36 +366,86 @@ func (r *Repo) resolveSymbolic(name string) (int64, error) {
 			return rid, err
 		}
 	}
+	if rid, err := rv.checkoutRelative(name); err != nil || rid != 0 {
+		return rid, err
+	}
 	if rest, ok := strings.CutPrefix(name, "rid:"); ok {
-		return ridLiteral(h, rest)
+		return ridLiteral(h, rest, rv.ciOnly)
 	}
 	if rest, ok := strings.CutPrefix(name, "tag:"); ok {
-		return newestWithSymTag(h, rest)
+		return newestWithSymTag(h, rest, rv.ciOnly)
 	}
 	if rest, ok := strings.CutPrefix(name, "root:"); ok {
-		return r.startOfBranchBy(rest, branchOrigin)
+		return rv.startOfBranchBy(rest, branchOrigin)
 	}
 	if rest, ok := strings.CutPrefix(name, "start:"); ok {
-		return r.startOfBranchBy(rest, branchFirst)
+		return rv.startOfBranchBy(rest, branchFirst)
 	}
 	if rest, ok := strings.CutPrefix(name, "merge-in:"); ok {
-		return r.startOfBranchBy(rest, branchMergeIn)
+		return rv.startOfBranchBy(rest, branchMergeIn)
 	}
 	if base, julian, ok := splitNameTimestamp(name); ok {
-		return newestSymTagBefore(h, base, julian)
+		return newestSymTagBefore(h, base, julian, rv.ciOnly)
 	}
 	// A hash prefix is tried before a plain tag, as fossil does; a hex string
 	// that matches no artifact falls through to the tag lookup.
-	if rid, matched, err := hashPrefix(h, name); err != nil || matched {
+	if rid, matched, err := hashPrefix(h, name, rv.ciOnly); err != nil || matched {
 		return rid, err
 	}
-	if rid, err := newestWithSymTag(h, name); err != nil || rid != 0 {
+	if rid, err := newestWithSymTag(h, name, rv.ciOnly); err != nil || rid != 0 {
 		return rid, err
 	}
 	if trimmed, ok := trimTrailingPunct(name); ok {
-		return r.resolveSymbolic(trimmed)
+		return rv.resolve(trimmed)
 	}
 	return 0, nil
+}
+
+// checkoutRelative resolves fossil's checkout keywords (src/name.c):
+// "current", "prev"/"previous" and "next". It returns 0 when no checkout is
+// open, when name is no keyword, or when the keyword names nothing (prev at
+// a root, next at a leaf), so the name falls through to the other forms.
+func (rv resolver) checkoutRelative(name string) (int64, error) {
+	if rv.ckout == 0 {
+		return 0, nil
+	}
+	var query string
+	switch name {
+	case "current":
+		return rv.ckout, nil
+	case "prev", "previous":
+		query = "SELECT pid FROM plink WHERE cid = ? AND isprim"
+	case "next":
+		// fossil's order: a primary child first, then the newest link.
+		query = "SELECT cid FROM plink WHERE pid = ? ORDER BY isprim DESC, mtime DESC"
+	default:
+		return 0, nil
+	}
+	var rid int64
+	err := rv.h.QueryRow(query+" LIMIT 1", rv.ckout).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
+}
+
+// eventIsCheckin and blobIsCheckin are the SQL conditions of a check-in-only
+// request, as appended clauses; they are empty for an untyped one.
+func eventIsCheckin(ciOnly bool) string {
+	if !ciOnly {
+		return ""
+	}
+	return " AND event.type = 'ci'"
+}
+
+func blobIsCheckin(ciOnly bool) string {
+	if !ciOnly {
+		return ""
+	}
+	return " AND EXISTS(SELECT 1 FROM event WHERE event.objid = blob.rid AND event.type = 'ci')"
 }
 
 // newestCheckin is fossil's "tip": the newest check-in by event.mtime.
@@ -362,13 +464,13 @@ func newestCheckin(h *db.DB) (int64, error) {
 }
 
 // ridLiteral resolves "rid:N" to RID N when that artifact exists.
-func ridLiteral(h *db.DB, digits string) (int64, error) {
+func ridLiteral(h *db.DB, digits string, ciOnly bool) (int64, error) {
 	n, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil || n <= 0 {
 		return 0, nil
 	}
 	var rid int64
-	err = h.QueryRow("SELECT rid FROM blob WHERE rid = ?", n).Scan(&rid)
+	err = h.QueryRow("SELECT rid FROM blob WHERE rid = ?"+blobIsCheckin(ciOnly), n).Scan(&rid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -380,14 +482,14 @@ func ridLiteral(h *db.DB, digits string) (int64, error) {
 
 // newestWithSymTag is fossil's most_recent_event_with_tag: the check-in
 // carrying sym-<tag> with the greatest event.mtime, 0 when none does.
-func newestWithSymTag(h *db.DB, tag string) (int64, error) {
+func newestWithSymTag(h *db.DB, tag string, ciOnly bool) (int64, error) {
 	var rid int64
 	err := h.QueryRow(`
 		SELECT event.objid FROM tag
 		JOIN tagxref ON tagxref.tagid = tag.tagid
 		JOIN event ON event.objid = tagxref.rid
 		WHERE tag.tagname = ?
-		  AND tagxref.tagtype > 0
+		  AND tagxref.tagtype > 0`+eventIsCheckin(ciOnly)+`
 		ORDER BY event.mtime DESC LIMIT 1`,
 		"sym-"+tag).Scan(&rid)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -401,7 +503,7 @@ func newestWithSymTag(h *db.DB, tag string) (int64, error) {
 
 // newestSymTagBefore is the "NAME:TIMESTAMP" form: the check-in carrying
 // sym-<base> with the greatest event.mtime at or before julian.
-func newestSymTagBefore(h *db.DB, base string, julian float64) (int64, error) {
+func newestSymTagBefore(h *db.DB, base string, julian float64, ciOnly bool) (int64, error) {
 	var rid int64
 	err := h.QueryRow(`
 		SELECT event.objid FROM tag
@@ -409,7 +511,7 @@ func newestSymTagBefore(h *db.DB, base string, julian float64) (int64, error) {
 		JOIN event ON event.objid = tagxref.rid
 		WHERE tag.tagname = ?
 		  AND tagxref.tagtype > 0
-		  AND event.mtime <= ?
+		  AND event.mtime <= ?`+eventIsCheckin(ciOnly)+`
 		ORDER BY event.mtime DESC LIMIT 1`,
 		"sym-"+base, julian).Scan(&rid)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -423,12 +525,12 @@ func newestSymTagBefore(h *db.DB, base string, julian float64) (int64, error) {
 
 // startOfBranchBy resolves branch name BR recursively, then returns the point
 // in BR that mode selects (fossil's root:/start:/merge-in:).
-func (r *Repo) startOfBranchBy(name string, mode int) (int64, error) {
-	rid, err := r.resolveSymbolic(name)
+func (rv resolver) startOfBranchBy(name string, mode int) (int64, error) {
+	rid, err := rv.resolve(name)
 	if err != nil || rid <= 0 {
 		return rid, err
 	}
-	return startOfBranch(r.inner.DB(), rid, mode)
+	return startOfBranch(rv.h, rid, mode)
 }
 
 // startOfBranch is fossil's start_of_branch (src/name.c): walk rid's primary-
@@ -531,14 +633,15 @@ func youngestAncestorInBranch(h *db.DB, rid int64, branch string) (int64, error)
 // match returns its rid; more than one returns ErrAmbiguousVersion. A non-hex
 // name, or a hex prefix that matches nothing, returns matched=false so the
 // caller falls through to a tag lookup.
-func hashPrefix(h *db.DB, name string) (rid int64, matched bool, err error) {
+func hashPrefix(h *db.DB, name string, ciOnly bool) (rid int64, matched bool, err error) {
 	s := name
 	s = strings.TrimPrefix(s, "[")
 	s = strings.TrimSuffix(s, "]")
 	if len(s) < 4 || len(s) > 64 || !isHex(s) {
 		return 0, false, nil
 	}
-	rows, err := h.Query("SELECT rid FROM blob WHERE uuid GLOB ?", strings.ToLower(s)+"*")
+	rows, err := h.Query("SELECT rid FROM blob WHERE uuid GLOB ?"+blobIsCheckin(ciOnly),
+		strings.ToLower(s)+"*")
 	if err != nil {
 		return 0, false, err
 	}

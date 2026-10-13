@@ -83,7 +83,7 @@ RS-8.2-4	8.2	A name no form matches fails to resolve.
 RS-8.3-1	8.3	"rid:DIGITS" resolves to that rid.
 RS-8.3-2	8.3	"tag:NAME" resolves NAME by the plain-name rule without trying it as a hash.
 RS-8.3-3	8.3	"tip" resolves to the check-in with the greatest event.mtime.
-RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.	ckout is not checked: it resolves to a sentinel that names no artifact, which fossil's test-name-to-id cannot print
+RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.	the ckout sentinel is not checked: go-libfossil has no checkout-inclusive request (fossil's "ci+" type, whose answer is a pseudo-RID for the working files), so only an untyped request, which treats ckout as an ordinary name, is
 RS-8.3-5	8.3	"root:BR" resolves to the first primary ancestor of BR that is off BR's branch.
 RS-8.3-6	8.3	"start:BR" resolves to the earliest primary ancestor of BR still on BR's branch.
 RS-8.3-7	8.3	"merge-in:BR" resolves to the most recent merge-in point of BR from its parent branch.

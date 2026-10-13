@@ -223,7 +223,9 @@ func applyEventOverride(q db.Querier, opts ApplyOpts) error {
 	}
 	var value any
 	if opts.TagType != TagCancel {
-		value = opts.Value
+		// Empty maps to NULL so this agrees with the tagxref read-back
+		// crosslink does later.
+		value = nullableValue(opts.Value)
 	}
 	// col comes from the fixed map above, never from input.
 	stmt := "UPDATE event SET " + col + "=? WHERE objid=?"

@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and fossil's manifest_get does. The file set is the named delta's own F
   cards overlaid by this manifest's, one level, without following the named
   delta's B card. This reverses the refusal added for #275; -00 forbade it
-  and -01 reverses that, so the code follows -01 (#371).
+  and -01 reverses that, so the code follows -01. The named delta's delete
+  markers are dropped from the set, and the commit writer never emits a B
+  card naming a delta manifest (#371).
 
 - Tests that run `fossil server` no longer flake with "directory not empty"
   during temp-dir cleanup (#352). Fossil forks a child per connection, and

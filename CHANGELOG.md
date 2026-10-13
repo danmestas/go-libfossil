@@ -121,6 +121,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already holding the first. A session that fails after a round whose cascade
   linked check-ins runs the same repair before returning its error, as
   fossil's per-round manifest_crosslink_end does.
+- A received delta stored before its basis is now checked against its HASH
+  when the basis arrives later in the same pass: the same reply on the sync
+  client, the same request on the server, the same round of a clone
+  (sync-protocol-01 Section 7.7, SP-7.7-4). It was kept unverified, and the
+  mismatch surfaced only as a logged warning from the after-dephantomize
+  cascade and an expansion error wherever the artifact was later read. Each
+  receiver now remembers the deltas its pass stored dangling, and the store
+  that makes one's bytes available checks it in that store's transaction,
+  including a delta whose chain to that basis runs through a row an earlier
+  pass stored. The check applies each delta of a chain to its parent's
+  bytes, so a clone's chain of n deltas costs n applies, not n squared. A
+  mismatch returns the delta to what it was before the pass (removed if it
+  was new, a phantom again if it was one) and fails that card with the
+  wrong-hash error naming the delta: the client's sync and a clone fail, and
+  the server answers `wrong hash on received artifact: HASH`. The basis
+  stays stored. fossil's commit hook instead rolls the whole round back;
+  go-libfossil commits each card on its own, so it keeps the rest of the
+  round, as the server already does for a delta refused on receipt; the
+  suite records that difference as a deviation on
+  `sync.7.7.late-basis-aborts-pass` and
+  `sync.7.7.server-late-basis-aborts-request`. A card error that ends a client
+  reply early now still crosslinks the phantoms the reply filled. The
+  cases `sync.7.7.late-basis-wrong-hash`,
+  `sync.7.7.clone-late-basis-wrong-hash` and
+  `sync.7.7.server-late-basis-wrong-hash` now pass. Tracked in #412.
+- A received delta against a held basis whose bytes are not its name was
+  stored unchecked: the basis failed its own hash check, so the delta was
+  treated as having no basis. The basis is now reconstructed without that
+  check, as fossil's `content_get` does, and the delta's result checked
+  against its HASH (Section 7.7 hashes the reconstructed artifact, not its
+  basis), so a mismatch is refused and a match kept. A held basis whose
+  bytes cannot be rebuilt at all (bad zlib, or a delta in its chain that does
+  not apply) is a mismatch too: fossil's `content_get` keeps the bytes it
+  has, so the delta is applied to those and the result refused. New cases:
+  `sync.7.7.misnamed-basis-wrong-hash`, `sync.7.7.misnamed-basis-verified`
+  and `sync.7.7.unreadable-basis-wrong-hash`.
 - The crosslink sweep no longer holds back a check-in for absent file
   content (#406). A root check-in, or one on a present parent, whose files
   never arrived got no event, plink, mlink, leaf or tag rows, so it never
@@ -171,11 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong-hash error. A basis not held still leaves the delta stored dangling,
   as fossil does. fossil checks a `file` delta on receipt and a `cfile` or
   clone delta in its commit hook; this checks them all on receipt. Tracked
-  in #405. A delta stored dangling whose basis then arrives in the same
-  reply or request is still not rechecked, where fossil's commit hook
-  catches it and rolls the round back: tracked in #412 with the gap cases
-  `sync.7.7.late-basis-wrong-hash`, `sync.7.7.clone-late-basis-wrong-hash`
-  and `sync.7.7.server-late-basis-wrong-hash`.
+  in #405. A delta whose basis arrives later in the same reply or request
+  is covered by the #412 entry above.
 - `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
   target as fossil's `update` does when no version is named: the newest open
   leaf descended from the checkout (every descendant leaf when all are

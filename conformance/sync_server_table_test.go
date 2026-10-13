@@ -213,14 +213,23 @@ func serverCardFailureCases() []syncServerCase {
 	}, {
 		// SP-7.7-4: a delta whose basis arrives later in the same request
 		// has its bytes available in that pass, so its mismatch must not be
-		// kept either. DTS turns S into T, not N1. When #412 is fixed, tighten
-		// want to also require onlyError("wrong+hash+on+received+artifact:+{N1}",
-		// ...) so the gap cannot close on a weaker answer such as a silent drop.
+		// kept either. DTS turns S into T, not N1. fossil's commit hook rolls
+		// the request back; go-libfossil keeps S, returns N1 to what it was
+		// before the request, and answers with N1's wrong-hash error.
 		Case:    Case{ID: "sync.7.7.server-late-basis-wrong-hash", Req: "SP-7.7-4"},
 		notSent: wrongHashAborts,
 		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",
 			"file {S} {S.size}", "{S.data}", "{R}"},
-		want: all(completed, held("N1", 0)),
+		want: all(completed, held("N1", 0), onlyError("wrong+hash+on+received+artifact:+{N1}",
+			"wrong hash on received artifact: {N1}")),
+	}, {
+		// The draft's commit hook rolls the whole request back: S is not kept
+		// either. go-libfossil keeps it, having committed it on its own.
+		Case:    Case{ID: "sync.7.7.server-late-basis-aborts-request", Req: "SP-7.7-4"},
+		notSent: wrongHashAborts,
+		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",
+			"file {S} {S.size}", "{S.data}", "{R}"},
+		want: all(completed, held("N1", 0), held("S", 0)),
 	}, {
 		// A HASH that is no artifact name fails the handler's validation.
 		Case: Case{ID: "sync.5.2.file-bad-name", Req: "SP-5.2-7"},

@@ -1,5 +1,20 @@
 package conformance
 
+// misnameA1 gives the client's A1 the bytes of A2, which is the same
+// length, so A1's row is held but its bytes are not its name.
+var misnameA1 = []string{
+	"DELETE FROM delta WHERE rid=(SELECT rid FROM blob WHERE uuid='{A1}')",
+	"UPDATE blob SET content=(SELECT content FROM blob WHERE uuid='{A2}'), " +
+		"size=(SELECT size FROM blob WHERE uuid='{A2}') WHERE uuid='{A1}'",
+}
+
+// unreadA1 leaves the client's A1 held, with a size, but with bytes that
+// are not a compressed artifact at all.
+var unreadA1 = []string{
+	"DELETE FROM delta WHERE rid=(SELECT rid FROM blob WHERE uuid='{A1}')",
+	"UPDATE blob SET content=x'0000001000112233' WHERE uuid='{A1}'",
+}
+
 // clientFileCases are Section 7.1 and the integrity check of 7.7.
 func clientFileCases() []syncClientCase {
 	return []syncClientCase{{
@@ -59,6 +74,48 @@ func clientFileCases() []syncClientCase {
 			"file {S} {S.size}", "{S.data}")},
 		want: every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
 		fc:   true,
+	}, {
+		// The draft's commit hook aborts the whole pass, not only N1:
+		// fossil keeps neither N1 nor S. go-libfossil commits each card on its
+		// own, so it keeps S and returns only the bad delta to what it was.
+		Case: Case{ID: "sync.7.7.late-basis-aborts-pass", Req: "SP-7.7-4"},
+		op:   opPull,
+		replies: [][]string{reply("file {N1} {S} {DTS.size}", "{DTS.data}",
+			"file {S} {S.size}", "{S.data}")},
+		want: every(notStored("N1"), notStored("S")),
+		fc:   true,
+	}, {
+		// Integrity hashes the reconstructed artifact, not its basis: a held
+		// basis whose bytes are not its name is still reconstructed, as
+		// fossil's content_get does without checking it, and the delta's
+		// result checked against HASH. The client's A1 holds A2's bytes,
+		// and DTA1 against them gives T, not N1.
+		Case:    Case{ID: "sync.7.7.misnamed-basis-wrong-hash", Req: "SP-7.7-4"},
+		op:      opPull,
+		setup:   misnameA1,
+		replies: [][]string{reply("file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
+		fc:      true,
+	}, {
+		// A held basis whose bytes cannot be rebuilt at all gives the delta
+		// no HASH either. fossil's content_get keeps what it has and
+		// xfer_accept_file applies the delta to that, so the result is
+		// refused, not stored unchecked.
+		Case:    Case{ID: "sync.7.7.unreadable-basis-wrong-hash", Req: "SP-7.7-4"},
+		op:      opPull,
+		setup:   unreadA1,
+		replies: [][]string{reply("file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
+		fc:      true,
+	}, {
+		// And a result that is HASH is kept: DTA1 copies nothing from A1, so
+		// it gives T against A2's bytes too.
+		Case:    Case{ID: "sync.7.7.misnamed-basis-verified", Req: "SP-7.7-4"},
+		op:      opPull,
+		setup:   misnameA1,
+		replies: [][]string{reply("file {T} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    every(noFailure, expands("T")),
+		fc:      true,
 	}, {
 		// The verification passes a delta whose result is HASH.
 		Case:    Case{ID: "sync.7.7.file-delta-verified", Req: "SP-7.7-4"},

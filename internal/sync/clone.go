@@ -86,6 +86,8 @@ type cloneSession struct {
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
 	obs Observer
+	// pass is the current round's verification pass (§7.7).
+	pass *receivePass
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -479,6 +481,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 
 	filesRecvd := 0
 	cs.roundPush = false
+	cs.pass = newReceivePass() // each round is one verification pass (§7.7)
 	defer func() { cs.roundRecvd = filesRecvd }()
 
 cardLoop:
@@ -677,7 +680,11 @@ func (cs *cloneSession) receiveContent(
 // verbatim rather than recompressed — this is what makes a clone
 // byte-identical to its source's blob table, not merely content-identical.
 func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
-	if err := storeReceivedFile(ctx, cs.repo, uuid, deltaSrc, payload, storedBlob, visibilityPublic, cs.linker); err != nil {
+	if cs.pass == nil {
+		panic("sync.Clone: handleFile: pass must be set by processResponse")
+	}
+	if err := storeReceivedFile(ctx, cs.repo, cs.pass, uuid, deltaSrc, payload, storedBlob,
+		visibilityPublic, cs.linker); err != nil {
 		return fmt.Errorf("sync.Clone: handleFile %s: %w", uuid, err)
 	}
 

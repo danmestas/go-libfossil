@@ -209,6 +209,7 @@ type handler struct {
 	remoteHas       map[string]remoteHasEntry // UUIDs the client announced via igot (mirrors Fossil's onremote table)
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
+	pass            *receivePass              // this request's verification pass (§7.7)
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -1260,14 +1261,23 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 // is its content_put_ex failure, whose g.zErrMsg page_xfer sends.
 func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload []byte,
 	storedBlob []byte, vis visibility) string {
+	if h.pass == nil {
+		h.pass = newReceivePass() // one pass per request
+	}
 	// storeReceivedFile's cascade, inline, to keep its count: the cascade
-	// leaves the leaf and tag repair to crosslinkReceived (issue #414).
-	rid, err := storeReceived(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
-	if err == nil && rid > 0 {
+	// leaves the leaf and tag repair to crosslinkReceived (issue #414). A
+	// late mismatch still leaves the card's own artifact stored, so its
+	// cascade is owed even then.
+	rid, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
+		nil)
+	if rid > 0 {
 		h.cascaded += manifest.AfterDephantomize(ctx, h.repo, rid)
 	}
-	if errors.Is(err, errHashMismatch) {
-		return wrongHashText(uuid)
+	// A late mismatch names the delta at fault, which this request stored
+	// earlier, not the card that made its bytes available.
+	var mismatch *hashMismatchError
+	if errors.As(err, &mismatch) {
+		return wrongHashText(mismatch.uuid)
 	}
 	if err != nil {
 		return fmt.Sprintf("storing %s: %v", uuid, err)

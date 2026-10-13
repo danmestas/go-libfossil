@@ -22,12 +22,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prev`/`previous` (its primary parent) and `next` (a child, primary first,
   then the newest), as fossil does inside a checkout (repo-state-01 §8.3).
   A keyword that names nothing, such as `prev` at a root, falls through to the
-  other forms. `ckout` stays an ordinary name: it is a keyword only in fossil's
-  checkout-inclusive request, which go-libfossil does not have.
+  other forms. `ckout` stays an ordinary name: it is a keyword only in the
+  checkout-inclusive request, `Checkout.ResolveWorking`.
   `Repo.ResolveVersion` is unchanged. A checkout with no recorded version has
   no relative names, and every other form still resolves. The `merge` command
   resolves its version through the checkout, so `merge prev` and `merge next`
   work.
+- `Checkout.ResolveWorking` is fossil's checkout-inclusive request (`ci+`,
+  repo-state-01 §8.3) and returns a `WorkingVersion`. While the checkout has a
+  version, `ckout` names the working files: `Working` is set and `RID` is the
+  checkout's version. No pseudo-RID is exported. Every other name, and `ckout`
+  in a checkout with no version, resolves as `Checkout.ResolveVersion` does,
+  except that only check-ins can answer: the request is a check-in request,
+  so a technote carrying the tag does not. `ckout` is a keyword only as the
+  whole name, so `ckout.` and `root:ckout` read it as an ordinary name. The
+  draft also makes `ckout` a keyword in a plain check-in request. This follows
+  fossil, where only `ci+` has it (an erratum to the draft is pending), so
+  `ResolveVersion` and `ResolveBranchStart` still read it as an ordinary name.
+  New `repostate.8.3` cases run the request against `fossil test-name-to-id
+  --type ci+`: `ckout` over a tag of that name, with and without a checkout
+  version, and `ckout` as the tag under the untyped request. RS-8.3-4 is now
+  covered rather than partial (tracked in #419).
 - `Repo.ResolveBranchStart` is fossil's branch-type request: it resolves a
   name, then returns the first check-in of the branch the result is on
   (repo-state-01 §8.3). It follows the draft where fossil 2.28 differs:

@@ -518,20 +518,67 @@ func convertUpdateChange(c checkout.UpdateChange) UpdateChange {
 //	"prev", "previous"   its primary parent
 //	"next"               a child: a primary child first, then the newest link
 //
-// A keyword that names nothing, such as "prev" at a root, falls through to
-// the other forms, as in fossil. The forms that take a name, such as
+// A keyword that names nothing, such as "prev" at a root, falls through to the
+// other forms, as in fossil. The forms that take a name, such as
 // "root:current", resolve it the same way. "ckout" is an ordinary name here:
-// it is a keyword only in fossil's checkout-inclusive request ("ci+"), whose
-// answer is a pseudo-RID for the working files, not an artifact.
+// it is a keyword only in the checkout-inclusive request, ResolveWorking.
 func (c *Checkout) ResolveVersion(name string) (int64, error) {
+	ckout, err := c.versionOrZero(name)
+	if err != nil {
+		return 0, err
+	}
+	return resolveVersion(c.inner.Repo().DB(), name, ckout, false)
+}
+
+// WorkingVersion is the answer of a checkout-inclusive request: a check-in,
+// or the checkout's working files.
+type WorkingVersion struct {
+	// RID is the check-in the name resolves to. When Working is set it is
+	// the checkout's version, the check-in the working files started from.
+	RID int64
+	// Working reports that the name was "ckout": the request asks for the
+	// files on disk, edits included, rather than for any stored check-in.
+	Working bool
+}
+
+// ResolveWorking is fossil's checkout-inclusive request ("ci+",
+// symbolic_name_to_rid in src/name.c): while the checkout has a version,
+// "ckout" names its working files, reported as Working. Every other name,
+// and "ckout" in a checkout with no version, resolves as ResolveVersion
+// does, except that only check-ins can answer: the request is a check-in
+// request, so a technote or wiki page carrying the tag does not.
+//
+// repo-state-01 Section 8.3 makes "ckout" a keyword in a plain check-in
+// request too. This follows fossil, where only "ci+" has it (an erratum to
+// the draft is pending), so ResolveVersion and Repo.ResolveBranchStart still
+// read "ckout" as an ordinary name. It is a keyword only as the whole name:
+// in "root:ckout" or "ckout." fossil resolves the inner name as a plain
+// check-in request, and so does this.
+func (c *Checkout) ResolveWorking(name string) (WorkingVersion, error) {
+	ckout, err := c.versionOrZero(name)
+	if err != nil {
+		return WorkingVersion{}, err
+	}
+	if name == "ckout" && ckout > 0 {
+		return WorkingVersion{RID: ckout, Working: true}, nil
+	}
+	rid, err := resolveVersion(c.inner.Repo().DB(), name, ckout, true)
+	if err != nil {
+		return WorkingVersion{}, err
+	}
+	return WorkingVersion{RID: rid}, nil
+}
+
+// versionOrZero is the checkout's version, or 0 when it records none: fossil
+// guards its checkout keywords on a nonzero checkout version and resolves
+// the other forms regardless.
+func (c *Checkout) versionOrZero(name string) (int64, error) {
 	rid, _, err := c.inner.Version()
 	if errors.Is(err, checkout.ErrNoVersion) {
-		// fossil guards its checkout keywords on a nonzero checkout version
-		// and resolves the other forms regardless.
-		rid, err = 0, nil
+		return 0, nil
 	}
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
 	}
-	return resolveVersion(c.inner.Repo().DB(), name, int64(rid), false)
+	return int64(rid), nil
 }

@@ -178,3 +178,44 @@ func TestSyncUV_NoUVFlag_SkipsUV(t *testing.T) {
 		t.Error("UV file should not sync when UV=false")
 	}
 }
+
+// TestSyncUV_SHA3GateToOldServer pins §7.6 on the client: an unversioned file
+// named by SHA3 is not sent to a server whose server-version predates SHA3
+// support; the refusal fossil's send_unversioned_file sends goes in its place.
+func TestSyncUV_SHA3GateToOldServer(t *testing.T) {
+	_, clientRepo := newTestRepoPair(t)
+	uv.Write(clientRepo.DB(), "u.txt", []byte("unversioned"), 300)
+	if _, _, h, err := uv.Read(clientRepo.DB(), "u.txt"); err != nil || len(h) <= 40 {
+		t.Fatalf("uv.Read: hash %q, err %v; want a SHA3 name", h, err)
+	}
+	var requests []*xfer.Message
+	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		requests = append(requests, req)
+		if len(requests) > 1 {
+			return &xfer.Message{}
+		}
+		return &xfer.Message{Cards: []xfer.Card{
+			&xfer.PragmaCard{Name: "server-version", Values: []string{"19999"}},
+			&xfer.PragmaCard{Name: "uv-push-ok"},
+		}}
+	}}
+	_, _ = Sync(context.Background(), clientRepo, transport, SyncOpts{
+		Pull: true, Push: true, UV: true,
+		ProjectCode: testPC, ServerCode: "s",
+	})
+	if len(requests) < 2 {
+		t.Fatalf("client sent %d requests, want a second one", len(requests))
+	}
+	refused := false
+	for _, c := range requests[1].Cards {
+		switch c := c.(type) {
+		case *xfer.UVFileCard:
+			t.Fatalf("uvfile %s sent to a server older than SHA3 support", c.Name)
+		case *xfer.ErrorCard:
+			refused = refused || c.Message == sha3Refusal().Message
+		}
+	}
+	if !refused {
+		t.Fatalf("second request %v carries no SHA3 refusal", requests[1].Cards)
+	}
+}

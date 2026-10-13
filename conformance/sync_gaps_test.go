@@ -4,12 +4,7 @@ import "testing"
 
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
-var syncGaps = map[string]string{
-	// The client sends an unversioned file named by SHA3 to a server older
-	// than SHA3 support, where fossil sends the refusal in its place
-	// (internal/sync/client.go buildUVFileCards).
-	"sync.7.6.client-uv-gate": "#303",
-}
+var syncGaps = map[string]string{}
 
 // syncDeviations marks the cases where go-libfossil differs from the draft
 // on purpose, by case ID, with the reason.

@@ -181,6 +181,15 @@ func clientCardCases() []syncClientCase {
 			reported("igot {Z1}0")),
 		fc: true,
 	}, {
+		// A file card whose HASH is not an artifact name is fossil's
+		// "malformed file line": the reply loop stops, the prefix stays.
+		Case:    Case{ID: "sync.5.2.file-not-a-name-client", Req: "SP-5.2-8"},
+		op:      opPull,
+		replies: [][]string{prefix("file {Z1}0 {N1.size}\n{N1.data}")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("malformed file line")),
+		fc: true,
+	}, {
 		Case:    Case{ID: "sync.5.2.private-surplus", Req: "SP-5.2-9"},
 		op:      clientOp{pull: true, private: true},
 		replies: [][]string{reply(append([]string{"private x"}, stored1...)...)},

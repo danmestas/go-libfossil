@@ -109,6 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requires (#397). It acted on the card and read on. The server already
   answers such a `gimme` and `igot` with bad command; a new case pins the
   `gimme` half.
+- The same holds for a reply `file` or `cfile` whose HASH or DELTASRC is not an
+  artifact name: the client reports `malformed file line` (`cfile`) and stops
+  reading the reply, keeping the prefix already processed, as fossil's
+  `xfer_accept_file` and client loop do (#397). It aborted the whole sync with
+  an invalid-UUID error before.
 
 - An `igot` under push reclassifies an artifact or phantom the server
   already holds, as sync-protocol-01 Section 7.5 (SP-7.5-5) and fossil's

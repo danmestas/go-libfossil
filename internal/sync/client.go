@@ -613,6 +613,16 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	return s.converged(t)
 }
 
+// unknownCommand answers a reply card fossil's client does not recognize,
+// such as a gimme or igot whose HASH fails blob_is_hname: the line is
+// reported as unknown command: [LINE] and the reply-card loop stops (§5.2).
+// It reports stop for handleReplyCard to return.
+func (s *session) unknownCommand(c xfer.Card) bool {
+	line := strings.TrimRight(replyOnlyLine(c), "\n")
+	s.result.Errors = append(s.result.Errors, "unknown command: ["+line+"]")
+	return true
+}
+
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
 	filesRecvd   int // file and cfile cards received
@@ -654,8 +664,14 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 	case *xfer.CFileCard:
 		return false, s.receiveFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob, t)
 	case *xfer.IGotCard:
+		if !hash.IsValidHash(c.UUID) {
+			return s.unknownCommand(c), nil
+		}
 		return false, s.handleIGot(c)
 	case *xfer.GimmeCard:
+		if !hash.IsValidHash(c.UUID) {
+			return s.unknownCommand(c), nil
+		}
 		// A session that is not pushing never sends files, so a gimme from
 		// it could not be satisfied and would hold the pull open forever
 		// (#277). A "pull only" message (§10.2) disables pushing mid-reply,

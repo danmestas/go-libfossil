@@ -165,6 +165,22 @@ func clientCardCases() []syncClientCase {
 			reported("gimme")),
 		fc: true,
 	}, {
+		// fossil's client reads gimme and igot only with an artifact name
+		// (blob_is_hname); any other is a malformed card.
+		Case:    Case{ID: "sync.5.2.gimme-not-a-name-client", Req: "SP-5.2-8"},
+		op:      clientOp{pull: true, push: true},
+		replies: [][]string{prefix("gimme {Z1}0")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("gimme {Z1}0")),
+		fc: true,
+	}, {
+		Case:    Case{ID: "sync.5.2.igot-not-a-name-client", Req: "SP-5.2-8"},
+		op:      opPull,
+		replies: [][]string{prefix("igot {Z1}0")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("igot {Z1}0")),
+		fc: true,
+	}, {
 		Case:    Case{ID: "sync.5.2.private-surplus", Req: "SP-5.2-9"},
 		op:      clientOp{pull: true, private: true},
 		replies: [][]string{reply(append([]string{"private x"}, stored1...)...)},

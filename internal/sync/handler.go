@@ -321,15 +321,15 @@ func (h *handler) badCommand(line string) {
 	h.resp = append(h.resp, &xfer.ErrorCard{Message: badCommandPrefix + line})
 }
 
-// replyOnlyLine re-encodes a card the server should not have received (error,
-// message -- reply-only in fossil's page_xfer, which has no branch for them)
-// into the wire line it arrived as, so badCommand can quote it the way fossil
-// quotes blob_str(&xfer.line). The LF EncodeCard writes is the one the error
-// text carries.
+// replyOnlyLine re-encodes a card fossil would not have recognized (an error
+// or message the server received, which page_xfer has no branch for, or an
+// igot or gimme whose HASH is no artifact name) into the wire line it arrived
+// as, so it can be quoted the way fossil quotes blob_str(&xfer.line). The LF
+// EncodeCard writes is the one the error text carries.
 func replyOnlyLine(c xfer.Card) string {
 	var buf bytes.Buffer
 	if err := xfer.EncodeCard(&buf, c); err != nil {
-		// error and message cards always encode; this is a programmer error.
+		// These cards always encode; this is a programmer error.
 		panic("handler.replyOnlyLine: " + err.Error())
 	}
 	return buf.String()

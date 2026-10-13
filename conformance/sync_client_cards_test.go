@@ -164,6 +164,39 @@ func clientCardCases() []syncClientCase {
 		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
 			reported("gimme")),
 		fc: true,
+	}}
+}
+
+// clientCardNameCases continues clientCardCases with the replies whose cards
+// carry no artifact name or a surplus token; the table is split to stay short.
+func clientCardNameCases() []syncClientCase {
+	stored1 := []string{"file {N1} {N1.size}", "{N1.data}"}
+	prefix := func(bad string) []string { return reply(append(stored1, bad, "igot {U}")...) }
+	return []syncClientCase{{
+		// fossil's client reads gimme and igot only with an artifact name
+		// (blob_is_hname); any other is a malformed card.
+		Case:    Case{ID: "sync.5.2.gimme-not-a-name-client", Req: "SP-5.2-8"},
+		op:      clientOp{pull: true, push: true},
+		replies: [][]string{prefix("gimme {Z1}0")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("gimme {Z1}0")),
+		fc: true,
+	}, {
+		Case:    Case{ID: "sync.5.2.igot-not-a-name-client", Req: "SP-5.2-8"},
+		op:      opPull,
+		replies: [][]string{prefix("igot {Z1}0")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("igot {Z1}0")),
+		fc: true,
+	}, {
+		// A file card whose HASH is not an artifact name is fossil's
+		// "malformed file line": the reply loop stops, the prefix stays.
+		Case:    Case{ID: "sync.5.2.file-not-a-name-client", Req: "SP-5.2-8"},
+		op:      opPull,
+		replies: [][]string{prefix("file {Z1}0 {N1.size}\n{N1.data}")},
+		want: every(stored("N1"), notStored("U"), neverSent("gimme {U}"),
+			reported("malformed file line")),
+		fc: true,
 	}, {
 		Case:    Case{ID: "sync.5.2.private-surplus", Req: "SP-5.2-9"},
 		op:      clientOp{pull: true, private: true},

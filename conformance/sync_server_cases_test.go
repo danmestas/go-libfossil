@@ -126,9 +126,11 @@ func TestSyncServer(t *testing.T) {
 func syncServerCases() []syncServerCase {
 	var all []syncServerCase
 	for _, group := range [][]syncServerCase{
-		serverRoundCases(), serverTransportCases(), serverCardCases(), serverErrorCases(),
-		serverAuthCases(), serverLoginCases(), serverContentCases(), serverUVCases(),
-		serverUVGimmeCases(), serverCloneCases(), serverDirectionCases(), serverPragmaCases(),
+		serverRoundCases(), serverTransportCases(), serverCardCases(),
+		serverCardFailureCases(), serverErrorCases(), serverAuthCases(),
+		serverLoginCases(), serverContentCases(), serverContentIGotCases(),
+		serverUVCases(), serverUVGimmeCases(), serverCloneCases(),
+		serverDirectionCases(), serverPragmaCases(), serverPragmaLockCases(),
 		serverConfigCases(), serverVersionCases(), serverGateCases(), serverAdmissionCases(),
 		serverCookieRefusalCases(), serverPragmaMoreCases(), serverRefusalCases(),
 		serverOrderCases(),

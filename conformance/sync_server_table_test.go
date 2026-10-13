@@ -145,6 +145,13 @@ func serverCardCases() []syncServerCase {
 		want: all(completed, onlyError("bad command: gimme {A1} extra\n"),
 			noCard("file {A1}"), withCard("file {A2} {A2.size}")),
 	}, {
+		// page_xfer reads gimme only with an artifact name (blob_is_hname),
+		// so any other falls through to bad command and parsing goes on.
+		Case: Case{ID: "sync.5.2.gimme-not-a-name-server", Req: "SP-5.2-6"},
+		body: []string{"{CV}", pullCard, "gimme {Z1}0", "gimme {A2}", "{R}"},
+		want: all(completed, onlyError("bad command: gimme {Z1}0\n"),
+			withCard("file {A2} {A2.size}")),
+	}, {
 		Case: Case{ID: "sync.5.2.client-error-card", Req: "SP-5.2-6"},
 		body: []string{"{CV}", pullCard, "error foo", "gimme {A1}", "{R}"},
 		want: all(completed, onlyError("bad command: error foo\n"),
@@ -164,7 +171,13 @@ func serverCardCases() []syncServerCase {
 			"igot {U}", "{R}"},
 		want: all(completed, onlyError("malformed+file+line", "malformed file line"),
 			noCard("file {A1}"), noCard("gimme {U}")),
-	}, {
+	}}
+}
+
+// serverCardFailureCases continues serverCardCases with the handler
+// failures and resets of Section 5.2; the table is split to stay short.
+func serverCardFailureCases() []syncServerCase {
+	return []syncServerCase{{
 		// A well-framed file whose content is not HASH fails the handler
 		// the same way: reset, error, and no later card is parsed.
 		Case:    Case{ID: "sync.5.2.file-wrong-hash", Req: "SP-5.2-7"},

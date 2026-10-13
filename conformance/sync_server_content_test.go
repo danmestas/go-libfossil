@@ -44,7 +44,13 @@ func serverContentCases() []syncServerCase {
 		setup: append(append([]string{}, phantomU...), privateU),
 		body:  []string{"{CV}", pushCard, "igot {U}", "{R}"},
 		want:  all(completed, noErrors, privateCount("U", 0), withCard("gimme {U}")),
-	}, {
+	}}
+}
+
+// serverContentIGotCases continues serverContentCases with the igot
+// reclassification rows of Section 7.5; the table is split to stay short.
+func serverContentIGotCases() []syncServerCase {
+	return []syncServerCase{{
 		// nobody may not push private content: igot HASH 1 is no error,
 		// and reclassifies the held artifact private.
 		Case: Case{ID: "sync.7.5.unauthorized-private-igot-held", Req: "SP-7.5-5"},

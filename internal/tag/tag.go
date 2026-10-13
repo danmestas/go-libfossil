@@ -209,6 +209,10 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return nil
 	}
 
+	reach, err := replacesPropagatingBranch(q, tagid, opts)
+	if err != nil {
+		return err
+	}
 	if _, err := q.Exec(
 		`INSERT OR REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
@@ -233,7 +237,7 @@ func ApplyTagWithTx(q db.Querier, opts ApplyOpts) error {
 		return err
 	}
 
-	if err := propagateAfterInsert(q, tagid, opts); err != nil {
+	if err := propagateAfterInsert(q, tagid, opts, reach); err != nil {
 		return fmt.Errorf("propagate: %w", err)
 	}
 
@@ -371,7 +375,9 @@ func superseded(q db.Querier, tagid int64, rid libfossil.FslID, mtime float64) (
 // deleting the copies descendants had inherited. Confirmed against fossil
 // 2.28: applying `tag add --raw zz A v2` over an inherited `zz` removes the
 // child's row.
-func propagateAfterInsert(q db.Querier, tagid int64, opts ApplyOpts) error {
+func propagateAfterInsert(
+	q db.Querier, tagid int64, opts ApplyOpts, reachAbsent bool,
+) error {
 	tagType := opts.TagType
 	if tagType == TagSingleton {
 		tagType = TagCancel
@@ -379,8 +385,33 @@ func propagateAfterInsert(q db.Querier, tagid int64, opts ApplyOpts) error {
 	pr := propagation{
 		tagid: tagid, tagType: tagType, origID: opts.TargetRID, mtime: opts.MTime,
 		value: opts.Value, tagName: opts.TagName, leaves: opts.Leaves,
+		reachAbsent: reachAbsent && tagType == TagCancel,
 	}
 	return pr.propagate(q, opts.TargetRID)
+}
+
+// replacesPropagatingBranch is whether this write replaces a propagating
+// branch row with a cancel or a singleton. The row it replaces was handed down
+// the primary children when it landed, in fossil, and the walk deletes those
+// copies and rechecks each (src/tag.c:100-102). A crosslink batch defers
+// propagation to its repair gate, so the copies may not exist yet; the walk
+// then reaches the children that hold none (propagation.reachAbsent), which are
+// the check-ins fossil would have rechecked (Section 7.3, RS-7.3-3). Only a
+// branch tag matters: no other tag schedules a recheck.
+func replacesPropagatingBranch(q db.Querier, tagid int64, opts ApplyOpts) (bool, error) {
+	if tagid != leaf.BranchTagID || opts.TagType == TagPropagating {
+		return false, nil
+	}
+	var old int
+	err := q.QueryRow("SELECT tagtype FROM tagxref WHERE tagid=? AND rid=?",
+		tagid, opts.TargetRID).Scan(&old)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("tagxref branch row: %w", err)
+	}
+	return old == TagPropagating, nil
 }
 
 // ensureTag returns the tagid for the given tag name, creating it if it doesn't exist.

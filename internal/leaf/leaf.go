@@ -186,7 +186,8 @@ type Mark struct{ direct, order int }
 // Schedule queues rid and each of its current plink parents, merge parents
 // included, for a recheck. It is leaf_eventually_check(): fossil reads the
 // parents here, at the branch write, so a parent the batch later loses (a
-// reparent) is still checked; Apply adds the parents rid has by then.
+// reparent) is still checked. Apply goes beyond fossil and also checks the
+// parents rid has by then; see Apply.
 func (p *Pending) Schedule(q db.Querier, rid libfossil.FslID) error {
 	if p == nil {
 		panic("leaf.Pending.Schedule: p must not be nil")
@@ -252,10 +253,20 @@ func (p *Pending) Rollback(m Mark) {
 }
 
 // Apply runs the incremental check on every scheduled check-in and on its
-// parents, those it had when scheduled and those it has now, and keeps the
+// parents, those it had when scheduled and those it has now. It keeps the
 // schedule: the caller clears it with Reset once the transaction holding the
 // checks has committed, or rolls it back if it did not. The work is bounded by
 // what the batch scheduled, never by the repository.
+//
+// Checking the parents a check-in has now departs from fossil, whose
+// leaf_eventually_check reads plink only when the branch write happens
+// (src/leaf.c:178-191). The draft defines the single-batch result as the
+// check-ins a branch tag reaches and their parents, whatever order the batch
+// linked them in, and fossil's rule gives a different table in two cases: a
+// tag applied before its target is linked (the target has no plink row yet),
+// and a reparent inside the batch (the new parent was never scheduled).
+// Following the draft here keeps a delta-chain-ordered sweep equal to an
+// ascending one, and matches `fossil rebuild` on the corpus repositories.
 func (p *Pending) Apply(q db.Querier) error {
 	if p == nil {
 		panic("leaf.Pending.Apply: p must not be nil")

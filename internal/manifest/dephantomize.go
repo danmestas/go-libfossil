@@ -190,6 +190,26 @@ func (rl *ReceiveLinker) LinkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	return rl.retryWaitersFor(ctx, tx, uuid, &remaining)
 }
 
+// WithTx runs fn in a transaction on r, as r.WithTx does, for a caller whose
+// fn calls LinkStored. If the transaction fails, the leaf rechecks LinkStored
+// scheduled in it are dropped with it: a rolled-back blob's rid can be handed
+// to an unrelated blob later (rid is not AUTOINCREMENT), and a recheck left
+// behind would then insert a leaf row for a blob that is no check-in.
+func (rl *ReceiveLinker) WithTx(r *repo.Repo, fn func(tx *db.Tx) error) error {
+	if rl == nil {
+		panic("manifest.ReceiveLinker.WithTx: linker must not be nil")
+	}
+	if r == nil {
+		panic("manifest.ReceiveLinker.WithTx: r must not be nil")
+	}
+	mark := rl.state.leaves.Mark()
+	err := r.WithTx(fn)
+	if err != nil {
+		rl.state.leaves.Rollback(mark)
+	}
+	return err
+}
+
 // Finalize retries the bounded deferred set, sweeps only residual candidates
 // with the same content cache, and repairs leaf/tag state exactly once. Its
 // return count is only the final-sweep work, not receive-time links.

@@ -20,9 +20,15 @@ type propagation struct {
 	value   string
 	tagName string
 	// leaves receives a recheck for every child whose branch row the walk
-	// writes or deletes (src/tag.c:100-102). Nil only for PropagateAll, whose
-	// caller owns the leaf table; see there.
+	// writes or deletes (src/tag.c:100-102). Nil only for a tag that is not a
+	// branch tag, which schedules nothing.
 	leaves *leaf.Pending
+	// reachAbsent makes a cancel walk act on a child that holds no row of its
+	// own, as it does on one holding an older inherited row. See
+	// propagateAfterInsert: a crosslink batch propagates only at its repair
+	// gate, so a descendant can lack the row fossil would already have handed
+	// it, and the cancel that deletes that row must still recheck it.
+	reachAbsent bool
 }
 
 // walkChild is one primary child of a check-in the walk is visiting.
@@ -95,7 +101,7 @@ func (pr propagation) propagate(q db.Querier, pid libfossil.FslID) error {
 // the walk does not descend past it (#288).
 func (pr propagation) children(q db.Querier, rid libfossil.FslID) ([]walkChild, error) {
 	defaultDoit := 0
-	if pr.tagType == TagPropagating {
+	if pr.tagType == TagPropagating || pr.reachAbsent {
 		defaultDoit = 1
 	}
 	const query = `
@@ -203,24 +209,11 @@ func (pq *mtimeQueue) Pop() any {
 	return item
 }
 
-// PropagateAll re-propagates all tags from rid to its descendants.
-// Matches Fossil's tag_propagate_all (tag.c:118-135).
-// Singleton tags (type 1) are treated as cancel (type 0) during propagation.
-//
-// It schedules no leaf recheck for the branch rows it writes, so it is only
-// for a caller that rebuilds the leaf table itself; every write path that
-// maintains leaves incrementally uses PropagateAllLeaves.
-func PropagateAll(q db.Querier, rid libfossil.FslID) error {
-	if q == nil {
-		panic("tag.PropagateAll: q must not be nil")
-	}
-	return propagateAll(q, rid, nil)
-}
-
-// PropagateAllLeaves is PropagateAll scheduling, on leaves, a recheck of every
-// check-in whose branch row the walk writes or deletes, as fossil's
-// tag_propagate_all does through tag_propagate (draft-fossil-repo-state-01
-// Section 7.3, deferred scheduling).
+// PropagateAllLeaves re-propagates all tags from rid to its descendants, as
+// fossil's tag_propagate_all does (tag.c:118-135); singleton tags walk as
+// cancels. It schedules on leaves a recheck of every check-in whose branch row
+// the walk writes or deletes, as fossil does through tag_propagate
+// (draft-fossil-repo-state-01 Section 7.3).
 func PropagateAllLeaves(q db.Querier, rid libfossil.FslID, leaves *leaf.Pending) error {
 	if q == nil {
 		panic("tag.PropagateAllLeaves: q must not be nil")
@@ -231,7 +224,7 @@ func PropagateAllLeaves(q db.Querier, rid libfossil.FslID, leaves *leaf.Pending)
 	return propagateAll(q, rid, leaves)
 }
 
-// propagateAll is tag_propagate_all; leaves is nil only for PropagateAll.
+// propagateAll is tag_propagate_all.
 func propagateAll(q db.Querier, rid libfossil.FslID, leaves *leaf.Pending) error {
 	if rid <= 0 {
 		return nil

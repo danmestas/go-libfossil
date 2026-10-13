@@ -335,8 +335,8 @@ func CrosslinkAfterCascades(ctx context.Context, r *repo.Repo, cascaded int) (in
 // within the caller's transaction: candidate discovery, linking and the leaf and
 // tag repair all run on tx, so a rebuild that fails partway rolls back to the
 // derived state it started from, as fossil's rebuild_db does in its one
-// transaction. The leaf table is recomputed whole (leaf.Rebuild), Section 7.3's
-// explicit full rebuild, rather than from the batch's schedule. It links
+// transaction. The leaf table is the batch's own schedule applied once, which
+// is Section 7.3's single-batch result. It links
 // exactly what Crosslink would: a check-in whose file content or parent is
 // absent is linked against phantoms, and a delta manifest whose baseline is
 // absent is refused and filed under its baseline in orphan, as
@@ -362,7 +362,10 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if err := repairPlinkAndTags(tx, st.leaves); err != nil {
 		return st.linked, fmt.Errorf("manifest.CrosslinkRebuild: %w", err)
 	}
-	if err := leaf.Rebuild(tx); err != nil {
+	// The batch's own schedule, not leaf.Rebuild: it is the single-batch
+	// result Section 7.3 defines, and it reaches a check-in whose inherited
+	// branch row a cancel deleted, which a scan of surviving rows cannot.
+	if err := st.leaves.Apply(tx); err != nil {
 		return st.linked, fmt.Errorf("manifest.CrosslinkRebuild: %w", err)
 	}
 	return st.linked, nil

@@ -1138,7 +1138,7 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker, verified bool) error {
 	var dangling, root libfossil.FslID // tracked once the store succeeds
-	err := r.WithTx(func(tx *db.Tx) error {
+	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		alreadyHeld, err := heldReal(tx, uuid)
 		if err != nil {
 			return err
@@ -1185,6 +1185,17 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		pass.track(dangling, root, uuid)
 	}
 	return err
+}
+
+// withLinkerTx is r.WithTx for a write that may call linker.LinkStored: a
+// failed transaction also drops the leaf rechecks it scheduled. A nil linker
+// schedules nothing.
+func withLinkerTx(r *repo.Repo, linker *manifest.ReceiveLinker,
+	fn func(tx *db.Tx) error) error {
+	if linker == nil {
+		return r.WithTx(fn)
+	}
+	return linker.WithTx(r, fn)
 }
 
 // visibilityUpdate is one artifact whose private/public status an igot card
@@ -1258,7 +1269,7 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	}
 
 	var dephantomizedRid libfossil.FslID
-	err := r.WithTx(func(tx *db.Tx) error {
+	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		rid, filled, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob, vis,
 			linker)
 		if err != nil {

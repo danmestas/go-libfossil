@@ -1,11 +1,14 @@
 package manifest
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -256,4 +259,47 @@ func TestCheckinOntoSingletonBranchKeepsVerdicts(t *testing.T) {
 		t.Fatalf("Checkin c2: %v", err)
 	}
 	assertLeaves(t, r, "after c2", []string{"c1-singleton-root"})
+}
+
+// A recheck LinkStored schedules inside a transaction that then fails is
+// dropped with it: the rolled-back rid may be reused by an unrelated blob.
+func TestReceiveLinkerWithTxDropsRechecksOnFailure(t *testing.T) {
+	r := setupTestRepo(t)
+	d := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "branch root",
+		U:    deck.User("testuser"),
+		D:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+		T: []deck.TagCard{{
+			Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk",
+		}},
+	}
+	body, err := d.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	rid, uuid, err := blob.Store(r.DB(), body)
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	boom := errors.New("later step failed")
+	err = linker.WithTx(r, func(tx *db.Tx) error {
+		if err := linker.LinkStored(context.Background(), tx, rid, uuid, body); err != nil {
+			return err
+		}
+		if linker.state.leaves.Len() == 0 {
+			t.Fatal("LinkStored scheduled no recheck for a branch tag")
+		}
+		return boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("WithTx error = %v, want %v", err, boom)
+	}
+	if got := linker.state.leaves.Len(); got != 0 {
+		t.Fatalf("schedule after a rolled-back transaction has %d entries, want 0", got)
+	}
 }

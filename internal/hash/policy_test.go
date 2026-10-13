@@ -2,6 +2,7 @@ package hash_test
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -64,7 +65,6 @@ func TestNamingForPolicy(t *testing.T) {
 		{"sha3", "2", sha1Name, hash.AlgSHA3, true},
 		{"sha3-only does not reuse legacy names", "3", sha1Name, hash.AlgSHA3, false},
 		{"shun-sha1 does not reuse legacy names", "4", sha1Name, hash.AlgSHA3, false},
-		{"garbage value falls back to auto", "nonsense", sha3Name, hash.AlgSHA3, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestNamingForPolicy(t *testing.T) {
 			if tt.artifact != "" {
 				insertArtifact(t, d, tt.artifact)
 			}
-			got := hash.NamingFor(d)
+			got := hash.MustNamingFor(d)
 			if got.New != tt.wantAlg {
 				t.Errorf("New = %v, want %v", got.New, tt.wantAlg)
 			}
@@ -102,7 +102,7 @@ func TestNamingForAbsentConfigRow(t *testing.T) {
 			if tt.artifact != "" {
 				insertArtifact(t, d, tt.artifact)
 			}
-			if got := hash.NamingFor(d).New; got != tt.want {
+			if got := hash.MustNamingFor(d).New; got != tt.want {
 				t.Errorf("New = %v, want %v", got, tt.want)
 			}
 		})
@@ -162,6 +162,24 @@ func TestPromoteFor(t *testing.T) {
 			_ = d.QueryRow("SELECT value FROM config WHERE name='hash-policy'").Scan(&got)
 			if got != tt.want {
 				t.Errorf("hash-policy = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// artifact-format-01 7.1 (AF-7.1-2): an unrecognized policy value is fatal,
+// and the match is exact, so neither a name nor a wrong-case name nor an
+// ordinal outside 0-4 is read as a policy.
+func TestNamingForUnrecognizedPolicy(t *testing.T) {
+	for _, value := range []string{"banana", "SHA3", "sha3", "5", "-1", "", " 2", "2.0"} {
+		t.Run("value"+strconv.Quote(value), func(t *testing.T) {
+			d := setupDB(t)
+			setPolicy(t, d, value)
+			if _, err := hash.NamingFor(d); err == nil {
+				t.Fatalf("NamingFor accepted hash-policy %q", value)
+			}
+			if err := hash.PromoteFor(d, sha3Name); err == nil {
+				t.Fatalf("PromoteFor accepted hash-policy %q", value)
 			}
 		})
 	}

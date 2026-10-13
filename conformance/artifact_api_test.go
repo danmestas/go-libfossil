@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -336,6 +337,18 @@ var rCardCases = []apiCase{
 		}
 		return nil
 	}},
+	// The commit-time check, driven through manifest.VerifyRCard, the seam
+	// Checkin calls after storing the manifest: manifest.Checkin builds R and
+	// the F cards from one file list, so no caller input makes them differ.
+	{Case{ID: "artifact.6.3.5.commit-r-lowercase-ok", Req: "AF-6.3-5"}, func(t *testing.T) error {
+		return checkStoredR(t, func(r string) string { return r }, false)
+	}},
+	{Case{ID: "artifact.6.3.5.commit-r-uppercase", Req: "AF-6.3-5"}, func(t *testing.T) error {
+		return checkStoredR(t, strings.ToUpper, true)
+	}},
+	{Case{ID: "artifact.6.3.5.commit-r-wrong", Req: "AF-6.3-5"}, func(t *testing.T) error {
+		return checkStoredR(t, func(string) string { return strings.Repeat("0", 32) }, true)
+	}},
 	{Case{ID: "artifact.6.3.3.delta-r", Req: "AF-6.3-3"}, func(t *testing.T) error {
 		r := newPolicyRepo(t, "2")
 		d, err := deltaCheckin(r)
@@ -430,10 +443,65 @@ func policyCases() []apiCase {
 			},
 		})
 	}
+	// The setting holds the ordinal (7.1), so an unrecognized value is a stored
+	// one that is not 0 through 4: a policy name, in any case, included.
+	for _, value := range []string{"banana", "SHA3", "sha3", "5", "-1", ""} {
+		cases = append(cases, apiCase{
+			Case{ID: "artifact.7.1.unrecognized-" + policyCaseSlug(value), Req: "AF-7.1-2"},
+			func(t *testing.T) error {
+				_, _, err := blob.Store(newPolicyRepoRaw(t, value).DB(), []byte("x"))
+				if err == nil {
+					return expectf("blob.Store named content under hash-policy %q", value)
+				}
+				return nil
+			},
+		})
+	}
 	return append(cases, policyStateCases...)
 }
 
+// policyCaseSlug makes a stored policy value usable in a case ID.
+func policyCaseSlug(value string) string {
+	switch value {
+	case "":
+		return "empty"
+	case "-1":
+		return "negative"
+	}
+	return value
+}
+
+// newPolicyRepoRaw is newPolicyRepo that stores value even when it is empty,
+// where newPolicyRepo reads empty as "no row".
+func newPolicyRepoRaw(t *testing.T, value string) *repo.Repo {
+	t.Helper()
+	r := newPolicyRepo(t, "2")
+	// Written below SetConfig, which refuses these: the row stands in for one
+	// another tool wrote, which the reader must still reject.
+	if _, err := r.DB().Exec("INSERT OR REPLACE INTO config(name, value, mtime) "+
+		"VALUES('hash-policy', ?, julianday('now'))", value); err != nil {
+		t.Fatalf("setting hash-policy %q: %v", value, err)
+	}
+	return r
+}
+
 var policyStateCases = []apiCase{
+	// The write side of AF-7.1-2: a value the reader would reject is refused
+	// where it comes in, as fossil's hash-policy command does, and the stored
+	// row is left alone.
+	{Case{ID: "artifact.7.1.set-unrecognized", Req: "AF-7.1-2"}, func(t *testing.T) error {
+		r := newPolicyRepo(t, "2")
+		for _, v := range []string{"sha3", "SHA3", "5", "-1", ""} {
+			if err := r.SetConfig("hash-policy", v); err == nil {
+				return expectf("SetConfig accepted hash-policy %q", v)
+			}
+		}
+		got, err := r.Config("hash-policy")
+		if err != nil {
+			return err
+		}
+		return want("stored hash-policy", got, "2")
+	}},
 	{Case{ID: "artifact.7.2.default-empty", Req: "AF-7.2-1"}, func(t *testing.T) error {
 		return namesWith(newPolicyRepo(t, ""), 64)
 	}},
@@ -523,4 +591,48 @@ func separateName(strict string) func(*testing.T) error {
 		}
 		return want("second name", name, hash.SHA3(data))
 	}
+}
+
+// checkStoredR checks in a manifest, stores a copy whose R card is mutate(R)
+// under a fresh Z card (so it still parses), and runs the commit-time R check
+// on the copy. wantFail says whether the check must reject it.
+func checkStoredR(t *testing.T, mutate func(string) string, wantFail bool) error {
+	r := newPolicyRepo(t, "2")
+	rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{{Name: "a.txt", Content: []byte("one\n")}},
+		User:  "u", Comment: "c", Time: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)})
+	if err != nil {
+		return err
+	}
+	raw, err := content.Expand(r.DB(), rid)
+	if err != nil {
+		return err
+	}
+	d, err := deck.Parse(raw)
+	if err != nil {
+		return err
+	}
+	bad := strings.Replace(string(raw), "R "+d.R, "R "+mutate(d.R), 1)
+	bad = bad[:strings.LastIndex(bad, "Z ")]
+	sum := md5.Sum([]byte(bad))
+	bad += "Z " + hex.EncodeToString(sum[:]) + "\n"
+	var verr error
+	err = r.WithTx(func(tx *db.Tx) error {
+		brid, _, err := blob.Store(tx, []byte(bad))
+		if err != nil {
+			return err
+		}
+		verr = manifest.VerifyRCard(tx, content.NewCache(1<<20), brid)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if wantFail && verr == nil {
+		return expectf("the commit-time R check accepted R card %q", mutate(d.R))
+	}
+	if !wantFail && verr != nil {
+		return expectf("the commit-time R check rejected a correct R card: %v", verr)
+	}
+	return nil
 }

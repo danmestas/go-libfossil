@@ -56,7 +56,11 @@ func Write(d *db.DB, name string, content []byte, mtime int64) error {
 	// Name the content by the repo's hash-policy. The old check here read
 	// project-code, which is 40 hex characters in every repo whatever the
 	// policy, so it could only ever choose SHA1.
-	contentHash := hash.NamingFor(d).New.Hash(content)
+	naming, err := hash.NamingFor(d)
+	if err != nil {
+		return fmt.Errorf("uv.Write: %w", err)
+	}
+	contentHash := naming.New.Hash(content)
 	if err := storeRow(d, name, mtime, contentHash, content); err != nil {
 		return fmt.Errorf("uv.Write: %w", err)
 	}

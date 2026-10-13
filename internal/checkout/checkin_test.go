@@ -625,7 +625,7 @@ func TestCommitZeroLengthFile(t *testing.T) {
 	}
 	// The empty artifact is named by the repo's hash-policy like any other,
 	// so this asserts the empty hash of whichever algorithm the repo uses.
-	if want := hash.NamingFor(r.DB()).New.Hash([]byte{}); uuid != want {
+	if want := hash.MustNamingFor(r.DB()).New.Hash([]byte{}); uuid != want {
 		t.Fatalf("empty.txt uuid = %q, want %q", uuid, want)
 	}
 }

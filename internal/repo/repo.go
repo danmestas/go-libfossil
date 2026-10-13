@@ -2,6 +2,7 @@ package repo
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -167,7 +168,17 @@ func (r *Repo) UUIDByRID(rid int64) (string, error) {
 }
 
 // SetConfig writes a configuration value to the repo's config table.
+//
+// A hash-policy value must be one of the ordinals 0 through 4, the only form
+// the reader accepts (AF-7.1-2). Fossil makes an unknown policy fatal where
+// the value comes in (hname.c hash_policy_command), so a bad value is refused
+// here instead of poisoning every later store.
 func (r *Repo) SetConfig(key, value string) error {
+	if key == "hash-policy" {
+		if n, err := strconv.Atoi(value); err != nil || n < 0 || n > 4 {
+			return fmt.Errorf("repo.SetConfig: hash-policy %q is not a policy ordinal (0-4)", value)
+		}
+	}
 	_, err := r.db.Exec(
 		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, julianday('now'))",
 		key, value,

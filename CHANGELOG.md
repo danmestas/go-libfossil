@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets all three for every tag type, writing NULL for a cancel, and crosslinking
   a check-in reads the three values back from `tagxref`, so a tag that reached
   the check-in while it was a phantom takes effect.
-||||||| parent of a639eb4 (test: isolate fossil's global config in tests that run the fossil binary (#284))
+
 - Tests that run the fossil binary no longer write into the developer's
   global fossil config (`~/.fossil` or `~/.config/fossil.db`) (#284). Each
   `fossil new`, `open`, `clone` and `serve` on a temporary repository left a

@@ -43,7 +43,8 @@ func FossilBinary() string {
 // RequireFossilBin calls it, so a test that resolves the binary through that
 // gets isolation by default; tests that resolve fossil another way must call
 // it themselves (TestFossilInvocationsIsolateHome enforces this). It cannot
-// be used from a parallel test, because t.Setenv forbids that.
+// be used from a parallel test: t.Setenv panics there, which is the intended
+// loud failure, since a shared process environment cannot be isolated per test.
 func IsolateFossilHome(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

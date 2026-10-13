@@ -70,6 +70,12 @@ var notFossilExec = map[string]string{
 // tests: a test that shells out to fossil must resolve it through
 // RequireFossilBin (or call IsolateFossilHome), so the developer's real
 // ~/.fossil and ~/.config/fossil.db are never written (#284).
+//
+// The check is per file, not per function: one isolating marker anywhere in a
+// file clears every exec.Command in it, so a file whose helpers call fossil
+// directly still relies on its tests calling RequireFossilBin first. The
+// markers match whole call names ("newtestrepo(" does not match
+// NewTestRepoFromPath), so a helper that does not isolate does not count.
 func TestFossilInvocationsIsolateHome(t *testing.T) {
 	root := ".."
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

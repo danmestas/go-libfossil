@@ -53,6 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. The `date-tag-cancel`, `-unparsable` and `-zero` conformance cases
   are no longer marked as deviations, and new `-before-checkin` cases check
   the same three with the tags arriving while the check-in is a phantom.
+- A file, cfile or uvfile payload cut short by the end of the body is now the
+  card's handler failure, as sync-protocol-01 Section 5.1 requires (#373). The
+  decoder used to fail the whole message, so a server answered HTTP 400 and a
+  client dropped the reply. It now yields the card as a malformed line and
+  stops: a server answers 200 with `error malformed\sfile\sline` (or the
+  cfile or uvfile text) and keeps the effect of the cards before it, and a
+  client keeps the prefix it has processed and records the error. The short
+  payload is never stored. This follows -01, not fossil 2.28, which stores the
+  bytes present.
 - Tests that run `fossil server` no longer flake with "directory not empty"
   during temp-dir cleanup (#352). Fossil forks a child per connection, and
   killing only the parent let a child write into the directory while it was

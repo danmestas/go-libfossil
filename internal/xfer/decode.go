@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -67,6 +68,16 @@ func readPayload(r *bufio.Reader, size int) ([]byte, error) {
 		}
 	}
 	return buf, nil
+}
+
+// cutShort reports whether a payload read failed because the body ended
+// before the payload's declared count. Section 5.1 of sync-protocol-01 (erratum
+// s5.1-truncated-payload-receiver) makes such a card a handler failure that
+// names the card's malformed-line error, so the decoder yields a BadFileCard
+// and stops, leaving the cards before it in effect. fossil(1) instead keeps
+// the bytes present (blob_extract clamps the count); -01 is followed here.
+func cutShort(err error) bool {
+	return errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 // readPayloadWithTrailingNewline reads size bytes then consumes one trailing \n.
@@ -389,6 +400,9 @@ func parseFile(r *bufio.Reader, args []string) (Card, error) {
 		return &BadFileCard{Message: "malformed file line"}, nil
 	}
 	content, err := readPayload(r, size)
+	if cutShort(err) {
+		return &BadFileCard{Message: "malformed file line"}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("xfer: file payload: %w", err)
 	}
@@ -422,6 +436,9 @@ func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 		return &BadFileCard{Message: "malformed cfile line"}, nil
 	}
 	compressed, err := readPayload(r, csize)
+	if cutShort(err) {
+		return &BadFileCard{Message: "malformed cfile line"}, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("xfer: cfile payload: %w", err)
 	}
@@ -460,6 +477,11 @@ func parseCFile(r *bufio.Reader, args []string, budget *int64) (Card, error) {
 // After the SIZE payload canonical does blob_seek(xfer.pIn, 1, BLOB_SEEK_CUR):
 // it steps over exactly one byte whatever it is, not only a LF. A sender
 // writes a LF there, but the receiver does not require one.
+//
+// A config payload cut short by the end of the body still fails the whole
+// decode (an HTTP 400 upstream), unlike file, cfile and uvfile: Section 5.1
+// names handler texts only for those three, so this is a deliberate choice,
+// not an oversight; the cards before it are not kept.
 func parseConfig(r *bufio.Reader, rawLine string, args []string) (Card, error) {
 	if len(args) != 2 {
 		return &BadCommandCard{Line: rawLine}, nil
@@ -515,6 +537,9 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	}
 	if !uvFileOmitsContent(flags) {
 		content, err := readPayload(r, size)
+		if cutShort(err) {
+			return &BadFileCard{Message: "malformed uvfile line"}, nil
+		}
 		if err != nil {
 			return nil, fmt.Errorf("xfer: uvfile payload: %w", err)
 		}

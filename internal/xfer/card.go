@@ -274,9 +274,9 @@ type BadCommandCard struct {
 func (c *BadCommandCard) Type() CardType { return CardBadCommand }
 
 // BadFileCard is a file, cfile or uvfile line whose metadata the decoder
-// cannot frame a payload from — a bad arity, hash, size or flags. Because the
-// payload length is then unknown, no later card can be located, so the
-// decoder yields this card and stops.
+// cannot frame a payload from — a bad arity, hash, size or flags — or whose
+// payload the body ends inside (sync-protocol-01 Section 5.1). Either way no
+// later card can be located, so the decoder yields this card and stops.
 //
 // src/xfer.c xfer_accept_file / _compressed_file / _unversioned_file: the
 // receiver writes Message into its error, and page_xfer resets the reply,

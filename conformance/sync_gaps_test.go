@@ -9,11 +9,6 @@ var syncGaps = map[string]string{
 	// than SHA3 support, where fossil sends the refusal in its place
 	// (internal/sync/client.go buildUVFileCards).
 	"sync.7.6.client-uv-gate": "#303",
-	// A payload cut short by the end of the body fails the whole decode:
-	// the server answers HTTP 400 and the client keeps none of the reply
-	// (internal/xfer decode), where Section 5.1 makes it a handler failure.
-	"sync.5.1.truncated-payload-server": "#373",
-	"sync.5.1.truncated-payload":        "#373",
 	// The server's card loop (internal/sync/handler.go): a file card after
 	// a refused push is refused without a reset and does not end card
 	// processing (Section 6.6); a failed login skips the end-of-request

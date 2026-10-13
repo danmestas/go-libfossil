@@ -298,11 +298,9 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	}
 
 	if d.Type == deck.Checkin {
-		missing := missingCheckinRefs(tx, d, rl.state.guard.avail)
-		if len(missing) != 0 {
-			rl.state.guard.recordDeferred(tx, "ReceiveLinker", rid, missing)
-			rl.enqueueWaiter(rid, missing)
-			return nil
+		deferred, err := rl.deferCheckin(tx, rid, d)
+		if err != nil || deferred {
+			return err
 		}
 	}
 
@@ -336,6 +334,21 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 		rl.settle(rid)
 	}
 	return nil
+}
+
+// deferCheckin reports whether checkin rid (deck d) must wait for a blob still
+// in flight -- its baseline or a file (missingCheckinRefs) -- recording its
+// baseline gap and queuing it as a waiter on each missing blob when so.
+func (rl *ReceiveLinker) deferCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
+	missing := missingCheckinRefs(tx, d, rl.state.guard.avail)
+	if len(missing) == 0 {
+		return false, nil
+	}
+	if err := rl.state.guard.recordDeferred(tx, "ReceiveLinker", rid, d, missing); err != nil {
+		return true, err
+	}
+	rl.enqueueWaiter(rid, missing)
+	return true, nil
 }
 
 func (rl *ReceiveLinker) settle(rid libfossil.FslID) {
@@ -571,16 +584,17 @@ type cascadeLinker struct {
 	r     *repo.Repo
 	cache *content.Cache
 
-	// guard holds back a Checkin whose referenced blobs are not yet locally
-	// available, exactly as the whole-repository sweep's linkState.guard does
-	// (see checkinDeferralGuard in crosslink.go). A deferred checkin gets no
+	// guard holds back a Checkin whose baseline or files are not yet locally
+	// available (see checkinDeferralGuard and missingCheckinRefs in
+	// crosslink.go). A deferred checkin gets at most its baseline gap record
+	// (the baseline's phantom and an orphan row) and no
 	// event/leaf/plink/mlink/tagxref rows from this cascade at all -- that is
 	// what lets the sweep's own candidate query, which only reselects rids
-	// with no event row, rediscover and complete it once the missing blob
-	// arrives. The cascade has no candidate query or round boundary of its
-	// own to retry from, so it depends entirely on falling through to the
-	// sweep's recovery path; writing so much as the event row here would
-	// strand the checkin permanently (issue #180).
+	// with no event row, rediscover and complete it. The cascade has no
+	// candidate query or round boundary of its own to retry from, so it
+	// depends entirely on falling through to the sweep's recovery path;
+	// writing so much as the event row here would strand the checkin
+	// permanently (issue #180).
 	guard *checkinDeferralGuard
 
 	// pending holds discovered artifacts whose writes have not been committed.
@@ -593,10 +607,15 @@ type cascadeLinker struct {
 }
 
 func newCascadeLinker(r *repo.Repo) *cascadeLinker {
+	guard := newCheckinDeferralGuard()
+	// The cascade runs mid-session, with more blobs on the way, so it waits
+	// on files as well as the baseline; the session's closing sweep links
+	// whatever is still waiting (see missingCheckinRefs).
+	guard.awaitFiles = true
 	return &cascadeLinker{
 		r:     r,
 		cache: content.NewCache(crosslinkCacheBytes),
-		guard: newCheckinDeferralGuard(),
+		guard: guard,
 	}
 }
 
@@ -689,9 +708,10 @@ func (cl *cascadeLinker) walk(ctx context.Context, rid libfossil.FslID, linkFlag
 					return false
 				}
 				// Runs on r.DB() in autocommit, as it always did: no batch
-				// transaction is open between flushes, and no crosslink path
-				// writes 'orphan', so batching cannot reorder this against the
-				// query above.
+				// transaction is open between flushes. A deferral does write
+				// 'orphan', but only under a baseline that is still absent, so
+				// never under current, which has just arrived: batching cannot
+				// reorder this against the query above.
 				if _, err := cl.r.DB().Exec("DELETE FROM orphan WHERE baseline=?", current); err != nil {
 					continue
 				}
@@ -821,14 +841,19 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) error {
 		return nil
 	}
 
-	// Hold back a Checkin referencing a blob that has not arrived yet, same
-	// as the whole-repository sweep's linkBatch does before ever calling
-	// linkArtifact. Checked before the savepoint opens, not inside it: a
-	// deferred checkin must leave nothing in the open batch transaction at
-	// all, matching the sweep's defer skipping every row write. See
-	// cascadeLinker.guard and checkinDeferralGuard.
-	if d.Type == deck.Checkin && cl.guard.shouldDefer(tx, "AfterDephantomize", rid, d) {
-		return nil
+	// Hold back a Checkin whose baseline or files have not arrived yet, as
+	// the whole-repository sweep's linkBatch holds one for its baseline
+	// before ever calling linkArtifact. Checked before the savepoint opens,
+	// not inside it: a deferred checkin leaves only its gap record in the
+	// batch transaction, matching the sweep's defer skipping every
+	// derived-row write. A failed gap record is a database fault, not an
+	// artifact's, so it fails the batch. See cascadeLinker.guard and
+	// checkinDeferralGuard.
+	if d.Type == deck.Checkin {
+		deferred, err := cl.guard.shouldDefer(tx, "AfterDephantomize", rid, d)
+		if err != nil || deferred {
+			return err
+		}
 	}
 
 	if _, err := tx.Exec("SAVEPOINT " + cascadeSavepoint); err != nil {

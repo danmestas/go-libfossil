@@ -310,13 +310,11 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 // within the caller's transaction: candidate discovery, linking and the leaf and
 // tag repair all run on tx, so a rebuild that fails partway rolls back to the
 // derived state it started from, as fossil's rebuild_db does in its one
-// transaction. It never defers a check-in whose file or baseline content is
-// absent. A rebuild is the final word on what the repository holds -- nothing
-// more will arrive -- so it reserves a phantom for every referenced blob and
-// links the check-in, matching `fossil rebuild` (src/manifest.c add_one_mlink's
-// uuid_to_rid(...,1)) rather than the receive path's deferral. On a complete
-// repository no check-in is ever deferred, so this links what Crosslink would;
-// the difference shows only on a repository with missing content.
+// transaction. It links exactly what Crosslink would: a check-in whose file
+// content or parent is absent is linked against phantoms, and a delta manifest
+// whose baseline is absent is refused and filed under its baseline in orphan,
+// as `fossil rebuild` does (src/manifest.c fetch_baseline; see
+// missingBaseline).
 func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if tx == nil {
 		panic("manifest.CrosslinkRebuild: tx must not be nil")
@@ -329,7 +327,6 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 		return 0, err
 	}
 	st := newLinkState(crosslinkCacheBytes)
-	st.noDefer = true
 	if err := linkBatch(context.Background(), tx, candidates, st); err != nil {
 		return 0, err
 	}
@@ -479,17 +476,12 @@ const crosslinkBatchSize = 2000
 
 // linkState carries the sweep's cross-batch accumulators: one content cache for
 // every chain, and the checkinDeferralGuard tracking checkins deferred because
-// a referenced blob has not arrived. A ReceiveLinker owns the same state from
-// each accepted blob through its final candidate sweep.
+// their baseline has not arrived (missingBaseline). A ReceiveLinker owns the
+// same state from each accepted blob through its final candidate sweep.
 type linkState struct {
 	cache  *content.Cache
 	guard  *checkinDeferralGuard
 	linked int
-	// noDefer links a check-in whose file or baseline content is absent instead
-	// of holding it back. It is set only by a terminal rebuild (CrosslinkRebuild),
-	// where nothing more will arrive, so deferral -- which exists to await an
-	// arriving blob -- would drop a check-in `fossil rebuild` keeps.
-	noDefer bool
 }
 
 func newLinkState(cacheBytes int64) *linkState {
@@ -576,8 +568,14 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			batchNonArtifact = append(batchNonArtifact, c.rid)
 			continue
 		}
-		if d.Type == deck.Checkin && !st.noDefer && deferCheckin(tx, c, d, st) {
-			continue
+		if d.Type == deck.Checkin {
+			deferred, err := deferCheckin(tx, c, d, st)
+			if err != nil {
+				return err
+			}
+			if deferred {
+				continue
+			}
 		}
 		handled, linkErr := linkArtifact(tx, c.rid, d, st.cache)
 		if linkErr != nil {
@@ -696,8 +694,8 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 }
 
 // checkinDeferralGuard is the accumulator state behind holding back a Checkin
-// manifest whose referenced blobs (F-cards or the B-card baseline) are not
-// yet available locally: one availability cache shared across every checkin
+// manifest whose B-card baseline (or, for the cascade, a file) is not yet
+// available locally: one availability cache shared across every checkin
 // it tests, exact deferred-reference counts for the end-of-run rollup, and
 // bounded deterministic samples of deferred rids and missing blob UUIDs.
 //
@@ -707,10 +705,14 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 // cascade-deferred checkin falling through to the sweep's own recovery path:
 // collectCrosslinkCandidates reselects a rid only when it has NO event row,
 // and the cascade has no candidate query or round boundary of its own to
-// fall back on. It depends entirely on writing nothing for a deferred rid, so
-// a later sweep still sees it as undiscovered. See shouldDefer.
+// fall back on. It depends entirely on writing no event row for a deferred
+// rid, so a later sweep still sees it as undiscovered. See shouldDefer.
 type checkinDeferralGuard struct {
-	avail                 *content.AvailabilityCache
+	avail *content.AvailabilityCache
+	// awaitFiles makes the guard also wait on a check-in's files
+	// (missingCheckinRefs), not only its baseline (missingBaseline). Only the
+	// receive-time cascade sets it; a sweep never does.
+	awaitFiles            bool
 	deferredCount         int
 	missingReferenceCount int
 	deferredRids          []libfossil.FslID
@@ -728,38 +730,46 @@ func newCheckinDeferralGuard() *checkinDeferralGuard {
 }
 
 // shouldDefer reports whether rid's checkin manifest d must be held back
-// because a blob it references (F-cards or the B-card baseline) has not
-// arrived locally yet, recording it in g's accumulators when so. source
-// labels the caller in the debug log ("Crosslink" or "AfterDephantomize").
+// because its B-card baseline -- or, for a guard that awaits files, a file --
+// has not arrived locally yet (see missingBaseline and missingCheckinRefs),
+// recording the gap and the guard's diagnostics when so. source labels the
+// caller in the debug log ("Crosslink" or "AfterDephantomize").
 //
-// The manifest blob remains durable in 'blob'; the caller MUST write nothing
-// else -- no event/leaf/plink/mlink/tagxref rows -- for rid when this returns
-// true. Skipping every row for it is what keeps a downstream Checkout.Update
-// walking the manifest's F-cards via manifest.ListFiles from hitting `blob
-// not found` mid-traversal, and what lets a later sweep rediscover and
-// complete rid once the missing blob arrives; see the type doc.
-//
-// Surfaced by agent-infra trial #10 under 16-way concurrent fork+merge: a leaf
-// Pulled a multi-blob session in which the merge manifest landed before its
-// file blobs, the original crosslink ran with insertCheckinMlinks silently
-// skipping missing-blob F-cards, and the next Update on that leaf failed. The
-// next sync round that delivers the missing blob also triggers another
-// Crosslink sweep (HandleSync runs Crosslink whenever filesRecvd > 0); the
-// candidate query selects this rid again because no event row was written, and
-// the checkin crosslinks completely.
-func (g *checkinDeferralGuard) shouldDefer(tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck) bool {
-	missing := missingCheckinRefs(tx, d, g.avail)
-	if len(missing) == 0 {
-		return false
+// The manifest blob remains durable in 'blob'. Beyond the gap record --
+// the baseline's phantom and an orphan row -- the caller MUST write nothing
+// for rid when this returns true: no event/leaf/plink/mlink/tagxref rows. The
+// missing event row is what lets a later sweep rediscover and complete rid
+// once the baseline arrives; see the type doc.
+func (g *checkinDeferralGuard) shouldDefer(
+	tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck,
+) (bool, error) {
+	var missing []string
+	if g.awaitFiles {
+		missing = missingCheckinRefs(tx, d, g.avail)
+	} else {
+		missing = missingBaseline(tx, d, g.avail)
 	}
-	g.recordDeferred(tx, source, rid, missing)
-	return true
+	if len(missing) == 0 {
+		return false, nil
+	}
+	return true, g.recordDeferred(tx, source, rid, d, missing)
 }
 
-// recordDeferred retains exact diagnostic counts and bounded samples for a
-// checkin whose missing references have already been computed by a receive-time
-// linker.
-func (g *checkinDeferralGuard) recordDeferred(tx *db.Tx, source string, rid libfossil.FslID, missing []string) {
+// recordDeferred records the baseline gap, if any, of checkin rid (deck d)
+// whose missing references have already been computed, and retains exact
+// diagnostic counts and bounded samples for it. An absent baseline is
+// missing[0] (see missingCheckinRefs).
+func (g *checkinDeferralGuard) recordDeferred(
+	tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck, missing []string,
+) error {
+	if len(missing) == 0 {
+		panic("manifest.recordDeferred: missing must not be empty")
+	}
+	if d.B != "" && missing[0] == d.B {
+		if err := recordBaselineGap(tx, rid, d.B); err != nil {
+			return fmt.Errorf("manifest.%s defer rid=%d: %w", source, rid, err)
+		}
+	}
 	g.deferredCount++
 	g.deferredRids = insertDeferredRIDSample(g.deferredRids, rid)
 	for _, uuid := range missing {
@@ -773,6 +783,7 @@ func (g *checkinDeferralGuard) recordDeferred(tx *db.Tx, source string, rid libf
 		"uuid", uuid,
 		"missing_count", len(missing),
 		"first_missing", missing[0])
+	return nil
 }
 
 // recordMissingBlobSample retains only the lexicographically smallest distinct
@@ -820,10 +831,9 @@ func insertDeferredRIDSample(samples []libfossil.FslID, rid libfossil.FslID) []l
 }
 
 // deferCheckin reports whether a checkin must be held back this sweep because
-// a blob it references has not arrived locally yet. Thin wrapper over
-// checkinDeferralGuard.shouldDefer so linkBatch's call site -- and its
-// existing behavior and tests -- do not change.
-func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) bool {
+// its baseline has not arrived locally yet (see missingBaseline). Thin wrapper
+// over checkinDeferralGuard.shouldDefer for linkBatch's call site.
+func deferCheckin(tx *db.Tx, c candidate, d *deck.Deck, st *linkState) (bool, error) {
 	return st.guard.shouldDefer(tx, "Crosslink", c.rid, d)
 }
 
@@ -987,67 +997,108 @@ func repairTagPropagation(q db.Querier) error {
 	return nil
 }
 
-// missingCheckinRefs returns the list of UUIDs referenced by a Checkin
-// manifest whose blobs are not yet present locally. References checked:
-//   - B-card: the baseline manifest UUID for delta manifests. Without
-//     the baseline, ListFiles cannot resolve the effective F-card set.
-//   - F-cards: every (non-deleted) file UUID. These are the targets
-//     Checkout.Update.expandUUID will need. They are not checked when the
-//     primary parent's content is itself absent: no mlink row depends on
-//     them until it arrives (see the comment in the body).
+// missingBaseline returns the reference whose absence holds a check-in
+// manifest back from a sweep: the B-card baseline of a delta manifest, when
+// that baseline's content is not available. The result is empty when the
+// check-in may be linked now.
 //
-// When the parent is absent and its manifest arrives later, the child's
-// files are phantoms that sync requests, so the Checkout.Update protection
-// then relies on sync converging. A root check-in or a check-in on a present
-// parent is still held for its files, which fossil does not do (#406).
+// The baseline is the only such reference. Without it the delta manifest has
+// no file set, so [FossilArtifact] Section 8.3 makes its crosslink a soft
+// failure retried once the baseline arrives, and fossil's manifest_crosslink
+// refuses it outright (fetch_baseline fails; src/manifest.c ~1363, ~2361).
+// That holds for a rebuild too: fossil rebuild refuses it the same way.
 //
-// Empty result means crosslink is safe to run; non-empty means defer
-// to a later sweep that will discover the manifest again (no event row
-// was written, so the candidate query re-selects this rid).
+// Absent file content and an absent parent never hold a check-in back from a
+// sweep. Each is an unresolved reference, which yields a phantom rather than
+// an error (draft-fossil-repo-state-01 Section 4.2 step 1): fossil's
+// add_one_mlink resolves files with uuid_to_rid(..., 1), so the event, plink
+// and mlink rows are all written, against phantoms that the content fills in
+// place when it arrives. A sweep is the last step of every sync, clone and
+// rebuild, so holding a check-in there for a file that never arrives withheld
+// its rows forever (#406). Only the receive-time paths, which run while more
+// blobs are still arriving, wait on files too; see missingCheckinRefs.
 //
-// Divergence from fossil-scm/c: fossil's reference uses an `rcvfrom`
-// table + deferred-flush at content arrival; the Go port reuses the
-// existing whole-repo sweep semantics by checking presence at sweep
-// time. The candidate query naturally re-discovers deferred manifests
-// because we do not write any event/leaf/plink/mlink/tagxref rows for
-// them.
-func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) []string {
+// A deferred check-in gets no event row, so the candidate query re-selects it
+// on the next sweep; recordBaselineGap also files it under its baseline in
+// orphan, where the phantom-fill cascade finds it when the baseline arrives.
+func missingBaseline(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) []string {
 	if tx == nil {
-		panic("manifest.missingCheckinRefs: tx must not be nil")
+		panic("manifest.missingBaseline: tx must not be nil")
 	}
 	if d == nil {
-		panic("manifest.missingCheckinRefs: d must not be nil")
+		panic("manifest.missingBaseline: d must not be nil")
 	}
-	var missing []string
-	seen := make(map[string]struct{})
-	check := func(uuid string) {
-		if uuid == "" {
-			return
-		}
-		if _, dup := seen[uuid]; dup {
-			return
-		}
-		seen[uuid] = struct{}{}
-		if _, ok := avail.ByUUID(tx, uuid); !ok {
-			missing = append(missing, uuid)
-		}
+	if d.B == "" {
+		return nil
 	}
-	check(d.B)
+	if _, ok := avail.ByUUID(tx, d.B); ok {
+		return nil
+	}
+	return []string{d.B}
+}
+
+// missingCheckinRefs is missingBaseline for the receive-time paths -- the
+// phantom-fill cascade and the clone's ReceiveLinker -- which run while a
+// session is still delivering blobs. Beyond the baseline it also waits on the
+// check-in's (non-deleted) F-card files, the content Checkout.Update will
+// read, so a check-in whose files are still in flight is not exposed half
+// stored (agent-infra trial #10). That wait is bounded: every such session
+// ends in a sweep, which links what is still waiting against phantoms. The
+// baseline, when absent, is always first in the result.
+//
+// Files are not awaited when the primary parent's content is itself absent:
+// with no parent manifest there is no file transition to derive -- fossil's
+// add_mlink returns before reading a file -- and the parent's own crosslink
+// derives the rows once it arrives (issue #398).
+func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) []string {
+	missing := missingBaseline(tx, d, avail)
 	if len(d.P) > 0 {
-		// With the primary parent's manifest absent there is no file
-		// transition to derive: fossil's add_mlink returns before reading a
-		// file, and the parent's own crosslink derives the rows once it
-		// arrives, reserving phantoms for files still absent then. Holding
-		// the check-in for its files would withhold the event and plink rows
-		// fossil writes, for content that may never come (issue #398).
 		if _, ok := avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
 		}
 	}
+	seen := make(map[string]struct{}, len(d.F))
 	for _, f := range d.F {
-		check(f.UUID) // skipped if "" (deleted file in delta manifest)
+		if f.UUID == "" { // a deleted file in a delta manifest
+			continue
+		}
+		if _, dup := seen[f.UUID]; dup {
+			continue
+		}
+		seen[f.UUID] = struct{}{}
+		if _, ok := avail.ByUUID(tx, f.UUID); !ok {
+			missing = append(missing, f.UUID)
+		}
 	}
 	return missing
+}
+
+// recordBaselineGap records that check-in rid waits on the baseline named
+// baseline, as fossil's fetch_baseline does when it refuses a delta manifest:
+// the baseline resolves to its rid, reserving a phantom when it has never been
+// seen, so a sync requests it, and an orphan row keys rid by that baseline, so
+// the phantom-fill cascade (afterDephantomize) links rid as soon as it lands.
+// This is the gap record of [FossilArtifact] Section 8.3's soft failure.
+func recordBaselineGap(tx *db.Tx, rid libfossil.FslID, baseline string) error {
+	if tx == nil {
+		panic("manifest.recordBaselineGap: tx must not be nil")
+	}
+	if rid <= 0 {
+		panic("manifest.recordBaselineGap: rid must be positive")
+	}
+	if baseline == "" {
+		panic("manifest.recordBaselineGap: baseline must not be empty")
+	}
+	baseRid, err := ridOrPhantom(tx, baseline)
+	if err != nil {
+		return fmt.Errorf("baseline %s: %w", baseline, err)
+	}
+	if _, err := tx.Exec(
+		"INSERT OR IGNORE INTO orphan(rid, baseline) VALUES(?, ?)", rid, baseRid,
+	); err != nil {
+		return fmt.Errorf("orphan rid=%d: %w", rid, err)
+	}
+	return nil
 }
 
 // crosslinkCheckin links one check-in manifest. cache is the caller's shared

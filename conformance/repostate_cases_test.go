@@ -51,8 +51,8 @@ func dagCases() []rsCase {
 		rebuild:  true,
 	}, {
 		// c2 is a delta manifest: its link carries c1 as the baseline and
-		// c2's own time. The files are loaded too: go-libfossil defers a
-		// check-in whose files are missing.
+		// c2's own time. The files are loaded too, so the link is all the
+		// case is about.
 		Case: Case{ID: "repostate.3.1.link-metadata", Req: "RS-3.1-1"},
 		arts: []rsArt{
 			file("fa", "a\n"), file("fb", "b\n"),
@@ -64,6 +64,32 @@ func dagCases() []rsCase {
 		want:     rows("plink", "c1>c2 1 @2 c1"),
 		ignoring: []string{"-plink: c1>c2 1 @2 c1", "+plink: c1>c2 1 @2 -"},
 		rebuild:  true,
+	}, {
+		// A delta manifest whose baseline b is not stored has no baseline id
+		// for its link to carry. [FossilArtifact] Section 8.3 makes its
+		// crosslink a soft failure, the gap recorded against the baseline
+		// and retried when b arrives, so it has no link or event row yet and
+		// b is a phantom. fossil's manifest_crosslink refuses it the same way
+		// (fetch_baseline), in a sweep and in `fossil rebuild` alike.
+		Case:   Case{ID: "repostate.3.1.absent-baseline", Req: "RS-3.1-1"},
+		arts:   []rsArt{literal("c2", "B {b}\nC c2\nD "+rsTime(2)+"\nP {p}\nU u\n")},
+		tables: []string{"event", "phantom", "plink"},
+		want:   rows("phantom", "b"),
+		ignoring: []string{"+event: c2 ci @2", "+plink: p>c2 1 @2 -", "+phantom: p",
+			"-phantom: b"},
+		rebuild: true,
+	}, {
+		// The baseline arrives after its delta: the deferred crosslink is
+		// retried and the link carries the baseline id.
+		Case: Case{ID: "repostate.3.1.late-baseline", Req: "RS-3.1-1"},
+		arts: []rsArt{
+			literal("c2", "B {c1}\nC c2\nD "+rsTime(2)+"\nP {c1}\nU u\n"),
+			checkin("c1", 1, nil, rsRoot...),
+		},
+		tables:   []string{"event", "plink"},
+		want:     join(rows("event", "c1 ci @1", "c2 ci @2"), rows("plink", "c1>c2 1 @2 c1")),
+		ignoring: []string{"-event: c2 ci @2", "-plink: c1>c2 1 @2 c1"},
+		each:     true,
 	}}
 }
 
@@ -90,13 +116,30 @@ func crosslinkCases() []rsCase {
 		rebuild:       true,
 		rebuildWrites: "the phantom root has no branch tag, so fossil rebuild tags it trunk",
 	}, {
-		// A root check-in whose file is absent: fossil links it against a
-		// phantom file; go-libfossil still defers it (#406).
-		Case:     Case{ID: "repostate.4.2.root-absent-file", Req: "RS-4.2-2"},
-		arts:     []rsArt{literal("c1", "C c1\nD "+rsTime(1)+"\nF a.txt {fa}\nU u\n")},
-		tables:   []string{"event"},
-		want:     rows("event", "c1 ci @1"),
-		ignoring: []string{"-event: c1 ci @1"},
+		// A root check-in whose file is absent: an absent reference yields a
+		// phantom, not an error, so the check-in links against a phantom file
+		// as fossil's add_one_mlink does (uuid_to_rid(...,1)).
+		Case: Case{ID: "repostate.4.2.root-absent-file", Req: "RS-4.2-2"},
+		arts: []rsArt{literal("c1", "C c1\nD "+rsTime(1)+"\nF a.txt {fa}\n"+
+			"T *branch * trunk\nT *sym-trunk *\nU u\n")},
+		tables: []string{"event", "mlink", "phantom"},
+		want: join(rows("event", "c1 ci @1"), rows("mlink", "c1 fa #0 #0 a.txt 0"),
+			rows("phantom", "fa")),
+		ignoring: []string{"-event: c1 ci @1", "-mlink: c1 fa #0 #0 a.txt 0", "-phantom: fa"},
+		rebuild:  true,
+	}, {
+		// A check-in on a stored parent, naming a file that never arrives:
+		// the file transition is recorded against the file's phantom.
+		Case: Case{ID: "repostate.4.2.present-parent-absent-file", Req: "RS-4.2-2"},
+		arts: []rsArt{
+			checkin("c1", 1, nil, rsRoot...),
+			literal("c2", "C c2\nD "+rsTime(2)+"\nF a.txt {fa}\nP {c1}\nU u\n"),
+		},
+		tables: []string{"event", "phantom", "plink"},
+		want: join(rows("event", "c1 ci @1", "c2 ci @2"), rows("phantom", "fa"),
+			rows("plink", "c1>c2 1 @2 -")),
+		ignoring: []string{"-event: c2 ci @2", "-phantom: fa", "-plink: c1>c2 1 @2 -"},
+		rebuild:  true,
 	}, {
 		Case:     Case{ID: "repostate.4.2.phantom-target", Req: "RS-4.2-1"},
 		arts:     with(chain()[:2], control("t", 9, "*foo {c3} v")),

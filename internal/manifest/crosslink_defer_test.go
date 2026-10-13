@@ -13,22 +13,14 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
-// TestCrosslink_DefersCheckinWithMissingFileBlob reproduces the multi-blob
-// delivery race surfaced by agent-infra trial #10 finding #12.
-//
-// Mechanism: a leaf Pulls a multi-blob session in which the Checkin
-// manifest blob lands BEFORE its referenced file blob. v0.4.1's Crosslink
-// would have written event/leaf rows for the manifest while
-// insertCheckinMlinks silently skipped the missing-blob F-card; a
-// downstream Checkout.Update walking the manifest's F-cards via
-// expandUUID then hit `blob not found for uuid <hex>`.
-//
-// The fix defers crosslinking the manifest until the referenced blob is
-// also stored locally. The manifest blob remains durable in `blob`; only
-// the relational rows are delayed. The next Crosslink sweep — which runs
-// on every HandleSync round that received files — picks it up because
-// the candidate query selects rids without an event row.
-func TestCrosslink_DefersCheckinWithMissingFileBlob(t *testing.T) {
+// TestCrosslink_LinksCheckinWithMissingFileBlob is issue #406: a check-in
+// whose file has not arrived is linked against a phantom for the file, as
+// fossil's add_one_mlink does (uuid_to_rid(..., 1)), rather than held back.
+// The hold-back it replaces (agent-infra trial #10 finding #12) had no bound:
+// a file that never arrived withheld the check-in's rows forever. When the
+// file does arrive it fills the phantom in place, so the mlink row already
+// names it and nothing is relinked.
+func TestCrosslink_LinksCheckinWithMissingFileBlob(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("file content arrives later")
@@ -67,31 +59,43 @@ func TestCrosslink_DefersCheckinWithMissingFileBlob(t *testing.T) {
 		t.Fatalf("blob.Store(manifest): %v", err)
 	}
 
-	// First Crosslink sweep: the file blob is missing, so the manifest
-	// must be deferred. No event/leaf/mlink rows must be written.
 	linked, err := Crosslink(r)
 	if err != nil {
-		t.Fatalf("Crosslink (deferred phase): %v", err)
+		t.Fatalf("Crosslink: %v", err)
 	}
-	if linked != 0 {
-		t.Errorf("Crosslink (deferred phase): linked = %d, want 0", linked)
+	if linked != 1 {
+		t.Errorf("Crosslink: linked = %d, want 1", linked)
 	}
-	assertCounts(t, r, manifestRID, 0, 0, 0, "after defer")
+	assertCounts(t, r, manifestRID, 1, 1, 1, "linked against a phantom")
+	fileRID := assertPhantom(t, r, fileUUID, true)
 
-	// Now the missing file blob arrives. The next Crosslink sweep
-	// re-discovers the manifest (no event row was written) and links
-	// it fully.
+	// The file arrives: it fills the phantom, and the existing mlink row
+	// already names it.
 	if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
 		t.Fatalf("blob.Store(file): %v", err)
 	}
-	linked, err = Crosslink(r)
-	if err != nil {
-		t.Fatalf("Crosslink (post-arrival phase): %v", err)
+	if linked, err = Crosslink(r); err != nil || linked != 0 {
+		t.Fatalf("Crosslink after arrival = %d, %v; want 0", linked, err)
 	}
-	if linked != 1 {
-		t.Errorf("Crosslink (post-arrival phase): linked = %d, want 1", linked)
+	assertCounts(t, r, manifestRID, 1, 1, 1, "after file arrival")
+	if got := assertPhantom(t, r, fileUUID, false); got != fileRID {
+		t.Errorf("file rid = %d after arrival, want the phantom's rid %d", got, fileRID)
 	}
-	assertCounts(t, r, manifestRID, 1, 1, 1, "after blob arrival")
+}
+
+// assertPhantom checks whether uuid is stored as a phantom and returns its
+// rid; a uuid with no blob row at all fails the test.
+func assertPhantom(t *testing.T, r *repo.Repo, uuid string, want bool) int64 {
+	t.Helper()
+	var rid, size int64
+	if err := r.DB().QueryRow("SELECT rid, size FROM blob WHERE uuid=?", uuid).
+		Scan(&rid, &size); err != nil {
+		t.Fatalf("blob %s: %v", uuid, err)
+	}
+	if got := size < 0; got != want {
+		t.Errorf("blob %s phantom = %v, want %v", uuid, got, want)
+	}
+	return rid
 }
 
 // TestCrosslink_DefersDeltaCheckinWithMissingBaseline covers the B-card
@@ -173,6 +177,10 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 		t.Errorf("linked = %d, want 0 (delta baseline missing)", linked)
 	}
 	assertCounts(t, r, deltaRID, 0, 0, 0, "delta deferred")
+	// The gap is recorded as fossil's fetch_baseline records it: a phantom for
+	// the baseline, so a sync requests it, and an orphan row under it.
+	baseRID := assertPhantom(t, r, baselineUUID, true)
+	assertOrphan(t, r, int64(deltaRID), baseRID)
 
 	// Baseline arrives (and its file). Crosslink should link both.
 	if _, _, err := blob.Store(r.DB(), baselineFileContent); err != nil {
@@ -245,17 +253,9 @@ func TestCrosslink_LinksWhenAllBlobsPresent(t *testing.T) {
 	assertCounts(t, r, manifestRID, 1, 1, 1, "synchronous link")
 }
 
-// TestCrosslink_DefersMultipleCheckinsSharingMissingBlob covers the
-// many-to-one case: two distinct Checkin manifests both reference the
-// same not-yet-arrived file blob. The first sweep must defer both
-// manifests and write zero relational rows; arrival of the single shared
-// blob must allow the next sweep to link both manifests.
-//
-// Methodology: stage two Checkin manifests pointing at the same fileUUID
-// (same content -> same hash). Run Crosslink with the file blob absent;
-// assert linked == 0. Store the file blob, run Crosslink again; assert
-// linked == 2 and both manifests now have event/leaf rows.
-func TestCrosslink_DefersMultipleCheckinsSharingMissingBlob(t *testing.T) {
+// TestCrosslink_LinksCheckinsSharingMissingBlob: two check-ins naming the
+// same absent file both link in one sweep, against one shared phantom.
+func TestCrosslink_LinksCheckinsSharingMissingBlob(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("shared file across two checkins")
@@ -299,20 +299,7 @@ func TestCrosslink_DefersMultipleCheckinsSharingMissingBlob(t *testing.T) {
 
 	linked, err := Crosslink(r)
 	if err != nil {
-		t.Fatalf("Crosslink (deferred): %v", err)
-	}
-	if linked != 0 {
-		t.Errorf("linked = %d, want 0 (both deferred)", linked)
-	}
-	assertCounts(t, r, rid1, 0, 0, 0, "rid1 deferred")
-	assertCounts(t, r, rid2, 0, 0, 0, "rid2 deferred")
-
-	if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
-		t.Fatalf("blob.Store(file): %v", err)
-	}
-	linked, err = Crosslink(r)
-	if err != nil {
-		t.Fatalf("Crosslink (post-arrival): %v", err)
+		t.Fatalf("Crosslink: %v", err)
 	}
 	if linked != 2 {
 		t.Errorf("linked = %d, want 2 (both manifests link)", linked)
@@ -321,6 +308,13 @@ func TestCrosslink_DefersMultipleCheckinsSharingMissingBlob(t *testing.T) {
 	// at the other), so both stay in the leaf table.
 	assertCounts(t, r, rid1, 1, 1, 1, "rid1 linked (sibling leaf)")
 	assertCounts(t, r, rid2, 1, 1, 1, "rid2 linked (sibling leaf)")
+	fileRID := assertPhantom(t, r, fileUUID, true)
+	var fids int
+	if err := r.DB().QueryRow(
+		"SELECT count(*) FROM mlink WHERE mid IN (?, ?) AND fid=?", rid1, rid2, fileRID,
+	).Scan(&fids); err != nil || fids != 2 {
+		t.Errorf("mlink rows on the shared phantom = %d, %v; want 2", fids, err)
+	}
 }
 
 // TestCrosslink_DoesNotDeferOnMissingParent confirms a deliberate
@@ -456,18 +450,10 @@ func TestCrosslink_DoesNotDeferOnMissingFilesAtopMissingParent(t *testing.T) {
 	assertCounts(t, r, childRID, 1, 1, 1, "after parent arrival")
 }
 
-// TestCrosslink_DedupesDuplicateFCardUUIDs covers a hostile-input case:
-// a single manifest references the same file UUID via multiple F-cards
-// (e.g., a renamed file pair where both names point at the same content
-// blob — legal in the manifest grammar). The deferral check must visit
-// the underlying blob once, not N times, and the missing-list reported
-// to slog must contain that UUID once.
-//
-// Methodology: build a manifest with two F-cards (different names, same
-// UUID) pointing at a not-yet-stored blob. Trigger missingCheckinRefs
-// indirectly via Crosslink — assert the manifest is deferred (proves the
-// missing-blob check ran) and that it links cleanly when the blob lands.
-func TestCrosslink_DedupesDuplicateFCardUUIDs(t *testing.T) {
+// TestCrosslink_DuplicateFCardUUIDsShareOnePhantom covers a manifest naming
+// one absent file blob under two names -- legal in the manifest grammar. It
+// links at once with one mlink row per name, both on a single phantom.
+func TestCrosslink_DuplicateFCardUUIDsShareOnePhantom(t *testing.T) {
 	r := setupTestRepo(t)
 
 	fileContent := []byte("dedup target")
@@ -508,50 +494,48 @@ func TestCrosslink_DedupesDuplicateFCardUUIDs(t *testing.T) {
 
 	linked, err := Crosslink(r)
 	if err != nil {
-		t.Fatalf("Crosslink (defer): %v", err)
-	}
-	if linked != 0 {
-		t.Errorf("linked = %d, want 0 (deferred for missing UUID)", linked)
-	}
-	assertCounts(t, r, manifestRID, 0, 0, 0, "deferred")
-
-	if _, _, err := blob.Store(r.DB(), fileContent); err != nil {
-		t.Fatalf("blob.Store(file): %v", err)
-	}
-	linked, err = Crosslink(r)
-	if err != nil {
-		t.Fatalf("Crosslink (post-arrival): %v", err)
+		t.Fatalf("Crosslink: %v", err)
 	}
 	if linked != 1 {
-		t.Errorf("linked = %d, want 1 after blob arrival", linked)
+		t.Errorf("linked = %d, want 1", linked)
 	}
 	// Two F-cards same UUID -> two mlink rows (one per filename).
 	assertCounts(t, r, manifestRID, 1, 1, 2, "linked, two mlinks")
+	fileRID := assertPhantom(t, r, fileUUID, true)
+	var phantoms int
+	if err := r.DB().QueryRow("SELECT count(*) FROM blob WHERE size<0").
+		Scan(&phantoms); err != nil || phantoms != 1 {
+		t.Errorf("phantoms = %d, %v; want 1", phantoms, err)
+	}
+	var fids int
+	if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=? AND fid=?",
+		manifestRID, fileRID).Scan(&fids); err != nil || fids != 2 {
+		t.Errorf("mlink rows on the phantom = %d, %v; want 2", fids, err)
+	}
 }
 
 // TestCheckinDeferralGuardBoundsDiagnosticSamples ensures a long receive
 // sweep preserves exact diagnostics without retaining every deferred artifact.
-// RIDs and unique missing UUIDs arrive largest-first; repeated references
-// still count as observations, while each bounded sample keeps the smallest
-// distinct identifiers.
+// RIDs and missing baselines arrive largest-first, and every second baseline
+// is shared; repeated references still count as observations, while each
+// bounded sample keeps the smallest distinct identifiers.
 func TestCheckinDeferralGuardBoundsDiagnosticSamples(t *testing.T) {
-	const deferrals = logDeferredSampleSize + 3
+	// Every baseline is shared by two rids, and there are still more distinct
+	// baselines than the sample keeps.
+	const deferrals = 2*logDeferredSampleSize + 3
 
 	r := setupTestRepo(t)
 	guard := newCheckinDeferralGuard()
-	const sharedMissingUUID = "0000000000000000000000000000000000000001"
+	baselineOf := func(rid int) string { return fmt.Sprintf("%040x", (rid+1)/2) }
 
 	if err := r.WithTx(func(tx *db.Tx) error {
 		for rid := deferrals; rid > 0; rid-- {
-			uniqueMissingUUID := fmt.Sprintf("%040x", rid+1)
-			d := &deck.Deck{
-				Type: deck.Checkin,
-				F: []deck.FileCard{
-					{Name: "shared", UUID: sharedMissingUUID},
-					{Name: fmt.Sprintf("unique-%d", rid), UUID: uniqueMissingUUID},
-				},
+			d := &deck.Deck{Type: deck.Checkin, B: baselineOf(rid)}
+			deferred, err := guard.shouldDefer(tx, "test", libfossil.FslID(rid), d)
+			if err != nil {
+				return err
 			}
-			if !guard.shouldDefer(tx, "test", libfossil.FslID(rid), d) {
+			if !deferred {
 				return fmt.Errorf("rid %d was not deferred", rid)
 			}
 		}
@@ -563,7 +547,7 @@ func TestCheckinDeferralGuardBoundsDiagnosticSamples(t *testing.T) {
 	if got := guard.deferredCount; got != deferrals {
 		t.Errorf("deferred event count = %d, want %d", got, deferrals)
 	}
-	if got, want := guard.missingReferenceCount, 2*deferrals; got != want {
+	if got, want := guard.missingReferenceCount, deferrals; got != want {
 		t.Errorf("missing reference count = %d, want %d", got, want)
 	}
 	if got := len(guard.deferredRids); got != logDeferredSampleSize {
@@ -585,6 +569,16 @@ func TestCheckinDeferralGuardBoundsDiagnosticSamples(t *testing.T) {
 		if _, ok := guard.missingBlobs[wantUUID]; !ok {
 			t.Errorf("missing smallest retained UUID %q from %v", wantUUID, guard.missingBlobs)
 		}
+	}
+}
+
+// assertOrphan checks that rid is filed in orphan under baseline.
+func assertOrphan(t *testing.T, r *repo.Repo, rid, baseline int64) {
+	t.Helper()
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM orphan WHERE rid=? AND baseline=?",
+		rid, baseline).Scan(&n); err != nil || n != 1 {
+		t.Errorf("orphan(%d, %d) rows = %d, %v; want 1", rid, baseline, n, err)
 	}
 }
 

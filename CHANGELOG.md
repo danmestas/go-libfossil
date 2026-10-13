@@ -106,6 +106,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The crosslink sweep no longer holds back a check-in for absent file
+  content (#406). A root check-in, or one on a present parent, whose files
+  never arrived got no event, plink, mlink, leaf or tag rows, so it never
+  appeared. The sweep -- `Crosslink`, the step that ends every sync and
+  clone, and `verify.Rebuild` -- now links it against phantoms for the
+  absent files, as fossil's `add_one_mlink` does and as repo-state-01 §4.2
+  (RS-4.2-2) requires of an unresolved reference; the content fills the
+  phantoms in place when it arrives. The receive-time paths, the
+  phantom-fill cascade and a clone's receive linker, still wait for files
+  while a session is delivering them, so `Checkout.Update` does not meet a
+  check-in whose files are in flight; the closing sweep bounds that wait.
+  New case: `repostate.4.2.present-parent-absent-file`; the gap case
+  `repostate.4.2.root-absent-file` now passes, and both also run through
+  `verify.Rebuild`.
+- `verify.Rebuild` no longer links a delta manifest whose B-card baseline is
+  absent (#406). It wrote event and plink rows, with no baseline id, where
+  `fossil rebuild` refuses it (`fetch_baseline`). Every crosslink path now
+  refuses it the same way, as artifact-format-01 §8.3's soft failure: the
+  baseline gets a phantom, so a sync requests it, and the manifest is filed
+  in `orphan` under it, where the phantom-fill cascade links it when the
+  baseline arrives. Before, a sweep deferred it without either, so nothing
+  asked for the baseline. `verify.Rebuild` clears and rederives `orphan`.
+  New cases: `repostate.3.1.absent-baseline` (with `.rebuild`) and
+  `repostate.3.1.late-baseline`.
 - A check-in whose primary parent is absent is no longer held back for
   absent file content (#398). The crosslink sweep, the receive linker and the
   phantom-fill cascade deferred it until its files arrived, but with no parent
@@ -115,11 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes them, as RS-4.2-2 requires: the libfossil repository holds one such
   fossil-scm check-in, imported without its history. Its file transitions are
   derived when the parent arrives, against phantoms for files still absent,
-  as fossil's do. A check-in on a present parent is still deferred for its
-  files. New case: `repostate.4.2.phantom-parent-absent-file`. Fossil also
-  links a root check-in, or one on a present parent, whose files are absent;
-  go-libfossil still defers those to protect `Checkout.Update`, a deviation
-  tracked in #406 with the gap case `repostate.4.2.root-absent-file`.
+  as fossil's do. New case: `repostate.4.2.phantom-parent-absent-file`. A
+  root check-in, or one on a present parent, with absent files is covered by
+  the #406 entry above.
 - A received `file` or `cfile` delta whose basis is held is now checked
   against its HASH before it is stored, on the sync client, the server and a
   clone alike (sync-protocol-01 Section 7.7, SP-7.7-4). The server had

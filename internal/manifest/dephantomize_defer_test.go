@@ -7,16 +7,16 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
-// TestAfterDephantomizeCascadeDefersCheckinWithMissingFileBlob is the
-// cascade's analogue of TestCrosslink_DefersCheckinWithMissingFileBlob
-// (issue #180): the mid-round phantom-fill cascade must hold back a Checkin
-// manifest whose referenced blob has not arrived, exactly as the
-// whole-repository sweep's deferCheckin does, so a later Crosslink sweep --
-// triggered once the missing blob arrives -- can still rediscover and
-// complete it.
+// TestAfterDephantomizeCascadeDefersCheckinWithMissingFileBlob (issue #180):
+// the mid-round phantom-fill cascade must hold back a Checkin manifest whose
+// referenced file blob has not arrived -- more blobs are still on the way --
+// so a later Crosslink sweep can still rediscover and complete it. Unlike the
+// cascade, that sweep never waits on files (#406; see
+// TestCrosslink_LinksCheckinWithMissingFileBlob).
 //
 // Before the fix, afterDephantomize called linkArtifact for a Checkin
 // unconditionally: it wrote the event row even though insertCheckinMlinks
@@ -82,4 +82,59 @@ func TestAfterDephantomizeCascadeDefersCheckinWithMissingFileBlob(t *testing.T) 
 		t.Errorf("Crosslink (post-arrival phase): linked = %d, want 1", linked)
 	}
 	assertCounts(t, r, manifestRID, 1, 1, 1, "after blob arrival")
+}
+
+// TestAfterDephantomizeLinksOrphanWhenBaselineArrives: a delta manifest whose
+// baseline is absent is refused and filed in orphan under the baseline's
+// phantom, as fossil's fetch_baseline files it; when the baseline arrives, the
+// phantom-fill cascade finds it there, links it and clears the row.
+func TestAfterDephantomizeLinksOrphanWhenBaselineArrives(t *testing.T) {
+	r := setupTestRepo(t)
+	baseline := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "baseline arrives later",
+		D:    time.Date(2026, 7, 27, 11, 0, 0, 0, time.UTC),
+		U:    deck.User("tester"),
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+		},
+	}
+	baselineBytes, err := baseline.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal(baseline): %v", err)
+	}
+	baselineUUID := repoHash(r, baselineBytes)
+	delta := &deck.Deck{
+		Type: deck.Checkin,
+		B:    baselineUUID,
+		C:    "delta before its baseline",
+		D:    time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+		P:    []string{baselineUUID},
+		U:    deck.User("tester"),
+	}
+	deltaBytes, err := delta.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal(delta): %v", err)
+	}
+	deltaRID, _, err := blob.Store(r.DB(), deltaBytes)
+	if err != nil {
+		t.Fatalf("blob.Store(delta): %v", err)
+	}
+
+	AfterDephantomize(context.Background(), r, deltaRID)
+	assertCounts(t, r, deltaRID, 0, 0, 0, "refused without its baseline")
+	baseRID := assertPhantom(t, r, baselineUUID, true)
+	assertOrphan(t, r, int64(deltaRID), baseRID)
+
+	if _, _, err := blob.Store(r.DB(), baselineBytes); err != nil {
+		t.Fatalf("blob.Store(baseline): %v", err)
+	}
+	AfterDephantomize(context.Background(), r, libfossil.FslID(baseRID))
+	assertCounts(t, r, deltaRID, 1, 0, 0, "linked once the baseline arrived")
+	var orphans int
+	if err := r.DB().QueryRow("SELECT count(*) FROM orphan").Scan(&orphans); err != nil ||
+		orphans != 0 {
+		t.Errorf("orphan rows = %d, %v; want 0", orphans, err)
+	}
 }

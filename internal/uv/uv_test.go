@@ -1,6 +1,8 @@
 package uv
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"path/filepath"
 	"testing"
 
@@ -240,5 +242,40 @@ func TestReceiveDeletionOfAbsentName(t *testing.T) {
 	}
 	if err := d.QueryRow("SELECT count(*) FROM unversioned").Scan(&n); err != nil || n != 1 {
 		t.Fatalf("rows after a local Delete: %d, %v; want 1", n, err)
+	}
+}
+
+// TestContentHashFossilizesNames checks sync-protocol-01 §8.5.1: the catalog
+// hashes each name in its fossilized form and sorts by those bytes. The
+// unfossilized order puts "a b.txt" first; the fossilized one, "a\sb.txt",
+// puts it after "a-b.txt".
+func TestContentHashFossilizesNames(t *testing.T) {
+	d := openTestDB(t)
+	if err := Write(d, "a b.txt", []byte("one"), 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := Write(d, "a-b.txt", []byte("two"), 200); err != nil {
+		t.Fatal(err)
+	}
+	var h1, h2 string
+	var d1, d2 string
+	if err := d.QueryRow("SELECT hash, datetime(mtime,'unixepoch') FROM unversioned"+
+		" WHERE name='a b.txt'").Scan(&h1, &d1); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.QueryRow("SELECT hash, datetime(mtime,'unixepoch') FROM unversioned"+
+		" WHERE name='a-b.txt'").Scan(&h2, &d2); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha1.Sum([]byte("a-b.txt " + d2 + " " + h2 + "\n" +
+		`a\sb.txt ` + d1 + " " + h1 + "\n"))
+	want := hex.EncodeToString(sum[:])
+
+	got, err := ContentHash(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("ContentHash = %s, want %s", got, want)
 	}
 }

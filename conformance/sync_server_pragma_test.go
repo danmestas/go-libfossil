@@ -62,6 +62,43 @@ func serverPragmaCases() []syncServerCase {
 		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
 			"pragma ci-lock {M2} aaaa", "{R}"},
 		want: all(completed, noErrors, noCard("pragma ci-lock-fail")),
+	}, {
+		// No lock is held: one is written, for alice and client aaaa, and
+		// nothing acknowledges it.
+		Case: Case{ID: "sync.9.4.ci-lock-written", Req: "SP-9.4-1"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"{R}"},
+		want: all(completed, noErrors, noCard("pragma ci-lock"),
+			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'"+
+				" AND json_extract(value, '$.login')='alice'"+
+				" AND json_extract(value, '$.clientid')='aaaa'", 1)),
+	}, {
+		// bob's lock for client aaaa is live: alice's ci-lock from the same
+		// client leaves it as it was, holder and time alike.
+		Case: Case{ID: "sync.9.4.ci-lock-kept", Req: "SP-9.4-1"},
+		setup: []string{"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{M2}'," +
+			" json_object('login', 'bob', 'clientid', 'aaaa'), strftime('%s', 'now') - 30)"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"{R}"},
+		want: all(completed, noErrors, noCard("pragma ci-lock"),
+			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'"+
+				" AND json_extract(value, '$.login')='bob'"+
+				" AND mtime < strftime('%s', 'now') - 20", 1)),
+	}, {
+		// §9.4: the dispatcher applies ci-lock with no Write-capability test,
+		// so nobody, who cannot commit, still takes the lock.
+		Case:  Case{ID: "sync.9.4.ci-lock-no-write-gate", Req: "SP-9.4-1"},
+		setup: closed,
+		body:  []string{"{CV}", "pragma ci-lock {M2} aaaa", "{R}"},
+		want: all(completed, noErrors, noCard("pragma ci-lock"),
+			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'", 1)),
+	}, {
+		// §9.4: the pragma has exactly an artifact-hash HASH argument, so a
+		// token that is no hash writes no lock.
+		Case: Case{ID: "sync.9.4.ci-lock-not-a-hash", Req: "SP-9.4-1"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock x aaaa", "{R}"},
+		want: all(completed, noErrors,
+			repoCount("SELECT count(*) FROM config WHERE name GLOB 'ci-lock-*'", 0)),
 	}}
 }
 

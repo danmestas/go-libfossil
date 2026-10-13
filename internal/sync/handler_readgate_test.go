@@ -237,7 +237,7 @@ func TestCkinLockNeedsWrite(t *testing.T) {
 	handleReq(t, r, &xfer.PragmaCard{Name: "ci-lock", Values: []string{uuid, "client-A"}})
 	var n int
 	err := r.DB().QueryRow(
-		"SELECT count(*) FROM config WHERE name GLOB 'libfossil-ci-lock-*'").Scan(&n)
+		"SELECT count(*) FROM config WHERE name GLOB 'ci-lock-*'").Scan(&n)
 	if err != nil {
 		t.Fatalf("count locks: %v", err)
 	}

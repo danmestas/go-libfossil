@@ -113,6 +113,13 @@ type session struct {
 	// sha3Refusals counts gimmes for SHA3 content withheld from an older
 	// server; the next request carries one refusal error card for each.
 	sha3Refusals int
+	// peerDate is the server's check-in date from server-version: 0 before
+	// one arrives, or when it carries no DATE and TIME, which no date gate
+	// passes (§8.6).
+	peerDate int
+	// privateIGots are the private artifacts a gimme asked for outside a
+	// private sync; the next request answers each with igot HASH 1 (§8.6).
+	privateIGots []string
 	// dephantomized buffers the phantoms this reply filled, whose
 	// after-dephantomize cascade runs once at the end of the reply.
 	dephantomized []libfossil.FslID

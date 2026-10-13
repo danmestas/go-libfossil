@@ -1277,7 +1277,7 @@ func TestDecode_UVFileMalformedNameOrHash(t *testing.T) {
 		"uvfile n 100 garbage 0 4\n",
 		"uvfile /abs 100 - 0 1\n",
 		"uvfile a/../b 100 - 0 1\n",
-		"uvfile a\\b 100 - 0 1\n",
+		"uvfile a\\\\b 100 - 0 1\n", // NAME a\b: the escape is undone, then refused
 		"uvfile \xff 100 - 0 1\n",
 	} {
 		msg, err := DecodeUncompressed([]byte(line))

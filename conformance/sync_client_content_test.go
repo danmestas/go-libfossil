@@ -97,6 +97,13 @@ func clientUVFileCases() []syncClientCase {
 		replies: [][]string{reply("uvfile x.txt {UVT} - 5 1", "igot {U}")},
 		want:    sent(2, "gimme {U}"),
 	}, {
+		// NAME is fossilized: the row is named with the space restored.
+		Case:    Case{ID: "sync.7.3.uvfile-name-client", Req: "SP-7.3-1"},
+		op:      uvPull,
+		replies: [][]string{reply(`uvfile a\sb.txt {UVT} {N1} {N1.size} 0`, "{N1.data}")},
+		want: clientRows("SELECT count(*) FROM unversioned WHERE name='a b.txt'"+
+			" AND hash='{N1}'", 1),
+	}, {
 		// Accepted, the card would delete u.txt, being newer.
 		Case:    Case{ID: "sync.7.3.flags-negative-client", Req: "SP-7.3-2"},
 		op:      uvPull,
@@ -182,5 +189,18 @@ func clientPrivateCases() []syncClientCase {
 		replies: [][]string{reply("igot {A1} 1", "igot {U} 1")},
 		want:    every(rounds(1), private("A1", 1), notStored("U")),
 		fc:      true,
+	}, {
+		// P is private. The first request goes before any server date is
+		// known, and the reply dates the server before 2020-04-13, which
+		// would withhold igot P 1 outside a private sync: neither stops the
+		// listing. The gimme for B1 makes the second request.
+		Case:  Case{ID: "sync.8.6.private-inventory", Req: "SP-8.6-1"},
+		op:    clientOp{push: true, private: true},
+		setup: quiet,
+		replies: [][]string{{"pragma server-version 22800 20200101 000000", "gimme {B1}",
+			"{TS}"}},
+		want: every(rounds(2), sent(1, "igot {P} 1"), sent(2, "igot {P} 1"),
+			sent(2, "file {B1} {B1.size}")),
+		fc: true,
 	}}
 }

@@ -46,9 +46,9 @@ func peerVersion(c *xfer.PragmaCard) int {
 // nothing (fossil's send_file, src/xfer.c).
 const privateIGotDate = 20200413
 
-// peerDate reads the DATE of a client-version pragma as fossil's page_xfer
-// does: only when the pragma carries both DATE and TIME, by atoi, and 0 when
-// it does not, which no date gate passes.
+// peerDate reads the DATE of a client-version or server-version pragma as
+// fossil's page_xfer and client_sync do: only when the pragma carries both
+// DATE and TIME, by atoi, and 0 when it does not, which no date gate passes.
 func peerDate(c *xfer.PragmaCard) int {
 	if len(c.Values) < 3 {
 		return 0

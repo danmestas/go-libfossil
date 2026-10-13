@@ -4,7 +4,10 @@ import "testing"
 
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
-var syncGaps = map[string]string{}
+var syncGaps = map[string]string{
+	// The ci-lock and ci-unlock dispatch.
+	"sync.9.4.ci-lock-no-write-gate": "#392",
+}
 
 // syncDeviations marks the cases where go-libfossil differs from the draft
 // on purpose, by case ID, with the reason.

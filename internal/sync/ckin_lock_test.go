@@ -178,3 +178,74 @@ func TestCkinLock_SyncRoundTrip(t *testing.T) {
 		t.Fatalf("HeldBy = %q, want %q", result2.CkinLockFail.HeldBy, "nobody")
 	}
 }
+
+// TestCkinLock_SharesFossilTable pins the lock table to fossil's: a row
+// fossil's ci-lock wrote (config ci-lock-HASH, JSON login and clientid, the
+// time in the mtime column) is the lock this server sees, and a live row is
+// kept as it is, with no refresh, even for the client holding it (§9.4).
+func TestCkinLock_SharesFossilTable(t *testing.T) {
+	r := newCkinLockTestRepo(t)
+	d := r.DB()
+	uuid := "f0551100000000000000000000000000000000ab"
+	insertLeafBlob(t, r, uuid)
+	since := time.Now().Unix() - 30
+	if _, err := d.Exec("INSERT INTO config(name, value, mtime) VALUES(?,"+
+		" json_object('login', 'bob', 'clientid', 'client-A'), ?)",
+		"ci-lock-"+uuid, since); err != nil {
+		t.Fatal(err)
+	}
+	fail := processCkinLock(d, uuid, "client-B", "alice", DefaultCkinLockTimeout)
+	if fail == nil || fail.HeldBy != "bob" || fail.Since.Unix() != since {
+		t.Fatalf("fossil's lock: got %+v, want held by bob since %d", fail, since)
+	}
+	if fail := processCkinLock(d, uuid, "client-A", "alice", DefaultCkinLockTimeout); fail != nil {
+		t.Fatalf("same client: got %+v, want no failure", fail)
+	}
+	var login string
+	var mtime int64
+	if err := d.QueryRow("SELECT json_extract(value, '$.login'), CAST(mtime AS INTEGER)"+
+		" FROM config WHERE name=?", "ci-lock-"+uuid).Scan(&login, &mtime); err != nil {
+		t.Fatal(err)
+	}
+	if login != "bob" || mtime != since {
+		t.Fatalf("lock now held by %s since %d, want bob since %d", login, mtime, since)
+	}
+}
+
+// TestCkinLock_DropsLegacyRows checks that lock rows under the old
+// libfossil-ci-lock- key, which no sweep matches any longer, are cleared.
+func TestCkinLock_DropsLegacyRows(t *testing.T) {
+	r := newCkinLockTestRepo(t)
+	d := r.DB()
+	d.Exec("INSERT INTO config(name, value, mtime) VALUES(?, ?, ?)",
+		"libfossil-ci-lock-aaaa", "bob|client-B", time.Now().Unix())
+	uuid := "leg00000000000000000000000000000000000000"
+	insertLeafBlob(t, r, uuid)
+
+	if fail := processCkinLock(d, uuid, "client-A", "alice", DefaultCkinLockTimeout); fail != nil {
+		t.Fatalf("unexpected conflict: %+v", fail)
+	}
+	var n int
+	d.QueryRow("SELECT count(*) FROM config WHERE name GLOB 'libfossil-ci-lock-*'").Scan(&n)
+	if n != 0 {
+		t.Fatalf("%d legacy lock rows remain", n)
+	}
+}
+
+// TestLockTimeout_ReadsConfig checks that the lock-timeout setting, which
+// fossil honors, sets how long a lock lives, and that a bad value does not.
+func TestLockTimeout_ReadsConfig(t *testing.T) {
+	d := newCkinLockTestRepo(t).DB()
+	if got := lockTimeout(d); got != DefaultCkinLockTimeout {
+		t.Fatalf("unset: %v", got)
+	}
+	for v, want := range map[string]time.Duration{
+		"300": 300 * time.Second, "0": DefaultCkinLockTimeout,
+		"-5": DefaultCkinLockTimeout, "soon": DefaultCkinLockTimeout,
+	} {
+		d.Exec("REPLACE INTO config(name, value, mtime) VALUES('lock-timeout', ?, 1)", v)
+		if got := lockTimeout(d); got != want {
+			t.Errorf("lock-timeout %q: %v, want %v", v, got, want)
+		}
+	}
+}

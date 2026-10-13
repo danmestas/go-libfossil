@@ -173,7 +173,7 @@ func encodeCloneSeqNo(w *bytes.Buffer, c *CloneSeqNoCard) error {
 
 func encodeUVGimme(w *bytes.Buffer, c *UVGimmeCard) error {
 	w.WriteString("uvgimme ")
-	w.WriteString(c.Name)
+	w.WriteString(deck.FossilEncode(c.Name))
 	w.WriteByte('\n')
 	return nil
 }
@@ -226,8 +226,10 @@ func encodeMessage(w *bytes.Buffer, c *MessageCard) error {
 	return nil
 }
 
+// encodeUVIGot writes: uvigot NAME MTIME HASH SIZE. NAME is fossilized, as on
+// uvfile and uvgimme (draft Appendix B), where fossil(1) sends it raw.
 func encodeUVIGot(w *bytes.Buffer, c *UVIGotCard) error {
-	fmt.Fprintf(w, "uvigot %s %d %s %d\n", c.Name, c.MTime, c.Hash, c.Size)
+	fmt.Fprintf(w, "uvigot %s %d %s %d\n", deck.FossilEncode(c.Name), c.MTime, c.Hash, c.Size)
 	return nil
 }
 
@@ -342,7 +344,8 @@ func encodeConfig(w *bytes.Buffer, c *ConfigCard) error {
 // encodeUVFile writes: uvfile NAME MTIME HASH SIZE FLAGS \n CONTENT
 // When deleted (0x0001) or content-omitted (0x0004), no payload follows.
 func encodeUVFile(w *bytes.Buffer, c *UVFileCard) error {
-	fmt.Fprintf(w, "uvfile %s %d %s %d %d\n", c.Name, c.MTime, c.Hash, c.Size, c.Flags)
+	fmt.Fprintf(w, "uvfile %s %d %s %d %d\n", deck.FossilEncode(c.Name), c.MTime, c.Hash,
+		c.Size, c.Flags)
 	if !uvFileOmitsContent(c.Flags) {
 		w.Write(c.Content)
 	}

@@ -269,7 +269,7 @@ func parseControlCard(cmd string, args []string) Card {
 		if len(args) != 1 {
 			return nil
 		}
-		return &UVGimmeCard{Name: args[0]}
+		return &UVGimmeCard{Name: deck.FossilDecode(args[0])}
 	case "pragma":
 		return parsePragma(args)
 	case "login":
@@ -374,7 +374,7 @@ func parseUVIGot(args []string) Card {
 	if err != nil {
 		return nil
 	}
-	return &UVIGotCard{Name: args[0], MTime: mtime, Hash: args[2], Size: size}
+	return &UVIGotCard{Name: deck.FossilDecode(args[0]), MTime: mtime, Hash: args[2], Size: size}
 }
 
 // --- Payload card parsers ---
@@ -511,8 +511,14 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 	// page_xfer breaks. Its checks are reproduced here -- arity, a NAME that
 	// is a strict simple pathname, a non-negative MTIME, a HASH that is an
 	// artifact name or "-", and SIZE and FLAGS that are non-negative
-	// decimals (parseSize enforces the last).
-	if len(args) != 5 || !deck.StrictPathname(args[0]) ||
+	// decimals (parseSize enforces the last). NAME is fossilized (draft
+	// Section 7.3), so it is checked defossilized; fossil(1) checks the token
+	// as sent and refuses any escape, sending names raw.
+	if len(args) != 5 {
+		return &BadFileCard{Message: "malformed uvfile line"}, nil
+	}
+	name := deck.FossilDecode(args[0])
+	if !deck.StrictPathname(name) ||
 		(args[2] != "-" && !hash.IsValidHash(args[2])) {
 		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
@@ -529,7 +535,7 @@ func parseUVFile(r *bufio.Reader, args []string) (Card, error) {
 		return &BadFileCard{Message: "malformed uvfile line"}, nil
 	}
 	c := &UVFileCard{
-		Name:  args[0],
+		Name:  name,
 		MTime: mtime,
 		Hash:  args[2],
 		Size:  size,

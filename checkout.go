@@ -507,3 +507,25 @@ func convertUpdateChange(c checkout.UpdateChange) UpdateChange {
 		return ChangeModified
 	}
 }
+
+// ResolveVersion resolves name as Repo.ResolveVersion does and also
+// resolves the names relative to this checkout (repo-state-01 Section 8.3),
+// tried after "tip" and before every other form, as fossil's
+// symbolic_name_to_rid does (src/name.c):
+//
+//	"current"            the checkout's version
+//	"prev", "previous"   its primary parent
+//	"next"               a child: a primary child first, then the newest link
+//
+// A keyword that names nothing, such as "prev" at a root, falls through to
+// the other forms, as in fossil. The forms that take a name, such as
+// "root:current", resolve it the same way. "ckout" is an ordinary name here:
+// it is a keyword only in fossil's checkout-inclusive request ("ci+"), whose
+// answer is a pseudo-RID for the working files, not an artifact.
+func (c *Checkout) ResolveVersion(name string) (int64, error) {
+	rid, _, err := c.inner.Version()
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
+	}
+	return resolveVersion(c.inner.Repo().DB(), name, int64(rid))
+}

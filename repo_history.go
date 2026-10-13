@@ -276,13 +276,62 @@ func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
 //
 // No match returns ErrVersionNotFound (wrapped); a hex prefix matching more
 // than one artifact returns ErrAmbiguousVersion (wrapped).
+//
+// The names relative to an open checkout ("current", "prev", "next") are
+// ordinary names here, as in fossil outside a checkout; Checkout's
+// ResolveVersion resolves them.
 func (r *Repo) ResolveVersion(name string) (int64, error) {
+	return resolveVersion(r.inner.DB(), name, 0)
+}
+
+// ResolveBranchStart resolves name as ResolveVersion does, then returns the
+// first check-in of the branch the result is on: fossil's branch-type ("br")
+// request (repo-state-01 Section 8.3), the start of the branch rather than
+// the check-in its name most recently points at. A name that resolves to an
+// artifact other than a check-in returns ErrVersionNotFound (wrapped).
+//
+// Section 8.3 walks back from the result of every form. fossil(1) walks only
+// from a "tag:NAME" or plain-name result (symbolic_name_to_rid, src/name.c),
+// so there a hash, "tip" or a date names the check-in itself; this follows
+// the draft.
+func (r *Repo) ResolveBranchStart(name string) (int64, error) {
+	h := r.inner.DB()
+	rid, err := resolveVersion(h, name, 0)
+	if err != nil {
+		return 0, err
+	}
+	var checkins int
+	err = h.QueryRow("SELECT count(*) FROM event WHERE objid = ? AND type = 'ci'", rid).
+		Scan(&checkins)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: resolve branch start %q: %w", name, err)
+	}
+	if checkins == 0 {
+		return 0, fmt.Errorf("libfossil: resolve branch start %q: not a check-in: %w",
+			name, ErrVersionNotFound)
+	}
+	first, err := startOfBranch(h, rid, branchFirst)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: resolve branch start %q: %w", name, err)
+	}
+	return first, nil
+}
+
+// resolveVersion is ResolveVersion with the open checkout's version, ckout,
+// or 0 when no checkout is open.
+func resolveVersion(h *db.DB, name string, ckout int64) (int64, error) {
+	if h == nil {
+		panic("libfossil: resolveVersion: nil db")
+	}
+	if ckout < 0 {
+		panic("libfossil: resolveVersion: negative checkout rid")
+	}
 	// go-libfossil's contract treats "" as "tip"; fossil treats an empty
 	// name as unresolvable.
 	if name == "" {
 		name = "tip"
 	}
-	rid, err := r.resolveSymbolic(name)
+	rid, err := resolver{h: h, ckout: ckout}.resolve(name)
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
 	}
@@ -299,11 +348,19 @@ const (
 	branchMergeIn = 2 // merge-in: the most recent merge-in for the branch
 )
 
-// resolveSymbolic is ResolveVersion's engine: fossil's symbolic_name_to_rid,
-// as an ordered sequence of attempts. It returns 0 when nothing matches and
-// ErrAmbiguousVersion when a hex prefix matches more than one artifact.
-func (r *Repo) resolveSymbolic(name string) (int64, error) {
-	h := r.inner.DB()
+// resolver is fossil's symbolic_name_to_rid for one request. ckout is the
+// open checkout's version, 0 when none is open; it is carried into the
+// recursive forms, as fossil's global checkout is.
+type resolver struct {
+	h     *db.DB
+	ckout int64
+}
+
+// resolve is ResolveVersion's engine, as an ordered sequence of attempts.
+// It returns 0 when nothing matches and ErrAmbiguousVersion when a hex
+// prefix matches more than one artifact.
+func (rv resolver) resolve(name string) (int64, error) {
+	h := rv.h
 
 	if name == "tip" {
 		// fossil's "tip" is the newest check-in, but when there is none it
@@ -314,6 +371,9 @@ func (r *Repo) resolveSymbolic(name string) (int64, error) {
 			return rid, err
 		}
 	}
+	if rid, err := rv.checkoutRelative(name); err != nil || rid != 0 {
+		return rid, err
+	}
 	if rest, ok := strings.CutPrefix(name, "rid:"); ok {
 		return ridLiteral(h, rest)
 	}
@@ -321,13 +381,13 @@ func (r *Repo) resolveSymbolic(name string) (int64, error) {
 		return newestWithSymTag(h, rest)
 	}
 	if rest, ok := strings.CutPrefix(name, "root:"); ok {
-		return r.startOfBranchBy(rest, branchOrigin)
+		return rv.startOfBranchBy(rest, branchOrigin)
 	}
 	if rest, ok := strings.CutPrefix(name, "start:"); ok {
-		return r.startOfBranchBy(rest, branchFirst)
+		return rv.startOfBranchBy(rest, branchFirst)
 	}
 	if rest, ok := strings.CutPrefix(name, "merge-in:"); ok {
-		return r.startOfBranchBy(rest, branchMergeIn)
+		return rv.startOfBranchBy(rest, branchMergeIn)
 	}
 	if base, julian, ok := splitNameTimestamp(name); ok {
 		return newestSymTagBefore(h, base, julian)
@@ -341,9 +401,40 @@ func (r *Repo) resolveSymbolic(name string) (int64, error) {
 		return rid, err
 	}
 	if trimmed, ok := trimTrailingPunct(name); ok {
-		return r.resolveSymbolic(trimmed)
+		return rv.resolve(trimmed)
 	}
 	return 0, nil
+}
+
+// checkoutRelative resolves fossil's checkout keywords (src/name.c):
+// "current", "prev"/"previous" and "next". It returns 0 when no checkout is
+// open, when name is no keyword, or when the keyword names nothing (prev at
+// a root, next at a leaf), so the name falls through to the other forms.
+func (rv resolver) checkoutRelative(name string) (int64, error) {
+	if rv.ckout == 0 {
+		return 0, nil
+	}
+	var query string
+	switch name {
+	case "current":
+		return rv.ckout, nil
+	case "prev", "previous":
+		query = "SELECT pid FROM plink WHERE cid = ? AND isprim"
+	case "next":
+		// fossil's order: a primary child first, then the newest link.
+		query = "SELECT cid FROM plink WHERE pid = ? ORDER BY isprim DESC, mtime DESC"
+	default:
+		return 0, nil
+	}
+	var rid int64
+	err := rv.h.QueryRow(query+" LIMIT 1", rv.ckout).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return rid, nil
 }
 
 // newestCheckin is fossil's "tip": the newest check-in by event.mtime.
@@ -423,12 +514,12 @@ func newestSymTagBefore(h *db.DB, base string, julian float64) (int64, error) {
 
 // startOfBranchBy resolves branch name BR recursively, then returns the point
 // in BR that mode selects (fossil's root:/start:/merge-in:).
-func (r *Repo) startOfBranchBy(name string, mode int) (int64, error) {
-	rid, err := r.resolveSymbolic(name)
+func (rv resolver) startOfBranchBy(name string, mode int) (int64, error) {
+	rid, err := rv.resolve(name)
 	if err != nil || rid <= 0 {
 		return rid, err
 	}
-	return startOfBranch(r.inner.DB(), rid, mode)
+	return startOfBranch(rv.h, rid, mode)
 }
 
 // startOfBranch is fossil's start_of_branch (src/name.c): walk rid's primary-

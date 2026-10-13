@@ -6,15 +6,6 @@ import "testing"
 // fail, by case ID, grouped by the code at fault, each with the issue
 // tracking its fix.
 var repostateGaps = map[string]string{
-	// Name resolution (repo_history.go ResolveVersion): no checkout context
-	// and no requested type. These cases do not yet call the API #386 will
-	// add (the branch-type case calls nothing it could pass): rewire them to
-	// the new entry points when it lands, do not just delete these entries.
-	"repostate.8.3.current":     "#386",
-	"repostate.8.3.prev":        "#386",
-	"repostate.8.3.previous":    "#386",
-	"repostate.8.3.next":        "#386",
-	"repostate.8.3.branch-type": "#386",
 	// Crosslink deferral (internal/manifest/crosslink.go missingCheckinRefs).
 	"repostate.4.2.root-absent-file": "#406",
 }

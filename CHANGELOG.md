@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and -01 reverses that, so the code follows -01. The named delta's delete
   markers are dropped from the set, and the commit writer never emits a B
   card naming a delta manifest (#371).
-
 - A check-in's event time now follows repo-state-01 §4.2 step 6 whatever order
   the check-in and its `date` tags arrive in (#372). Crosslinking a check-in
   read its `date` tagxref row whatever its source, so re-crosslinking after a

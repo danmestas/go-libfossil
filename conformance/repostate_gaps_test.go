@@ -4,8 +4,18 @@ import "testing"
 
 // repostateGaps marks the repository-state cases go-libfossil is known to
 // fail, by case ID, grouped by the code at fault, each with the issue
-// tracking its fix. None is open.
-var repostateGaps = map[string]string{}
+// tracking its fix.
+var repostateGaps = map[string]string{
+	// Name resolution (repo_history.go ResolveVersion): no checkout context
+	// and no requested type. These cases do not yet call the API #386 will
+	// add (the branch-type case calls nothing it could pass): rewire them to
+	// the new entry points when it lands, do not just delete these entries.
+	"repostate.8.3.current":     "#386",
+	"repostate.8.3.prev":        "#386",
+	"repostate.8.3.previous":    "#386",
+	"repostate.8.3.next":        "#386",
+	"repostate.8.3.branch-type": "#386",
+}
 
 // repostateDeviations marks the cases where go-libfossil follows fossil(1)
 // rather than the draft text, by case ID.
@@ -14,7 +24,20 @@ var repostateDeviations = map[string]string{
 	// verify.Rebuild now derives leaves through the crosslink sweep, so it shares
 	// the same branch-aware leaf rule and the same §7.3 deviation.
 	"repostate.7.3.parentless-untagged.rebuild": parentlessDeviation,
+	// The same check-in seen from Section 7.3's crosslink trigger: linking it
+	// does not recheck it, as fossil's does not.
+	"repostate.7.3.recheck-lone-untagged": parentlessDeviation,
+	// An untagged child of a tagged check-in: Section 7.3 rechecks it and
+	// its parent when it is linked.
+	"repostate.7.3.recheck-untagged-child":         untaggedChildDeviation,
+	"repostate.7.3.recheck-untagged-child.rebuild": untaggedChildDeviation,
 }
+
+const untaggedChildDeviation = "follows fossil(1): a check-in with a parent but no branch " +
+	"tag is never rechecked, so it is no leaf and its parent keeps its verdict, where " +
+	"Section 7.3 rechecks every crosslinked check-in and its parents; widening the " +
+	"candidates changed the leaf table of a real fossil-authored repository (the " +
+	"libfossil corpus)"
 
 const parentlessDeviation = "follows fossil(1): an untagged parentless check-in is " +
 	"never a leaf, where Section 7.3 makes every check-in without a same-branch " +

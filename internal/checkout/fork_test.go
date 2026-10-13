@@ -34,6 +34,31 @@ func TestBranchLeaves_Empty(t *testing.T) {
 	}
 }
 
+// TestBranchLeaves_EmptyNameIsMainBranch checks that "" names the default
+// branch, which the main-branch setting overrides (repo-state-01 Section 6.1).
+func TestBranchLeaves_EmptyNameIsMainBranch(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+
+	for _, tc := range []struct {
+		set  bool
+		want int
+	}{{false, 1}, {true, 0}} {
+		if tc.set {
+			if err := r.SetConfig("main-branch", "main"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		leaves, err := BranchLeaves(r, "")
+		if err != nil {
+			t.Fatalf("BranchLeaves: %v", err)
+		}
+		if len(leaves) != tc.want {
+			t.Fatalf("main-branch set %v: got %d leaves, want %d", tc.set, len(leaves), tc.want)
+		}
+	}
+}
+
 func TestWouldFork_SingleLeaf(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()
@@ -286,5 +311,70 @@ func TestWouldFork_MergeChild(t *testing.T) {
 	}
 	if !forked {
 		t.Fatal("WouldFork = false, want true (a merge child makes the version a non-leaf)")
+	}
+}
+
+// TestBranchLeaves_EmptyNameReturnsMainBranchLeaves renames the only branch to
+// the main-branch setting: "" must then return its leaf.
+func TestBranchLeaves_EmptyNameReturnsMainBranchLeaves(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	if err := r.SetConfig("main-branch", "main"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("UPDATE tagxref SET value='main' WHERE tagid=" +
+		"(SELECT tagid FROM tag WHERE tagname='branch')"); err != nil {
+		t.Fatal(err)
+	}
+	leaves, err := BranchLeaves(r, "")
+	if err != nil {
+		t.Fatalf("BranchLeaves: %v", err)
+	}
+	if len(leaves) != 1 {
+		t.Fatalf("got %d leaves on the main branch, want 1", len(leaves))
+	}
+}
+
+// TestWouldFork_UntaggedChildJoinsMainBranch: with main-branch set, a child
+// with no active branch row is on that branch (Section 6.1), so a parent
+// tagged with it has a same-branch child and a commit on it would fork.
+func TestWouldFork_UntaggedChildJoinsMainBranch(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer co.Close()
+
+	rid1, _, _ := co.Version()
+	if err := co.Extract(rid1, ExtractOpts{}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	co.env.Storage.WriteFile(co.dir+"/child.txt", []byte("child"), 0644)
+	if _, _, err := co.Commit(CommitOpts{Message: "child", User: "test", AllowEmpty: true}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := r.SetConfig("main-branch", "main"); err != nil {
+		t.Fatal(err)
+	}
+	const branchTag = "(SELECT tagid FROM tag WHERE tagname='branch')"
+	if _, err := r.DB().Exec("UPDATE tagxref SET value='main' WHERE tagid="+branchTag+
+		" AND rid=?", int64(rid1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("DELETE FROM tagxref WHERE tagid="+branchTag+
+		" AND rid<>?", int64(rid1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatalf("Extract back: %v", err)
+	}
+	forked, err := co.WouldFork()
+	if err != nil {
+		t.Fatalf("WouldFork: %v", err)
+	}
+	if !forked {
+		t.Fatal("WouldFork = false, want true (the untagged child is on the main branch)")
 	}
 }

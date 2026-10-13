@@ -14,14 +14,23 @@ import (
 //
 // Canonical fossil's rule (src/leaf.c, leaf_check/is_a_leaf/leaf_rebuild): a
 // check-in stops being a leaf only once a child of it carries the *same* branch
-// name, where a check-in with no branch tag reads as "trunk":
+// name, where a check-in with no active branch tag reads as "trunk" (here, the
+// main-branch setting, see mainBranchSQL):
 //
 //	SELECT 1 FROM plink
 //	 WHERE pid=:rid
 //	   AND coalesce((SELECT value FROM tagxref
-//	                  WHERE tagid=TAG_BRANCH AND rid=plink.pid),'trunk')
+//	                  WHERE tagid=TAG_BRANCH AND rid=plink.pid
+//	                    AND tagtype>0),'trunk')
 //	    == coalesce((SELECT value FROM tagxref
-//	                  WHERE tagid=TAG_BRANCH AND rid=plink.cid),'trunk')
+//	                  WHERE tagid=TAG_BRANCH AND rid=plink.cid
+//	                    AND tagtype>0),'trunk')
+//
+// Only an active branch row (tagtype > 0) names a branch. fossil's is_a_leaf
+// and leaf_rebuild filter so, but its leaf_check, which maintains the table,
+// does not: a check-in whose branch tag was cancelled with a value keeps that
+// value there. draft-fossil-repo-state-01 Section 6.4 requires the filter on
+// every path that decides branch membership, so both paths here apply it.
 //
 // Two consequences are easy to get wrong and are what issue #189 was:
 //
@@ -41,6 +50,23 @@ import (
 // lookup per row of a whole-repository recompute.
 const branchTagID = 8
 
+// mainBranchSQL is the default branch a check-in with no active branch row
+// reads as: the main-branch setting, or trunk when it is unset. Section 6.1
+// forbids assuming "trunk" when the setting is present. fossil's leaf.c uses
+// the literal 'trunk' here; the -01 text is followed, as for repo.MainBranch,
+// which also reads an empty value as unset.
+const mainBranchSQL = `coalesce(nullif((SELECT value FROM config
+	                                  WHERE name='main-branch'),''),'trunk')`
+
+// sameBranchSQL is true for a plink row whose child is on its parent's branch,
+// each read through its active branch row only.
+var sameBranchSQL = fmt.Sprintf(`
+	coalesce((SELECT value FROM tagxref
+	           WHERE tagid=%[1]d AND rid=plink.pid AND tagtype>0),%[2]s)
+	  = coalesce((SELECT value FROM tagxref
+	               WHERE tagid=%[1]d AND rid=plink.cid AND tagtype>0),%[2]s)`,
+	branchTagID, mainBranchSQL)
+
 // leafCheck brings rid's leaf row in line with the rule above, inserting or
 // deleting as needed. It is fossil's leaf_check(), and like fossil's it is
 // called on a check-in and on each of its parents once the surrounding write is
@@ -54,14 +80,10 @@ func leafCheck(q db.Querier, rid libfossil.FslID) error {
 	}
 
 	var one int
-	err := q.QueryRow(fmt.Sprintf(`
+	err := q.QueryRow(`
 		SELECT 1 FROM plink
-		 WHERE plink.pid = ?
-		   AND coalesce((SELECT value FROM tagxref
-		                  WHERE tagid=%d AND rid=plink.pid),'trunk')
-		     = coalesce((SELECT value FROM tagxref
-		                  WHERE tagid=%d AND rid=plink.cid),'trunk')
-		 LIMIT 1`, branchTagID, branchTagID), rid).Scan(&one)
+		 WHERE plink.pid = ? AND `+sameBranchSQL+`
+		 LIMIT 1`, rid).Scan(&one)
 	switch {
 	case err == nil:
 		if _, err := q.Exec("DELETE FROM leaf WHERE rid=?", rid); err != nil {
@@ -90,12 +112,19 @@ func leafCheck(q db.Querier, rid libfossil.FslID) error {
 // by leaf_check(), scheduled by leaf_eventually_check() for a rid and EACH OF
 // ITS PARENTS whenever a branch tag lands on that rid -- from tag_insert() when
 // a check-in declares one, and from tag_propagate() when one is inherited
-// (src/leaf.c, src/tag.c). So the candidate set is:
+// (src/leaf.c, src/tag.c). fossil's candidate set is therefore every rid
+// carrying a branch tagxref row, plus every rid that is a parent in plink.
 //
-//	every rid carrying a branch tagxref row, plus every rid that is a parent
-//	in plink
+// That set never checks a check-in that has a parent but carries no branch
+// tag, so such a check-in is never a leaf in fossil, and its parent keeps the
+// verdict it had before the child arrived. draft-fossil-repo-state-01 Section
+// 7.3 instead rechecks every crosslinked check-in and its parents, whatever
+// its tags. This follows fossil: widening the set to plink children changed
+// the leaf table of a real fossil-authored repository (the libfossil corpus
+// holds a tagless check-in with a parent), which `fossil rebuild` does not
+// reproduce, so the Section 7.3 cases for it are marked as deviations.
 //
-// and it differs from "every check-in" in both directions. A parent whose own
+// The set still differs from "every check-in" in both directions. A parent whose own
 // artifact never arrived has no event row at all, yet fossil does list such a
 // phantom as a leaf when the check-in naming it sits on another branch. In the
 // other direction, a check-in that neither declares nor inherits a branch tag
@@ -120,12 +149,8 @@ func repairLeafTable(q db.Querier) error {
 		) c
 		WHERE NOT EXISTS(
 		    SELECT 1 FROM plink
-		     WHERE plink.pid = c.rid
-		       AND coalesce((SELECT value FROM tagxref
-		                      WHERE tagid=%d AND rid=plink.pid),'trunk')
-		         = coalesce((SELECT value FROM tagxref
-		                      WHERE tagid=%d AND rid=plink.cid),'trunk'))
-	`, branchTagID, branchTagID, branchTagID)); err != nil {
+		     WHERE plink.pid = c.rid AND %s)
+	`, branchTagID, sameBranchSQL)); err != nil {
 		return fmt.Errorf("repairLeafTable insert: %w", err)
 	}
 	return nil

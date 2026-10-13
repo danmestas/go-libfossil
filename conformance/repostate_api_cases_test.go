@@ -9,7 +9,8 @@ func rsAPICases() []rsAPICase {
 	var all []rsAPICase
 	for _, table := range [][]rsAPICase{
 		resolveCases(), resolveFormCases(), leafAPICases(), commitLeafCases(),
-		branchAPICases(), writerAPICases(),
+		branchAPICases(), writerAPICases(), integrityAPICases(), defaultBranchCases(),
+		checkoutAPICases(),
 	} {
 		all = append(all, table...)
 	}
@@ -145,4 +146,55 @@ func leafAPICases() []rsAPICase {
 		leafAmbiguous("repostate.7.5.ambiguity-open", "RS-7.5-3", forkedChain, "f", true),
 		leafAmbiguous("repostate.7.5.ambiguity-closed", "RS-7.5-3", closedC4, "f", false),
 	}
+}
+
+// untaggedChild is c1, whose branch tag is a singleton, and its child c2,
+// which therefore carries no branch tag.
+func untaggedChild() []rsArt {
+	return []rsArt{
+		checkin("c1", 1, nil, "+branch * trunk", "*sym-trunk *"),
+		checkin("c2", 2, of("c1")),
+	}
+}
+
+// defaultBranchCases resolve start: from c2, which carries no branch tag.
+// The walk keeps to c2's branch, so it reaches c1 only when c2 is attributed
+// to the branch c1's tag names: the default branch of Section 6.1.
+func defaultBranchCases() []rsAPICase {
+	onMain := []rsArt{
+		checkin("c1", 1, nil, "+branch * main", "*sym-main *"),
+		checkin("c2", 2, of("c1")),
+	}
+	return []rsAPICase{
+		resolves("repostate.6.1.untagged-default-branch", "RS-6.1-2",
+			untaggedChild(), "start:trunk", "c1"),
+		mainBranch("repostate.6.1.main-branch-setting", "RS-6.1-4", "main",
+			resolves("", "", onMain, "start:main", "c1")),
+		// With main-branch set, an untagged check-in is not on trunk.
+		mainBranch("repostate.6.1.main-branch-not-trunk", "RS-6.1-4", "main",
+			resolves("", "", untaggedChild(), "start:trunk", "c2")),
+	}
+}
+
+// mainBranch is c with the main-branch setting set to name in both
+// repositories before c runs.
+func mainBranch(id, req, name string, c rsAPICase) rsAPICase {
+	c.Case = Case{ID: id, Req: req}
+	inner := c.run
+	c.run = func(e *rsEnv) error {
+		if e.ref != nil {
+			if _, err := e.fossilRun("settings", "main-branch", name); err != nil {
+				return err
+			}
+		}
+		r, err := e.open()
+		if err != nil {
+			return err
+		}
+		if err := r.SetConfig("main-branch", name); err != nil {
+			return err
+		}
+		return inner(e)
+	}
+	return c
 }

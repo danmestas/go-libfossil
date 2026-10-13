@@ -15,6 +15,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/diff"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // ErrFileNotFound is returned by ReadFile when the requested filePath is
@@ -478,8 +479,8 @@ func startOfBranch(h *db.DB, rid int64, mode int) (int64, error) {
 	return ans, nil
 }
 
-// branchOfRID is fossil's branch_of_rid: rid's active branch, "trunk" when it
-// carries no branch tag.
+// branchOfRID is fossil's branch_of_rid: rid's active branch, the default
+// branch (the main-branch setting) when it carries no active branch tag.
 func branchOfRID(h *db.DB, rid int64) (string, error) {
 	var br string
 	err := h.QueryRow(`
@@ -488,7 +489,7 @@ func branchOfRID(h *db.DB, rid int64) (string, error) {
 		  AND tagid = (SELECT tagid FROM tag WHERE tagname='branch')
 		  AND tagtype > 0`, rid).Scan(&br)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "trunk", nil
+		return repo.MainBranch(h)
 	}
 	if err != nil {
 		return "", err

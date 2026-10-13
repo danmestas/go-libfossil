@@ -25,7 +25,7 @@ RS-4.2-4	4.2	Crosslinking a cluster applies an implicit singleton "cluster" tag 
 RS-4.2-5	4.2	After a check-in with a resolved primary parent is crosslinked, the parent's tags are re-propagated, so the new check-in inherits them.
 RS-4.2-6	4.2	A T-card of any type applied to a resolved target runs the propagation walk from that target; a singleton enters it as a cancel, removing the same-named tag the descendants inherited.
 RS-4.2-7	4.2	Crosslinking an artifact again creates no additional linkage or event rows and leaves derived state unchanged.
-RS-4.2-8	4.2	Singleton reparent operations recorded during a crosslink batch are re-applied when the batch ends.	batching is optional; only the end state of a batch that holds a parent tag is checked
+RS-4.2-8	4.2	Singleton reparent operations recorded during a crosslink batch are re-applied when the batch ends.
 RS-4.2-9	4.2	A date tag applied to a crosslinked check-in sets its stored event time to the tag's value, which otherwise is the D-card time.
 RS-4.2-10	4.2	A date tag that arrives before its check-in sets the event time when the check-in is crosslinked.
 RS-4.2-11	4.2	A newer date tag replaces an older one, so the newest date tag's value orders the check-in.
@@ -68,7 +68,7 @@ RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 
 RS-7.2-1	7.2	A check-in is a leaf exactly when no plink child of it, primary or merge, is on the same branch.
 RS-7.3-1	7.3	A full leaf recomputation selects every check-in without a same-branch child, including parentless ones.	disagreement with fossil(1); see cases
 RS-7.3-2	7.3	An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.
-RS-7.3-3	7.3	Crosslinking a check-in, a new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.	the crosslink trigger for a parentless check-in with no branch tag is the RS-7.3-1 deviation
+RS-7.3-3	7.3	Crosslinking a check-in, a new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.
 RS-7.3-4	7.3	Scheduled leaf rechecks have all been applied before the leaf table is read.
 RS-7.4-1	7.4	An open leaf is a leaf without a closed tag row of tagtype greater than 0.
 RS-7.5-1	7.5	A branch's open leaves are its leaf-table members that are not closed and share its branch.
@@ -83,7 +83,7 @@ RS-8.2-4	8.2	A name no form matches fails to resolve.
 RS-8.3-1	8.3	"rid:DIGITS" resolves to that rid.
 RS-8.3-2	8.3	"tag:NAME" resolves NAME by the plain-name rule without trying it as a hash.
 RS-8.3-3	8.3	"tip" resolves to the check-in with the greatest event.mtime.
-RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.
+RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.	ckout is not checked: it resolves to a sentinel that names no artifact, which fossil's test-name-to-id cannot print
 RS-8.3-5	8.3	"root:BR" resolves to the first primary ancestor of BR that is off BR's branch.
 RS-8.3-6	8.3	"start:BR" resolves to the earliest primary ancestor of BR still on BR's branch.
 RS-8.3-7	8.3	"merge-in:BR" resolves to the most recent merge-in point of BR from its parent branch.
@@ -93,8 +93,8 @@ RS-8.3-10	8.3	A hash prefix matching more than one artifact is rejected as ambig
 RS-8.3-11	8.3	A name that matches nothing is retried without one trailing . _ ) > ! ? or , when longer than four characters, or without two when longer than five; three or more are never stripped.
 RS-8.3-12	8.3	A branch-type request resolves to the first check-in of the branch the name resolves into.
 RS-8.5-1	8.5	Name resolution and open-leaf enumeration stay distinct: a newer closed sym carrier wins resolution while the leaf view omits it.
-RS-9-1	9	The current trunk is the main-branch setting's name resolved by the plain-name rule.
+RS-9-1	9	The current trunk is the main-branch setting's name resolved by the plain-name rule.	not checkable: go-libfossil has no current-trunk operation; CreateCheckout starts at tip and Update moves to the newest leaf on any branch
 RS-9-2	9	Resolving a forked branch picks one check-in by greatest mtime and is not an error.
 RS-9-3	9	A branch's open leaf carries its active branch tag, is in the leaf table and is not closed; a branch with none is not open.
-RS-9-4	9	A report naming one open leaf of a branch with several picks the greatest mtime.
+RS-9-4	9	A report naming one open leaf of a branch with several picks the greatest mtime.	not checkable: go-libfossil has no report that names one open leaf; checkout.BranchLeaves returns them all, unordered
 RS-12-1	12	An artifact that the artifact-format rules reject contributes no crosslink state.

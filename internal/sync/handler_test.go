@@ -2358,3 +2358,35 @@ func TestHandleCFileWrongHashEndsCards(t *testing.T) {
 		t.Fatal("the mismatching content was stored")
 	}
 }
+
+// TestHandleIGotReclassifiesInRequestOrder checks that igots for one name
+// in a single run reclassify it in card order, as page_xfer applies each as
+// it reads it (§7.5): the last igot decides, whether the name was a phantom
+// the run itself made or one an unauthorized private igot finds.
+func TestHandleIGotReclassifiesInRequestOrder(t *testing.T) {
+	for _, tc := range []struct {
+		caps        string
+		first, last bool // IsPrivate of the two igots
+		wantPrivate bool
+	}{
+		{caps: "oi", first: false, last: true, wantPrivate: true},
+		{caps: "oix", first: true, last: false, wantPrivate: false},
+		{caps: "oix", first: false, last: true, wantPrivate: true},
+	} {
+		r := setupSyncTestRepo(t)
+		r.DB().Exec("UPDATE user SET cap=? WHERE login='nobody'", tc.caps)
+		name := "cccccccccccccccccccccccccccccccccccccccc"
+		handleReq(t, r,
+			&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+			&xfer.IGotCard{UUID: name, IsPrivate: tc.first},
+			&xfer.IGotCard{UUID: name, IsPrivate: tc.last},
+		)
+		rid, ok := blob.Exists(r.DB(), name)
+		if !ok {
+			t.Fatalf("%+v: no phantom", tc)
+		}
+		if got := content.IsPrivate(r.DB(), int64(rid)); got != tc.wantPrivate {
+			t.Errorf("%+v: private %v, want %v", tc, got, tc.wantPrivate)
+		}
+	}
+}

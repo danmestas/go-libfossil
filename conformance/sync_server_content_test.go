@@ -33,6 +33,36 @@ func serverContentCases() []syncServerCase {
 		want: all(completed, onlyError("not authorized to sync private content"), held("N1", 1),
 			repoCount("SELECT count(*) FROM private JOIN blob USING(rid) WHERE uuid='{N1}'", 0)),
 	}, {
+		// §7.5: a public igot under push reclassifies a held private
+		// artifact public, as page_xfer's content_make_public does.
+		Case: Case{ID: "sync.7.5.public-igot-held", Req: "SP-7.5-5"},
+		body: []string{"{CV}", pushCard, "igot {P}", "{R}"},
+		want: all(completed, noErrors, privateCount("P", 0)),
+	}, {
+		// ... and a private phantom public, which a push then asks for.
+		Case:  Case{ID: "sync.7.5.public-igot-phantom", Req: "SP-7.5-5"},
+		setup: append(append([]string{}, phantomU...), privateU),
+		body:  []string{"{CV}", pushCard, "igot {U}", "{R}"},
+		want:  all(completed, noErrors, privateCount("U", 0), withCard("gimme {U}")),
+	}, {
+		// nobody may not push private content: igot HASH 1 is no error,
+		// and reclassifies the held artifact private.
+		Case: Case{ID: "sync.7.5.unauthorized-private-igot-held", Req: "SP-7.5-5"},
+		body: []string{"{CV}", pushCard, "igot {A1} 1", "{R}"},
+		want: all(completed, noErrors, privateCount("A1", 1)),
+	}, {
+		// ... and a public phantom private, which is then not asked for.
+		Case:  Case{ID: "sync.7.5.unauthorized-private-igot-phantom", Req: "SP-7.5-5"},
+		setup: phantomU,
+		body:  []string{"{CV}", pushCard, "igot {U} 1", "{R}"},
+		want:  all(completed, noErrors, privateCount("U", 1), noCard("gimme {U}")),
+	}, {
+		// ... but makes no phantom for an artifact the server lacks.
+		Case: Case{ID: "sync.7.5.unauthorized-private-igot-absent", Req: "SP-7.5-5"},
+		body: []string{"{CV}", pushCard, "igot {U} 1", "{R}"},
+		want: all(completed, noErrors, noCard("gimme {U}"),
+			repoCount("SELECT count(*) FROM blob WHERE uuid='{U}'", 0)),
+	}, {
 		// Q is stored as a delta against private P; a clone by nobody,
 		// who may not have P, gets Q in full.
 		Case: Case{ID: "sync.7.5.no-private-delta", Req: "SP-7.5-4"},
@@ -206,4 +236,13 @@ func serverCloneCases() []syncServerCase {
 		body: []string{"{CV}", "clone 3 1", "igot {U}", "{R}"},
 		want: all(completed, noErrors, noCard("gimme {U}")),
 	}}
+}
+
+// privateU makes U, a phantom after phantomU, private.
+const privateU = "INSERT INTO private(rid) SELECT rid FROM blob WHERE uuid='{U}'"
+
+// privateCount checks whether the artifact or phantom named is private.
+func privateCount(name string, n int) replyCheck {
+	return repoCount("SELECT count(*) FROM private JOIN blob USING(rid)"+
+		" WHERE uuid='{"+name+"}'", n)
 }

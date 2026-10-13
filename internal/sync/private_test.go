@@ -285,10 +285,12 @@ func TestSyncPrivateArtifactTransition(t *testing.T) {
 	}
 
 	// Sync again — the server will emit igot without IsPrivate=true,
-	// and the client should clear the private status.
+	// and the client should clear the private status. The sync only
+	// pulls: a push would carry the client's igot HASH 1, which makes the
+	// server's copy private again before its inventory goes out, as
+	// fossil's content_make_private does (§7.5).
 	syncViaHandler(t, serverRepo, clientRepo, SyncOpts{
 		Pull:    true,
-		Push:    true,
 		Private: true,
 	})
 

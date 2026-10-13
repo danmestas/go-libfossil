@@ -16,8 +16,8 @@
 conflict and otherwise "emits no lock result" and "no positive lock
 acknowledgement". Fossil's ci-lock handler also emits
 `pragma avoid-delta-manifests` whenever the server's
-`forbid-delta-manifests` setting is on, which is the default, whether or
-not the lock was granted. §9.4 does not mention it. The pragma is listed
+`forbid-delta-manifests` setting is on, which is the default since Fossil
+2.29, whether or not the lock was granted. §9.4 does not mention it. The pragma is listed
 in §9 and described in the last paragraph of §9.5, but that description
 is wrong: it has the client change which artifacts it sends during the
 sync. In Fossil the pragma changes no transfer behavior. It makes the
@@ -42,8 +42,9 @@ Verified against Fossil 2.29 source; behavior run on Fossil 2.28.
   pragma follows a `ci-lock-fail` as well as a granted or kept lock. It
   is emitted only by a ci-lock that passes the handler's guard (exactly
   four tokens, a hash-name third token, `:1781-1783`).
-- Setting: `forbid-delta-manifests` is a boolean, default on
-  (`src/db.c:4899-4906`), and is a project setting that `fossil
+- Setting: `forbid-delta-manifests` is a boolean, default on in Fossil
+  2.29 (`src/db.c:4899-4906`) and default off in Fossil 2.28
+  (`src/db.c:4898`), and is a project setting that `fossil
   configuration` can sync (`src/configure.c:146`).
 - Client: the reply handler sets the process flag
   `g.bAvoidDeltaManifests = 1` (`src/xfer.c:2864-2871`) and does nothing
@@ -58,12 +59,14 @@ Verified against Fossil 2.29 source; behavior run on Fossil 2.28.
   request of that sync only (`src/xfer.c:2184-2189`, `:2382-2388`). A
   plain `sync`, `push` or `pull` sends no ci-lock and so never receives
   the pragma.
-- Run (Fossil 2.28, `fossil http` with an uncompressed `/xfer` body):
-  a ci-lock with no live lock is answered with `pragma
-  avoid-delta-manifests` alone; a ci-lock from a second client ID with
-  `pragma ci-lock-fail LOGIN MTIME` then `pragma avoid-delta-manifests`;
-  with `forbid-delta-manifests` off, the first reply is empty and the
-  second carries only the `ci-lock-fail`.
+- Run (Fossil 2.28, `fossil http` with an uncompressed `/xfer` body,
+  `forbid-delta-manifests` set on): a ci-lock with no live lock is
+  answered with `pragma avoid-delta-manifests` alone; a ci-lock from a
+  second client ID with `pragma ci-lock-fail LOGIN MTIME` then `pragma
+  avoid-delta-manifests`. With the setting off, or unset on 2.28, whose
+  default is off, the first reply is empty and the second carries only
+  the `ci-lock-fail`. A 2.29 build sends the pragma with the setting
+  unset.
 
 ## 4. Impact
 
@@ -132,4 +135,6 @@ because a client that never writes delta manifests has nothing to do.
   `:2788-2792`, `:3033-3040`; `src/db.c:4899-4906`;
   `src/configure.c:146`; `src/main.c:305`.
 - Run: Fossil 2.28 `fossil http` against a scratch repository, with
-  `forbid-delta-manifests` on and off, giving the replies in Section 3.
+  `forbid-delta-manifests` set on, set off, and unset (off on 2.28),
+  giving the replies in Section 3; a 2.29 build with the setting unset
+  sends the pragma. The "default on" of the correction is Fossil 2.29's.

@@ -41,8 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ResolveVersion` and `ResolveBranchStart` still read it as an ordinary name.
   New `repostate.8.3` cases run the request against `fossil test-name-to-id
   --type ci+`: `ckout` over a tag of that name, with and without a checkout
-  version, and `ckout` as the tag under the untyped request. RS-8.3-4 is now
-  covered rather than partial (tracked in #419).
+  version, and `ckout` as the tag under the untyped request. RS-8.3-4 now
+  follows fossil as a recorded deviation (the `ckout.` retry case) rather than
+  being partial (tracked in #419).
 - `Repo.ResolveBranchStart` is fossil's branch-type request: it resolves a
   name, then returns the first check-in of the branch the result is on
   (repo-state-01 §8.3). It follows the draft where fossil 2.28 differs:

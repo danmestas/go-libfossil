@@ -573,6 +573,9 @@ func (c *Checkout) ResolveWorking(name string) (WorkingVersion, error) {
 // guards its checkout keywords on a nonzero checkout version and resolves
 // the other forms regardless.
 func (c *Checkout) versionOrZero(name string) (int64, error) {
+	if c == nil || c.inner == nil {
+		panic("libfossil: resolve version on a nil or closed Checkout")
+	}
 	rid, _, err := c.inner.Version()
 	if errors.Is(err, checkout.ErrNoVersion) {
 		return 0, nil

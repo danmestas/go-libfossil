@@ -201,10 +201,12 @@ func TestCheckoutResolveWorking_CheckinOnly(t *testing.T) {
 }
 
 // With no recorded version, "ckout" is no keyword: it falls through to the
-// other forms, as in fossil, and here matches nothing.
+// other forms, as in fossil: a tag of that name answers, not the working files.
 func TestCheckoutResolveWorking_NoVersion(t *testing.T) {
 	r := newTestRepo(t)
-	commit(t, r, 0, "a", []FileToCommit{{Name: "f", Content: []byte("a\n")}})
+	a := commit(t, r, 0, "a", []FileToCommit{{Name: "f", Content: []byte("a\n")}})
+	tagged := commitBranch(t, r, a, "ckout", "tagged ckout",
+		[]FileToCommit{{Name: "f", Content: []byte("k\n")}})
 	dir := filepath.Join(t.TempDir(), "co")
 	co, err := r.CreateCheckout(dir, CheckoutCreateOpts{})
 	if err != nil {
@@ -219,7 +221,8 @@ func TestCheckoutResolveWorking_NoVersion(t *testing.T) {
 	if _, err := ck.Exec("UPDATE vvar SET value = '' WHERE name = 'checkout'"); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := co.ResolveWorking("ckout"); !errors.Is(err, ErrVersionNotFound) {
-		t.Errorf("ResolveWorking(ckout) = %+v, %v; want ErrVersionNotFound", got, err)
+	got, err := co.ResolveWorking("ckout")
+	if err != nil || got != (WorkingVersion{RID: tagged}) {
+		t.Errorf("ResolveWorking(ckout) = %+v, %v; want the tag's check-in %d", got, err, tagged)
 	}
 }

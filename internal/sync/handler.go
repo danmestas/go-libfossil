@@ -189,6 +189,7 @@ type handler struct {
 	uncompressed  bool                      // reply goes out uncompressed (clone v3)
 	cloneDone     bool                      // clone card has no usable cursor: send nothing
 	peerVersion   int                       // client's release, from client-version
+	peerDate      int                       // client's check-in date, from client-version
 	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent bool                      // true after sending UV catalog
@@ -805,6 +806,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		// client-version carrying DATE and TIME is answered in place, as
 		// page_xfer answers it, so the answer precedes any content.
 		h.peerVersion = peerVersion(c)
+		h.peerDate = peerDate(c)
 		if len(c.Values) >= 3 {
 			h.resp = append(h.resp, versionPragma("server-version"))
 		}
@@ -957,7 +959,13 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
-		return nil // private blob, client not authorized — skip.
+		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
+		// told the artifact exists and is private; an older or undated one
+		// is told nothing, as fossil's send_file decides on remoteDate.
+		if h.peerDate >= privateIGotDate {
+			h.resp = append(h.resp, &xfer.IGotCard{UUID: c.UUID, IsPrivate: true})
+		}
+		return nil
 	}
 	// §7.6: SHA3 content is withheld from a client older than SHA3
 	// support, or one that named no release; the refusal is appended, so

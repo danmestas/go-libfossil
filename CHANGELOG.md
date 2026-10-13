@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. The `date-tag-cancel`, `-unparsable` and `-zero` conformance cases
   are no longer marked as deviations, and new `-before-checkin` cases check
   the same three with the tags arriving while the check-in is a phantom.
+- Outside a private sync, the sync server answers a gimme for private content
+  with `igot HASH 1` when the peer's `pragma client-version` dates it
+  2020-04-13 or later, and with nothing for an earlier or missing date, as
+  sync-protocol-01 Section 8.6 and fossil's `send_file` do (#375). It used to
+  send nothing whatever the date. The server now records the peer's check-in
+  date from the pragma.
 - The sync server's refusals now follow sync-protocol-01 Sections 5.3, 6.4 and
   6.6 (#374). A file or cfile card sent without an accepted push resets the
   reply, is refused with `error not\sauthorized\sto\swrite` and ends card

@@ -37,16 +37,37 @@ func peerVersion(c *xfer.PragmaCard) int {
 	if len(c.Values) == 0 {
 		panic("sync.peerVersion: pragma has no VERSION")
 	}
-	v := c.Values[0]
+	return leadingInt(c.Values[0])
+}
+
+// privateIGotDate is the first peer check-in date that is told, with igot
+// HASH 1, of private content it asked for outside a private sync (§8.6). An
+// older peer treats a private igot it may not sync as an error, so it is told
+// nothing (fossil's send_file, src/xfer.c).
+const privateIGotDate = 20200413
+
+// peerDate reads the DATE of a client-version pragma as fossil's page_xfer
+// does: only when the pragma carries both DATE and TIME, by atoi, and 0 when
+// it does not, which no date gate passes.
+func peerDate(c *xfer.PragmaCard) int {
+	if len(c.Values) < 3 {
+		return 0
+	}
+	return leadingInt(c.Values[1])
+}
+
+// leadingInt reads s as fossil's atoi reads a pragma token: its leading
+// digits, and 0 when there are none or they overflow an int.
+func leadingInt(s string) int {
 	n := 0
-	for n < len(v) && v[n] >= '0' && v[n] <= '9' {
+	for n < len(s) && s[n] >= '0' && s[n] <= '9' {
 		n++
 	}
-	version, err := strconv.Atoi(v[:n])
+	v, err := strconv.Atoi(s[:n])
 	if err != nil {
 		return 0
 	}
-	return version
+	return v
 }
 
 // loginCookieGate reports whether a server-version names a release that

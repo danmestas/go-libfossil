@@ -75,7 +75,7 @@ type session struct {
 	remoteHas           map[string]bool
 	phantoms            map[string]bool
 	pendingSend         map[string]bool
-	filesRecvdLastRound int
+	mxPhantomReq        int // gimme cards allowed per request; fossil's mxPhantomReq
 	igotSentThisRound   int
 	maxSend             int
 	phantomAge          map[string]int // UUID -> consecutive rounds gimme'd without delivery
@@ -153,6 +153,7 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		maxSend:        ms,
 		remoteHas:      make(map[string]bool),
 		phantoms:       make(map[string]bool),
+		mxPhantomReq:   MaxGimmeBase,
 		pendingSend:    make(map[string]bool),
 		phantomAge:     make(map[string]int),
 		peerVersion:    releaseVersion,

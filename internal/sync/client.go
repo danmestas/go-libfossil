@@ -184,7 +184,7 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 	}
 	cards = append(cards, fileCards...)
 
-	// Gimme cards from phantoms (max = max(MaxGimmeBase, filesRecvdLastRound*2)).
+	// Gimme cards from phantoms (at most s.mxPhantomReq).
 	cards = append(cards, s.buildGimmeCards()...)
 
 	// Private: send igot cards for private blobs.
@@ -453,9 +453,9 @@ func (s *session) buildGimmeCards() []xfer.Card {
 	if !s.opts.Pull {
 		return nil
 	}
-	maxGimme := MaxGimmeBase
-	if alt := s.filesRecvdLastRound * 2; alt > maxGimme {
-		maxGimme = alt
+	maxGimme := s.mxPhantomReq
+	if maxGimme < MaxGimmeBase {
+		panic("sync.buildGimmeCards: mxPhantomReq fell below MaxGimmeBase")
 	}
 
 	var cards []xfer.Card
@@ -593,7 +593,6 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	}
 
 	s.result.FilesRecvd += t.filesRecvd
-	s.filesRecvdLastRound = t.filesRecvd
 	s.agePhantoms()
 	return s.converged(t)
 }
@@ -786,6 +785,10 @@ func (s *session) converged(t replyTally) (bool, error) {
 		var one int
 		err := s.repo.DB().QueryRow("SELECT 1 FROM phantom LIMIT 1").Scan(&one)
 		if err == nil {
+			// fossil's client_sync assigns mxPhantomReq only on this path
+			// (src/xfer.c): max(200, 2*files received). A round that
+			// continues for any other reason leaves it as it was.
+			s.mxPhantomReq = max(MaxGimmeBase, 2*t.filesRecvd)
 			return false, nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {

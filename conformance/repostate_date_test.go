@@ -52,7 +52,7 @@ func dateTagCases() []rsCase {
 			ignoring: []string{"-omtime: c2 @2", "+omtime: c2 @30"},
 			rebuild:  true,
 		},
-	}, dateTagFallbackCases()...)
+	}, append(dateTagFallbackCases(), dateTagFirstFallbackCases()...)...)
 }
 
 // dateTagFallbackCases are the date tags step 6 ignores, leaving the D-card
@@ -65,19 +65,51 @@ func dateTagFallbackCases() []rsCase {
 		[]string{"c1 ci @1", "c2 ci @2", "t1 g @8", "t2 g @9"},
 		"-event: c2 ci @2", "+event: c2 ci <nil>")
 	cancel.fossil = "fossil(1) 2.28 tag_insert writes julianday(NULL) for a cancel " +
-		"applied after crosslink, leaving c2 with no time (erratum " +
-		"repo-state-01-s4.2-date-tag-event-time)"
+		"applied after crosslink, leaving c2 with no time where step 6 restores " +
+		"its D-card time (erratum repo-state-01-s4.2-date-tag-event-time)"
 	unparsable := dateCase("repostate.4.2.date-tag-unparsable", "RS-4.2-14",
 		with(twoCheckins, control("t", 9, "+date {c2} not-a-date")),
 		[]string{"c1 ci @1", "c2 ci @2", "t g @9"},
 		"-event: c2 ci @2", "+event: c2 ci <nil>")
 	unparsable.fossil = "fossil(1) 2.28 stores julianday('not-a-date'), NULL, as c2's " +
-		"time once it is crosslinked (erratum repo-state-01-s4.2-date-tag-event-time)"
+		"time once it is crosslinked, where step 6 ignores the tag and keeps the " +
+		"D-card time (erratum repo-state-01-s4.2-date-tag-event-time)"
 	zero := dateCase("repostate.4.2.date-tag-zero", "RS-4.2-14",
 		with(twoCheckins, control("t", 9, "+date {c2} 0")),
 		[]string{"c1 ci @1", "c2 ci @2", "t g @9"},
 		"-event: c2 ci @2", "+event: c2 ci -210866760000000")
 	zero.fossil = "fossil(1) 2.28 stores julianday('0'), a time of 0, with no " +
-		"positivity check (erratum repo-state-01-s4.2-date-tag-event-time)"
+		"positivity check, where step 6 ignores a time that is not positive and " +
+		"keeps the D-card time (erratum repo-state-01-s4.2-date-tag-event-time)"
 	return []rsCase{cancel, unparsable, zero}
+}
+
+// dateTagFirstFallbackCases are dateTagFallbackCases with the tags arriving
+// while c2 is a phantom: step 6 gives the same D-card time in either order.
+// They have no ".rebuild" case, which would load the same artifacts as the
+// cases above; for the cancel, fossil's own rebuild disagrees with its
+// per-artifact crosslink, storing no time.
+func dateTagFirstFallbackCases() []rsCase {
+	first := func(id, req string, tags []rsArt, want []string, ignoring ...string) rsCase {
+		arts := append(append([]rsArt{chain()[0]}, tags...), chain()[1])
+		c := dateCase(id, req, arts, append([]string{"c1 ci @1", "c2 ci @2"}, want...),
+			ignoring...)
+		c.each, c.rebuild = true, false
+		return c
+	}
+	zero := first("repostate.4.2.date-tag-zero-before-checkin", "RS-4.2-14",
+		[]rsArt{control("t", 9, "+date {c2} 0")},
+		[]string{"t g @9"}, "-event: c2 ci @2", "+event: c2 ci -210866760000000")
+	zero.fossil = "fossil(1) 2.28 manifest_crosslink reads julianday('0'), a time of 0, " +
+		"where step 6 ignores a time that is not positive and keeps the D-card time " +
+		"(erratum repo-state-01-s4.2-date-tag-event-time)"
+	return []rsCase{
+		first("repostate.4.2.date-tag-cancel-before-checkin", "RS-4.2-13",
+			[]rsArt{control("t1", 8, "+date {c2} "+rsTime(30)), control("t2", 9, "-date {c2}")},
+			[]string{"t1 g @8", "t2 g @9"}, "-event: c2 ci @2", "+event: c2 ci @30"),
+		first("repostate.4.2.date-tag-unparsable-before-checkin", "RS-4.2-14",
+			[]rsArt{control("t", 9, "+date {c2} not-a-date")},
+			[]string{"t g @9"}, "-event: c2 ci @2", "+event: c2 ci <nil>"),
+		zero,
+	}
 }

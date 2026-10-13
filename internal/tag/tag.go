@@ -32,11 +32,14 @@ type TagOpts struct {
 // ApplyOpts describes a tag application from an existing control artifact.
 type ApplyOpts struct {
 	TargetRID libfossil.FslID // Artifact to tag.
-	SrcRID    libfossil.FslID // Control artifact that introduced this tag (0 for inline T-cards).
-	TagName   string
-	TagType   int // TagCancel, TagSingleton, or TagPropagating.
-	Value     string
-	MTime     float64 // Julian day.
+	// SrcRID is the artifact whose T card introduced this tag: the control
+	// artifact, or the check-in carrying an inline card. tagxref keeps 0 for
+	// inherited rows only, so a date tag needs it positive to set a time.
+	SrcRID  libfossil.FslID
+	TagName string
+	TagType int // TagCancel, TagSingleton, or TagPropagating.
+	Value   string
+	MTime   float64 // Julian day.
 }
 
 // AddTag creates a control artifact that adds or cancels a tag on a target checkin.
@@ -235,27 +238,53 @@ func applyEventOverride(q db.Querier, opts ApplyOpts) error {
 	return nil
 }
 
-// applyDateOverride moves a check-in's event.mtime to the value of a date tag
-// (`fossil amend --date`) that has just won its tagxref row, keeping the
-// manifest's own time in omtime. It mirrors tag_insert (src/tag.c), which runs
-// this for every tag type: a cancel's NULL value leaves mtime NULL there too.
-// A check-in crosslinked later reads the same row back; see
-// crosslinkCheckinTables.
+// applyDateOverride re-derives a check-in's event time from its date tag
+// (`fossil amend --date`) once that tag has won its tagxref row.
 func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 	if opts.TagName != "date" {
 		return nil
 	}
-	var value any
-	if opts.TagType != TagCancel {
-		value = nullableValue(opts.Value)
-	}
-	if _, err := q.Exec(
-		`UPDATE event SET mtime=julianday(?), omtime=coalesce(omtime, mtime) WHERE objid=?`,
-		value, opts.TargetRID,
-	); err != nil {
+	if err := RefreshEventTime(q, opts.TargetRID); err != nil {
 		return fmt.Errorf("date update: %w", err)
 	}
 	return nil
+}
+
+// RefreshEventTime sets rid's event.mtime from its date tag, following
+// draft-fossil-repo-state-01 Section 4.2, step 6: the value of a date tag
+// applied directly to rid (srcid > 0), when it parses (by SQLite
+// julianday, which already bounds the upper end) to a positive time;
+// otherwise the D-card time kept in event.omtime. An inherited row
+// (srcid 0, from a propagating tag on an ancestor) and a cancel set nothing.
+//
+// Both arrival orders call this, tag application after it wins its row and
+// crosslink after it inserts the event row, so the result depends only on
+// tagxref, never on which came first. That is where -01 departs from fossil
+// 2.28: its tag_insert writes julianday(value) as is, so a cancel or an
+// unparsable value leaves no time, 0 stores a time of 0, and its
+// manifest_crosslink reads an inherited row too. omtime keeps the D-card
+// time (RS-4.2-15); coalesce fills it for an event row that predates it.
+// A missing event row (a phantom target) is a no-op.
+func RefreshEventTime(q db.Querier, rid libfossil.FslID) error {
+	if q == nil {
+		panic("tag.RefreshEventTime: q must not be nil")
+	}
+	if rid <= 0 {
+		panic("tag.RefreshEventTime: rid must be positive")
+	}
+	// In an UPDATE every right-hand side reads the row as it was, so the
+	// fallback is the stored omtime, or, for a row without one, the old mtime.
+	_, err := q.Exec(
+		`UPDATE event SET
+		   mtime=coalesce((SELECT jd FROM (SELECT julianday(value) AS jd FROM tagxref
+		       WHERE rid=?1 AND srcid>0 AND tagtype>0
+		         AND tagid=(SELECT tagid FROM tag WHERE tagname='date'))
+		     WHERE jd>0 AND jd<5373484.5), omtime, mtime),
+		   omtime=coalesce(omtime, mtime)
+		 WHERE objid=?1`,
+		rid,
+	)
+	return err
 }
 
 // superseded reports whether tagxref already holds a row for (tagid, rid)

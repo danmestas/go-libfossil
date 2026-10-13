@@ -91,7 +91,8 @@ func syncClientCases() []syncClientCase {
 	var all []syncClientCase
 	for _, group := range [][]syncClientCase{
 		clientRoundCases(), clientPhantomCases(), clientGimmeCases(), clientTerminationCases(),
-		clientFramingCases(), clientPayloadCases(), clientCardCases(), clientAuthCases(),
+		clientFramingCases(), clientPayloadCases(), clientCardCases(), clientCardNameCases(),
+		clientAuthCases(),
 		clientFileCases(), clientCFileCases(), clientUVFileCases(), clientDeltaCases(),
 		clientPrivateCases(), clientCloneCases(), clientCloneStallCases(),
 		clientCloneErrorCases(), clientUVCases(), clientUVStatusCases(), clientMessageCases(),

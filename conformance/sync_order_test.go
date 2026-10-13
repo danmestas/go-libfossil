@@ -28,7 +28,8 @@ var manyPhantoms = []string{
 }
 
 func serverOrderCases() []syncServerCase {
-	return append(serverRefusalOrderCases(), serverPhantomGimmeCases()...)
+	return append(append(serverRefusalOrderCases(), serverRefusalResetCases()...),
+		serverPhantomGimmeCases()...)
 }
 
 // serverRefusalOrderCases are refusals whose reset, or whose end of card
@@ -70,7 +71,13 @@ func serverRefusalOrderCases() []syncServerCase {
 		body: []string{"{CV}", "clone 3 1", "bogus", "{R}"},
 		want: all(completed, onlyError("bad command: bogus\n"), noCard("cfile "),
 			noCard("clone_seqno"), noCard("push "), noCard("cookie ")),
-	}, {
+	}}
+}
+
+// serverRefusalResetCases continues serverRefusalOrderCases with the
+// refusals that reset the reply; the table is split to stay short.
+func serverRefusalResetCases() []syncServerCase {
+	return []syncServerCase{{
 		// The refused push resets too: g may clone but not write.
 		Case:  Case{ID: "sync.10.1.clone-then-refused-push", Req: "SP-10.1-2"},
 		setup: []string{"UPDATE user SET cap='g' WHERE login='nobody'"},

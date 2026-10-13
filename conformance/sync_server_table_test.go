@@ -171,7 +171,13 @@ func serverCardCases() []syncServerCase {
 			"igot {U}", "{R}"},
 		want: all(completed, onlyError("malformed+file+line", "malformed file line"),
 			noCard("file {A1}"), noCard("gimme {U}")),
-	}, {
+	}}
+}
+
+// serverCardFailureCases continues serverCardCases with the handler
+// failures and resets of Section 5.2; the table is split to stay short.
+func serverCardFailureCases() []syncServerCase {
+	return []syncServerCase{{
 		// A well-framed file whose content is not HASH fails the handler
 		// the same way: reset, error, and no later card is parsed.
 		Case:    Case{ID: "sync.5.2.file-wrong-hash", Req: "SP-5.2-7"},

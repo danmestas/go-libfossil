@@ -84,7 +84,13 @@ func serverPragmaCases() []syncServerCase {
 			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'"+
 				" AND json_extract(value, '$.login')='bob'"+
 				" AND mtime < strftime('%s', 'now') - 20", 1)),
-	}, {
+	}}
+}
+
+// serverPragmaLockCases continues serverPragmaCases with the rest of the
+// commit lock rows of Section 9.4; the table is split to stay short.
+func serverPragmaLockCases() []syncServerCase {
+	return []syncServerCase{{
 		// §9.4: the dispatcher applies ci-lock with no Write-capability test,
 		// so nobody, who cannot commit, still takes the lock.
 		Case:  Case{ID: "sync.9.4.ci-lock-no-write-gate", Req: "SP-9.4-1"},

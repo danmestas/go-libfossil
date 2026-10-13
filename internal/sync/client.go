@@ -744,7 +744,7 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 	case c.Name == "ci-lock-fail" && len(c.Values) >= 2:
 		mtime, _ := strconv.ParseInt(c.Values[1], 10, 64)
 		s.result.CkinLockFail = &CkinLockFail{
-			HeldBy: c.Values[0],
+			HeldBy: deck.FossilDecode(c.Values[0]),
 			Since:  time.Unix(mtime, 0),
 		}
 	}

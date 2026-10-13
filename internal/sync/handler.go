@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -853,34 +854,50 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		h.reqClusters = true
 	case c.Name == "ci-lock" && len(c.Values) == 2 && hash.IsValidHash(c.Values[0]):
 		// fossil takes the pragma only with exactly HASH and CLIENT-ID, HASH
-		// a hash (xfer.c:1781); anything else is no lock request.
-		//
-		// Fossil takes a lock for any requester. A lock only matters to
-		// someone who can commit, and ci-lock-fail names the holder, so
-		// this server takes and reports locks for writers alone.
-		if !auth.CanPush(h.caps) {
-			return
-		}
-		fail := processCkinLock(h.repo.DB(), c.Values[0], c.Values[1], h.user,
-			lockTimeout(h.repo.DB()))
-		if fail != nil {
-			h.resp = append(h.resp, &xfer.PragmaCard{
-				Name:   "ci-lock-fail",
-				Values: []string{fail.HeldBy, fmt.Sprintf("%d", fail.Since.Unix())},
-			})
-		}
+		// a hash (xfer.c:1781); anything else is no lock request. As in
+		// fossil, any requester may take a lock, with no Write test (§9.4).
+		h.handleCkinLock(c.Values[0], c.Values[1])
 	case c.Name == "ci-unlock" && len(c.Values) == 1 && hash.IsValidHash(c.Values[0]):
-		// fossil drops CLIENT-ID's check-in locks for any requester; as with
-		// ci-lock, this server lets only writers touch locks.
-		if auth.CanPush(h.caps) {
-			releaseCkinLocks(h.repo.DB(), c.Values[0])
-		}
+		// fossil drops CLIENT-ID's check-in locks for any requester, with no
+		// Write or ownership test (§9.4).
+		releaseCkinLocks(h.repo.DB(), c.Values[0])
 	case c.Name == "send-private":
 		if auth.CanSyncPrivate(h.caps) {
 			h.syncPrivate = true
 		} else {
 			h.resp = append(h.resp, &xfer.ErrorCard{Message: privateRefusal})
 		}
+	}
+}
+
+// handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
+// the requester's login, null for nobody as fossil's g.zLogin is, and
+// ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
+// lock with no login fossil emits an empty LOGIN, which the -01 grammar
+// (1*fossilized) does not allow and which fossil's own client drops as a
+// short card; this server names the holder nobody instead.
+//
+// No capability gates the pragma, so the config table is bounded instead by
+// the sweep processCkinLock runs before each write: a lock whose HASH is not
+// a leaf is deleted, so at most one lock per leaf plus the latest lock on a
+// non-leaf survive, whatever the requester sends.
+func (h *handler) handleCkinLock(parentUUID, clientID string) {
+	login := h.user
+	if login == "nobody" {
+		login = ""
+	}
+	fail := processCkinLock(h.repo.DB(), parentUUID, clientID, login,
+		lockTimeout(h.repo.DB()))
+	if fail != nil {
+		holder := fail.HeldBy
+		if holder == "" {
+			holder = "nobody"
+		}
+		h.resp = append(h.resp, &xfer.PragmaCard{
+			Name: "ci-lock-fail",
+			Values: []string{deck.FossilEncode(holder),
+				fmt.Sprintf("%d", fail.Since.Unix())},
+		})
 	}
 }
 

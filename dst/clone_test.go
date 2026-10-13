@@ -22,8 +22,12 @@ import (
 //  1. Create server repo, seed with 50 blobs (deterministic content from seed).
 //  2. Create MockFossil with server-side SeededBuggify (seed+1000).
 //  3. Call sync.Clone() with client-side SeededBuggify (seed+2000).
-//  4. On success: verify blob convergence + no phantoms.
+//  4. On success: verify blob convergence; phantoms are expected by default
+//     and must be gone when PullPhantoms succeeded.
 //  5. On failure: verify repo file deleted (error cleanup).
+//
+// Odd seeds set PullPhantoms so the opt-in follow-up pull and its stall check
+// keep fault-injection coverage.
 func runCloneDST(t *testing.T, seed int64) {
 	t.Helper()
 
@@ -68,7 +72,8 @@ func runCloneDST(t *testing.T, seed int64) {
 
 	ctx := context.Background()
 	cloneRepo, result, cloneErr := libsync.Clone(ctx, clonePath, mf, libsync.CloneOpts{
-		Buggify: clientBuggify,
+		Buggify:      clientBuggify,
+		PullPhantoms: seed%2 == 1,
 	})
 
 	if cloneErr != nil {
@@ -107,6 +112,9 @@ func runCloneDST(t *testing.T, seed int64) {
 	row := cloneRepo.DB().QueryRow("SELECT COUNT(*) FROM phantom")
 	if err := row.Scan(&phantomCount); err != nil {
 		t.Fatalf("seed %d: query phantom count: %v", seed, err)
+	}
+	if seed%2 == 1 && phantomCount > 0 {
+		t.Errorf("seed %d: PullPhantoms clone succeeded with %d phantoms", seed, phantomCount)
 	}
 	if phantomCount > 0 {
 		t.Logf("seed %d: %d residual phantoms (expected under buggify)", seed, phantomCount)

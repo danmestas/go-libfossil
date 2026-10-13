@@ -35,8 +35,9 @@ const cloneAvailableDeltaSourceLimit = 4096
 
 // PhantomStallError reports a clone that stopped making progress while
 // phantom blobs — content referenced but never received — were still
-// outstanding. Terminating a stalled clone is correct; reporting it as
-// success is not, so this is always returned instead of nil in that case.
+// outstanding. It is returned only when CloneOpts.PullPhantoms is set and
+// phantoms remain after the follow-up pull; a default Clone ends at
+// clone_seqno 0 (sync-protocol-01 Section 8.2) and does not look for them.
 // Count is programmatically reachable so a caller can act on it without
 // parsing the message.
 type PhantomStallError struct {

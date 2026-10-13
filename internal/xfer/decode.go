@@ -209,9 +209,30 @@ func parseLine(r *bufio.Reader, rawLine, line string, budget *int64) (Card, erro
 		return parseXDelete(r, args)
 	}
 	if c := parseControlCard(cmd, args); c != nil {
-		return c, nil
+		return keepRawLine(c, rawLine), nil
 	}
 	return &BadCommandCard{Line: rawLine}, nil
+}
+
+// keepRawLine records the line as received on the cards a server answers with
+// "bad command: LINE" when a client sends them (§5.2). fossil quotes
+// blob_str(&xfer.line) verbatim, so re-encoding the parsed card would alter a
+// spelling such as "clone_seqno 05" or a run of spaces.
+func keepRawLine(c Card, rawLine string) Card {
+	if !strings.HasSuffix(rawLine, "\n") {
+		rawLine += "\n"
+	}
+	switch c := c.(type) {
+	case *CloneSeqNoCard:
+		c.Raw = rawLine
+	case *ErrorCard:
+		c.Raw = rawLine
+	case *MessageCard:
+		c.Raw = rawLine
+	case *UnknownCard:
+		c.Raw = rawLine
+	}
+	return c
 }
 
 // parseControlCard reads a card that carries no payload. It returns nil when

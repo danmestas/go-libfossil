@@ -85,12 +85,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them in place, as fossil(1)'s clone does. A caller that relies on a
   complete clone sets `CloneOpts.PullPhantoms`. Only the tests of that pull
   set it: the `repo clone` command, the DST clone harness and the parity
-  tests all clone as fossil(1) does. The `sync.8.2.clone-zero-phantom` case passes and
-  is no longer a deviation (tracked in #424).
+  tests all clone as fossil(1) does. The `sync.8.2.clone-zero-phantom` case
+  passes and is no longer a deviation (tracked in #424).
 - The sync server answers a client-sent `clone_seqno` with
   `error bad command` and goes on with the cards after it, as
   sync-protocol-01 Section 5.2 says for a reply-only card sent by a client
-  (SP-5.2-6), and as fossil's `page_xfer` does. It used to ignore the card.
+  (SP-5.2-6), and as fossil's `page_xfer` does, including a `clone_seqno`
+  whose argument is not decimal. The error quotes the line as received. It
+  used to ignore the card.
   The `sync.5.2.client-clone-seqno` case passes and is no longer a deviation
   (tracked in #424).
 - The conformance suite now checks the -01 drafts of the artifact-format,

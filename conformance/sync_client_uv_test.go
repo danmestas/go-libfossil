@@ -189,6 +189,26 @@ func clientMessageCases() []syncClientCase {
 		want:    every(stored("N1"), rounds(2)),
 		fc:      true,
 	}, {
+		// A wrong hash found before storage is a handler error, not a failed
+		// commit: the igot before it still leaves its phantom (#418).
+		Case:    Case{ID: "sync.10.1.integrity-error-prefix", Req: "SP-10.1-6"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}", "file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    every(phantom("U"), notStored("N1"), mentions("mismatch", "wrong hash")),
+		fc:      true,
+		fossil: "fossil(1) 2.28 stores the content after the error and aborts at " +
+			"commit when verify_before_commit sees the mismatch, which rolls back the " +
+			"reply's prefix with it",
+	}, {
+		// The same reply, but a continuation condition (the igot's phantom)
+		// holds, so the second request must follow the error (§10.1, §3.7).
+		Case:    Case{ID: "sync.10.1.integrity-error-continues", Req: "SP-10.1-7"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}", "file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    sent(2, "gimme {U}"),
+		fossil: "fossil(1) 2.28 aborts the round at commit when verify_before_commit " +
+			"sees the mismatch, so it never reaches the continuation",
+	}, {
 		Case:    Case{ID: "sync.10.1.error-continues-when-due", Req: "SP-10.1-1"},
 		op:      opPull,
 		replies: [][]string{reply("igot {U}", "error x")},

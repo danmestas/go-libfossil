@@ -207,11 +207,12 @@ func TestProcessResponseThreadsContextToPhantomFillCascade(t *testing.T) {
 	}
 }
 
-// TestProcessResponseCrosslinksFilledPhantomsOnCardError: a card error ends
-// the reply early, but the phantoms the reply already filled are stored, so
-// their crosslink cascade still runs. Here a late hash mismatch follows the
-// fill of a phantom with delta children.
-func TestProcessResponseCrosslinksFilledPhantomsOnCardError(t *testing.T) {
+// TestProcessResponseKeepsPrefixOnCardError: a card error that is not a
+// failed commit check ends the reply early, but the prefix before it commits
+// (§10.1, #418): the phantoms the reply filled get their crosslink cascade,
+// and the phantoms its igot cards announced are recorded. Here a delta
+// against a held basis fails its pre-storage check.
+func TestProcessResponseKeepsPrefixOnCardError(t *testing.T) {
 	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
 	baseUUID, base, children := buildPhantomFillFanout(t, r, 3)
 	evil, err := delta.Create(base, append(append([]byte{}, base...), "evil\n"...))
@@ -219,15 +220,65 @@ func TestProcessResponseCrosslinksFilledPhantomsOnCardError(t *testing.T) {
 		t.Fatalf("delta.Create: %v", err)
 	}
 	claimed := hash.SHA1([]byte("not what the delta gives"))
+	announced := hash.SHA1([]byte("announced by an igot before the error"))
 	msg := &xfer.Message{Cards: []xfer.Card{
-		&xfer.FileCard{UUID: claimed, DeltaSrc: baseUUID, Content: evil},
 		&xfer.FileCard{UUID: baseUUID, Content: base},
+		&xfer.IGotCard{UUID: announced},
+		&xfer.FileCard{UUID: claimed, DeltaSrc: baseUUID, Content: evil},
 	}}
-	if _, err := s.processResponse(context.Background(), msg); !errors.Is(err, errHashMismatch) {
-		t.Fatalf("processResponse = %v, want a hash mismatch", err)
+	_, err = s.processResponse(context.Background(), msg)
+	if !errors.Is(err, errHashMismatch) || abortsPass(err) {
+		t.Fatalf("processResponse = %v, want a pre-storage hash mismatch", err)
 	}
 	if got := countCrosslinkedRids(t, r, children); got != len(children) {
 		t.Fatalf("crosslinked %d of %d children of the filled phantom, want all", got,
 			len(children))
+	}
+	if all, phantoms := rows(t, r, announced); all != 1 || phantoms != 1 {
+		t.Fatalf("announced artifact rows = %d (%d phantom), want one phantom", all,
+			phantoms)
+	}
+	if all, _ := rows(t, r, claimed); all != 0 {
+		t.Fatalf("%d rows for the refused delta, want 0", all)
+	}
+}
+
+// TestProcessResponseLateMismatchRollsBackReply: a delta found wrong when its
+// basis arrives later in the reply fails the commit check (§7.7, SP-7.7-4),
+// which rolls back the whole reply: the phantom the basis filled is a
+// phantom again, its cascade's crosslinks are gone, and the session owes no
+// repair for them.
+func TestProcessResponseLateMismatchRollsBackReply(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
+	baseUUID, base, children := buildPhantomFillFanout(t, r, 3)
+	evil, err := delta.Create(base, append(append([]byte{}, base...), "evil\n"...))
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
+	claimed := hash.SHA1([]byte("not what the delta gives"))
+	announced := hash.SHA1([]byte("announced by an igot in the aborted reply"))
+	msg := &xfer.Message{Cards: []xfer.Card{
+		&xfer.IGotCard{UUID: announced},
+		&xfer.FileCard{UUID: claimed, DeltaSrc: baseUUID, Content: evil},
+		&xfer.FileCard{UUID: baseUUID, Content: base},
+	}}
+	_, err = s.processResponse(context.Background(), msg)
+	if !abortsPass(err) {
+		t.Fatalf("processResponse = %v, want a late hash mismatch", err)
+	}
+	if all, phantoms := rows(t, r, baseUUID); all != 1 || phantoms != 1 {
+		t.Fatalf("basis rows = %d (%d phantom), want the phantom it was", all, phantoms)
+	}
+	for _, uuid := range []string{claimed, announced} {
+		if all, _ := rows(t, r, uuid); all != 0 {
+			t.Fatalf("%d rows for %s, want 0", all, uuid)
+		}
+	}
+	if got := countCrosslinkedRids(t, r, children); got != 0 {
+		t.Fatalf("crosslinked %d children in a rolled-back reply, want 0", got)
+	}
+	if s.cascaded != 0 || s.result.FilesRecvd != 0 {
+		t.Fatalf("session counts cascaded=%d files=%d after a rollback, want 0",
+			s.cascaded, s.result.FilesRecvd)
 	}
 }

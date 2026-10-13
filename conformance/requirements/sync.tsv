@@ -169,6 +169,8 @@ SP-10.1-2	10.1	Server: at wrong-project, authorization, duplicate-login and unkn
 SP-10.1-3	10.1	Server: the SHA3 gate and unauthorized send-private append their error without reset, and parsing continues.
 SP-10.1-4	10.1	Server: card errors keep HTTP status 200.
 SP-10.1-5	10.1	Server: only invalid clone sequence number and invalid config record roll back the request; other card errors keep earlier mutations.
+SP-10.1-6	10.1	Client: a handler-reported content or integrity error ends the reply-card loop, and the prefix of the reply processed before it stays committed.
+SP-10.1-7	10.1	Client: after a handler-reported content or integrity error, continuation (Section 3.7) is evaluated.
 SP-10.2-1	10.2	Receiver: message takes exactly two visible tokens, its TEXT is defossilized and it is not fatal.
 SP-10.2-2	10.2	Client: with push enabled, a message matching "pull only *" clears push: later gimme cards in that reply append no content and later requests omit push.
 SP-10.2-3	10.2	Client: any other message changes no state.

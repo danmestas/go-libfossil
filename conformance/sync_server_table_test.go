@@ -214,8 +214,8 @@ func serverCardFailureCases() []syncServerCase {
 		// SP-7.7-4: a delta whose basis arrives later in the same request
 		// has its bytes available in that pass, so its mismatch must not be
 		// kept either. DTS turns S into T, not N1. fossil's commit hook rolls
-		// the request back; go-libfossil keeps S, returns N1 to what it was
-		// before the request, and answers with N1's wrong-hash error.
+		// the request back; so does go-libfossil, whose request runs in one
+		// transaction, and it answers with N1's wrong-hash error.
 		Case:    Case{ID: "sync.7.7.server-late-basis-wrong-hash", Req: "SP-7.7-4"},
 		notSent: wrongHashAborts,
 		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",
@@ -224,7 +224,7 @@ func serverCardFailureCases() []syncServerCase {
 			"wrong hash on received artifact: {N1}")),
 	}, {
 		// The draft's commit hook rolls the whole request back: S is not kept
-		// either. go-libfossil keeps it, having committed it on its own.
+		// either.
 		Case:    Case{ID: "sync.7.7.server-late-basis-aborts-request", Req: "SP-7.7-4"},
 		notSent: wrongHashAborts,
 		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",

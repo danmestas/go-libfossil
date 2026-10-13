@@ -43,33 +43,60 @@ func rows(t *testing.T, r *repo.Repo, uuid string) (all, phantoms int) {
 	return all, phantoms
 }
 
+// inPass runs fn as one verification pass, in its transaction (runPass): a
+// late hash mismatch rolls back everything fn stored.
+func inPass(r *repo.Repo, fn func(r *repo.Repo, pass *receivePass) error) error {
+	cardErr, err := runPass(r, func(bound *repo.Repo) (error, error) {
+		return fn(bound, newReceivePass()), nil
+	})
+	return errors.Join(cardErr, err)
+}
+
+// storeAll stores each of stores in order, as the cards of one pass.
+func storeAll(r *repo.Repo, pass *receivePass, stores ...lateStore) error {
+	for _, s := range stores {
+		if err := storeReceivedFile(context.Background(), r, pass, s.uuid, s.src,
+			s.payload, nil, visibilityPublic, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lateStore is one received card: an artifact, its delta basis, its payload.
+type lateStore struct {
+	uuid, src string
+	payload   []byte
+}
+
+// wantLateMismatch checks err is the late hash mismatch naming uuid, which
+// aborts its pass.
+func wantLateMismatch(t *testing.T, err error, uuid string) {
+	t.Helper()
+	var mismatch *hashMismatchError
+	if !errors.As(err, &mismatch) || mismatch.uuid != uuid || !abortsPass(err) {
+		t.Fatalf("pass = %v, want a late hash mismatch naming %s", err, uuid)
+	}
+	if !errors.Is(err, errHashMismatch) {
+		t.Fatalf("pass = %v, want errors.Is errHashMismatch", err)
+	}
+}
+
 // TestReceivePassLateBasisMismatch: a delta stored dangling is checked when
 // its basis arrives later in the same pass (Section 7.7, SP-7.7-4). The
-// basis's store reports the delta's name as a hash mismatch, the basis
-// stays stored, and the delta, new in the pass, is gone.
+// mismatch aborts the pass, which keeps neither the delta nor the basis.
 func TestReceivePassLateBasisMismatch(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	fx := newLateBasisFixture(t)
-	ctx := context.Background()
-	pass := newReceivePass()
-	if err := storeReceivedFile(ctx, r, pass, fx.claimed, fx.baseUUID, fx.evil, nil,
-		visibilityPublic, nil); err != nil {
-		t.Fatalf("store delta before basis: %v", err)
-	}
-	err := storeReceivedFile(ctx, r, pass, fx.baseUUID, "", []byte(fx.base), nil,
-		visibilityPublic, nil)
-	var mismatch *hashMismatchError
-	if !errors.As(err, &mismatch) || mismatch.uuid != fx.claimed {
-		t.Fatalf("store basis = %v, want a hash mismatch naming %s", err, fx.claimed)
-	}
-	if !errors.Is(err, errHashMismatch) {
-		t.Fatalf("store basis = %v, want errors.Is errHashMismatch", err)
-	}
-	if all, _ := rows(t, r, fx.claimed); all != 0 {
-		t.Fatalf("%d rows for the mismatched delta, want 0", all)
-	}
-	if _, ok := content.AvailableByUUID(r.DB(), fx.baseUUID); !ok {
-		t.Fatal("the basis is not stored")
+	err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		return storeAll(r, pass, lateStore{fx.claimed, fx.baseUUID, fx.evil},
+			lateStore{fx.baseUUID, "", []byte(fx.base)})
+	})
+	wantLateMismatch(t, err, fx.claimed)
+	for _, uuid := range []string{fx.claimed, fx.baseUUID} {
+		if all, _ := rows(t, r, uuid); all != 0 {
+			t.Fatalf("%d rows for %s, want 0", all, uuid)
+		}
 	}
 	var deltas int
 	r.DB().QueryRow("SELECT count(*) FROM delta").Scan(&deltas)
@@ -78,13 +105,11 @@ func TestReceivePassLateBasisMismatch(t *testing.T) {
 	}
 }
 
-// TestReceivePassLateBasisRestoresPhantom: a delta that filled a phantom is
-// returned to a phantom, with its privacy, so what referred to it still
-// resolves.
-func TestReceivePassLateBasisRestoresPhantom(t *testing.T) {
+// TestReceivePassLateBasisKeepsPhantom: a delta that filled a phantom leaves
+// it the phantom it was, with its privacy, when its pass aborts.
+func TestReceivePassLateBasisKeepsPhantom(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	fx := newLateBasisFixture(t)
-	ctx := context.Background()
 	rid, err := blob.StorePhantom(r.DB(), fx.claimed)
 	if err != nil {
 		t.Fatalf("StorePhantom: %v", err)
@@ -92,34 +117,28 @@ func TestReceivePassLateBasisRestoresPhantom(t *testing.T) {
 	if err := content.MakePrivate(r.DB(), int64(rid)); err != nil {
 		t.Fatalf("MakePrivate: %v", err)
 	}
-	pass := newReceivePass()
-	if err := storeReceivedFile(ctx, r, pass, fx.claimed, fx.baseUUID, fx.evil, nil,
-		visibilityPublic, nil); err != nil {
-		t.Fatalf("store delta before basis: %v", err)
-	}
-	err = storeReceivedFile(ctx, r, pass, fx.baseUUID, "", []byte(fx.base), nil,
-		visibilityPublic, nil)
-	if !errors.Is(err, errHashMismatch) {
-		t.Fatalf("store basis = %v, want a hash mismatch", err)
-	}
+	err = inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		return storeAll(r, pass, lateStore{fx.claimed, fx.baseUUID, fx.evil},
+			lateStore{fx.baseUUID, "", []byte(fx.base)})
+	})
+	wantLateMismatch(t, err, fx.claimed)
 	if all, phantoms := rows(t, r, fx.claimed); all != 1 || phantoms != 1 {
 		t.Fatalf("delta rows = %d (%d phantom), want one phantom", all, phantoms)
 	}
 	var inPhantom int
 	r.DB().QueryRow("SELECT count(*) FROM phantom WHERE rid=?", rid).Scan(&inPhantom)
 	if inPhantom != 1 || !content.IsPrivate(r.DB(), int64(rid)) {
-		t.Fatalf("phantom row %d, private %v: want a private phantom again", inPhantom,
+		t.Fatalf("phantom row %d, private %v: want a private phantom still", inPhantom,
 			content.IsPrivate(r.DB(), int64(rid)))
 	}
 }
 
 // TestReceivePassLateBasisChain: a dangling delta grounded by another that
 // is itself grounded later is checked once the chain reaches its root, and
-// a good one is kept.
+// its mismatch aborts the pass, good middle delta and basis included.
 func TestReceivePassLateBasisChain(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	fx := newLateBasisFixture(t)
-	ctx := context.Background()
 	mid := fx.base + "mid\n"
 	top := mid + "top\n"
 	midDelta, err := delta.Create([]byte(fx.base), []byte(mid))
@@ -130,47 +149,27 @@ func TestReceivePassLateBasisChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delta.Create: %v", err)
 	}
-	pass := newReceivePass()
 	midUUID, topUUID := hash.SHA1([]byte(mid)), hash.SHA1([]byte(top))
-	for _, s := range []struct {
-		uuid, src string
-		payload   []byte
-	}{{topUUID, midUUID, badTop}, {midUUID, fx.baseUUID, midDelta}} {
-		if err := storeReceivedFile(ctx, r, pass, s.uuid, s.src, s.payload, nil,
-			visibilityPublic, nil); err != nil {
-			t.Fatalf("store %s: %v", s.uuid, err)
+	err = inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		return storeAll(r, pass, lateStore{topUUID, midUUID, badTop},
+			lateStore{midUUID, fx.baseUUID, midDelta},
+			lateStore{fx.baseUUID, "", []byte(fx.base)})
+	})
+	wantLateMismatch(t, err, topUUID)
+	for _, uuid := range []string{topUUID, midUUID, fx.baseUUID} {
+		if all, _ := rows(t, r, uuid); all != 0 {
+			t.Fatalf("%d rows for %s, want 0", all, uuid)
 		}
-	}
-	err = storeReceivedFile(ctx, r, pass, fx.baseUUID, "", []byte(fx.base), nil,
-		visibilityPublic, nil)
-	var mismatch *hashMismatchError
-	if !errors.As(err, &mismatch) || mismatch.uuid != topUUID {
-		t.Fatalf("store basis = %v, want a hash mismatch naming the top", err)
-	}
-	if all, _ := rows(t, r, topUUID); all != 0 {
-		t.Fatalf("%d rows for the bad top, want 0", all)
-	}
-	midRid, ok := content.AvailableByUUID(r.DB(), midUUID)
-	if !ok {
-		t.Fatal("the good middle delta is not available")
-	}
-	if got, err := content.Expand(r.DB(), midRid); err != nil || string(got) != mid {
-		t.Fatalf("expand middle = %q, %v", got, err)
-	}
-	if len(pass.dangling) != 0 || len(pass.byRoot) != 0 {
-		t.Fatalf("pass still tracks %d deltas, %d sources", len(pass.dangling),
-			len(pass.byRoot))
 	}
 }
 
 // TestReceivePassHeldChainLateBasis: a bad delta whose basis is a delta row
 // stored in an earlier pass, against a phantom that arrives in this one, is
 // still checked (SP-7.7-4): the chain to its bytes runs through a row this
-// pass did not store.
+// pass did not store. The abort keeps the earlier pass's row.
 func TestReceivePassHeldChainLateBasis(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	fx := newLateBasisFixture(t)
-	ctx := context.Background()
 	mid := fx.base + "mid\n"
 	midDelta, err := delta.Create([]byte(fx.base), []byte(mid))
 	if err != nil {
@@ -178,8 +177,9 @@ func TestReceivePassHeldChainLateBasis(t *testing.T) {
 	}
 	midUUID := hash.SHA1([]byte(mid))
 	// An earlier pass left mid as a delta on the phantom basis.
-	if err := storeReceivedFile(ctx, r, newReceivePass(), midUUID, fx.baseUUID, midDelta,
-		nil, visibilityPublic, nil); err != nil {
+	if err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		return storeAll(r, pass, lateStore{midUUID, fx.baseUUID, midDelta})
+	}); err != nil {
 		t.Fatalf("store held delta: %v", err)
 	}
 	badTop, err := delta.Create([]byte(mid), []byte(mid+"evil\n"))
@@ -187,69 +187,19 @@ func TestReceivePassHeldChainLateBasis(t *testing.T) {
 		t.Fatalf("delta.Create: %v", err)
 	}
 	claimed := hash.SHA1([]byte(mid + "good\n"))
-	pass := newReceivePass()
-	if err := storeReceivedFile(ctx, r, pass, claimed, midUUID, badTop, nil,
-		visibilityPublic, nil); err != nil {
-		t.Fatalf("store dangling delta: %v", err)
-	}
-	err = storeReceivedFile(ctx, r, pass, fx.baseUUID, "", []byte(fx.base), nil,
-		visibilityPublic, nil)
-	var mismatch *hashMismatchError
-	if !errors.As(err, &mismatch) || mismatch.uuid != claimed {
-		t.Fatalf("store basis = %v, want a hash mismatch naming %s", err, claimed)
-	}
+	err = inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		return storeAll(r, pass, lateStore{claimed, midUUID, badTop},
+			lateStore{fx.baseUUID, "", []byte(fx.base)})
+	})
+	wantLateMismatch(t, err, claimed)
 	if all, _ := rows(t, r, claimed); all != 0 {
 		t.Fatalf("%d rows for the mismatched delta, want 0", all)
 	}
-	if _, ok := content.AvailableByUUID(r.DB(), midUUID); !ok {
-		t.Fatal("the held middle delta is not available")
+	if all, phantoms := rows(t, r, midUUID); all != 1 || phantoms != 0 {
+		t.Fatalf("held middle rows = %d (%d phantom), want it kept", all, phantoms)
 	}
-}
-
-// TestReceivePassKeepsDependentsOfRevertedDelta: when a delta is reverted, the
-// dangling deltas that were stored on it wait on it again, and are checked
-// when its real content arrives.
-func TestReceivePassKeepsDependentsOfRevertedDelta(t *testing.T) {
-	r := setupSyncTestRepo(t)
-	fx := newLateBasisFixture(t)
-	ctx := context.Background()
-	mid := fx.base + "mid\n"
-	top := mid + "top\n"
-	badMid, err := delta.Create([]byte(fx.base), []byte(fx.base+"evil\n"))
-	if err != nil {
-		t.Fatalf("delta.Create: %v", err)
-	}
-	topDelta, err := delta.Create([]byte(mid), []byte(top))
-	if err != nil {
-		t.Fatalf("delta.Create: %v", err)
-	}
-	midUUID, topUUID := hash.SHA1([]byte(mid)), hash.SHA1([]byte(top))
-	pass := newReceivePass()
-	for _, s := range []struct {
-		uuid, src string
-		payload   []byte
-	}{{topUUID, midUUID, topDelta}, {midUUID, fx.baseUUID, badMid}} {
-		if err := storeReceivedFile(ctx, r, pass, s.uuid, s.src, s.payload, nil,
-			visibilityPublic, nil); err != nil {
-			t.Fatalf("store %s: %v", s.uuid, err)
-		}
-	}
-	err = storeReceivedFile(ctx, r, pass, fx.baseUUID, "", []byte(fx.base), nil,
-		visibilityPublic, nil)
-	var mismatch *hashMismatchError
-	if !errors.As(err, &mismatch) || mismatch.uuid != midUUID {
-		t.Fatalf("store basis = %v, want a hash mismatch naming the middle", err)
-	}
-	if err := storeReceivedFile(ctx, r, pass, midUUID, "", []byte(mid), nil,
-		visibilityPublic, nil); err != nil {
-		t.Fatalf("store the real middle: %v", err)
-	}
-	rid, ok := content.AvailableByUUID(r.DB(), topUUID)
-	if !ok {
-		t.Fatal("the top delta is not available after its basis arrived")
-	}
-	if got, err := content.Expand(r.DB(), rid); err != nil || string(got) != top {
-		t.Fatalf("expand top = %q, %v", got, err)
+	if _, ok := content.AvailableByUUID(r.DB(), fx.baseUUID); ok {
+		t.Fatal("the basis of the aborted pass is stored")
 	}
 }
 
@@ -272,26 +222,36 @@ func TestReceivePassLateBasisChainIsLinear(t *testing.T) {
 	for i := range revs {
 		revs[i] = append(append([]byte{}, pad...), fmt.Sprintf("\nrevision %d\n", i)...)
 	}
-	pass := newReceivePass()
-	for i := n; i >= 1; i-- {
-		d, err := delta.Create(revs[i-1], revs[i])
-		if err != nil {
-			t.Fatalf("delta.Create %d: %v", i, err)
+	var took time.Duration
+	err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		for i := n; i >= 1; i-- {
+			d, err := delta.Create(revs[i-1], revs[i])
+			if err != nil {
+				t.Fatalf("delta.Create %d: %v", i, err)
+			}
+			if err := storeReceivedFile(ctx, r, pass, hash.SHA1(revs[i]),
+				hash.SHA1(revs[i-1]), d, nil, visibilityPublic, nil); err != nil {
+				return fmt.Errorf("store delta %d: %w", i, err)
+			}
 		}
-		if err := storeReceivedFile(ctx, r, pass, hash.SHA1(revs[i]),
-			hash.SHA1(revs[i-1]), d, nil, visibilityPublic, nil); err != nil {
-			t.Fatalf("store delta %d: %v", i, err)
+		start := time.Now()
+		if err := storeReceivedFile(ctx, r, pass, hash.SHA1(revs[0]), "", revs[0], nil,
+			visibilityPublic, nil); err != nil {
+			return fmt.Errorf("store basis: %w", err)
 		}
+		took = time.Since(start)
+		if len(pass.dangling) != 0 {
+			return fmt.Errorf("%d deltas still dangling", len(pass.dangling))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	start := time.Now()
-	if err := storeReceivedFile(ctx, r, pass, hash.SHA1(revs[0]), "", revs[0], nil,
-		visibilityPublic, nil); err != nil {
-		t.Fatalf("store basis: %v", err)
-	}
-	if took := time.Since(start); took > 20*time.Second {
+	if took > 20*time.Second {
 		t.Fatalf("checking a %d-delta chain took %v, want linear time", n, took)
 	}
-	if len(pass.dangling) != 0 {
-		t.Fatalf("%d deltas still dangling", len(pass.dangling))
+	if _, ok := content.AvailableByUUID(r.DB(), hash.SHA1(revs[n])); !ok {
+		t.Fatal("the chain's newest delta is not available after the pass")
 	}
 }

@@ -573,34 +573,91 @@ func (s *session) buildLoginCard(cards []xfer.Card, projectCode string) (*xfer.L
 	return computeLogin(s.opts.User, s.opts.Password, projectCode, payload), signed, nil
 }
 
-// processResponse handles all cards in a server response.
-// It returns true when the sync has converged (nothing more to do).
+// processResponse handles all cards in a server response. It returns true
+// when the sync has converged (nothing more to do).
+//
+// The reply is one verification pass (§7.7) and runs in one write
+// transaction, as fossil's client_sync runs each round between
+// db_begin_transaction and db_end_transaction: a delta stored dangling is
+// checked if its basis arrives later in this reply, and a mismatch rolls the
+// whole reply back. A card error otherwise ends only the card loop: the
+// prefix before it, with the phantoms, visibility and crosslink cascade it
+// owes, commits (§10.1), and the error is returned.
 func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool, error) {
 	if msg == nil {
 		panic("sync.processResponse: msg must not be nil")
 	}
+	var done bool
+	cascaded, recvd := s.cascaded, s.result.FilesRecvd
+	cardErr, err := runPass(s.repo, func(bound *repo.Repo) (cardErr, err error) {
+		defer s.bindRepo(bound)()
+		done, cardErr, err = s.processReply(ctx, msg)
+		return cardErr, err
+	})
+	s.dephantomized = s.dephantomized[:0]
+	if err != nil {
+		// The reply rolled back: what it counted is not stored, and the
+		// cascades it ran owe no repair.
+		s.cascaded, s.result.FilesRecvd = cascaded, recvd
+		return false, err
+	}
+	if cardErr != nil {
+		return false, cardErr
+	}
+	return done, nil
+}
+
+// bindRepo points the session at bound, the repository bound to the current
+// pass's transaction, so every read and write the reply makes joins it. It
+// returns the function that points the session back.
+func (s *session) bindRepo(bound *repo.Repo) func() {
+	if bound == nil {
+		panic("sync.bindRepo: bound must not be nil")
+	}
+	orig := s.repo
+	s.repo = bound
+	return func() { s.repo = orig }
+}
+
+// processReply is processResponse inside its transaction. cardErr is the
+// card error that ended the card loop; err is a failure of the reply's
+// closing steps.
+func (s *session) processReply(ctx context.Context,
+	msg *xfer.Message) (done bool, cardErr, err error) {
 	var t replyTally
-	// Each reply is one verification pass (§7.7): a delta stored dangling is
-	// checked if its basis arrives later in this reply, not in a later one.
 	s.pass = newReceivePass()
 	defer func() { s.pass = nil }()
 	for _, card := range msg.Cards {
 		stop, err := s.handleReplyCard(ctx, card, &t)
 		if err != nil {
-			// The phantoms this reply already filled are stored and owe
-			// their crosslink cascade, which a late hash mismatch (the basis
-			// stays stored) must not skip.
-			s.cascaded += manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
-			s.dephantomized = s.dephantomized[:0]
-			return false, err
+			cardErr = err
+			break
 		}
 		if stop {
 			break
 		}
 	}
+	if abortsPass(cardErr) {
+		return false, cardErr, nil // the whole reply rolls back
+	}
+	if err := s.closeReply(ctx, &t); err != nil {
+		return false, cardErr, err
+	}
+	if cardErr != nil {
+		return false, cardErr, nil
+	}
+	s.agePhantoms()
+	done, err = s.converged(t)
+	return done, nil, err
+}
 
+// closeReply records what the reply's cards buffered: the visibility igot
+// cards announced, the crosslink cascade of the phantoms it filled, and the
+// phantoms it learned of. It runs after a card error too, since the prefix
+// before the error commits (#418).
+func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	if err := s.flushVisibilityUpdates(); err != nil {
-		return false, fmt.Errorf("sync: record artifact visibility: %w", err)
+		return fmt.Errorf("sync: record artifact visibility: %w", err)
 	}
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
@@ -608,18 +665,16 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {
-		return false, fmt.Errorf("sync: record phantoms: %w", err)
+		return fmt.Errorf("sync: record phantoms: %w", err)
 	}
 	t.newPhantoms = created
 	// Phantoms the round's storage created (a delta's basis, a cluster's
 	// members) join the session's, once per reply rather than per file.
 	if err := s.loadDBPhantoms(); err != nil {
-		return false, fmt.Errorf("sync: load phantoms: %w", err)
+		return fmt.Errorf("sync: load phantoms: %w", err)
 	}
-
 	s.result.FilesRecvd += t.filesRecvd
-	s.agePhantoms()
-	return s.converged(t)
+	return nil
 }
 
 // unknownCommand answers a reply card fossil's client does not recognize,
@@ -974,15 +1029,16 @@ func (s *session) tablesPending() bool {
 // and handler use storeReceived for that.
 //
 // pass is the verification pass the card belongs to (see receivePass). A
-// late hash mismatch, found in a delta this pass stored earlier, still leaves
-// the card's own artifact stored, and its cascade owed.
+// late hash mismatch, found in a delta this pass stored earlier, aborts the
+// pass, whose transaction (runPass) rolls back this card's store with the
+// rest, so it owes no cascade.
 func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, deltaSrc string,
 	payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
 	dephantomizedRid, err := storeReceived(ctx, r, pass, uuid, deltaSrc, payload, storedBlob,
 		vis, linker)
-	// General sync and push paths preserve Fossil's post-commit
-	// after_dephantomize cascade. A clone uses its ReceiveLinker inside the
-	// storage transaction instead, so it must not run a second cascade.
+	// General sync and push paths preserve Fossil's after_dephantomize
+	// cascade, in the pass's transaction. A clone uses its ReceiveLinker
+	// inside the storage transaction instead, so it must not run a second.
 	if linker == nil && dephantomizedRid > 0 {
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
 	}
@@ -1052,17 +1108,13 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 //
 // An unverified delta joins pass, to be checked when its basis arrives. A
 // verified one is available now, so the deltas pass holds against it are
-// checked in this transaction.
+// checked here, and a late mismatch among them aborts the pass.
 func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid,
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker, verified bool) error {
-	var late error
-	var dangling, root libfossil.FslID // tracked once the store commits
-	var prior danglingDelta
+	var dangling, root libfossil.FslID // tracked once the store succeeds
 	err := r.WithTx(func(tx *db.Tx) error {
-		var alreadyHeld bool
-		var err error
-		prior, alreadyHeld, err = priorRow(tx, uuid)
+		alreadyHeld, err := heldReal(tx, uuid)
 		if err != nil {
 			return err
 		}
@@ -1094,31 +1146,18 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		}
 		switch {
 		case alreadyHeld:
+			return nil
 		case verified:
-			late = pass.verifyFrom(tx, rid)
-		default:
-			if root, err = pass.rootOf(tx, srcRid); err != nil {
-				return fmt.Errorf("storeDeltaContent: %w", err)
-			}
-			dangling = rid
+			return pass.verifyFrom(tx, rid)
 		}
-		return lateFault(late)
-	})
-	if err != nil {
-		return err
-	}
-	if dangling > 0 {
-		pass.track(dangling, root, prior)
-	}
-	return late
-}
-
-// lateFault is what a storage transaction returns for verifyFrom's result: a
-// hash mismatch is a verdict on another artifact, already reverted, and the
-// transaction commits; anything else is a fault that rolls it back.
-func lateFault(err error) error {
-	if errors.Is(err, errHashMismatch) {
+		if root, err = pass.rootOf(tx, srcRid); err != nil {
+			return fmt.Errorf("storeDeltaContent: %w", err)
+		}
+		dangling = rid
 		return nil
+	})
+	if err == nil && dangling > 0 {
+		pass.track(dangling, root, uuid)
 	}
 	return err
 }
@@ -1181,12 +1220,11 @@ func hashMatches(uuid string, data []byte) bool {
 // in place if one already exists for uuid.
 //
 // Returns the rid of a phantom that was just filled, so a non-linker caller
-// can run AfterDephantomize once this transaction has committed; returns 0
+// can run AfterDephantomize after this store, in the same pass; returns 0
 // when no phantom was filled (blob already real, or newly inserted).
 //
 // Full content is available once stored, so the deltas pass holds against
-// it are checked in the same transaction; a late mismatch among them is
-// returned with the rid, and the store itself stands.
+// it are checked here too; a late mismatch among them aborts the pass.
 func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid string,
 	fullContent []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
@@ -1195,7 +1233,6 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	}
 
 	var dephantomizedRid libfossil.FslID
-	var late error
 	err := r.WithTx(func(tx *db.Tx) error {
 		rid, filled, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob, vis,
 			linker)
@@ -1205,13 +1242,12 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 		if filled {
 			dephantomizedRid = rid
 		}
-		late = pass.verifyFrom(tx, rid)
-		return lateFault(late)
+		return pass.verifyFrom(tx, rid)
 	})
 	if err != nil {
 		return 0, err
 	}
-	return dephantomizedRid, late
+	return dephantomizedRid, nil
 }
 
 // storeResolvedTx is storeResolvedContent's write, inside its transaction. It

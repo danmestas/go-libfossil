@@ -65,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BranchTip`. `BranchTip` is unchanged and still returns the newest check-in on the branch, leaf or not.
   RS-9-1 and RS-9-4 now have cases (`repostate.9.current-trunk*`,
   `repostate.9.open-leaf-*`) and are no longer out of scope.
+- `db.DB.WithBoundTx` runs a function in one write transaction and hands it
+  a DB bound to that transaction: every statement on it joins the
+  transaction, and a `WithTx` nested on it is a savepoint there, which its
+  error rolls back alone, instead of a second connection waiting for the
+  write lock. `WithTx` on a bound DB behaves that way too; on any other DB
+  it is unchanged. The sync passes of #418 run on it.
 
 ### Changed
 
@@ -148,20 +154,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including a delta whose chain to that basis runs through a row an earlier
   pass stored. The check applies each delta of a chain to its parent's
   bytes, so a clone's chain of n deltas costs n applies, not n squared. A
-  mismatch returns the delta to what it was before the pass (removed if it
-  was new, a phantom again if it was one) and fails that card with the
-  wrong-hash error naming the delta: the client's sync and a clone fail, and
-  the server answers `wrong hash on received artifact: HASH`. The basis
-  stays stored. fossil's commit hook instead rolls the whole round back;
-  go-libfossil commits each card on its own, so it keeps the rest of the
-  round, as the server already does for a delta refused on receipt; the
-  suite records that difference as a deviation on
-  `sync.7.7.late-basis-aborts-pass` and
-  `sync.7.7.server-late-basis-aborts-request`. A card error that ends a client
-  reply early now still crosslinks the phantoms the reply filled. The
+  mismatch aborts the whole pass, as fossil's commit hook does (see the
+  #418 entry below): the client's sync and a clone fail, and the server
+  answers `wrong hash on received artifact: HASH` naming the delta. The
   cases `sync.7.7.late-basis-wrong-hash`,
   `sync.7.7.clone-late-basis-wrong-hash` and
   `sync.7.7.server-late-basis-wrong-hash` now pass. Tracked in #412.
+- Each server request, each client reply and each clone round now runs in
+  one write transaction, as fossil's `page_xfer` runs a request after
+  `db_begin_write` and `client_sync` runs a round between
+  `db_begin_transaction` and `db_end_transaction` (sync-protocol-01 Sections
+  7.7 and 10.1). A received delta found wrong only when its basis arrives
+  later in the pass fails Section 7.7's commit check, and that now rolls
+  back everything the pass stored, the basis, the phantom-fill crosslink
+  cascades and the server's closing leaf and tag repair included, where it
+  used to undo only the delta and keep the rest. The server still answers
+  with the wrong-hash error and its timestamp comment, as
+  `sync.7.7.server-late-basis-wrong-hash` requires; fossil 2.28 and 2.29 differ,
+  since their commit hook fails inside `page_xfer` and the request ends with
+  an HTTP error page instead of that card. A client's sync and a clone fail
+  with the error. The server's `invalid clone sequence number` fatal
+  rolls the request back too, so the side-effect-free walk of the request
+  that stood in for that rollback is gone; a request that pushes a file with
+  a wrong hash ahead of such a clone card now gets the file's error, where
+  page_xfer's card loop breaks, not the clone's. Every other card error still keeps the work
+  before it, as Section 10.1 requires: on the client that prefix now commits
+  whole, where a card error used to return before the reply's buffered igot
+  phantoms and visibility changes were written. The deviation on
+  `sync.7.7.late-basis-aborts-pass` and
+  `sync.7.7.server-late-basis-aborts-request` is gone, so SP-7.7-4 is
+  covered, and the new requirement SP-10.1-6 has the case
+  `sync.10.1.integrity-error-prefix`. fossil 2.28 stores a file whose hash
+  is wrong and then aborts at commit, which rolls that prefix back; the case
+  follows the draft. After such an error the client ends the session
+  instead of evaluating continuation (Section 3.7); that is SP-10.1-7, a
+  marked gap tracked in #421. Server requests, pulls and clones included, now
+  hold the repository's write lock for the whole request, as fossil's
+  `db_begin_write` does, so concurrent requests to one repository wait on
+  each other up to the busy timeout. A `ContentCache` must not outlive a
+  rolled-back pass: a rolled-back request frees row ids that later inserts
+  reuse. Tracked in #418.
 - A received delta against a held basis whose bytes are not its name was
   stored unchecked: the basis failed its own hash check, so the delta was
   treated as having no basis. The basis is now reconstructed without that

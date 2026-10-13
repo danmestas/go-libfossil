@@ -117,7 +117,7 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 type HandleOpts struct {
 	Buggify      BuggifyChecker // nil in production.
 	Observer     Observer       // nil defaults to no-op.
-	ContentCache *content.Cache // nil = no caching.
+	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
 	Clock        simio.Clock    // time for the reply's timestamp comment; nil = real time
 }
 
@@ -184,6 +184,7 @@ type handler struct {
 	pullOK          bool                      // client sent a valid pull card
 	cloneMode       bool                      // client sent a clone card
 	fatal           bool                      // a card rule ended the request; resp holds only its error
+	aborted         bool                      // a late hash mismatch rolls the request back (§7.7)
 	broke           bool                      // card loop broken; the post-loop still runs
 	errsReset       int                       // counted errors a reset discarded (§5.3 errors N)
 	projectCode     string                    // the repository's project-code
@@ -303,7 +304,8 @@ func (h *handler) fail(msg string) {
 
 // resetContent discards the reply built so far, as fossil's cgi_reset_content
 // does before a card-level error. Only the reply is cleared; any blob already
-// stored this round stays (fossil keeps its mutations too, §10.1). The errors
+// stored this round stays unless the request rolls back (§7.7 late mismatch,
+// §8.1 fatal), as fossil keeps its mutations too (§10.1). The errors
 // it discards are still counted in the closing comment (§5.3).
 func (h *handler) resetContent() {
 	h.errsReset += countedErrors(h.resp)
@@ -362,30 +364,58 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return nil, err
 	}
 
-	if h.probeCloneFatal(req.Cards) {
-		return h.reply(), nil
-	}
 	// The clone snapshot cookie is read ahead of the card loop, since the
 	// clone batch goes out at the clone card and fossil's client sends its
 	// cookie after that card.
 	h.cloneSnapMax = cloneCapFromCards(req.Cards)
-	if err := h.processCards(ctx, req.Cards); err != nil {
+	// §10.1: the request's cards run in one write transaction, as page_xfer
+	// runs them after db_begin_write, and so does the closing crosslink.
+	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
+		defer h.bindRepo(bound)()
+		return nil, h.processInTx(ctx, req)
+	}); err != nil {
 		return nil, err
+	}
+	if h.fatal || h.aborted {
+		h.filesRecvd = 0 // rolled back with the request
 	}
 	if h.fatal {
 		return h.reply(), nil
 	}
-	// The end-of-request steps run after a broken loop too (§6.4).
-	if err := h.emitInventory(); err != nil {
-		return nil, err
-	}
-
-	if err := h.crosslinkReceived(ctx); err != nil {
-		return nil, err
-	}
-
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// processInTx is process's work inside the request transaction. A §8.1
+// fatal or a late hash mismatch (§7.7) rolls the whole request back: it
+// returns errPassAborted once the reply holds its error. After a late
+// mismatch the reply is the wrong-hash card plus the timestamp comment, as
+// sync.7.7.server-late-basis-wrong-hash requires; fossil 2.28/2.29 differs:
+// its commit hook fails inside page_xfer and it aborts the request with an
+// HTTP error page instead of sending that card.
+func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
+	if err := h.processCards(ctx, req.Cards); err != nil {
+		return err
+	}
+	if h.fatal || h.aborted {
+		return errPassAborted
+	}
+	// The end-of-request steps run after a broken loop too (§6.4).
+	if err := h.emitInventory(); err != nil {
+		return err
+	}
+	return h.crosslinkReceived(ctx)
+}
+
+// bindRepo points the handler at bound, the repository bound to the request
+// transaction, and returns the function that points it back.
+func (h *handler) bindRepo(bound *repo.Repo) func() {
+	if bound == nil {
+		panic("handler.bindRepo: bound must not be nil")
+	}
+	orig := h.repo
+	h.repo = bound
+	return func() { h.repo = orig }
 }
 
 // processCards handles the request's cards in request order, as page_xfer's
@@ -447,92 +477,6 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 		return h.handleDataCard(ctx, card)
 	}
 	return nil
-}
-
-// probeCloneFatal answers a request that reaches §8.1's invalid clone
-// sequence fatal, and reports whether it did. page_xfer answers that fatal
-// by rolling back the whole request, so nothing the cards before it stored
-// survives. This handler stores as it goes, with no request transaction to
-// roll back, so a request holding such a clone card is first walked without
-// side effects: only the cards that decide whether the clone card is reached,
-// and with which capabilities, are acted on. When the walk ends in the
-// fatal, its reply is the answer and no card has written anything.
-//
-// The walk stores no file, so a file card that fails on storage (a hash
-// mismatch) does not break it as it breaks the real loop. A request that
-// pushes such a file ahead of an invalid clone card therefore gets the
-// clone error where fossil sends the file's; no conforming client sends
-// push and clone together (§8.5). A file refused for its name or for lack
-// of write access is modelled, as it needs no storage.
-func (h *handler) probeCloneFatal(cards []xfer.Card) bool {
-	if !hasInvalidCloneSeq(cards) {
-		return false
-	}
-	probe := &handler{repo: h.repo, clock: h.clock,
-		projectCode: h.projectCode, serverCode: h.serverCode}
-	probe.initAuth()
-	for _, card := range cards {
-		probe.probeCard(card)
-		if probe.fatal || probe.broke {
-			break
-		}
-	}
-	if !probe.fatal {
-		return false
-	}
-	h.resp, h.fatal = probe.resp, true
-	h.uncompressed = probe.uncompressed
-	return true
-}
-
-// hasInvalidCloneSeq reports whether a clone card in cards would meet
-// §8.1's fatal if an authorized requester reached it.
-func hasInvalidCloneSeq(cards []xfer.Card) bool {
-	for _, card := range cards {
-		c, ok := card.(*xfer.CloneCard)
-		if ok && c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// probeCard is processCard for probeCloneFatal: the cards that can end the
-// card loop or change the capabilities, none of which writes to the
-// repository.
-func (h *handler) probeCard(card xfer.Card) {
-	if card == nil {
-		panic("handler.probeCard: card must not be nil")
-	}
-	switch c := card.(type) {
-	case *xfer.LoginCard:
-		h.handleLogin(c)
-	case *xfer.PushCard:
-		h.handlePushCard(c)
-	case *xfer.PullCard:
-		h.handlePullCard(c)
-	case *xfer.CloneCard:
-		h.handleCloneCard(c)
-	case *xfer.FileCard:
-		h.probeFile(c.UUID, c.DeltaSrc, false)
-	case *xfer.CFileCard:
-		h.probeFile(c.UUID, c.DeltaSrc, true)
-	case *xfer.BadFileCard:
-		h.breakLoop(c.Message)
-	case *xfer.ConfigCard:
-		h.handleConfigPush()
-	}
-}
-
-// probeFile models the side-effect-free refusals of handleFile for the
-// clone-fatal probe: no write access, or a name that is no artifact name.
-func (h *handler) probeFile(uuid, deltaSrc string, compressed bool) {
-	switch {
-	case !h.pushOK:
-		h.breakLoop("not authorized to write")
-	case !hash.IsValidHash(uuid) || (deltaSrc != "" && !hash.IsValidHash(deltaSrc)):
-		h.breakLoop(malformedFileLine(compressed))
-	}
 }
 
 // crosslinkReceived crosslinks any newly-received manifests into the
@@ -782,8 +726,8 @@ func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	// §8.1: an otherwise authorized three-token clone with VERSION >= 2
 	// and a digit-only SEQNO of zero or less clears accumulated output,
 	// rolls back, emits this error, and parses no later request card.
-	// probeCloneFatal reaches this ahead of the card loop, before any card
-	// has written, which is what stands in for the rollback.
+	// processInTx rolls the request transaction back on h.fatal, so
+	// nothing the cards before this one stored survives.
 	if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
 		h.fail("invalid clone sequence number")
 		return
@@ -1246,9 +1190,12 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	// artifact under a name it does not have. fossil verifies a file here and
 	// a cfile in its commit hook, which rolls back the request's earlier
 	// changes; this refuses the card with the same reset and error instead,
-	// so those changes stay applied.
-	if msg := h.storeFile(ctx, uuid, deltaSrc, payload, storedBlob, vis); msg != "" {
+	// so those changes stay applied. A delta found wrong only when its basis
+	// arrives is the commit hook's case: the request rolls back.
+	msg, late := h.storeFile(ctx, uuid, deltaSrc, payload, storedBlob, vis)
+	if msg != "" {
 		h.breakLoop(msg)
+		h.aborted = late
 		return nil
 	}
 	h.filesRecvd++
@@ -1256,18 +1203,18 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 }
 
 // storeFile stores a validated file or cfile card's content and reports the
-// handler error text for a failure, "" when the artifact is stored. A hash
+// handler error text for a failure, "" when the artifact is stored, and late
+// when the failure is a late hash mismatch that aborts the request. A hash
 // mismatch is fossil's "wrong hash on received artifact"; any other failure
 // is its content_put_ex failure, whose g.zErrMsg page_xfer sends.
 func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload []byte,
-	storedBlob []byte, vis visibility) string {
+	storedBlob []byte, vis visibility) (msg string, late bool) {
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
 	// storeReceivedFile's cascade, inline, to keep its count: the cascade
-	// leaves the leaf and tag repair to crosslinkReceived (issue #414). A
-	// late mismatch still leaves the card's own artifact stored, so its
-	// cascade is owed even then.
+	// leaves the leaf and tag repair to crosslinkReceived (issue #414), and
+	// both run in the request transaction.
 	rid, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
 	if rid > 0 {
@@ -1277,19 +1224,19 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	// earlier, not the card that made its bytes available.
 	var mismatch *hashMismatchError
 	if errors.As(err, &mismatch) {
-		return wrongHashText(mismatch.uuid)
+		return wrongHashText(mismatch.uuid), mismatch.late
 	}
 	if err != nil {
-		return fmt.Sprintf("storing %s: %v", uuid, err)
+		return fmt.Sprintf("storing %s: %v", uuid, err), false
 	}
 	_, ok := blob.Exists(h.repo.DB(), uuid)
 	if h.buggify != nil && h.buggify.Check("handler.handleFile.missingAfterStore", 0.01) {
 		ok = false
 	}
 	if !ok {
-		return fmt.Sprintf("blob %s missing after store", uuid)
+		return fmt.Sprintf("blob %s missing after store", uuid), false
 	}
-	return ""
+	return "", false
 }
 
 // wrongHashText is xfer_accept_file's error for content that is not HASH.

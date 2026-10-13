@@ -10,20 +10,24 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // receivePass is one verification pass of received content: one reply on
-// the client, one request on the server, one round of a clone.
+// the client, one request on the server, one round of a clone. Each runs in
+// one write transaction (see runPass), as fossil's page_xfer and client_sync
+// run each request and each round.
 //
 // Section 7.7 (SP-7.7-4) has the repository recompute, before the pass
 // commits, every artifact stored in it whose complete bytes are available by
-// then. fossil queues each stored rid with verify_before_commit and checks the
-// queue in its commit hook, so a mismatch aborts the whole round. go-libfossil
-// commits each card on its own, so there is no pass-wide commit to hook.
-// Instead the pass remembers the deltas it stored dangling, and the store
-// that makes one's bytes available checks it in that store's own
-// transaction. A delta stored against a held basis, and full content, are
-// verified before storage and never enter the pass.
+// then, and abort the commit on a mismatch. fossil queues each stored rid
+// with verify_before_commit and checks the queue in its commit hook. Here the
+// pass remembers the deltas it stored dangling, and the store that makes
+// one's bytes available checks it at once. A mismatch is a late
+// hashMismatchError, which aborts the pass: its transaction rolls back
+// everything the pass stored, as the failed commit hook does. A delta stored
+// against a held basis, and full content, are verified before storage and
+// never enter the pass.
 type receivePass struct {
 	dangling map[libfossil.FslID]danglingDelta
 	// byRoot indexes dangling by the rid whose arrival makes each delta's
@@ -34,14 +38,11 @@ type receivePass struct {
 	byRoot map[libfossil.FslID][]libfossil.FslID
 }
 
-// danglingDelta is a delta this pass stored before its basis was available,
-// with the state its row had before, which a mismatch restores.
+// danglingDelta is a delta this pass stored before its basis was available:
+// the name it must hash to, and the rid that grounds it.
 type danglingDelta struct {
-	uuid           string
-	root           libfossil.FslID
-	wasPhantom     bool
-	wasPrivate     bool
-	wasUnclustered bool
+	uuid string
+	root libfossil.FslID
 }
 
 func newReceivePass() *receivePass {
@@ -51,28 +52,18 @@ func newReceivePass() *receivePass {
 	}
 }
 
-// priorRow reads the state uuid's row has before a delta is stored under it.
-// It reports held when a real (non-phantom) row exists, which storage leaves
-// as it is.
-func priorRow(q db.Querier, uuid string) (prior danglingDelta, held bool, err error) {
-	prior.uuid = uuid
+// heldReal reports whether uuid already has a real (non-phantom) row, which
+// storage leaves as it is.
+func heldReal(q db.Querier, uuid string) (bool, error) {
 	var size int64
-	err = q.QueryRow(`SELECT b.size,
-	    EXISTS(SELECT 1 FROM private WHERE rid = b.rid),
-	    EXISTS(SELECT 1 FROM unclustered WHERE rid = b.rid)
-	  FROM blob b WHERE b.uuid = ?`, uuid).Scan(&size, &prior.wasPrivate,
-		&prior.wasUnclustered)
+	err := q.QueryRow("SELECT size FROM blob WHERE uuid = ?", uuid).Scan(&size)
 	if errors.Is(err, sql.ErrNoRows) {
-		return danglingDelta{uuid: uuid}, false, nil
+		return false, nil
 	}
 	if err != nil {
-		return prior, false, fmt.Errorf("prior state of %s: %w", uuid, err)
+		return false, fmt.Errorf("state of %s: %w", uuid, err)
 	}
-	if size >= 0 {
-		return prior, true, nil
-	}
-	prior.wasPhantom = true
-	return prior, false, nil
+	return size >= 0, nil
 }
 
 // rootOf finds the rid whose arrival makes a delta on srcRid available: the
@@ -111,18 +102,17 @@ func chainEnd(q db.Querier, start libfossil.FslID,
 // error rather than a hang.
 const maxChainSteps = 1 << 24
 
-// track records a delta stored dangling whose bytes become available when
-// root arrives. Deltas waiting on rid itself now wait on root, since rid is
-// no more available than its own basis.
-func (p *receivePass) track(rid, root libfossil.FslID, prior danglingDelta) {
+// track records a delta stored dangling, which must hash to uuid, whose bytes
+// become available when root arrives. Deltas waiting on rid itself now wait
+// on root, since rid is no more available than its own basis.
+func (p *receivePass) track(rid, root libfossil.FslID, uuid string) {
 	if rid <= 0 || root <= 0 {
 		panic("sync.receivePass.track: rid and root must be positive")
 	}
-	if prior.uuid == "" {
-		panic("sync.receivePass.track: prior.uuid must not be empty")
+	if uuid == "" {
+		panic("sync.receivePass.track: uuid must not be empty")
 	}
-	prior.root = root
-	p.dangling[rid] = prior
+	p.dangling[rid] = danglingDelta{uuid: uuid, root: root}
 	waiting := append(p.byRoot[rid], rid)
 	delete(p.byRoot, rid)
 	for _, w := range waiting {
@@ -141,19 +131,18 @@ type cascadeItem struct {
 }
 
 // verifyFrom checks every dangling delta that rid, just made available, now
-// grounds. A delta that does not give its HASH is returned to the state it
-// had before the pass, and the first such HASH is reported as a hash
-// mismatch. It runs inside the transaction that stored rid, so the store and
-// the reversal commit together.
+// grounds. The first that does not give its HASH is returned as a late
+// hashMismatchError, which aborts the pass: nothing is undone here, since
+// the pass's transaction rolls it all back.
 //
 // The walk goes down the delta table from rid, applying each row's delta to
 // its parent's bytes as it goes, so a chain of n deltas costs n applies, not
 // the n(n+1)/2 that rebuilding each from rid would. fossil gets the same
 // bound from content_get's cache of every 8th step. It passes through rows
 // this pass did not store, which a dangling delta's chain may run through.
-func (p *receivePass) verifyFrom(tx *db.Tx, rid libfossil.FslID) error {
-	if tx == nil {
-		panic("sync.receivePass.verifyFrom: tx must not be nil")
+func (p *receivePass) verifyFrom(q db.Querier, rid libfossil.FslID) error {
+	if q == nil {
+		panic("sync.receivePass.verifyFrom: q must not be nil")
 	}
 	if rid <= 0 {
 		panic("sync.receivePass.verifyFrom: rid must be positive")
@@ -163,53 +152,44 @@ func (p *receivePass) verifyFrom(tx *db.Tx, rid libfossil.FslID) error {
 		return nil
 	}
 	delete(p.byRoot, rid)
-	onPath, err := pathRows(tx, rid, deps)
+	onPath, err := pathRows(q, rid, deps)
 	if err != nil {
 		return err
 	}
 	// A basis that cannot be rebuilt is applied to nothing: its dependents
 	// get no HASH, as when fossil's blob_delta_apply fails on what
 	// content_get gave it.
-	rootBytes, _ := content.ExpandUnchecked(tx, rid)
-	var first error
+	rootBytes, _ := content.ExpandUnchecked(q, rid)
 	stack := []cascadeItem{{rid, rootBytes}}
 	for len(stack) > 0 {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		kids, err := childRows(tx, it.rid, onPath)
+		kids, err := childRows(q, it.rid, onPath)
 		if err != nil {
 			return err
 		}
 		for _, kid := range kids {
-			kidBytes, ok, err := p.visit(tx, kid, it.bytes)
+			kidBytes, ok, err := p.visit(q, kid, it.bytes)
 			if err != nil {
 				return err
 			}
 			if !ok {
-				if first == nil {
-					first = &hashMismatchError{uuid: p.dangling[kid].uuid}
-				}
-				if err := p.revert(tx, kid); err != nil {
-					return err
-				}
-				continue
+				return &hashMismatchError{uuid: p.dangling[kid].uuid, late: true}
 			}
 			stack = append(stack, cascadeItem{kid, kidBytes})
 		}
 	}
-	if err := p.reroot(tx, deps); err != nil {
-		return err
-	}
-	return first
+	return nil
 }
 
 // visit applies row kid's delta to its parent's bytes. For a dangling delta
 // it reports whether the result is its HASH, and drops it from the pass when
 // it is; any other row always passes.
-func (p *receivePass) visit(tx *db.Tx, kid libfossil.FslID, parent []byte) ([]byte, bool, error) {
+func (p *receivePass) visit(q db.Querier, kid libfossil.FslID,
+	parent []byte) ([]byte, bool, error) {
 	var kidBytes []byte
 	if parent != nil {
-		payload, err := blob.Load(tx, kid)
+		payload, err := blob.Load(q, kid)
 		if err != nil {
 			return nil, false, fmt.Errorf("verify received delta rid=%d: %w", kid, err)
 		}
@@ -226,37 +206,6 @@ func (p *receivePass) visit(tx *db.Tx, kid libfossil.FslID, parent []byte) ([]by
 	}
 	delete(p.dangling, kid)
 	return kidBytes, true, nil
-}
-
-// revert returns dangling delta rid to its state before the pass and drops it
-// from the pass.
-func (p *receivePass) revert(tx *db.Tx, rid libfossil.FslID) error {
-	prior := p.dangling[rid]
-	delete(p.dangling, rid)
-	return revertDangling(tx, rid, prior)
-}
-
-// reroot moves the deltas of deps that the cascade did not reach, because a
-// delta above them was reverted, to wait on the end of their chain now.
-func (p *receivePass) reroot(tx *db.Tx, deps []libfossil.FslID) error {
-	for _, d := range deps {
-		dd, ok := p.dangling[d]
-		if !ok {
-			continue
-		}
-		var src libfossil.FslID
-		if err := tx.QueryRow("SELECT srcid FROM delta WHERE rid=?", d).Scan(&src); err != nil {
-			return fmt.Errorf("re-root received delta rid=%d: %w", d, err)
-		}
-		root, err := chainEnd(tx, src, nil)
-		if err != nil {
-			return err
-		}
-		dd.root = root
-		p.dangling[d] = dd
-		p.byRoot[root] = append(p.byRoot[root], d)
-	}
-	return nil
 }
 
 // pathRows returns the rows on the chains from each of deps up to root, the
@@ -303,59 +252,6 @@ func childRows(q db.Querier, parent libfossil.FslID,
 		}
 	}
 	return kids, rows.Err()
-}
-
-// revertDangling undoes the storage of a delta that turned out not to give
-// its HASH, as fossil's aborted commit would: a row that was a phantom is a
-// phantom again, with its earlier visibility; a row new in this pass is
-// removed, unless something stored since refers to it by rid, in which case
-// it stays as a phantom so that reference still resolves.
-func revertDangling(tx *db.Tx, rid libfossil.FslID, prior danglingDelta) error {
-	referenced, err := ridReferenced(tx, rid)
-	if err != nil {
-		return err
-	}
-	stmts := []string{
-		"DELETE FROM delta WHERE rid=?",
-		"DELETE FROM unclustered WHERE rid=?",
-		"DELETE FROM private WHERE rid=?",
-	}
-	if prior.wasPhantom || referenced {
-		stmts = append(stmts,
-			"UPDATE blob SET size=-1, content=NULL, rcvid=0 WHERE rid=?",
-			"INSERT OR IGNORE INTO phantom(rid) VALUES(?)")
-		if prior.wasUnclustered {
-			stmts = append(stmts, "INSERT OR IGNORE INTO unclustered(rid) VALUES(?)")
-		}
-		if prior.wasPrivate {
-			stmts = append(stmts, "INSERT OR IGNORE INTO private(rid) VALUES(?)")
-		}
-	} else {
-		stmts = append(stmts, "DELETE FROM phantom WHERE rid=?", "DELETE FROM blob WHERE rid=?")
-	}
-	for _, stmt := range stmts {
-		if _, err := tx.Exec(stmt, rid); err != nil {
-			return fmt.Errorf("revert received delta rid=%d: %w", rid, err)
-		}
-	}
-	return nil
-}
-
-// ridReferenced reports whether a row other than rid's own bookkeeping names
-// rid: a delta stored on it, or crosslinked state a clone's linker wrote.
-func ridReferenced(q db.Querier, rid libfossil.FslID) (bool, error) {
-	var n int
-	err := q.QueryRow(`SELECT
-	    EXISTS(SELECT 1 FROM delta WHERE srcid=?1)
-	 OR EXISTS(SELECT 1 FROM mlink WHERE fid=?1 OR pid=?1 OR mid=?1 OR pmid=?1)
-	 OR EXISTS(SELECT 1 FROM plink WHERE pid=?1 OR cid=?1 OR baseid=?1)
-	 OR EXISTS(SELECT 1 FROM orphan WHERE baseline=?1)
-	 OR EXISTS(SELECT 1 FROM tagxref WHERE rid=?1 OR srcid=?1 OR origid=?1)
-	 OR EXISTS(SELECT 1 FROM event WHERE objid=?1)`, rid).Scan(&n)
-	if err != nil {
-		return false, fmt.Errorf("references to rid=%d: %w", rid, err)
-	}
-	return n != 0, nil
 }
 
 // deltaVerdict is what applying a received delta to its basis showed.
@@ -414,9 +310,12 @@ func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdi
 
 // hashMismatchError is a received artifact whose content is not its name.
 // uuid names the artifact at fault, which for a delta caught late is not the
-// card being stored when it is found.
+// card being stored when it is found. late marks that case: the commit check
+// of Section 7.7 failed, which aborts the whole pass, where a mismatch found
+// before storage refuses only its own card.
 type hashMismatchError struct {
 	uuid string
+	late bool
 }
 
 func (e *hashMismatchError) Error() string {
@@ -424,3 +323,50 @@ func (e *hashMismatchError) Error() string {
 }
 
 func (e *hashMismatchError) Unwrap() error { return errHashMismatch }
+
+// abortsPass reports whether err ends a pass by rolling back everything it
+// stored (Section 7.7's failed commit check), rather than ending only the
+// card that returned it.
+func abortsPass(err error) bool {
+	var mismatch *hashMismatchError
+	return errors.As(err, &mismatch) && mismatch.late
+}
+
+// errPassAborted is what a pass's callback returns to roll its transaction
+// back once it has recorded why: the server's late mismatch and §8.1 fatal,
+// whose reply is already built.
+var errPassAborted = errors.New("sync: pass aborted")
+
+// runPass runs fn in the one write transaction of a verification pass, with
+// the repository bound to it: every store, cascade and crosslink fn makes
+// through that repository commits together or not at all. fn reports two
+// errors. A card error that only ends the card loop (cardErr) leaves the
+// prefix processed before it to commit, as Section 10.1 has a handler error
+// do; runPass returns it as cardErr with a nil err. Any other error, a late
+// hash mismatch included, rolls the pass back and is returned as err, except
+// errPassAborted, which rolls back and returns nil: its caller already holds
+// the reason. A non-nil err therefore means nothing fn did was kept.
+func runPass(r *repo.Repo,
+	fn func(bound *repo.Repo) (cardErr, err error)) (cardErr, err error) {
+	if r == nil {
+		panic("sync.runPass: r must not be nil")
+	}
+	if fn == nil {
+		panic("sync.runPass: fn must not be nil")
+	}
+	err = r.WithBoundTx(func(bound *repo.Repo) error {
+		var ferr error
+		cardErr, ferr = fn(bound)
+		if ferr == nil && abortsPass(cardErr) {
+			ferr, cardErr = cardErr, nil
+		}
+		return ferr
+	})
+	if errors.Is(err, errPassAborted) {
+		err = nil
+	}
+	if err != nil {
+		cardErr = nil
+	}
+	return cardErr, err
+}

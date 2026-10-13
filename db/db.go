@@ -50,6 +50,11 @@ type DB struct {
 	stmts     stmtCache
 	poolExecs atomic.Int64
 	writeTxns atomic.Int64
+	// root is set on a DB that WithBoundTx hands its callback: the pool's own
+	// DB, which keeps the counters. bound is the transaction every statement
+	// on it runs in, nil once that transaction has ended.
+	root  *DB
+	bound *Tx
 }
 
 // Open opens a SQLite database with the registered driver and default pragmas.
@@ -203,6 +208,7 @@ func (d *DB) SqlDB() *sql.DB {
 	if d == nil {
 		panic("db.SqlDB: receiver must not be nil")
 	}
+	d.mustBePool("SqlDB")
 	return d.conn
 }
 
@@ -212,6 +218,7 @@ func (d *DB) SqlDB() *sql.DB {
 // skipped there. Checkpoint errors are joined with the close error so the
 // connection is always closed regardless of checkpoint outcome.
 func (d *DB) Close() error {
+	d.mustBePool("Close")
 	var ckptErr error
 	if !wasmClearPragmas {
 		ckptErr = d.Checkpoint(CheckpointTruncate)
@@ -231,6 +238,7 @@ func (d *DB) Checkpoint(mode CheckpointMode) error {
 	if d == nil {
 		panic("db.Checkpoint: receiver must not be nil")
 	}
+	d.mustBePool("Checkpoint")
 	if mode < CheckpointPassive || mode > CheckpointTruncate {
 		return fmt.Errorf("db.Checkpoint: invalid mode %d", int(mode))
 	}
@@ -261,6 +269,9 @@ func (d *DB) PoolExecs() int64 {
 	if d == nil {
 		panic("db.PoolExecs: receiver must not be nil")
 	}
+	if d.root != nil {
+		return d.root.PoolExecs()
+	}
 	return d.poolExecs.Load()
 }
 
@@ -275,10 +286,16 @@ func (d *DB) WriteTxns() int64 {
 	if d == nil {
 		panic("db.WriteTxns: receiver must not be nil")
 	}
+	if d.root != nil {
+		return d.root.WriteTxns()
+	}
 	return d.writeTxns.Load()
 }
 
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
+	if tx := d.boundTx(); tx != nil {
+		return tx.Exec(query, args...)
+	}
 	d.poolExecs.Add(1)
 	if !cacheableStmt(query) {
 		return d.conn.Exec(query, args...)
@@ -291,6 +308,9 @@ func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
 }
 
 func (d *DB) QueryRow(query string, args ...any) *sql.Row {
+	if tx := d.boundTx(); tx != nil {
+		return tx.QueryRow(query, args...)
+	}
 	if !cacheableStmt(query) {
 		return d.conn.QueryRow(query, args...)
 	}
@@ -306,6 +326,9 @@ func (d *DB) QueryRow(query string, args ...any) *sql.Row {
 }
 
 func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
+	if tx := d.boundTx(); tx != nil {
+		return tx.Query(query, args...)
+	}
 	if !cacheableStmt(query) {
 		return d.conn.Query(query, args...)
 	}
@@ -317,12 +340,20 @@ func (d *DB) Query(query string, args ...any) (*sql.Rows, error) {
 }
 
 func (d *DB) SetApplicationID(id int32) error {
+	if tx := d.boundTx(); tx != nil {
+		_, err := tx.tx.Exec(fmt.Sprintf("PRAGMA application_id=%d", id))
+		return err
+	}
 	_, err := d.conn.Exec(fmt.Sprintf("PRAGMA application_id=%d", id))
 	return err
 }
 
 func (d *DB) ApplicationID() (int32, error) {
 	var id int32
+	if tx := d.boundTx(); tx != nil {
+		err := tx.tx.QueryRow("PRAGMA application_id").Scan(&id)
+		return id, err
+	}
 	err := d.conn.QueryRow("PRAGMA application_id").Scan(&id)
 	return id, err
 }
@@ -330,6 +361,9 @@ func (d *DB) ApplicationID() (int32, error) {
 type Tx struct {
 	tx    *sql.Tx
 	stmts stmtCache
+	// savepoints is how many savepoints a bound DB's nested WithTx has open
+	// in this transaction; it names the next one.
+	savepoints int
 }
 
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
@@ -366,14 +400,22 @@ func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
 	return st.Query(args...)
 }
 
+// WithTx runs fn in a write transaction, which commits when fn returns nil
+// and rolls back otherwise. On a DB that WithBoundTx bound, it runs fn in a
+// savepoint of the bound transaction instead, so it neither waits for a
+// second connection nor commits on its own: fn's error undoes only fn's
+// writes, and the bound transaction decides whether the rest commits.
 func (d *DB) WithTx(fn func(tx *Tx) error) error {
 	if d == nil {
 		panic("db.WithTx: receiver must not be nil")
 	}
-	d.writeTxns.Add(1)
 	if fn == nil {
 		panic("db.WithTx: fn must not be nil")
 	}
+	if tx := d.boundTx(); tx != nil {
+		return tx.withSavepoint(fn)
+	}
+	d.writeTxns.Add(1)
 	sqlTx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("db.WithTx begin: %w", err)
@@ -393,4 +435,82 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 		return err
 	}
 	return sqlTx.Commit()
+}
+
+// WithBoundTx runs fn in one write transaction and hands it a DB bound to that
+// transaction. Every statement on the bound DB runs in the transaction, and
+// every WithTx or WithBoundTx on it is a savepoint there, so code written
+// against a *DB, including code that opens its own transactions, joins this
+// one instead of contending for the write lock from a second connection. The
+// transaction commits when fn returns nil and rolls back everything fn did
+// otherwise. The bound DB is valid only until fn returns, and it cannot be
+// closed or checkpointed, nor hand out its *sql.DB. On a DB that is itself
+// bound, WithBoundTx is a savepoint of that transaction, as WithTx is.
+func (d *DB) WithBoundTx(fn func(bound *DB) error) error {
+	if d == nil {
+		panic("db.WithBoundTx: receiver must not be nil")
+	}
+	if fn == nil {
+		panic("db.WithBoundTx: fn must not be nil")
+	}
+	if d.boundTx() != nil {
+		return d.WithTx(func(*Tx) error { return fn(d) })
+	}
+	return d.WithTx(func(tx *Tx) error {
+		b := &DB{path: d.path, driver: d.driver, root: d, bound: tx}
+		// Unbind on every path, so a bound DB kept past fn fails loudly
+		// rather than running on a finished transaction.
+		defer func() { b.bound = nil }()
+		return fn(b)
+	})
+}
+
+// boundTx returns the transaction a bound DB runs in, nil for the pool's DB.
+// A bound DB used after its transaction ended is a programmer error.
+func (d *DB) boundTx() *Tx {
+	if d.root != nil && d.bound == nil {
+		panic("db: a bound DB was used after its transaction ended")
+	}
+	return d.bound
+}
+
+// mustBePool panics when op is called on a bound DB, which does not own the
+// pool it would act on.
+func (d *DB) mustBePool(op string) {
+	if d.root != nil {
+		panic("db." + op + ": not allowed on a DB bound to a transaction")
+	}
+}
+
+// withSavepoint runs fn in a savepoint of t. fn's error rolls back to the
+// savepoint and is returned, leaving t open for the writes before it.
+func (t *Tx) withSavepoint(fn func(tx *Tx) error) (err error) {
+	t.savepoints++
+	name := fmt.Sprintf("withtx_%d", t.savepoints)
+	defer func() { t.savepoints-- }()
+	if _, err := t.tx.Exec("SAVEPOINT " + name); err != nil {
+		return fmt.Errorf("db.WithTx savepoint: %w", err)
+	}
+	done := false
+	defer func() {
+		if done {
+			return
+		}
+		// fn failed or panicked: undo its writes. A failure here means
+		// SQLite already ended the whole transaction, which its commit
+		// will then report.
+		_, rbErr := t.tx.Exec("ROLLBACK TO " + name)
+		_, relErr := t.tx.Exec("RELEASE " + name)
+		if rbErr != nil || relErr != nil {
+			err = errors.Join(err, rbErr, relErr)
+		}
+	}()
+	if err := fn(t); err != nil {
+		return err
+	}
+	if _, err := t.tx.Exec("RELEASE " + name); err != nil {
+		return fmt.Errorf("db.WithTx release: %w", err)
+	}
+	done = true
+	return nil
 }

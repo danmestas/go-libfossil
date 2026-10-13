@@ -120,7 +120,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links a root check-in, or one on a present parent, whose files are absent;
   go-libfossil still defers those to protect `Checkout.Update`, a deviation
   tracked in #406 with the gap case `repostate.4.2.root-absent-file`.
-
+- A received `file` or `cfile` delta whose basis is held is now checked
+  against its HASH before it is stored, on the sync client, the server and a
+  clone alike (sync-protocol-01 Section 7.7, SP-7.7-4). The server had
+  checked only a `file` delta, since #402, and the client and clone stored
+  every delta as given. A delta whose result is not HASH, or that does not
+  apply, is not stored: the client's sync fails and a clone fails with the
+  wrong-hash error a full file already gets, and the server answers with its
+  wrong-hash error. A basis not held still leaves the delta stored dangling,
+  as fossil does. fossil checks a `file` delta on receipt and a `cfile` or
+  clone delta in its commit hook; this checks them all on receipt. Tracked
+  in #405.
 - `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
   target as fossil's `update` does when no version is named: the newest open
   leaf descended from the checkout (every descendant leaf when all are

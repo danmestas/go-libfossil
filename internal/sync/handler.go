@@ -14,7 +14,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -1240,18 +1239,12 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	}
 	vis := visibility(h.nextIsPrivate)
 	h.nextIsPrivate = false
-	if !compressed && deltaSrc != "" && !h.fileDeltaMatches(uuid, deltaSrc, payload) {
-		h.breakLoop(wrongHashText(uuid))
-		return nil
-	}
-	// Departure from fossil and sync-protocol-01 Section 7.5, which verifies
-	// only a reconstructable non-clone file before storage and leaves a
-	// cfile to a commit hook that aborts on mismatch: a cfile whose content
-	// is not its HASH is refused here, before storage, with the same reset
-	// and error as a file. The cost is that the request's earlier changes
-	// stay applied where a commit abort would roll them back; the gain is
-	// that this handler never stores an artifact under a name it does not
-	// have.
+	// storeFile verifies a delta against HASH before storing it (Section
+	// 7.7, SP-7.7-4), file and cfile alike, so this handler never stores an
+	// artifact under a name it does not have. fossil verifies a file here and
+	// a cfile in its commit hook, which rolls back the request's earlier
+	// changes; this refuses the card with the same reset and error instead,
+	// so those changes stay applied.
 	if msg := h.storeFile(ctx, uuid, deltaSrc, payload, storedBlob, vis); msg != "" {
 		h.breakLoop(msg)
 		return nil
@@ -1281,29 +1274,6 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 		return fmt.Sprintf("blob %s missing after store", uuid)
 	}
 	return ""
-}
-
-// fileDeltaMatches reports whether a file card's delta, applied to its
-// basis, gives content named uuid. §7.5 applies pre-storage verification to
-// a reconstructable non-clone file, as xfer_accept_file applies the delta to
-// an available source and checks the result. A basis this server cannot
-// expand leaves the delta unverified, stored dangling, as fossil stores it.
-// A delta that does not apply is a mismatch: fossil verifies what
-// blob_delta_apply left, which is not the artifact either.
-func (h *handler) fileDeltaMatches(uuid, deltaSrc string, payload []byte) bool {
-	srcRid, ok := content.AvailableByUUID(h.repo.DB(), deltaSrc)
-	if !ok {
-		return true
-	}
-	src, err := content.Expand(h.repo.DB(), srcRid)
-	if err != nil {
-		return true
-	}
-	target, err := delta.Apply(src, payload)
-	if err != nil {
-		return false
-	}
-	return hashMatches(uuid, target)
 }
 
 // wrongHashText is xfer_accept_file's error for content that is not HASH.

@@ -28,6 +28,33 @@ func clientFileCases() []syncClientCase {
 		replies: [][]string{reply("file {N1} 3", "abc")},
 		want:    every(notStored("N1"), mentions("mismatch", "wrong hash")),
 		fc:      true,
+	}, {
+		// A delta against a held basis is reconstructable, so it is applied
+		// and checked against HASH before storage: DTA1 turns A1 into T,
+		// not N1. fossil's xfer_accept_file reports the wrong hash and its
+		// commit hook rolls the store back.
+		Case:    Case{ID: "sync.7.7.file-delta-wrong-hash", Req: "SP-7.7-4"},
+		op:      opPull,
+		replies: [][]string{reply("file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    every(notStored("N1"), mentions("mismatch", "wrong hash")),
+		fc:      true,
+	}, {
+		// The same delta as a cfile: its complete bytes are available in the
+		// pass that stores it, so a mismatch must not be stored either.
+		// fossil catches it in the commit hook.
+		Case: Case{ID: "sync.7.7.cfile-delta-wrong-hash", Req: "SP-7.7-4"},
+		op:   opPull,
+		replies: [][]string{reply("cfile {N1} {A1} {DTA1.size} {DTA1.zsize}", "{DTA1.z}",
+			"{DTA1.pad}")},
+		want: every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
+		fc:   true,
+	}, {
+		// The verification passes a delta whose result is HASH.
+		Case:    Case{ID: "sync.7.7.file-delta-verified", Req: "SP-7.7-4"},
+		op:      opPull,
+		replies: [][]string{reply("file {T} {A1} {DTA1.size}", "{DTA1.data}")},
+		want:    expands("T"),
+		fc:      true,
 	}}
 }
 

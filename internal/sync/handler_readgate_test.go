@@ -196,6 +196,39 @@ func TestXTableHashWithoutReadSendsNothing(t *testing.T) {
 	}
 }
 
+// A Clone-only requester has Read by derivation, but it asked for no pull:
+// xtable-hash lists keys and mtimes that xgimme, pull-gated, would refuse to
+// fetch. Both cards use the pull gate (#351).
+func TestXTableHashNeedsPull(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	setupKVTable(t, r)
+	setNobodyCaps(t, r, "g")
+	resp := handleReq(t, r,
+		&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+		&xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}})
+	if n := len(findCards[*xfer.XIGotCard](resp)); n != 0 {
+		t.Fatalf("xtable-hash without a pull card sent %d xigot cards", n)
+	}
+
+	// A requester whose pull card is accepted gets the inventory.
+	setNobodyCaps(t, r, "go")
+	resp = handleReq(t, r,
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}})
+	if n := len(findCards[*xfer.XIGotCard](resp)); n == 0 {
+		t.Fatal("xtable-hash with a pull card sent no xigot cards")
+	}
+
+	// A push-only client with Read gets it too: it queues newer rows from it.
+	setNobodyCaps(t, r, "io")
+	resp = handleReq(t, r,
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PragmaCard{Name: "xtable-hash", Values: []string{"kv", "wrong"}})
+	if n := len(findCards[*xfer.XIGotCard](resp)); n == 0 {
+		t.Fatal("xtable-hash with a push card sent no xigot cards")
+	}
+}
+
 func TestCkinLockNeedsWrite(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	uuid := "lock000000000000000000000000000000000000"
@@ -242,7 +275,7 @@ func TestReaderGetsEverything(t *testing.T) {
 
 // TestCloneImpliesRead pins that Clone counts as Read at every read gate, as
 // fossil's page_xfer grants it: a requester with only g gets the unversioned
-// catalog, a uvgimme'd file, the xtable-hash inventory and read-gated
+// catalog, a uvgimme'd file and read-gated
 // configuration. Pull still needs o, so its pull card is refused.
 func TestCloneImpliesRead(t *testing.T) {
 	r := setupSyncTestRepo(t)
@@ -268,8 +301,10 @@ func TestCloneImpliesRead(t *testing.T) {
 	if n := len(findCards[*xfer.UVFileCard](resp)); n != 1 {
 		t.Errorf("clone-only requester got %d uvfile cards, want 1", n)
 	}
-	if n := len(findCards[*xfer.XIGotCard](resp)); n == 0 {
-		t.Error("clone-only requester got no xigot cards")
+	// xtable-hash takes xgimme's pull gate, which Clone alone does not
+	// meet (#351), so no inventory of rows the requester cannot fetch.
+	if n := len(findCards[*xfer.XIGotCard](resp)); n != 0 {
+		t.Errorf("clone-only requester got %d xigot cards, want 0", n)
 	}
 	if n := len(findCards[*xfer.ConfigCard](resp)); n == 0 {
 		t.Error("clone-only requester got no configuration")

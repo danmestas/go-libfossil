@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets all three for every tag type, writing NULL for a cancel, and crosslinking
   a check-in reads the three values back from `tagxref`, so a tag that reached
   the check-in while it was a phantom takes effect.
+- The sync server's `xtable-hash` now needs a direction card (#351), not
+  Read alone. Read is derived for a Clone-only requester (#312), which then
+  received an inventory of table keys and mtimes it can neither pull (xgimme
+  needs a pull card) nor push against. The gate is Read plus an accepted pull
+  or push card: a push-only table-sync client still gets the inventory it
+  uses to queue newer local rows. Table sync is a go-libfossil extension
+  with no fossil counterpart. The private-clone card order the issue also
+  raised needs no change: the clone client has no private mode and never
+  sent `pragma send-private`; a comment records fossil's order for when one
+  is added.
+
 - The sync client's per-request `gimme` limit now follows fossil's
   `mxPhantomReq` exactly (#350). The cap itself (200, or twice the files the
   last round received) was already in place, but it was recomputed every

@@ -102,6 +102,47 @@ func leafCases() []rsCase {
 			[]rsArt{checkin("c1", 1, nil), checkin("b1", 2, of("c1"), rsFeat...)},
 			[]string{"b1", "c1"}, "-leaf: c1"),
 		lone,
+		pulledChild(), pulledRetag(),
+	}
+}
+
+// pulledChild pulls c2 onto c1, which the puller already holds and has as
+// its leaf. c2 arrives as an announced phantom filled the next round, so the
+// phantom-fill cascade links it and the session's closing sweep finds
+// nothing left: the recheck crosslinking c2 schedules must still be applied
+// before the session ends, making c2 the leaf in c1's place, and c1's trunk
+// tag must reach c2.
+func pulledChild() rsCase {
+	return rsCase{
+		Case:   Case{ID: "repostate.7.3.pulled-child", Req: "RS-7.3-4"},
+		arts:   chain()[:2],
+		tables: []string{"leaf", "tagxref"},
+		tags:   []string{"branch", "sym-trunk"},
+		want: join(rows("leaf", "c2"), rows("tagxref",
+			"branch c1 2 c1 c1 'trunk' @1", "branch c2 2 0 c1 'trunk' @1",
+			"sym-trunk c1 2 c1 c1 NULL @1", "sym-trunk c2 2 0 c1 NULL @1")),
+		ignoring: []string{"-leaf: c2", "+leaf: c1"},
+		pull:     1,
+	}
+}
+
+// pulledRetag pulls a control artifact moving c2 onto feat into a
+// repository holding c1, c2 and c3. The cascade links t; the propagation
+// to c3 and the leaf recheck of c1, which loses its trunk child, must
+// still be applied before the session ends.
+func pulledRetag() rsCase {
+	return rsCase{
+		Case: Case{ID: "repostate.7.6.pulled-retag", Req: "RS-7.6-2"},
+		arts: with(chain()[:3],
+			control("t", 9, "*branch {c2} feat", "*sym-feat {c2}", "-sym-trunk {c2}")),
+		tables: []string{"leaf", "tagxref"},
+		tags:   []string{"branch"},
+		want: join(rows("leaf", "c1", "c3"), rows("tagxref",
+			"branch c1 2 c1 c1 'trunk' @1", "branch c2 2 t c2 'feat' @9",
+			"branch c3 2 0 c2 'feat' @9")),
+		ignoring: []string{"-leaf: c1", "+tagxref: branch c3 2 0 c1 'trunk' @1",
+			"-tagxref: branch c3 2 0 c2 'feat' @9"},
+		pull: 3,
 	}
 }
 

@@ -123,6 +123,9 @@ type session struct {
 	// dephantomized buffers the phantoms this reply filled, whose
 	// after-dephantomize cascade runs once at the end of the reply.
 	dephantomized []libfossil.FslID
+	// cascaded counts what those cascades linked, across the session: the
+	// closing crosslink owes it the leaf and tag repair (issue #414).
+	cascaded int
 	roundStats          RoundStats
 	xTableHashSent map[string]bool            // table -> true if xtable-hash pragma sent
 	xTableGimmes   map[string]map[string]bool // table -> pkHash -> true
@@ -318,7 +321,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// Auto-crosslink after convergence. Context-aware for the same reason the
 	// clone's sweep is (#120): this runs after the round loop, so it has no
 	// round boundary of its own at which a cancelled context could be noticed.
-	linked, xlinkErr := manifest.CrosslinkContext(ctx, s.repo)
+	linked, xlinkErr := manifest.CrosslinkAfterCascades(ctx, s.repo, s.cascaded)
 	if xlinkErr != nil {
 		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), xlinkErr)
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)

@@ -198,6 +198,7 @@ type handler struct {
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
 	filesRecvd      int                       // files received from client (for observer)
+	cascaded        int                       // artifacts the phantom-fill cascades linked
 	syncPrivate     bool                      // true if pragma send-private was accepted
 	nextIsPrivate   bool                      // true if a private card precedes the next file/cfile
 	syncedTables    map[string]*SyncedTable   // cached table definitions
@@ -548,7 +549,7 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 	if h.filesRecvd == 0 {
 		return nil
 	}
-	if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
+	if _, err := manifest.CrosslinkAfterCascades(ctx, h.repo, h.cascaded); err != nil {
 		return fmt.Errorf("HandleSync: crosslink: %w", err)
 	}
 	return nil
@@ -1259,7 +1260,12 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 // is its content_put_ex failure, whose g.zErrMsg page_xfer sends.
 func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload []byte,
 	storedBlob []byte, vis visibility) string {
-	err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
+	// storeReceivedFile's cascade, inline, to keep its count: the cascade
+	// leaves the leaf and tag repair to crosslinkReceived (issue #414).
+	rid, err := storeReceived(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
+	if err == nil && rid > 0 {
+		h.cascaded += manifest.AfterDephantomize(ctx, h.repo, rid)
+	}
 	if errors.Is(err, errHashMismatch) {
 		return wrongHashText(uuid)
 	}

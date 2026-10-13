@@ -596,7 +596,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	}
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
-	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	s.cascaded += manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {

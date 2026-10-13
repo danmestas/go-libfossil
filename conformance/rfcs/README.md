@@ -28,13 +28,16 @@ second column.
 | `erratum/sync-protocol-01-s5.1-truncated-payload-receiver.md` | same | `5a1b741b25d8` | `8157e3faaf` | `0e08208def3084a…` |
 | `erratum/sync-protocol-01-s5.3-errors-count.md` | same | `5a1b741b25d8` | `ca1539a1e9` | `752da0b6944f341…` |
 | `erratum/sync-protocol-01-s6.6-file-card-after-refused-push.md` | same | `5a1b741b25d8` | `1c50fe8add` | `5857e99624ece02…` |
-| `erratum/sync-protocol-01-s9.4-avoid-delta-manifests.md` | same | `5a1b741b25d8` | `78e82316c1` | `9a1cbf178587b2b…` |
+| `erratum/sync-protocol-01-s9.4-avoid-delta-manifests.md` | same | `00e1711e802e` | `e29beb0afc` | `caad0402360fdcc…` |
 | `erratum/sync-protocol-01-s10.1-wrong-hash-file-fails-the-round.md` | same | `5a1b741b25d8` | `e5dd8a4c9b` | `8cb2b8cbbdfe808…` |
 
 The drafts carry every -01 erratum: the six of zit check-in
 `100351e26ce269a29e0567dfd81010729be80f3d` (2026-10-12) and the five of
 2026-10-13 (repo-state §5.3, §7.3, §8.3; sync-protocol §9.4, §10.1), applied
-by check-in `5a1b741b25d8`. The errata are pinned for the Fossil 2.28 and
+by check-in `5a1b741b25d8`. The §9.4 erratum was corrected afterwards, at
+check-in `00e1711e802e`: it now says the `forbid-delta-manifests` default
+is on since Fossil 2.29, while 2.28 defaults it off. The draft text is
+unchanged. The errata are pinned for the Fossil 2.28 and
 2.29 behavior they record, which the cases use as the reference where the
 drafts and fossil(1) disagree. The -00 errata are folded into the -01 drafts
 (zit check-in `44685f33b1`) and are no longer pinned. There is no

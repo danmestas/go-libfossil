@@ -103,9 +103,10 @@ func TestDecodeHugeDeclaredSizeIsNotAllocated(t *testing.T) {
 	for _, line := range lines {
 		t.Run(strings.TrimSpace(line), func(t *testing.T) {
 			data := []byte(line + "short payload")
+			var msg *Message
 			var err error
-			n := allocatedBy(func() { _, err = Decode(data, ContentTypeUncompressed) })
-			if err == nil {
+			n := allocatedBy(func() { msg, err = Decode(data, ContentTypeUncompressed) })
+			if err == nil && !endsInBadCard(msg) {
 				t.Fatal("Decode accepted a truncated payload")
 			}
 			if n > allocBudget {
@@ -113,6 +114,17 @@ func TestDecodeHugeDeclaredSizeIsNotAllocated(t *testing.T) {
 			}
 		})
 	}
+}
+
+// endsInBadCard reports whether a message's last card is one the decoder
+// could not read: a payload cut short is a malformed file, cfile or uvfile
+// line (Section 5.1), not a decode error.
+func endsInBadCard(msg *Message) bool {
+	if msg == nil || len(msg.Cards) == 0 {
+		return false
+	}
+	_, ok := msg.Cards[len(msg.Cards)-1].(*BadFileCard)
+	return ok
 }
 
 // zlibZeros compresses n zero bytes without holding them in memory.

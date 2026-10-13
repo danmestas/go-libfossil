@@ -867,13 +867,35 @@ func TestEncode_WireFormat_FileNoTrailingNewline(t *testing.T) {
 	}
 }
 
-func TestDecode_FileTruncatedPayload(t *testing.T) {
-	// Header says 100 bytes but only 5 bytes follow
-	input := "file abc123 100\nhello"
-	r := bufio.NewReader(strings.NewReader(input))
-	_, err := DecodeCard(r)
-	if err == nil {
-		t.Error("expected error for truncated file payload")
+// TestDecode_TruncatedPayload checks Section 5.1 (sync-protocol-01 erratum
+// s5.1-truncated-payload-receiver): a body that ends inside a payload makes
+// the card its handler's malformed-line failure, not a decode error, so the
+// receiver keeps the cards before it.
+func TestDecode_TruncatedPayload(t *testing.T) {
+	for _, tc := range []struct{ input, msg string }{
+		{"file abc123 100\nhello", "malformed file line"},
+		{"cfile abc123 4 100\nhello", "malformed cfile line"},
+		{"uvfile a.txt 0 " + sizeTestHash + " 100 0\nhello", "malformed uvfile line"},
+	} {
+		wantBadFile(t, tc.input, tc.msg)
+	}
+}
+
+// TestDecode_TruncatedPayloadKeepsPrefix checks that the message decoded
+// before a cut-short payload survives, ending at the bad card.
+func TestDecode_TruncatedPayloadKeepsPrefix(t *testing.T) {
+	msg, err := DecodeUncompressed([]byte("igot " + sizeTestHash + "\nfile abc 9\nabc"))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(msg.Cards) != 2 {
+		t.Fatalf("got %d cards, want 2", len(msg.Cards))
+	}
+	if _, ok := msg.Cards[0].(*IGotCard); !ok {
+		t.Fatalf("card 0 is %T, want *IGotCard", msg.Cards[0])
+	}
+	if _, ok := msg.Cards[1].(*BadFileCard); !ok {
+		t.Fatalf("card 1 is %T, want *BadFileCard", msg.Cards[1])
 	}
 }
 

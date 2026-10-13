@@ -54,9 +54,7 @@ SP-4.1-6	4.1	Receiver: decodes the container whatever DEFLATE level it was compr
 SP-4.2-1	4.2	Client: a reply that ends without a terminal card is complete, not an error.
 SP-5.1-1	5.1	Receiver: a byte-counted payload ends only at its declared count and may contain LF and card-like text.
 SP-5.1-2	5.1	Sender: a cfile payload not ending in LF is followed by one padding LF, which the receiver consumes as an empty line.
-# SP-5.1-3 is FAILING: Tracked in #373.
 SP-5.1-3	5.1	Server: a payload cut short by the end of the body is not stored; the card is a validation failure of its handler, with error malformed file line, malformed cfile line or malformed uvfile line.
-# SP-5.1-4 is FAILING: Tracked in #373.
 SP-5.1-4	5.1	Client: a payload cut short by the end of the reply is not stored; the client stops reading the reply at that card and keeps the prefix it processed.
 SP-5.2-1	5.2	Sender: emits canonical cards: one SP between tokens, no leading or trailing whitespace, one LF.
 SP-5.2-2	5.2	Receiver: accepts canonical cards and splits tokens on at most SP, HTAB, VT, FF and CR runs.	other bytes, including UTF-8 spaces, stay in the token

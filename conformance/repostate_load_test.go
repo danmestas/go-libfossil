@@ -233,6 +233,11 @@ var rsQueries = map[string]string{
 	"phantom": "SELECT uuid FROM blob WHERE size < 0",
 	"event": "SELECT " + rsUUID("event.objid") + ", type, " + rsMillis("event.mtime") +
 		" FROM event",
+	// eventcols reads the columns the bgcolor, user and comment tags set on a
+	// check-in's event row. It is outside rsAllTables: only the cases about
+	// those tags compare it.
+	"eventcols": "SELECT " + rsUUID("event.objid") + ", quote(bgcolor), quote(euser), " +
+		"quote(ecomment) FROM event WHERE type = 'ci'",
 	"mlink": "SELECT " + rsUUID("mlink.mid") + ", " + rsUUID("mlink.fid") + ", " +
 		rsUUID("mlink.pid") + ", " + rsUUID("mlink.pmid") +
 		", (SELECT name FROM filename WHERE fnid = mlink.fnid), isaux FROM mlink",

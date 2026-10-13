@@ -1063,10 +1063,17 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 	// own time.
 	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
-		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime)
+		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime,
+		   bgcolor, euser, ecomment)
 		 VALUES('ci', coalesce((SELECT julianday(value) FROM tagxref
 		   WHERE rid=?2 AND tagid=(SELECT tagid FROM tag WHERE tagname='date')), ?1),
-		   ?2, ?3, ?4, ?1)`,
+		   ?2, ?3, ?4, ?1,
+		   (SELECT value FROM tagxref WHERE rid=?2 AND tagtype>0
+		     AND tagid=(SELECT tagid FROM tag WHERE tagname='bgcolor')),
+		   (SELECT value FROM tagxref WHERE rid=?2
+		     AND tagid=(SELECT tagid FROM tag WHERE tagname='user')),
+		   (SELECT value FROM tagxref WHERE rid=?2
+		     AND tagid=(SELECT tagid FROM tag WHERE tagname='comment')))`,
 		mtime, rid, d.U, d.C,
 	); err != nil {
 		return fmt.Errorf("event: %w", err)

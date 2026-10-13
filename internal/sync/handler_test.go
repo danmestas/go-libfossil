@@ -147,6 +147,32 @@ func TestHandleIGotWithPushOnly(t *testing.T) {
 	}
 }
 
+// TestHandleIGotShunned verifies a shunned hash draws no gimme and no
+// phantom (#349), while an unshunned one still does.
+func TestHandleIGotShunned(t *testing.T) {
+	r := setupPushableTestRepo(t)
+	shunned := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	other := "cccccccccccccccccccccccccccccccccccccccc"
+	if _, err := r.DB().Exec("INSERT INTO shun(uuid, mtime) VALUES(?, 0)", shunned); err != nil {
+		t.Fatalf("shun: %v", err)
+	}
+	resp := handleReq(t, r,
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.IGotCard{UUID: shunned},
+		&xfer.IGotCard{UUID: other},
+	)
+	got := map[string]bool{}
+	for _, g := range findCards[*xfer.GimmeCard](resp) {
+		got[g.UUID] = true
+	}
+	if got[shunned] {
+		t.Error("gimme sent for a shunned hash")
+	}
+	if !got[other] {
+		t.Error("no gimme for an unshunned unknown hash")
+	}
+}
+
 func TestHandleGimme(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	data := []byte("gimme this")

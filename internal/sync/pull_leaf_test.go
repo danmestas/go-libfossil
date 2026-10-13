@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -158,5 +159,62 @@ func TestPushRepairsLeavesOfCascadeLinks(t *testing.T) {
 	}
 	if got := leafUUIDs(t, srv); len(got) != 1 || got[0] != childUUID {
 		t.Fatalf("leaf rows = %v, want only the child %s", got, childUUID)
+	}
+}
+
+// failAfterTransport serves the first n exchanges from inner, then fails every
+// later one with a non-retryable error.
+type failAfterTransport struct {
+	inner Transport
+	n     int
+	calls int
+}
+
+func (f *failAfterTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	f.calls++
+	if f.calls > f.n {
+		return nil, errors.New("transport down")
+	}
+	resp, err := f.inner.Exchange(ctx, req)
+	if err == nil && f.calls == f.n {
+		// Announce an artifact the server does not have, so the session asks
+		// for it and needs a further round after the cascade's round.
+		resp.Cards = append(resp.Cards, &xfer.IGotCard{UUID: hash.SHA3([]byte("unserved"))})
+	}
+	return resp, err
+}
+
+// TestFailedPullRepairsLeavesOfEarlierCascades fails the exchange after the
+// round whose cascade linked the child. fossil runs manifest_crosslink_end per
+// round, so the failed session must still leave the child the only leaf with
+// its propagated branch row (RS-7.3-4).
+func TestFailedPullRepairsLeavesOfEarlierCascades(t *testing.T) {
+	content := []byte("pulled file\n")
+	when := time.Date(2026, 4, 25, 12, 0, 0, 0, time.UTC)
+	dst := setupSyncTestRepo(t)
+	fileUUID := storeAndLink(t, dst, content)
+	rootBytes, _ := buildCheckinManifest(t, "root", when, fileUUID, content, nil)
+	rootUUID := storeAndLink(t, dst, rootBytes)
+	childBytes := buildChildManifest(t, when.Add(time.Minute), fileUUID, content, rootUUID)
+	src := setupSyncTestRepo(t)
+	storeAndLink(t, src, content, rootBytes)
+	childUUID := storeAndLink(t, src, childBytes)
+
+	tr := &failAfterTransport{inner: handlerTransport(t, src), n: 2}
+	_, err := Sync(context.Background(), dst, tr, SyncOpts{Pull: true, ProjectCode: testPC})
+	if err == nil {
+		t.Fatal("Sync succeeded; the case needs a failing third exchange")
+	}
+	if got := leafUUIDs(t, dst); len(got) != 1 || got[0] != childUUID {
+		t.Fatalf("leaf rows = %v, want only the child %s", got, childUUID)
+	}
+	var n int
+	if err := dst.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
+		JOIN blob ON blob.rid=tagxref.rid
+		WHERE tagname='branch' AND uuid=? AND tagtype=2`, childUUID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("child's propagated branch rows = %d, want 1", n)
 	}
 }

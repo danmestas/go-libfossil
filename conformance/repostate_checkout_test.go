@@ -35,8 +35,9 @@ func checkoutAPICases() []rsAPICase {
 		// c1 has no parent, so prev names nothing and falls through to the
 		// other forms, where it matches nothing either.
 		checkoutResolves("repostate.8.3.prev-at-root", "RS-8.3-4", twoChildren, "c1", "prev", ""),
-		// ckout is a keyword only in a checkout-inclusive request; an
-		// untyped one treats it as an ordinary name.
+		// ckout is a keyword only in the checkout-inclusive request
+		// (repostate_working_test.go); an untyped one treats it as an
+		// ordinary name.
 		checkoutResolves("repostate.8.3.ckout-untyped", "RS-8.3-4", twoChildren, "c2", "ckout", ""),
 		// root:BR resolves BR by the same procedure, checkout names too.
 		checkoutResolves("repostate.8.3.root-of-current", "RS-8.3-4", feat3, "b3",

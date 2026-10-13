@@ -149,3 +149,80 @@ func TestCheckoutResolveVersion_NoVersion(t *testing.T) {
 		t.Errorf("ResolveVersion(current) = %d, %v, want ErrVersionNotFound", rid, err)
 	}
 }
+
+// "ckout" names the working files in the checkout-inclusive request, even
+// over a tag of that name, and only as the whole name; every other name
+// resolves as Checkout.ResolveVersion resolves it.
+func TestCheckoutResolveWorking(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "a", []FileToCommit{{Name: "f", Content: []byte("a\n")}})
+	tagged := commitBranch(t, r, a, "ckout", "tagged ckout",
+		[]FileToCommit{{Name: "f", Content: []byte("k\n")}})
+	co := checkoutAt(t, r, a)
+
+	got, err := co.ResolveWorking("ckout")
+	if err != nil || got != (WorkingVersion{RID: a, Working: true}) {
+		t.Errorf("ResolveWorking(ckout) = %+v, %v; want the working files on %d", got, err, a)
+	}
+	for name, want := range map[string]int64{"current": a, "tip": tagged, "ckout.": tagged} {
+		got, err := co.ResolveWorking(name)
+		if err != nil || got != (WorkingVersion{RID: want}) {
+			t.Errorf("ResolveWorking(%q) = %+v, %v; want check-in %d", name, got, err, want)
+		}
+	}
+	// The plain request reads ckout as the tag.
+	if rid, err := co.ResolveVersion("ckout"); err != nil || rid != tagged {
+		t.Errorf("ResolveVersion(ckout) = %d, %v; want %d", rid, err, tagged)
+	}
+}
+
+// The checkout-inclusive request is a check-in request: a technote carrying
+// the tag cannot answer it, though it answers the untyped ResolveVersion.
+func TestCheckoutResolveWorking_CheckinOnly(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "a", []FileToCommit{{Name: "f", Content: []byte("a\n")}})
+	co := checkoutAt(t, r, a)
+	if _, err := r.inner.DB().Exec(`INSERT INTO event(type, mtime, objid, user, comment)
+		VALUES ('e', 99999999, 1000000, 'u', 'note');
+		INSERT INTO blob(rid, uuid, size)
+		VALUES (1000000, 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 0);
+		INSERT INTO tag(tagname) VALUES ('sym-note');
+		INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
+		VALUES ((SELECT tagid FROM tag WHERE tagname='sym-note'), 1, 1000000, 1000000,
+		NULL, 99999999, 1000000)`); err != nil {
+		t.Fatal(err)
+	}
+	if rid, err := co.ResolveVersion("note"); err != nil || rid != 1000000 {
+		t.Errorf("ResolveVersion(note) = %d, %v; want the technote", rid, err)
+	}
+	if got, err := co.ResolveWorking("note"); !errors.Is(err, ErrVersionNotFound) {
+		t.Errorf("ResolveWorking(note) = %+v, %v; want ErrVersionNotFound", got, err)
+	}
+}
+
+// With no recorded version, "ckout" is no keyword: it falls through to the
+// other forms, as in fossil: a tag of that name answers, not the working files.
+func TestCheckoutResolveWorking_NoVersion(t *testing.T) {
+	r := newTestRepo(t)
+	a := commit(t, r, 0, "a", []FileToCommit{{Name: "f", Content: []byte("a\n")}})
+	tagged := commitBranch(t, r, a, "ckout", "tagged ckout",
+		[]FileToCommit{{Name: "f", Content: []byte("k\n")}})
+	dir := filepath.Join(t.TempDir(), "co")
+	co, err := r.CreateCheckout(dir, CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatalf("CreateCheckout: %v", err)
+	}
+	t.Cleanup(func() { _ = co.Close() })
+	ck, err := sql.Open(db.RegisteredDriver().Name, filepath.Join(dir, ".fslckout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ck.Close()
+	if _, err := ck.Exec("UPDATE vvar SET value = '' WHERE name = 'checkout'"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := co.ResolveWorking("ckout")
+	if err != nil || got != (WorkingVersion{RID: tagged}) {
+		t.Errorf("ResolveWorking(ckout) = %+v, %v; want the tag's check-in %d", got, err, tagged)
+	}
+}

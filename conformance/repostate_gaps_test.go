@@ -21,7 +21,14 @@ var repostateDeviations = map[string]string{
 	// its parent when it is linked.
 	"repostate.7.3.recheck-untagged-child":         untaggedChildDeviation,
 	"repostate.7.3.recheck-untagged-child.rebuild": untaggedChildDeviation,
+	// ckout.: Section 8.3 retries the whole procedure under a ci type.
+	"repostate.8.3.ckout-inclusive-whole-name": ckoutWholeNameDeviation,
 }
+
+const ckoutWholeNameDeviation = "follows fossil(1): the ci+ request is rewritten to ci, so " +
+	"the trailing-punctuation retry and the recursive forms read ckout as an ordinary " +
+	"name, where Section 8.3 retries the whole procedure and makes ckout a keyword under " +
+	"ci as well (erratum pending)"
 
 const untaggedChildDeviation = "follows fossil(1): a check-in with a parent but no branch " +
 	"tag is never rechecked, so it is no leaf and its parent keeps its verdict, where " +

@@ -15,13 +15,13 @@ type RepoMergeCmd struct {
 }
 
 func (c *RepoMergeCmd) Run(g *Globals) (err error) {
-	r, co, done, err := openWorkingCheckout(g, c.Dir)
+	_, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
 	defer closeWith(done, &err)
 
-	rid, err := resolveRID(r, c.Version)
+	rid, err := co.ResolveVersion(c.Version)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", c.Version, err)
 	}

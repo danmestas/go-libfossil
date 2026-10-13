@@ -18,6 +18,9 @@ func checkoutAPICases() []rsAPICase {
 	// A tag named current, on c1: inside a checkout the keyword wins.
 	currentTag := with(twoChildren, control("t", 9, "+sym-current {c1}"))
 	feat3 := with(branched(), checkin("b3", 6, of("b2")))
+	// A technote tagged sym-feat, newer than feat's tip: the branch-type
+	// request is a check-in request, so only check-ins can answer it.
+	noted := with(feat3, technote("e", 9, "+sym-feat *"))
 	return []rsAPICase{{
 		Case: Case{ID: "repostate.6.4.checkout-branch", Req: "RS-6.4-1"},
 		arts: cancelledBranch(),
@@ -43,6 +46,8 @@ func checkoutAPICases() []rsAPICase {
 		// only a tag:NAME or plain-name result, so it gives b3 itself.
 		branchTypeResolves("repostate.8.3.branch-type-hash", "RS-8.3-12", feat3,
 			rsBuild(feat3).hashes["b3"], "b1", "b3"),
+		branchTypeResolves("repostate.8.3.branch-type-technote", "RS-8.3-12", noted,
+			"feat", "b1", "b1"),
 	}
 }
 

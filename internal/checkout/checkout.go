@@ -283,6 +283,10 @@ func (c *Checkout) Repo() *repo.Repo {
 	return c.repo
 }
 
+// ErrNoVersion is returned (wrapped) by Version when the checkout database
+// records no checked-out version, as after an open with nothing to check out.
+var ErrNoVersion = errors.New("checkout: no checkout version")
+
 // Version returns the current checkout version (RID and UUID).
 func (c *Checkout) Version() (libfossil.FslID, string, error) {
 	if c == nil {
@@ -294,7 +298,7 @@ func (c *Checkout) Version() (libfossil.FslID, string, error) {
 		return 0, "", fmt.Errorf("checkout.Version: %w", err)
 	}
 	if ridStr == "" {
-		return 0, "", fmt.Errorf("checkout.Version: vvar checkout not set")
+		return 0, "", fmt.Errorf("checkout.Version: vvar checkout not set: %w", ErrNoVersion)
 	}
 
 	rid64, err := strconv.ParseInt(ridStr, 10, 64)

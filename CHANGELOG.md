@@ -24,12 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A keyword that names nothing, such as `prev` at a root, falls through to the
   other forms. `ckout` stays an ordinary name: it is a keyword only in fossil's
   checkout-inclusive request, which go-libfossil does not have.
-  `Repo.ResolveVersion` is unchanged.
+  `Repo.ResolveVersion` is unchanged. A checkout with no recorded version has
+  no relative names, and every other form still resolves. The `merge` command
+  resolves its version through the checkout, so `merge prev` and `merge next`
+  work.
 - `Repo.ResolveBranchStart` is fossil's branch-type request: it resolves a
   name, then returns the first check-in of the branch the result is on
   (repo-state-01 §8.3). It follows the draft where fossil 2.28 differs:
   fossil walks back only from a `tag:NAME` or plain-name result, so a hash,
-  `tip` or a date gives the named check-in itself there.
+  `tip` or a date gives the named check-in itself there. As the draft and
+  fossil both require, only check-ins can match, so a technote tagged with the
+  branch name does not shadow the branch.
   The `repostate.8.3` checkout and branch-type cases now run against these
   and pass (RS-8.3-4, RS-8.3-12; tracked in #386).
 

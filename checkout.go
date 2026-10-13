@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/checkout"
@@ -524,8 +525,13 @@ func convertUpdateChange(c checkout.UpdateChange) UpdateChange {
 // answer is a pseudo-RID for the working files, not an artifact.
 func (c *Checkout) ResolveVersion(name string) (int64, error) {
 	rid, _, err := c.inner.Version()
+	if errors.Is(err, checkout.ErrNoVersion) {
+		// fossil guards its checkout keywords on a nonzero checkout version
+		// and resolves the other forms regardless.
+		rid, err = 0, nil
+	}
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: resolve version %q: %w", name, err)
 	}
-	return resolveVersion(c.inner.Repo().DB(), name, int64(rid))
+	return resolveVersion(c.inner.Repo().DB(), name, int64(rid), false)
 }

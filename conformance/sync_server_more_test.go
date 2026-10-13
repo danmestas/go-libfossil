@@ -83,6 +83,12 @@ func serverAdmissionCases() []syncServerCase {
 			"{R}"},
 		want: all(completed, noErrors, held("N1", 0), withCard("gimme {U}")),
 	}, {
+		// A server never asks for a shunned artifact (#349).
+		Case:  Case{ID: "sync.7.7.shunned-igot-server", Req: "SP-3.3-1"},
+		setup: []string{"INSERT INTO shun(uuid, mtime) VALUES('{N1}', 0)"},
+		body:  []string{"{CV}", pushCard, "igot {N1}", "igot {U}", "{R}"},
+		want:  all(completed, noErrors, noCard("gimme {N1}"), withCard("gimme {U}")),
+	}, {
 		// alice's password is stored as itself, not as the shared secret.
 		Case: Case{ID: "sync.6.4.cleartext-fallback", Req: "SP-6.4-4"},
 		setup: append([]string{"UPDATE user SET pw='secret' WHERE login='alice'"},

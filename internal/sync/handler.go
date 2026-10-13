@@ -834,6 +834,17 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 	if c.IsPrivate && !h.syncPrivate {
 		return nil // not authorized — don't request
 	}
+	// Fossil's igot handling goes through rid_from_uuid → content_new, which
+	// returns 0 for a shunned name: no phantom is made, so no gimme follows
+	// (src/content.c, #349). The check is last so an exists hit above still
+	// records remoteHas for the held artifact.
+	shunned, err := shun.IsShunned(h.repo.DB(), c.UUID)
+	if err != nil {
+		return fmt.Errorf("handler: shun check for igot %s: %w", c.UUID, err)
+	}
+	if shunned {
+		return nil
+	}
 	h.resp = append(h.resp, &xfer.GimmeCard{UUID: c.UUID})
 	return nil
 }
@@ -1009,6 +1020,11 @@ func (h *handler) emitIGots() error {
 // emitPrivateIGots emits igot cards with IsPrivate=true for all blobs in
 // the private table. Only called when the client sent pragma send-private
 // and has the 'x' capability.
+//
+// Shunned private artifacts are still announced: fossil's send_private
+// (src/xfer.c) selects from the private table with no shun filter, unlike
+// the public igot paths. #349 asked for the filter, but matching fossil
+// wins; the receiving side drops a shunned file on arrival either way.
 func (h *handler) emitPrivateIGots() error {
 	rows, err := h.repo.DB().Query(
 		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",

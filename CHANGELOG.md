@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets all three for every tag type, writing NULL for a cancel, and crosslinking
   a check-in reads the three values back from `tagxref`, so a tag that reached
   the check-in while it was a phantom takes effect.
+- The sync server no longer asks for a shunned artifact (#349). `handleIGot`
+  answered an `igot` for a shunned hash with `gimme`; fossil's `content_new`
+  returns 0 for a shunned name, so it makes no phantom and requests nothing.
+  Private igot emission is deliberately unchanged: fossil's `send_private`
+  has no shun filter, so a shunned private artifact is still announced
+  (contrary to what #349 proposed); a conformance case pins this.
 
 - Tests that run the fossil binary no longer write into the developer's
   global fossil config (`~/.fossil` or `~/.config/fossil.db`) (#284). Each

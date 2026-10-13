@@ -46,6 +46,15 @@ func serverContentCases() []syncServerCase {
 		Case: Case{ID: "sync.7.5.private-needs-send-private", Req: "SP-7.5-6"},
 		body: []string{"{LOGIN priv secret}", "{CV}", pullCard, "gimme {P}", "{R}"},
 		want: all(completed, noErrors, noCard("file {P}"), noCard("private")),
+	}, {
+		// fossil(1)'s send_private has no shun filter, unlike its public
+		// igot paths, so a shunned private artifact is still announced
+		// (#349 asked otherwise; fossil wins). No requirement row covers private
+		// inventory filtering, so the case rides on SP-9.5-1, send-private.
+		Case:  Case{ID: "sync.7.7.shunned-private-igot", Req: "SP-9.5-1"},
+		setup: []string{"INSERT INTO shun(uuid, mtime) VALUES('{P}', 0)"},
+		body:  []string{"{LOGIN priv secret}", "{CV}", "pragma send-private", pullCard, "{R}"},
+		want:  all(completed, noErrors, withCard("igot {P} 1")),
 	}}
 }
 

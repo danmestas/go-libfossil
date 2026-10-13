@@ -13,9 +13,8 @@ import (
 
 // The checkout-inclusive request (Section 8.3), fossil's "ci+" type, which
 // Checkout.ResolveWorking is. "ckout" names the working files there while
-// the checkout has a version. The draft also makes it a keyword in a plain
-// check-in request; fossil does not (symbolic_name_to_rid, src/name.c), and
-// the cases follow fossil, as an erratum to the draft is pending.
+// the checkout has a version, and only as the whole name given; anywhere
+// else it is an ordinary name (symbolic_name_to_rid, src/name.c).
 
 func workingAPICases() []rsAPICase {
 	twoChildren := with(chain()[:3], checkin("m", 4, of("c3", "c2")))
@@ -29,12 +28,10 @@ func workingAPICases() []rsAPICase {
 		workingResolves("repostate.8.3.ckout-inclusive", twoChildren, "c2", "ckout", "c2", true),
 		workingResolves("repostate.8.3.ckout-inclusive-over-tag", ckoutTag, "c2", "ckout",
 			"c2", true),
-		// Section 8.3 retries the whole procedure without the trailing dot,
-		// and makes ckout a keyword under ci too, so ckout. names the
-		// working files. fossil(1) rewrites ci+ to ci first, so its retry
-		// reads ckout as the tag; go-libfossil follows fossil.
-		workingDeviates("repostate.8.3.ckout-inclusive-whole-name", ckoutTag, "c2", "ckout.",
-			"c1"),
+		// The trailing-punctuation retry resolves ckout under ci, where it is
+		// an ordinary name: ckout. names the tag, not the working files.
+		workingResolves("repostate.8.3.ckout-inclusive-whole-name", ckoutTag, "c2", "ckout.",
+			"c1", false),
 		// With no checkout version, ckout falls through to the other forms.
 		workingResolves("repostate.8.3.ckout-no-version", ckoutTag, "", "ckout", "c1", false),
 		workingResolves("repostate.8.3.ckout-no-version-untagged", twoChildren, "", "ckout",
@@ -77,28 +74,6 @@ func workingResolves(id string, arts []rsArt, at, name, want string, working boo
 				"(working %t), want %q (working %t)", at, name, got, gotWorking, want, working)
 		}
 		return nil
-	}}
-}
-
-// workingDeviates is a checkout-inclusive case where the draft's answer is
-// the working files on the checkout's version at, and fossil(1)'s is the
-// check-in labelled fossilWant. The Go side is held to the draft, so the
-// case is marked as a deviation while go-libfossil follows fossil.
-func workingDeviates(id string, arts []rsArt, at, name, fossilWant string) rsAPICase {
-	if at == "" || fossilWant == "" {
-		panic("conformance: a deviating case needs a checkout and fossil's answer")
-	}
-	draft := workingResolves(id, arts, at, name, at, true)
-	return rsAPICase{Case: draft.Case, arts: arts, run: func(e *rsEnv) error {
-		if e.ref != nil {
-			if err := e.fossilWorking(at, name, fossilWant); err != nil {
-				return err
-			}
-		}
-		ref := e.ref
-		e.ref = nil // fossil(1) was checked above, against its own answer.
-		defer func() { e.ref = ref }()
-		return draft.run(e)
 	}}
 }
 

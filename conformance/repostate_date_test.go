@@ -52,7 +52,47 @@ func dateTagCases() []rsCase {
 			ignoring: []string{"-omtime: c2 @2", "+omtime: c2 @30"},
 			rebuild:  true,
 		},
-	}, append(dateTagFallbackCases(), dateTagFirstFallbackCases()...)...)
+	}, append(append(dateTagFallbackCases(), dateTagFirstFallbackCases()...),
+		dateArrivalCases()...)...)
+}
+
+// dateArrivalCases are Section 5.3, step 1's arrival order: c1's propagating
+// date tag (t1, @9) is newer than c2's direct one (t2, @8). The direct tag
+// applied first keeps its value and stops the propagation at c2, which it
+// retimes; the propagation arriving first leaves an inherited row on c2 that
+// makes the direct tag skipped, and an inherited date tag retimes nothing,
+// so c2 keeps its D-card time. Each is loaded in its own order, and rebuilt
+// in it, since a rebuild crosslinks in storage order.
+func dateArrivalCases() []rsCase {
+	arrival := func(id string, tags []rsArt, want []string, ignoring ...string) rsCase {
+		return rsCase{
+			Case:     Case{ID: id, Req: "RS-5.3-5"},
+			arts:     append(chain()[:2], tags...),
+			tables:   []string{"event", "tagxref"},
+			tags:     []string{"date"},
+			want:     want,
+			ignoring: ignoring,
+			each:     true,
+			rebuild:  true,
+		}
+	}
+	inherited := control("t1", 9, "*date {c1} "+rsTime(30))
+	direct := control("t2", 8, "+date {c2} "+rsTime(40))
+	c1Rows := []string{"event: c1 ci @30", "event: t1 g @9", "event: t2 g @8",
+		"tagxref: date c1 2 t1 c1 '" + rsTime(30) + "' @9"}
+	return []rsCase{
+		arrival("repostate.5.3.direct-before-inherited", []rsArt{direct, inherited},
+			append([]string{"event: c2 ci @40",
+				"tagxref: date c2 1 t2 c2 '" + rsTime(40) + "' @8"}, c1Rows...),
+			"-tagxref: date c2 1 t2 c2 '"+rsTime(40)+"' @8",
+			"+tagxref: date c2 2 0 c1 '"+rsTime(30)+"' @9"),
+		arrival("repostate.5.3.inherited-before-direct", []rsArt{inherited, direct},
+			append([]string{"event: c2 ci @2",
+				"tagxref: date c2 2 0 c1 '" + rsTime(30) + "' @9"}, c1Rows...),
+			"-tagxref: date c2 2 0 c1 '"+rsTime(30)+"' @9",
+			"+tagxref: date c2 1 t2 c2 '"+rsTime(40)+"' @8", "-event: c2 ci @2",
+			"+event: c2 ci @40"),
+	}
 }
 
 // dateTagFallbackCases are the date tags step 6 ignores, leaving the D-card

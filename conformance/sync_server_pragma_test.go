@@ -144,6 +144,75 @@ func serverPragmaLockCases() []syncServerCase {
 	}}
 }
 
+// forbidOn sets forbid-delta-manifests on explicitly, for the cases about
+// something other than its default, which fossil(1) 2.28 reads as off.
+var forbidOn = []string{"REPLACE INTO config(name, value, mtime)" +
+	" VALUES('forbid-delta-manifests', 'on', 1)"}
+
+// defaultOff is why fossil(1) 2.28 sends no avoid-delta-manifests when the
+// setting is absent or unreadable.
+const defaultOff = "fossil(1) 2.28 reads forbid-delta-manifests with a default of off; " +
+	"Section 9.4 and fossil 2.29 (xfer.c:1831, db.c:4899) default it on"
+
+// serverAvoidDeltaCases are the avoid-delta-manifests pragma of Section 9.4:
+// every ci-lock that passes the argument guard is answered with it while
+// forbid-delta-manifests is on, its default, after any ci-lock-fail.
+func serverAvoidDeltaCases() []syncServerCase {
+	return []syncServerCase{{
+		// No lock is held: the lock is written, and the pragma is the only
+		// card the ci-lock draws.
+		Case: Case{ID: "sync.9.4.avoid-delta-manifests", Req: "SP-9.4-3"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"{R}"},
+		want: all(completed, noErrors, count("pragma avoid-delta-manifests", 1),
+			noCard("pragma ci-lock")),
+		fossil: defaultOff,
+	}, {
+		// Each ci-lock draws one; the second, refused, puts it after its
+		// ci-lock-fail.
+		Case: Case{ID: "sync.9.4.avoid-delta-manifests-after-fail", Req: "SP-9.4-3"},
+		setup: append([]string{"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{M2}'," +
+			" json_object('login', 'bob', 'clientid', 'aaaa'), strftime('%s', 'now'))"},
+			forbidOn...),
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} bbbb",
+			"{R}"},
+		want: all(completed, count("pragma avoid-delta-manifests", 1),
+			before("pragma ci-lock-fail ", "pragma avoid-delta-manifests")),
+	}, {
+		// The client already holding the lock gets no lock result, but the
+		// pragma still.
+		Case:  Case{ID: "sync.9.4.avoid-delta-manifests-same-client", Req: "SP-9.4-3"},
+		setup: forbidOn,
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"pragma ci-lock {M2} aaaa", "{R}"},
+		want: all(completed, noErrors, count("pragma avoid-delta-manifests", 2),
+			noCard("pragma ci-lock-fail")),
+	}, {
+		Case: Case{ID: "sync.9.4.avoid-delta-manifests-off", Req: "SP-9.4-3"},
+		setup: []string{"REPLACE INTO config(name, value, mtime)" +
+			" VALUES('forbid-delta-manifests', 'off', 1)"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"{R}"},
+		want: all(completed, noErrors, noCard("pragma avoid-delta-manifests")),
+	}, {
+		// A value fossil reads as neither true nor false keeps the default.
+		Case: Case{ID: "sync.9.4.avoid-delta-manifests-unreadable-setting", Req: "SP-9.4-3"},
+		setup: []string{"REPLACE INTO config(name, value, mtime)" +
+			" VALUES('forbid-delta-manifests', 'maybe', 1)"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} aaaa",
+			"{R}"},
+		want:   all(completed, noErrors, count("pragma avoid-delta-manifests", 1)),
+		fossil: defaultOff,
+	}, {
+		// A ci-lock that fails the guard, its HASH no hash, draws nothing.
+		Case:  Case{ID: "sync.9.4.avoid-delta-manifests-guard", Req: "SP-9.4-3"},
+		setup: forbidOn,
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock x aaaa",
+			"pragma ci-lock {M2}", "{R}"},
+		want: all(completed, noErrors, noCard("pragma avoid-delta-manifests")),
+	}}
+}
+
 // serverConfigCases are Section 9.3.
 func serverConfigCases() []syncServerCase {
 	return []syncServerCase{{

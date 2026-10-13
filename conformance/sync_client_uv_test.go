@@ -189,26 +189,6 @@ func clientMessageCases() []syncClientCase {
 		want:    every(stored("N1"), rounds(2)),
 		fc:      true,
 	}, {
-		// A wrong hash found before storage is a handler error, not a failed
-		// commit: the igot before it still leaves its phantom (#418).
-		Case:    Case{ID: "sync.10.1.integrity-error-prefix", Req: "SP-10.1-6"},
-		op:      opPull,
-		replies: [][]string{reply("igot {U}", "file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
-		want:    every(phantom("U"), notStored("N1"), mentions("mismatch", "wrong hash")),
-		fc:      true,
-		fossil: "fossil(1) 2.28 stores the content after the error and aborts at " +
-			"commit when verify_before_commit sees the mismatch, which rolls back the " +
-			"reply's prefix with it",
-	}, {
-		// The same reply, but a continuation condition (the igot's phantom)
-		// holds, so the second request must follow the error (§10.1, §3.7).
-		Case:    Case{ID: "sync.10.1.integrity-error-continues", Req: "SP-10.1-7"},
-		op:      opPull,
-		replies: [][]string{reply("igot {U}", "file {N1} {A1} {DTA1.size}", "{DTA1.data}")},
-		want:    sent(2, "gimme {U}"),
-		fossil: "fossil(1) 2.28 aborts the round at commit when verify_before_commit " +
-			"sees the mismatch, so it never reaches the continuation",
-	}, {
 		Case:    Case{ID: "sync.10.1.error-continues-when-due", Req: "SP-10.1-1"},
 		op:      opPull,
 		replies: [][]string{reply("igot {U}", "error x")},
@@ -225,6 +205,80 @@ func clientMessageCases() []syncClientCase {
 		op:      opPull,
 		replies: [][]string{reply("message a b", "igot {U}")},
 		want:    every(rounds(1), notStored("U")),
+		fc:      true,
+	}}
+}
+
+// clientIntegrityCases are Section 10.1's two kinds of handler-reported
+// error. One that leaves the stored artifacts consistent, here a file card
+// whose HASH is no artifact name, keeps the prefix and continues. A file or
+// cfile whose content does not match its HASH is a fail-fast path: the
+// round commits nothing, the igot before it included, and no further round
+// starts. fossil(1) stores the content and aborts at commit.
+func clientIntegrityCases() []syncClientCase {
+	wrongDelta := []string{"igot {U}", "file {N1} {A1} {DTA1.size}", "{DTA1.data}"}
+	return []syncClientCase{{
+		Case:    Case{ID: "sync.10.1.content-error-prefix", Req: "SP-10.1-6"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}", "file {Z1}0 {N1.size}", "{N1.data}")},
+		want:    every(phantom("U"), notStored("N1"), reported("malformed file line")),
+		fc:      true,
+	}, {
+		// The igot's phantom is a continuation condition (Section 3.7).
+		Case:    Case{ID: "sync.10.1.content-error-continues", Req: "SP-10.1-7"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}", "file {Z1}0 {N1.size}", "{N1.data}")},
+		want:    sent(2, "gimme {U}"),
+		fc:      true,
+	}, {
+		// DTA1 turns A1 into T, not N1: the igot's phantom goes with the
+		// round.
+		Case:    Case{ID: "sync.10.1.integrity-error-prefix", Req: "SP-10.1-8"},
+		op:      opPull,
+		replies: [][]string{reply(wrongDelta...)},
+		want: every(notStored("U"), notStored("N1"),
+			mentions("mismatch", "wrong hash", "does not match")),
+		fc: true,
+	}, {
+		// The same reply: the phantom would call for a second request, but
+		// none is sent.
+		Case:    Case{ID: "sync.10.1.integrity-error-continues", Req: "SP-10.1-8"},
+		op:      opPull,
+		replies: [][]string{reply(wrongDelta...)},
+		want:    rounds(1),
+		fc:      true,
+	}, {
+		// Full content that is not N1's, so no delta is involved.
+		Case:    Case{ID: "sync.10.1.integrity-error-full-file", Req: "SP-10.1-8"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}", "file {N1} 3", "abc")},
+		want:    every(notStored("U"), notStored("N1"), rounds(1)),
+		fc:      true,
+	}, {
+		Case: Case{ID: "sync.10.1.integrity-error-cfile", Req: "SP-10.1-8"},
+		op:   opPull,
+		replies: [][]string{reply("igot {U}", "cfile {N1} {A1} {DTA1.size} {DTA1.zsize}",
+			"{DTA1.z}", "{DTA1.pad}")},
+		want: every(notStored("U"), notStored("N1"), rounds(1)),
+		fc:   true,
+	}, {
+		// In a clone, A1, stored before the wrong delta, goes with the round,
+		// and the clone_seqno that calls for another round is not followed.
+		Case: Case{ID: "sync.10.1.integrity-error-clone", Req: "SP-10.1-8"},
+		op:   clientOp{clone: true, login: true},
+		replies: [][]string{append(cloneReply([]string{"A1"}),
+			"cfile {N1} {A1} {DTA1.size} {DTA1.zsize}", "{DTA1.z}", "{DTA1.pad}",
+			"clone_seqno 2", pushCard)},
+		want: every(rounds(1), notKept("A1"),
+			mentions("mismatch", "wrong hash", "does not match")),
+	}, {
+		// Section 9.5: avoid-delta-manifests is a hint for a pending commit;
+		// the gimme after it is answered as ever.
+		Case:    Case{ID: "sync.9.5.avoid-delta-manifests-transfer", Req: "SP-9.5-5"},
+		op:      opSync,
+		setup:   quiet,
+		replies: [][]string{reply("pragma avoid-delta-manifests", "gimme {A1}")},
+		want:    every(noFailure, sentPrefix(2, "file {A1} ")),
 		fc:      true,
 	}}
 }

@@ -5,9 +5,9 @@
 Network Working Group                                    D. R. Hipp, Ed.
 Internet-Draft                                                    Fossil
 Intended status: Standards Track                                 S. Beal
-Expires: 15 April 2027                                         libfossil
+Expires: 16 April 2027                                         libfossil
                                                               D. Shearer
-                                                         12 October 2026
+                                                         13 October 2026
 
 
   The Fossil Distributed Version Control System: Repository State and
@@ -48,12 +48,12 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 15 April 2027.
+   This Internet-Draft will expire on 16 April 2027.
 
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 1]
+Hipp, et al.              Expires 16 April 2027                 [Page 1]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -93,7 +93,7 @@ Table of Contents
      5.2.  Storage Model . . . . . . . . . . . . . . . . . . . . . .  14
      5.3.  Direct Application Procedure  . . . . . . . . . . . . . .  14
      5.4.  Propagation Algorithm . . . . . . . . . . . . . . . . . .  15
-     5.5.  Blocking Conditions . . . . . . . . . . . . . . . . . . .  16
+     5.5.  Blocking Conditions . . . . . . . . . . . . . . . . . . .  17
    6.  Branch Membership and Naming  . . . . . . . . . . . . . . . .  17
      6.1.  Branch of a check-in  . . . . . . . . . . . . . . . . . .  17
      6.2.  Branch creation . . . . . . . . . . . . . . . . . . . . .  18
@@ -102,36 +102,36 @@ Table of Contents
    7.  Leaves  . . . . . . . . . . . . . . . . . . . . . . . . . . .  20
      7.1.  Definition  . . . . . . . . . . . . . . . . . . . . . . .  20
      7.2.  Normative leaf test . . . . . . . . . . . . . . . . . . .  20
-     7.3.  Maintenance algorithm . . . . . . . . . . . . . . . . . .  20
-     7.4.  Open leaves and closed-marker semantics . . . . . . . . .  21
+     7.3.  Maintenance algorithm . . . . . . . . . . . . . . . . . .  21
+     7.4.  Open leaves and closed-marker semantics . . . . . . . . .  22
      7.5.  Leaf-set enumeration and ambiguity  . . . . . . . . . . .  22
-     7.6.  Triggers for re-evaluation  . . . . . . . . . . . . . . .  22
+     7.6.  Triggers for re-evaluation  . . . . . . . . . . . . . . .  23
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 2]
+Hipp, et al.              Expires 16 April 2027                 [Page 2]
 
 Internet-Draft           Fossil Repository State            October 2026
 
 
      7.7.  Relationship to name resolution . . . . . . . . . . . . .  23
-   8.  Symbolic Name Resolution  . . . . . . . . . . . . . . . . . .  23
-     8.1.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .  23
-     8.2.  Rule  . . . . . . . . . . . . . . . . . . . . . . . . . .  23
-     8.3.  Procedure . . . . . . . . . . . . . . . . . . . . . . . .  24
+   8.  Symbolic Name Resolution  . . . . . . . . . . . . . . . . . .  24
+     8.1.  Scope . . . . . . . . . . . . . . . . . . . . . . . . . .  24
+     8.2.  Rule  . . . . . . . . . . . . . . . . . . . . . . . . . .  24
+     8.3.  Procedure . . . . . . . . . . . . . . . . . . . . . . . .  25
      8.4.  Branch-walk rule  . . . . . . . . . . . . . . . . . . . .  27
      8.5.  Distinguishing name resolution from open-leaf
-           enumeration . . . . . . . . . . . . . . . . . . . . . . .  27
-   9.  Current Trunk and Forks . . . . . . . . . . . . . . . . . . .  27
-   10. Worked Example: Fork with a Closed Leaf . . . . . . . . . . .  29
-     10.1.  Fork at trunk, one leaf closed . . . . . . . . . . . . .  29
+           enumeration . . . . . . . . . . . . . . . . . . . . . . .  28
+   9.  Current Trunk and Forks . . . . . . . . . . . . . . . . . . .  28
+   10. Worked Example: Fork with a Closed Leaf . . . . . . . . . . .  30
+     10.1.  Fork at trunk, one leaf closed . . . . . . . . . . . . .  30
      10.2.  Edge case: a closed leaf newer than the open leaf  . . .  30
-     10.3.  Generalization . . . . . . . . . . . . . . . . . . . . .  30
-   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  30
-   12. Security Considerations . . . . . . . . . . . . . . . . . . .  30
-   13. Normative References  . . . . . . . . . . . . . . . . . . . .  31
-   Appendix A.  Changes from draft-fossil-repo-state-00  . . . . . .  32
-   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  33
+     10.3.  Generalization . . . . . . . . . . . . . . . . . . . . .  31
+   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  31
+   12. Security Considerations . . . . . . . . . . . . . . . . . . .  31
+   13. Normative References  . . . . . . . . . . . . . . . . . . . .  32
+   Appendix A.  Changes from draft-fossil-repo-state-00  . . . . . .  33
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  34
 
 1.  Introduction
 
@@ -165,7 +165,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 3]
+Hipp, et al.              Expires 16 April 2027                 [Page 3]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -221,7 +221,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 4]
+Hipp, et al.              Expires 16 April 2027                 [Page 4]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -277,7 +277,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 5]
+Hipp, et al.              Expires 16 April 2027                 [Page 5]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -333,7 +333,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 6]
+Hipp, et al.              Expires 16 April 2027                 [Page 6]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -389,7 +389,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 7]
+Hipp, et al.              Expires 16 April 2027                 [Page 7]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -445,7 +445,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 8]
+Hipp, et al.              Expires 16 April 2027                 [Page 8]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -501,7 +501,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                 [Page 9]
+Hipp, et al.              Expires 16 April 2027                 [Page 9]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -557,7 +557,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                [Page 10]
+Hipp, et al.              Expires 16 April 2027                [Page 10]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -613,7 +613,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                [Page 11]
+Hipp, et al.              Expires 16 April 2027                [Page 11]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -669,7 +669,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                [Page 12]
+Hipp, et al.              Expires 16 April 2027                [Page 12]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -725,7 +725,7 @@ Internet-Draft           Fossil Repository State            October 2026
 
 
 
-Hipp, et al.              Expires 15 April 2027                [Page 13]
+Hipp, et al.              Expires 16 April 2027                [Page 13]
 
 Internet-Draft           Fossil Repository State            October 2026
 
@@ -771,30 +771,40 @@ Internet-Draft           Fossil Repository State            October 2026
 
    When a tag is applied directly to an artifact:
 
+   1.  If an existing tagxref row for that (tag, artifact) pair already
+       carries an mtime greater than or equal to the incoming tag's
+       mtime, the write MUST be skipped.  The existing row may be a
+       directly applied row or an inherited row written by propagation
+       (srcid zero, carrying the originating tag's mtime); both are
+       compared.  Resolution between competing tag applications on the
+       same artifact is by timestamp: a strictly later mtime supersedes
 
 
 
-
-
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 14]
+Hipp, et al.              Expires 16 April 2027                [Page 14]
 
 Internet-Draft           Fossil Repository State            October 2026
 
 
-   1.  If an existing tagxref row for that (tag, artifact) pair already
-       carries an mtime greater than or equal to the incoming tag's
-       mtime, the write MUST be skipped.  Resolution between competing
-       tag applications on the same artifact is by timestamp: a strictly
-       later mtime supersedes an earlier one.  If two competing
-       applications for the same (tag, artifact) pair carry exactly
-       equal mtime, the >= skip rule makes the winner depend on write
-       order, so that equal-mtime case is implementation-defined rather
-       than crosslink-order-independent.
+       an earlier one.  If two competing applications for the same (tag,
+       artifact) pair carry exactly equal mtime, the >= skip rule makes
+       the winner depend on write order, so that equal-mtime case is
+       implementation-defined rather than crosslink-order-independent.
+
+       Because an inherited row blocks an older direct application here,
+       while a direct row blocks propagation regardless of mtime
+       (Section 5.5), the result also depends on arrival order when an
+       artifact's ancestor carries a propagating tag newer than a direct
+       tag of the same name on the artifact.  If the direct tag is
+       applied first, the artifact keeps the direct value and the
+       propagation stops there.  If the propagation reaches the artifact
+       first, the direct tag is skipped and the artifact and its
+       descendants keep the inherited value.  For a date tag this
+       changes the stored event time (Section 4.2, step 6): the direct
+       value in the first order, the D-card time in the second.  This
+       document does not define an order-independent result for this
+       case; an implementation that must reproduce Fossil applies the
+       rule above as written.
 
    2.  Otherwise the row is replaced with the raw tag type (0, 1, or 2)
        supplied by the T-card, srcid set to the artifact carrying the
@@ -824,6 +834,14 @@ Internet-Draft           Fossil Repository State            October 2026
    propagate (2) or cancel/block (0), and MUST reject any other value.
    This restriction is enforced by construction.  When propagation is
    driven from a parent artifact's full tag set, every singleton (1) tag
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 15]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    on that parent is first downgraded to cancel (0), so that a singleton
    tag on a parent blocks propagation through that artifact rather than
    propagating past it.
@@ -833,14 +851,6 @@ Internet-Draft           Fossil Repository State            October 2026
 
    1.  Initialize a priority queue of candidate artifacts ordered by
        mtime, seeded with the starting artifact.
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 15]
-
-Internet-Draft           Fossil Repository State            October 2026
-
 
    2.  For each artifact dequeued, enumerate its primary children
        (children reached via a primary, non-merge link).
@@ -880,6 +890,14 @@ Internet-Draft           Fossil Repository State            October 2026
        enqueued for further propagation, so that the walk continues
        transitively down the primary-child chain.
 
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 16]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    6.  The walk terminates when the queue is empty — that is, when no
        further primary child qualifies to receive the tag under the rule
        in step 3.
@@ -888,15 +906,6 @@ Internet-Draft           Fossil Repository State            October 2026
 
    Propagation of a * tag along a primary-child chain is halted at any
    artifact where either of the following holds:
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 16]
-
-Internet-Draft           Fossil Repository State            October 2026
-
 
    *  The artifact carries a directly-applied (srcid nonzero) same-tag
       entry — an explicit re-tag at that point in the chain overrides
@@ -937,6 +946,14 @@ Internet-Draft           Fossil Repository State            October 2026
    carries that branch's propagating branch tag and the matching
    propagating sym-<branch> symbolic tag.  Every later check-in on the
    branch therefore inherits both an active branch tag and the
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 17]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    resolvable symbolic name.  Creating a branch (including the default
    branch at repository initialization) therefore MUST create the
    sym-<branch> marker, without which the branch name would not resolve
@@ -945,14 +962,6 @@ Internet-Draft           Fossil Repository State            October 2026
    not by itself make such a check-in the resolvable tip (Section 8) or
    the open leaf (Section 7) of that branch, both of which operate on an
    active branch or symbolic tag.
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 17]
-
-Internet-Draft           Fossil Repository State            October 2026
-
 
    The default branch name is the value of the main-branch configuration
    setting, which itself defaults to trunk when the setting is absent.
@@ -993,22 +1002,20 @@ Internet-Draft           Fossil Repository State            October 2026
    included; the extra cards cancel nothing on the root.  If the parent
    itself carries a propagating sym-* tag of the new branch's own name,
    branch new emits both the propagating card and a cancel card for that
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 18]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    name; this document does not define their combined effect.  Fossil's
    name-reuse check treats a branch as open only when a leaf carries a
    propagating branch tag and no singleton closed tag, which differs
    from the open-leaf test of Section 9 when a leaf carries a propagated
    closed tag or a singleton branch tag, and commit --branch skips the
    check when forced.
-
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 18]
-
-Internet-Draft           Fossil Repository State            October 2026
-
 
 6.3.  Enumerating branches
 
@@ -1051,20 +1058,17 @@ Internet-Draft           Fossil Repository State            October 2026
    group's greatest-mtime member, with exact-mtime ties resolved as in
    Section 8, the listing open/closed status of a branch whose top
    members share an exact mtime is itself implementation-defined.  They
-   also support ordering by name or by modification time, optionally
-   reversed and optionally limited to the most-recently-modified
-   branches.
 
 
 
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 19]
+Hipp, et al.              Expires 16 April 2027                [Page 19]
 
 Internet-Draft           Fossil Repository State            October 2026
 
+
+   also support ordering by name or by modification time, optionally
+   reversed and optionally limited to the most-recently-modified
+   branches.
 
 6.4.  A note on branch current
 
@@ -1109,29 +1113,33 @@ Internet-Draft           Fossil Repository State            October 2026
    test above.  The canonical test in this section governs, and the
    narrower helper's own filtered query governs its own semantics.
 
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 20]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
 7.3.  Maintenance algorithm
 
    The leaf table MUST be kept consistent with the canonical leaf test
    through the following procedures:
 
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 20]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    *  Full rebuild: implementations MUST support recomputing the entire
-      leaf table by selecting every check-in and excluding those that
-      have a same-branch child, with no primary/non-primary filter
-      applied.  The candidate set is every check-in, not only those that
-      appear as a child of some parent-link.  A check-in with no parent
-      at all (for example the sole check-in of a new repository, or any
-      root check-in) is a leaf when it has no same-branch child, and
-      MUST be included.  This is a whole-table recomputation, so its
-      cost scales with repository size.  Implementations SHOULD reserve
-      it for explicit rebuild operations rather than routine updates.
+      leaf table.  The result MUST be the table that crosslinking every
+      check-in in a single batch produces under the scheduling rule
+      below: the candidates are the check-ins to which a branch tag of
+      any type is applied or propagated, and the parents of those check-
+      ins; each candidate is a member if it has no same-branch child,
+      with no primary/non-primary filter applied.  A check-in that is
+      not a candidate is not a member, even when it has no same-branch
+      child: the leaf table holds the candidates of this section that
+      pass the test of Section 7.2, and that test alone does not decide
+      membership.  This is a whole-table recomputation, so its cost
+      scales with repository size.  Implementations SHOULD reserve it
+      for explicit rebuild operations rather than routine updates.
 
    *  Incremental check: implementations MUST support recomputing leaf
       membership for a single check-in: if that check-in has a same-
@@ -1140,11 +1148,14 @@ Internet-Draft           Fossil Repository State            October 2026
       tolerating the case where it is already present.
 
    *  Deferred scheduling: implementations MUST schedule an incremental
-      leaf recheck for the affected check-in and for each of its direct
-      parents when a check-in is crosslinked, when a parent-link is
-      created, or when a branch tag is applied or propagated.
-      Establishing a new child can retroactively remove a parent's leaf
-      status.
+      leaf recheck for a check-in and for each of its direct parents,
+      merge parents included, when a branch tag of any type is applied
+      to that check-in, and when the propagation walk of a branch tag
+      (Section 5.4) updates or deletes that check-in's branch entry.
+      Crosslinking a check-in or creating a parent-link MUST NOT by
+      itself schedule a recheck.  A check-in that never receives a
+      branch tag is therefore rechecked only as the parent of a check-in
+      that does.
 
    *  Batch application: scheduled rechecks MUST be applied — each
       queued check-in run through the incremental check — and the
@@ -1155,11 +1166,28 @@ Internet-Draft           Fossil Repository State            October 2026
    This paragraph is informative.  Fossil's full leaf recompute (fossil
    leaves --recompute) draws its candidates from the child column of the
    parent-link table, so it omits every check-in with no parent, check-
-   ins this section requires to be included.  Fossil's incremental
-   maintenance schedules a recheck only when a branch tag is set on a
-   check-in or propagated to it, so a check-in with no parent and no
-   branch tag never enters its leaf table.  Every check-in Fossil writes
-   carries a branch tag, so the two agree on Fossil-authored history.
+   ins the full rebuild above can include; fossil rebuild does not use
+   it.  Under the scheduling rule above, a check-in with no branch tag
+   is never a leaf unless it is the parent of a check-in that receives
+   one, and a check-in keeps its verdict when a child that inherits no
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 21]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
+   branch row is linked to it in a later batch.  (An ordinary child with
+   no T card does inherit its parent's propagating branch row when it is
+   crosslinked, which schedules the child and the parent; the verdict is
+   kept only when the parent's branch row is a singleton or absent.)
+   The leaf table can therefore omit check-ins that the test of
+   Section 7.2 would accept, and can keep a check-in whose same-branch
+   child arrived later.  An ordinary commit carries no branch card and
+   inherits its branch tag along the primary parent, so a history whose
+   root check-in has no branch tag, as some older or imported histories
+   do, consists of untagged check-ins.
 
 7.4.  Open leaves and closed-marker semantics
 
@@ -1170,14 +1198,6 @@ Internet-Draft           Fossil Repository State            October 2026
    indicates an assignment, not a cancellation) on the check-in in
    question.  Implementations MUST expose both a form suitable for
    embedding as an existence-test expression, so that callers can negate
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 21]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    it to select the open subset directly, and a form that evaluates the
    same test for a single, specific check-in.
 
@@ -1199,6 +1219,20 @@ Internet-Draft           Fossil Repository State            October 2026
    above.  A leaf table that has drifted out of sync will produce
    incorrect ambiguity results even though the underlying parent-link
    data is unchanged.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 22]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
    Where an implementation reports leaf ambiguity to a user, it SHOULD
    enumerate every open leaf on the affected branch, ordered by
@@ -1222,17 +1256,10 @@ Internet-Draft           Fossil Repository State            October 2026
       evaluated, since the same-branch relationship between it and its
       parent may change as a result.
 
-   *  Crosslinking a check-in, and creating a parent-link, MUST trigger
-      a re-evaluation of the check-in and of each of its direct parents,
-      since a new child can remove a parent's leaf status and a check-in
-      with no parent and no branch tag receives no other trigger.
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 22]
-
-Internet-Draft           Fossil Repository State            October 2026
-
+   *  Crosslinking a check-in, and creating a parent-link, do not by
+      themselves trigger a re-evaluation (Section 7.3).  A check-in that
+      inherits a branch tag from its parent when it is crosslinked is
+      re-evaluated, with its parents, under the second bullet.
 
    All three cases route through the deferred-scheduling and batch-
    application procedure described above rather than performing an
@@ -1253,6 +1280,15 @@ Internet-Draft           Fossil Repository State            October 2026
    or fallback rules a name resolver applies among competing candidate
    check-ins.  See [FossilSync] for how leaf changes interact with
    synchronization.
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 23]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
 8.  Symbolic Name Resolution
 
@@ -1283,13 +1319,6 @@ Internet-Draft           Fossil Repository State            October 2026
    outright, subject only to the trailing-punctuation retry of
    Section 8.3.
 
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 23]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    Two conditions explicitly MUST NOT hold for this selection:
 
    *  Closed-ness of the candidate check-in MUST NOT filter or otherwise
@@ -1309,6 +1338,13 @@ Internet-Draft           Fossil Repository State            October 2026
    semantics and MUST yield the same result.  The fast path is an
    optimization only; it has no observable effect on which check-in is
    selected.
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 24]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
    If two or more check-ins carrying the same active sym-tag share an
    exactly equal, maximal event.mtime, the tie is broken by underlying
@@ -1339,13 +1375,6 @@ Internet-Draft           Fossil Repository State            October 2026
        *  *current* resolves to the RID of the open local checkout, and
           is available only when a local checkout is open.
 
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 24]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
        *  *prev* / *previous* resolves to the open checkout's primary
           parent (the parent link marked primary).
 
@@ -1355,10 +1384,27 @@ Internet-Draft           Fossil Repository State            October 2026
           underlying query-engine row order selects one and the result
           is implementation-defined.
 
-       *  *ckout* (only when the requested type is "ci" or a checkout-
-          inclusive type) resolves to the sentinel checkout RID rather
-          than an ordinary artifact RID, and marks that a local checkout
-          is in use.
+       *  *ckout* is a keyword only when the requested type is "ci+" and
+          a local checkout is open.  It then resolves to the sentinel
+          checkout RID rather than an ordinary artifact RID, and marks
+          that a local checkout is in use; a caller that needs the
+          check-in itself maps the sentinel to the checkout's RID.  The
+          type "ci+" otherwise behaves as "ci".  For any other requested
+          type, including "ci" and an unconstrained request, or when no
+          checkout is open, "ckout" is not a keyword and is resolved by
+          the remaining forms of this procedure like any other name.
+          The "ci+" semantics apply only to the name as given: the
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 25]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
+          trailing- punctuation retry below and every form that resolves
+          a contained name (root:, start:, merge-in:) resolve that name
+          under "ci", where "ckout" is an ordinary name.
 
    4.  *root:*BR -- resolves BR via this same procedure, then rewrites
        the result to the parent-branch check-in from which BR originally
@@ -1394,14 +1440,6 @@ Internet-Draft           Fossil Repository State            October 2026
        with an exact-time tie resolved by the underlying query-engine
        row order and therefore implementation-defined.
 
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 25]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    For portable resolution, a timestamp MUST use the absolute form YYYY-
    MM-DDTHH:MM:SS[.fraction]Z.  Fossil also admits compatibility forms:
    eight, twelve, or fourteen decimal digits, each optionally suffixed
@@ -1412,6 +1450,14 @@ Internet-Draft           Fossil Repository State            October 2026
    after compact-form expansion; a bare date-time requires the
    hyphenated prefix; and NAME*:*TIMESTAMP accepts either form.  An
    omitted Z is interpreted through Fossil's configured display-time
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 26]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    mode: as UTC when UTC display is selected, otherwise as local time
    converted to UTC.  Implementations that support broader SQLite-
    specific syntax MUST NOT treat it as portable across conforming
@@ -1443,21 +1489,6 @@ Internet-Draft           Fossil Repository State            October 2026
    branch-type request yields the branch's first check-in rather than
    the check-in the tag most recently pointed to.
 
-
-
-
-
-
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 26]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
 8.4.  Branch-walk rule
 
    The root:/start:/merge-in: forms, and the branch-type post-processing
@@ -1473,6 +1504,15 @@ Internet-Draft           Fossil Repository State            October 2026
    above: it is a parentage traversal, not a repeat of tag-and-mtime
    selection, though its starting point is ordinarily produced by that
    selection.
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 27]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
 8.5.  Distinguishing name resolution from open-leaf enumeration
 
@@ -1505,15 +1545,6 @@ Internet-Draft           Fossil Repository State            October 2026
    to any branch name, including the default branch, and does not treat
    the default branch as a special case.
 
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 27]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    Current-trunk therefore has a repository-local input that the other
    views do not.  The branch name to resolve comes from the main-branch
    configuration setting (Section 6), which is a local value: it is not
@@ -1524,6 +1555,20 @@ Internet-Draft           Fossil Repository State            October 2026
    different current-trunk check-ins.  Current-trunk is thus not a pure
    function of the artifact set alone; it is a function of the artifact
    set together with the local main-branch setting.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 28]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
    A branch MAY have more than one leaf check-in.  A branch with more
    than one leaf is, for the purposes of this specification, forked.
@@ -1562,14 +1607,6 @@ Internet-Draft           Fossil Repository State            October 2026
    than an aggregate over the branch's leaves.  It is obtained by
    following, from the branch's representative check-in, at most one
    parent-child (plink) edge to a child check-in, and reading that
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 28]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    child's active branch-tag value.  A branch therefore has at most one
    merge target under this procedure, never a set of targets, regardless
    of how many leaves the branch itself has.  If the representative
@@ -1580,6 +1617,14 @@ Internet-Draft           Fossil Repository State            October 2026
    specification therefore records the multi-child case as
    implementation-defined rather than mandating a cross-implementation
    rule.
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 29]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
    When two or more candidate check-ins for a branch (or for trunk
    specifically) share the identical maximum mtime, this specification
@@ -1618,14 +1663,6 @@ Internet-Draft           Fossil Repository State            October 2026
    ness changes leaf enumeration but does not affect branch-name
    resolution or update targeting.
 
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 29]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
 10.2.  Edge case: a closed leaf newer than the open leaf
 
    In the second repository state, trunk again forks, but now the
@@ -1637,6 +1674,14 @@ Internet-Draft           Fossil Repository State            October 2026
    whatis trunk reports artifact
    ee3a7eed71fb15bd4f468bfa71b8b79a47ad97678a2a226dadaaa23904dafc21,
    even though the default open-leaf view omitted that check-in. update
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 30]
+
+Internet-Draft           Fossil Repository State            October 2026
+
+
    trunk likewise moves the checkout from
    b05cbea82bf9e747754eae8cc0eb7c070f87a1f1069c429a990f6ecc92e24580 to
    ee3a7eed71fb15bd4f468bfa71b8b79a47ad97678a2a226dadaaa23904dafc21.  In
@@ -1675,13 +1720,6 @@ Internet-Draft           Fossil Repository State            October 2026
    therefore only as trustworthy as the set of artifacts it has
    admitted.
 
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 30]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    Implementations MUST treat crosslink state as derived data with no
    independent trust basis.  A recipient MUST NOT grant an artifact's
    tag or parent claims any weight beyond what the admission procedure
@@ -1691,6 +1729,14 @@ Internet-Draft           Fossil Repository State            October 2026
    would be rejected under those admission rules (for example, malformed
    structure, failed integrity checks, or provenance the recipient does
    not accept).
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 31]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
    Because the trust boundary sits entirely at artifact admission, this
    document defines no additional authentication, integrity, or
@@ -1728,16 +1774,6 @@ Internet-Draft           Fossil Repository State            October 2026
               01, 2026, <https://datatracker.ietf.org/doc/html/draft-
               fossil-sync-protocol-01>.
 
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 31]
-
-Internet-Draft           Fossil Repository State            October 2026
-
-
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
               DOI 10.17487/RFC2119, March 1997,
@@ -1746,6 +1782,17 @@ Internet-Draft           Fossil Repository State            October 2026
    [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
               2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 32]
+
+Internet-Draft           Fossil Repository State            October 2026
+
 
 Appendix A.  Changes from draft-fossil-repo-state-00
 
@@ -1765,6 +1812,14 @@ Appendix A.  Changes from draft-fossil-repo-state-00
       target's descendants had inherited, in agreement with Section 5.3.
       Normative change.
 
+   *  Section 5.3, step 1: the skip test compares the existing row
+      whether it was applied directly or inherited by propagation, and
+      the text records that, together with the unconditional block of
+      Section 5.5, the result depends on arrival order when an
+      ancestor's propagating tag is newer than a direct tag of the same
+      name, which for a date tag changes the stored event time.
+      Normative change.
+
    *  Section 5.4, step 3: a child with no same-tag entry qualifies only
       for a propagate-type walk.  A cancel-type walk does not qualify
       there and does not continue past that child.  Normative change.
@@ -1776,28 +1831,48 @@ Appendix A.  Changes from draft-fossil-repo-state-00
       Fossil's name-reuse check differs from the open-leaf test of
       Section 9.  Informative note.
 
-   *  Section 7.3: deferred scheduling now also schedules a leaf recheck
-      when a check-in is crosslinked, so every check-in, including a
-      parentless one with no branch tag, is checked at least once;
-      Section 7.6 lists the same triggers.  The terminology entry for a
-      singleton tag and Section 5.1 now also say that applying a
-      singleton cancels the inherited tag on descendants.  Normative
-      change.  A new paragraph records that Fossil's full recompute
-      omits parentless check-ins and that its incremental maintenance
-      runs only on branch-tag events.  Informative note.
 
 
 
 
-Hipp, et al.              Expires 15 April 2027                [Page 32]
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 16 April 2027                [Page 33]
 
 Internet-Draft           Fossil Repository State            October 2026
 
+
+   *  Section 7.3: the full rebuild is defined as the leaf table that
+      crosslinking every check-in in one batch produces, and deferred
+      scheduling rechecks a check-in and its parents only when a branch
+      tag is applied to it or propagated to it; crosslinking and parent-
+      link creation schedule nothing, so a check-in that never receives
+      a branch tag is checked only as the parent of one that does.
+      Section 7.6 says the same.  The terminology entry for a singleton
+      tag and Section 5.1 now also say that applying a singleton cancels
+      the inherited tag on descendants.  Normative change.  A new
+      paragraph records that untagged check-ins are absent from the leaf
+      table and that a check-in's verdict is not revisited when a child
+      that inherits no branch row arrives later.  Informative note.
 
    *  Section 8.3: the trailing-punctuation retry now names the exact
       set of characters, requires a minimum name length, and strips one
       or two trailing characters but never three or more.  Normative
       change.
+
+   *  Section 8.3: the ckout keyword is recognized only for the request
+      type "ci+" with an open checkout, and only for the name as given,
+      since the retry and the contained-name forms resolve under "ci";
+      under any other request type the name is resolved like any other.
+      Normative change.
 
 Authors' Addresses
 
@@ -1826,23 +1901,4 @@ Authors' Addresses
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Hipp, et al.              Expires 15 April 2027                [Page 33]
+Hipp, et al.              Expires 16 April 2027                [Page 34]

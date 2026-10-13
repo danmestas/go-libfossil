@@ -114,6 +114,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to ignore the card.
   The `sync.5.2.client-clone-seqno` case passes and is no longer a deviation
   (tracked in #424).
+- The conformance suite is re-pinned to the -01 drafts as zit check-in
+  `5a1b741b25d8` holds them, with five more errata applied: repo-state §5.3
+  (an inherited row blocks an older direct tag, so the result follows
+  arrival order), §7.3 (leaves are rechecked only on branch-tag events),
+  §8.3 (`ckout` is a keyword only for `ci+` and only as the whole name),
+  sync-protocol §9.4/§9.5 (`pragma avoid-delta-manifests` answers ci-lock)
+  and §10.1 (a file whose content does not match its hash fails the round).
+  zit now keeps each -01 text under the draft's -00 file name; the copies
+  keep their -01 names and `conformance/rfcs/README.md` records the zit path
+  and check-in. The new errata are pinned. The requirement tables are re-read
+  against every changed hunk: RS-5.3-1, RS-7.3-1, RS-7.3-3, RS-8.3-4,
+  SP-9.4-1, SP-10.1-6 and SP-10.1-7 are reworded, and RS-5.3-5, SP-9.4-3,
+  SP-9.5-5 and SP-10.1-8 are new. The §7.3 and §8.3 cases that were marked
+  as deviations, because go-libfossil already followed fossil, now pass as
+  written, and new cases cover arrival order for a date tag, an untagged
+  chain, one-batch leaf derivation and a merge parent's recheck. One
+  non-conformance remains: the leaf table is recomputed per crosslink batch,
+  so a parent whose untagged child arrives in a later batch loses the verdict
+  §7.3 keeps (`repostate.7.3.recheck-untagged-child`, tracked in #426).
+- The sync server answers every `pragma ci-lock` that passes its argument
+  guard with `pragma avoid-delta-manifests` while the repository's
+  `forbid-delta-manifests` setting is on, after any `ci-lock-fail`
+  (sync-protocol-01 §9.4). The setting is read as fossil's `db_get_boolean`
+  reads it, defaulting to on as the draft and fossil 2.29 do; fossil 2.28's
+  server defaults it to off, so against 2.28 the cases that rely on the
+  default record that difference. The client recognizes the pragma and,
+  as §9.5 now says, changes nothing about its transfer; go-libfossil commits
+  without an autosync, so no commit is pending when it arrives.
+- A file or cfile whose content does not match its hash, found when it
+  arrives or later in the reply, now fails the round on the client
+  (sync-protocol-01 §10.1): nothing the reply carried is committed, the
+  igots and files before it included, and no further round starts. `Sync`
+  and `Clone` return the error as before. Content errors that leave the
+  stored artifacts consistent, such as a malformed file card or an
+  unversioned file with a wrong hash, still commit the prefix and continue.
+  The `sync.10.1.integrity-error-*` cases now check that, against fossil
+  2.28 as well, and the gap tracked in #421 is gone with the text it rested
+  on.
 - The conformance suite now checks the -01 drafts of the artifact-format,
   repo-state and sync-protocol specifications (the delta format stays on -00;
   there is no -01). The -00 errata are folded into -01 and no longer pinned;

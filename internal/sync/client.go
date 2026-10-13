@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -1002,6 +1003,13 @@ func storeReceived(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, pay
 		if !hash.IsValidHash(deltaSrc) {
 			return 0, fmt.Errorf("sync: invalid delta source UUID format: %s", deltaSrc)
 		}
+		// Section 7.7 (SP-7.7-4): a delta whose basis is held is applied and
+		// checked against HASH before anything is stored, for the client,
+		// the server and a clone alike. fossil's commit hook catches a cfile
+		// delta, and a clone's, that xfer_accept_file does not pre-verify.
+		if !deltaMatches(r.DB(), uuid, deltaSrc, payload) {
+			return 0, fmt.Errorf("received file %s: %w", uuid, errHashMismatch)
+		}
 		return 0, storeDeltaContent(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
 			linker)
 	}
@@ -1010,7 +1018,8 @@ func storeReceived(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, pay
 }
 
 // storeDeltaContent persists a received delta exactly as given — never
-// expanded, never verified at receive time — linked to its source via a
+// expanded here; storeReceived has already verified it against its HASH
+// when the basis is held — linked to its source via a
 // create-phantom-if-missing lookup (mirrors Fossil's rid_from_uuid(&src,
 // 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
 // unconditionally, matching content_put_ex's REPLACE INTO delta, whether
@@ -1095,6 +1104,35 @@ func hashMatches(uuid string, data []byte) bool {
 		return hash.SHA3(data) == uuid
 	}
 	return hash.SHA1(data) == uuid
+}
+
+// deltaMatches reports whether a received delta, applied to its basis,
+// gives content named uuid. Section 7.7 verifies a reconstructable non-clone
+// file before storage, as xfer_accept_file applies the delta to an
+// available source and checks the result. A basis q cannot expand leaves the
+// delta unverified, stored dangling, as fossil stores it. A delta that does
+// not apply is a mismatch: fossil verifies what blob_delta_apply left, which
+// is not the artifact either.
+func deltaMatches(q db.Querier, uuid, deltaSrc string, payload []byte) bool {
+	if q == nil {
+		panic("sync.deltaMatches: q must not be nil")
+	}
+	if deltaSrc == "" {
+		panic("sync.deltaMatches: deltaSrc must not be empty")
+	}
+	srcRid, ok := content.AvailableByUUID(q, deltaSrc)
+	if !ok {
+		return true
+	}
+	src, err := content.Expand(q, srcRid)
+	if err != nil {
+		return true
+	}
+	target, err := delta.Apply(src, payload)
+	if err != nil {
+		return false
+	}
+	return hashMatches(uuid, target)
 }
 
 // storeResolvedContent verifies that fullContent hashes to uuid and stores

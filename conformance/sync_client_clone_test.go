@@ -49,6 +49,16 @@ func clientCloneCases() []syncClientCase {
 		want:    every(atLeast(2), notSent(1, "reqconfig "), notSent(1, "pragma uv-hash ")),
 		fc:      true,
 	}, {
+		// SP-7.7-4 holds in a clone too: the cfile delta DTA1 against the
+		// A1 just received does not give N1, so the clone fails rather than
+		// keep an artifact under a name it does not have.
+		Case: Case{ID: "sync.7.7.clone-delta-wrong-hash", Req: "SP-7.7-4"},
+		op:   clientOp{clone: true, login: true},
+		replies: [][]string{append(cloneReply([]string{"A1"}),
+			"cfile {N1} {A1} {DTA1.size} {DTA1.zsize}", "{DTA1.z}", "{DTA1.pad}",
+			"clone_seqno 0", pushCard)},
+		want: mentions("mismatch", "wrong hash", "does not match"),
+	}, {
 		Case: Case{ID: "sync.8.2.clone-advancing-cursor", Req: "SP-8.2-2"},
 		op:   opClone,
 		replies: [][]string{cloneReply([]string{"N1"}, "clone_seqno 2", pushCard),

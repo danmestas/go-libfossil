@@ -199,6 +199,18 @@ func serverCardFailureCases() []syncServerCase {
 			"wrong hash on received artifact: {U}"),
 			noCard("file {A1}"), noCard("gimme {U2}")),
 	}, {
+		// SP-7.7-4: a cfile delta is stored under its HASH only if it gives
+		// HASH. fossil catches it in its commit hook; go-libfossil refuses
+		// the card with the file's error.
+		Case:    Case{ID: "sync.7.7.server-cfile-delta-wrong-hash", Req: "SP-7.7-4"},
+		notSent: wrongHashAborts,
+		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}",
+			"cfile {U} {A1} {DTA1.size} {DTA1.zsize}", "{DTA1.z}", "{DTA1.pad}",
+			"igot {U2}", "{R}"},
+		want: all(completed, onlyError("wrong+hash+on+received+artifact:+{U}",
+			"wrong hash on received artifact: {U}"),
+			noCard("file {A1}"), noCard("gimme {U2}"), held("U", 0)),
+	}, {
 		// A HASH that is no artifact name fails the handler's validation.
 		Case: Case{ID: "sync.5.2.file-bad-name", Req: "SP-5.2-7"},
 		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}", "file {Z1}0 {N1.size}",

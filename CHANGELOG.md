@@ -103,6 +103,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (sha1), treats a negative stored value as unset (db.c) and leaves a value
   above 4 undefined; -01 is followed here, so every stored value outside 0
   through 4 is an error.
+- The server sends a clone's reply (the unversioned catalog under uv-sync,
+  the snapshot cookie, the cfile batch, `clone_seqno` and the push card) at
+  the clone card, and the cluster igots of `pragma req-clusters` at the
+  pragma, as fossil's `page_xfer` does. A later reset, from a bad command or
+  a refused push, now discards them, so the reply is the error alone
+  (sync-protocol-01 Section 10.1, #389). They were sent after the card loop
+  and survived the reset. The clone snapshot cookie is read before the card
+  loop, since fossil's client sends it after the clone card; a
+  `pragma send-private` must now precede the clone card to include private
+  content, as in fossil.
+
 - `pragma ci-lock` and `pragma ci-unlock` are applied for any requester, with
   no Write-capability test, as sync-protocol-01 Section 9.4 and fossil's
   `page_xfer` do (#392). The lock table stays bounded without that gate: each

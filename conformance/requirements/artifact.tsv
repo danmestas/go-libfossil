@@ -109,7 +109,7 @@ AF-6.3-3	6.3.3	A delta manifest's R value covers the merged file set, not its ow
 AF-6.3-4	6.3.4	A writer emits the R card as R, a space, 32 lowercase digits and LF.
 AF-6.3-5	6.3.4	At commit time the R card is checked byte for byte against the lowercase digest recomputed from the checkout.
 AF-7.1-1	7.1	New content is named SHA-1 under sha1 and auto, and SHA3-256 under sha3, sha3-only and shun-sha1.
-AF-7.1-2	7.1	Policy value strings match case-sensitively and exactly; an unrecognized value is a fatal error.	The cases feed the stored setting, which go-libfossil keeps as the ordinal 0 through 4: a policy name in any case, an out-of-range or negative ordinal and an empty value each fail the store, and Repo.SetConfig refuses to write them. Matching a name case-sensitively is not observable (no surface takes a value string; fossil's is the hash-policy command). Divergence from fossil: 2.28 reads a non-integer as 0 (sha1) and treats a negative stored value (db.c:2773) as unset to be re-derived under 7.2, and its behavior above 4 is undefined; -01 is followed here, so any stored value outside 0-4 is fatal.
+AF-7.1-2	7.1	Policy value strings match case-sensitively and exactly; an unrecognized value is a fatal error.
 AF-7.2-1	7.2	With no policy set, a repository holding a SHA3 name or no SHA-1 name, including an empty one, defaults to sha3, and otherwise to auto.
 AF-7.4-1	7.4	Under auto, storing an artifact under a name longer than 40 digits promotes the repository to sha3 and persists the change.
 AF-7.5-1	7.5	Under sha1, auto and sha3, content already stored under the other algorithm's name keeps that name and is not stored again.

@@ -128,6 +128,30 @@ func policyFor(q db.Querier) (policy int, fromRow bool, err error) {
 	return db.HashPolicyAuto, false, nil
 }
 
+// policyNames are the policy value strings of artifact-format-01 Table 7,
+// indexed by ordinal, as fossil's azPolicy (hname.c) lists them.
+var policyNames = [...]string{
+	db.HashPolicySHA1:     "sha1",
+	db.HashPolicyAuto:     "auto",
+	db.HashPolicySHA3:     "sha3",
+	db.HashPolicySHA3Only: "sha3-only",
+	db.HashPolicyShunSHA1: "shun-sha1",
+}
+
+// PolicyByName returns the ordinal of the policy named name. The match is
+// case-sensitive and exact (artifact-format-01 7.1, AF-7.1-2), as fossil's
+// hash-policy command compares with fossil_strcmp: "SHA3", " sha3" and
+// "2" are all unrecognized, and an unrecognized name is an error.
+func PolicyByName(name string) (int, error) {
+	for ordinal, known := range policyNames {
+		if name == known {
+			return ordinal, nil
+		}
+	}
+	return 0, fmt.Errorf("unknown hash policy %q: should be one of: "+
+		"sha1 auto sha3 sha3-only shun-sha1", name)
+}
+
 // PromoteFor is called before an artifact named uuid enters the repo. Under
 // the auto policy a SHA3 name promotes the repo to sha3, and the promotion is
 // written to the hash-policy setting (7.4) so fossil opening the repo sees

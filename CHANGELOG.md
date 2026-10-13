@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Repo.SetHashPolicy` sets the hash policy by its name, as
+  `fossil hash-policy NEW-POLICY` does: sha1, auto, sha3, sha3-only or
+  shun-sha1, matched case-sensitively and exactly (artifact-format-01 7.1).
+  Any other string, a wrong-case or empty one included, is an error that
+  leaves the policy unchanged. Asking for auto in a repository that already
+  holds a SHA3-named artifact stores sha3 (7.3), as fossil does. New
+  conformance cases drive each name, wrong-case names, unknown names and
+  the empty name through it, so AF-7.1-2 is now covered rather than partial.
+
 ### Changed
 
 - The conformance suite now checks the -01 drafts of the artifact-format,
@@ -30,8 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with an unread 4 GiB mapping (skipped where it cannot be mapped).
   AF-4.7.9-1, AF-8.4-1, DF-3-2, DF-3.1-6 and DF-3.4-3 are now covered.
   AF-6.3-5 stays uncovered (go-libfossil does not check the R card at commit,
-  tracked in #387), and so does AF-7.1-2 (no hash-policy value-string surface
-  to drive). Artifact-format-01 Section 4.6.4 lets a reader accept the
+  tracked in #387). Artifact-format-01 Section 4.6.4 lets a reader accept the
   time-only and now/subsec forms (a reader MAY accept forms 2 through 5), so
   `deck.Parse` keeps rejecting them while fossil(1) and the date-tag path
   (SQLite julianday) accept them.

@@ -85,3 +85,15 @@ func (r *Repo) SetConfig(key, value string) error {
 	}
 	return nil
 }
+
+// SetHashPolicy sets the repository's hash policy by name, as
+// `fossil hash-policy NEW-POLICY` does. name must be exactly one of sha1,
+// auto, sha3, sha3-only or shun-sha1: the match is case-sensitive, and any
+// other string is an error that leaves the policy unchanged. Asking for auto
+// in a repository that already holds a SHA3-named artifact sets sha3.
+func (r *Repo) SetHashPolicy(name string) error {
+	if err := r.inner.SetHashPolicy(name); err != nil {
+		return fmt.Errorf("libfossil: set hash policy: %w", err)
+	}
+	return nil
+}

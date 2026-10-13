@@ -211,6 +211,17 @@ func serverCardFailureCases() []syncServerCase {
 			"wrong hash on received artifact: {U}"),
 			noCard("file {A1}"), noCard("gimme {U2}"), held("U", 0)),
 	}, {
+		// SP-7.7-4: a delta whose basis arrives later in the same request
+		// has its bytes available in that pass, so its mismatch must not be
+		// kept either. DTS turns S into T, not N1. When #412 is fixed, tighten
+		// want to also require onlyError("wrong+hash+on+received+artifact:+{N1}",
+		// ...) so the gap cannot close on a weaker answer such as a silent drop.
+		Case:    Case{ID: "sync.7.7.server-late-basis-wrong-hash", Req: "SP-7.7-4"},
+		notSent: wrongHashAborts,
+		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",
+			"file {S} {S.size}", "{S.data}", "{R}"},
+		want: all(completed, held("N1", 0)),
+	}, {
 		// A HASH that is no artifact name fails the handler's validation.
 		Case: Case{ID: "sync.5.2.file-bad-name", Req: "SP-5.2-7"},
 		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}", "file {Z1}0 {N1.size}",

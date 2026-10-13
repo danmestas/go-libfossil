@@ -59,6 +59,16 @@ func clientCloneCases() []syncClientCase {
 			"clone_seqno 0", pushCard)},
 		want: mentions("mismatch", "wrong hash", "does not match"),
 	}, {
+		// And for a delta whose basis arrives later in the same reply: DTS
+		// against S, which comes after it, does not give N1.
+		Case: Case{ID: "sync.7.7.clone-late-basis-wrong-hash", Req: "SP-7.7-4"},
+		op:   clientOp{clone: true, login: true},
+		replies: [][]string{cloneReply(nil,
+			"cfile {N1} {S} {DTS.size} {DTS.zsize}", "{DTS.z}", "{DTS.pad}",
+			"cfile {S} {S.size} {S.zsize}", "{S.z}", "{S.pad}",
+			"clone_seqno 0", pushCard)},
+		want: every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
+	}, {
 		Case: Case{ID: "sync.8.2.clone-advancing-cursor", Req: "SP-8.2-2"},
 		op:   opClone,
 		replies: [][]string{cloneReply([]string{"N1"}, "clone_seqno 2", pushCard),

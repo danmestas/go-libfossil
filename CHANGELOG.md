@@ -130,7 +130,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong-hash error. A basis not held still leaves the delta stored dangling,
   as fossil does. fossil checks a `file` delta on receipt and a `cfile` or
   clone delta in its commit hook; this checks them all on receipt. Tracked
-  in #405.
+  in #405. A delta stored dangling whose basis then arrives in the same
+  reply or request is still not rechecked, where fossil's commit hook
+  catches it and rolls the round back: tracked in #412 with the gap cases
+  `sync.7.7.late-basis-wrong-hash`, `sync.7.7.clone-late-basis-wrong-hash`
+  and `sync.7.7.server-late-basis-wrong-hash`.
 - `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
   target as fossil's `update` does when no version is named: the newest open
   leaf descended from the checkout (every descendant leaf when all are

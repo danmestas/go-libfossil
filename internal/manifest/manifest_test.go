@@ -1644,3 +1644,59 @@ func TestCrosslinkReversedDeltaOrderStillPropagatesAndLeafs(t *testing.T) {
 		t.Errorf("leaf=%v, want [%d] (v3 only)", leafRids, v3)
 	}
 }
+
+// A parent that is a delta-of-delta (readable since -01 4.7.3, e.g. received
+// by sync) must not make the writer emit one: B may only name a baseline.
+func TestCheckinOnDeltaOfDeltaParentEmitsNoDeltaBaseline(t *testing.T) {
+	r := setupTestRepo(t)
+	_, baseUUID, err := Checkin(r, CheckinOpts{
+		Files: []File{
+			{Name: "a.txt", Content: []byte("aaa")},
+			{Name: "b.txt", Content: []byte("bbb")},
+		},
+		Comment: "baseline", User: "testuser",
+		Time: time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin baseline: %v", err)
+	}
+	_, aUUID, err := blob.Store(r.DB(), []byte("aaa-2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := func(d *deck.Deck) (libfossil.FslID, string) {
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatalf("Marshal: %v", err)
+		}
+		rid, uuid, err := blob.Store(r.DB(), data)
+		if err != nil {
+			t.Fatalf("Store: %v", err)
+		}
+		return rid, uuid
+	}
+	when := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
+	_, firstUUID := store(&deck.Deck{Type: deck.Checkin, B: baseUUID, C: "first",
+		D: when, U: deck.User("testuser"), F: []deck.FileCard{{Name: "a.txt", UUID: aUUID}}})
+	secondRid, _ := store(&deck.Deck{Type: deck.Checkin, B: firstUUID, C: "second",
+		D: when.Add(time.Hour), U: deck.User("testuser")})
+
+	rid, _, err := Checkin(r, CheckinOpts{
+		Files: []File{
+			{Name: "a.txt", Content: []byte("aaa-2")},
+			{Name: "b.txt", Content: []byte("bbb")},
+		},
+		Comment: "third", User: "testuser", Parent: secondRid, Delta: true,
+		Time: when.Add(2 * time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("Checkin on delta-of-delta parent: %v", err)
+	}
+	d, err := GetManifest(r, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.B == firstUUID {
+		t.Fatalf("new check-in B = %s names a delta manifest", d.B)
+	}
+}

@@ -116,17 +116,32 @@ func deltaManifestCases() []apiCase {
 				}
 				return want("file set", set, []string{"a.txt=" + h4, "d.txt=" + h5})
 			}},
+		// Section 8.2: the named delta's delete marker removes b.txt from
+		// the merged set; it must not surface as a hashless entry.
+		{Case{ID: "artifact.4.7.3.delta-of-delta-baseline-delete", Req: "AF-4.7.3-1"},
+			func(t *testing.T) error {
+				r := newPolicyRepo(t, "2")
+				_, baseline := storeArtifact(t, r, deltaBaseline)
+				_, first := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+
+					"\nF b.txt\nU u\n")
+				rid, _ := storeArtifact(t, r, "B "+first+"\nC second\nD "+ts+
+					"\nF d.txt "+h5+"\nU u\n")
+				set, err := fileSet(r, rid)
+				if err != nil {
+					return err
+				}
+				return want("file set", set, []string{"d.txt=" + h5})
+			}},
 	}
 }
 
-// Crosslink refuses a B card whose target is not a baseline manifest the same
-// way ListFiles does: the delta gets no mlink rows, where a valid baseline
-// gives it the baseline's files. The files exist, so a refusal cannot be
-// mistaken for a check-in deferred on a missing blob.
-// draft-fossil-artifact-format-01 Section 4.7.3 has a reader accept a delta
-// manifest as the target; the "delta manifest" row records today's refusal
-// and changes when the artifact.4.7.3.delta-of-delta-one-level gap is fixed.
-func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
+// Crosslink refuses a B card whose target is not a check-in the same way
+// ListFiles does: the delta gets no mlink rows, where a valid baseline gives it
+// the baseline's files. The files exist, so a refusal cannot be mistaken for a
+// check-in deferred on a missing blob. draft-fossil-artifact-format-01 Section
+// 4.7.3 has a reader accept a delta manifest as the target, resolved one level,
+// so only a control artifact is refused.
+func TestCrosslinkBaselineMustBeCheckin(t *testing.T) {
 	tests := []struct {
 		name     string
 		baseline func(t *testing.T, r *repo.Repo, file string) string
@@ -140,7 +155,7 @@ func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
 			_, baseline := storeArtifact(t, r, "C baseline\nD "+ts+"\nF a.txt "+file+"\nU u\n")
 			_, uuid := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+"\nU u\n")
 			return uuid
-		}, false},
+		}, true},
 		{"control artifact", func(t *testing.T, r *repo.Repo, _ string) string {
 			_, uuid := storeArtifact(t, r, baseControl)
 			return uuid

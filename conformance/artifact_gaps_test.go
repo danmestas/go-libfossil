@@ -4,12 +4,7 @@ import "testing"
 
 // artifactGaps marks the artifact cases go-libfossil is known to fail, by
 // case ID, grouped by the code at fault, each with the issue tracking its fix.
-var artifactGaps = map[string]string{
-	// manifest.ListFiles refuses a baseline that is itself a delta manifest
-	// (#275); Section 4.7.3 of the -01 draft has a reader accept it and
-	// resolve the file set one level, as fossil(1) does.
-	"artifact.4.7.3.delta-of-delta-one-level": "#371",
-}
+var artifactGaps = map[string]string{}
 
 // TestArtifactGapKeys checks that every marked case exists, and that every
 // loss the fuzz test forgives is still a marked gap.

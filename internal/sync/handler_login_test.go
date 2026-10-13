@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/auth"
@@ -56,17 +57,25 @@ func loginRepo(t *testing.T) (*repo.Repo, string) {
 	return r, pc
 }
 
-// requireLoginRefused asserts that resp is the whole of a refused login: the
-// one error card fossil sends (src/xfer.c page_xfer resets the reply and
-// emits "error login\sfailed"), and nothing processed after it.
+// requireLoginRefused asserts that resp is the whole of a refused login that
+// leads its request: the one error card fossil sends (src/xfer.c page_xfer
+// resets the reply, emits "error login\sfailed" and breaks), nothing
+// processed after it, and the closing comment counting that error (§6.4).
 func requireLoginRefused(t *testing.T, resp *xfer.Message, want string) {
 	t.Helper()
-	if len(resp.Cards) != 1 {
-		t.Fatalf("reply has %d cards, want only the error: %#v", len(resp.Cards), resp.Cards)
+	if len(resp.Cards) != 2 {
+		t.Fatalf("reply has %d cards, want the error and the comment: %#v",
+			len(resp.Cards), resp.Cards)
 	}
 	ec, ok := resp.Cards[0].(*xfer.ErrorCard)
 	if !ok || ec.Message != want {
 		t.Fatalf("reply = %#v, want error %q", resp.Cards[0], want)
+	}
+	cc, ok := resp.Cards[1].(*xfer.CommentCard)
+	if !ok || !strings.HasPrefix(cc.Text, "timestamp ") ||
+		!strings.HasSuffix(cc.Text, " errors 1") {
+		t.Fatalf("reply ends with %#v, want the timestamp comment with errors 1",
+			resp.Cards[1])
 	}
 }
 
@@ -110,8 +119,8 @@ func TestHandleUndecodedLoginRefused(t *testing.T) {
 	requireLoginRefused(t, resp, "login failed")
 }
 
-// A failed login ends the exchange: fossil does not carry on as nobody.
-func TestHandleFailedLoginIsFatal(t *testing.T) {
+// A failed login ends card processing: fossil does not carry on as nobody.
+func TestHandleFailedLoginEndsCards(t *testing.T) {
 	r, pc := loginRepo(t)
 	storeTestBlob(t, r, []byte("visible to nobody"))
 	req := signedRequest(t, "alice", "wrong", pc,
@@ -208,4 +217,38 @@ func TestHandleEmptyPasswordLoginRefused(t *testing.T) {
 		t.Fatalf("HandleSync: %v", err)
 	}
 	requireLoginRefused(t, resp, "login failed")
+}
+
+// A pull ahead of a refused login keeps its effect: page_xfer refuses the
+// login in card order and breaks, and the pull's igot inventory still
+// follows the error, as do the closing comment (§6.4).
+func TestHandleLoginRefusedAfterPull(t *testing.T) {
+	r, pc := loginRepo(t)
+	uuid := storeTestBlob(t, r, []byte("visible to nobody"))
+	login := computeLogin("alice", "wrong", pc, []byte("anything"))
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PullCard{ServerCode: "sc", ProjectCode: pc},
+		login,
+		&xfer.GimmeCard{UUID: uuid},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "login failed" {
+		t.Fatalf("error cards %v, want one \"login failed\"", errs)
+	}
+	if files := findCards[*xfer.FileCard](resp); len(files) != 0 {
+		t.Fatalf("the gimme after the refused login was answered: %v", files)
+	}
+	igots := findCards[*xfer.IGotCard](resp)
+	if len(igots) != 1 || igots[0].UUID != uuid {
+		t.Fatalf("igot cards %v, want the pull's inventory of %s", igots, uuid)
+	}
+	last, ok := resp.Cards[len(resp.Cards)-1].(*xfer.CommentCard)
+	if !ok || !strings.HasSuffix(last.Text, " errors 1") {
+		t.Fatalf("reply ends with %#v, want the comment with errors 1",
+			resp.Cards[len(resp.Cards)-1])
+	}
 }

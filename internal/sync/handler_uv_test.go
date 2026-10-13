@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -227,5 +228,30 @@ func TestHandlerUVFile_DeletionWithoutFlags(t *testing.T) {
 	if err != nil || mtime != 200 || fileHash != "" {
 		t.Fatalf("gone.txt: mtime %d, hash %q, %v; want a tombstone at 200",
 			mtime, fileHash, err)
+	}
+}
+
+// TestHandlerFileRefusalKeepsEarlierCards pins §6.6's card order: a file card
+// refused for want of a push ends card processing at its own position, so a
+// uvfile that came before it is still stored while the reply is reset to the
+// one error.
+func TestHandlerFileRefusalKeepsEarlierCards(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	if err := uv.EnsureSchema(r.DB()); err != nil {
+		t.Fatalf("EnsureSchema: %v", err)
+	}
+	setNobodyCaps(t, r, "oy")
+	data := []byte("refused")
+	resp := handleReq(t, r,
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
+		helloUVFile(),
+		&xfer.FileCard{UUID: hash.SHA1(data), Content: data},
+	)
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "not authorized to write" {
+		t.Fatalf("error cards %v, want one \"not authorized to write\"", errs)
+	}
+	if content, _, _, err := uv.Read(r.DB(), "new.txt"); err != nil || string(content) != "hello" {
+		t.Fatalf("uvfile before the refused file card: content %q, err %v", content, err)
 	}
 }

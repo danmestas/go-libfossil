@@ -9,16 +9,6 @@ var syncGaps = map[string]string{
 	// than SHA3 support, where fossil sends the refusal in its place
 	// (internal/sync/client.go buildUVFileCards).
 	"sync.7.6.client-uv-gate": "#303",
-	// The server's card loop (internal/sync/handler.go): a file card after
-	// a refused push is refused without a reset and does not end card
-	// processing (Section 6.6); a failed login skips the end-of-request
-	// steps and the closing comment (6.4); errors N counts the unknown-card
-	// error and the private-content refusal (5.3).
-	"sync.6.6.file-after-refused-push":      "#374",
-	"sync.5.3.errors-counts-reset":          "#374",
-	"sync.6.4.failure-end-of-request":       "#374",
-	"sync.5.3.errors-skips-bad-command":     "#374",
-	"sync.5.3.errors-skips-private-refusal": "#374",
 	// handleGimme skips private content outside a private sync, where
 	// Section 8.6 answers a peer dated 2020-04-13 or later with igot HASH 1.
 	"sync.8.6.private-gimme-igot": "#375",

@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // findCards returns all cards of type T from a message.
@@ -2136,4 +2137,62 @@ func TestEmitCloneBatchCursorAlwaysAdvances(t *testing.T) {
 		cursor = next
 	}
 	t.Fatalf("cursor never reached exhaustion in 50 rounds (last %d)", cursor)
+}
+
+// TestHandleFileWithoutPushEndsCards pins §6.6: without an accepted push, a
+// file card resets the reply, is refused with "not authorized to write" and
+// ends card processing, so a later gimme is not answered; the earlier pull's
+// inventory still follows.
+func TestHandleFileWithoutPushEndsCards(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	if _, err := r.DB().Exec("UPDATE user SET cap='o' WHERE login='nobody'"); err != nil {
+		t.Fatalf("set nobody caps: %v", err)
+	}
+	held := storeTestBlob(t, r, []byte("held by the server"))
+	data := []byte("pushed without a push")
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.FileCard{UUID: hash.SHA1(data), Content: data},
+		&xfer.GimmeCard{UUID: held},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	errs := findCards[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != "not authorized to write" {
+		t.Fatalf("error cards %v, want one \"not authorized to write\"", errs)
+	}
+	if msgs := findCards[*xfer.MessageCard](resp); len(msgs) != 0 {
+		t.Fatalf("the reset left the pull-only message in place: %v", msgs)
+	}
+	if files := findCards[*xfer.FileCard](resp); len(files) != 0 {
+		t.Fatalf("the gimme after the refused file was answered: %v", files)
+	}
+	if igots := findCards[*xfer.IGotCard](resp); len(igots) != 1 {
+		t.Fatalf("igot cards %v, want the pull's inventory", igots)
+	}
+}
+
+// TestCountedErrors pins §5.3's errors N: the unknown-operator error, the
+// private-content refusal and the SHA3 refusal are not counted, and an error
+// a reset discarded still is.
+func TestCountedErrors(t *testing.T) {
+	cards := []xfer.Card{
+		&xfer.ErrorCard{Message: badCommandPrefix + "frobnicate\n"},
+		&xfer.ErrorCard{Message: privateRefusal},
+		sha3Refusal(),
+		&xfer.MessageCard{Message: "not an error"},
+		&xfer.ErrorCard{Message: "pull denied: insufficient capabilities"},
+	}
+	if n := countedErrors(cards); n != 1 {
+		t.Fatalf("countedErrors = %d, want 1", n)
+	}
+	h := &handler{clock: simio.RealClock{}, resp: cards}
+	h.resetContent()
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: "not authorized to write"})
+	if text := h.timestampComment().Text; !strings.HasSuffix(text, " errors 2") {
+		t.Fatalf("comment %q, want errors 2", text)
+	}
 }

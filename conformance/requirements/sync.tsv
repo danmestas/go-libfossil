@@ -70,7 +70,6 @@ SP-5.2-11	5.2	Receiver: imposes no maximum line length before LF.
 SP-5.3-1	5.3	Receiver: a line beginning with # is not dispatched as a card.
 SP-5.3-2	5.3	Server: the timestamp comment is "# timestamp YYYY-MM-DDTHH:MM:SS errors N" in UTC with N canonical decimal.
 SP-5.3-3	5.3	Server: answering req-clusters, a nonempty run of public cluster igot cards is enclosed by # sending-clusters and # end-of-clusters, and an empty run by neither.
-# SP-5.3-4 is FAILING: Tracked in #374.
 SP-5.3-4	5.3	Server: N counts the errors raised while handling the request, including those whose cards a later reset discarded; the unknown-operator error, the private-content refusal and the SHA3 version refusal are not counted.	the SHA3 version refusal is not covered
 SP-5.3-5	5.3	Receiver: does not act on N.
 SP-6.1-1	6.1	Sender: the login card is login USER NONCE SIGNATURE with USER fossilized and NONCE and SIGNATURE 40 lowercase hex characters.
@@ -84,7 +83,6 @@ SP-6.4-4	6.4	Server: when that fails and the stored credential is not exactly 40
 SP-6.4-5	6.4	Server: NONCE must equal the SHA-1 of the body after the login line, compared case-sensitively.
 SP-6.4-6	6.4	Server: a failed login keeps HTTP 200, discards staged output, emits error login failed and ends card processing without rolling back the request.
 SP-6.4-7	6.4	Server: a successful login only adds capabilities to the request's baseline.
-# SP-6.4-8 is FAILING: Tracked in #374.
 SP-6.4-8	6.4	Server: after a failed login, the end-of-request steps still run for a direction an earlier card established, and the reply ends with the timestamp comment.
 SP-6.5-1	6.5	Client: once the recorded server version passes the gate (VERSION >= 22700 and DATE/TIME at or after 20250727 110500), login goes in Cookie: x-f-l-c=login+USER+NONCE+SIGNATURE and no body login is sent.
 SP-6.5-2	6.5	Client: before server-version is seen, or when the gate is false, a named login uses the body card and never the cookie.
@@ -92,7 +90,6 @@ SP-6.5-3	6.5	Server: accepts body login whatever the gate.
 SP-6.5-4	6.5	Server: accepts a login carried in the x-f-l-c cookie through the body-login path.
 SP-6.6-1	6.6	Server: each card is checked against its capability (o read, i write, g clone, x private, a admin) and an error is emitted when it is lacking.	Admin is checked by the case for SP-9.3-6
 SP-6.6-2	6.6	Server: a push without Write after an accepted pull gets message "pull only - not authorized to push" without a reset; otherwise output is reset and error not authorized to write is emitted; neither ends card processing.
-# SP-6.6-3 is FAILING: Tracked in #374.
 SP-6.6-3	6.6	Server: while push is not enabled, the first file or cfile card is refused with reset output and error not authorized to write, ends card processing, and end-of-request steps for an earlier direction still run.
 SP-7.1-1	7.1	Receiver: file HASH SIZE and file HASH DELTASRC SIZE carry exactly SIZE payload bytes with no trailing separator.
 SP-7.1-2	7.1	Sender: push and pull transfer content with file cards, not cfile.

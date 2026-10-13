@@ -103,6 +103,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (sha1), treats a negative stored value as unset (db.c) and leaves a value
   above 4 undefined; -01 is followed here, so every stored value outside 0
   through 4 is an error.
+- A pushed `file` or `cfile` card that fails the server's handler now resets
+  the reply, sends the one error and ends card processing, as
+  sync-protocol-01 Section 5.2 (SP-5.2-7) and fossil's `xfer_accept_file`
+  path in `page_xfer` require (#390). Content that is not its HASH is
+  answered `wrong hash on received artifact: HASH`, a HASH or DELTASRC that
+  is no artifact name `malformed file line` (or `cfile`), and a storage
+  failure its error; each was appended to the reply and the next card
+  handled. A `file` delta whose basis the server holds is now applied and
+  checked against HASH before it is stored, the pre-storage verification
+  Section 7.5 gives a reconstructable non-clone file. A `cfile` is checked
+  too, where fossil(1) 2.28 stores it unchecked and aborts at commit; the
+  wrong-hash cases are not sent to fossil(1) for that reason.
+
 - The server sends a clone's reply (the unversioned catalog under uv-sync,
   the snapshot cookie, the cfile batch, `clone_seqno` and the push card) at
   the clone card, and the cluster igots of `pragma req-clusters` at the

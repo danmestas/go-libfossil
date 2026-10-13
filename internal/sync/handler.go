@@ -14,6 +14,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -456,11 +457,12 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 // and with which capabilities, are acted on. When the walk ends in the
 // fatal, its reply is the answer and no card has written anything.
 //
-// The walk stores no file, so a file card that fails validation does not
-// break it as it breaks the real loop. A request that pushes a bad file
-// ahead of an invalid clone card therefore gets the clone error where
-// fossil sends the file's; no conforming client sends push and clone
-// together (§8.5).
+// The walk stores no file, so a file card that fails on storage (a hash
+// mismatch) does not break it as it breaks the real loop. A request that
+// pushes such a file ahead of an invalid clone card therefore gets the
+// clone error where fossil sends the file's; no conforming client sends
+// push and clone together (§8.5). A file refused for its name or for lack
+// of write access is modelled, as it needs no storage.
 func (h *handler) probeCloneFatal(cards []xfer.Card) bool {
 	if !hasInvalidCloneSeq(cards) {
 		return false
@@ -510,14 +512,25 @@ func (h *handler) probeCard(card xfer.Card) {
 		h.handlePullCard(c)
 	case *xfer.CloneCard:
 		h.handleCloneCard(c)
-	case *xfer.FileCard, *xfer.CFileCard:
-		if !h.pushOK {
-			h.breakLoop("not authorized to write")
-		}
+	case *xfer.FileCard:
+		h.probeFile(c.UUID, c.DeltaSrc, false)
+	case *xfer.CFileCard:
+		h.probeFile(c.UUID, c.DeltaSrc, true)
 	case *xfer.BadFileCard:
 		h.breakLoop(c.Message)
 	case *xfer.ConfigCard:
 		h.handleConfigPush()
+	}
+}
+
+// probeFile models the side-effect-free refusals of handleFile for the
+// clone-fatal probe: no write access, or a name that is no artifact name.
+func (h *handler) probeFile(uuid, deltaSrc string, compressed bool) {
+	switch {
+	case !h.pushOK:
+		h.breakLoop("not authorized to write")
+	case !hash.IsValidHash(uuid) || (deltaSrc != "" && !hash.IsValidHash(deltaSrc)):
+		h.breakLoop(malformedFileLine(compressed))
 	}
 }
 
@@ -920,9 +933,9 @@ func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
 	case *xfer.GimmeCard:
 		return h.handleGimme(c)
 	case *xfer.FileCard:
-		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, nil)
+		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, nil, false)
 	case *xfer.CFileCard:
-		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
+		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob, true)
 	case *xfer.PrivateCard:
 		if !auth.CanSyncPrivate(h.caps) {
 			h.resp = append(h.resp, &xfer.ErrorCard{Message: privateRefusal})
@@ -1154,7 +1167,12 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	return nil
 }
 
-func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
+// handleFile stores a pushed file or cfile card (compressed). A validation
+// failure is xfer_accept_file's error path: page_xfer resets the reply,
+// emits the error and parses no later card (§5.2), so each failure here
+// ends in breakLoop.
+func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte,
+	storedBlob []byte, compressed bool) error {
 	if uuid == "" {
 		panic("handler.handleFile: uuid must not be empty")
 	}
@@ -1164,6 +1182,12 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	// steps of a pull accepted earlier still run.
 	if !h.pushOK {
 		h.breakLoop("not authorized to write")
+		return nil
+	}
+	// xfer_accept_file and xfer_accept_compressed_file test HASH and
+	// DELTASRC with blob_is_hname before anything else.
+	if !hash.IsValidHash(uuid) || (deltaSrc != "" && !hash.IsValidHash(deltaSrc)) {
+		h.breakLoop(malformedFileLine(compressed))
 		return nil
 	}
 	// A shunned artifact is dropped on receipt, with no error, as fossil's
@@ -1185,24 +1209,83 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	}
 	vis := visibility(h.nextIsPrivate)
 	h.nextIsPrivate = false
-	if err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil); err != nil {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("storing %s: %v", uuid, err),
-		})
+	if !compressed && deltaSrc != "" && !h.fileDeltaMatches(uuid, deltaSrc, payload) {
+		h.breakLoop(wrongHashText(uuid))
 		return nil
+	}
+	// Departure from fossil and sync-protocol-01 Section 7.5, which verifies
+	// only a reconstructable non-clone file before storage and leaves a
+	// cfile to a commit hook that aborts on mismatch: a cfile whose content
+	// is not its HASH is refused here, before storage, with the same reset
+	// and error as a file. The cost is that the request's earlier changes
+	// stay applied where a commit abort would roll them back; the gain is
+	// that this handler never stores an artifact under a name it does not
+	// have.
+	if msg := h.storeFile(ctx, uuid, deltaSrc, payload, storedBlob, vis); msg != "" {
+		h.breakLoop(msg)
+		return nil
+	}
+	h.filesRecvd++
+	return nil
+}
+
+// storeFile stores a validated file or cfile card's content and reports the
+// handler error text for a failure, "" when the artifact is stored. A hash
+// mismatch is fossil's "wrong hash on received artifact"; any other failure
+// is its content_put_ex failure, whose g.zErrMsg page_xfer sends.
+func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload []byte,
+	storedBlob []byte, vis visibility) string {
+	err := storeReceivedFile(ctx, h.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
+	if errors.Is(err, errHashMismatch) {
+		return wrongHashText(uuid)
+	}
+	if err != nil {
+		return fmt.Sprintf("storing %s: %v", uuid, err)
 	}
 	_, ok := blob.Exists(h.repo.DB(), uuid)
 	if h.buggify != nil && h.buggify.Check("handler.handleFile.missingAfterStore", 0.01) {
 		ok = false
 	}
 	if !ok {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("blob %s missing after store", uuid),
-		})
-		return nil
+		return fmt.Sprintf("blob %s missing after store", uuid)
 	}
-	h.filesRecvd++
-	return nil
+	return ""
+}
+
+// fileDeltaMatches reports whether a file card's delta, applied to its
+// basis, gives content named uuid. §7.5 applies pre-storage verification to
+// a reconstructable non-clone file, as xfer_accept_file applies the delta to
+// an available source and checks the result. A basis this server cannot
+// expand leaves the delta unverified, stored dangling, as fossil stores it.
+// A delta that does not apply is a mismatch: fossil verifies what
+// blob_delta_apply left, which is not the artifact either.
+func (h *handler) fileDeltaMatches(uuid, deltaSrc string, payload []byte) bool {
+	srcRid, ok := content.AvailableByUUID(h.repo.DB(), deltaSrc)
+	if !ok {
+		return true
+	}
+	src, err := content.Expand(h.repo.DB(), srcRid)
+	if err != nil {
+		return true
+	}
+	target, err := delta.Apply(src, payload)
+	if err != nil {
+		return false
+	}
+	return hashMatches(uuid, target)
+}
+
+// wrongHashText is xfer_accept_file's error for content that is not HASH.
+func wrongHashText(uuid string) string {
+	return "wrong hash on received artifact: " + uuid
+}
+
+// malformedFileLine is the framing error of a file or cfile handler.
+func malformedFileLine(compressed bool) string {
+	if compressed {
+		return "malformed cfile line"
+	}
+	return "malformed file line"
 }
 
 // handleReqConfig answers reqconfig NAME with the configuration groups NAME

@@ -165,6 +165,13 @@ func serverCloneCases() []syncServerCase {
 		body: []string{"{CV}", pushCard, "file {N1} {N1.size}", "{N1.data}", "clone 3 0", "{R}"},
 		want: all(syncReply, onlyError("invalid clone sequence number"), held("N1", 0)),
 	}, {
+		// A file card that fails validation ends the card loop before the
+		// clone card is reached, so the file's error is sent, not the
+		// clone fatal.
+		Case: Case{ID: "sync.8.1.bad-file-before-invalid-seqno", Req: "SP-5.2-7"},
+		body: []string{"{CV}", pushCard, "file {Z1}0 {N1.size}", "{N1.data}", "clone 3 0", "{R}"},
+		want: all(syncReply, onlyError("malformed+file+line", "malformed file line")),
+	}, {
 		// Section 8.1 withholds the fatal from a SEQNO that is not
 		// digit-only and says no more. fossil(1) 2.28 builds differ: the
 		// macOS build sends clone_seqno 0, the Linux build CI pins sends the

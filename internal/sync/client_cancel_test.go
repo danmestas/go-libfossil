@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,7 +212,8 @@ func TestProcessResponseThreadsContextToPhantomFillCascade(t *testing.T) {
 // stored artifacts consistent ends the reply early, but the prefix before it
 // commits (§10.1, #418): the phantoms the reply filled get their crosslink
 // cascade, and the phantoms its igot cards announced are recorded. Here an
-// unversioned file fails its hash check, and is not stored.
+// unversioned file fails its hash check and is not stored; the error is a
+// warning, not a failure of the session, so continuation is still evaluated.
 func TestProcessResponseKeepsPrefixOnCardError(t *testing.T) {
 	s, r := newTestSession(t, SyncOpts{Pull: true, UV: true, ServerCode: "sc",
 		ProjectCode: testPC})
@@ -225,8 +227,11 @@ func TestProcessResponseKeepsPrefixOnCardError(t *testing.T) {
 			Size: len(uvContent), Content: uvContent},
 	}}
 	_, err := s.processResponse(context.Background(), msg)
-	if err == nil || failsRound(err) {
-		t.Fatalf("processResponse = %v, want the unversioned file's card error", err)
+	if err != nil {
+		t.Fatalf("processResponse = %v, want the content error as a warning", err)
+	}
+	if len(s.result.Errors) != 1 || !strings.Contains(s.result.Errors[0], "hash mismatch") {
+		t.Fatalf("result.Errors = %q, want the uvfile's hash mismatch", s.result.Errors)
 	}
 	if got := countCrosslinkedRids(t, r, children); got != len(children) {
 		t.Fatalf("crosslinked %d of %d children of the filled phantom, want all", got,

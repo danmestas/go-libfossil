@@ -650,6 +650,14 @@ func (s *session) processReply(ctx context.Context,
 		// which reaches the same repository.
 		return false, nil, cardErr
 	}
+	var content *contentError
+	if errors.As(cardErr, &content) {
+		// §10.1: a handler-reported content error that leaves the stored
+		// artifacts consistent warns, commits the prefix and follows ordinary
+		// continuation, as fossil's client does after nErr++ and break.
+		s.result.Errors = append(s.result.Errors, "error: "+content.Error())
+		cardErr = nil
+	}
 	if err := s.closeReply(ctx, &t); err != nil {
 		return false, cardErr, err
 	}
@@ -1648,6 +1656,15 @@ func (s *session) handleUVIGotCard(c *xfer.UVIGotCard) error {
 	return nil
 }
 
+// contentError is a handler-reported content error that leaves the stored
+// artifacts consistent, such as a uvfile whose content is not its HASH.
+// Section 10.1 has it end the card loop, warn and commit the prefix, and the
+// session continue by Section 3.7. A received file or cfile that is not its
+// HASH is the integrity error instead (hashMismatchError).
+type contentError struct{ msg string }
+
+func (e *contentError) Error() string { return e.msg }
+
 // handleUVFileCard processes a uvfile card from the server.
 func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 	if c == nil {
@@ -1674,7 +1691,7 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		}
 		computed := hash.ContentHash(c.Content, c.Hash)
 		if computed != c.Hash {
-			return fmt.Errorf("uvfile %s: hash mismatch", c.Name)
+			return &contentError{msg: fmt.Sprintf("uvfile %s: hash mismatch", c.Name)}
 		}
 	}
 

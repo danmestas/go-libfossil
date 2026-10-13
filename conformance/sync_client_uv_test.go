@@ -110,14 +110,14 @@ func clientUVStatusCases() []syncClientCase {
 		// s0.txt is not held (status 0); u.txt is held with other content
 		// and is older (status 1), so it is deleted and asked for.
 		Case: Case{ID: "sync.8.5.1.status-0-1", Req: "SP-8.5.1-5"},
-		op:   clientOp{pull: true, uv: true},
+		op:   clientOp{pull: true, push: true, uv: true},
 		replies: [][]string{reply("pragma uv-pull-only", "uvigot s0.txt {UVT} {N1} 15",
 			"uvigot u.txt {UVT1} {N1} 15")},
 		want: every(sent(2, "uvgimme s0.txt"), sent(2, "uvgimme u.txt"),
 			clientRows("SELECT count(*) FROM unversioned WHERE name='u.txt'", 0)),
 	}, {
 		Case:    Case{ID: "sync.8.5.1.status-2", Req: "SP-8.5.1-5"},
-		op:      clientOp{pull: true, uv: true},
+		op:      clientOp{pull: true, push: true, uv: true},
 		replies: [][]string{reply("pragma uv-pull-only", "uvigot u.txt {UVT1} {UVH} 11")},
 		want: every(neverSent("uvgimme "),
 			clientRows("SELECT count(*) FROM unversioned WHERE name='u.txt' AND mtime={UVT1}", 1)),
@@ -224,6 +224,20 @@ func clientIntegrityCases() []syncClientCase {
 		want:    every(phantom("U"), notStored("N1"), reported("malformed file line")),
 		fc:      true,
 	}, {
+		// A uvfile whose content is not its HASH is a handler-reported
+		// content error: the igot before it stays, and the session goes on.
+		Case:    Case{ID: "sync.10.1.uvfile-wrong-hash-prefix", Req: "SP-10.1-6"},
+		op:      clientOp{pull: true, push: true, uv: true},
+		replies: [][]string{reply("igot {U}", "uvfile u.txt {UVT} {N1} 3 0", "abc")},
+		want:    every(phantom("U"), mentions("hash mismatch", "HASH does not match")),
+		fc:      true,
+	}, {
+		Case:    Case{ID: "sync.10.1.uvfile-wrong-hash-continues", Req: "SP-10.1-7"},
+		op:      clientOp{pull: true, push: true, uv: true},
+		replies: [][]string{reply("igot {U}", "uvfile u.txt {UVT} {N1} 3 0", "abc")},
+		want:    sent(2, "gimme {U}"),
+		fc:      true,
+	}, {
 		// The igot's phantom is a continuation condition (Section 3.7).
 		Case:    Case{ID: "sync.10.1.content-error-continues", Req: "SP-10.1-7"},
 		op:      opPull,
@@ -274,7 +288,7 @@ func clientIntegrityCases() []syncClientCase {
 	}, {
 		// Section 9.5: avoid-delta-manifests is a hint for a pending commit;
 		// the gimme after it is answered as ever.
-		Case:    Case{ID: "sync.9.5.avoid-delta-manifests-transfer", Req: "SP-9.5-5"},
+		Case:    Case{ID: "sync.9.5.avoid-delta-manifests-transfer", Req: "SP-9.5-7"},
 		op:      opSync,
 		setup:   quiet,
 		replies: [][]string{reply("pragma avoid-delta-manifests", "gimme {A1}")},

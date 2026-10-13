@@ -40,15 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a checkout with no version, resolves as `Checkout.ResolveVersion` does,
   except that only check-ins can answer: the request is a check-in request,
   so a technote carrying the tag does not. `ckout` is a keyword only as the
-  whole name, so `ckout.` and `root:ckout` read it as an ordinary name. The
-  draft also makes `ckout` a keyword in a plain check-in request. This follows
-  fossil, where only `ci+` has it (an erratum to the draft is pending), so
-  `ResolveVersion` and `ResolveBranchStart` still read it as an ordinary name.
+  whole name, so `ckout.` and `root:ckout` read it as an ordinary name.
+  `ckout` is a keyword only in `ci+` (as the 2026-10-13 erratum has it, and
+  fossil), so `ResolveVersion` and `ResolveBranchStart` read it as an
+  ordinary name.
   New `repostate.8.3` cases run the request against `fossil test-name-to-id
   --type ci+`: `ckout` over a tag of that name, with and without a checkout
-  version, and `ckout` as the tag under the untyped request. RS-8.3-4 now
-  follows fossil as a recorded deviation (the `ckout.` retry case) rather than
-  being partial (tracked in #419).
+  version, and `ckout` as the tag under the untyped request (RS-8.3-4;
+  tracked in #419).
 - `Repo.ResolveBranchStart` is fossil's branch-type request: it resolves a
   name, then returns the first check-in of the branch the result is on
   (repo-state-01 §8.3). It follows the draft where fossil 2.28 differs:
@@ -126,13 +125,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and check-in. The new errata are pinned. The requirement tables are re-read
   against every changed hunk: RS-5.3-1, RS-7.3-1, RS-7.3-3, RS-8.3-4,
   SP-9.4-1, SP-10.1-6 and SP-10.1-7 are reworded, and RS-5.3-5, SP-9.4-3,
-  SP-9.5-5 and SP-10.1-8 are new. The §7.3 and §8.3 cases that were marked
+  SP-9.5-7 and SP-10.1-8 are new. The §7.3 and §8.3 cases that were marked
   as deviations, because go-libfossil already followed fossil, now pass as
   written, and new cases cover arrival order for a date tag, an untagged
   chain, one-batch leaf derivation and a merge parent's recheck. One
   non-conformance remains: the leaf table is recomputed per crosslink batch,
   so a parent whose untagged child arrives in a later batch loses the verdict
   §7.3 keeps (`repostate.7.3.recheck-untagged-child`, tracked in #426).
+- A pull that receives a `uvfile` whose content does not match its hash now
+  records the error, commits the cards before it and evaluates the continuation
+  rules, as sync-protocol-01 Section 10.1 and fossil(1) do (SP-10.1-7), where it
+  used to end the session with an error. A file or cfile that does not match
+  its hash still fails the round (tracked in #421).
 - The sync server answers every `pragma ci-lock` that passes its argument
   guard with `pragma avoid-delta-manifests` while the repository's
   `forbid-delta-manifests` setting is on, after any `ci-lock-fail`
@@ -193,8 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   active-tag rule for leaves and the checkout's branch (RS-6.4-1), a parent
   tag that arrives before its target (RS-4.2-8), and the leaf recheck of
   untagged check-ins (RS-7.3-3; a check-in with a parent but no branch tag is
-  still never rechecked, as in fossil, and marked a deviation, because
-  rechecking it changed the leaf table of a real fossil-authored repository).
+  rechecked only as the parent of a branch-tagged one, as in fossil, which
+  the 2026-10-13 erratum made the draft's text).
   Where fossil 2.28 differs (its rebuild links a misnamed artifact, and its
   `branch current` and `leaf_check` read cancelled branch rows), the cases
   follow the draft and record the difference. Checkout-relative names and

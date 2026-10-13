@@ -94,7 +94,8 @@ func trailerCases() []deltaCase {
 			strings.Repeat("\xff", 8)),
 		// go-libfossil verifies the checksum, which the draft allows but
 		// does not require; fossil(1) does not, and accepts "A".
-		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;", "").checksumFailure().differs(noVerify),
+		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;", "").
+			checksumFailure().differs(noVerify),
 		// More mismatches a verifying decoder rejects: an empty target, a target
 		// built by a copy, and one whose checksum differs in the 1-3 byte tail
 		// word only (ckab is "ab", the target is "abc").

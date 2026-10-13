@@ -44,9 +44,10 @@ func FuzzArtifactRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("deck.Parse rejects what Marshal wrote, %q: %v", encoded, err)
 		}
-		// Marshal writes the K ticket ID lowercase (AF-4.7.9-1), which a
-		// parser may have accepted in uppercase.
+		// Marshal writes the K ticket ID (AF-4.7.9-1) and the R checksum
+		// (AF-6.3-4) lowercase, which a parser may have accepted in uppercase.
 		first.K = strings.ToLower(first.K)
+		first.R = strings.ToLower(first.R)
 		for _, loss := range knownLosses {
 			loss.forgive(first)
 			loss.forgive(second)

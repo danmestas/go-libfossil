@@ -130,13 +130,15 @@ func producerCases() []deltaFuncCase {
 // wrapped value. The input is mapped, never read: a producer that checks
 // the sizes first answers at once.
 func refusesHuge(inSource bool) func(*testing.T, *fossilReference) error {
-	return func(*testing.T, *fossilReference) error {
+	return func(t *testing.T, _ *fossilReference) error {
+		// A skip, not a pass: a run that could not build the input checked
+		// nothing. TestCheckSizes covers the bound without the mapping.
 		if strconv.IntSize < 64 {
-			return nil
+			t.Skip("needs a 64-bit int to name a 4 GiB input")
 		}
 		huge, release, err := untouchedBuffer(1 << 32)
 		if err != nil {
-			return nil // no way to map 4 GiB here; the bound is covered by TestCheckSizes
+			t.Skipf("cannot map 4 GiB here: %v", err)
 		}
 		defer release()
 		source, target := huge, []byte{}

@@ -150,13 +150,22 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 // that needs the baseline fails when it cannot be resolved (8.3). The search
 // uses the baseline's own F cards and does not follow a B card it carries.
 func LookupFile(r *repo.Repo, rid libfossil.FslID, name string) (FileEntry, bool, error) {
+	return LookupFileCached(r, rid, name, nil)
+}
+
+// LookupFileCached is LookupFile that serves the manifest and baseline through
+// cache; a nil cache is exactly LookupFile. Like ListFilesCached it pays off
+// only for a caller resolving one name across many overlapping revisions.
+func LookupFileCached(
+	r *repo.Repo, rid libfossil.FslID, name string, cache *content.Cache,
+) (FileEntry, bool, error) {
 	if r == nil {
 		panic("manifest.LookupFile: r must not be nil")
 	}
 	if name == "" {
 		panic("manifest.LookupFile: name must not be empty")
 	}
-	d, err := GetManifestCached(r, rid, nil)
+	d, err := GetManifestCached(r, rid, cache)
 	if err != nil {
 		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
 	}
@@ -166,7 +175,7 @@ func LookupFile(r *repo.Repo, rid libfossil.FslID, name string) (FileEntry, bool
 	if d.B == "" {
 		return FileEntry{}, false, nil
 	}
-	baseDeck, err := loadBaseline(r.DB(), nil, d)
+	baseDeck, err := loadBaseline(r.DB(), cache, d)
 	if err != nil {
 		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
 	}
@@ -180,7 +189,9 @@ func LookupFile(r *repo.Repo, rid libfossil.FslID, name string) (FileEntry, bool
 // findFileCard binary-searches cards, which a parsed deck keeps in comparator
 // order (4.5.2), for name.
 func findFileCard(cards []deck.FileCard, name string) (deck.FileCard, bool) {
-	i := sort.Search(len(cards), func(i int) bool { return deck.Compare(cards[i].Name, name) >= 0 })
+	i := sort.Search(len(cards), func(i int) bool {
+		return deck.Compare(cards[i].Name, name) >= 0
+	})
 	if i < len(cards) && cards[i].Name == name {
 		return cards[i], true
 	}

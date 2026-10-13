@@ -244,7 +244,8 @@ func writerLowercases(base, lower, upper string) func(*testing.T) error {
 			return err
 		}
 		if !strings.Contains(string(data), lower) {
-			return expectf("Marshal wrote %q, want the line %q", data, strings.TrimSuffix(lower, "\n"))
+			return expectf("Marshal wrote %q, want the line %q",
+				data, strings.TrimSuffix(lower, "\n"))
 		}
 		return nil
 	}

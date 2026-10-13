@@ -134,25 +134,22 @@ func expandForkFile(r *repo.Repo, rid int64, filename string, rowKind int64) ([]
 		if rid <= 0 {
 			return nil, false, nil
 		}
-		files, err := manifest.ListFiles(r, libfossil.FslID(rid))
+		file, found, err := manifest.LookupFile(r, libfossil.FslID(rid), filename)
 		if err != nil {
 			return nil, false, fmt.Errorf("list file %q in checkin %d: %w", filename, rid, err)
 		}
-		for _, file := range files {
-			if file.Name != filename {
-				continue
-			}
-			fileRid, ok := content.AvailableByUUID(r.DB(), file.UUID)
-			if !ok {
-				return nil, true, fmt.Errorf("file %q from checkin %d is unavailable", filename, rid)
-			}
-			bytes, err := content.Expand(r.DB(), fileRid)
-			if err != nil {
-				return nil, true, fmt.Errorf("expand file %q from checkin %d: %w", filename, rid, err)
-			}
-			return bytes, true, nil
+		if !found {
+			return nil, false, nil
 		}
-		return nil, false, nil
+		fileRid, ok := content.AvailableByUUID(r.DB(), file.UUID)
+		if !ok {
+			return nil, true, fmt.Errorf("file %q from checkin %d is unavailable", filename, rid)
+		}
+		bytes, err := content.Expand(r.DB(), fileRid)
+		if err != nil {
+			return nil, true, fmt.Errorf("expand file %q from checkin %d: %w", filename, rid, err)
+		}
+		return bytes, true, nil
 	default:
 		return nil, false, fmt.Errorf("expand file %q: unknown conflict RID kind %d", filename, rowKind)
 	}

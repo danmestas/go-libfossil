@@ -192,18 +192,18 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string, cache *conte
 	if filePath == "" {
 		panic("annotate.loadFileAt: filePath must not be empty")
 	}
-	files, err := manifest.ListFilesCached(r, rid, cache)
+	// One name, so ask for one name: LookupFileCached searches the delta's
+	// own F cards first (artifact-format-01 8.4).
+	f, found, err := manifest.LookupFileCached(r, rid, filePath, cache)
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range files {
-		if f.Name == filePath {
-			fileRID, ok := content.AvailableByUUID(r.DB(), f.UUID)
-			if !ok {
-				return nil, fmt.Errorf("blob %s not found", f.UUID)
-			}
-			return cache.Expand(r.DB(), fileRID)
+	if found {
+		fileRID, ok := content.AvailableByUUID(r.DB(), f.UUID)
+		if !ok {
+			return nil, fmt.Errorf("blob %s not found", f.UUID)
 		}
+		return cache.Expand(r.DB(), fileRID)
 	}
 	return nil, fmt.Errorf("file %q not found in checkin %d", filePath, rid)
 }

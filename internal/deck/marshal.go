@@ -203,7 +203,9 @@ func marshalCardsMNPQR(b *strings.Builder, d *Deck) {
 	}
 
 	if d.R != "" {
-		fmt.Fprintf(b, "R %s\n", d.R)
+		// §6.3.4: the checksum is always rendered lowercase, though the
+		// parse grammar is case-insensitive.
+		fmt.Fprintf(b, "R %s\n", strings.ToLower(d.R))
 	}
 }
 

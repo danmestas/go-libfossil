@@ -402,7 +402,10 @@ var reservedCases = func() []artifactCase {
 // case: a reader MAY accept forms 2 through 5, and only form 1 is required.
 // deck.Parse leaves them out, since a stored artifact must carry form 1 and
 // "now" would make Parse depend on the clock; fossil(1) accepts both, so a
-// rejecting case could not pass the fossil check.
+// rejecting case could not pass the fossil check. The date-time path of
+// repo-state (SQLite julianday) accepts all five forms, so the two readers
+// differ inside the MAY: a hand-made "D 12:00" crosslinks in fossil but Parse
+// rejects it. The date-only case below is the one MAY form Parse takes.
 
 // timestampCases puts each token in the manifest base's D card. An
 // accepted token is checked as the instant it denotes, in UTC.
@@ -420,8 +423,6 @@ func timestampCases() []artifactCase {
 		{"hour-24", "2026-01-02T24:00:00", "2026-01-03T00:00:00.000"},
 		{"no-calendar-check", "2024-02-31T03:04:05", "2024-03-02T03:04:05.000"},
 		{"after-epoch", "-4713-11-25T00:00:00", "-4713-11-25T00:00:00.000"},
-		// Form 2: a reader MAY accept a date alone, as midnight.
-		{"date-only", "2026-01-02", "2026-01-02T00:00:00.000"},
 	}
 	// Julian day numbers (Section 4.6.4, form 5); 2461042.5 is
 	// 2026-01-02T00:00:00.
@@ -470,6 +471,13 @@ func timestampCases() []artifactCase {
 				return want("D", d.D.UTC().Format("2006-01-02T15:04:05.000"), g.instant)
 			}))
 	}
+	// Form 2: a reader MAY accept a date alone, as midnight. The case sits
+	// under AF-4.6.4-4, the row that names the date-only form, because the
+	// range rejections beside it need the accepting side to be real.
+	cases = append(cases, loose("artifact.4.6.4.date-only", "AF-4.6.4-4",
+		edit(baseManifest, "D "+ts, "D 2026-01-02"), func(d *deck.Deck) error {
+			return want("D", d.D.UTC().Format("2006-01-02T15:04:05.000"), "2026-01-02T00:00:00.000")
+		}))
 	for _, b := range bad {
 		cases = append(cases, rejected("artifact.4.6.4."+b.slug, b.req,
 			edit(baseManifest, "D "+ts, "D "+b.token)))
@@ -641,7 +649,8 @@ var checksumCases = []artifactCase{
 		edit(baseManifest, "R "+md5Token, "R "+strings.Repeat("g", 32))),
 	rejected("artifact.6.1.r-short", "AF-6.1-1",
 		edit(baseManifest, "R "+md5Token, "R "+md5Token[:31])),
-	accepted("artifact.6.1.r-uppercase", "AF-6.1-1",
+	// Parse keeps the token as written; Marshal renders it lowercase (6.3.4).
+	loose("artifact.6.1.r-uppercase", "AF-6.1-1",
 		edit(baseManifest, "R "+md5Token, "R "+strings.ToUpper(md5Token)),
 		cardIs("R", func(d *deck.Deck) string { return d.R }, strings.ToUpper(md5Token))),
 	zRejected("artifact.6.1.z-short", "AF-6.1-1", baseControl+zCard(baseControl)[:33]+"\n"),

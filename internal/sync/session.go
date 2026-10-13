@@ -41,6 +41,7 @@ type SyncOpts struct {
 	UV           bool           // enable unversioned file sync (wiki, forum, attachments)
 	XTableSync   bool           // enable extension table sync (peer_registry, etc.) — only between EdgeSync peers
 	Private      bool           // enable private artifact sync
+	ShareLinks   bool           // share-links mode: request and keep links (§9.5); pull only
 	Env          *simio.Env     // nil defaults to RealEnv
 	Buggify      BuggifyChecker // nil in production — used by DST for fault injection
 	Observer     Observer       // nil defaults to no-op

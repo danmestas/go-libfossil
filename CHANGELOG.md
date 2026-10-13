@@ -76,6 +76,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error rolls back alone, instead of a second connection waiting for the
   write lock. `WithTx` on a bound DB behaves that way too; on any other DB
   it is unchanged. The sync passes of #418 run on it.
+- `SyncOpts.ShareLinks` turns on share-links mode (sync-protocol-01 §9.5),
+  fossil's `--share-links`. Off by default. A pulling session sends
+  `pragma req-links` in its first request, after the operation cards, unless
+  `SyncOpts.ProjectCode` names another project, and keeps each
+  `pragma link URL ARG MTIME` as config `link:URL` = ARG: URL and ARG
+  defossilized and otherwise verbatim, an existing link replaced only by a
+  strictly newer MTIME. ARG is never parsed or sent on. A link with the wrong
+  token count, a URL that is not HTTP(S) or an MTIME that is not a positive
+  decimal is dropped, as is every link with the mode off. Two of these follow
+  the draft where fossil 2.28 differs: fossil fails fatally on a link URL its
+  parser rejects (a bad port, or a form that is neither a URL nor a local
+  repository) instead of dropping the link, and it reads MTIME with
+  `strtoll` base 0, so it keeps `0x10` as 16 and `12z` as 12. Like fossil, a
+  push-only session ignores the option. The server is unchanged: it emits no
+  link, which meets the draft whether or not a request asks for links. New
+  `sync.9.5` client cases run against `fossil sync --share-links` as well,
+  and SP-9.5-4 is now covered rather than partial, with two new
+  requirements, SP-9.5-5 (which links a client keeps) and SP-9.5-6
+  (`req-links` only in share-links mode). Tracked in #425.
 
 ### Changed
 
@@ -129,8 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and kept check-in lock, and a discarded `pragma link` ARG. Where fossil(1)
   2.28 differs (it repeats a gimme for a hash the peer lacks, refuses an
   escaped `uvfile` NAME, and sends a well-formed `uvigot` past `max-upload`),
-  the cases follow the draft and record fossil's behavior. SP-9.5-4 stays
-  partial: go-libfossil has no share-links mode, so no link is stored.
+  the cases follow the draft and record fossil's behavior. SP-9.5-4 is
+  completed by `SyncOpts.ShareLinks` (see Added), which stores a link.
 - Repo-state conformance cases now cover a misnamed artifact (RS-4.4-3), the
   default branch and the `main-branch` setting (RS-6.1-2, RS-6.1-4), the
   active-tag rule for leaves and the checkout's branch (RS-6.4-1), a parent

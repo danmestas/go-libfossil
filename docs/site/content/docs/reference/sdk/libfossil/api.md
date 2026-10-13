@@ -1708,8 +1708,12 @@ type SyncOpts struct {
     MaxSend     int
     XTableSync  bool // enable extension table sync (peer_registry, etc.)
     Private     bool // enable private artifact sync
-    Observer    SyncObserver
-    Buggify     BuggifyChecker
+    // ShareLinks is fossil's --share-links mode (§9.5): a pulling session
+    // asks the server for the URLs of other copies of the repository and
+    // keeps each valid one as config link:URL. Off by default.
+    ShareLinks bool
+    Observer   SyncObserver
+    Buggify    BuggifyChecker
 }
 ```
 

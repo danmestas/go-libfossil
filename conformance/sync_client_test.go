@@ -120,6 +120,7 @@ type clientRun struct {
 type clientOp struct {
 	pull, push, clone bool
 	private, uv       bool
+	shareLinks        bool   // pull in share-links mode (§9.5)
 	login             bool   // as user, alice unless set, password "secret" unless set
 	user, password    string // the login, when not alice and secret
 }
@@ -184,7 +185,8 @@ func runGoClient(fx *syncFixture, op clientOp, setup []string, peer *scriptedPee
 }
 
 func syncOpts(op clientOp) libfossil.SyncOpts {
-	opts := libfossil.SyncOpts{Pull: op.pull, Push: op.push, Private: op.private, UV: op.uv}
+	opts := libfossil.SyncOpts{Pull: op.pull, Push: op.push, Private: op.private, UV: op.uv,
+		ShareLinks: op.shareLinks}
 	if op.login {
 		opts.User, opts.Password = op.credentials()
 	}
@@ -224,6 +226,9 @@ func (f *fossilReference) runFossilClient(fx *syncFixture, op clientOp, setup []
 		args = []string{fossilVerb(op), url, "-R", path, "--once", "--user", "setup"}
 		if op.private {
 			args = append(args, "--private")
+		}
+		if op.shareLinks {
+			args = append(args, "--share-links") // undocumented; pull only
 		}
 		if op.uv {
 			// Only fossil sync takes -u: a case whose client pulls

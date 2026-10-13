@@ -114,6 +114,10 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 		}
 		cards = append(cards, &xfer.PushCard{ProjectCode: projCode, ServerCode: srvCode})
 	}
+	// §3.2: the initial request's req-links follows the operation cards.
+	if s.sendsReqLinks(cycle) {
+		cards = append(cards, &xfer.PragmaCard{Name: "req-links"})
+	}
 	if s.cookie != "" {
 		cards = append(cards, &xfer.CookieCard{Value: s.cookie})
 	}
@@ -769,6 +773,9 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 	case *xfer.MessageCard:
 		s.handleMessage(c)
 	case *xfer.PragmaCard:
+		if c.Name == "link" {
+			return false, s.handleLink(c)
+		}
 		s.handleReplyPragma(c)
 	case *xfer.UVIGotCard, *xfer.UVFileCard, *xfer.UVGimmeCard:
 		return false, s.handleReplyUVCard(card)

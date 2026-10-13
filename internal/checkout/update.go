@@ -2,7 +2,6 @@ package checkout
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,41 +15,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/merge"
 )
-
-// CalcUpdateVersion finds the latest leaf checkin to update to.
-// Returns 0 if the checkout is already at the latest version.
-//
-// Panics if c is nil (TigerStyle precondition).
-func (c *Checkout) CalcUpdateVersion() (libfossil.FslID, error) {
-	if c == nil {
-		panic("checkout.CalcUpdateVersion: nil *Checkout")
-	}
-
-	currentRID, _, err := c.Version()
-	if err != nil {
-		return 0, fmt.Errorf("checkout.CalcUpdateVersion: %w", err)
-	}
-
-	var tipRID int64
-	err = c.repo.DB().QueryRow(`
-		SELECT l.rid FROM leaf l
-		JOIN event e ON e.objid=l.rid
-		WHERE e.type='ci'
-		ORDER BY e.mtime DESC LIMIT 1
-	`).Scan(&tipRID)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return 0, nil // no checkins at all
-		}
-		return 0, fmt.Errorf("checkout.CalcUpdateVersion: %w", err)
-	}
-
-	if libfossil.FslID(tipRID) == currentRID {
-		return 0, nil // already at latest
-	}
-
-	return libfossil.FslID(tipRID), nil
-}
 
 // updateFileMaps holds name→UUID maps for the current, target, and ancestor versions.
 type updateFileMaps struct {

@@ -378,3 +378,24 @@ func TestWouldFork_UntaggedChildJoinsMainBranch(t *testing.T) {
 		t.Fatal("WouldFork = false, want true (the untagged child is on the main branch)")
 	}
 }
+
+// TestLeafAmbiguous_UntaggedLeafNotAmbiguous: Section 6.1 attributes a
+// check-in with no branch tag to the default branch but does not make it an
+// open leaf of it, so it is not ambiguous beside a tagged trunk leaf (fossil's
+// leaf_ambiguity compares raw values and NULL matches nothing).
+func TestLeafAmbiguous_UntaggedLeafNotAmbiguous(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	_, rid1 := forkTwoTrunkLeaves(t, r)
+	if _, err := r.DB().Exec(`DELETE FROM tagxref WHERE rid = ?
+		AND tagid = (SELECT tagid FROM tag WHERE tagname = 'branch')`, int64(rid1)); err != nil {
+		t.Fatal(err)
+	}
+	ambiguous, err := LeafAmbiguous(r, rid1)
+	if err != nil {
+		t.Fatalf("LeafAmbiguous: %v", err)
+	}
+	if ambiguous {
+		t.Fatal("LeafAmbiguous = true, want false (untagged leaf has no branch to share)")
+	}
+}

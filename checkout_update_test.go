@@ -62,7 +62,7 @@ func TestCheckoutUpdate_TargetRID(t *testing.T) {
 }
 
 func TestCheckoutUpdate_ZeroTargetRIDIsTipUpdate(t *testing.T) {
-	// TargetRID=0 means "update to current branch tip" per checkout package.
+	// TargetRID=0 means the newest open descendant leaf on the checkout's branch.
 	_, checkout, _ := updateFixture(t)
 	result, err := checkout.Update(libfossil.UpdateOpts{TargetRID: 0})
 	if err != nil {

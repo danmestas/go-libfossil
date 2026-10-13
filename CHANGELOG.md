@@ -40,6 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   markers are dropped from the set, and the commit writer never emits a B
   card naming a delta manifest (#371).
 
+- A check-in's event time now follows repo-state-01 §4.2 step 6 whatever order
+  the check-in and its `date` tags arrive in (#372). Crosslinking a check-in
+  read its `date` tagxref row whatever its source, so re-crosslinking after a
+  propagating `date` tag retimed every descendant that had inherited it; only
+  a tag applied directly to the check-in now sets its time. A cancelled `date`
+  tag now restores the D-card time, and a value that does not parse, or parses
+  to a time outside 0 < r < 5373484.5, is ignored and keeps the D-card time,
+  where go-libfossil, like fossil 2.28, stored no time or a time of 0. The
+  rule lives in one place, `tag.RefreshEventTime`, which both tag application
+  and crosslinking call; `event.omtime` still keeps the D-card time. This
+  departs from fossil 2.28, whose result for these cases depends on arrival
+  order. The `date-tag-cancel`, `-unparsable` and `-zero` conformance cases
+  are no longer marked as deviations, and new `-before-checkin` cases check
+  the same three with the tags arriving while the check-in is a phantom.
 - Tests that run `fossil server` no longer flake with "directory not empty"
   during temp-dir cleanup (#352). Fossil forks a child per connection, and
   killing only the parent let a child write into the directory while it was

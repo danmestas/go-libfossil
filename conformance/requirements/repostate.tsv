@@ -29,7 +29,6 @@ RS-4.2-8	4.2	Singleton reparent operations recorded during a crosslink batch are
 RS-4.2-9	4.2	A date tag applied to a crosslinked check-in sets its stored event time to the tag's value, which otherwise is the D-card time.
 RS-4.2-10	4.2	A date tag that arrives before its check-in sets the event time when the check-in is crosslinked.
 RS-4.2-11	4.2	A newer date tag replaces an older one, so the newest date tag's value orders the check-in.
-# RS-4.2-12 is FAILING: Tracked in #372.
 RS-4.2-12	4.2	A date tag of any type sets the time of its target only; a propagating date tag does not retime descendants.
 RS-4.2-13	4.2	Cancelling the date tag restores the D-card time.
 RS-4.2-14	4.2	A date tag whose value does not parse, or parses to a time that is not positive, is ignored, leaving the D-card time.

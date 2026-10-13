@@ -1056,18 +1056,18 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conte
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
-	// event. A date tag already recorded for the check-in (one that reached
-	// it while it was a phantom, or a rebuild that linked the tag first)
-	// overrides the D-card time, as manifest_crosslink does; a tag arriving
-	// later moves it in tag.ApplyTagWithTx. omtime is always the check-in's
-	// own time.
+	// event, at the D-card time; omtime always keeps it. A date tag already
+	// recorded for the check-in (one that reached it while it was a phantom,
+	// or a rebuild that linked the tag first) then moves mtime through
+	// tag.RefreshEventTime, the same rule a tag arriving later applies, so
+	// the time does not depend on arrival order. Unlike manifest_crosslink,
+	// that rule skips an inherited date row (#372) and a cancelled, unparsable
+	// or non-positive value (draft-fossil-repo-state-01 Section 4.2, step 6).
 	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime,
 		   bgcolor, euser, ecomment)
-		 VALUES('ci', coalesce((SELECT julianday(value) FROM tagxref
-		   WHERE rid=?2 AND tagid=(SELECT tagid FROM tag WHERE tagname='date')), ?1),
-		   ?2, ?3, ?4, ?1,
+		 VALUES('ci', ?1, ?2, ?3, ?4, ?1,
 		   (SELECT value FROM tagxref WHERE rid=?2 AND tagtype>0
 		     AND tagid=(SELECT tagid FROM tag WHERE tagname='bgcolor')),
 		   (SELECT value FROM tagxref WHERE rid=?2
@@ -1077,6 +1077,9 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 		mtime, rid, d.U, d.C,
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
+	}
+	if err := tag.RefreshEventTime(tx, rid); err != nil {
+		return fmt.Errorf("event time: %w", err)
 	}
 
 	if err := insertCheckinPlinks(tx, rid, d, checkinBaseid(tx, d)); err != nil {

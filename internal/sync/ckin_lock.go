@@ -3,7 +3,6 @@ package sync
 import (
 	"database/sql"
 	"errors"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,17 +12,16 @@ import (
 // DefaultCkinLockTimeout is the default duration after which a ci-lock expires.
 const DefaultCkinLockTimeout = 60 * time.Second
 
-// lockTimeout is the repository's lock-timeout setting in seconds, which
-// fossil reads with db_get_int("lock-timeout", 60) (§9.4). A setting that is
-// absent, not a number or not positive gives the default; a zero timeout
-// would expire every lock as it was taken.
+// lockTimeout is the repository's lock-timeout setting in seconds, read as
+// fossil's db_get_int("lock-timeout", 60) reads it (§9.4): absent gives 60,
+// and otherwise SQLite's integer conversion applies, so a value that is not
+// a number reads as 0. A timeout of 0 or less makes every lock stale at the
+// next ci-lock, which is what fossil does with such a setting.
 func lockTimeout(d *db.DB) time.Duration {
-	var v string
-	if d.QueryRow("SELECT value FROM config WHERE name='lock-timeout'").Scan(&v) != nil {
-		return DefaultCkinLockTimeout
-	}
-	n, err := strconv.Atoi(strings.TrimSpace(v))
-	if err != nil || n <= 0 {
+	var n int64
+	err := d.QueryRow("SELECT CAST(value AS INTEGER) FROM config" +
+		" WHERE name='lock-timeout'").Scan(&n)
+	if err != nil {
 		return DefaultCkinLockTimeout
 	}
 	return time.Duration(n) * time.Second
@@ -55,7 +53,8 @@ func releaseCkinLocks(d *db.DB, clientID string) {
 // processCkinLock handles a ci-lock pragma request, as fossil's page_xfer
 // does: stale locks go first; a live lock on parentUUID is kept as it is,
 // with no refresh, and reported unless clientID holds it; with none, a lock
-// is written for user and clientID, unacknowledged (§9.4).
+// is written for user and clientID, unacknowledged (§9.4). An empty user is
+// nobody, whose login fossil stores as JSON null.
 func processCkinLock(d *db.DB, parentUUID, clientID, user string,
 	timeout time.Duration) *CkinLockFail {
 	if parentUUID == "" {
@@ -84,7 +83,7 @@ func processCkinLock(d *db.DB, parentUUID, clientID, user string,
 		return nil
 	}
 	d.Exec("REPLACE INTO config(name, value, mtime)"+
-		" VALUES(?, json_object('login', ?, 'clientid', ?), ?)",
+		" VALUES(?, json_object('login', nullif(?, ''), 'clientid', ?), ?)",
 		configKey(parentUUID), user, clientID, time.Now().Unix())
 	return nil
 }

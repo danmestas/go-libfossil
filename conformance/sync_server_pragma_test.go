@@ -91,7 +91,43 @@ func serverPragmaCases() []syncServerCase {
 		setup: closed,
 		body:  []string{"{CV}", "pragma ci-lock {M2} aaaa", "{R}"},
 		want: all(completed, noErrors, noCard("pragma ci-lock"),
-			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'", 1)),
+			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'"+
+				" AND json_type(value, '$.login')='null'", 1)),
+	}, {
+		// §9.4: ci-unlock has no Write-capability test either, so nobody
+		// on a closed repository drops client Z1's lock and any row that is
+		// not JSON.
+		Case: Case{ID: "sync.9.4.ci-unlock-no-write-gate", Req: "SP-9.4-2"},
+		setup: append(append([]string{}, closed...),
+			"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{M2}',"+
+				" json_object('login', 'bob', 'clientid', '{Z1}'), strftime('%s', 'now'))",
+			"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{A1}', 'junk', 1)"),
+		body: []string{"{CV}", "pragma ci-unlock {Z1}", "{R}"},
+		want: all(completed, noErrors, noCard("pragma ci-lock"),
+			repoCount("SELECT count(*) FROM config WHERE name GLOB 'ci-lock-*'", 0)),
+	}, {
+		// §9.4: a lock is stale once it is the configured lock-timeout
+		// old. fossil reads the setting with db_get_int, so 0 makes every
+		// lock stale and bob's 30-second-old lock gives way to alice's.
+		Case: Case{ID: "sync.9.4.ci-lock-timeout-setting", Req: "SP-9.4-1"},
+		setup: []string{"REPLACE INTO config(name, value, mtime) VALUES('lock-timeout', '0', 1)",
+			"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{M2}'," +
+				" json_object('login', 'bob', 'clientid', 'aaaa'), strftime('%s', 'now') - 30)"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} bbbb",
+			"{R}"},
+		want: all(completed, noErrors, noCard("pragma ci-lock-fail"),
+			repoCount("SELECT count(*) FROM config WHERE name='ci-lock-{M2}'"+
+				" AND json_extract(value, '$.login')='alice'", 1)),
+	}, {
+		// §9.4: ci-lock-fail carries the fossilized LOGIN, so a login with
+		// a space stays one token.
+		Case: Case{ID: "sync.9.4.ci-lock-fail-fossilized", Req: "SP-9.4-1"},
+		setup: []string{"INSERT INTO config(name, value, mtime) VALUES('ci-lock-{M2}'," +
+			" json_object('login', 'bob smith', 'clientid', 'aaaa'), strftime('%s', 'now'))"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard, "pragma ci-lock {M2} bbbb",
+			"{R}"},
+		want: all(completed, count("pragma ci-lock-fail ", 1),
+			matches("pragma ci-lock-fail ", `^pragma ci-lock-fail bob\\ssmith \d+$`)),
 	}, {
 		// §9.4: the pragma has exactly an artifact-hash HASH argument, so a
 		// token that is no hash writes no lock.

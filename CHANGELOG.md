@@ -103,6 +103,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (sha1), treats a negative stored value as unset (db.c) and leaves a value
   above 4 undefined; -01 is followed here, so every stored value outside 0
   through 4 is an error.
+- `pragma ci-lock` and `pragma ci-unlock` are applied for any requester, with
+  no Write-capability test, as sync-protocol-01 Section 9.4 and fossil's
+  `page_xfer` do (#392). The lock table stays bounded without that gate: each
+  `ci-lock` first deletes every lock whose check-in is not a leaf, so at most
+  one lock per leaf and one other survive. nobody's lock row stores a null
+  login, as fossil's does, and `ci-lock-fail` names such a holder `nobody`,
+  since -01's grammar requires a LOGIN token where fossil sends an empty one.
+  The LOGIN in `ci-lock-fail` is fossilized on the server and defossilized on
+  the client. The `lock-timeout` setting is read as fossil's `db_get_int`
+  reads it: a value of 0 or less, or one that is not a number (read as 0),
+  makes every lock stale, where it previously fell back to 60 seconds.
+
 - The sync client answers a server's `gimme` for content it holds as
   private, outside a private sync, with `igot HASH 1` when the server's
   `pragma server-version` dates it 2020-04-13 or later, and with nothing for

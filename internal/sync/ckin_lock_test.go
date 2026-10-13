@@ -129,8 +129,7 @@ func TestCkinLock_SyncRoundTrip(t *testing.T) {
 	// up by expireStaleLocks (which removes locks for non-leaf parents).
 	parentUUID := "abcd0000000000000000000000000000000000ab"
 	insertLeafBlob(t, serverRepo, parentUUID)
-	// Only a requester who may commit takes a lock.
-	grantNobodyPush(t, serverRepo)
+	// nobody holds no Write capability and still takes the lock (§9.4).
 
 	transport := &MockTransport{
 		Handler: func(req *xfer.Message) *xfer.Message {
@@ -173,7 +172,7 @@ func TestCkinLock_SyncRoundTrip(t *testing.T) {
 	if result2.CkinLockFail == nil {
 		t.Fatal("expected lock fail for second client")
 	}
-	// Default user with no login card is "nobody"
+	// nobody's lock row has a null login, which ci-lock-fail names nobody.
 	if result2.CkinLockFail.HeldBy != "nobody" {
 		t.Fatalf("HeldBy = %q, want %q", result2.CkinLockFail.HeldBy, "nobody")
 	}
@@ -232,20 +231,48 @@ func TestCkinLock_DropsLegacyRows(t *testing.T) {
 	}
 }
 
-// TestLockTimeout_ReadsConfig checks that the lock-timeout setting, which
-// fossil honors, sets how long a lock lives, and that a bad value does not.
+// TestLockTimeout_ReadsConfig checks that the lock-timeout setting sets how
+// long a lock lives, read as fossil's db_get_int reads it: a value that is
+// not a number is 0, and 0 or less is kept, making every lock stale.
 func TestLockTimeout_ReadsConfig(t *testing.T) {
 	d := newCkinLockTestRepo(t).DB()
 	if got := lockTimeout(d); got != DefaultCkinLockTimeout {
 		t.Fatalf("unset: %v", got)
 	}
 	for v, want := range map[string]time.Duration{
-		"300": 300 * time.Second, "0": DefaultCkinLockTimeout,
-		"-5": DefaultCkinLockTimeout, "soon": DefaultCkinLockTimeout,
+		"300": 300 * time.Second, " 30": 30 * time.Second, "0": 0,
+		"-5": -5 * time.Second, "soon": 0, "45s": 45 * time.Second,
 	} {
 		d.Exec("REPLACE INTO config(name, value, mtime) VALUES('lock-timeout', ?, 1)", v)
 		if got := lockTimeout(d); got != want {
 			t.Errorf("lock-timeout %q: %v, want %v", v, got, want)
 		}
+	}
+}
+
+// TestCkinLock_ClientDefossilizesHolder checks that the client reads
+// ci-lock-fail's LOGIN as fossilized text, as fossil's client does with
+// defossilize (§9.4), so a login with a space is reported whole.
+func TestCkinLock_ClientDefossilizesHolder(t *testing.T) {
+	transport := &MockTransport{
+		Handler: func(req *xfer.Message) *xfer.Message {
+			return &xfer.Message{Cards: []xfer.Card{&xfer.PragmaCard{
+				Name: "ci-lock-fail", Values: []string{`bob\ssmith`, "1700000000"},
+			}}}
+		},
+	}
+	clientRepo := newCkinLockTestRepo(t)
+	result, err := Sync(context.Background(), clientRepo, transport, SyncOpts{
+		Pull: true,
+		CkinLock: &CkinLockReq{
+			ParentUUID: "abcd0000000000000000000000000000000000ab",
+			ClientID:   "client-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if result.CkinLockFail == nil || result.CkinLockFail.HeldBy != "bob smith" {
+		t.Fatalf("CkinLockFail = %+v, want holder %q", result.CkinLockFail, "bob smith")
 	}
 }

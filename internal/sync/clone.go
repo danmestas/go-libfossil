@@ -81,7 +81,7 @@ type cloneSession struct {
 	roundRecvd            int    // file/cfile cards the last reply delivered
 	roundPush             bool   // the last reply carried a push card
 	cleanup               bool   // the next request is an operation-less cleanup
-	serverErr             string // a server error after the first round, which fails the clone
+	serverErr             string // an error after round 0, or an unreadable card: fails the clone
 	cookie                string // server-issued snapshot bound; echoed every round so the
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
@@ -493,12 +493,13 @@ cardLoop:
 		}
 		switch c := card.(type) {
 		// §5.2: a reply card the decoder could not read ends the reply-card
-		// loop. On a clone it is a protocol defect, not a transport fault, so
-		// it aborts the clone without a retry (a retry would only hide it).
+		// loop, on every round, the first included.
 		case *xfer.BadCommandCard:
-			return fmt.Errorf("sync.Clone: bad command in reply: %q", strings.TrimRight(c.Line, "\n"))
+			cs.badCard("unknown command: [" + strings.TrimRight(c.Line, "\n") + "]")
+			break cardLoop
 		case *xfer.BadFileCard:
-			return fmt.Errorf("sync.Clone: %s", c.Message)
+			cs.badCard(c.Message)
+			break cardLoop
 
 		case *xfer.PushCard:
 			cs.roundPush = true
@@ -594,6 +595,22 @@ func (cs *cloneSession) serverError(cycle int, c *xfer.ErrorCard) bool {
 		cs.serverErr = c.Message
 	}
 	return true
+}
+
+// badCard records a reply card the decoder could not read. As fossil's
+// client sets xfer.err and breaks, the cards before it stand and the session
+// goes on by §3.7, so a clone's mandatory second round is still made. Clone
+// fails naming the card once the session ends, as it does after a server
+// error (§10.1). Unlike an error card, the first round does not excuse it:
+// fossil's unknown-command branch has no clone exception.
+func (cs *cloneSession) badCard(msg string) {
+	if msg == "" {
+		panic("cloneSession.badCard: empty message")
+	}
+	cs.result.Messages = append(cs.result.Messages, msg)
+	if cs.serverErr == "" {
+		cs.serverErr = msg
+	}
 }
 
 // recordCodes stores the project and server codes a push card carries, the

@@ -96,7 +96,7 @@ func syncClientCases() []syncClientCase {
 		clientPrivateCases(), clientCloneCases(), clientCloneStallCases(),
 		clientCloneErrorCases(), clientUVCases(), clientUVStatusCases(), clientMessageCases(),
 		clientGateCases(), clientAdmissionCases(), clientPullOnlyCases(),
-		clientShortUVIGotCases(), clientRefusalCases(),
+		clientShortUVIGotCases(), clientRefusalCases(), clientCloneBadCardCases(),
 	} {
 		all = append(all, group...)
 	}

@@ -186,7 +186,7 @@ func serverErrorCases() []syncServerCase {
 		setup: []string{"UPDATE user SET cap='o' WHERE login='nobody'"},
 		body:  []string{"{CV}", pullCard, "gimme {A1}", "clone 3 1", "{R}"},
 		want: all(completed, noCard("file {A1}"),
-			onlyError("not authorized to clone", "clone denied")),
+			onlyError("not authorized to clone")),
 	}, {
 		Case: Case{ID: "sync.10.1.non-reset-append", Req: "SP-10.1-3"},
 		body: []string{"{CV}", pullCard, "gimme {A1}", "pragma send-private", "{R}"},
@@ -268,11 +268,11 @@ func serverLoginCases() []syncServerCase {
 		Case:  Case{ID: "sync.6.6.read-required", Req: "SP-6.6-1"},
 		setup: closed,
 		body:  []string{"{CV}", pullCard, "{R}"},
-		want:  all(completed, onlyError("not authorized to read", "pull denied"), noCard("igot ")),
+		want:  all(completed, onlyError("not authorized to read"), noCard("igot ")),
 	}, {
 		Case:  Case{ID: "sync.6.6.write-required", Req: "SP-6.6-1"},
 		setup: closed,
 		body:  []string{"{CV}", pushCard, "{R}"},
-		want:  all(completed, onlyError("not authorized to write", "push denied")),
+		want:  all(completed, onlyError("not authorized to write")),
 	}}
 }

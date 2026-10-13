@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -175,35 +176,38 @@ type remoteHasEntry struct {
 
 // handler holds per-request state while processing cards.
 type handler struct {
-	repo          *repo.Repo
-	buggify       BuggifyChecker
-	resp          []xfer.Card
-	pushOK        bool                      // client sent a valid push card
-	pullOK        bool                      // client sent a valid pull card
-	cloneMode     bool                      // client sent a clone card
-	fatal         bool                      // a card rule ended the request; resp holds only its error
-	broke         bool                      // card loop broken; the post-loop still runs
-	errsReset     int                       // counted errors a reset discarded (§5.3 errors N)
-	projectCode   string                    // the repository's project-code
-	serverCode    string                    // the repository's server-code
-	uncompressed  bool                      // reply goes out uncompressed (clone v3)
-	cloneDone     bool                      // clone card has no usable cursor: send nothing
-	peerVersion   int                       // client's release, from client-version
-	peerDate      int                       // client's check-in date, from client-version
-	cloneSeq      int                       // rid of the next blob to send, from the client's clone card
-	cloneSnapMax  int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
-	uvCatalogSent bool                      // true after sending UV catalog
-	reqClusters   bool                      // client sent pragma req-clusters
-	filesSent     int                       // files sent in response (for observer)
-	filesRecvd    int                       // files received from client (for observer)
-	syncPrivate   bool                      // true if pragma send-private was accepted
-	nextIsPrivate bool                      // true if a private card precedes the next file/cfile
-	syncedTables  map[string]*SyncedTable   // cached table definitions
-	xrowsSent     int                       // table sync rows sent
-	xrowsRecvd    int                       // table sync rows received
-	cache         *content.Cache            // nil = passthrough to content.Expand
-	clock         simio.Clock               // time for the reply's timestamp comment
-	remoteHas     map[string]remoteHasEntry // UUIDs the client announced via igot (mirrors Fossil's onremote table)
+	repo            *repo.Repo
+	buggify         BuggifyChecker
+	resp            []xfer.Card
+	pushOK          bool                      // client sent a valid push card
+	pullOK          bool                      // client sent a valid pull card
+	cloneMode       bool                      // client sent a clone card
+	fatal           bool                      // a card rule ended the request; resp holds only its error
+	broke           bool                      // card loop broken; the post-loop still runs
+	errsReset       int                       // counted errors a reset discarded (§5.3 errors N)
+	projectCode     string                    // the repository's project-code
+	serverCode      string                    // the repository's server-code
+	uncompressed    bool                      // reply goes out uncompressed (clone v3)
+	cloneDone       bool                      // clone card has no usable cursor: send nothing
+	peerVersion     int                       // client's release, from client-version
+	peerDate        int                       // client's check-in date, from client-version
+	cloneSeq        int                       // rid of the next blob to send, from the client's clone card
+	cloneSnapMax    int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
+	uvCatalogSent   bool                      // true after sending UV catalog
+	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
+	reqClusters     bool                      // client sent pragma req-clusters
+	filesSent       int                       // files sent in response (for observer)
+	filesRecvd      int                       // files received from client (for observer)
+	syncPrivate     bool                      // true if pragma send-private was accepted
+	nextIsPrivate   bool                      // true if a private card precedes the next file/cfile
+	syncedTables    map[string]*SyncedTable   // cached table definitions
+	xrowsSent       int                       // table sync rows sent
+	xrowsRecvd      int                       // table sync rows received
+	cache           *content.Cache            // nil = passthrough to content.Expand
+	clock           simio.Clock               // time for the reply's timestamp comment
+	remoteHas       map[string]remoteHasEntry // UUIDs the client announced via igot (mirrors Fossil's onremote table)
+	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
+	logins          int                       // login cards read so far; only one is allowed
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -267,35 +271,24 @@ func (h *handler) handleLoginCard(c *xfer.LoginCard) string {
 	return ""
 }
 
-// loginStop is where a refused login ends card processing: the index of the
-// refused card in the request, and the error page_xfer answers it with.
-type loginStop struct {
-	at  int
-	msg string
-}
-
-// login verifies the request's login cards ahead of every other card, so the
-// capabilities they grant apply to the whole request. Only one is allowed
-// (§6.1, src/xfer.c "error multiple\slogin\scards"). A refusal is returned
-// with its card's position rather than acted on here: page_xfer refuses a
-// login in card order with a reset, an error and a break, so the cards before
-// it keep their effect and the end-of-request steps still run (§6.4).
-func (h *handler) login(req *xfer.Message) (loginStop, bool) {
-	logins := 0
-	for i, card := range req.Cards {
-		lc, ok := card.(*xfer.LoginCard)
-		if !ok {
-			continue
-		}
-		logins++
-		if logins > 1 {
-			return loginStop{at: i, msg: "multiple login cards"}, true
-		}
-		if msg := h.handleLoginCard(lc); msg != "" {
-			return loginStop{at: i, msg: msg}, true
-		}
+// handleLogin answers a login card at its own position in the request, as
+// page_xfer's check_login runs where the card is read: the capabilities it
+// grants apply to the cards after it, never to those before. Only one is
+// allowed (§6.1, src/xfer.c "error multiple\slogin\scards"). A refusal is
+// page_xfer's reset, error and break, so the cards before it keep their
+// effect and the end-of-request steps still run (§6.4).
+func (h *handler) handleLogin(c *xfer.LoginCard) {
+	if c == nil {
+		panic("handler.handleLogin: c must not be nil")
 	}
-	return loginStop{}, false
+	h.logins++
+	if h.logins > 1 {
+		h.breakLoop("multiple login cards")
+		return
+	}
+	if msg := h.handleLoginCard(c); msg != "" {
+		h.breakLoop(msg)
+	}
 }
 
 // fail ends the request with a single error card, discarding the reply built
@@ -372,27 +365,14 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return nil, err
 	}
 
-	// First pass: resolve the login card before other control cards. A
-	// refused login ends card processing at its own position.
-	cards := req.Cards
-	stop, refused := h.login(req)
-	if refused {
-		cards = cards[:stop.at]
-	}
-
-	// Second pass: process other control cards with capability checks.
-	if h.processControlCards(cards); h.fatal {
+	if h.probeCloneFatal(req.Cards) {
 		return h.reply(), nil
 	}
-
-	// Process data cards and emit response blobs.
-	if err := h.processDataCards(ctx, cards); err != nil {
+	if err := h.processCards(ctx, req.Cards); err != nil {
 		return nil, err
 	}
-	// A refused login is page_xfer's reset, error and break, reached only
-	// if no card before it broke the loop first.
-	if refused && !h.broke {
-		h.breakLoop(stop.msg)
+	if h.fatal {
+		return h.reply(), nil
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
 	if err := h.emitInventory(); err != nil {
@@ -411,6 +391,137 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// processCards handles the request's cards in request order, as page_xfer's
+// card loop reads them, until one ends the request (h.fatal) or breaks the
+// loop. Each card sees only the state the cards before it established: a
+// file card before its push card is refused, and a card before a login card
+// has nobody's capabilities (§5.2, §6.4, §6.6).
+func (h *handler) processCards(ctx context.Context, cards []xfer.Card) error {
+	for _, card := range cards {
+		// Phantoms from a run of igot cards are written in one transaction,
+		// as fossil writes them inside page_xfer's single write
+		// transaction; any other card sees them already stored.
+		if _, isIGot := card.(*xfer.IGotCard); !isIGot {
+			if err := h.flushPhantoms(); err != nil {
+				return err
+			}
+		}
+		if err := h.processCard(ctx, card); err != nil {
+			return err
+		}
+		if h.fatal || h.broke {
+			break
+		}
+	}
+	if h.fatal {
+		// A fatal rolls the request back (§8.1): nothing pending is kept.
+		h.pendingPhantoms = nil
+		return nil
+	}
+	return h.flushPhantoms()
+}
+
+// processCard handles one request card.
+func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
+	if card == nil {
+		panic("handler.processCard: card must not be nil")
+	}
+	switch c := card.(type) {
+	case *xfer.LoginCard:
+		h.handleLogin(c)
+	case *xfer.PragmaCard, *xfer.PushCard, *xfer.PullCard, *xfer.CloneCard,
+		*xfer.CloneSeqNoCard, *xfer.CookieCard, *xfer.SchemaCard:
+		h.handleControlCard(card)
+	case *xfer.BadFileCard:
+		// A file/cfile/uvfile line the decoder could not frame: page_xfer
+		// resets its reply, emits the handler's error and breaks (§5.2).
+		h.breakLoop(c.Message)
+	case *xfer.BadCommandCard:
+		h.badCommand(c.Line)
+	case *xfer.ErrorCard, *xfer.MessageCard:
+		// error and message are reply-only: a client that sends one gets a
+		// bad command, as fossil's page_xfer has no branch for them (§5.2).
+		h.badCommand(replyOnlyLine(c))
+	default:
+		return h.handleDataCard(ctx, card)
+	}
+	return nil
+}
+
+// probeCloneFatal answers a request that reaches §8.1's invalid clone
+// sequence fatal, and reports whether it did. page_xfer answers that fatal
+// by rolling back the whole request, so nothing the cards before it stored
+// survives. This handler stores as it goes, with no request transaction to
+// roll back, so a request holding such a clone card is first walked without
+// side effects: only the cards that decide whether the clone card is reached,
+// and with which capabilities, are acted on. When the walk ends in the
+// fatal, its reply is the answer and no card has written anything.
+//
+// The walk stores no file, so a file card that fails validation does not
+// break it as it breaks the real loop. A request that pushes a bad file
+// ahead of an invalid clone card therefore gets the clone error where
+// fossil sends the file's; no conforming client sends push and clone
+// together (§8.5).
+func (h *handler) probeCloneFatal(cards []xfer.Card) bool {
+	if !hasInvalidCloneSeq(cards) {
+		return false
+	}
+	probe := &handler{repo: h.repo, clock: h.clock,
+		projectCode: h.projectCode, serverCode: h.serverCode}
+	probe.initAuth()
+	for _, card := range cards {
+		probe.probeCard(card)
+		if probe.fatal || probe.broke {
+			break
+		}
+	}
+	if !probe.fatal {
+		return false
+	}
+	h.resp, h.fatal = probe.resp, true
+	h.uncompressed = probe.uncompressed
+	return true
+}
+
+// hasInvalidCloneSeq reports whether a clone card in cards would meet
+// §8.1's fatal if an authorized requester reached it.
+func hasInvalidCloneSeq(cards []xfer.Card) bool {
+	for _, card := range cards {
+		c, ok := card.(*xfer.CloneCard)
+		if ok && c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// probeCard is processCard for probeCloneFatal: the cards that can end the
+// card loop or change the capabilities, none of which writes to the
+// repository.
+func (h *handler) probeCard(card xfer.Card) {
+	if card == nil {
+		panic("handler.probeCard: card must not be nil")
+	}
+	switch c := card.(type) {
+	case *xfer.LoginCard:
+		h.handleLogin(c)
+	case *xfer.PushCard:
+		h.handlePushCard(c)
+	case *xfer.PullCard:
+		h.handlePullCard(c)
+	case *xfer.CloneCard:
+		h.handleCloneCard(c)
+	case *xfer.FileCard, *xfer.CFileCard:
+		if !h.pushOK {
+			h.breakLoop("not authorized to write")
+		}
+	case *xfer.BadFileCard:
+		h.breakLoop(c.Message)
+	case *xfer.ConfigCard:
+		h.handleConfigPush()
+	}
 }
 
 // crosslinkReceived crosslinks any newly-received manifests into the
@@ -432,20 +543,6 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 		return fmt.Errorf("HandleSync: crosslink: %w", err)
 	}
 	return nil
-}
-
-// processControlCards handles the request's control cards in order, after
-// the login pass, until one ends the request (h.fatal) or breaks the loop.
-func (h *handler) processControlCards(cards []xfer.Card) {
-	for _, card := range cards {
-		if _, ok := card.(*xfer.LoginCard); ok {
-			continue // Already processed.
-		}
-		h.handleControlCard(card)
-		if h.fatal || h.broke {
-			return
-		}
-	}
 }
 
 // reply is the message the handler answers with.
@@ -540,80 +637,6 @@ func countedErrors(cards []xfer.Card) int {
 	return n
 }
 
-// processDataCards handles file, igot, gimme, and other data cards in the
-// correct order. The caller emits the igot and clone batches after it
-// (emitInventory), once a refused login has had its say.
-func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error {
-	// File cards (and private prefix) first so blobs are stored before
-	// IGotCard checks blob.Exists. Without this, a request containing
-	// both IGotCard and FileCard for the same blob produces a spurious
-	// GimmeCard — the IGotCard runs before the FileCard stores it.
-	//
-	// A BadFileCard is a file/cfile/uvfile line the decoder could not frame;
-	// fossil's page_xfer resets its reply, emits the handler's error and
-	// breaks out of the card loop (§5.2, §7.3). We stop processing the
-	// remaining request cards here too, then still emit the post-loop
-	// inventory below, as fossil does after its break. A control card may
-	// already have broken out (h.broke), and then no data card is processed.
-	//
-	// A card that breaks the loop (a BadFileCard, or a file or cfile card
-	// without an accepted push) does so at its own position: cards before
-	// it still take effect, and only then does the break reset the reply
-	// (cgi_reset_content keeps side effects), as fossil's in-order loop does.
-	stop, stopMsg := len(cards), ""
-	for i, card := range cards {
-		if h.broke {
-			break
-		}
-		switch c := card.(type) {
-		case *xfer.FileCard, *xfer.CFileCard:
-			if !h.pushOK {
-				stop, stopMsg = i, "not authorized to write"
-			} else if err := h.handleDataCard(ctx, card); err != nil {
-				return err
-			}
-		case *xfer.PrivateCard:
-			if err := h.handleDataCard(ctx, card); err != nil {
-				return err
-			}
-		case *xfer.BadFileCard:
-			stop, stopMsg = i, c.Message
-		}
-		if stopMsg != "" {
-			break
-		}
-	}
-	if !h.broke {
-		cards = cards[:stop]
-	}
-	// Remaining data cards (igot, gimme, bad commands, etc.), in request
-	// order so a bad command resets the reply built before it and parsing
-	// goes on past it.
-	for _, card := range cards {
-		if h.broke {
-			break
-		}
-		switch c := card.(type) {
-		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard, *xfer.BadFileCard:
-			continue // Already handled above.
-		case *xfer.BadCommandCard:
-			h.badCommand(c.Line)
-		case *xfer.ErrorCard, *xfer.MessageCard:
-			// error and message are reply-only: a client that sends one gets a
-			// bad command, as fossil's page_xfer has no branch for them (§5.2).
-			h.badCommand(replyOnlyLine(c))
-		default:
-			if err := h.handleDataCard(ctx, card); err != nil {
-				return err
-			}
-		}
-	}
-	if stopMsg != "" && !h.broke {
-		h.breakLoop(stopMsg)
-	}
-	return nil
-}
-
 // emitInventory sends what follows the card loop: the cluster igots a
 // req-clusters asked for, the igot inventory of a pull, and a clone's batch.
 func (h *handler) emitInventory() error {
@@ -623,6 +646,14 @@ func (h *handler) emitInventory() error {
 	// which a gimme still needs Read to fetch.
 	if h.reqClusters {
 		if err := h.sendAllClusters(); err != nil {
+			return err
+		}
+	}
+	// An accepted push asks for the server's phantoms, ahead of the pull's
+	// inventory as page_xfer's request_phantoms runs ahead of
+	// send_unclustered (§6.4, §8.5).
+	if h.pushOK {
+		if err := h.requestPhantoms(); err != nil {
 			return err
 		}
 	}
@@ -652,8 +683,6 @@ func (h *handler) emitInventory() error {
 
 func (h *handler) handleControlCard(card xfer.Card) {
 	switch c := card.(type) {
-	case *xfer.LoginCard:
-		return // Already processed in first pass (initAuth/handleLoginCard).
 	case *xfer.PragmaCard:
 		h.handlePragma(c)
 	case *xfer.PushCard:
@@ -686,20 +715,22 @@ func (h *handler) handlePushCard(c *xfer.PushCard) {
 	}
 	if auth.CanPush(h.caps) {
 		h.pushOK = true
-	} else if h.pullOK {
+		return
+	}
+	if h.pullOK {
 		// A requester who may read but not write is told to pull only,
 		// not refused, as fossil's page_xfer answers a push card with
 		// "message pull only - not authorized to push" once a pull card
-		// has set isPull. The pull still proceeds (§10.2). The pull card
-		// precedes the push card in a canonical request, so pullOK is set.
+		// has set isPull. The pull still proceeds (§10.2).
 		h.resp = append(h.resp, &xfer.MessageCard{
 			Message: "pull only - not authorized to push",
 		})
-	} else {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: "push denied: insufficient capabilities",
-		})
+		return
 	}
+	// Otherwise the reply so far is reset and the push refused, but card
+	// processing goes on (§6.6): page_xfer has no break here.
+	h.resetContent()
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: "not authorized to write"})
 }
 
 // handlePullCard accepts a pull from a requester with Read, after the project
@@ -710,11 +741,10 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 	}
 	if auth.CanPull(h.caps) {
 		h.pullOK = true
-	} else {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: "pull denied: insufficient capabilities",
-		})
+		return
 	}
+	// page_xfer resets, refuses and breaks (§6.6, §10.1).
+	h.breakLoop("not authorized to read")
 }
 
 // handleCloneCard starts a clone for a requester with Clone, at the rid the
@@ -724,23 +754,19 @@ func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 		h.refuseClone()
 		return
 	}
+	// §4.1, §8.1: page_xfer sends a version 3 clone's reply uncompressed,
+	// and sets that before the sequence-number fatal below.
+	h.uncompressed = c.Version >= 3
 	// §8.1: an otherwise authorized three-token clone with VERSION >= 2
 	// and a digit-only SEQNO of zero or less clears accumulated output,
 	// rolls back, emits this error, and parses no later request card.
-	//
-	// The mandated rollback is satisfied vacuously: no card handled
-	// before processDataCards writes anything, so returning here leaves
-	// nothing to undo. That depends on an ordering nothing enforces —
-	// the day a control card starts writing (§3.5's ci-lock is the
-	// obvious candidate, since a lock taken ahead of this card would
-	// survive the abort), this needs a real transaction instead.
+	// probeCloneFatal reaches this ahead of the card loop, before any card
+	// has written, which is what stands in for the rollback.
 	if c.SeqNoIsDecimal && c.Version >= 2 && c.SeqNo <= 0 {
 		h.fail("invalid clone sequence number")
 		return
 	}
 	h.cloneMode = true
-	// §4.1, §8.1: page_xfer sends a version 3 clone's reply uncompressed.
-	h.uncompressed = c.Version >= 3
 	// The pagination cursor rides on the clone card and nowhere else
 	// (§8.1; canonical xfer.c:1553 reads token 2 of `clone VERSION
 	// SEQNO`). §8.1 withholds the fatal above from a negative SEQNO, which
@@ -775,12 +801,8 @@ func (h *handler) refuseClone() {
 // wrongProject refuses a push or pull card naming another project, ahead of
 // any capability check, as page_xfer does with "error wrong\sproject" and a
 // break (§8.5). The servercode beside it is informational and not checked.
-//
-// This is deliberately stricter than fossil in one respect. Control cards
-// are handled in a pass before data cards, so the break also stops file
-// cards that came earlier in the request, which fossil, reading cards in
-// order, would already have stored. A conforming client sends push and pull
-// first, so only a malformed request sees the difference.
+// Cards are handled in request order, so a file card ahead of it has been
+// stored, as fossil stores it.
 func (h *handler) wrongProject(code string) bool {
 	if code == h.projectCode {
 		return false
@@ -792,8 +814,8 @@ func (h *handler) wrongProject(code string) bool {
 // handlePragma acts on the pragmas the server understands and ignores the
 // rest, client-version included.
 //
-// Pragmas are handled in card order, before data cards, so a pull card later
-// in the request is not yet known here. The catalogs are therefore gated on
+// Pragmas are handled in card order, so a pull card later in the request is
+// not yet known here. The catalogs are therefore gated on
 // the Read capability itself, as fossil's page_xfer gates uv-hash on
 // g.perm.Read, rather than on an accepted pull.
 func (h *handler) handlePragma(c *xfer.PragmaCard) {
@@ -904,14 +926,20 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 	if c == nil {
 		panic("handler.handleIGot: c must not be nil")
 	}
-	_, exists := blob.Exists(h.repo.DB(), c.UUID)
-	if exists {
+	// page_xfer reads igot only with an artifact name (blob_is_hname); any
+	// other line falls through to its bad command (§5.2). IsValidHash takes
+	// lowercase hex only where validate16 also takes A-F: an uppercase name
+	// would break the blob table's CHECK constraint, so it is refused here.
+	if !hash.IsValidHash(c.UUID) {
+		h.badCommand(replyOnlyLine(c))
+		return nil
+	}
+	if _, exists := blob.Exists(h.repo.DB(), c.UUID); exists {
 		// Record that the client has this blob so emitIGots can skip it.
-		// Mirrors Fossil's remote_has() → onremote table (xfer.c:1471).
-		if h.remoteHas == nil {
-			h.remoteHas = make(map[string]remoteHasEntry)
-		}
-		h.remoteHas[c.UUID] = remoteHasEntry{isPrivate: c.IsPrivate}
+		// Mirrors Fossil's remote_has() → onremote table (xfer.c:1471),
+		// which fossil fills only under push; it is kept for a pull too, so
+		// a pull-only client is not told about what it just announced.
+		h.recordRemoteHas(c)
 		return nil
 	}
 	// Only a pushing client can deliver what it announces. Fossil's
@@ -921,13 +949,14 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 	if !h.pushOK {
 		return nil
 	}
-	if c.IsPrivate && !h.syncPrivate {
-		return nil // not authorized — don't request
+	// A private igot makes a phantom only for a requester who may push
+	// private content, as page_xfer checks g.perm.Private.
+	if c.IsPrivate && !auth.CanSyncPrivate(h.caps) {
+		return nil
 	}
 	// Fossil's igot handling goes through rid_from_uuid → content_new, which
 	// returns 0 for a shunned name: no phantom is made, so no gimme follows
-	// (src/content.c, #349). The check is last so an exists hit above still
-	// records remoteHas for the held artifact.
+	// (src/content.c, #349).
 	shunned, err := shun.IsShunned(h.repo.DB(), c.UUID)
 	if err != nil {
 		return fmt.Errorf("handler: shun check for igot %s: %w", c.UUID, err)
@@ -935,14 +964,114 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 	if shunned {
 		return nil
 	}
-	h.resp = append(h.resp, &xfer.GimmeCard{UUID: c.UUID})
+	h.pendingPhantoms = append(h.pendingPhantoms,
+		pendingPhantom{uuid: c.UUID, private: c.IsPrivate})
+	// page_xfer calls remote_has on the new phantom too, so a file card
+	// later in the request that fills it is not announced back.
+	h.recordRemoteHas(c)
 	return nil
+}
+
+// recordRemoteHas notes that the client holds what an igot announced.
+func (h *handler) recordRemoteHas(c *xfer.IGotCard) {
+	if c == nil {
+		panic("handler.recordRemoteHas: c must not be nil")
+	}
+	if h.remoteHas == nil {
+		h.remoteHas = make(map[string]remoteHasEntry)
+	}
+	h.remoteHas[c.UUID] = remoteHasEntry{isPrivate: c.IsPrivate}
+}
+
+// pendingPhantom is an artifact a pushing client announced that
+// flushPhantoms has yet to record.
+type pendingPhantom struct {
+	uuid    string
+	private bool
+}
+
+// flushPhantoms records the pending igot names as phantoms in one
+// transaction, as page_xfer's rid_from_uuid(..., 1, isPriv) does: push
+// creates server phantoms from client igot (§3.3, §8.5). The gimme for them
+// is sent by requestPhantoms after the card loop, so a file card later in
+// the same request fills one without being asked for. One transaction for
+// the run avoids a WAL commit per announced artifact.
+func (h *handler) flushPhantoms() error {
+	if len(h.pendingPhantoms) == 0 {
+		return nil
+	}
+	pending := h.pendingPhantoms
+	h.pendingPhantoms = nil
+	return h.repo.WithTx(func(tx *db.Tx) error {
+		for _, p := range pending {
+			rid, err := blob.StorePhantom(tx, p.uuid)
+			if err != nil {
+				return fmt.Errorf("handler: phantom for igot %s: %w", p.uuid, err)
+			}
+			if !p.private {
+				continue
+			}
+			if err := content.MakePrivate(tx, int64(rid)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// maxPhantomGimme bounds the gimme cards one reply sends for the server's
+// phantoms: page_xfer's request_phantoms(&xfer, 500).
+const maxPhantomGimme = 500
+
+// requestPhantoms asks a pushing client for the server's phantoms, as
+// page_xfer's request_phantoms does after the card loop: every phantom but
+// those the client asked for this round (it lacks them), shunned names, and
+// private ones outside a private sync (§3.3), at most maxPhantomGimme.
+func (h *handler) requestPhantoms() error {
+	if !h.pushOK {
+		panic("handler.requestPhantoms: push not accepted")
+	}
+	query := "SELECT uuid FROM phantom CROSS JOIN blob USING(rid)" +
+		" WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
+	if !h.syncPrivate {
+		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
+	}
+	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
+	if err != nil {
+		return fmt.Errorf("handler: listing phantoms: %w", err)
+	}
+	defer rows.Close()
+	sent := 0
+	for sent < maxPhantomGimme && rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
+			return fmt.Errorf("handler: listing phantoms: %w", err)
+		}
+		if h.remoteLacks[uuid] {
+			continue
+		}
+		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
+		sent++
+	}
+	return rows.Err()
 }
 
 func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if c == nil {
 		panic("handler.handleGimme: c must not be nil")
 	}
+	// page_xfer reads gimme only with an artifact name (blob_is_hname); any
+	// other line falls through to its bad command (§5.2).
+	if !hash.IsValidHash(c.UUID) {
+		h.badCommand(replyOnlyLine(c))
+		return nil
+	}
+	// The client lacks what it asks for, so the server does not ask for it
+	// back (fossil's remote_unk, ahead of the isPull check).
+	if h.remoteLacks == nil {
+		h.remoteLacks = make(map[string]bool)
+	}
+	h.remoteLacks[c.UUID] = true
 	// Fossil's page_xfer answers gimme only `if( isPull )`: a pull card the
 	// requester's Read permission accepted, or a clone, which sets isPull
 	// too. Answering any other gimme hands content to whoever names a hash.

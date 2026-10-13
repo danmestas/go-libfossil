@@ -84,15 +84,26 @@ func segmentCases() []deltaCase {
 	}
 }
 
+// noVerify is why a mismatching checksum is rejected by go-libfossil only.
+const noVerify = "fossil never verifies the checksum, which Section 3.4 permits; " +
+	"go-libfossil verifies, so the verifying branch applies"
+
 func trailerCases() []deltaCase {
 	return []deltaCase{
 		applyOK("delta.3.4.wrap", "DF-3.4-2", "", "8\n8:"+strings.Repeat("\xff", 8)+ckFF8+";",
 			strings.Repeat("\xff", 8)),
 		// go-libfossil verifies the checksum, which the draft allows but
 		// does not require; fossil(1) does not, and accepts "A".
-		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;", "").checksumFailure().differs(
-			"fossil never verifies the checksum, which Section 3.4 permits; " +
-				"go-libfossil verifies, so the verifying branch applies"),
+		applyBad("delta.4.reject-08", "DF-3.4-3", "", "1\n1:A0;", "").checksumFailure().differs(noVerify),
+		// More mismatches a verifying decoder rejects: an empty target, a target
+		// built by a copy, and one whose checksum differs in the 1-3 byte tail
+		// word only (ckab is "ab", the target is "abc").
+		applyBad("delta.3.4.mismatch-empty", "DF-3.4-3", "", "0\n1;", "").checksumFailure().
+			differs(noVerify),
+		applyBad("delta.3.4.mismatch-copy", "DF-3.4-3", "abc", "3\n3@0,"+ckab+";", "").
+			checksumFailure().differs(noVerify),
+		applyBad("delta.3.4.mismatch-tail", "DF-3.4-3", "", "3\n3:abc"+ckab+";", "").
+			checksumFailure().differs(noVerify),
 		applyOK("delta.3.4.trailing", "DF-3.4-4", "", "0\n0;ignored", ""),
 		applyOK("delta.3.4.trailing-segment", "DF-3.4-4", "", "1\n1:A"+ckA+";1:B", "A"),
 	}

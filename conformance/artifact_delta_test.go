@@ -99,6 +99,34 @@ func deltaManifestCases() []apiCase {
 				_, uuid := storeArtifact(t, r, baseControl)
 				return uuid
 			})},
+		// Section 8.4: single-name lookup searches the delta first; a delete
+		// marker answers not-found without reading the baseline.
+		{Case{ID: "artifact.8.4.delta-entry", Req: "AF-8.4-1"},
+			lookup(true, "F a.txt "+h4+"\n", "a.txt", h4, false)},
+		{Case{ID: "artifact.8.4.delete-marker", Req: "AF-8.4-1"},
+			lookup(true, "F b.txt\n", "b.txt", "", false)},
+		{Case{ID: "artifact.8.4.baseline-entry", Req: "AF-8.4-1"},
+			lookup(true, "F a.txt "+h4+"\n", "b.txt", h2, false)},
+		{Case{ID: "artifact.8.4.delete-marker-baseline-unread", Req: "AF-8.4-1"},
+			lookup(false, "F b.txt\n", "b.txt", "", false)},
+		{Case{ID: "artifact.8.4.delta-entry-baseline-unread", Req: "AF-8.4-1"},
+			lookup(false, "F a.txt "+h4+"\n", "a.txt", h4, false)},
+		// Section 8.3: an absent name needs the baseline, and an unresolvable one
+		// is a fatal error of the search.
+		{Case{ID: "artifact.8.4.absent-baseline-missing", Req: "AF-8.4-1"},
+			lookup(false, "F a.txt "+h4+"\n", "b.txt", "", true)},
+		// The search stops at the baseline's own F cards: c.txt reaches the
+		// baseline only through the delta the baseline names.
+		{Case{ID: "artifact.8.4.baseline-chain-not-followed", Req: "AF-8.4-1"},
+			func(t *testing.T) error {
+				r := newPolicyRepo(t, "2")
+				_, baseline := storeArtifact(t, r, deltaBaseline)
+				_, first := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+
+					"\nF a.txt "+h4+"\nU u\n")
+				rid, _ := storeArtifact(t, r, "B "+first+"\nC second\nD "+ts+
+					"\nF d.txt "+h5+"\nU u\n")
+				return wantLookup(r, rid, "c.txt", "", false)
+			}},
 		// Section 4.7.3 (-01): a delta naming a delta is accepted, and its
 		// file set is built from the named delta's own F cards only, so
 		// b.txt and c.txt, which that delta inherits, are absent.
@@ -181,4 +209,38 @@ func TestCrosslinkBaselineMustBeCheckin(t *testing.T) {
 			}
 		})
 	}
+}
+
+// lookup stores the deltaBaseline and a delta with the cards rest, or, when
+// baselinePresent is false, a delta whose baseline was never stored, then
+// looks name up in the delta.
+func lookup(baselinePresent bool, rest, name, uuid string, wantErr bool) func(*testing.T) error {
+	return func(t *testing.T) error {
+		r := newPolicyRepo(t, "2")
+		_, baseline := storeArtifact(t, r, deltaBaseline)
+		if !baselinePresent {
+			baseline = h9
+		}
+		rid, _ := storeArtifact(t, r, "B "+baseline+"\nC delta\nD "+ts+"\n"+rest+"U u\n")
+		return wantLookup(r, rid, name, uuid, wantErr)
+	}
+}
+
+// wantLookup checks manifest.LookupFile: the hash it finds (empty for
+// not-found) or, when wantErr, that the search fails.
+func wantLookup(r *repo.Repo, rid libfossil.FslID, name, uuid string, wantErr bool) error {
+	entry, found, err := manifest.LookupFile(r, rid, name)
+	if wantErr {
+		if err == nil {
+			return expectf("looking up %q gave found=%v without an error", name, found)
+		}
+		return nil
+	}
+	if err != nil {
+		return expectf("looking up %q failed: %v", name, err)
+	}
+	if found != (uuid != "") {
+		return expectf("looking up %q gave found=%v, want %v", name, found, uuid != "")
+	}
+	return want("hash of "+name, entry.UUID, uuid)
 }

@@ -23,9 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step 6, where go-libfossil, like fossil, stores no time or a time of 0;
   those cases are marked as deviations. The draft non-conformances the
   re-pin exposes are tracked in #370, #371, #372, #373, #374 and #375.
+- More conformance cases for the artifact and delta suites: single-name
+  lookup in a delta manifest (8.4), a lowercase K card from the writer
+  (4.7.9), date-only timestamps (4.6.4), mismatching delta checksums beyond
+  the first (3.4), and the 2^32 limit on delta sizes (3.1), checked with an
+  unread 4 GiB mapping. DF-3-2, DF-3.1-6 and DF-3.4-3 are now covered. AF-6.3-5
+  and AF-7.1-2 stay uncovered, with the reason in their rows: go-libfossil has
+  no commit-time R check and no hash-policy value-string surface to drive.
+  Artifact-format-01 Section 4.6.4 lets a reader accept the time-only and
+  now/subsec forms (a reader MAY accept forms 2 through 5), so `deck.Parse`
+  keeps rejecting them; fossil(1) accepts both.
 
 ### Fixed
 
+- Looking up one file in a delta manifest follows artifact-format-01 Section
+  8.4: the delta's own F cards are searched first, and a delete marker answers
+  not-found without reading the baseline, so a deleted name no longer fails
+  when the baseline is missing. A name the delta does not mention still
+  needs the baseline and fails without it. The new `manifest.LookupFile`
+  serves `Repo.ReadFile` and `manifest.FileAt`, and no longer lists the whole
+  file set for one name.
+- `deck.Deck.Marshal` writes the K card's ticket ID in lowercase, as Section
+  4.7.9 requires of a writer, even when the deck came from an artifact whose
+  parser-accepted K card was uppercase.
 - `deck.Parse` accepts every Julian-day spelling artifact-format-01 Section
   4.6.4 form 5 allows: a sign, an exponent, a leading point and a trailing
   point. Hex, `inf`, `nan` and `_` stay rejected, and the bound is now

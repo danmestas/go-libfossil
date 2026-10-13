@@ -398,6 +398,12 @@ var reservedCases = func() []artifactCase {
 	)
 }()
 
+// Forms 3 (time only) and 4 (now, subsec, subsecond) of Section 4.6.4 have no
+// case: a reader MAY accept forms 2 through 5, and only form 1 is required.
+// deck.Parse leaves them out, since a stored artifact must carry form 1 and
+// "now" would make Parse depend on the clock; fossil(1) accepts both, so a
+// rejecting case could not pass the fossil check.
+
 // timestampCases puts each token in the manifest base's D card. An
 // accepted token is checked as the instant it denotes, in UTC.
 func timestampCases() []artifactCase {
@@ -414,6 +420,8 @@ func timestampCases() []artifactCase {
 		{"hour-24", "2026-01-02T24:00:00", "2026-01-03T00:00:00.000"},
 		{"no-calendar-check", "2024-02-31T03:04:05", "2024-03-02T03:04:05.000"},
 		{"after-epoch", "-4713-11-25T00:00:00", "-4713-11-25T00:00:00.000"},
+		// Form 2: a reader MAY accept a date alone, as midnight.
+		{"date-only", "2026-01-02", "2026-01-02T00:00:00.000"},
 	}
 	// Julian day numbers (Section 4.6.4, form 5); 2461042.5 is
 	// 2026-01-02T00:00:00.
@@ -438,6 +446,8 @@ func timestampCases() []artifactCase {
 		{"five-digit-year", "AF-4.6.4-4", "20260-01-02T03:04:05"},
 		{"one-digit-month", "AF-4.6.4-4", "2026-1-02T03:04:05"},
 		{"epoch", "AF-4.6.4-5", "-4713-11-24T12:00:00"},
+		{"date-only-month-13", "AF-4.6.4-4", "2026-13-02"},
+		{"date-only-epoch", "AF-4.6.4-5", "-4713-11-24"},
 		{"zero-julian", "AF-4.6.4-7", "0"},
 		{"negative-julian", "AF-4.6.4-7", "-1"},
 		{"julian-upper-bound", "AF-4.6.4-7", "5373484.5"},

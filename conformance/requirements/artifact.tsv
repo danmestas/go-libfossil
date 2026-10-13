@@ -59,7 +59,6 @@ AF-4.6.4-2	4.6.4	A parser accepts a date-time with T or whitespace separators, H
 AF-4.6.4-3	4.6.4	A lowercase t separator is rejected.
 AF-4.6.4-4	4.6.4	In the date-time, date-only and time-only forms, the year is 4 digits, month 01-12, day 01-31 with no calendar check, hour 00-24, minute and second 00-59.
 AF-4.6.4-5	4.6.4	A date on or before -4713-11-24 is rejected.
-# AF-4.6.4-6 is FAILING: Tracked in #370.
 AF-4.6.4-6	4.6.4	A Julian day number is an optional sign, digits with an optional fraction (at least one digit), and an optional E or e exponent with an optional sign; no other numeric spelling is recognized.
 AF-4.6.4-7	4.6.4	A Julian day number that is zero, negative, or 5373484.5 or more, after rounding to the nearest millisecond, is rejected.
 AF-4.7.1-1	4.7.1	Every hash position (A target as a hash, A source, B, E ID, F hash, G, I, M, P, both Q tokens, T target) holds exactly 40 or 64 hexadecimal digits.

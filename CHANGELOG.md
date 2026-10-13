@@ -68,8 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails the commit. Tracked in #387.
 - A `hash-policy` setting that is not one of the ordinals 0 through 4 is now an
   error when content is named or stored, not a silent fall back to the
-  default (artifact-format-01 7.1: an unrecognized policy value is fatal).
-  fossil 2.28 reads a non-integer value as 0 (sha1); -01 is followed here.
+  default (artifact-format-01 7.1: an unrecognized policy value is fatal),
+  and `Repo.SetConfig` refuses to write such a value, as fossil's
+  `hash-policy` command does. fossil 2.28 reads a non-integer value as 0
+  (sha1), treats a negative stored value as unset (db.c) and leaves a value
+  above 4 undefined; -01 is followed here, so every stored value outside 0
+  through 4 is an error.
 - The sync client answers a server's `gimme` for content it holds as
   private, outside a private sync, with `igot HASH 1` when the server's
   `pragma server-version` dates it 2020-04-13 or later, and with nothing for

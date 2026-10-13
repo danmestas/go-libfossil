@@ -98,7 +98,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			return txErr
 		}
 
-		if txErr := verifyRCard(tx, cache, manifestRid); txErr != nil {
+		if txErr := VerifyRCard(tx, cache, manifestRid); txErr != nil {
 			return txErr
 		}
 
@@ -304,6 +304,11 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 }
 
 func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error) {
+	// Writer postcondition (AF-6.3-4): ComputeR yields lowercase hex, so this
+	// can only trip on a programmer error upstream.
+	if len(d.R) != 32 || strings.ToLower(d.R) != d.R {
+		panic("manifest.insertCheckinBlob: R card must be 32 lowercase hex digits")
+	}
 	manifestBytes, err := d.Marshal()
 	if err != nil {
 		return 0, "", fmt.Errorf("marshal: %w", err)
@@ -315,7 +320,7 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 	return rid, uuid, nil
 }
 
-// verifyRCard is the commit-time self-check of artifact-format-01 6.3.4
+// VerifyRCard is the commit-time self-check of artifact-format-01 6.3.4
 // (AF-6.3-5), fossil's checkin.c "manifest checksum self-test": it reads the
 // stored manifest back, recomputes the R digest over the tree the manifest
 // resolves to (a delta manifest's baseline merged with its own cards), and
@@ -323,9 +328,13 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 // always lowercase, so an uppercase or otherwise wrong R card fails. Reading
 // back, not reusing the digest the writer just computed, is what makes this a
 // check: it catches a manifest whose cards do not describe the tree R covers.
-func verifyRCard(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
+// It returns an error rather than panicking because a mismatch can come from
+// stored-state corruption, which is not a programmer error. It is exported
+// (inside internal/) so the conformance suite can drive it with a stored
+// manifest that carries a bad R card.
+func VerifyRCard(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
 	if rid <= 0 {
-		panic("manifest.verifyRCard: rid must be positive")
+		panic("manifest.VerifyRCard: rid must be positive")
 	}
 	d, mf, err := loadCheckinManifest(tx, cache, rid)
 	if err != nil {

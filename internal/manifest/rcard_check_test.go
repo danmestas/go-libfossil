@@ -13,7 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
-// storedManifest writes data as a blob and runs verifyRCard on it. The text
+// storedManifest writes data as a blob and runs VerifyRCard on it. The text
 // is stored as written because deck.Marshal would lowercase the R card.
 func storedManifest(t *testing.T, mutate func(r string) string) error {
 	t.Helper()
@@ -44,7 +44,7 @@ func storedManifest(t *testing.T, mutate func(r string) string) error {
 		if err != nil {
 			return err
 		}
-		verr = verifyRCard(tx, content.NewCache(1<<20), brid)
+		verr = VerifyRCard(tx, content.NewCache(1<<20), brid)
 		return nil
 	})
 	if err != nil {
@@ -55,20 +55,21 @@ func storedManifest(t *testing.T, mutate func(r string) string) error {
 
 func TestVerifyRCardAcceptsLowercaseDigest(t *testing.T) {
 	if err := storedManifest(t, func(r string) string { return r }); err != nil {
-		t.Fatalf("verifyRCard on a correct R card: %v", err)
+		t.Fatalf("VerifyRCard on a correct R card: %v", err)
 	}
 }
 
 func TestVerifyRCardRejectsUppercaseDigest(t *testing.T) {
-	if err := storedManifest(t, strings.ToUpper); err == nil {
-		t.Fatal("verifyRCard accepted an uppercase R card")
+	err := storedManifest(t, strings.ToUpper)
+	if err == nil || !strings.Contains(err.Error(), "R-card check: manifest R card") {
+		t.Fatalf("want an R-card mismatch for an uppercase R card, got %v", err)
 	}
 }
 
 func TestVerifyRCardRejectsWrongDigest(t *testing.T) {
 	err := storedManifest(t, func(string) string { return strings.Repeat("0", 32) })
-	if err == nil {
-		t.Fatal("verifyRCard accepted an R card that does not match the tree")
+	if err == nil || !strings.Contains(err.Error(), "R-card check: manifest R card") {
+		t.Fatalf("want an R-card mismatch for a wrong R card, got %v", err)
 	}
 }
 

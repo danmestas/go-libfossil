@@ -90,8 +90,9 @@ func NamingFor(q db.Querier) (Naming, error) {
 	return n, nil
 }
 
-// MustNamingFor is NamingFor for fixtures that build the repo themselves: a
-// policy value they did not write is a programmer error, so it panics.
+// MustNamingFor is NamingFor for test fixtures that wrote the policy row
+// themselves, so an unrecognized value there is a fixture bug and panics.
+// Production code reads on-disk state and must use NamingFor.
 func MustNamingFor(q db.Querier) Naming {
 	n, err := NamingFor(q)
 	if err != nil {

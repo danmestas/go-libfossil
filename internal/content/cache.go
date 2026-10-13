@@ -105,7 +105,7 @@ func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 		return elem.Value.(*cacheEntry).data, true
 	}
 
-	data, err := expandChain(q, rid, have, c.store)
+	data, err := expandChain(q, rid, have, c.store, true)
 	if err != nil {
 		return nil, err
 	}

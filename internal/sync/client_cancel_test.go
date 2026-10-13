@@ -2,13 +2,16 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -201,5 +204,30 @@ func TestProcessResponseThreadsContextToPhantomFillCascade(t *testing.T) {
 		t.Fatalf("with a context cancelled mid-cascade, crosslinked %d of %d fanout "+
 			"children: session.Sync's context did not reach the mid-round phantom-fill "+
 			"cascade through processResponse (issue #167)", got, fanout)
+	}
+}
+
+// TestProcessResponseCrosslinksFilledPhantomsOnCardError: a card error ends
+// the reply early, but the phantoms the reply already filled are stored, so
+// their crosslink cascade still runs. Here a late hash mismatch follows the
+// fill of a phantom with delta children.
+func TestProcessResponseCrosslinksFilledPhantomsOnCardError(t *testing.T) {
+	s, r := newTestSession(t, SyncOpts{Pull: true, ServerCode: "sc", ProjectCode: testPC})
+	baseUUID, base, children := buildPhantomFillFanout(t, r, 3)
+	evil, err := delta.Create(base, append(append([]byte{}, base...), "evil\n"...))
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
+	claimed := hash.SHA1([]byte("not what the delta gives"))
+	msg := &xfer.Message{Cards: []xfer.Card{
+		&xfer.FileCard{UUID: claimed, DeltaSrc: baseUUID, Content: evil},
+		&xfer.FileCard{UUID: baseUUID, Content: base},
+	}}
+	if _, err := s.processResponse(context.Background(), msg); !errors.Is(err, errHashMismatch) {
+		t.Fatalf("processResponse = %v, want a hash mismatch", err)
+	}
+	if got := countCrosslinkedRids(t, r, children); got != len(children) {
+		t.Fatalf("crosslinked %d of %d children of the filled phantom, want all", got,
+			len(children))
 	}
 }

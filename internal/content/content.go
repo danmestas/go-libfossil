@@ -47,7 +47,22 @@ func Expand(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 		}
 	}()
 
-	return expandChain(q, rid, nil, nil)
+	return expandChain(q, rid, nil, nil, true)
+}
+
+// ExpandUnchecked reconstructs rid's bytes as Expand does but does not check
+// them against rid's name, as fossil's content_get reconstructs. It is for a
+// caller that checks what it derives from the bytes: a received delta's
+// basis, whose result is verified against the delta's own HASH (sync-protocol
+// Section 7.7). It must not be used to serve content.
+func ExpandUnchecked(q db.Querier, rid libfossil.FslID) ([]byte, error) {
+	if q == nil {
+		panic("content.ExpandUnchecked: q must not be nil")
+	}
+	if rid <= 0 {
+		panic("content.ExpandUnchecked: rid must be > 0")
+	}
+	return expandChain(q, rid, nil, nil, false)
 }
 
 // expandChain expands rid by walking its delta chain back to a materialized
@@ -58,6 +73,10 @@ func Expand(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 // the chain root. put, when non-nil, receives every node this call
 // materialized. Both are nil for a plain [Expand], which then walks and
 // replays the whole chain exactly as it always has.
+//
+// check is false only for [ExpandUnchecked] (put is then nil): the result is
+// not bound to rid's name, and the BUGGIFY corruption that exists to exercise
+// that binding does not fire.
 //
 // The two hooks are what make repeated expansion of one chain linear rather
 // than quadratic. In a real repository content_deltify has rewritten older
@@ -70,6 +89,7 @@ func expandChain(
 	rid libfossil.FslID,
 	have func(libfossil.FslID) ([]byte, bool),
 	put func(libfossil.FslID, []byte),
+	check bool,
 ) ([]byte, error) {
 	chain, base, err := walkDeltaChain(q, rid, have)
 	if err != nil {
@@ -147,12 +167,19 @@ func expandChain(
 	// When put is non-nil every node above was verified on its way into the
 	// caller's store, rid included; hashing it a second time here would
 	// double the cost of a sweep for nothing.
-	verified := put != nil
+	return finishExpansion(q, rid, content, put != nil, check)
+}
 
+// finishExpansion applies the final name check to an expanded artifact, with
+// the BUGGIFY corruption that exercises it under DST. verified is true when
+// every node was already checked on its way into the caller's store.
+func finishExpansion(q db.Querier, rid libfossil.FslID, content []byte, verified,
+	check bool) ([]byte, error) {
 	// BUGGIFY: flip a byte in expanded content to exercise the hash check
 	// below under DST. It fires once per expansion, on the artifact the
 	// caller named, whether or not interiors were materialized on the way.
-	if simio.Buggify(0.01) && len(content) > 0 {
+	// An unchecked expansion has no check to exercise.
+	if check && simio.Buggify(0.01) && len(content) > 0 {
 		corrupted := make([]byte, len(content))
 		copy(corrupted, content)
 		corrupted[0] ^= 0xFF
@@ -160,7 +187,7 @@ func expandChain(
 		verified = false
 	}
 
-	if !verified {
+	if !verified && check {
 		if err := bindToName(q, rid, content); err != nil {
 			return nil, err
 		}

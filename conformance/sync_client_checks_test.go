@@ -1,6 +1,9 @@
 package conformance
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -136,6 +139,18 @@ func stored(name string) clientCheck {
 // phantom for it.
 func notStored(name string) clientCheck {
 	return clientRows("SELECT count(*) FROM blob WHERE uuid='{"+name+"}'", 0)
+}
+
+// notKept checks that the client kept nothing under an artifact's name: a
+// clone that fails removes its repository, which keeps nothing, and any
+// repository the run left must pass notStored.
+func notKept(name string) clientCheck {
+	return func(r *clientRun) error {
+		if _, err := os.Stat(r.repo); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return notStored(name)(r)
+	}
 }
 
 // phantom checks that the client holds a phantom for an artifact.
@@ -351,18 +366,37 @@ func atLeast(n int) clientCheck {
 	}
 }
 
+// runReport is everything the client said about the run: fossil(1)'s output,
+// go-libfossil's error and the errors in its result.
+func runReport(r *clientRun) string {
+	text := r.output
+	if r.err != nil {
+		text += r.err.Error()
+	}
+	if r.result != nil {
+		text += strings.Join(r.result.Errors, "\n")
+	}
+	return text
+}
+
+// names checks the client's report names an artifact, so that a failure for
+// some other reason that happens to use a reason's words does not pass.
+func names(name string) clientCheck {
+	return func(r *clientRun) error {
+		uuid := r.fx.expand("{" + name + "}")
+		if !strings.Contains(runReport(r), uuid) {
+			return expectf("%s did not name %s (%s): %.200q", r.who, name, uuid, runReport(r))
+		}
+		return nil
+	}
+}
+
 // mentions checks the client reported one of reasons: each client's
 // wording of the reason a case is about, in go-libfossil's error or
 // result, or fossil(1)'s output.
 func mentions(reasons ...string) clientCheck {
 	return func(r *clientRun) error {
-		text := r.output
-		if r.err != nil {
-			text += r.err.Error()
-		}
-		if r.result != nil {
-			text += strings.Join(r.result.Errors, "\n")
-		}
+		text := runReport(r)
 		for _, reason := range reasons {
 			if strings.Contains(text, reason) {
 				return nil

@@ -13,7 +13,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -581,9 +580,18 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 		panic("sync.processResponse: msg must not be nil")
 	}
 	var t replyTally
+	// Each reply is one verification pass (§7.7): a delta stored dangling is
+	// checked if its basis arrives later in this reply, not in a later one.
+	s.pass = newReceivePass()
+	defer func() { s.pass = nil }()
 	for _, card := range msg.Cards {
 		stop, err := s.handleReplyCard(ctx, card, &t)
 		if err != nil {
+			// The phantoms this reply already filled are stored and owe
+			// their crosslink cascade, which a late hash mismatch (the basis
+			// stays stored) must not skip.
+			s.cascaded += manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+			s.dephantomized = s.dephantomized[:0]
 			return false, err
 		}
 		if stop {
@@ -964,30 +972,36 @@ func (s *session) tablesPending() bool {
 // not be used where the session owes the closing repair
 // manifest.CrosslinkAfterCascades that count (issue #414); the sync client
 // and handler use storeReceived for that.
-func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
-	dephantomizedRid, err := storeReceived(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
-		linker)
-	if err != nil {
-		return err
-	}
+//
+// pass is the verification pass the card belongs to (see receivePass). A
+// late hash mismatch, found in a delta this pass stored earlier, still leaves
+// the card's own artifact stored, and its cascade owed.
+func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, deltaSrc string,
+	payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
+	dephantomizedRid, err := storeReceived(ctx, r, pass, uuid, deltaSrc, payload, storedBlob,
+		vis, linker)
 	// General sync and push paths preserve Fossil's post-commit
 	// after_dephantomize cascade. A clone uses its ReceiveLinker inside the
 	// storage transaction instead, so it must not run a second cascade.
 	if linker == nil && dephantomizedRid > 0 {
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
 	}
-	return nil
+	return err
 }
 
 // storeReceived is storeReceivedFile without the after-dephantomize cascade:
 // it returns the rid of a phantom it filled, for which the caller owes the
-// cascade. The sync client runs those cascades once per reply, so a pull that
-// fills many phantoms does not commit one crosslink transaction per artifact.
-func storeReceived(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte,
-	storedBlob []byte, vis visibility,
+// cascade, with or without an error. The sync client runs those cascades once
+// per reply, so a pull that fills many phantoms does not commit one crosslink
+// transaction per artifact.
+func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, deltaSrc string,
+	payload []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
 	if r == nil {
 		panic("storeReceivedFile: r must not be nil")
+	}
+	if pass == nil {
+		panic("storeReceivedFile: pass must not be nil")
 	}
 	if uuid == "" {
 		panic("storeReceivedFile: uuid must not be empty")
@@ -1012,25 +1026,46 @@ func storeReceived(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, pay
 		// checked against HASH before anything is stored, for the client,
 		// the server and a clone alike. fossil's commit hook catches a cfile
 		// delta, and a clone's, that xfer_accept_file does not pre-verify.
-		if !deltaMatches(r.DB(), uuid, deltaSrc, payload) {
-			return 0, fmt.Errorf("received file %s: %w", uuid, errHashMismatch)
+		// One whose basis is not held yet is stored dangling and checked by
+		// the pass once the basis arrives.
+		verdict, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
+		if err != nil {
+			return 0, fmt.Errorf("received file %s: %w", uuid, err)
 		}
-		return 0, storeDeltaContent(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
-			linker)
+		if verdict == deltaMismatch {
+			return 0, &hashMismatchError{uuid: uuid}
+		}
+		return 0, storeDeltaContent(ctx, r, pass, uuid, deltaSrc, payload, storedBlob, vis,
+			linker, verdict == deltaMatch)
 	}
 
-	return storeResolvedContent(ctx, r, uuid, payload, storedBlob, vis, linker)
+	return storeResolvedContent(ctx, r, pass, uuid, payload, storedBlob, vis, linker)
 }
 
 // storeDeltaContent persists a received delta exactly as given — never
 // expanded here; storeReceived has already verified it against its HASH
-// when the basis is held — linked to its source via a
+// when the basis is held (verified) — linked to its source via a
 // create-phantom-if-missing lookup (mirrors Fossil's rid_from_uuid(&src,
 // 1, ...) in src/xfer.c). The delta table's rid->srcid link is recorded
 // unconditionally, matching content_put_ex's REPLACE INTO delta, whether
 // or not srcRid is itself currently available.
-func storeDeltaContent(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
-	return r.WithTx(func(tx *db.Tx) error {
+//
+// An unverified delta joins pass, to be checked when its basis arrives. A
+// verified one is available now, so the deltas pass holds against it are
+// checked in this transaction.
+func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid,
+	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
+	linker *manifest.ReceiveLinker, verified bool) error {
+	var late error
+	var dangling, root libfossil.FslID // tracked once the store commits
+	var prior danglingDelta
+	err := r.WithTx(func(tx *db.Tx) error {
+		var alreadyHeld bool
+		var err error
+		prior, alreadyHeld, err = priorRow(tx, uuid)
+		if err != nil {
+			return err
+		}
 		_, held := blob.Exists(tx, deltaSrc)
 		srcRid, err := blob.StorePhantom(tx, deltaSrc)
 		if err != nil {
@@ -1057,8 +1092,35 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, uuid, deltaSrc string,
 				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
 			}
 		}
-		return nil
+		switch {
+		case alreadyHeld:
+		case verified:
+			late = pass.verifyFrom(tx, rid)
+		default:
+			if root, err = pass.rootOf(tx, srcRid); err != nil {
+				return fmt.Errorf("storeDeltaContent: %w", err)
+			}
+			dangling = rid
+		}
+		return lateFault(late)
 	})
+	if err != nil {
+		return err
+	}
+	if dangling > 0 {
+		pass.track(dangling, root, prior)
+	}
+	return late
+}
+
+// lateFault is what a storage transaction returns for verifyFrom's result: a
+// hash mismatch is a verdict on another artifact, already reverted, and the
+// transaction commits; anything else is a fault that rolls it back.
+func lateFault(err error) error {
+	if errors.Is(err, errHashMismatch) {
+		return nil
+	}
+	return err
 }
 
 // visibilityUpdate is one artifact whose private/public status an igot card
@@ -1111,35 +1173,6 @@ func hashMatches(uuid string, data []byte) bool {
 	return hash.SHA1(data) == uuid
 }
 
-// deltaMatches reports whether a received delta, applied to its basis,
-// gives content named uuid. Section 7.7 verifies a reconstructable non-clone
-// file before storage, as xfer_accept_file applies the delta to an
-// available source and checks the result. A basis q cannot expand leaves the
-// delta unverified, stored dangling, as fossil stores it. A delta that does
-// not apply is a mismatch: fossil verifies what blob_delta_apply left, which
-// is not the artifact either.
-func deltaMatches(q db.Querier, uuid, deltaSrc string, payload []byte) bool {
-	if q == nil {
-		panic("sync.deltaMatches: q must not be nil")
-	}
-	if deltaSrc == "" {
-		panic("sync.deltaMatches: deltaSrc must not be empty")
-	}
-	srcRid, ok := content.AvailableByUUID(q, deltaSrc)
-	if !ok {
-		return true
-	}
-	src, err := content.Expand(q, srcRid)
-	if err != nil {
-		return true
-	}
-	target, err := delta.Apply(src, payload)
-	if err != nil {
-		return false
-	}
-	return hashMatches(uuid, target)
-}
-
 // storeResolvedContent verifies that fullContent hashes to uuid and stores
 // it. "Verify, then store resolved content" is a single cohesive unit —
 // full (non-delta) file cards always carry content that can be hashed
@@ -1150,96 +1183,121 @@ func deltaMatches(q db.Querier, uuid, deltaSrc string, payload []byte) bool {
 // Returns the rid of a phantom that was just filled, so a non-linker caller
 // can run AfterDephantomize once this transaction has committed; returns 0
 // when no phantom was filled (blob already real, or newly inserted).
-func storeResolvedContent(ctx context.Context, r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
+//
+// Full content is available once stored, so the deltas pass holds against
+// it are checked in the same transaction; a late mismatch among them is
+// returned with the rid, and the store itself stands.
+func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid string,
+	fullContent []byte, storedBlob []byte, vis visibility,
+	linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
 	if !hashMatches(uuid, fullContent) {
-		return 0, fmt.Errorf("received file %s: %w", uuid, errHashMismatch)
+		return 0, &hashMismatchError{uuid: uuid}
 	}
 
 	var dephantomizedRid libfossil.FslID
+	var late error
 	err := r.WithTx(func(tx *db.Tx) error {
-		recordAndLink := func(rid libfossil.FslID) error {
-			if err := recordVisibility(tx, rid, vis); err != nil {
-				return err
-			}
-			if linker != nil {
-				if err := linker.LinkStored(ctx, tx, rid, uuid, fullContent); err != nil {
-					return fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
-				}
-			}
-			return nil
-		}
-
-		// A received SHA3 name promotes an auto-policy repo, as in fossil.
-		if err := hash.PromoteFor(tx, uuid); err != nil {
-			return fmt.Errorf("storeResolvedContent: hash policy: %w", err)
-		}
-		existingRid, exists := blob.Exists(tx, uuid)
-		if exists {
-			var size int64
-			tx.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size)
-			if size != -1 {
-				// Real blob already exists; only its visibility can have moved.
-				return recordAndLink(existingRid)
-			}
-			// Fill phantom: update blob content, remove from phantom table.
-			compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=1 WHERE rid=?",
-				len(fullContent), compressed, existingRid); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
-				return fmt.Errorf("delete phantom rid=%d: %w", existingRid, err)
-			}
-			if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", existingRid); err != nil {
-				return fmt.Errorf("unclustered rid=%d: %w", existingRid, err)
-			}
-			dephantomizedRid = libfossil.FslID(existingRid)
-			return recordAndLink(existingRid)
-		}
-		compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
+		rid, filled, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob, vis,
+			linker)
 		if err != nil {
 			return err
 		}
-		result, err := tx.Exec(
-			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-			uuid, len(fullContent), compressed,
-		)
-		if err != nil {
-			return err
+		if filled {
+			dephantomizedRid = rid
 		}
-		rid, err := result.LastInsertId()
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
-			return err
-		}
-		if err := recordAndLink(libfossil.FslID(rid)); err != nil {
-			return err
-		}
-		if linker != nil {
-			return nil
-		}
-
-		// Crosslink cluster artifacts: parse the content and if it's a
-		// cluster manifest, process its M-card UUIDs to create phantoms
-		// for blobs we don't have yet. This is how the client discovers
-		// individual blob UUIDs referenced by a cluster.
-		if d, parseErr := deck.Parse(fullContent); parseErr == nil && d.Type == deck.Cluster {
-			if err := manifest.CrosslinkCluster(tx, libfossil.FslID(rid), d); err != nil {
-				return fmt.Errorf("crosslink cluster %s: %w", uuid, err)
-			}
-		}
-
-		return nil
+		late = pass.verifyFrom(tx, rid)
+		return lateFault(late)
 	})
 	if err != nil {
 		return 0, err
 	}
-	return dephantomizedRid, nil
+	return dephantomizedRid, late
+}
+
+// storeResolvedTx is storeResolvedContent's write, inside its transaction. It
+// returns the rid holding uuid, and filled when that rid was a phantom this
+// store filled.
+func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []byte,
+	storedBlob []byte, vis visibility,
+	linker *manifest.ReceiveLinker) (rid libfossil.FslID, filled bool, err error) {
+	// A received SHA3 name promotes an auto-policy repo, as in fossil.
+	if err := hash.PromoteFor(tx, uuid); err != nil {
+		return 0, false, fmt.Errorf("storeResolvedContent: hash policy: %w", err)
+	}
+	rid, filled, inserted, err := writeResolved(tx, uuid, fullContent, storedBlob)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := recordVisibility(tx, rid, vis); err != nil {
+		return 0, false, err
+	}
+	if linker != nil {
+		if err := linker.LinkStored(ctx, tx, rid, uuid, fullContent); err != nil {
+			return 0, false, fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
+		}
+		return rid, filled, nil
+	}
+	if !inserted {
+		return rid, filled, nil
+	}
+	// Crosslink cluster artifacts: parse the content and if it's a
+	// cluster manifest, process its M-card UUIDs to create phantoms
+	// for blobs we don't have yet. This is how the client discovers
+	// individual blob UUIDs referenced by a cluster.
+	if d, parseErr := deck.Parse(fullContent); parseErr == nil && d.Type == deck.Cluster {
+		if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
+			return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+		}
+	}
+	return rid, filled, nil
+}
+
+// writeResolved writes verified full content under uuid: a real row already
+// there is left as it is, a phantom is filled in place, and otherwise a row
+// is inserted. It reports which of the last two it did.
+func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
+	storedBlob []byte) (rid libfossil.FslID, filled, inserted bool, err error) {
+	existingRid, exists := blob.Exists(tx, uuid)
+	if exists {
+		var size int64
+		tx.QueryRow("SELECT size FROM blob WHERE rid=?", existingRid).Scan(&size)
+		if size != -1 {
+			// Real blob already exists; only its visibility can have moved.
+			return existingRid, false, false, nil
+		}
+	}
+	compressed, err := blob.EncodeForStorage(fullContent, storedBlob)
+	if err != nil {
+		return 0, false, false, err
+	}
+	if exists {
+		// Fill phantom: update blob content, remove from phantom table.
+		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=1 WHERE rid=?",
+			len(fullContent), compressed, existingRid); err != nil {
+			return 0, false, false, err
+		}
+		if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
+			return 0, false, false, fmt.Errorf("delete phantom rid=%d: %w", existingRid, err)
+		}
+		rid = existingRid
+		filled = true
+	} else {
+		result, err := tx.Exec(
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+			uuid, len(fullContent), compressed)
+		if err != nil {
+			return 0, false, false, err
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return 0, false, false, err
+		}
+		rid = libfossil.FslID(id)
+	}
+	if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
+		return 0, false, false, fmt.Errorf("unclustered rid=%d: %w", rid, err)
+	}
+	return rid, filled, !filled, nil
 }
 
 // seedPhantoms asks, in the first round, for the phantoms the repository
@@ -1424,12 +1482,16 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// long-running cascade on the general push/pull path is interruptible by the
 	// caller's deadline -- the same guarantee #166 gave the clone and
 	// server-push receive paths.
-	rid, err := storeReceived(ctx, s.repo, uuid, deltaSrc, payload, storedBlob, vis, nil)
-	if err != nil {
-		return false, err
+	if s.pass == nil {
+		panic("sync.handleFileCard: pass must be set by processResponse")
 	}
+	rid, err := storeReceived(ctx, s.repo, s.pass, uuid, deltaSrc, payload, storedBlob, vis,
+		nil)
 	if rid > 0 {
 		s.dephantomized = append(s.dephantomized, rid)
+	}
+	if err != nil {
+		return false, err
 	}
 
 	// BUGGIFY: simulate post-store failure to test retry/recovery logic.

@@ -126,7 +126,9 @@ type session struct {
 	dephantomized []libfossil.FslID
 	// cascaded counts what those cascades linked, across the session: the
 	// closing crosslink owes it the leaf and tag repair (issue #414).
-	cascaded         int
+	cascaded int
+	// pass is the current reply's verification pass (§7.7).
+	pass             *receivePass
 	roundStats       RoundStats
 	xTableHashSent   map[string]bool            // table -> true if xtable-hash pragma sent
 	xTableGimmes     map[string]map[string]bool // table -> pkHash -> true

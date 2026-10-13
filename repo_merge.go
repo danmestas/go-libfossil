@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -115,6 +116,25 @@ func (r *Repo) BranchTip(name string) (int64, error) {
 		return 0, fmt.Errorf("libfossil: branch tip %q: %w", name, err)
 	}
 	return rid, nil
+}
+
+// BranchOpenLeaf names one open leaf of the named branch (repo-state-01
+// Section 9): a check-in whose active branch tag is name, that is a leaf and
+// that is not closed. When the branch has several, the one with the greatest
+// event.mtime is returned, as the draft requires of any report that names a
+// single open leaf. open is false, with a nil error, when the branch has no
+// open leaf: it is not open. An empty name means the main branch.
+//
+// Unlike BranchTip, which returns the branch's newest check-in whether or
+// not it is a leaf or closed, this is fossil's `branch info` answer. fossil's
+// query (branch_is_open, src/branch.c) takes whichever open leaf it meets
+// first; this follows the draft's greatest-mtime rule.
+func (r *Repo) BranchOpenLeaf(name string) (rid int64, open bool, err error) {
+	leaf, open, err := checkout.BranchOpenLeaf(r.inner, name)
+	if err != nil {
+		return 0, false, fmt.Errorf("libfossil: branch open leaf %q: %w", name, err)
+	}
+	return int64(leaf), open, nil
 }
 
 // Merge performs a three-way merge of srcBranch into dstBranch and creates a

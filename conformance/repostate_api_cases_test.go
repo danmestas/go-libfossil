@@ -10,7 +10,7 @@ func rsAPICases() []rsAPICase {
 	for _, table := range [][]rsAPICase{
 		resolveCases(), resolveFormCases(), leafAPICases(), commitLeafCases(),
 		branchAPICases(), writerAPICases(), integrityAPICases(), defaultBranchCases(),
-		checkoutAPICases(),
+		checkoutAPICases(), trunkAPICases(),
 	} {
 		all = append(all, table...)
 	}

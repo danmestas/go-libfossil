@@ -284,6 +284,26 @@ func (r *Repo) ResolveVersion(name string) (int64, error) {
 	return resolveVersion(r.inner.DB(), name, 0, false)
 }
 
+// CurrentTrunk returns the current trunk (repo-state-01 Section 9): the
+// check-in that the main-branch setting's name resolves to by ResolveVersion,
+// "trunk" when the setting is unset. The setting is local and not synced, so
+// two repositories holding the same artifacts can name different trunks.
+// fossil resolves it the same way where it needs one: update outside a
+// checkout (src/update.c) and open with no version (src/db.c). A name that
+// resolves to nothing returns ErrVersionNotFound (wrapped).
+func (r *Repo) CurrentTrunk() (int64, error) {
+	h := r.inner.DB()
+	name, err := repo.MainBranch(h)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: current trunk: %w", err)
+	}
+	rid, err := resolveVersion(h, name, 0)
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: current trunk: %w", err)
+	}
+	return rid, nil
+}
+
 // ResolveBranchStart resolves name as ResolveVersion does, then returns the
 // first check-in of the branch the result is on: fossil's branch-type ("br")
 // request (repo-state-01 Section 8.3), the start of the branch rather than

@@ -16,6 +16,7 @@ func rsAPICases() []rsAPICase {
 	}
 	for i := range all {
 		all[i].Gap = repostateGaps[all[i].ID]
+		all[i].Deviation = repostateDeviations[all[i].ID]
 	}
 	return all
 }

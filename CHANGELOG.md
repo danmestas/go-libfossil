@@ -64,6 +64,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A check-in whose primary parent is absent is no longer held back for
+  absent file content (#398). The crosslink sweep, the receive linker and the
+  phantom-fill cascade deferred it until its files arrived, but with no parent
+  manifest there is no file transition to record, so the wait could never end
+  for a check-in whose files the repository will not receive. Its event and
+  plink rows and its parent phantom were missing where `fossil rebuild`
+  writes them, as RS-4.2-2 requires: the libfossil repository holds one such
+  fossil-scm check-in, imported without its history. Its file transitions are
+  derived when the parent arrives, against phantoms for files still absent,
+  as fossil's do. A check-in on a present parent is still deferred for its
+  files. New case: `repostate.4.2.phantom-parent-absent-file`.
+
 - `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
   target as fossil's `update` does when no version is named: the newest open
   leaf descended from the checkout (every descendant leaf when all are

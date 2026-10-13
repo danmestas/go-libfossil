@@ -77,6 +77,19 @@ func crosslinkCases() []rsCase {
 		rebuild:       true,
 		rebuildWrites: "the phantom root has no branch tag, so fossil rebuild tags it trunk",
 	}, {
+		// The shape of a foreign check-in imported without its history (#398):
+		// neither its parent nor its file is stored. The absent parent still
+		// yields the linkage row; with no parent manifest there is no file
+		// transition to record, so the absent file blocks nothing.
+		Case:   Case{ID: "repostate.4.2.phantom-parent-absent-file", Req: "RS-4.2-2"},
+		arts:   []rsArt{literal("c2", "C c2\nD "+rsTime(2)+"\nF a.txt {fa}\nP {c1}\nU u\n")},
+		tables: []string{"event", "mlink", "phantom", "plink"},
+		want: join(rows("event", "c2 ci @2"), rows("phantom", "c1"),
+			rows("plink", "c1>c2 1 @2 -")),
+		ignoring:      []string{"-event: c2 ci @2", "-phantom: c1", "-plink: c1>c2 1 @2 -"},
+		rebuild:       true,
+		rebuildWrites: "the phantom root has no branch tag, so fossil rebuild tags it trunk",
+	}, {
 		Case:     Case{ID: "repostate.4.2.phantom-target", Req: "RS-4.2-1"},
 		arts:     with(chain()[:2], control("t", 9, "*foo {c3} v")),
 		tables:   []string{"phantom", "tagxref"},

@@ -992,7 +992,9 @@ func repairTagPropagation(q db.Querier) error {
 //   - B-card: the baseline manifest UUID for delta manifests. Without
 //     the baseline, ListFiles cannot resolve the effective F-card set.
 //   - F-cards: every (non-deleted) file UUID. These are the targets
-//     Checkout.Update.expandUUID will need.
+//     Checkout.Update.expandUUID will need. They are not checked when the
+//     primary parent's content is itself absent: no mlink row depends on
+//     them until it arrives (see the comment in the body).
 //
 // Empty result means crosslink is safe to run; non-empty means defer
 // to a later sweep that will discover the manifest again (no event row
@@ -1026,6 +1028,17 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCach
 		}
 	}
 	check(d.B)
+	if len(d.P) > 0 {
+		// With the primary parent's manifest absent there is no file
+		// transition to derive: fossil's add_mlink returns before reading a
+		// file, and the parent's own crosslink derives the rows once it
+		// arrives, reserving phantoms for files still absent then. Holding
+		// the check-in for its files would withhold the event and plink rows
+		// fossil writes, for content that may never come (issue #398).
+		if _, ok := avail.ByUUID(tx, d.P[0]); !ok {
+			return missing
+		}
+	}
 	for _, f := range d.F {
 		check(f.UUID) // skipped if "" (deleted file in delta manifest)
 	}

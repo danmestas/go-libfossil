@@ -513,6 +513,16 @@ func (s *session) buildUVFileCards() ([]xfer.Card, error) {
 			continue
 		}
 
+		// §7.6: a file named by SHA3 goes to a server older than SHA3
+		// support as the refusal in its place, with or without content,
+		// as fossil's send_unversioned_file sends it; a tombstone above
+		// names no hash and still goes.
+		if sha3Barred(fileHash, s.peerVersion) {
+			cards = append(cards, sha3Refusal())
+			delete(s.uvToSend, name)
+			continue
+		}
+
 		if sendFullContent && content != nil {
 			cards = append(cards, &xfer.UVFileCard{
 				Name:    name,

@@ -53,6 +53,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. The `date-tag-cancel`, `-unparsable` and `-zero` conformance cases
   are no longer marked as deviations, and new `-before-checkin` cases check
   the same three with the tags arriving while the check-in is a phantom.
+- The sync client no longer sends an unversioned file named by SHA3 to a
+  server whose `pragma server-version` predates SHA3 support (#303). It sends
+  `error Fossil\sversion\s2.0\sor\slater\srequired.` in its place, as
+  sync-protocol-01 Section 7.6 and fossil's `send_unversioned_file` do,
+  whether the card would carry content or not; a deletion tombstone names no
+  hash and still goes. Artifacts were already gated this way.
 - Outside a private sync, the sync server answers a gimme for private content
   with `igot HASH 1` when the peer's `pragma client-version` dates it
   2020-04-13 or later, and with nothing for an earlier or missing date, as

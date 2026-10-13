@@ -6,7 +6,7 @@ import "testing"
 // (bgcolor, euser, ecomment), whatever the tag's type, and a cancel clears
 // the column. fossil(1) does this in tag_insert when the tag arrives after
 // the check-in and in manifest_crosslink when it arrived first, while the
-// check-in was still a phantom. draft-fossil-repo-state-00 does not describe
+// check-in was still a phantom. draft-fossil-repo-state-01 does not describe
 // these columns, so the cases name no requirement and stay out of the
 // coverage audit, with fossil(1) as their reference.
 

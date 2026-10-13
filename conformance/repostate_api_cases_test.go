@@ -99,9 +99,15 @@ func resolveFormCases() []rsAPICase {
 			"trunk:2026-01-01T00:00:03", "c3"),
 		resolves("repostate.8.3.hash-before-name", "RS-8.3-9", hexTag, c2Prefix(6), "c2"),
 		resolves("repostate.8.3.ambiguous-prefix", "RS-8.3-10", ambiguous(), ambiguousPrefix(), ""),
-		// fossil retries "release." but not a three-letter stem such as
-		// "rel."; the case uses the longer name.
+		// Section 8.3 retries a name of more than four characters without
+		// one trailing punctuation character, and one of more than five
+		// without two; "rel." is too short and "release..." ends in three.
 		resolves("repostate.8.3.trailing-punct", "RS-8.3-11", release, "release.", "c3"),
+		resolves("repostate.8.3.trailing-punct-two", "RS-8.3-11", release, "release!?", "c3"),
+		resolves("repostate.8.3.trailing-punct-three", "RS-8.3-11", release, "release...", ""),
+		resolves("repostate.8.3.trailing-punct-short", "RS-8.3-11",
+			with(chain(), control("t1", 8, "+sym-rel {c3}")), "rel.", ""),
+		resolves("repostate.8.3.trailing-punct-not-listed", "RS-8.3-11", release, "release;", ""),
 	}
 }
 

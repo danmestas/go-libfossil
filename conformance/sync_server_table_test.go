@@ -112,7 +112,7 @@ func serverTransportCases() []syncServerCase {
 }
 
 // serverCardCases are Section 5.2's request-card rules. The bad-command
-// text follows erratum s5.2: LINE with its LF, fossilized as one token.
+// text follows Section 5.2: LINE with its LF, fossilized as one token.
 func serverCardCases() []syncServerCase {
 	return []syncServerCase{{
 		Case: Case{ID: "sync.5.2.bad-command", Req: "SP-5.2-4"},

@@ -21,9 +21,8 @@ func serverContentCases() []syncServerCase {
 		want: all(completed, present("cfile {M2} "), present("cfile {B1} ")),
 	}, {
 		// A2 is held, so the delta is consumed and ignored: A2 stays
-		// stored in full. The draft also forbids a phantom for the delta's
-		// basis, but fossil(1) 2.28 makes one and asks for it, so that
-		// part is left out (see the requirement's scope).
+		// stored in full. Whether a phantom is made for the delta's basis
+		// is the receiver's choice (Section 7.4); fossil(1) 2.28 makes one.
 		Case: Case{ID: "sync.7.4.verified-duplicate-server", Req: "SP-7.4-1"},
 		body: []string{"{CV}", pushCard, "file {A2} {U} {DA2U.size}", "{DA2U.data}", "{R}"},
 		want: all(completed, noErrors, held("A2", 1),
@@ -132,7 +131,7 @@ func serverUVGimmeCases() []syncServerCase {
 		setup:  []string{noAnonymousCaps("")},
 		body:   []string{"{CV}", "uvgimme u.txt", "{R}"},
 		want:   all(completed, noErrors, noCard("uvfile "), noCard("uvigot ")),
-		fossil: "fossil(1) 2.28 answers uvgimme without checking Read (erratum s7.3)",
+		fossil: "fossil(1) 2.28 answers uvgimme without checking Read (Section 7.3)",
 	}, {
 		Case:  Case{ID: "sync.7.3.uvgimme-clone-implies-read", Req: "SP-7.3-12"},
 		setup: []string{noAnonymousCaps("g")},

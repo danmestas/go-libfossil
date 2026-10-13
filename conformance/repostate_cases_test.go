@@ -14,7 +14,7 @@ func repostateCases() []rsCase {
 	var all []rsCase
 	for _, table := range [][]rsCase{
 		dagCases(), crosslinkCases(), rejectionCases(), tagTypeCases(),
-		propagationCases(), blockingCases(), branchCases(), leafCases(),
+		propagationCases(), blockingCases(), branchCases(), leafCases(), dateTagCases(),
 	} {
 		all = append(all, table...)
 	}
@@ -130,6 +130,16 @@ func crosslinkCases() []rsCase {
 		want: rows("tagxref", "foo c2 2 t c2 'v' @9", "foo c3 2 0 c2 'v' @9",
 			"foo c4 2 0 c2 'v' @9"),
 		ignoring: []string{"-tagxref: foo c3 2 0 c2 'v' @9"},
+		rebuild:  true,
+	}, {
+		// A singleton walks as a cancel: c4 loses the foo it inherited.
+		Case:   Case{ID: "repostate.4.2.singleton-walks-as-cancel", Req: "RS-4.2-6"},
+		arts:   with(chain(), control("t1", 8, "*foo {c1} v"), control("t2", 9, "+foo {c3} s")),
+		tables: []string{"tagxref"},
+		tags:   []string{"foo"},
+		want: rows("tagxref", "foo c1 2 t1 c1 'v' @8", "foo c2 2 0 c1 'v' @8",
+			"foo c3 1 t2 c3 's' @9"),
+		ignoring: []string{"+tagxref: foo c4 2 0 c1 'v' @8"},
 		rebuild:  true,
 	}, reparentCase()}
 }

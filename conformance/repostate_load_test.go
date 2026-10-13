@@ -238,6 +238,10 @@ var rsQueries = map[string]string{
 	// those tags compare it.
 	"eventcols": "SELECT " + rsUUID("event.objid") + ", quote(bgcolor), quote(euser), " +
 		"quote(ecomment) FROM event WHERE type = 'ci'",
+	// omtime reads the D-card time a check-in keeps beside its event time.
+	// It is outside rsAllTables: only the date-tag cases compare it.
+	"omtime": "SELECT " + rsUUID("event.objid") + ", " + rsMillis("event.omtime") +
+		" FROM event WHERE type = 'ci'",
 	"mlink": "SELECT " + rsUUID("mlink.mid") + ", " + rsUUID("mlink.fid") + ", " +
 		rsUUID("mlink.pid") + ", " + rsUUID("mlink.pmid") +
 		", (SELECT name FROM filename WHERE fnid = mlink.fnid), isaux FROM mlink",

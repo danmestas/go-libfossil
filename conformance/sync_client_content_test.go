@@ -128,9 +128,8 @@ func clientUVFileCases() []syncClientCase {
 func clientDeltaCases() []syncClientCase {
 	return []syncClientCase{{
 		// A2 is held, so the delta is consumed and ignored: A2 stays
-		// stored in full. The draft also forbids a phantom for the delta's
-		// basis, but fossil(1) 2.28 makes one and asks for it, so that
-		// part is left out (see the requirement's scope).
+		// stored in full. Whether a phantom is made for the delta's basis
+		// is the receiver's choice (Section 7.4); fossil(1) 2.28 makes one.
 		Case:    Case{ID: "sync.7.4.verified-duplicate", Req: "SP-7.4-1"},
 		op:      opPull,
 		replies: [][]string{reply("file {A2} {U} {DA2U.size}", "{DA2U.data}")},

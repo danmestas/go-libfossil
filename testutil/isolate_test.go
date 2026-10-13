@@ -63,6 +63,8 @@ var fossilIsolationMarkers = []string{
 var notFossilExec = map[string]string{
 	"cmd/libfossil/main_test.go":                "re-executes the test binary",
 	"cmd/libfossil/driver_dependencies_test.go": "runs the go tool",
+	"testutil/server_unix.go":                   "runs the bin its caller resolved",
+	"testutil/server_other.go":                  "runs the bin its caller resolved",
 }
 
 // TestFossilInvocationsIsolateHome fails when a Go file runs a subprocess

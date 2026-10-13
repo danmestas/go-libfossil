@@ -241,38 +241,62 @@ func afterJulianEpoch(year, month, day int) bool {
 	return day > 24
 }
 
-// parseJulianTimestamp parses form 5, a bare decimal Julian day number, valid
-// only for 0 < r < 5373484.5. matched reports whether the token is a bare
-// number at all.
-func parseJulianTimestamp(s string) (time.Time, bool, error) {
+// scanJulianNumber reports whether s is exactly the §4.6.4 form 5 spelling: an
+// optional sign, digits with an optional fraction (at least one digit in all),
+// then an optional E or e exponent with an optional sign and at least one digit.
+// It runs before strconv.ParseFloat because that also accepts hex, inf, nan and
+// underscores, which SQLite's julianday() (and so fossil) does not.
+func scanJulianNumber(s string) bool {
 	i := 0
-	if i < len(s) && s[i] == '-' {
+	if i < len(s) && (s[i] == '-' || s[i] == '+') {
 		i++
 	}
-	start := i
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	if i == start {
-		return time.Time{}, false, nil // no integer digits: not a number
-	}
-	if i < len(s) {
-		if s[i] != '.' {
-			return time.Time{}, false, nil
-		}
-		i++
-		fracStart := i
+	digits := func() int {
+		start := i
 		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 			i++
 		}
-		if i == fracStart || i < len(s) {
-			return time.Time{}, false, nil
+		return i - start
+	}
+	n := digits()
+	if i < len(s) && s[i] == '.' {
+		i++
+		n += digits()
+	}
+	if n == 0 {
+		return false
+	}
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E') {
+		i++
+		if i < len(s) && (s[i] == '-' || s[i] == '+') {
+			i++
+		}
+		if digits() == 0 {
+			return false
 		}
 	}
+	return i == len(s)
+}
+
+// maxJulianMillis is 5373484.5 days in milliseconds, the exclusive upper bound.
+const maxJulianMillis = 464269060800000
+
+// parseJulianTimestamp parses form 5, a bare decimal Julian day number, valid
+// only for 0 < r < 5373484.5 measured after rounding to the millisecond, as
+// fossil does via SQLite (a positive value that rounds to zero, or up to the
+// bound, is rejected). matched reports whether the token is a bare number.
+func parseJulianTimestamp(s string) (time.Time, bool, error) {
+	if !scanJulianNumber(s) {
+		return time.Time{}, false, nil
+	}
 	r, convErr := strconv.ParseFloat(s, 64)
-	if convErr != nil || !(r > 0 && r < 5373484.5) {
+	// The magnitude test keeps the int64 conversion below defined.
+	if convErr != nil || !(r > 0 && r < 5373485) {
 		return time.Time{}, true, fmt.Errorf("Julian day out of range: %q", s)
 	}
-	millis := int64(r*millisPerJulianDay+0.5) - julianEpochMillis
-	return time.UnixMilli(millis).UTC(), true, nil
+	ms := int64(r*millisPerJulianDay + 0.5)
+	if ms <= 0 || ms >= maxJulianMillis {
+		return time.Time{}, true, fmt.Errorf("Julian day out of range: %q", s)
+	}
+	return time.UnixMilli(ms - julianEpochMillis).UTC(), true, nil
 }

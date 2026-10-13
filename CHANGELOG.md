@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `deck.Parse` accepts every Julian-day spelling artifact-format-01 Section
+  4.6.4 form 5 allows: a sign, an exponent, a leading point and a trailing
+  point. Hex, `inf`, `nan` and `_` stay rejected, and the bound is now
+  checked after rounding to the millisecond, so `5373484.4999999999` and
+  `1e-10` are rejected as in fossil (#370).
+
 - Tests that run `fossil server` no longer flake with "directory not empty"
   during temp-dir cleanup (#352). Fossil forks a child per connection, and
   killing only the parent let a child write into the directory while it was

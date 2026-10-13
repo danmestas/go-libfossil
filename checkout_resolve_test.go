@@ -75,7 +75,8 @@ func TestResolveBranchStart_TechnoteDoesNotShadow(t *testing.T) {
 	b1 := makeBranch(t, r, base, "feat")
 	if _, err := r.inner.DB().Exec(`INSERT INTO event(type, mtime, objid, user, comment)
 		VALUES ('e', 99999999, 1000000, 'u', 'note');
-		INSERT INTO blob(rid, uuid, size) VALUES (1000000, 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 0);
+		INSERT INTO blob(rid, uuid, size)
+		VALUES (1000000, 'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', 0);
 		INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
 		VALUES ((SELECT tagid FROM tag WHERE tagname='sym-feat'), 1, 1000000, 1000000,
 		NULL, 99999999, 1000000)`); err != nil {

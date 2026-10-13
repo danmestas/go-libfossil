@@ -7,6 +7,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -189,6 +190,41 @@ func (r *Repo) SetConfig(key, value string) error {
 	return nil
 }
 
+// SetHashPolicy assigns the hash policy by its value string, as fossil's
+// hash-policy command does: name must be one of sha1, auto, sha3, sha3-only
+// or shun-sha1, matched case-sensitively and exactly, and anything else is
+// an error that leaves the stored policy alone (artifact-format-01 7.1,
+// AF-7.1-2). The ordinal is what is stored, the form the reader takes.
+//
+// Asking for auto in a repo that already holds a SHA3 artifact stores sha3
+// (7.3, set-time coercion): auto would be promoted by the first SHA3 store
+// anyway, and fossil's command coerces the same way.
+func (r *Repo) SetHashPolicy(name string) error {
+	if r == nil {
+		panic("repo.SetHashPolicy: receiver must not be nil")
+	}
+	policy, err := hash.PolicyByName(name)
+	if err != nil {
+		return fmt.Errorf("repo.SetHashPolicy: %w", err)
+	}
+	if policy != db.HashPolicyAuto {
+		return r.SetConfig("hash-policy", strconv.Itoa(policy))
+	}
+	// The SHA3 check and the write are one statement, so a SHA3 artifact
+	// stored concurrently cannot slip between them and have the write undo
+	// the ratchet (7.3).
+	_, err = r.db.Exec(
+		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES('hash-policy', "+
+			"CASE WHEN EXISTS(SELECT 1 FROM blob WHERE length(uuid)>40) THEN ? ELSE ? END, "+
+			"julianday('now'))",
+		strconv.Itoa(db.HashPolicySHA3), strconv.Itoa(db.HashPolicyAuto),
+	)
+	if err != nil {
+		return fmt.Errorf("repo.SetHashPolicy: %w", err)
+	}
+	return nil
+}
+
 func (r *Repo) Verify() error {
 	if r == nil {
 		panic("repo.Verify: receiver must not be nil")
@@ -210,4 +246,3 @@ func (r *Repo) Verify() error {
 	}
 	return rows.Err()
 }
-

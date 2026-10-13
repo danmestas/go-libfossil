@@ -445,6 +445,10 @@ func policyCases() []apiCase {
 	}
 	// The setting holds the ordinal (7.1), so an unrecognized value is a stored
 	// one that is not 0 through 4: a policy name, in any case, included.
+	// Divergence from fossil: 2.28 reads a non-integer as 0 (sha1) and treats
+	// a negative stored value (db.c:2773) as unset to be re-derived under 7.2,
+	// and its behavior above 4 is undefined; -01 is followed here, so any
+	// stored value outside 0-4 is fatal.
 	for _, value := range []string{"banana", "SHA3", "sha3", "5", "-1", ""} {
 		cases = append(cases, apiCase{
 			Case{ID: "artifact.7.1.unrecognized-" + policyCaseSlug(value), Req: "AF-7.1-2"},
@@ -457,7 +461,61 @@ func policyCases() []apiCase {
 			},
 		})
 	}
+	cases = append(cases, policyNameCases()...)
 	return append(cases, policyStateCases...)
+}
+
+// policyNameCases drive AF-7.1-2 through the value-string surface,
+// Repo.SetHashPolicy, which plays fossil's hash-policy command: each of
+// Table 7's names is accepted exactly, and any other string is refused,
+// leaving the stored policy alone.
+func policyNameCases() []apiCase {
+	var cases []apiCase
+	for ordinal, name := range []string{"sha1", "auto", "sha3", "sha3-only", "shun-sha1"} {
+		cases = append(cases, apiCase{
+			Case{ID: "artifact.7.1.name-" + name, Req: "AF-7.1-2"},
+			func(t *testing.T) error {
+				r := newPolicyRepo(t, "")
+				if err := r.SetHashPolicy(name); err != nil {
+					return expectf("SetHashPolicy(%q): %v", name, err)
+				}
+				return wantStoredPolicy(r, fmt.Sprint(ordinal))
+			},
+		})
+	}
+	refused := map[string][]string{
+		"wrong-case": {"SHA1", "Auto", "SHA3", "Sha3-Only", "SHUN-SHA1"},
+		"unknown":    {"banana", "sha256", "sha3_only", "sha3 ", " sha1", "sha1\x00", "2"},
+		"empty":      {""},
+	}
+	for _, kind := range []string{"wrong-case", "unknown", "empty"} {
+		names := refused[kind]
+		cases = append(cases, apiCase{
+			Case{ID: "artifact.7.1.name-" + kind, Req: "AF-7.1-2"},
+			func(t *testing.T) error { return refusesPolicyNames(t, names) },
+		})
+	}
+	return cases
+}
+
+// refusesPolicyNames checks SetHashPolicy fails for every name and leaves
+// the stored sha3-only policy as it was.
+func refusesPolicyNames(t *testing.T, names []string) error {
+	r := newPolicyRepo(t, "3")
+	for _, name := range names {
+		if err := r.SetHashPolicy(name); err == nil {
+			return expectf("SetHashPolicy accepted %q", name)
+		}
+	}
+	return wantStoredPolicy(r, "3")
+}
+
+func wantStoredPolicy(r *repo.Repo, ordinal string) error {
+	got, err := r.Config("hash-policy")
+	if err != nil {
+		return err
+	}
+	return want("stored hash-policy", got, ordinal)
 }
 
 // policyCaseSlug makes a stored policy value usable in a case ID.

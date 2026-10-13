@@ -184,3 +184,22 @@ func TestNamingForUnrecognizedPolicy(t *testing.T) {
 		})
 	}
 }
+
+// artifact-format-01 7.1 (AF-7.1-2): policy names match case-sensitively
+// and exactly, as fossil's hash-policy command does with fossil_strcmp.
+func TestPolicyByName(t *testing.T) {
+	for want, name := range []string{"sha1", "auto", "sha3", "sha3-only", "shun-sha1"} {
+		got, err := hash.PolicyByName(name)
+		if err != nil || got != want {
+			t.Errorf("PolicyByName(%q) = %d, %v; want %d", name, got, err, want)
+		}
+	}
+	bad := []string{
+		"", "SHA1", "Auto", "SHA3", "sha3 ", " sha1", "sha3_only", "sha1\x00", "2", "sha256",
+	}
+	for _, name := range bad {
+		if got, err := hash.PolicyByName(name); err == nil {
+			t.Errorf("PolicyByName(%q) = %d, want an error", name, got)
+		}
+	}
+}

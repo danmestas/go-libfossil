@@ -116,6 +116,7 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) ServeHTTP\(ctx context.Context, addr string\) error](<#Repo.ServeHTTP>)
   - [func \(r \*Repo\) SetCaps\(login, caps string\) error](<#Repo.SetCaps>)
   - [func \(r \*Repo\) SetConfig\(key, value string\) error](<#Repo.SetConfig>)
+  - [func \(r \*Repo\) SetHashPolicy\(name string\) error](<#Repo.SetHashPolicy>)
   - [func \(r \*Repo\) SetPassword\(login, password string\) error](<#Repo.SetPassword>)
   - [func \(r \*Repo\) StashApply\(dir string, id int64\) error](<#Repo.StashApply>)
   - [func \(r \*Repo\) StashClear\(\) error](<#Repo.StashClear>)
@@ -1386,6 +1387,15 @@ func (r *Repo) SetConfig(key, value string) error
 ```
 
 SetConfig writes a configuration value to the repo's config table.
+
+<a name="Repo.SetHashPolicy"></a>
+### func \(\*Repo\) [SetHashPolicy](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L94-L99>)
+
+```go
+func (r *Repo) SetHashPolicy(name string) error
+```
+
+SetHashPolicy sets the repository's hash policy by name, as \`fossil hash\-policy NEW\-POLICY\` does. name must be exactly one of sha1, auto, sha3, sha3\-only or shun\-sha1: the match is case\-sensitive, and any other string is an error that leaves the policy unchanged. Asking for auto in a repository that already holds a SHA3\-named artifact sets sha3.
 
 <a name="Repo.SetPassword"></a>
 ### func \(\*Repo\) [SetPassword](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L59>)

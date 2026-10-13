@@ -91,3 +91,28 @@ func TestLeafUntaggedChildUsesMainBranch(t *testing.T) {
 	}
 	assertLeaves(t, r, "after leafCheck", nil)
 }
+
+// TestInitialCheckinStartsMainBranch pins Section 6.1: the initial check-in
+// starts the branch named by the main-branch setting, not the literal trunk.
+func TestInitialCheckinStartsMainBranch(t *testing.T) {
+	r := setupTestRepo(t)
+	if err := r.SetConfig("main-branch", "main"); err != nil {
+		t.Fatal(err)
+	}
+	rid, _, err := Checkin(r, CheckinOpts{
+		Files: []File{{Name: "a.txt", Content: []byte("a")}}, Comment: "root",
+		User: "test", Time: time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := r.DB().QueryRow(`SELECT count(*) FROM tagxref x JOIN tag t USING(tagid)
+		WHERE x.rid=? AND x.tagtype=2 AND ((t.tagname='branch' AND x.value='main')
+		OR t.tagname='sym-main')`, int64(rid)).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("%d of branch=main, sym-main tags on the root check-in, want 2", n)
+	}
+}

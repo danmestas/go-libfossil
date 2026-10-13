@@ -83,6 +83,7 @@ func leafCases() []rsCase {
 		[]rsArt{checkin("c1", 1, nil)}, []string{"c1"}, "-leaf: c1")
 	lone.each, lone.rebuild, lone.fossil = true, false, untagged.fossil
 	return []rsCase{
+		mainBranchLeaf(),
 		leaves("repostate.7.2.branch-leaves", "RS-7.2-1", merged(),
 			[]string{"b1", "m"}, "-leaf: b1"),
 		leaves("repostate.7.2.merge-child-leaf", "RS-7.2-1", mergedIntoTrunk(),
@@ -102,4 +103,24 @@ func leafCases() []rsCase {
 			[]string{"b1", "c1"}, "-leaf: c1"),
 		lone,
 	}
+}
+
+// mainBranchLeaf sets main-branch to main before anything loads. c1 carries
+// no branch tag, so Section 6.1 puts it on main, the default branch, where
+// b1 starts: b1 is a same-branch child, and c1 is no leaf. Read as the
+// literal trunk, c1 would have no same-branch child and stay one. The
+// setting is local, not an artifact, so the case is doctored in and loads
+// per artifact only.
+func mainBranchLeaf() rsCase {
+	c := leaves("repostate.6.1.main-branch-leaf", "RS-6.1-4", []rsArt{
+		checkin("c1", 1, nil),
+		checkin("b1", 2, of("c1"), "*branch * main", "*sym-main *"),
+	}, []string{"b1"}, "+leaf: c1")
+	c.rebuild = false
+	c.doctor = &rsDoctor{at: 0, sql: "REPLACE INTO config(name, value, mtime) " +
+		"VALUES('main-branch', 'main', 0)"}
+	c.fossil = "fossil 2.28's leaf_check reads an untagged check-in as the literal trunk " +
+		"(src/leaf.c), whatever main-branch says, so c1 stays a leaf; fossil-bug candidate " +
+		"against Section 6.1"
+	return c
 }

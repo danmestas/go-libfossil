@@ -36,7 +36,10 @@ type ExtractOpts struct {
 
 // UpdateOpts configures updating to a new version with merge.
 type UpdateOpts struct {
-	TargetRID int64 // 0 = tip
+	// TargetRID is the check-in to update to. 0 picks it as fossil's update
+	// does with no version named: the newest open leaf descended from the
+	// checkout on its branch. Update fails when several such leaves remain.
+	TargetRID int64
 }
 
 // UpdateResult reports what Update actually did. Paths, not counts: a

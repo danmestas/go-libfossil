@@ -57,9 +57,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `branch current` and `leaf_check` read cancelled branch rows), the cases
   follow the draft and record the difference. Checkout-relative names and
   branch-type requests (RS-8.3-4, RS-8.3-12) have cases tracked in #386.
+- A repo-state conformance case, `repostate.6.1.main-branch-leaf`, pins the
+  leaf table's reading of an untagged check-in as the `main-branch` setting's
+  branch (RS-6.1-4). fossil 2.28's `leaf.c` reads it as the literal `trunk`,
+  so the case records that difference. No library behavior changes.
 
 ### Fixed
 
+- `Checkout.Update` with no target, and `CalcUpdateVersion`, now pick the
+  target as fossil's `update` does when no version is named: the newest open
+  leaf descended from the checkout (every descendant leaf when all are
+  closed), kept to the checkout's branch when there are several. If several
+  remain on that branch the update fails ("multiple descendants") instead of
+  guessing. It previously moved to the newest leaf on any branch, including
+  leaves that do not descend from the checkout. repo-state-01 does not
+  define update with no version named. Where fossil 2.28's
+  `compute_leaves` reads branch rows without tagtype > 0 and an untagged
+  check-in as `trunk`, this reads active rows only and the `main-branch`
+  setting, as Sections 6.4 and 6.1 require of branch membership; an untagged
+  checkout is kept to the default branch, where fossil keeps none of the
+  leaves and stays put, and untagged leaves count as the default branch's.
+  Section 10.3 says closed-ness and leaf-ness are not inputs to update's
+  target computation; that is read as covering a named update, while
+  fossil's no-version update drops closed leaves and works from the leaf
+  set (an erratum candidate).
+- The initial check-in starts the branch named by the `main-branch` setting
+  (branch tag and `sym-` tag), not the literal `trunk`, as repo-state-01
+  Section 6.1 and fossil's `commit` require.
+- `LeafAmbiguous` is false for a check-in with no active branch tag: Section
+  6.1 attributes it to the default branch but says that does not make it an
+  open leaf of that branch, and fossil's `leaf_ambiguity` compares raw
+  values, where a missing row matches nothing. It used to compare against
+  the default branch's open leaves.
 - A check-in now verifies its own R card before it is linked: the stored
   manifest is read back and the digest recomputed over the tree it resolves
   to (a delta manifest's baseline merged with its own cards) must equal the R

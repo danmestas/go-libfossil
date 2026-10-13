@@ -268,9 +268,15 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 		// Both tags propagate, matching `fossil new` and repo-state §6.1: the
 		// branch name and its sym- alias descend to every child on the branch.
 		// sym-trunk as a singleton (+) would stop at the root (issue #289).
+		// The initial check-in starts the default branch, which is the
+		// main-branch setting (Section 6.1), as fossil's commit does.
+		main, err := repo.MainBranch(tx)
+		if err != nil {
+			return nil, fmt.Errorf("main branch: %w", err)
+		}
 		d.T = []deck.TagCard{
-			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
-			{Type: deck.TagPropagating, Name: "sym-trunk", UUID: "*"},
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: main},
+			{Type: deck.TagPropagating, Name: "sym-" + main, UUID: "*"},
 		}
 	}
 

@@ -163,7 +163,9 @@ SP-9.4-2	9.4	Server: ci-unlock CLIENT-ID deletes that client's locks and emits n
 SP-9.5-1	9.5	Server: send-private without Private capability appends error not authorized to sync private content without resetting output, and parsing continues.
 SP-9.5-2	9.5	Client: sends pragma send-private in every private round.
 SP-9.5-3	9.5	Server: emits no link pragma in reply to a request without req-links.
-SP-9.5-4	9.5	Receiver: stores a link's ARG defossilized and verbatim, and never parses, alters or echoes it.	storing is not covered: go-libfossil has no share-links mode, the OPTIONAL mechanism that accepts a link, so it discards every link as a client with that mode off does; the case checks a discarded ARG is never echoed
+SP-9.5-4	9.5	Receiver: stores a link's ARG defossilized and verbatim, and never parses, alters or echoes it.
+SP-9.5-5	9.5	Client: keeps a link only in share-links mode, with exactly URL, ARG and MTIME, a URL that parses as HTTP(S) and a positive decimal MTIME; otherwise it discards every field.
+SP-9.5-6	9.5	Client: sends pragma req-links only in share-links mode.
 SP-10.1-1	10.1	Client: a server error outside the first clone reply ends the reply-card loop; earlier cards stay committed and continuation is evaluated.
 SP-10.1-2	10.1	Server: at wrong-project, authorization, duplicate-login and unknown-card errors, partial output is discarded before the error, except for the push refusal's message form.
 SP-10.1-3	10.1	Server: the SHA3 gate and unauthorized send-private append their error without reset, and parsing continues.

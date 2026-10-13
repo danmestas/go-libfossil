@@ -1,6 +1,9 @@
 package conformance
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // More client cases: the SHA3 gate, admission, and the pull-only message.
 
@@ -145,24 +148,149 @@ func clientShortUVIGotCases() []syncClientCase {
 	}}
 }
 
-// clientLinkCases are Section 9.5's links on the client. go-libfossil has
-// no share-links mode, so it is the client with that mode off: it sends no
-// req-links and discards a link it is sent.
+// clientLinkCases are Section 9.5's links on the client: the share-links
+// mode that asks for them and the checks a link must pass to be kept.
 func clientLinkCases() []syncClientCase {
+	return append(clientLinkStoreCases(), clientLinkDiscardCases()...)
+}
+
+// opShareLinks pulls in share-links mode, fossil(1)'s --share-links.
+var opShareLinks = clientOp{pull: true, shareLinks: true}
+
+// linkRow counts the client's config rows for link:URL with value and mtime.
+func linkRow(url, value string, mtime int) string {
+	return fmt.Sprintf("SELECT count(*) FROM config WHERE name='link:%s' AND value='%s' "+
+		"AND mtime=%d", url, value, mtime)
+}
+
+// noLinks checks that the client stored no link.
+var noLinks = clientRows("SELECT count(*) FROM config WHERE name GLOB 'link:*'", 0)
+
+// argNotEchoed checks that no request carries text from a link's ARG,
+// which the cases spell with "opaque".
+var argNotEchoed = eachCardSent(func(c wireCard) error {
+	if strings.Contains(c.line, "opaque") {
+		return expectf("%q echoes the link's ARG", c.line)
+	}
+	return nil
+})
+
+// clientLinkStoreCases are the request side and a kept link. In each, the
+// igot after the links and the gimme it draws show the reply was read on.
+func clientLinkStoreCases() []syncClientCase {
 	return []syncClientCase{{
-		// The igot after the link shows the reply was read on.
+		Case:    Case{ID: "sync.9.5.req-links-sent", Req: "SP-9.5-6"},
+		op:      opShareLinks,
+		replies: [][]string{reply("igot {U}")},
+		want:    every(sent(1, "pragma req-links"), sentBefore(1, "pull ", "pragma req-links")),
+		fc:      true,
+	}, {
+		Case:    Case{ID: "sync.9.5.no-req-links-unshared", Req: "SP-9.5-6"},
+		op:      opPull,
+		replies: [][]string{reply("igot {U}")},
+		want:    every(sent(2, "gimme {U}"), neverSent("pragma req-links")),
+		fc:      true,
+	}, {
+		// Without share-links the client discards a link, and never
+		// echoes its ARG.
 		Case: Case{ID: "sync.9.5.link-not-echoed", Req: "SP-9.5-4"},
 		op:   opPull,
 		replies: [][]string{reply(`pragma link https://example.com/r opaque\sarg 1767225600`,
 			"igot {U}")},
-		want: every(sent(2, "gimme {U}"), neverSent("pragma req-links"),
-			eachCardSent(func(c wireCard) error {
-				if strings.Contains(c.line, "opaque") {
-					return expectf("%q echoes the link's ARG", c.line)
-				}
-				return nil
-			}),
-			clientRows("SELECT count(*) FROM config WHERE name GLOB 'link:*'", 0)),
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
+	}, {
+		// URL and ARG are stored defossilized: the space, backslash and
+		// newline escapes come back as the bytes they stand for.
+		Case: Case{ID: "sync.9.5.link-stored", Req: "SP-9.5-4"},
+		op:   opShareLinks,
+		replies: [][]string{reply(
+			`pragma link https://example.com/a\sb opaque\sarg\\x\n 1767225600`, "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed,
+			clientRows(linkRow("https://example.com/a b", "opaque arg\\x\n", 1767225600), 1),
+			clientRows("SELECT count(*) FROM config WHERE name GLOB 'link:*'", 1)),
 		fc: true,
+	}, {
+		// Acceptance does not depend on the request that carried req-links:
+		// a link in round 2 is kept too.
+		Case: Case{ID: "sync.9.5.link-later-round", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("igot {U}"),
+			reply("pragma link https://example.com/r opaque 100")},
+		want: every(sent(2, "gimme {U}"),
+			clientRows(linkRow("https://example.com/r", "opaque", 100), 1)),
+		fc: true,
+	}, {
+		// A push+pull session still asks for links.
+		Case:    Case{ID: "sync.9.5.req-links-push-pull", Req: "SP-9.5-6"},
+		op:      clientOp{pull: true, push: true, shareLinks: true},
+		replies: [][]string{reply("igot {U}")},
+		want:    sent(1, "pragma req-links"),
+		fc:      true,
+	}, {
+		// A link already held is replaced only by a strictly newer one:
+		// a is older than its link, b newer and c the same age.
+		Case: Case{ID: "sync.9.5.link-newer-mtime", Req: "SP-9.5-4"},
+		op:   opShareLinks,
+		setup: []string{"INSERT INTO config(name, value, mtime) VALUES" +
+			"('link:https://example.com/a', 'a0', 100), " +
+			"('link:https://example.com/b', 'b0', 300), " +
+			"('link:https://example.com/c', 'c0', 200)"},
+		replies: [][]string{reply("pragma link https://example.com/a opaque-a1 200",
+			"pragma link https://example.com/b opaque-b1 200",
+			"pragma link https://example.com/c opaque-c1 200", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed,
+			clientRows(linkRow("https://example.com/a", "opaque-a1", 200), 1),
+			clientRows(linkRow("https://example.com/b", "b0", 300), 1),
+			clientRows(linkRow("https://example.com/c", "c0", 200), 1)),
+		fc: true,
+	}}
+}
+
+// clientLinkDiscardCases are links a client in share-links mode discards.
+func clientLinkDiscardCases() []syncClientCase {
+	return []syncClientCase{{
+		// ssh: and file: URLs parse, but not as HTTP(S).
+		Case: Case{ID: "sync.9.5.link-not-http", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("pragma link ssh://example.com/r opaque 100",
+			"pragma link file:/r opaque 100", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
+	}, {
+		// An http: prefix with a bad port, and a form no URL parser takes.
+		Case: Case{ID: "sync.9.5.link-unparsed-url", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("pragma link https://example.com:8x/r opaque 100",
+			"pragma link example.com/r opaque 100", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
+		fossil: "fossil(1) 2.28 fails fatally on a link URL its parser rejects " +
+			"rather than discarding the link",
+	}, {
+		Case: Case{ID: "sync.9.5.link-non-positive-mtime", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("pragma link https://example.com/a opaque 0",
+			"pragma link https://example.com/b opaque -5",
+			"pragma link https://example.com/c opaque none", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
+	}, {
+		// MTIME is decimal; fossil(1) reads it with strtoll base 0.
+		Case: Case{ID: "sync.9.5.link-mtime-not-decimal", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("pragma link https://example.com/a opaque 0x10",
+			"pragma link https://example.com/b opaque 12z", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
+		fossil: "fossil(1) 2.28 reads MTIME with strtoll(..., 0), so it keeps 0x10 " +
+			"as 16 and 12z as 12",
+	}, {
+		Case: Case{ID: "sync.9.5.link-token-count", Req: "SP-9.5-5"},
+		op:   opShareLinks,
+		replies: [][]string{reply("pragma link https://example.com/a opaque",
+			"pragma link https://example.com/b opaque 100 more", "igot {U}")},
+		want: every(sent(2, "gimme {U}"), argNotEchoed, noLinks),
+		fc:   true,
 	}}
 }

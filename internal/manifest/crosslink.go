@@ -709,6 +709,8 @@ func linkArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.C
 // rid, so a later sweep still sees it as undiscovered. See shouldDefer.
 type checkinDeferralGuard struct {
 	avail *content.AvailabilityCache
+	// checkinBaselines memoizes baselines verified to be check-in manifests.
+	checkinBaselines map[string]bool
 	// awaitFiles makes the guard also wait on a check-in's files
 	// (missingCheckinRefs), not only its baseline (missingBaseline). Only the
 	// receive-time cascade sets it; a sweep never does.
@@ -723,9 +725,10 @@ type checkinDeferralGuard struct {
 // sweep or one cascade run. Not safe for concurrent use; each caller owns one.
 func newCheckinDeferralGuard() *checkinDeferralGuard {
 	return &checkinDeferralGuard{
-		avail:        content.NewAvailabilityCache(),
-		deferredRids: make([]libfossil.FslID, 0, logDeferredSampleSize),
-		missingBlobs: make(map[string]struct{}, logDeferredSampleSize),
+		avail:            content.NewAvailabilityCache(),
+		checkinBaselines: make(map[string]bool),
+		deferredRids:     make([]libfossil.FslID, 0, logDeferredSampleSize),
+		missingBlobs:     make(map[string]struct{}, logDeferredSampleSize),
 	}
 }
 
@@ -745,9 +748,9 @@ func (g *checkinDeferralGuard) shouldDefer(
 ) (bool, error) {
 	var missing []string
 	if g.awaitFiles {
-		missing = missingCheckinRefs(tx, d, g.avail)
+		missing = missingCheckinRefs(tx, d, g)
 	} else {
-		missing = missingBaseline(tx, d, g.avail)
+		missing = missingBaseline(tx, d, g)
 	}
 	if len(missing) == 0 {
 		return false, nil
@@ -1002,7 +1005,8 @@ func repairTagPropagation(q db.Querier) error {
 // that baseline's content is not available. The result is empty when the
 // check-in may be linked now.
 //
-// The baseline is the only such reference. Without it the delta manifest has
+// The baseline is the only such reference, and it must be a check-in manifest,
+// not merely available content. Without it the delta manifest has
 // no file set, so [FossilArtifact] Section 8.3 makes its crosslink a soft
 // failure retried once the baseline arrives, and fossil's manifest_crosslink
 // refuses it outright (fetch_baseline fails; src/manifest.c ~1363, ~2361).
@@ -1021,7 +1025,7 @@ func repairTagPropagation(q db.Querier) error {
 // A deferred check-in gets no event row, so the candidate query re-selects it
 // on the next sweep; recordBaselineGap also files it under its baseline in
 // orphan, where the phantom-fill cascade finds it when the baseline arrives.
-func missingBaseline(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) []string {
+func missingBaseline(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 	if tx == nil {
 		panic("manifest.missingBaseline: tx must not be nil")
 	}
@@ -1031,10 +1035,40 @@ func missingBaseline(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) 
 	if d.B == "" {
 		return nil
 	}
-	if _, ok := avail.ByUUID(tx, d.B); ok {
-		return nil
+	if _, ok := g.avail.ByUUID(tx, d.B); !ok {
+		return []string{d.B}
 	}
-	return []string{d.B}
+	if !g.baselineIsCheckin(tx, d.B) {
+		return []string{d.B}
+	}
+	return nil
+}
+
+// baselineIsCheckin reports whether the available artifact uuid parses as a
+// check-in manifest. fossil's fetch_baseline asks manifest_get(rid,
+// CFTYPE_MANIFEST), which fails for a stored artifact of another type just as
+// it does for an absent one, and [FossilArtifact] Section 8.3 treats "not a
+// manifest" like "cannot be located". Only a positive answer is memoized:
+// the verdict for a given blob never changes, but a sweep reaches many deltas
+// over few baselines, so one expansion per baseline is enough.
+func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
+	if g.checkinBaselines[uuid] {
+		return true
+	}
+	rid, ok := g.avail.ByUUID(tx, uuid)
+	if !ok {
+		return false
+	}
+	data, err := expandManifestBytes(tx, nil, rid)
+	if err != nil {
+		return false
+	}
+	bd, err := deck.Parse(data)
+	if err != nil || bd.Type != deck.Checkin {
+		return false
+	}
+	g.checkinBaselines[uuid] = true
+	return true
 }
 
 // missingCheckinRefs is missingBaseline for the receive-time paths -- the
@@ -1050,10 +1084,10 @@ func missingBaseline(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) 
 // with no parent manifest there is no file transition to derive -- fossil's
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
-func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCache) []string {
-	missing := missingBaseline(tx, d, avail)
+func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
+	missing := missingBaseline(tx, d, g)
 	if len(d.P) > 0 {
-		if _, ok := avail.ByUUID(tx, d.P[0]); !ok {
+		if _, ok := g.avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
 		}
 	}
@@ -1066,7 +1100,7 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, avail *content.AvailabilityCach
 			continue
 		}
 		seen[f.UUID] = struct{}{}
-		if _, ok := avail.ByUUID(tx, f.UUID); !ok {
+		if _, ok := g.avail.ByUUID(tx, f.UUID); !ok {
 			missing = append(missing, f.UUID)
 		}
 	}
@@ -1116,6 +1150,12 @@ func crosslinkCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *conte
 
 	if err := crosslinkCheckinTables(tx, rid, d, cache); err != nil {
 		return err
+	}
+	// A linked check-in is no longer waiting on a baseline. Whichever path
+	// links it -- sweep, receive linker or cascade -- drops the gap row, as
+	// fossil's after_dephantomize does once the baseline lands.
+	if _, err := tx.Exec("DELETE FROM orphan WHERE rid=?", rid); err != nil {
+		return fmt.Errorf("orphan: %w", err)
 	}
 	return applyInlineTags(tx, rid, d)
 }

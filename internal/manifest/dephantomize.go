@@ -340,7 +340,7 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 // in flight -- its baseline or a file (missingCheckinRefs) -- recording its
 // baseline gap and queuing it as a waiter on each missing blob when so.
 func (rl *ReceiveLinker) deferCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
-	missing := missingCheckinRefs(tx, d, rl.state.guard.avail)
+	missing := missingCheckinRefs(tx, d, rl.state.guard)
 	if len(missing) == 0 {
 		return false, nil
 	}

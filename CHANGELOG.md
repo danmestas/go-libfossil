@@ -127,8 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   baseline gets a phantom, so a sync requests it, and the manifest is filed
   in `orphan` under it, where the phantom-fill cascade links it when the
   baseline arrives. Before, a sweep deferred it without either, so nothing
-  asked for the baseline. `verify.Rebuild` clears and rederives `orphan`.
-  New cases: `repostate.3.1.absent-baseline` (with `.rebuild`) and
+  asked for the baseline. A baseline that is stored but is not a check-in
+  manifest is refused the same way, as `fetch_baseline`'s `manifest_get` does.
+  The `orphan` row is dropped whenever the manifest links, by any path.
+  `verify.Rebuild` clears and rederives `orphan`. New requirement RS-3.1-3
+  and cases `repostate.3.1.absent-baseline` (with `.rebuild`),
+  `repostate.3.1.non-manifest-baseline` (with `.rebuild`) and
   `repostate.3.1.late-baseline`.
 - A check-in whose primary parent is absent is no longer held back for
   absent file content (#398). The crosslink sweep, the receive linker and the

@@ -199,6 +199,10 @@ func TestCrosslink_DefersDeltaCheckinWithMissingBaseline(t *testing.T) {
 		t.Errorf("linked = %d, want 2 (baseline + delta)", linked)
 	}
 	assertCounts(t, r, deltaRID, 1, 1, 0, "delta linked (no F-cards in delta)")
+	var orphans int
+	if err := r.DB().QueryRow("SELECT count(*) FROM orphan").Scan(&orphans); err != nil || orphans != 0 {
+		t.Errorf("orphan rows after the delta linked = %d, %v; want 0", orphans, err)
+	}
 }
 
 // TestCrosslink_LinksWhenAllBlobsPresent confirms the unchanged path

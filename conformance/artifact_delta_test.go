@@ -200,12 +200,18 @@ func TestCrosslinkBaselineMustBeCheckin(t *testing.T) {
 			if _, err := manifest.Crosslink(r); err != nil {
 				t.Fatalf("Crosslink: %v", err)
 			}
-			var n int
-			if err := r.DB().QueryRow("SELECT count(*) FROM mlink WHERE mid=?", rid).Scan(&n); err != nil {
-				t.Fatal(err)
-			}
-			if (n > 0) != tt.wantRows {
-				t.Fatalf("mlink rows for the delta = %d, want rows: %v", n, tt.wantRows)
+			for _, table := range []string{"mlink", "event"} {
+				col := map[string]string{"mlink": "mid", "event": "objid"}[table]
+				var n int
+				if err := r.DB().QueryRow("SELECT count(*) FROM "+table+" WHERE "+col+"=?",
+					rid).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				// A baseline that is not a manifest holds the whole delta back, as
+				// fossil's fetch_baseline does, not only its file rows.
+				if (n > 0) != tt.wantRows {
+					t.Fatalf("%s rows for the delta = %d, want rows: %v", table, n, tt.wantRows)
+				}
 			}
 		})
 	}

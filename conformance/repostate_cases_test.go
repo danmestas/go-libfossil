@@ -71,24 +71,40 @@ func dagCases() []rsCase {
 		// and retried when b arrives, so it has no link or event row yet and
 		// b is a phantom. fossil's manifest_crosslink refuses it the same way
 		// (fetch_baseline), in a sweep and in `fossil rebuild` alike.
-		Case:   Case{ID: "repostate.3.1.absent-baseline", Req: "RS-3.1-1"},
+		Case:   Case{ID: "repostate.3.1.absent-baseline", Req: "RS-3.1-3"},
 		arts:   []rsArt{literal("c2", "B {b}\nC c2\nD "+rsTime(2)+"\nP {p}\nU u\n")},
-		tables: []string{"event", "phantom", "plink"},
-		want:   rows("phantom", "b"),
+		tables: []string{"event", "orphan", "phantom", "plink"},
+		want:   join(rows("phantom", "b"), rows("orphan", "c2>b")),
 		ignoring: []string{"+event: c2 ci @2", "+plink: p>c2 1 @2 -", "+phantom: p",
-			"-phantom: b"},
+			"-phantom: b", "-orphan: c2>b"},
+		rebuild: true,
+	}, {
+		// The same refusal when the baseline is stored but is not a
+		// manifest: fossil's fetch_baseline asks manifest_get for a
+		// manifest, so a wiki page named as baseline fails it too.
+		Case: Case{ID: "repostate.3.1.non-manifest-baseline", Req: "RS-3.1-3"},
+		arts: []rsArt{
+			checkin("c1", 1, nil, rsRoot...),
+			literal("w", "D "+rsTime(3)+"\nL Page\nU u\nW 5\nhello\n"),
+			literal("c2", "B {w}\nC c2\nD "+rsTime(2)+"\nP {c1}\nU u\n"),
+		},
+		tables: []string{"event", "orphan", "plink"},
+		want:   join(rows("event", "c1 ci @1", "w w @3"), rows("orphan", "c2>w")),
+		ignoring: []string{"+event: c2 ci @2", "+plink: c1>c2 1 @2 -",
+			"-orphan: c2>w"},
 		rebuild: true,
 	}, {
 		// The baseline arrives after its delta: the deferred crosslink is
 		// retried and the link carries the baseline id.
-		Case: Case{ID: "repostate.3.1.late-baseline", Req: "RS-3.1-1"},
+		Case: Case{ID: "repostate.3.1.late-baseline", Req: "RS-3.1-3"},
 		arts: []rsArt{
 			literal("c2", "B {c1}\nC c2\nD "+rsTime(2)+"\nP {c1}\nU u\n"),
 			checkin("c1", 1, nil, rsRoot...),
 		},
-		tables:   []string{"event", "plink"},
+		// The gap row goes once the delta links, whichever path links it.
+		tables:   []string{"event", "orphan", "plink"},
 		want:     join(rows("event", "c1 ci @1", "c2 ci @2"), rows("plink", "c1>c2 1 @2 c1")),
-		ignoring: []string{"-event: c2 ci @2", "-plink: c1>c2 1 @2 c1"},
+		ignoring: []string{"-event: c2 ci @2", "-plink: c1>c2 1 @2 c1", "+orphan: c2>c1"},
 		each:     true,
 	}}
 }

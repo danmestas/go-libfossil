@@ -63,6 +63,36 @@ func serverRefusalOrderCases() []syncServerCase {
 		want: all(completed, onlyError("not authorized to read"),
 			noCard(serverVersion)),
 	}, {
+		// §10.1: the clone batch, its cookie, clone_seqno and push card are
+		// sent at the clone card, as page_xfer sends them, so the bad
+		// command's reset discards them.
+		Case: Case{ID: "sync.10.1.clone-then-bad-command", Req: "SP-10.1-2"},
+		body: []string{"{CV}", "clone 3 1", "bogus", "{R}"},
+		want: all(completed, onlyError("bad command: bogus\n"), noCard("cfile "),
+			noCard("clone_seqno"), noCard("push "), noCard("cookie ")),
+	}, {
+		// The refused push resets too: g may clone but not write.
+		Case:  Case{ID: "sync.10.1.clone-then-refused-push", Req: "SP-10.1-2"},
+		setup: []string{"UPDATE user SET cap='g' WHERE login='nobody'"},
+		body:  []string{"{CV}", "clone 3 1", pushCard, "{R}"},
+		want: all(completed, onlyError("not authorized to write"), noCard("cfile "),
+			noCard("clone_seqno"), noCard("cookie ")),
+	}, {
+		// The clone's unversioned catalog is sent at the clone card too.
+		Case: Case{ID: "sync.10.1.clone-uv-catalog-reset", Req: "SP-10.1-2"},
+		setup: []string{"INSERT INTO config(name, value, mtime) VALUES('uv-sync', '1', 0)",
+			"DELETE FROM config WHERE name='uv-hash'"},
+		body: []string{"{CV}", "clone 3 1", "bogus", "{R}"},
+		want: all(completed, onlyError("bad command: bogus\n"), noCard("uvigot "),
+			noCard("pragma uv-pull-only")),
+	}, {
+		// page_xfer answers req-clusters at the pragma, so a later reset
+		// discards the cluster igots.
+		Case: Case{ID: "sync.10.1.req-clusters-reset", Req: "SP-10.1-2"},
+		body: []string{"{CV}", "pragma req-clusters", "bogus", "{R}"},
+		want: all(completed, onlyError("bad command: bogus\n"),
+			noCard("# sending-clusters"), noCard("igot {C}")),
+	}, {
 		// The file card comes before the push card that would enable it.
 		Case: Case{ID: "sync.6.6.file-before-push", Req: "SP-6.6-3"},
 		body: []string{"{CV}", "file {N1} {N1.size}", "{N1.data}", pushCard, "{R}"},

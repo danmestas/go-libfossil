@@ -196,7 +196,6 @@ type handler struct {
 	cloneSnapMax    int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
 	uvCatalogSent   bool                      // true after sending UV catalog
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
-	reqClusters     bool                      // client sent pragma req-clusters
 	filesSent       int                       // files sent in response (for observer)
 	filesRecvd      int                       // files received from client (for observer)
 	syncPrivate     bool                      // true if pragma send-private was accepted
@@ -343,11 +342,6 @@ func (h *handler) breakLoop(msg string) {
 	h.resetContent()
 	h.resp = append(h.resp, &xfer.ErrorCard{Message: msg})
 	h.broke = true
-	// The reset also discards the cfiles page_xfer's clone card already
-	// sent, so no clone batch or clone push card follows the error, and the
-	// cluster igots it answered req-clusters with in place.
-	h.cloneMode = false
-	h.reqClusters = false
 }
 
 func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -369,6 +363,10 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	if h.probeCloneFatal(req.Cards) {
 		return h.reply(), nil
 	}
+	// The clone snapshot cookie is read ahead of the card loop, since the
+	// clone batch goes out at the clone card and fossil's client sends its
+	// cookie after that card.
+	h.cloneSnapMax = cloneCapFromCards(req.Cards)
 	if err := h.processCards(ctx, req.Cards); err != nil {
 		return nil, err
 	}
@@ -378,12 +376,6 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// The end-of-request steps run after a broken loop too (§6.4).
 	if err := h.emitInventory(); err != nil {
 		return nil, err
-	}
-
-	if h.cloneMode {
-		if err := h.emitClonePush(); err != nil {
-			return nil, err
-		}
 	}
 
 	if err := h.crosslinkReceived(ctx); err != nil {
@@ -432,8 +424,12 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 	switch c := card.(type) {
 	case *xfer.LoginCard:
 		h.handleLogin(c)
-	case *xfer.PragmaCard, *xfer.PushCard, *xfer.PullCard, *xfer.CloneCard,
-		*xfer.CloneSeqNoCard, *xfer.CookieCard, *xfer.SchemaCard:
+	case *xfer.CloneCard:
+		return h.handleClone(c)
+	case *xfer.PragmaCard:
+		return h.handlePragma(c)
+	case *xfer.PushCard, *xfer.PullCard, *xfer.CloneSeqNoCard, *xfer.CookieCard,
+		*xfer.SchemaCard:
 		h.handleControlCard(card)
 	case *xfer.BadFileCard:
 		// A file/cfile/uvfile line the decoder could not frame: page_xfer
@@ -638,18 +634,10 @@ func countedErrors(cards []xfer.Card) int {
 	return n
 }
 
-// emitInventory sends what follows the card loop: the cluster igots a
-// req-clusters asked for, the igot inventory of a pull, and a clone's batch.
+// emitInventory sends what follows the card loop: the phantom gimmes of a
+// push and the igot inventory of a pull. A clone's batch and the cluster
+// igots of req-clusters go out in place instead, at their cards.
 func (h *handler) emitInventory() error {
-	// pragma req-clusters is answered with the cluster igots, ahead of the
-	// inventory as page_xfer answers it in card order. Like fossil, any
-	// requester gets them: they name public artifacts and carry no content,
-	// which a gimme still needs Read to fetch.
-	if h.reqClusters {
-		if err := h.sendAllClusters(); err != nil {
-			return err
-		}
-	}
 	// An accepted push asks for the server's phantoms, ahead of the pull's
 	// inventory as page_xfer's request_phantoms runs ahead of
 	// send_unclustered (§6.4, §8.5).
@@ -667,42 +655,61 @@ func (h *handler) emitInventory() error {
 			return err
 		}
 	}
-	// If clone, emit paginated file cards, after the unversioned catalog
-	// page_xfer sends with a clone when uv-sync is on (§8.4).
-	if h.cloneMode {
-		if err := h.sendCloneUVCatalog(); err != nil {
-			return err
-		}
-		if h.cloneDone {
-			h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: 0})
-			return nil
-		}
-		return h.emitCloneBatch()
-	}
 	return nil
+}
+
+// handleClone answers a clone card in place, as page_xfer's clone branch
+// writes its reply where the card is read (xfer.c:1532-1578): the
+// unversioned catalog when uv-sync is on (§8.4), the batch and clone_seqno,
+// then the push card naming the repository (§8.2). Sent there, they are
+// discarded by any later reset, a bad command or a refused push, as fossil's
+// cgi_reset_content discards them (§10.1).
+func (h *handler) handleClone(c *xfer.CloneCard) error {
+	h.handleCloneCard(c)
+	if !h.cloneMode || h.fatal {
+		return nil
+	}
+	if err := h.sendCloneUVCatalog(); err != nil {
+		return err
+	}
+	if h.cloneDone {
+		h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: 0})
+	} else if err := h.emitCloneBatch(); err != nil {
+		return err
+	}
+	return h.emitClonePush()
+}
+
+// cloneCapFromCards is the clone snapshot bound the request's last clone-cap
+// cookie names, or 0 when it carries none.
+func cloneCapFromCards(cards []xfer.Card) int {
+	snap := 0
+	for _, card := range cards {
+		if c, ok := card.(*xfer.CookieCard); ok {
+			if rid, ok := parseCloneCap(c.Value); ok {
+				snap = rid
+			}
+		}
+	}
+	return snap
 }
 
 func (h *handler) handleControlCard(card xfer.Card) {
 	switch c := card.(type) {
-	case *xfer.PragmaCard:
-		h.handlePragma(c)
 	case *xfer.PushCard:
 		h.handlePushCard(c)
 	case *xfer.PullCard:
 		h.handlePullCard(c)
-	case *xfer.CloneCard:
-		h.handleCloneCard(c)
 	case *xfer.CloneSeqNoCard:
 		// Deliberately ignored. clone_seqno is a reply-only card, so no
 		// conforming client sends one; canonical answers `bad command`. We
 		// stay tolerant rather than strict, which is why the model server in
 		// TestCloneMultiBatchAgainstCanonicalServer rejects it and we do not.
 	case *xfer.CookieCard:
-		// Clone clients echo the cap cookie on every round. Sync sessions also
-		// use cookies opaquely; non-matching values leave cloneSnapMax at zero.
-		if rid, ok := parseCloneCap(c.Value); ok {
-			h.cloneSnapMax = rid
-		}
+		// Clone clients echo the cap cookie on every round; process reads
+		// it ahead of the card loop (cloneCapFromCards), since the batch
+		// it bounds goes out at the clone card. Sync sessions use cookies
+		// opaquely.
 	case *xfer.SchemaCard:
 		h.handleSchemaCard(c)
 	}
@@ -819,7 +826,7 @@ func (h *handler) wrongProject(code string) bool {
 // not yet known here. The catalogs are therefore gated on
 // the Read capability itself, as fossil's page_xfer gates uv-hash on
 // g.perm.Read, rather than on an accepted pull.
-func (h *handler) handlePragma(c *xfer.PragmaCard) {
+func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 	if c == nil {
 		panic("handler.handlePragma: c must not be nil")
 	}
@@ -851,7 +858,11 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
 	case c.Name == "req-clusters":
-		h.reqClusters = true
+		// Answered in place, as page_xfer answers it, so a later reset
+		// discards the igots (§10.1). Like fossil, any requester gets them:
+		// they name public artifacts and carry no content, which a gimme
+		// still needs Read to fetch.
+		return h.sendAllClusters()
 	case c.Name == "ci-lock" && len(c.Values) == 2 && hash.IsValidHash(c.Values[0]):
 		// fossil takes the pragma only with exactly HASH and CLIENT-ID, HASH
 		// a hash (xfer.c:1781); anything else is no lock request. As in
@@ -868,6 +879,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 			h.resp = append(h.resp, &xfer.ErrorCard{Message: privateRefusal})
 		}
 	}
+	return nil
 }
 
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds

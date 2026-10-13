@@ -1728,9 +1728,11 @@ func TestEmitCloneBatchIncludesPrivateWhenAuthorized(t *testing.T) {
 	privRid, _ := blob.Exists(r.DB(), privUUID)
 	content.MakePrivate(r.DB(), int64(privRid))
 
+	// send-private goes first, as clients send it: the batch is built at
+	// the clone card, as page_xfer builds it, so a later pragma is too late.
 	resp := handleReq(t, r,
-		&xfer.CloneCard{Version: 1},
 		&xfer.PragmaCard{Name: "send-private"},
+		&xfer.CloneCard{Version: 1},
 	)
 
 	files := findCards[*xfer.CFileCard](resp)
@@ -2298,5 +2300,29 @@ func TestHandlerPhantomGimmeSkipsPeerLacks(t *testing.T) {
 	}
 	if last := gimmes[len(gimmes)-1].UUID; last != names[maxPhantomGimme] {
 		t.Fatalf("last gimme %s, want %s", last, names[maxPhantomGimme])
+	}
+}
+
+// TestCloneCookieAfterCloneCard checks that the clone snapshot cookie bounds
+// the batch even when it follows the clone card, as fossil's client sends it:
+// the batch is built at the clone card, so the cookie is read ahead of it.
+func TestCloneCookieAfterCloneCard(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	r.DB().Exec("UPDATE user SET cap='g' WHERE login='nobody'")
+	early := storeTestBlob(t, r, []byte("clone cookie early"))
+	earlyRid, _ := blob.Exists(r.DB(), early)
+	late := storeTestBlob(t, r, []byte("clone cookie late"))
+
+	resp := handleReq(t, r,
+		&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+		&xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, earlyRid)},
+	)
+	if n := len(findCards[*xfer.CookieCard](resp)); n != 0 {
+		t.Fatalf("%d cookie cards: the echoed snapshot was not used", n)
+	}
+	for _, f := range findCards[*xfer.CFileCard](resp) {
+		if f.UUID == late {
+			t.Fatal("blob past the cookie's snapshot was sent")
+		}
 	}
 }

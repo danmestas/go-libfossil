@@ -879,6 +879,10 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 // the sweep processCkinLock runs before each write: a lock whose HASH is not
 // a leaf is deleted, so at most one lock per leaf plus the latest lock on a
 // non-leaf survive, whatever the requester sends.
+//
+// Whether or not a lock was written, the reply then carries pragma
+// avoid-delta-manifests while forbid-delta-manifests is on, after any
+// ci-lock-fail (§9.4), as fossil's handler ends (xfer.c:1831).
 func (h *handler) handleCkinLock(parentUUID, clientID string) {
 	login := h.user
 	if login == "nobody" {
@@ -896,6 +900,9 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 			Values: []string{deck.FossilEncode(holder),
 				fmt.Sprintf("%d", fail.Since.Unix())},
 		})
+	}
+	if forbidDeltaManifests(h.repo.DB()) {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
 }
 

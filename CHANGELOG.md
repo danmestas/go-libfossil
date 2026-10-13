@@ -40,15 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a checkout with no version, resolves as `Checkout.ResolveVersion` does,
   except that only check-ins can answer: the request is a check-in request,
   so a technote carrying the tag does not. `ckout` is a keyword only as the
-  whole name, so `ckout.` and `root:ckout` read it as an ordinary name. The
-  draft also makes `ckout` a keyword in a plain check-in request. This follows
-  fossil, where only `ci+` has it (an erratum to the draft is pending), so
-  `ResolveVersion` and `ResolveBranchStart` still read it as an ordinary name.
+  whole name, so `ckout.` and `root:ckout` read it as an ordinary name.
+  `ckout` is a keyword only in `ci+` (as the 2026-10-13 erratum has it, and
+  fossil), so `ResolveVersion` and `ResolveBranchStart` read it as an
+  ordinary name.
   New `repostate.8.3` cases run the request against `fossil test-name-to-id
   --type ci+`: `ckout` over a tag of that name, with and without a checkout
-  version, and `ckout` as the tag under the untyped request. RS-8.3-4 now
-  follows fossil as a recorded deviation (the `ckout.` retry case) rather than
-  being partial (tracked in #419).
+  version, and `ckout` as the tag under the untyped request (RS-8.3-4;
+  tracked in #419).
 - `Repo.ResolveBranchStart` is fossil's branch-type request: it resolves a
   name, then returns the first check-in of the branch the result is on
   (repo-state-01 §8.3). It follows the draft where fossil 2.28 differs:
@@ -114,6 +113,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   used to ignore the card.
   The `sync.5.2.client-clone-seqno` case passes and is no longer a deviation
   (tracked in #424).
+- The conformance suite is re-pinned to the -01 drafts as zit check-in
+  `5a1b741b25d8` holds them, with five more errata applied: repo-state §5.3
+  (an inherited row blocks an older direct tag, so the result follows
+  arrival order), §7.3 (leaves are rechecked only on branch-tag events),
+  §8.3 (`ckout` is a keyword only for `ci+` and only as the whole name),
+  sync-protocol §9.4/§9.5 (`pragma avoid-delta-manifests` answers ci-lock)
+  and §10.1 (a file whose content does not match its hash fails the round).
+  zit now keeps each -01 text under the draft's -00 file name; the copies
+  keep their -01 names and `conformance/rfcs/README.md` records the zit path
+  and check-in. The new errata are pinned. The requirement tables are re-read
+  against every changed hunk: RS-5.3-1, RS-7.3-1, RS-7.3-3, RS-8.3-4,
+  SP-9.4-1, SP-10.1-6 and SP-10.1-7 are reworded, and RS-5.3-5, SP-9.4-3,
+  SP-9.5-7 and SP-10.1-8 are new. The §7.3 and §8.3 cases that were marked
+  as deviations, because go-libfossil already followed fossil, now pass as
+  written, and new cases cover arrival order for a date tag, an untagged
+  chain, one-batch leaf derivation and a merge parent's recheck. One
+  non-conformance remains: the leaf table is recomputed per crosslink batch,
+  so a parent whose untagged child arrives in a later batch loses the verdict
+  §7.3 keeps (`repostate.7.3.recheck-untagged-child`, tracked in #426).
+- A pull that receives a `uvfile` whose content does not match its hash now
+  records the error, commits the cards before it and evaluates the continuation
+  rules, as sync-protocol-01 Section 10.1 and fossil(1) do (SP-10.1-7), where it
+  used to end the session with an error. A file or cfile that does not match
+  its hash still fails the round (tracked in #421).
+- The sync server answers every `pragma ci-lock` that passes its argument
+  guard with `pragma avoid-delta-manifests` while the repository's
+  `forbid-delta-manifests` setting is on, after any `ci-lock-fail`
+  (sync-protocol-01 §9.4). The setting is read as fossil's `db_get_boolean`
+  reads it, defaulting to on as the draft and fossil 2.29 do; fossil 2.28's
+  server defaults it to off, so against 2.28 the cases that rely on the
+  default record that difference. The client recognizes the pragma and,
+  as §9.5 now says, changes nothing about its transfer; go-libfossil commits
+  without an autosync, so no commit is pending when it arrives.
+- A file or cfile whose content does not match its hash, found when it
+  arrives or later in the reply, now fails the round on the client
+  (sync-protocol-01 §10.1): nothing the reply carried is committed, the
+  igots and files before it included, and no further round starts. `Sync`
+  and `Clone` return the error as before. Content errors that leave the
+  stored artifacts consistent, such as a malformed file card or an
+  unversioned file with a wrong hash, still commit the prefix and continue.
+  The `sync.10.1.integrity-error-*` cases now check that, against fossil
+  2.28 as well, and the gap tracked in #421 is gone with the text it rested
+  on.
 - The conformance suite now checks the -01 drafts of the artifact-format,
   repo-state and sync-protocol specifications (the delta format stays on -00;
   there is no -01). The -00 errata are folded into -01 and no longer pinned;
@@ -155,8 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   active-tag rule for leaves and the checkout's branch (RS-6.4-1), a parent
   tag that arrives before its target (RS-4.2-8), and the leaf recheck of
   untagged check-ins (RS-7.3-3; a check-in with a parent but no branch tag is
-  still never rechecked, as in fossil, and marked a deviation, because
-  rechecking it changed the leaf table of a real fossil-authored repository).
+  rechecked only as the parent of a branch-tagged one, as in fossil, which
+  the 2026-10-13 erratum made the draft's text).
   Where fossil 2.28 differs (its rebuild links a misnamed artifact, and its
   `branch current` and `leaf_check` read cancelled branch rows), the cases
   follow the draft and record the difference. Checkout-relative names and

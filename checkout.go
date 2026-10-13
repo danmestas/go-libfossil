@@ -548,12 +548,10 @@ type WorkingVersion struct {
 // does, except that only check-ins can answer: the request is a check-in
 // request, so a technote or wiki page carrying the tag does not.
 //
-// repo-state-01 Section 8.3 makes "ckout" a keyword in a plain check-in
-// request too. This follows fossil, where only "ci+" has it (an erratum to
-// the draft is pending), so ResolveVersion and Repo.ResolveBranchStart still
-// read "ckout" as an ordinary name. It is a keyword only as the whole name:
-// in "root:ckout" or "ckout." fossil resolves the inner name as a plain
-// check-in request, and so does this.
+// As repo-state-01 Section 8.3 says, only "ci+" has the keyword, so
+// ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary
+// name. It is a keyword only as the whole name: in "root:ckout" or "ckout."
+// the inner name is resolved as a plain check-in request, as in fossil.
 func (c *Checkout) ResolveWorking(name string) (WorkingVersion, error) {
 	ckout, err := c.versionOrZero(name)
 	if err != nil {

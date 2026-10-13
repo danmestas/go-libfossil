@@ -116,13 +116,13 @@ func leafCheck(q db.Querier, rid libfossil.FslID) error {
 // carrying a branch tagxref row, plus every rid that is a parent in plink.
 //
 // That set never checks a check-in that has a parent but carries no branch
-// tag, so such a check-in is never a leaf in fossil, and its parent keeps the
-// verdict it had before the child arrived. draft-fossil-repo-state-01 Section
-// 7.3 instead rechecks every crosslinked check-in and its parents, whatever
-// its tags. This follows fossil: widening the set to plink children changed
-// the leaf table of a real fossil-authored repository (the libfossil corpus
-// holds a tagless check-in with a parent), which `fossil rebuild` does not
-// reproduce, so the Section 7.3 cases for it are marked as deviations.
+// tag, so such a check-in is never a leaf in fossil. draft-fossil-repo-state-01
+// Section 7.3, as corrected on 2026-10-13, states the same rule: widening the
+// set to plink children changed the leaf table of a real fossil-authored
+// repository (the libfossil corpus holds a tagless check-in with a parent),
+// which `fossil rebuild` does not reproduce. Recomputing the table per batch
+// still departs from the section in one way: a parent whose untagged child
+// arrives in a later batch loses the verdict fossil keeps for it (#426).
 //
 // The set still differs from "every check-in" in both directions. A parent whose own
 // artifact never arrived has no event row at all, yet fossil does list such a

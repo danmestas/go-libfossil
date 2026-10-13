@@ -311,8 +311,9 @@ func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdi
 // hashMismatchError is a received artifact whose content is not its name.
 // uuid names the artifact at fault, which for a delta caught late is not the
 // card being stored when it is found. late marks that case: the commit check
-// of Section 7.7 failed, which aborts the whole pass, where a mismatch found
-// before storage refuses only its own card.
+// of Section 7.7 failed, which aborts the whole pass on either end. A
+// mismatch found before storage refuses only its own card on the server; a
+// client fails the round on either kind (failsRound, Section 10.1).
 type hashMismatchError struct {
 	uuid string
 	late bool
@@ -330,6 +331,16 @@ func (e *hashMismatchError) Unwrap() error { return errHashMismatch }
 func abortsPass(err error) bool {
 	var mismatch *hashMismatchError
 	return errors.As(err, &mismatch) && mismatch.late
+}
+
+// failsRound reports whether err is a received file or cfile whose content
+// does not match its name, found before storage or late. Section 10.1 makes
+// either an explicit fail-fast path for a client: the round that received it
+// commits nothing, its processed prefix included, and no further round
+// starts. A server still treats the early case as a card error (abortsPass).
+func failsRound(err error) bool {
+	var mismatch *hashMismatchError
+	return errors.As(err, &mismatch)
 }
 
 // errPassAborted is what a pass's callback returns to roll its transaction

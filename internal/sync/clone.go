@@ -484,9 +484,10 @@ func (cs *cloneSession) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, []xf
 // project code — and so the login card — is known.
 //
 // The round is one verification pass (§7.7) and runs in one write
-// transaction, as fossil's client_sync runs each round: a late hash mismatch
-// rolls the round back. Any other card error commits the prefix before it
-// and is returned.
+// transaction, as fossil's client_sync runs each round: a file or cfile
+// whose content does not match its name, found before storage or late, rolls
+// the round back, prefix included (§10.1's fail-fast path). Any other card
+// error commits the prefix before it and is returned.
 func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfer.Message) error {
 	if msg == nil {
 		panic("sync.Clone.processResponse: msg must not be nil")
@@ -496,7 +497,11 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 	cardErr, err := runPass(cs.repo, func(bound *repo.Repo) (error, error) {
 		defer cs.bindRepo(bound)()
 		filesRecvd = 0
-		return cs.processCards(ctx, cycle, msg, &filesRecvd), nil
+		cardErr := cs.processCards(ctx, cycle, msg, &filesRecvd)
+		if failsRound(cardErr) {
+			return nil, cardErr // §10.1: the round, prefix included, rolls back
+		}
+		return cardErr, nil
 	})
 	if err != nil {
 		return err // the round rolled back

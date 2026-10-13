@@ -583,10 +583,12 @@ func (s *session) buildLoginCard(cards []xfer.Card, projectCode string) (*xfer.L
 // The reply is one verification pass (§7.7) and runs in one write
 // transaction, as fossil's client_sync runs each round between
 // db_begin_transaction and db_end_transaction: a delta stored dangling is
-// checked if its basis arrives later in this reply, and a mismatch rolls the
-// whole reply back. A card error otherwise ends only the card loop: the
-// prefix before it, with the phantoms, visibility and crosslink cascade it
-// owes, commits (§10.1), and the error is returned.
+// checked if its basis arrives later in this reply. A file or cfile whose
+// content does not match its name, found before storage or late, rolls the
+// whole reply back, prefix included, and ends the session (§10.1's fail-fast
+// path). A card error otherwise ends only the card loop: the prefix before
+// it, with the phantoms, visibility and crosslink cascade it owes, commits
+// (§10.1), and the error is returned.
 func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool, error) {
 	if msg == nil {
 		panic("sync.processResponse: msg must not be nil")
@@ -641,8 +643,20 @@ func (s *session) processReply(ctx context.Context,
 			break
 		}
 	}
-	if abortsPass(cardErr) {
-		return false, cardErr, nil // the whole reply rolls back
+	if failsRound(cardErr) {
+		// §10.1: an integrity error is a fail-fast path. Returned as err, it
+		// rolls back the reply, prefix included, and the session starts no
+		// further round. fossil stores the content and aborts at commit,
+		// which reaches the same repository.
+		return false, nil, cardErr
+	}
+	var content *contentError
+	if errors.As(cardErr, &content) {
+		// §10.1: a handler-reported content error that leaves the stored
+		// artifacts consistent warns, commits the prefix and follows ordinary
+		// continuation, as fossil's client does after nErr++ and break.
+		s.result.Errors = append(s.result.Errors, "error: "+content.Error())
+		cardErr = nil
 	}
 	if err := s.closeReply(ctx, &t); err != nil {
 		return false, cardErr, err
@@ -849,6 +863,10 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
 		s.uvPullOnly = true
+	case c.Name == "avoid-delta-manifests":
+		// §9.5: a hint for the commit that asked for the lock, to write a
+		// baseline manifest. It changes nothing about the transfer, and no
+		// commit is pending here: go-libfossil commits without an autosync.
 	case c.Name == "ci-lock-fail" && len(c.Values) >= 2:
 		mtime, _ := strconv.ParseInt(c.Values[1], 10, 64)
 		s.result.CkinLockFail = &CkinLockFail{
@@ -1638,6 +1656,15 @@ func (s *session) handleUVIGotCard(c *xfer.UVIGotCard) error {
 	return nil
 }
 
+// contentError is a handler-reported content error that leaves the stored
+// artifacts consistent, such as a uvfile whose content is not its HASH.
+// Section 10.1 has it end the card loop, warn and commit the prefix, and the
+// session continue by Section 3.7. A received file or cfile that is not its
+// HASH is the integrity error instead (hashMismatchError).
+type contentError struct{ msg string }
+
+func (e *contentError) Error() string { return e.msg }
+
 // handleUVFileCard processes a uvfile card from the server.
 func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 	if c == nil {
@@ -1664,7 +1691,7 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		}
 		computed := hash.ContentHash(c.Content, c.Hash)
 		if computed != c.Hash {
-			return fmt.Errorf("uvfile %s: hash mismatch", c.Name)
+			return &contentError{msg: fmt.Sprintf("uvfile %s: hash mismatch", c.Name)}
 		}
 	}
 

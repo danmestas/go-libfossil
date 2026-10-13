@@ -131,7 +131,8 @@ func syncServerCases() []syncServerCase {
 		serverLoginCases(), serverContentCases(), serverContentIGotCases(),
 		serverUVCases(), serverUVGimmeCases(), serverCloneCases(),
 		serverDirectionCases(), serverPragmaCases(), serverPragmaLockCases(),
-		serverConfigCases(), serverVersionCases(), serverGateCases(), serverAdmissionCases(),
+		serverAvoidDeltaCases(), serverConfigCases(), serverVersionCases(), serverGateCases(),
+		serverAdmissionCases(),
 		serverCookieRefusalCases(), serverPragmaMoreCases(), serverRefusalCases(),
 		serverOrderCases(),
 	} {

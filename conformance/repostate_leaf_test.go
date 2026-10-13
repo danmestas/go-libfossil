@@ -48,14 +48,6 @@ func mergedIntoTrunk() []rsArt {
 }
 
 func leafCases() []rsCase {
-	// Section 7.3 makes a parentless check-in with no same-branch child a
-	// leaf; fossil(1) never makes an untagged one a leaf. The case follows
-	// the draft, and go-libfossil's crosslink, following fossil, is marked
-	// as a deviation.
-	untagged := leaves("repostate.7.3.parentless-untagged", "RS-7.3-1",
-		[]rsArt{checkin("c1", 1, nil)}, []string{"c1"}, "-leaf: c1")
-	untagged.fossil = "fossil 2.28 never makes an untagged parentless check-in a leaf; " +
-		"erratum candidate against Section 7.3"
 	// c4 carries its own trunk tag, so retagging c3 feat leaves c3 with no
 	// same-branch child: re-evaluating c3 itself makes it a leaf.
 	ownTrunk := with(chain()[:3], checkin("c4", 4, of("c3"), "*branch * trunk"),
@@ -71,38 +63,72 @@ func leafCases() []rsCase {
 	cancelled.fossil = "fossil 2.28's leaf_check reads the branch value without tagtype > 0 " +
 		"(src/leaf.c), so c1's cancelled feat row keeps it a leaf; fossil-bug candidate " +
 		"against Section 6.4"
-	// Crosslinking c2 rechecks c2, a leaf, and c1, which c2 joins on trunk.
-	childRecheck := leaves("repostate.7.3.recheck-untagged-child", "RS-7.3-3",
-		untaggedChild(), []string{"c2"}, "-leaf: c2", "+leaf: c1")
-	childRecheck.fossil = "fossil 2.28 rechecks leaves only when a branch tag lands, so c2, " +
-		"which carries none, is never checked: per-artifact keeps c1, rebuild neither; the " +
-		"informative note of Section 7.3 records this"
-	// Crosslinking c1, alone, untagged and parentless, rechecks it: the
-	// trigger half of the RS-7.3-1 deviation.
-	lone := leaves("repostate.7.3.recheck-lone-untagged", "RS-7.3-3",
-		[]rsArt{checkin("c1", 1, nil)}, []string{"c1"}, "-leaf: c1")
-	lone.each, lone.rebuild, lone.fossil = true, false, untagged.fossil
-	return []rsCase{
+	return append([]rsCase{
 		mainBranchLeaf(),
 		leaves("repostate.7.2.branch-leaves", "RS-7.2-1", merged(),
 			[]string{"b1", "m"}, "-leaf: b1"),
 		leaves("repostate.7.2.merge-child-leaf", "RS-7.2-1", mergedIntoTrunk(),
 			[]string{"b2", "x"}, "+leaf: c2"),
-		untagged,
 		leaves("repostate.7.3.sole-root", "RS-7.3-1",
 			[]rsArt{checkin("c1", 1, nil, rsRoot...)}, []string{"c1"}, "-leaf: c1"),
 		leaves("repostate.7.6.retag-branch", "RS-7.6-1", ownTrunk,
 			[]string{"c2", "c3", "c4"}, "-leaf: c3"),
 		leaves("repostate.7.6.propagated-branch", "RS-7.6-2", retagged,
 			[]string{"c2", "c4", "m"}, "-leaf: c4"),
-		cancelled, childRecheck,
+		cancelled,
+		pulledChild(), pulledRetag(),
+	}, untaggedLeafCases()...)
+}
+
+// untaggedLeafCases are Section 7.3's candidates: only a check-in a branch
+// tag reaches, and its parents, are ever rechecked, so an untagged check-in
+// is a leaf only as the parent of a tagged one.
+func untaggedLeafCases() []rsCase {
+	// c1 has no tag and no parent: no branch tag reaches it, so it is no
+	// candidate, and no leaf although it has no child.
+	untagged := leaves("repostate.7.3.parentless-untagged", "RS-7.3-1",
+		[]rsArt{checkin("c1", 1, nil)}, nil, "+leaf: c1")
+	// c2, untagged, has the untagged c1 as parent and no child: neither is
+	// a candidate.
+	chainUntagged := leaves("repostate.7.3.untagged-chain", "RS-7.3-1",
+		[]rsArt{checkin("c1", 1, nil), checkin("c2", 2, of("c1"))}, nil, "+leaf: c2")
+	// fossil rebuild writes artifacts of its own for this history, so the
+	// rebuild is left to the cases above and below.
+	chainUntagged.rebuild = false
+	// c1's singleton trunk tag rechecks c1, and c2, untagged, is on trunk
+	// with it: crosslinked in one batch, c1 has its same-branch child and
+	// c2 is never rechecked, so neither is a leaf.
+	childBatch := leaves("repostate.7.3.untagged-child-one-batch", "RS-7.3-1",
+		untaggedChild(), nil, "+leaf: c2")
+	childBatch.batch = true
+	childBatch.incremental = "fossil's per-artifact load crosslinks c2 in a later " +
+		"transaction than c1, which keeps c1 (recheck-untagged-child); fossil rebuild " +
+		"crosslinks both in one, as the case does"
+	// Per artifact, c1 is rechecked, alone, when its tag lands, and linking
+	// c2 later schedules nothing, so c1 keeps its verdict.
+	childRecheck := leaves("repostate.7.3.recheck-untagged-child", "RS-7.3-3",
+		untaggedChild(), []string{"c1"}, "-leaf: c1", "+leaf: c2")
+	childRecheck.each, childRecheck.rebuild = true, false
+	// Crosslinking c1, alone, untagged and parentless, schedules nothing.
+	lone := leaves("repostate.7.3.recheck-lone-untagged", "RS-7.3-3",
+		[]rsArt{checkin("c1", 1, nil)}, nil, "+leaf: c1")
+	lone.each, lone.rebuild = true, false
+	// b1's feat tag rechecks b1 and its merge parent c2, a leaf until then:
+	// c2's only child, b1, is on c2's branch, feat, through the merge. c1,
+	// on trunk, has only feat children and stays a leaf.
+	mergeParent := leaves("repostate.7.3.recheck-merge-parent", "RS-7.3-3", []rsArt{
+		checkin("c1", 1, nil, rsRoot...),
+		checkin("c2", 2, of("c1"), rsFeat...),
+		checkin("b1", 3, of("c1", "c2"), rsFeat...),
+	}, []string{"b1", "c1"}, "+leaf: c2")
+	mergeParent.each, mergeParent.rebuild = true, false
+	return []rsCase{
+		untagged, chainUntagged, childBatch, childRecheck, lone, mergeParent,
 		// Crosslinking b1 rechecks c1, its parent, which has no tag and no
 		// parent: b1 is on feat, so c1, on the default branch, is a leaf.
 		leaves("repostate.7.3.recheck-untagged-root", "RS-7.3-3",
 			[]rsArt{checkin("c1", 1, nil), checkin("b1", 2, of("c1"), rsFeat...)},
 			[]string{"b1", "c1"}, "-leaf: c1"),
-		lone,
-		pulledChild(), pulledRetag(),
 	}
 }
 

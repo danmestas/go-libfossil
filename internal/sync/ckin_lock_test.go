@@ -276,3 +276,41 @@ func TestCkinLock_ClientDefossilizesHolder(t *testing.T) {
 		t.Fatalf("CkinLockFail = %+v, want holder %q", result.CkinLockFail, "bob smith")
 	}
 }
+
+// TestSettingBoolean reads a stored setting as fossil's db_get_boolean does:
+// is_truth wins, then is_false, and anything else keeps the default.
+func TestSettingBoolean(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		dflt  bool
+		want  bool
+	}{
+		{"on", false, true}, {"YES", false, true}, {"True", false, true},
+		{"1", false, true}, {" 2x", false, true}, {"-1", false, true},
+		{"off", true, false}, {"No", true, false}, {"FALSE", true, false},
+		{"0", true, false},
+		{"00", true, true}, {"00", false, false}, {"", true, true},
+		{"junk", true, true}, {"junk", false, false}, {" 0", true, true},
+	} {
+		if got := settingBoolean(tc.value, tc.dflt); got != tc.want {
+			t.Errorf("settingBoolean(%q, %t) = %t, want %t", tc.value, tc.dflt, got, tc.want)
+		}
+	}
+}
+
+// TestForbidDeltaManifests: the setting is on unless the repository says
+// otherwise (§9.4).
+func TestForbidDeltaManifests(t *testing.T) {
+	r := newCkinLockTestRepo(t)
+	d := r.DB()
+	if !forbidDeltaManifests(d) {
+		t.Fatal("forbidDeltaManifests with no setting = false, want the default, true")
+	}
+	if _, err := d.Exec("REPLACE INTO config(name, value, mtime)" +
+		" VALUES('forbid-delta-manifests', 'off', 1)"); err != nil {
+		t.Fatal(err)
+	}
+	if forbidDeltaManifests(d) {
+		t.Fatal("forbidDeltaManifests with the setting off = true, want false")
+	}
+}

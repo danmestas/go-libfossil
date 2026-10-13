@@ -27,6 +27,66 @@ func lockTimeout(d *db.DB) time.Duration {
 	return time.Duration(n) * time.Second
 }
 
+// forbidDeltaManifests reads the forbid-delta-manifests setting as fossil
+// 2.29's db_get_boolean("forbid-delta-manifests", 1) does (§9.4): absent or
+// NULL is on, and a value that is neither true nor false keeps that default.
+// fossil 2.28's server reads it with a default of off, so it sends no
+// avoid-delta-manifests unless the setting is on; this follows the draft.
+func forbidDeltaManifests(d *db.DB) bool {
+	if d == nil {
+		panic("sync.forbidDeltaManifests: d must not be nil")
+	}
+	var value sql.NullString
+	err := d.QueryRow("SELECT value FROM config" +
+		" WHERE name='forbid-delta-manifests'").Scan(&value)
+	if err != nil || !value.Valid {
+		return true
+	}
+	return settingBoolean(value.String, true)
+}
+
+// settingBoolean is fossil's db_get_boolean on a stored value: is_truth
+// ("on", "yes", "true" in any case, or a nonzero atoi) gives true, is_false
+// ("off", "no", "false", "0" in any case) gives false, and anything else
+// gives dflt.
+func settingBoolean(value string, dflt bool) bool {
+	switch strings.ToLower(value) {
+	case "on", "yes", "true":
+		return true
+	case "off", "no", "false", "0":
+		return false
+	}
+	if cAtoi(value) != 0 {
+		return true
+	}
+	return dflt
+}
+
+// cAtoi is C's atoi as fossil's is_truth uses it: leading white space, an
+// optional sign, then decimal digits up to the first other byte; no digits
+// give 0. Overflow is not modelled, since only zero versus nonzero matters.
+func cAtoi(s string) int64 {
+	i := 0
+	for i < len(s) && strings.IndexByte(" \t\n\v\f\r", s[i]) >= 0 {
+		i++
+	}
+	negative := false
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		negative = s[i] == '-'
+		i++
+	}
+	var n int64
+	for ; i < len(s) && s[i] >= '0' && s[i] <= '9'; i++ {
+		if n < 1<<40 {
+			n = n*10 + int64(s[i]-'0')
+		}
+	}
+	if negative {
+		return -n
+	}
+	return n
+}
+
 // CkinLockFail reports that another client holds the check-in lock.
 type CkinLockFail struct {
 	HeldBy string

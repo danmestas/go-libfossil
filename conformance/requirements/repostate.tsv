@@ -1,9 +1,13 @@
 # Requirements for draft-fossil-repo-state-01, written from the draft text.
-# The -01 errata are applied in the draft; they are pinned for the fossil(1) 2.28
-# behavior they record, which RS-4.2-13 and RS-4.2-14 depart from.
-# draft	draft-fossil-repo-state-01.txt	028d6bd0c5a9842569e43f71449e40fb582a062b3d22ecab275f07ab8195a484
+# The -01 errata are applied in the draft; they are pinned for the fossil(1)
+# behavior they record, which RS-4.2-13 and RS-4.2-14 depart from. The errata of
+# 2026-10-13 (sections 5.3, 7.3 and 8.3) make fossil's behavior the draft's.
+# draft	draft-fossil-repo-state-01.txt	d94ba052317b718fdbcff6bda659766dbfd79150a53cfc2feb2b8ace49801f74
 # erratum	repo-state-01-s4.2-date-tag-event-time.md	e55108ed39857f4212c2e0ff4afac867fc42d3b762db58c269790200a33b24cf
+# erratum	repo-state-01-s5.3-inherited-row-blocks-direct-tag.md	2bfd0d2e76efe0bf5b3158527381ecb768df02a3925c83bbf26fee18eb935603
 # erratum	repo-state-01-s6.2-cancel-cards-from-parent.md	3d24910396abea9e6a162d2578ef58fc033f664fa1a4f778204bf2a1844029aa
+# erratum	repo-state-01-s7.3-leaf-recheck-branch-tag.md	25a27e819bae83cf71ae40e1de09614e2c8fa83c99c94593189da7cd3636e9cc
+# erratum	repo-state-01-s8.3-ckout-ci-plus.md	a955cf371e420ebdbcec15ab0d91aca3d25fa494de220af6a186e70192dd53ca
 #
 # id	section	requirement	scope
 RS-2-1	2	An operation that tags a check-in with a user-supplied symbolic name stores it as "sym-" + name unless the caller asks for the raw name.
@@ -42,10 +46,11 @@ RS-4.6-1	4.6	A tag or anti-tag operation stores a control artifact with exactly 
 RS-5.1-1	5.1	A T-card prefix - is stored as tagtype 0, + as 1 and * as 2.
 RS-5.1-2	5.1	Any other leading character on a T-card is a fatal error and is never stored as a tag type.
 RS-5.2-1	5.2	tagxref holds at most one row per (rid, tag), carrying tagtype, srcid, origid, value and mtime.
-RS-5.3-1	5.3	A direct application is skipped when the (tag, rid) row already has an mtime greater than or equal to the incoming one.
+RS-5.3-1	5.3	A direct application is skipped when the (tag, rid) row already has an mtime greater than or equal to the incoming one, whether that row was applied directly or inherited by propagation.
 RS-5.3-2	5.3	Otherwise the row is replaced with the card's raw tagtype, srcid = the artifact carrying the card, origid = rid = the target.
 RS-5.3-3	5.3	A cancel application stores a NULL value.
 RS-5.3-4	5.3	A singleton is propagated as a cancel: it removes the inherited same-name rows of the target's descendants.
+RS-5.3-5	5.3	When a check-in's ancestor carries a propagating tag newer than a direct tag of the same name on the check-in, the result follows arrival order: the direct tag applied first keeps the direct value and stops the propagation; the propagation arriving first makes the direct tag skipped, so the check-in keeps the inherited value and, for a date tag, its D-card time.
 RS-5.4-1	5.4	Propagation follows primary-parent links only and never crosses a merge link.
 RS-5.4-2	5.4	Re-propagating a parent's full tag set treats its singleton rows as cancels.
 RS-5.4-3	5.4	A child with a same-tag row qualifies only when that row has srcid 0 and an mtime strictly earlier than the propagating tag's; an equal mtime keeps the row.
@@ -67,9 +72,9 @@ RS-6.3-1	6.3	The branch list has one entry per distinct active branch-tag value,
 RS-6.3-2	6.3	A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.
 RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 rule as any branch membership.
 RS-7.2-1	7.2	A check-in is a leaf exactly when no plink child of it, primary or merge, is on the same branch.
-RS-7.3-1	7.3	A full leaf recomputation selects every check-in without a same-branch child, including parentless ones.	disagreement with fossil(1); see cases
+RS-7.3-1	7.3	A full leaf rebuild gives the table crosslinking every check-in in one batch gives: the candidates are the check-ins a branch tag is applied or propagated to, and their parents; a candidate with no same-branch child is a member, and a check-in that is not a candidate is not, even with no same-branch child.
 RS-7.3-2	7.3	An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.
-RS-7.3-3	7.3	Crosslinking a check-in, a new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.
+RS-7.3-3	7.3	A branch tag applied to a check-in, or a propagation walk updating or deleting its branch entry, rechecks the check-in and each of its parents, merge parents included; crosslinking a check-in or creating a plink edge schedules no recheck by itself.
 RS-7.3-4	7.3	Scheduled leaf rechecks have all been applied before the leaf table is read.
 RS-7.4-1	7.4	An open leaf is a leaf without a closed tag row of tagtype greater than 0.
 RS-7.5-1	7.5	A branch's open leaves are its leaf-table members that are not closed and share its branch.
@@ -84,7 +89,7 @@ RS-8.2-4	8.2	A name no form matches fails to resolve.
 RS-8.3-1	8.3	"rid:DIGITS" resolves to that rid.
 RS-8.3-2	8.3	"tag:NAME" resolves NAME by the plain-name rule without trying it as a hash.
 RS-8.3-3	8.3	"tip" resolves to the check-in with the greatest event.mtime.
-RS-8.3-4	8.3	"current", "prev"/"previous", "next" and "ckout" resolve relative to the open checkout.
+RS-8.3-4	8.3	"current", "prev"/"previous" and "next" resolve relative to the open checkout; "ckout" names the checkout only in a "ci+" request with an open checkout and only as the whole name given, and is otherwise resolved like any other name, the trailing-punctuation retry and the contained names of root:, start: and merge-in: included.
 RS-8.3-5	8.3	"root:BR" resolves to the first primary ancestor of BR that is off BR's branch.
 RS-8.3-6	8.3	"start:BR" resolves to the earliest primary ancestor of BR still on BR's branch.
 RS-8.3-7	8.3	"merge-in:BR" resolves to the most recent merge-in point of BR from its parent branch.

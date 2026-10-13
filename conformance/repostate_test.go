@@ -34,6 +34,9 @@ type rsCase struct {
 	// each loads one artifact at a time only, for cases where arrival
 	// order is the point.
 	each bool
+	// batch loads all the artifacts in one sweep only, for cases where
+	// crosslinking them together is the point.
+	batch bool
 	// rebuild adds a ".rebuild" case: the same artifacts, stored without
 	// crosslinking, then derived by verify.Rebuild.
 	rebuild bool
@@ -69,6 +72,12 @@ func (c rsCase) variants() []rsVariant {
 	crosslink := rsVariant{Case: c.Case, loads: []rsLoad{loadSweep, loadEach}}
 	if c.each || c.doctor != nil {
 		crosslink.loads = []rsLoad{loadEach}
+	}
+	if c.batch {
+		if c.each || c.doctor != nil {
+			panic("conformance: " + c.ID + " loads both in one batch and per artifact")
+		}
+		crosslink.loads = []rsLoad{loadSweep}
 	}
 	crosslink.Gap = repostateGaps[c.ID]
 	crosslink.Deviation = repostateDeviations[c.ID]

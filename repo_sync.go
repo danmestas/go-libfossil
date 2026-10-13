@@ -59,6 +59,13 @@ type CloneOpts struct {
 	Password string
 	Observer SyncObserver
 	Buggify  BuggifyChecker // fault injection for DST (nil = no faults)
+	// PullPhantoms, when set, makes Clone fetch the artifacts the clone
+	// rounds left missing with a follow-up pull session, and fail with an
+	// error if any are still missing after it. That pull departs from
+	// Section 8.2 of the sync draft, which sends no clone, pull or push card
+	// after clone_seqno 0, so it is off by default: like fossil(1)'s clone,
+	// Clone then succeeds with those artifacts left as phantoms.
+	PullPhantoms bool
 }
 
 // transportAdapter bridges the public byte-level Transport to the internal

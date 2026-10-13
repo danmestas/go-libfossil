@@ -460,8 +460,7 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 		return h.handleClone(c)
 	case *xfer.PragmaCard:
 		return h.handlePragma(c)
-	case *xfer.PushCard, *xfer.PullCard, *xfer.CloneSeqNoCard, *xfer.CookieCard,
-		*xfer.SchemaCard:
+	case *xfer.PushCard, *xfer.PullCard, *xfer.CookieCard, *xfer.SchemaCard:
 		h.handleControlCard(card)
 	case *xfer.BadFileCard:
 		// A file/cfile/uvfile line the decoder could not frame: page_xfer
@@ -469,9 +468,10 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 		h.breakLoop(c.Message)
 	case *xfer.BadCommandCard:
 		h.badCommand(c.Line)
-	case *xfer.ErrorCard, *xfer.MessageCard:
-		// error and message are reply-only: a client that sends one gets a
-		// bad command, as fossil's page_xfer has no branch for them (§5.2).
+	case *xfer.ErrorCard, *xfer.MessageCard, *xfer.CloneSeqNoCard:
+		// error, message and clone_seqno are reply-only: a client that sends
+		// one gets a bad command and later cards are processed, as fossil's
+		// page_xfer has no branch for them (§5.2, SP-5.2-6).
 		h.badCommand(replyOnlyLine(c))
 	default:
 		return h.handleDataCard(ctx, card)
@@ -658,11 +658,6 @@ func (h *handler) handleControlCard(card xfer.Card) {
 		h.handlePushCard(c)
 	case *xfer.PullCard:
 		h.handlePullCard(c)
-	case *xfer.CloneSeqNoCard:
-		// Deliberately ignored. clone_seqno is a reply-only card, so no
-		// conforming client sends one; canonical answers `bad command`. We
-		// stay tolerant rather than strict, which is why the model server in
-		// TestCloneMultiBatchAgainstCanonicalServer rejects it and we do not.
 	case *xfer.CookieCard:
 		// Clone clients echo the cap cookie on every round; process reads
 		// it ahead of the card loop (cloneCapFromCards), since the batch

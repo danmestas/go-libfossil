@@ -93,7 +93,8 @@ type cloneSession struct {
 // Clone performs a full repository clone from a remote Fossil server.
 // It creates a new repository at path, runs the clone protocol until
 // convergence, and returns the opened repo and a result summary.
-// On error, the partially-created repo file is removed.
+// On error, the partially-created repo file is removed. Artifacts the clone
+// rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *repo.Repo, result *CloneResult, err error) {
 	if path == "" {
 		panic("sync.Clone: path must not be empty")
@@ -173,10 +174,10 @@ func cloneEnv(opts CloneOpts) (*simio.Env, simio.Storage) {
 	return env, storage
 }
 
-// complete runs the clone session, links what it received and fetches any
-// artifact it left missing. The result is meaningful on error too: callers
-// inspecting it (e.g. BlobsRecvd) alongside a *PhantomStallError shouldn't
-// see it dropped to nil.
+// complete runs the clone session, links what it received and, when the
+// caller opted in, fetches any artifact it left missing. The result is
+// meaningful on error too: callers inspecting it (e.g. BlobsRecvd)
+// alongside a *PhantomStallError shouldn't see it dropped to nil.
 func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult, error) {
 	cloneResult, err := cs.run(ctx, t)
 	if err != nil {
@@ -219,12 +220,18 @@ func clearInheritedConfig(r *repo.Repo) error {
 }
 
 // fillPhantoms fetches artifacts the clone left missing (phantoms) with an
-// ordinary pull session. The clone session cannot ask for them: clone_seqno
-// 0 bars pull from it, and a gimme without pull fetches nothing (draft
-// §8.2). A clone of a consistent repository leaves none, and then no pull
-// is made. Any still missing after the pull end the clone with a
-// *PhantomStallError, as an incomplete repository is not a clone.
+// ordinary pull session, when CloneOpts.PullPhantoms asks for it. The clone
+// session cannot ask for them: clone_seqno 0 bars pull from it, and a gimme
+// without pull fetches nothing (draft §8.2, SP-8.2-5). That bar is why the
+// pull is opt-in: by default the clone ends at clone_seqno 0 with its
+// phantoms in place, as fossil(1)'s does. A clone of a consistent
+// repository leaves none, and then no pull is made. Any still missing after
+// the pull end the clone with a *PhantomStallError, as a caller that asked
+// for a complete clone must not get an incomplete one.
 func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
+	if !cs.opts.PullPhantoms {
+		return nil
+	}
 	missing, err := phantomUUIDs(cs.repo)
 	if err != nil {
 		return err

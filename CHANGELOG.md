@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CloneOpts.PullPhantoms` makes `Clone` fetch the artifacts its clone rounds
+  left missing with a follow-up pull session, and fail if any are still
+  missing after it, as every clone did before. That pull departs from
+  sync-protocol-01 Section 8.2, which sends no clone, pull or push card after
+  `clone_seqno 0`, so it is off by default (tracked in #424).
 - `Repo.SetHashPolicy` sets the hash policy by its name, as
   `fossil hash-policy NEW-POLICY` does: sha1, auto, sha3, sha3-only or
   shun-sha1, matched case-sensitively and exactly (artifact-format-01 7.1).
@@ -74,6 +79,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `Clone` now ends at `clone_seqno 0` and its cleanup round, as
+  sync-protocol-01 Section 8.2 requires (SP-8.2-5): by default it no longer
+  runs a follow-up pull for the phantoms a clone leaves, and it succeeds with
+  them in place, as fossil(1)'s clone does. A caller that relies on a
+  complete clone sets `CloneOpts.PullPhantoms`. Only the tests of that pull
+  set it: the `repo clone` command, the DST clone harness and the parity
+  tests all clone as fossil(1) does. The `sync.8.2.clone-zero-phantom` case passes and
+  is no longer a deviation (tracked in #424).
+- The sync server answers a client-sent `clone_seqno` with
+  `error bad command` and goes on with the cards after it, as
+  sync-protocol-01 Section 5.2 says for a reply-only card sent by a client
+  (SP-5.2-6), and as fossil's `page_xfer` does. It used to ignore the card.
+  The `sync.5.2.client-clone-seqno` case passes and is no longer a deviation
+  (tracked in #424).
 - The conformance suite now checks the -01 drafts of the artifact-format,
   repo-state and sync-protocol specifications (the delta format stays on -00;
   there is no -01). The -00 errata are folded into -01 and no longer pinned;

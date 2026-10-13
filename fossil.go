@@ -84,14 +84,16 @@ type CloneResult struct {
 // Clone performs a full repository clone from a remote Fossil server.
 // It creates a new repository at the given path, runs the clone protocol
 // until convergence, and returns the opened Repo handle and a result summary.
-// On error, the partially-created repo file is removed.
+// On error, the partially-created repo file is removed. Artifacts the clone
+// rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo, *CloneResult, error) {
 	adapter := &transportAdapter{pub: t}
 	iOpts := internalsync.CloneOpts{
-		User:     opts.User,
-		Password: opts.Password,
-		Observer: adaptObserver(opts.Observer),
-		Buggify:  opts.Buggify,
+		User:         opts.User,
+		Password:     opts.Password,
+		Observer:     adaptObserver(opts.Observer),
+		Buggify:      opts.Buggify,
+		PullPhantoms: opts.PullPhantoms,
 	}
 	inner, iResult, err := internalsync.Clone(ctx, path, adapter, iOpts)
 	if err != nil {

@@ -36,7 +36,7 @@ docs/site/static/llms-full.txt
 docs/site/hugo
 hugo
 .sesh/
-.agent-config/*
+.agent-config/
 /banks/*
 docs/superpowers
 go.work.sum

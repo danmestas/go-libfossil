@@ -183,6 +183,7 @@ type handler struct {
 	cloneMode     bool                      // client sent a clone card
 	fatal         bool                      // a card rule ended the request; resp holds only its error
 	broke         bool                      // card loop broken; the post-loop still runs
+	errsReset     int                       // counted errors a reset discarded (§5.3 errors N)
 	projectCode   string                    // the repository's project-code
 	serverCode    string                    // the repository's server-code
 	uncompressed  bool                      // reply goes out uncompressed (clone v3)
@@ -244,61 +245,77 @@ func (h *handler) canRead() bool {
 
 // handleLoginCard verifies a login card and adds the user's capabilities to
 // nobody's, as fossil's check_login does through login_set_capabilities: a
-// login only grants. A refused login is fatal, with the reply reset to
-// fossil's "error login\sfailed" (src/xfer.c page_xfer): fossil does not go
-// on serving the request as nobody, and nor does this.
-func (h *handler) handleLoginCard(c *xfer.LoginCard) {
+// login only grants. It reports the refusal's error text, "" when the login
+// is accepted. fossil does not go on serving the request as nobody after a
+// refusal, and nor does this: the caller ends card processing there.
+func (h *handler) handleLoginCard(c *xfer.LoginCard) string {
 	// A login's shared secret is salted with the project code; a repository
 	// without one can verify no login, and fossil's page_xfer stops there
 	// too ("missing project code"). Refuse it rather than ask VerifyLogin,
 	// which takes an empty project code as a programmer error.
 	if h.projectCode == "" {
-		h.fail("login failed")
-		return
+		return "login failed"
 	}
 	u, err := auth.VerifyLogin(h.repo.DB(), h.projectCode, c)
 	if err != nil {
-		h.fail("login failed")
-		return
+		return "login failed"
 	}
 	h.user = u.Login
 	h.caps += u.Cap
 	h.authed = true
+	return ""
 }
 
-// login verifies the request's login card, if any. Only one is allowed
-// (§6.1, src/xfer.c "error multiple\slogin\scards").
-func (h *handler) login(req *xfer.Message) {
+// loginStop is where a refused login ends card processing: the index of the
+// refused card in the request, and the error page_xfer answers it with.
+type loginStop struct {
+	at  int
+	msg string
+}
+
+// login verifies the request's login cards ahead of every other card, so the
+// capabilities they grant apply to the whole request. Only one is allowed
+// (§6.1, src/xfer.c "error multiple\slogin\scards"). A refusal is returned
+// with its card's position rather than acted on here: page_xfer refuses a
+// login in card order with a reset, an error and a break, so the cards before
+// it keep their effect and the end-of-request steps still run (§6.4).
+func (h *handler) login(req *xfer.Message) (loginStop, bool) {
 	logins := 0
-	for _, card := range req.Cards {
+	for i, card := range req.Cards {
 		lc, ok := card.(*xfer.LoginCard)
 		if !ok {
 			continue
 		}
 		logins++
 		if logins > 1 {
-			h.fail("multiple login cards")
-			return
+			return loginStop{at: i, msg: "multiple login cards"}, true
 		}
-		if h.handleLoginCard(lc); h.fatal {
-			return
+		if msg := h.handleLoginCard(lc); msg != "" {
+			return loginStop{at: i, msg: msg}, true
 		}
 	}
+	return loginStop{}, false
 }
 
 // fail ends the request with a single error card, discarding the reply built
 // so far, as fossil's cgi_reset_content before an error does.
 func (h *handler) fail(msg string) {
+	h.resetContent()
 	h.resp = []xfer.Card{&xfer.ErrorCard{Message: msg}}
 	h.fatal = true
 }
 
 // resetContent discards the reply built so far, as fossil's cgi_reset_content
 // does before a card-level error. Only the reply is cleared; any blob already
-// stored this round stays (fossil keeps its mutations too, §10.1).
+// stored this round stays (fossil keeps its mutations too, §10.1). The errors
+// it discards are still counted in the closing comment (§5.3).
 func (h *handler) resetContent() {
+	h.errsReset += countedErrors(h.resp)
 	h.resp = nil
 }
+
+// badCommandPrefix begins the error that answers an unknown or malformed card.
+const badCommandPrefix = "bad command: "
 
 // badCommand answers a line no card rule accepts. §5.2, src/xfer.c page_xfer's
 // final "else": the reply so far is reset, an "error bad\scommand:\s<LINE>"
@@ -306,7 +323,7 @@ func (h *handler) resetContent() {
 // line keeps its terminating LF, which the error quotes verbatim.
 func (h *handler) badCommand(line string) {
 	h.resetContent()
-	h.resp = append(h.resp, &xfer.ErrorCard{Message: "bad command: " + line})
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: badCommandPrefix + line})
 }
 
 // replyOnlyLine re-encodes a card the server should not have received (error,
@@ -354,27 +371,30 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return nil, err
 	}
 
-	// First pass: resolve the login card before other control cards.
-	if h.login(req); h.fatal {
-		return h.reply(), nil
+	// First pass: resolve the login card before other control cards. A
+	// refused login ends card processing at its own position.
+	cards := req.Cards
+	stop, refused := h.login(req)
+	if refused {
+		cards = cards[:stop.at]
 	}
 
 	// Second pass: process other control cards with capability checks.
-	for _, card := range req.Cards {
-		if _, ok := card.(*xfer.LoginCard); ok {
-			continue // Already processed.
-		}
-		h.handleControlCard(card)
-		if h.fatal {
-			return h.reply(), nil
-		}
-		if h.broke {
-			break
-		}
+	if h.processControlCards(cards); h.fatal {
+		return h.reply(), nil
 	}
 
 	// Process data cards and emit response blobs.
-	if err := h.processDataCards(ctx, req.Cards); err != nil {
+	if err := h.processDataCards(ctx, cards); err != nil {
+		return nil, err
+	}
+	// A refused login is page_xfer's reset, error and break, reached only
+	// if no card before it broke the loop first.
+	if refused && !h.broke {
+		h.breakLoop(stop.msg)
+	}
+	// The end-of-request steps run after a broken loop too (§6.4).
+	if err := h.emitInventory(); err != nil {
 		return nil, err
 	}
 
@@ -384,27 +404,47 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		}
 	}
 
-	// Crosslink any newly-received manifests into the relational tables
-	// (event/leaf/plink/mlink/tagxref). Without this the receiving repo
-	// stores blobs durably but exposes nothing on the timeline, fork
-	// detection sees stale leaf state, and the clone protocol cannot
-	// traverse manifest parents (mlink is empty) — symptoms documented
-	// in agent-infra trial 2026-04-25 finding #3.
-	//
-	// Only walk the crosslink scanner when we accepted files this round;
-	// pure pull/igot rounds add nothing relational to update.
-	//
-	// Context-aware (#120): this sweep walks the whole repository in one call,
-	// so on a large repo it is where a request whose client has already gone
-	// away would otherwise keep working uninterrupted.
-	if h.filesRecvd > 0 {
-		if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
-			return nil, fmt.Errorf("HandleSync: crosslink: %w", err)
-		}
+	if err := h.crosslinkReceived(ctx); err != nil {
+		return nil, err
 	}
 
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// crosslinkReceived crosslinks any newly-received manifests into the
+// relational tables (event/leaf/plink/mlink/tagxref). Without this the
+// receiving repo stores blobs durably but exposes nothing on the timeline,
+// fork detection sees stale leaf state, and the clone protocol cannot
+// traverse manifest parents (mlink is empty).
+//
+// It walks the scanner only when we accepted files this round; pure
+// pull/igot rounds add nothing relational to update. It is context-aware
+// (#120): the sweep walks the whole repository in one call, so on a large
+// repo it is where a request whose client has already gone away would
+// otherwise keep working uninterrupted.
+func (h *handler) crosslinkReceived(ctx context.Context) error {
+	if h.filesRecvd == 0 {
+		return nil
+	}
+	if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
+		return fmt.Errorf("HandleSync: crosslink: %w", err)
+	}
+	return nil
+}
+
+// processControlCards handles the request's control cards in order, after
+// the login pass, until one ends the request (h.fatal) or breaks the loop.
+func (h *handler) processControlCards(cards []xfer.Card) {
+	for _, card := range cards {
+		if _, ok := card.(*xfer.LoginCard); ok {
+			continue // Already processed.
+		}
+		h.handleControlCard(card)
+		if h.fatal || h.broke {
+			return
+		}
+	}
 }
 
 // reply is the message the handler answers with.
@@ -457,25 +497,51 @@ func (h *handler) emitClonePush() error {
 }
 
 // timestampComment is the comment that ends a completed reply, as fossil's
-// page_xfer writes it: the server's UTC time and the reply's error count
-// (draft §3). A fail-fast reply goes without it.
+// page_xfer writes it: the server's UTC time and the request's error count
+// (§5.3). A fail-fast reply goes without it.
 func (h *handler) timestampComment() *xfer.CommentCard {
 	if h.clock == nil {
 		panic("handler.timestampComment: nil clock")
 	}
-	errs := 0
-	for _, c := range h.resp {
-		if _, ok := c.(*xfer.ErrorCard); ok {
-			errs++
-		}
+	if h.errsReset < 0 {
+		panic("handler.timestampComment: negative reset error count")
 	}
+	errs := h.errsReset + countedErrors(h.resp)
 	now := h.clock.Now().UTC().Format("2006-01-02T15:04:05")
 	return &xfer.CommentCard{Text: fmt.Sprintf("timestamp %s errors %d", now, errs)}
 }
 
+// privateRefusal is the error a requester without the private capability
+// gets for pragma send-private or a private card.
+const privateRefusal = "not authorized to sync private content"
+
+// countedErrors counts the error cards that §5.3's errors N counts. N is the
+// errors raised, as page_xfer's nErr is, and three of them fossil never adds
+// to nErr: the unknown-operator error, the private-content refusal and the
+// SHA3 version refusal (erratum sync-protocol-01-s5.3-errors-count). The
+// count is made from card text because those three texts are fixed by the
+// draft and no other error carries them.
+func countedErrors(cards []xfer.Card) int {
+	n := 0
+	for _, c := range cards {
+		e, ok := c.(*xfer.ErrorCard)
+		if !ok {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(e.Message, badCommandPrefix),
+			e.Message == privateRefusal,
+			e.Message == sha3Refusal().Message:
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // processDataCards handles file, igot, gimme, and other data cards in the
-// correct order, then emits igot/clone batches. Extracted from process() to
-// keep each function under 70 lines.
+// correct order. The caller emits the igot and clone batches after it
+// (emitInventory), once a refused login has had its say.
 func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error {
 	// File cards (and private prefix) first so blobs are stored before
 	// IGotCard checks blob.Exists. Without this, a request containing
@@ -488,18 +554,36 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 	// remaining request cards here too, then still emit the post-loop
 	// inventory below, as fossil does after its break. A control card may
 	// already have broken out (h.broke), and then no data card is processed.
-	for _, card := range cards {
+	//
+	// A card that breaks the loop (a BadFileCard, or a file or cfile card
+	// without an accepted push) does so at its own position: cards before
+	// it still take effect, and only then does the break reset the reply
+	// (cgi_reset_content keeps side effects), as fossil's in-order loop does.
+	stop, stopMsg := len(cards), ""
+	for i, card := range cards {
 		if h.broke {
 			break
 		}
 		switch c := card.(type) {
-		case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard:
+		case *xfer.FileCard, *xfer.CFileCard:
+			if !h.pushOK {
+				stop, stopMsg = i, "not authorized to write"
+			} else if err := h.handleDataCard(ctx, card); err != nil {
+				return err
+			}
+		case *xfer.PrivateCard:
 			if err := h.handleDataCard(ctx, card); err != nil {
 				return err
 			}
 		case *xfer.BadFileCard:
-			h.breakLoop(c.Message)
+			stop, stopMsg = i, c.Message
 		}
+		if stopMsg != "" {
+			break
+		}
+	}
+	if !h.broke {
+		cards = cards[:stop]
 	}
 	// Remaining data cards (igot, gimme, bad commands, etc.), in request
 	// order so a bad command resets the reply built before it and parsing
@@ -523,8 +607,10 @@ func (h *handler) processDataCards(ctx context.Context, cards []xfer.Card) error
 			}
 		}
 	}
-
-	return h.emitInventory()
+	if stopMsg != "" && !h.broke {
+		h.breakLoop(stopMsg)
+	}
+	return nil
 }
 
 // emitInventory sends what follows the card loop: the cluster igots a
@@ -766,9 +852,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		if auth.CanSyncPrivate(h.caps) {
 			h.syncPrivate = true
 		} else {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: "not authorized to sync private content",
-			})
+			h.resp = append(h.resp, &xfer.ErrorCard{Message: privateRefusal})
 		}
 	}
 }
@@ -785,9 +869,7 @@ func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
 		return h.handleFile(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
 	case *xfer.PrivateCard:
 		if !auth.CanSyncPrivate(h.caps) {
-			h.resp = append(h.resp, &xfer.ErrorCard{
-				Message: "not authorized to sync private content",
-			})
+			h.resp = append(h.resp, &xfer.ErrorCard{Message: privateRefusal})
 			h.nextIsPrivate = false
 		} else {
 			h.nextIsPrivate = true
@@ -907,10 +989,12 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if uuid == "" {
 		panic("handler.handleFile: uuid must not be empty")
 	}
+	// §6.6: without an accepted push, the first file or cfile card resets
+	// the reply, is refused and ends card processing, as page_xfer's
+	// "error not authorized to write" and break do. The end-of-request
+	// steps of a pull accepted earlier still run.
 	if !h.pushOK {
-		h.resp = append(h.resp, &xfer.ErrorCard{
-			Message: fmt.Sprintf("file %s rejected: no push card", uuid),
-		})
+		h.breakLoop("not authorized to write")
 		return nil
 	}
 	// A shunned artifact is dropped on receipt, with no error, as fossil's

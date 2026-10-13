@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. The `date-tag-cancel`, `-unparsable` and `-zero` conformance cases
   are no longer marked as deviations, and new `-before-checkin` cases check
   the same three with the tags arriving while the check-in is a phantom.
+- The sync server's refusals now follow sync-protocol-01 Sections 5.3, 6.4 and
+  6.6 (#374). A file or cfile card sent without an accepted push resets the
+  reply, is refused with `error not\sauthorized\sto\swrite` and ends card
+  processing, where it used to be refused alone (`file HASH rejected: no push
+  card`) and the cards after it still ran. A refused login (a wrong password,
+  or a second login card) ends card processing at its own position instead of
+  ending the request: the cards before it keep their effect, the igot
+  inventory of an accepted pull still follows the error, and the reply ends
+  with the timestamp comment. `errors N` in that comment now counts the errors
+  raised, including those a later reset discarded, and leaves out the
+  bad-command error, the private-content refusal and the SHA3 refusal, as
+  fossil's `nErr` does.
 - A file, cfile or uvfile payload cut short by the end of the body is now the
   card's handler failure, as sync-protocol-01 Section 5.1 requires (#373). The
   decoder used to fail the whole message, so a server answered HTTP 400 and a

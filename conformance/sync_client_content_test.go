@@ -49,6 +49,17 @@ func clientFileCases() []syncClientCase {
 		want: every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
 		fc:   true,
 	}, {
+		// A delta whose basis arrives later in the same reply: its bytes are
+		// unavailable when it is stored but available in the pass that
+		// stores it, so the mismatch must still not be kept. DTS turns S
+		// into T, not N1; fossil's commit hook catches it once S is in.
+		Case: Case{ID: "sync.7.7.late-basis-wrong-hash", Req: "SP-7.7-4"},
+		op:   opPull,
+		replies: [][]string{reply("file {N1} {S} {DTS.size}", "{DTS.data}",
+			"file {S} {S.size}", "{S.data}")},
+		want: every(notStored("N1"), mentions("mismatch", "wrong hash", "does not match")),
+		fc:   true,
+	}, {
 		// The verification passes a delta whose result is HASH.
 		Case:    Case{ID: "sync.7.7.file-delta-verified", Req: "SP-7.7-4"},
 		op:      opPull,

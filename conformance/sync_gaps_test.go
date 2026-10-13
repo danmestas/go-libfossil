@@ -4,7 +4,13 @@ import "testing"
 
 // syncGaps marks the sync cases go-libfossil is known to fail, by case ID,
 // grouped by the code at fault.
-var syncGaps = map[string]string{}
+var syncGaps = map[string]string{
+	// Receive storage (internal/sync/client.go storeReceived): a delta stored
+	// dangling is not rechecked when its basis arrives later in the pass.
+	"sync.7.7.late-basis-wrong-hash":        "#412",
+	"sync.7.7.clone-late-basis-wrong-hash":  "#412",
+	"sync.7.7.server-late-basis-wrong-hash": "#412",
+}
 
 // syncDeviations marks the cases where go-libfossil differs from the draft
 // on purpose, by case ID, with the reason.

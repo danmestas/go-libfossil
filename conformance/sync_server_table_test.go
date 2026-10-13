@@ -213,7 +213,9 @@ func serverCardFailureCases() []syncServerCase {
 	}, {
 		// SP-7.7-4: a delta whose basis arrives later in the same request
 		// has its bytes available in that pass, so its mismatch must not be
-		// kept either. DTS turns S into T, not N1.
+		// kept either. DTS turns S into T, not N1. When #412 is fixed, tighten
+		// want to also require onlyError("wrong+hash+on+received+artifact:+{N1}",
+		// ...) so the gap cannot close on a weaker answer such as a silent drop.
 		Case:    Case{ID: "sync.7.7.server-late-basis-wrong-hash", Req: "SP-7.7-4"},
 		notSent: wrongHashAborts,
 		body: []string{"{CV}", pushCard, pullCard, "file {N1} {S} {DTS.size}", "{DTS.data}",

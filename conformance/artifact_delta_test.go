@@ -119,13 +119,12 @@ func deltaManifestCases() []apiCase {
 	}
 }
 
-// Crosslink refuses a B card whose target is not a baseline manifest the same
-// way ListFiles does: the delta gets no mlink rows, where a valid baseline
-// gives it the baseline's files. The files exist, so a refusal cannot be
-// mistaken for a check-in deferred on a missing blob.
-// draft-fossil-artifact-format-01 Section 4.7.3 has a reader accept a delta
-// manifest as the target; the "delta manifest" row records today's refusal
-// and changes when the artifact.4.7.3.delta-of-delta-one-level gap is fixed.
+// Crosslink refuses a B card whose target is not a check-in the same way
+// ListFiles does: the delta gets no mlink rows, where a valid baseline gives it
+// the baseline's files. The files exist, so a refusal cannot be mistaken for a
+// check-in deferred on a missing blob. draft-fossil-artifact-format-01 Section
+// 4.7.3 has a reader accept a delta manifest as the target, resolved one level,
+// so only a control artifact is refused.
 func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -140,7 +139,7 @@ func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
 			_, baseline := storeArtifact(t, r, "C baseline\nD "+ts+"\nF a.txt "+file+"\nU u\n")
 			_, uuid := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+"\nU u\n")
 			return uuid
-		}, false},
+		}, true},
 		{"control artifact", func(t *testing.T, r *repo.Repo, _ string) string {
 			_, uuid := storeArtifact(t, r, baseControl)
 			return uuid

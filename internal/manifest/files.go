@@ -58,10 +58,12 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 }
 
 // loadBaseline resolves the B card of delta manifest d to its baseline deck.
-// The target must be a baseline manifest (4.7.3, 8.3): a checkin with no B
-// card of its own. A delta manifest or a control artifact is not one, and
-// would hand back a partial or empty file set as if it were whole. Every
-// reader of a B card goes through here, so the rule has one owner.
+// The target must be a check-in (4.7.3, 8.3); a control artifact would hand
+// back an empty file set as if it were whole. Per artifact-format-01 4.7.3 and
+// fossil's manifest_get, the target MAY itself be a delta manifest: only its
+// own F cards are used, its own B card is not followed (one level). -00 and
+// #275 refused that case; -01 reverses it. Every reader of a B card goes
+// through here, so the rule has one owner.
 func loadBaseline(q db.Querier, cache *content.Cache, d *deck.Deck) (*deck.Deck, error) {
 	if d.B == "" {
 		panic("manifest.loadBaseline: d has no B card")
@@ -78,8 +80,8 @@ func loadBaseline(q db.Querier, cache *content.Cache, d *deck.Deck) (*deck.Deck,
 	if err != nil {
 		return nil, fmt.Errorf("parse baseline: %w", err)
 	}
-	if baseDeck.Type != deck.Checkin || baseDeck.B != "" {
-		return nil, fmt.Errorf("baseline %s is not a baseline manifest", d.B)
+	if baseDeck.Type != deck.Checkin {
+		return nil, fmt.Errorf("baseline %s is not a check-in manifest", d.B)
 	}
 	return baseDeck, nil
 }

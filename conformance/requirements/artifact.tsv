@@ -66,7 +66,6 @@ AF-4.7.1-2	4.7.1	The K ticket ID is exactly 40 hexadecimal digits; 64 is invalid
 AF-4.7.2-1	4.7.2	Only the final path component of the A filename is kept as the attachment name.
 AF-4.7.2-2	4.7.2	The A target is a valid hash or a well-formed wiki name.
 AF-4.7.2-3	4.7.2	The A source is optional and none is recorded when absent; a present but empty source fails hash validation and is rejected.
-# AF-4.7.3-1 is FAILING: Tracked in #371.
 AF-4.7.3-1	4.7.3	A delta manifest whose baseline is itself a delta manifest is accepted, and its file set is computed from that baseline's own F cards only.
 AF-4.7.4-1	4.7.4	A C card with no token at all (a bare C line) is rejected.
 AF-4.7.4-2	4.7.4	A C card whose single token is empty is a present, empty comment and is accepted.

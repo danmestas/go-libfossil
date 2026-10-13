@@ -455,6 +455,12 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 		return fmt.Errorf("parse baseline: %w", err)
 	}
 
+	// artifact-format-01 4.7.3: a writer MUST NOT emit a B card naming a
+	// delta manifest (fossil asserts the same in checkin.c). When the parent's
+	// baseline is itself a delta, leave d a full baseline manifest.
+	if baseDeck.B != "" {
+		return nil
+	}
 	baseFiles := make(map[string]string)
 	for _, f := range baseDeck.F {
 		baseFiles[f.Name] = f.UUID

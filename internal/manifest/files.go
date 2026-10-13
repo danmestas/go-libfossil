@@ -40,6 +40,11 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 	}
 	fileMap := make(map[string]FileEntry)
 	for _, f := range baseDeck.F {
+		// A named delta baseline keeps its own delete markers (-01 8.2);
+		// they carry no file, so they must not enter the set.
+		if f.UUID == "" {
+			continue
+		}
 		fileMap[f.Name] = FileEntry{Name: f.Name, UUID: f.UUID, Perm: f.Perm}
 	}
 	for _, f := range d.F {

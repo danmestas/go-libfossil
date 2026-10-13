@@ -15,6 +15,8 @@ var repostateGaps = map[string]string{
 	"repostate.8.3.previous":    "#386",
 	"repostate.8.3.next":        "#386",
 	"repostate.8.3.branch-type": "#386",
+	// Crosslink deferral (internal/manifest/crosslink.go missingCheckinRefs).
+	"repostate.4.2.root-absent-file": "#406",
 }
 
 // repostateDeviations marks the cases where go-libfossil follows fossil(1)

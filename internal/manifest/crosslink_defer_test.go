@@ -394,6 +394,68 @@ func TestCrosslink_DoesNotDeferOnMissingParent(t *testing.T) {
 	assertCounts(t, r, manifestRID, 1, 1, 0, "linked despite missing parent")
 }
 
+// TestCrosslink_DoesNotDeferOnMissingFilesAtopMissingParent is issue #398:
+// the libfossil repository holds a fossil-scm check-in imported without its
+// parent or most of its files. With the primary parent absent no mlink row
+// is derived (fossil's add_mlink returns early), so waiting on the files
+// could never complete the check-in; the sweep deferred it forever and lost
+// the event and plink rows `fossil rebuild` writes. Once the parent arrives,
+// its crosslink derives the child's file transition against a phantom for
+// the file that is still absent, as fossil's add_one_mlink does.
+func TestCrosslink_DoesNotDeferOnMissingFilesAtopMissingParent(t *testing.T) {
+	r := setupTestRepo(t)
+	parent := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "parent arrives later",
+		D:    time.Date(2026, 4, 26, 11, 0, 0, 0, time.UTC),
+		U:    deck.User("tester"),
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"},
+			{Type: deck.TagSingleton, Name: "sym-trunk", UUID: "*"},
+		},
+	}
+	parentBytes, err := parent.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal(parent): %v", err)
+	}
+	child := &deck.Deck{
+		Type: deck.Checkin,
+		C:    "imported without its history",
+		D:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
+		P:    []string{repoHash(r, parentBytes)},
+		F:    []deck.FileCard{{Name: "a.txt", UUID: repoHash(r, []byte("never stored"))}},
+		U:    deck.User("tester"),
+	}
+	childBytes, err := child.Marshal()
+	if err != nil {
+		t.Fatalf("Marshal(child): %v", err)
+	}
+	childRID, _, err := blob.Store(r.DB(), childBytes)
+	if err != nil {
+		t.Fatalf("blob.Store(child): %v", err)
+	}
+
+	if linked, err := Crosslink(r); err != nil || linked != 1 {
+		t.Fatalf("Crosslink = %d, %v; want 1 (absent files must not block)", linked, err)
+	}
+	// No leaf yet: the child carries no branch tag and has no parent to
+	// inherit one from, and fossil never makes an untagged check-in a leaf.
+	assertCounts(t, r, childRID, 1, 0, 0, "atop missing parent")
+	var plinks int
+	if err := r.DB().QueryRow("SELECT count(*) FROM plink WHERE cid=?", childRID).
+		Scan(&plinks); err != nil || plinks != 1 {
+		t.Fatalf("plink rows = %d, %v; want 1", plinks, err)
+	}
+
+	if _, _, err := blob.Store(r.DB(), parentBytes); err != nil {
+		t.Fatalf("blob.Store(parent): %v", err)
+	}
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink after parent: %v", err)
+	}
+	assertCounts(t, r, childRID, 1, 1, 1, "after parent arrival")
+}
+
 // TestCrosslink_DedupesDuplicateFCardUUIDs covers a hostile-input case:
 // a single manifest references the same file UUID via multiple F-cards
 // (e.g., a renamed file pair where both names point at the same content

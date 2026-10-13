@@ -106,6 +106,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A check-in that a sync linked through the phantom-fill cascade now gets its
+  leaf row and propagated tags (#414). A pulled check-in arrives as an
+  announced phantom filled the next round, so the cascade links it, and the
+  session's closing sweep then found nothing left to link and skipped the
+  leaf and tag-propagation repair: the check-in had an event row and no leaf
+  row, and its parent stayed a leaf. The cascade now reports what it linked,
+  and the sync client and the server handler each run the repair once at the
+  end of the session when the cascades or the sweep linked anything, as
+  repo-state-01 §7.3 (RS-7.3-4) requires before the leaf table is read; not
+  once per file. New cases `repostate.7.3.pulled-child` and
+  `repostate.7.6.pulled-retag` each also run as a `.pull` case, which pulls
+  the script's last artifacts from a go-libfossil server into a repository
+  already holding the first. A session that fails after a round whose cascade
+  linked check-ins runs the same repair before returning its error, as
+  fossil's per-round manifest_crosslink_end does.
 - The crosslink sweep no longer holds back a check-in for absent file
   content (#406). A root check-in, or one on a present parent, whose files
   never arrived got no event, plink, mlink, leaf or tag rows, so it never

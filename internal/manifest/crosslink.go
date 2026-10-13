@@ -299,10 +299,31 @@ func Crosslink(r *repo.Repo) (int, error) {
 // blobs incrementally get the same candidate ordering, cache, and single repair
 // gate as a clone, without retaining a linker beyond this call.
 func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
+	return CrosslinkAfterCascades(ctx, r, 0)
+}
+
+// CrosslinkAfterCascades is CrosslinkContext closing a session whose
+// phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) linked
+// cascaded artifacts between its rounds. A cascade links each artifact's own
+// rows only; the leaf and tag-propagation repair depends on the whole plink
+// graph, so it runs here, once, when the sweep or the cascades linked anything
+// (draft-fossil-repo-state-01 Section 7.3: every scheduled leaf recheck is
+// applied before the leaf table is read). Without the count, a session whose
+// cascades linked everything ended in a sweep that linked nothing and skipped
+// the repair, leaving a pulled check-in with no leaf row (issue #414). It
+// returns what the sweep alone linked.
+func CrosslinkAfterCascades(ctx context.Context, r *repo.Repo, cascaded int) (int, error) {
+	if r == nil {
+		panic("manifest.CrosslinkAfterCascades: r must not be nil")
+	}
+	if cascaded < 0 {
+		panic("manifest.CrosslinkAfterCascades: cascaded must not be negative")
+	}
 	linker, err := newReceiveLinker(r, crosslinkCacheBytes)
 	if err != nil {
 		return 0, err
 	}
+	linker.needsRepair = cascaded > 0
 	return linker.Finalize(ctx)
 }
 

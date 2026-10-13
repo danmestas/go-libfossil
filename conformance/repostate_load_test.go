@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -15,7 +16,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/verify"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -134,10 +137,13 @@ const (
 	// loadRebuild stores every artifact without crosslinking, then
 	// derives everything with verify.Rebuild.
 	loadRebuild
+	// loadPull pulls the artifacts from a server holding them all, into a
+	// repository already holding and crosslinking the first few (goLoadPull).
+	loadPull
 )
 
 func (l rsLoad) String() string {
-	return [...]string{"sweep", "per-artifact", "verify.Rebuild"}[l]
+	return [...]string{"sweep", "per-artifact", "verify.Rebuild", "pull"}[l]
 }
 
 // rsDoctor edits a repository's tables by SQL after the first at artifacts
@@ -161,6 +167,69 @@ func goLoad(t *testing.T, script rsScript, load rsLoad, doctor *rsDoctor) (strin
 		loadErr = err
 	}
 	return path, loadErr
+}
+
+// rsProjectCode names both ends of a pull: a sync session is refused
+// between repositories with different project codes.
+const rsProjectCode = "5cd1ee2f2fa7a1b9e1a2b6f3c4d5e6f708192a3b"
+
+// goLoadPull stores and crosslinks script.arts[:held] in a new repository,
+// then pulls the rest with a sync session from a go-libfossil server, in
+// process, that holds every artifact. It returns the puller's path, closed.
+func goLoadPull(t *testing.T, script rsScript, held int) (string, error) {
+	t.Helper()
+	if held <= 0 || held >= len(script.arts) {
+		panic("conformance: goLoadPull needs 0 < held < len(arts)")
+	}
+	dir := t.TempDir()
+	src, err := goStored(filepath.Join(dir, "server.fossil"), script.arts)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	path := filepath.Join(dir, "go.fossil")
+	dst, err := goStored(path, script.arts[:held])
+	if err != nil {
+		return "", err
+	}
+	transport := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		resp, err := sync.HandleSync(context.Background(), src, req)
+		if err != nil {
+			return &xfer.Message{Cards: []xfer.Card{&xfer.ErrorCard{Message: err.Error()}}}
+		}
+		return resp
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), clientTimeout)
+	defer cancel()
+	_, pullErr := sync.Sync(ctx, dst, transport,
+		sync.SyncOpts{Pull: true, ProjectCode: rsProjectCode})
+	if err := dst.Close(); err != nil && pullErr == nil {
+		pullErr = err
+	}
+	if pullErr != nil {
+		return "", fmt.Errorf("pull: %w", pullErr)
+	}
+	return path, nil
+}
+
+// goStored creates a repository at path holding arts, crosslinked in one
+// sweep, with the project code both ends of a pull share.
+func goStored(path string, arts []rsBuilt) (*repo.Repo, error) {
+	r, err := repo.Create(path, "u", simio.CryptoRand{}, rsProjectCode)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range arts {
+		if _, _, err := blob.Store(r.DB(), a.data); err != nil {
+			r.Close()
+			return nil, fmt.Errorf("blob.Store %s: %w", a.label, err)
+		}
+	}
+	if _, err := manifest.Crosslink(r); err != nil {
+		r.Close()
+		return nil, fmt.Errorf("Crosslink: %w", err)
+	}
+	return r, nil
 }
 
 func goStoreAll(r *repo.Repo, script rsScript, load rsLoad, doctor *rsDoctor) error {

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -30,21 +31,21 @@ type BuggifyChecker interface {
 
 // SyncOpts configures a sync session.
 type SyncOpts struct {
-	Push, Pull  bool   // enable push/pull directions (at least one must be true)
-	ProjectCode string // repo's project-code — sent to identify the repository
-	ServerCode  string // server-code from a previous session (cookie-like, speeds up sync)
-	User        string // login user — empty means unauthenticated "nobody" sync
-	Password    string // login password
-	PeerID      string // identifies this leaf agent instance (for observability)
-	MaxSend     int    // byte budget per round for file payloads (0 defaults to DefaultMaxSend)
-	UV          bool   // enable unversioned file sync (wiki, forum, attachments)
-	XTableSync  bool   // enable extension table sync (peer_registry, etc.) — only between EdgeSync peers
-	Private     bool   // enable private artifact sync
-	Env         *simio.Env     // nil defaults to RealEnv
-	Buggify     BuggifyChecker // nil in production — used by DST for fault injection
-	Observer    Observer       // nil defaults to no-op
-	CkinLock     *CkinLockReq    // nil = no lock requested
-	ContentCache *content.Cache  // nil = no caching (every Expand walks the full delta chain)
+	Push, Pull   bool           // enable push/pull directions (at least one must be true)
+	ProjectCode  string         // repo's project-code — sent to identify the repository
+	ServerCode   string         // server-code from a previous session (cookie-like, speeds up sync)
+	User         string         // login user — empty means unauthenticated "nobody" sync
+	Password     string         // login password
+	PeerID       string         // identifies this leaf agent instance (for observability)
+	MaxSend      int            // byte budget per round for file payloads (0 defaults to DefaultMaxSend)
+	UV           bool           // enable unversioned file sync (wiki, forum, attachments)
+	XTableSync   bool           // enable extension table sync (peer_registry, etc.) — only between EdgeSync peers
+	Private      bool           // enable private artifact sync
+	Env          *simio.Env     // nil defaults to RealEnv
+	Buggify      BuggifyChecker // nil in production — used by DST for fault injection
+	Observer     Observer       // nil defaults to no-op
+	CkinLock     *CkinLockReq   // nil = no lock requested
+	ContentCache *content.Cache // nil = no caching (every Expand walks the full delta chain)
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -61,33 +62,33 @@ type SyncResult struct {
 	BytesSent, BytesRecvd         int64
 	ArtifactsLinked               int
 	Errors                        []string
-	CkinLockFail *CkinLockFail // nil = no conflict
+	CkinLockFail                  *CkinLockFail // nil = no conflict
 }
 
 // session holds the mutable state of a running sync.
 type session struct {
-	repo                *repo.Repo
-	env                 *simio.Env
-	opts                SyncOpts
-	projectCode         string // resolved once: SyncOpts.ProjectCode, else the repo's own
-	result              SyncResult
-	cookie              string
-	remoteHas           map[string]bool
-	phantoms            map[string]bool
-	pendingSend         map[string]bool
-	mxPhantomReq        int // gimme cards allowed per request; fossil's mxPhantomReq
-	igotSentThisRound   int
-	maxSend             int
-	phantomAge          map[string]int // UUID -> consecutive rounds gimme'd without delivery
-	uvHashSent          bool
-	uvPushOK            bool
-	uvPullOnly          bool
-	uvToSend            map[string]bool // name -> true=full content, false=mtime-only
-	uvGimmes            map[string]bool
-	nUvGimmeSent        int
-	nUvFileRcvd         int
-	nGimmeRcvd          int // cumulative gimmes received across all rounds
-	nextIsPrivate       bool // true when a PrivateCard precedes the next file/cfile
+	repo              *repo.Repo
+	env               *simio.Env
+	opts              SyncOpts
+	projectCode       string // resolved once: SyncOpts.ProjectCode, else the repo's own
+	result            SyncResult
+	cookie            string
+	remoteHas         map[string]bool
+	phantoms          map[string]bool
+	pendingSend       map[string]bool
+	mxPhantomReq      int // gimme cards allowed per request; fossil's mxPhantomReq
+	igotSentThisRound int
+	maxSend           int
+	phantomAge        map[string]int // UUID -> consecutive rounds gimme'd without delivery
+	uvHashSent        bool
+	uvPushOK          bool
+	uvPullOnly        bool
+	uvToSend          map[string]bool // name -> true=full content, false=mtime-only
+	uvGimmes          map[string]bool
+	nUvGimmeSent      int
+	nUvFileRcvd       int
+	nGimmeRcvd        int  // cumulative gimmes received across all rounds
+	nextIsPrivate     bool // true when a PrivateCard precedes the next file/cfile
 	// pushStopped is set the moment the server's "message pull only ..." is
 	// read (§10.2): the client keeps pulling but answers no further gimme, as
 	// fossil's client_sync clears SYNC_PUSH mid-reply, so a gimme after the
@@ -123,13 +124,16 @@ type session struct {
 	// dephantomized buffers the phantoms this reply filled, whose
 	// after-dephantomize cascade runs once at the end of the reply.
 	dephantomized []libfossil.FslID
-	roundStats          RoundStats
-	xTableHashSent map[string]bool            // table -> true if xtable-hash pragma sent
-	xTableGimmes   map[string]map[string]bool // table -> pkHash -> true
-	xTableToSend   map[string]map[string]bool // table -> pkHash -> true
-	xTableCache    map[string]*repo.TableDef  // cached table defs, lazily loaded
-	dephantomizeHook    func(libfossil.FslID) // called after phantom→real transition
-	cache               *content.Cache // nil = passthrough to content.Expand
+	// cascaded counts what those cascades linked, across the session: the
+	// closing crosslink owes it the leaf and tag repair (issue #414).
+	cascaded         int
+	roundStats       RoundStats
+	xTableHashSent   map[string]bool            // table -> true if xtable-hash pragma sent
+	xTableGimmes     map[string]map[string]bool // table -> pkHash -> true
+	xTableToSend     map[string]map[string]bool // table -> pkHash -> true
+	xTableCache      map[string]*repo.TableDef  // cached table defs, lazily loaded
+	dephantomizeHook func(libfossil.FslID)      // called after phantom→real transition
+	cache            *content.Cache             // nil = passthrough to content.Expand
 }
 
 func newSession(r *repo.Repo, opts SyncOpts) *session {
@@ -246,6 +250,22 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 
 	obs := resolveObserver(opts.Observer)
 	s := newSession(r, opts)
+	closed := false
+	defer func() {
+		// A round that fails after earlier rounds' cascades committed their
+		// links must still repair leaves and propagated tags, as fossil's
+		// per-round manifest_crosslink_end does (src/xfer.c): otherwise a
+		// failed pull leaves check-ins with event rows and no leaf rows
+		// (repo-state-01 Section 7.3, RS-7.3-4). The context is detached so a
+		// cancelled pull is repaired too.
+		if closed || err == nil || s.cascaded == 0 {
+			return
+		}
+		_, rerr := manifest.CrosslinkAfterCascades(context.WithoutCancel(ctx), s.repo, s.cascaded)
+		if rerr != nil {
+			err = errors.Join(err, fmt.Errorf("sync: repair after failed session: %w", rerr))
+		}
+	}()
 	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
 	}
@@ -318,7 +338,8 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// Auto-crosslink after convergence. Context-aware for the same reason the
 	// clone's sweep is (#120): this runs after the round loop, so it has no
 	// round boundary of its own at which a cancelled context could be noticed.
-	linked, xlinkErr := manifest.CrosslinkContext(ctx, s.repo)
+	closed = true
+	linked, xlinkErr := manifest.CrosslinkAfterCascades(ctx, s.repo, s.cascaded)
 	if xlinkErr != nil {
 		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), xlinkErr)
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)

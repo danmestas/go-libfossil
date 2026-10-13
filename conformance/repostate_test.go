@@ -39,6 +39,11 @@ type rsCase struct {
 	rebuild bool
 	// doctor edits the tables partway through a per-artifact load.
 	doctor *rsDoctor
+	// pull, when set, adds a ".pull" case: the first pull artifacts are
+	// stored and crosslinked locally, then a sync session pulls the rest
+	// from a go-libfossil server holding them all, so the phantom-fill
+	// cascade, not a sweep, links what arrives.
+	pull int
 	// incremental says why fossil's per-artifact crosslink is not the
 	// reference for this case; `fossil rebuild` is used instead, and the
 	// case fails once the two agree.
@@ -68,6 +73,13 @@ func (c rsCase) variants() []rsVariant {
 	crosslink.Gap = repostateGaps[c.ID]
 	crosslink.Deviation = repostateDeviations[c.ID]
 	all := []rsVariant{crosslink}
+	if c.pull > 0 {
+		pulled := rsVariant{Case: c.Case, loads: []rsLoad{loadPull}}
+		pulled.ID = c.ID + ".pull"
+		pulled.Gap = repostateGaps[pulled.ID]
+		pulled.Deviation = repostateDeviations[pulled.ID]
+		all = append(all, pulled)
+	}
 	if c.rebuild {
 		rebuilt := rsVariant{Case: c.Case, loads: []rsLoad{loadRebuild}}
 		rebuilt.ID = c.ID + ".rebuild"
@@ -130,7 +142,13 @@ func runRepoStateCases(t *testing.T, cases []rsCase) {
 func (c rsCase) goConforms(t *testing.T, script rsScript, v rsVariant) error {
 	var problems []string
 	for _, load := range v.loads {
-		path, err := goLoad(t, script, load, c.doctor)
+		var path string
+		var err error
+		if load == loadPull {
+			path, err = goLoadPull(t, script, c.pull)
+		} else {
+			path, err = goLoad(t, script, load, c.doctor)
+		}
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", load, err))
 			continue

@@ -23,35 +23,42 @@ import (
 // the walk within crosslinkCancelCheckStride steps (see afterDephantomize),
 // mirroring the whole-repository sweep's CrosslinkContext contract. Callers with
 // no deadline pass context.Background().
-func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) {
+//
+// It returns how many artifacts the cascade linked. The cascade writes each
+// artifact's own rows but not the leaf and tag-propagation state, which
+// depends on the whole plink graph; the caller owes that repair once per
+// session, by passing the sum to CrosslinkAfterCascades (issue #414).
+func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) int {
 	if r == nil {
 		panic("manifest.AfterDephantomize: r must not be nil")
 	}
 	if rid <= 0 {
-		return
+		return 0
 	}
-	afterDephantomize(ctx, r, rid, true)
+	return afterDephantomize(ctx, r, rid, true).linked
 }
 
 // AfterDephantomizeBatch runs AfterDephantomize's cascade for every rid in
 // one linker, so a sync round that fills many phantoms commits its crosslinks
 // together rather than in one transaction per artifact. A cancelled ctx stops
-// it as it stops AfterDephantomize.
-func AfterDephantomizeBatch(ctx context.Context, r *repo.Repo, rids []libfossil.FslID) {
+// it as it stops AfterDephantomize. It returns how many artifacts it linked,
+// which the caller owes a repair for, as for AfterDephantomize's count.
+func AfterDephantomizeBatch(ctx context.Context, r *repo.Repo, rids []libfossil.FslID) int {
 	if r == nil {
 		panic("manifest.AfterDephantomizeBatch: r must not be nil")
 	}
 	if len(rids) == 0 {
-		return
+		return 0
 	}
 	cl := newCascadeLinker(r)
 	for _, rid := range rids {
 		if rid > 0 && !cl.walk(ctx, rid, true) {
-			return
+			return cl.stats.linked
 		}
 	}
 	cl.flush(ctx)
 	logDeferredCheckinSummary("AfterDephantomizeBatch", cl.guard, cl.stats.linked)
+	return cl.stats.linked
 }
 
 // afterDephantomize walks the orphan/delta-child graph reachable from rid and
@@ -190,14 +197,14 @@ func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 		panic("manifest.ReceiveLinker.Finalize: linker must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.linked, err)
+		_, repairErr := repairCrosslinkState(rl.r, rl.repairDue(), err)
 		return 0, repairErr
 	}
 	if err := rl.retryAllWaiters(ctx); err != nil {
 		// A cancellation or savepoint-control failure stops new derivation, but
 		// receive-time batches may already have committed plink/tagxref rows.
 		// They still get the same single repair gate before the cause returns.
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.linked, err)
+		_, repairErr := repairCrosslinkState(rl.r, rl.repairDue(), err)
 		return 0, repairErr
 	}
 	linked, sweepErr := crosslinkSweepWithState(ctx, rl.r, rl.state)
@@ -212,6 +219,16 @@ func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 		rl.needsRepair = false
 	}
 	return linked, repairErr
+}
+
+// repairDue is the link count repairCrosslinkState gates on: nonzero when this
+// linker, or a cascade the caller reported (CrosslinkAfterCascades), linked
+// rows the leaf and tag state has not been repaired for.
+func (rl *ReceiveLinker) repairDue() int {
+	if rl.needsRepair {
+		return 1
+	}
+	return 0
 }
 
 // Stats returns a snapshot of receive-time linking and bounded-cache work.

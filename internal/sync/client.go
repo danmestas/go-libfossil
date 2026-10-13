@@ -596,7 +596,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	}
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
-	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	s.cascaded += manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {
@@ -959,6 +959,11 @@ func (s *session) tablesPending() bool {
 // Callers with no such bytes on hand (payload built locally, or a bare
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
+//
+// A caller passing a nil linker discards the cascade's link count, so it must
+// not be used where the session owes the closing repair
+// manifest.CrosslinkAfterCascades that count (issue #414); the sync client
+// and handler use storeReceived for that.
 func storeReceivedFile(ctx context.Context, r *repo.Repo, uuid, deltaSrc string, payload []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) error {
 	dephantomizedRid, err := storeReceived(ctx, r, uuid, deltaSrc, payload, storedBlob, vis,
 		linker)

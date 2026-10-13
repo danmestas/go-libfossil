@@ -271,11 +271,62 @@ func TestCloneCancelledContext(t *testing.T) {
 	}
 }
 
-// TestCloneWithPhantoms verifies that a delta whose source the clone never
-// delivered leaves a phantom that Clone fetches afterwards with a separate
-// pull session: the clone session itself sends no pull or gimme once
-// clone_seqno 0 arrives (draft §8.2), and a server answers a gimme only
-// within a pull.
+// TestCloneLeavesPhantomsByDefault verifies that, without PullPhantoms, a
+// clone ends at clone_seqno 0 and its cleanup round (draft §8.2, SP-8.2-5):
+// the phantom a delta leaves stays one, and the clone still succeeds, as
+// fossil(1)'s does.
+func TestCloneLeavesPhantomsByDefault(t *testing.T) {
+	baseUUID := hash.SHA1([]byte("base the clone never delivers"))
+	targetContent := []byte("target delivered as a delta against the base")
+	deltaBytes, err := delta.Create([]byte("base the clone never delivers"), targetContent)
+	if err != nil {
+		t.Fatalf("delta.Create: %v", err)
+	}
+	transport := &mockCloneTransport{
+		handler: func(round int, req *xfer.Message) *xfer.Message {
+			for _, c := range req.Cards {
+				switch c.(type) {
+				case *xfer.CloneCard, *xfer.PullCard, *xfer.PushCard:
+					if round > 0 {
+						t.Errorf("round %d: %T after clone_seqno 0", round, c)
+					}
+				}
+			}
+			if round > 0 {
+				return &xfer.Message{}
+			}
+			return &xfer.Message{Cards: []xfer.Card{
+				&xfer.CFileCard{UUID: hash.SHA1(targetContent), DeltaSrc: baseUUID,
+					Content: deltaBytes},
+				&xfer.CloneSeqNoCard{SeqNo: 0},
+				&xfer.PushCard{ServerCode: "s1", ProjectCode: "p1"},
+			}}
+		},
+	}
+	repoPath := filepath.Join(t.TempDir(), "phantom.fossil")
+	r, _, err := sync.Clone(context.Background(), repoPath, transport, sync.CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone failed: %v", err)
+	}
+	defer r.Close()
+	if transport.round != 2 {
+		t.Errorf("Clone sent %d requests, want 2 (the clone round and its cleanup)",
+			transport.round)
+	}
+	var phantoms int
+	if err := r.DB().QueryRow("SELECT count(*) FROM phantom").Scan(&phantoms); err != nil {
+		t.Fatalf("count phantoms: %v", err)
+	}
+	if phantoms != 1 {
+		t.Errorf("phantoms after clone = %d, want 1 (the undelivered base)", phantoms)
+	}
+}
+
+// TestCloneWithPhantoms verifies that, with PullPhantoms, a delta whose
+// source the clone never delivered leaves a phantom that Clone fetches
+// afterwards with a separate pull session: the clone session itself sends
+// no pull or gimme once clone_seqno 0 arrives (draft §8.2), and a server
+// answers a gimme only within a pull.
 func TestCloneWithPhantoms(t *testing.T) {
 	// Base blob that the delta depends on.
 	baseContent := []byte("this is the base content for delta testing")
@@ -327,7 +378,8 @@ func TestCloneWithPhantoms(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoPath := filepath.Join(tmpDir, "phantom.fossil")
 
-	r, result, err := sync.Clone(context.Background(), repoPath, transport, sync.CloneOpts{})
+	r, result, err := sync.Clone(context.Background(), repoPath, transport,
+		sync.CloneOpts{PullPhantoms: true})
 	if err != nil {
 		t.Fatalf("Clone failed: %v", err)
 	}
@@ -351,8 +403,8 @@ func TestCloneWithPhantoms(t *testing.T) {
 	t.Logf("Clone with phantoms: rounds=%d blobs=%d", result.Rounds, result.BlobsRecvd)
 }
 
-// TestCloneStallReturnsError verifies that a clone which stops making
-// progress with phantoms still outstanding — a peer that delivers a delta,
+// TestCloneStallReturnsError verifies that a PullPhantoms clone which stops
+// making progress with phantoms still outstanding — a peer that delivers a delta,
 // then stops serving its base entirely — returns an error rather than
 // reporting success on an incomplete repository (issue #64).
 func TestCloneStallReturnsError(t *testing.T) {
@@ -388,7 +440,8 @@ func TestCloneStallReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoPath := filepath.Join(tmpDir, "stall.fossil")
 
-	r, result, err := sync.Clone(context.Background(), repoPath, transport, sync.CloneOpts{})
+	r, result, err := sync.Clone(context.Background(), repoPath, transport,
+		sync.CloneOpts{PullPhantoms: true})
 	if err == nil {
 		r.Close()
 		t.Fatal("Clone succeeded, want stall error with phantom outstanding")

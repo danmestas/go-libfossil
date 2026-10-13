@@ -168,6 +168,7 @@ func (c *CloneCard) Type() CardType { return CardClone }
 // CloneSeqNoCard represents a "clone_seqno" card.
 type CloneSeqNoCard struct {
 	SeqNo int
+	Raw   string // line as received, LF kept; empty for a built card
 }
 
 func (c *CloneSeqNoCard) Type() CardType { return CardCloneSeqNo }
@@ -239,6 +240,7 @@ func (c *PragmaCard) Type() CardType { return CardPragma }
 // ErrorCard carries an error message from the server.
 type ErrorCard struct {
 	Message string // plain text (defossilized)
+	Raw     string // line as received, LF kept; empty for a built card
 }
 
 func (c *ErrorCard) Type() CardType { return CardError }
@@ -246,6 +248,7 @@ func (c *ErrorCard) Type() CardType { return CardError }
 // MessageCard carries an informational message.
 type MessageCard struct {
 	Message string // plain text (defossilized)
+	Raw     string // line as received, LF kept; empty for a built card
 }
 
 func (c *MessageCard) Type() CardType { return CardMessage }
@@ -254,6 +257,7 @@ func (c *MessageCard) Type() CardType { return CardMessage }
 type UnknownCard struct {
 	Command string
 	Args    []string
+	Raw     string // line as received, LF kept; empty for a built card
 }
 
 func (c *UnknownCard) Type() CardType { return CardUnknown }

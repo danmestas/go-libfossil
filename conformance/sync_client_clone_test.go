@@ -101,16 +101,15 @@ func clientCloneCases() []syncClientCase {
 		fc:      true,
 	}, {
 		// T arrives as a delta against S, which does not: the cleanup may
-		// ask for S, but no pull follows it. go-libfossil's Clone pulls S
-		// in a session of its own, which the third reply answers.
+		// ask for S, but no pull follows it, so the clone ends with S a
+		// phantom. A third reply is scripted so that a pull, were one sent,
+		// would be seen rather than fail the exchange.
 		Case: Case{ID: "sync.8.2.clone-zero-phantom", Req: "SP-8.2-5"},
 		op:   opClone,
 		replies: [][]string{reply("cfile {T} {S} {T.size} {DTS.zsize}", "{DTS.z}", "{DTS.pad}",
 			"clone_seqno 0", pushCard), reply(), reply("file {S} {S.size}", "{S.data}")},
-		want: every(rounds(2), noOperation(2)),
-		deviates: every(noFailure, noOperation(2), sentPrefix(3, "pull "), sent(3, "gimme {S}"),
-			notSent(3, "clone "), notSent(3, "push "), expands("T")),
-		fc: true,
+		want: every(noFailure, rounds(2), noOperation(2)),
+		fc:   true,
 	}}
 }
 

@@ -10,12 +10,7 @@ var syncGaps = map[string]string{
 
 // syncDeviations marks the cases where go-libfossil differs from the draft
 // on purpose, by case ID, with the reason.
-var syncDeviations = map[string]string{
-	"sync.5.2.client-clone-seqno": "the server tolerates a client-sent clone_seqno, " +
-		"which no conforming client sends, rather than answering bad command (#255)",
-	"sync.8.2.clone-zero-phantom": "Clone fetches the phantoms a clone leaves with a " +
-		"follow-up pull, so that a clone it reports done is complete (#255)",
-}
+var syncDeviations = map[string]string{}
 
 // TestSyncGapKeys checks that every marked case exists.
 func TestSyncGapKeys(t *testing.T) {

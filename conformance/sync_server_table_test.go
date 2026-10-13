@@ -157,10 +157,27 @@ func serverCardCases() []syncServerCase {
 		want: all(completed, onlyError("bad command: error foo\n"),
 			withCard("file {A1} {A1.size}")),
 	}, {
-		Case:     Case{ID: "sync.5.2.client-clone-seqno", Req: "SP-5.2-6"},
-		body:     []string{"{CV}", "clone_seqno 5", "{R}"},
-		want:     all(completed, onlyError("bad command: clone_seqno 5\n")),
-		deviates: all(completed, noErrors),
+		// clone_seqno is reply-only; fossil's page_xfer has no branch for
+		// it, so it falls through to bad command and parsing goes on to the
+		// gimme after it.
+		Case: Case{ID: "sync.5.2.client-clone-seqno", Req: "SP-5.2-6"},
+		body: []string{"{CV}", pullCard, "clone_seqno 5", "gimme {A1}", "{R}"},
+		want: all(completed, onlyError("bad command: clone_seqno 5\n"),
+			withCard("file {A1} {A1.size}")),
+	}, {
+		// A non-decimal NEXT is still the defined reply-only operator in the
+		// wrong direction: fossil has no server branch for any clone_seqno
+		// line, so the answer is the same bad command.
+		Case: Case{ID: "sync.5.2.client-clone-seqno-nondecimal", Req: "SP-5.2-6"},
+		body: []string{"{CV}", pullCard, "clone_seqno abc", "gimme {A1}", "{R}"},
+		want: all(completed, onlyError("bad command: clone_seqno abc\n"),
+			withCard("file {A1} {A1.size}")),
+	}, {
+		// The error quotes the line as received, not a re-encoding of it.
+		Case: Case{ID: "sync.5.2.client-clone-seqno-quoted", Req: "SP-5.2-6"},
+		body: []string{"{CV}", pullCard, "clone_seqno 05", "gimme {A1}", "{R}"},
+		want: all(completed, onlyError("bad command: clone_seqno 05\n"),
+			withCard("file {A1} {A1.size}")),
 	}, {
 		// A negative SIZE fails the file handler's validation: the reply
 		// is reset, so the gimme's file goes, and parsing stops, so the

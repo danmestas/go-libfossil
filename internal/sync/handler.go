@@ -324,11 +324,35 @@ func (h *handler) badCommand(line string) {
 	h.resp = append(h.resp, &xfer.ErrorCard{Message: badCommandPrefix + line})
 }
 
+// receivedLine returns the line a card arrived as, LF kept, so a bad command
+// quotes it the way fossil quotes blob_str(&xfer.line). Cards the decoder did
+// not stamp with their raw line fall back to replyOnlyLine.
+func receivedLine(c xfer.Card) string {
+	switch c := c.(type) {
+	case *xfer.CloneSeqNoCard:
+		if c.Raw != "" {
+			return c.Raw
+		}
+	case *xfer.ErrorCard:
+		if c.Raw != "" {
+			return c.Raw
+		}
+	case *xfer.MessageCard:
+		if c.Raw != "" {
+			return c.Raw
+		}
+	case *xfer.UnknownCard:
+		if c.Raw != "" {
+			return c.Raw
+		}
+	}
+	return replyOnlyLine(c)
+}
+
 // replyOnlyLine re-encodes a card fossil would not have recognized (an error
 // or message the server received, which page_xfer has no branch for, or an
 // igot or gimme whose HASH is no artifact name) into the wire line it arrived
-// as, so it can be quoted the way fossil quotes blob_str(&xfer.line). The LF
-// EncodeCard writes is the one the error text carries.
+// as. The LF EncodeCard writes is the one the error text carries.
 func replyOnlyLine(c xfer.Card) string {
 	var buf bytes.Buffer
 	if err := xfer.EncodeCard(&buf, c); err != nil {
@@ -460,8 +484,7 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 		return h.handleClone(c)
 	case *xfer.PragmaCard:
 		return h.handlePragma(c)
-	case *xfer.PushCard, *xfer.PullCard, *xfer.CloneSeqNoCard, *xfer.CookieCard,
-		*xfer.SchemaCard:
+	case *xfer.PushCard, *xfer.PullCard, *xfer.CookieCard, *xfer.SchemaCard:
 		h.handleControlCard(card)
 	case *xfer.BadFileCard:
 		// A file/cfile/uvfile line the decoder could not frame: page_xfer
@@ -469,10 +492,20 @@ func (h *handler) processCard(ctx context.Context, card xfer.Card) error {
 		h.breakLoop(c.Message)
 	case *xfer.BadCommandCard:
 		h.badCommand(c.Line)
-	case *xfer.ErrorCard, *xfer.MessageCard:
-		// error and message are reply-only: a client that sends one gets a
-		// bad command, as fossil's page_xfer has no branch for them (§5.2).
-		h.badCommand(replyOnlyLine(c))
+	case *xfer.ErrorCard, *xfer.MessageCard, *xfer.CloneSeqNoCard:
+		// error, message and clone_seqno are reply-only: a client that sends
+		// one gets a bad command and later cards are processed, as fossil's
+		// page_xfer has no branch for them (§5.2, SP-5.2-6).
+		h.badCommand(receivedLine(c))
+	case *xfer.UnknownCard:
+		// A clone_seqno whose NEXT is not decimal decodes to UnknownCard but
+		// is still the defined reply-only operator (§5.2); fossil has no
+		// server branch for any clone_seqno line.
+		if c.Command == "clone_seqno" {
+			h.badCommand(receivedLine(c))
+			return nil
+		}
+		return h.handleDataCard(ctx, card)
 	default:
 		return h.handleDataCard(ctx, card)
 	}
@@ -658,11 +691,6 @@ func (h *handler) handleControlCard(card xfer.Card) {
 		h.handlePushCard(c)
 	case *xfer.PullCard:
 		h.handlePullCard(c)
-	case *xfer.CloneSeqNoCard:
-		// Deliberately ignored. clone_seqno is a reply-only card, so no
-		// conforming client sends one; canonical answers `bad command`. We
-		// stay tolerant rather than strict, which is why the model server in
-		// TestCloneMultiBatchAgainstCanonicalServer rejects it and we do not.
 	case *xfer.CookieCard:
 		// Clone clients echo the cap cookie on every round; process reads
 		// it ahead of the card loop (cloneCapFromCards), since the batch

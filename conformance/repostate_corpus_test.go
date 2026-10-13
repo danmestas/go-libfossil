@@ -77,7 +77,7 @@ func goSweep(t *testing.T, path string) string {
 	}
 	defer r.Close()
 	for _, table := range []string{"event", "plink", "leaf", "mlink", "tagxref", "forumpost",
-		"attachment", "backlink", "cherrypick"} {
+		"attachment", "backlink", "cherrypick", "orphan"} {
 		if _, err := r.DB().Exec("DELETE FROM " + table); err != nil {
 			t.Fatal(err)
 		}

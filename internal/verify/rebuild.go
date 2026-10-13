@@ -16,10 +16,12 @@ import (
 // them so every blob is a candidate again, then lets manifest.Crosslink refill
 // them exactly as a clone that received every artifact would. This is the same
 // set the repository-state corpus test empties before its sweep, which matches
-// `fossil rebuild` in event, plink, mlink, tagxref, leaf and phantom.
+// `fossil rebuild` in event, plink, mlink, tagxref, leaf and phantom. orphan is
+// among them because the sweep files a delta manifest whose baseline is absent
+// there; `fossil rebuild` drops and recreates it the same way.
 var crosslinkTables = []string{
 	"event", "plink", "leaf", "mlink", "tagxref",
-	"forumpost", "attachment", "backlink", "cherrypick",
+	"forumpost", "attachment", "backlink", "cherrypick", "orphan",
 }
 
 // bookkeepingTables are the sync-bookkeeping tables the crosslink sweep does not
@@ -78,9 +80,10 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 // tables the sweep does not own. The sweep writes event/plink/mlink/tagxref,
 // creates phantoms for absent targets, parents and file content, reparents,
 // then repairs leaf and tag-propagation state over the whole plink graph -- the
-// order `fossil rebuild` uses. CrosslinkRebuild, not Crosslink, because a
-// rebuild is terminal: a check-in whose content is absent is linked with
-// phantoms rather than deferred for a blob that will never arrive.
+// order `fossil rebuild` uses. CrosslinkRebuild, not Crosslink, so the whole
+// rebuild runs in tx: a check-in whose files or parent are absent is linked
+// with phantoms, and a delta manifest whose baseline is absent is refused and
+// filed in orphan, exactly as Crosslink and `fossil rebuild` do.
 func rederive(tx *db.Tx) error {
 	if err := clearTables(tx, crosslinkTables); err != nil {
 		return err

@@ -5,10 +5,7 @@ import "testing"
 // repostateGaps marks the repository-state cases go-libfossil is known to
 // fail, by case ID, grouped by the code at fault, each with the issue
 // tracking its fix.
-var repostateGaps = map[string]string{
-	// Crosslink deferral (internal/manifest/crosslink.go missingCheckinRefs).
-	"repostate.4.2.root-absent-file": "#406",
-}
+var repostateGaps = map[string]string{}
 
 // repostateDeviations marks the cases where go-libfossil follows fossil(1)
 // rather than the draft text, by case ID.

@@ -229,7 +229,12 @@ var rsQueries = map[string]string{
 		rsUUID("tagxref.origid") + ", quote(value), " +
 		"CASE WHEN tag.tagname = 'cluster' THEN '*' ELSE " + rsMillis("tagxref.mtime") +
 		" END FROM tagxref JOIN tag USING (tagid)",
-	"leaf":    "SELECT " + rsUUID("leaf.rid") + " FROM leaf",
+	"leaf": "SELECT " + rsUUID("leaf.rid") + " FROM leaf",
+	// orphan reads the delta manifests refused for a baseline, each under
+	// that baseline. It is outside rsAllTables: only the baseline cases
+	// compare it.
+	"orphan": "SELECT " + rsUUID("orphan.rid") + " || '>' || " + rsUUID("orphan.baseline") +
+		" FROM orphan",
 	"phantom": "SELECT uuid FROM blob WHERE size < 0",
 	"event": "SELECT " + rsUUID("event.objid") + ", type, " + rsMillis("event.mtime") +
 		" FROM event",

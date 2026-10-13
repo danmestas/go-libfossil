@@ -119,6 +119,16 @@ func serverCardCases() []syncServerCase {
 		body: []string{"{CV}", pullCard, "bogus x", "gimme {A1}", "{R}"},
 		want: all(completed, onlyError("bad command: bogus x\n"), withCard("file {A1} {A1.size}")),
 	}, {
+		Case: Case{ID: "sync.5.2.whitespace-runs-server", Req: "SP-5.2-2"},
+		body: []string{"{CV}", "pull\t{SC}\v\v{PC}", "gimme\f {A1}\r", "{R}"},
+		want: all(completed, noErrors, withCard("file {A1} {A1.size}")),
+	}, {
+		// A no-break space is not a separator: the gimme's one argument is
+		// not a hash, so A1 is not sent.
+		Case: Case{ID: "sync.5.2.non-ascii-space-server", Req: "SP-5.2-2"},
+		body: []string{"{CV}", pullCard, "gimme {A1}\u00a0", "{R}"},
+		want: all(completed, noCard("file {A1}")),
+	}, {
 		// The file the gimme put in the reply is discarded with it.
 		Case: Case{ID: "sync.5.2.bad-command-resets", Req: "SP-5.2-4"},
 		body: []string{"{CV}", pullCard, "gimme {A1}", "bogus", "{R}"},
@@ -274,5 +284,25 @@ func serverLoginCases() []syncServerCase {
 		setup: closed,
 		body:  []string{"{CV}", pushCard, "{R}"},
 		want:  all(completed, onlyError("not authorized to write")),
+	}, {
+		// nobody may read, but not clone.
+		Case:  Case{ID: "sync.6.6.clone-required", Req: "SP-6.6-1"},
+		setup: readOnly,
+		body:  []string{"{CV}", "clone 3 1", "{R}"},
+		want:  all(completed, onlyError("not authorized to clone")),
+	}, {
+		// alice may read, write and clone, but not sync private content.
+		Case: Case{ID: "sync.6.6.private-required", Req: "SP-6.6-1"},
+		body: []string{"{LOGIN alice secret}", "{CV}", "pragma send-private", pullCard, "{R}"},
+		want: all(completed, onlyError("not authorized to sync private content"),
+			withCard("igot {A1}")),
+	}, {
+		// alice may write, but is no administrator.
+		Case: Case{ID: "sync.6.6.admin-required", Req: "SP-6.6-1"},
+		body: []string{"{LOGIN alice secret}", "{CV}", pushCard,
+			"config /config {CFGP.size}", "{CFGP.data}", "{R}"},
+		want: all(completed, onlyError("not authorized to push configuration"),
+			repoCount("SELECT count(*) FROM config WHERE name='project-name'"+
+				" AND value='pushed'", 0)),
 	}}
 }

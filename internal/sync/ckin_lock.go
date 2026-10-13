@@ -1,7 +1,9 @@
 package sync
 
 import (
-	"encoding/json"
+	"database/sql"
+	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,63 +13,97 @@ import (
 // DefaultCkinLockTimeout is the default duration after which a ci-lock expires.
 const DefaultCkinLockTimeout = 60 * time.Second
 
+// lockTimeout is the repository's lock-timeout setting in seconds, which
+// fossil reads with db_get_int("lock-timeout", 60) (§9.4). A setting that is
+// absent, not a number or not positive gives the default; a zero timeout
+// would expire every lock as it was taken.
+func lockTimeout(d *db.DB) time.Duration {
+	var v string
+	if d.QueryRow("SELECT value FROM config WHERE name='lock-timeout'").Scan(&v) != nil {
+		return DefaultCkinLockTimeout
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 0 {
+		return DefaultCkinLockTimeout
+	}
+	return time.Duration(n) * time.Second
+}
+
 // CkinLockFail reports that another client holds the check-in lock.
 type CkinLockFail struct {
 	HeldBy string
 	Since  time.Time
 }
 
-type ckinLockEntry struct {
-	ClientID string `json:"clientid"`
-	Login    string `json:"login"`
-	MTime    int64  `json:"mtime"`
-}
+// ckinLockPrefix names a check-in lock's config row, as fossil's ci-lock
+// does: ci-lock-HASH, holding JSON {"login":...,"clientid":...}, with the
+// time the lock was taken in the mtime column (§9.4). A repository served by
+// both fossil and this server so has one lock table.
+const ckinLockPrefix = "ci-lock-"
 
 func configKey(parentUUID string) string {
-	return "libfossil-ci-lock-" + parentUUID
+	return ckinLockPrefix + parentUUID
 }
 
 // releaseCkinLocks drops the check-in locks clientID holds, and any lock
 // whose record is not JSON, as fossil's pragma ci-unlock does (§9.4).
 func releaseCkinLocks(d *db.DB, clientID string) {
-	d.Exec("DELETE FROM config WHERE name LIKE 'libfossil-ci-lock-%'"+
+	d.Exec("DELETE FROM config WHERE name GLOB 'ci-lock-*'"+
 		" AND (NOT json_valid(value) OR json_extract(value, '$.clientid')=?)", clientID)
 }
 
-// processCkinLock handles a ci-lock pragma request.
-// Returns non-nil CkinLockFail if another client holds the lock.
-func processCkinLock(d *db.DB, parentUUID, clientID, user string, timeout time.Duration) *CkinLockFail {
+// processCkinLock handles a ci-lock pragma request, as fossil's page_xfer
+// does: stale locks go first; a live lock on parentUUID is kept as it is,
+// with no refresh, and reported unless clientID holds it; with none, a lock
+// is written for user and clientID, unacknowledged (§9.4).
+func processCkinLock(d *db.DB, parentUUID, clientID, user string,
+	timeout time.Duration) *CkinLockFail {
+	if parentUUID == "" {
+		panic("sync.processCkinLock: empty parentUUID")
+	}
 	expireStaleLocks(d, timeout)
 
-	key := configKey(parentUUID)
-	var raw string
-	err := d.QueryRow("SELECT value FROM config WHERE name=?", key).Scan(&raw)
+	var login, holder string
+	var since int64
+	// mtime is cast: the column is declared DATETIME, which some drivers
+	// would otherwise hand back as a time.
+	err := d.QueryRow("SELECT coalesce(json_extract(value, '$.login'), ''),"+
+		" coalesce(json_extract(value, '$.clientid'), ''), CAST(mtime AS INTEGER)"+
+		" FROM config"+
+		" WHERE name=? AND json_valid(value)", configKey(parentUUID)).
+		Scan(&login, &holder, &since)
 	if err == nil {
-		var entry ckinLockEntry
-		if json.Unmarshal([]byte(raw), &entry) == nil && entry.ClientID != clientID {
-			return &CkinLockFail{
-				HeldBy: entry.Login,
-				Since:  time.Unix(entry.MTime, 0),
-			}
+		if holder != clientID {
+			return &CkinLockFail{HeldBy: login, Since: time.Unix(since, 0)}
 		}
+		return nil
 	}
-
-	// Upsert lock.
-	now := time.Now().Unix()
-	entry := ckinLockEntry{ClientID: clientID, Login: user, MTime: now}
-	val, _ := json.Marshal(entry)
-	d.Exec(`REPLACE INTO config(name, value, mtime) VALUES(?, ?, ?)`, key, string(val), now)
+	if !errors.Is(err, sql.ErrNoRows) {
+		// A lock that cannot be read is not overwritten: the pragma has no
+		// error reply, and taking the lock could clobber another client's.
+		return nil
+	}
+	d.Exec("REPLACE INTO config(name, value, mtime)"+
+		" VALUES(?, json_object('login', ?, 'clientid', ?), ?)",
+		configKey(parentUUID), user, clientID, time.Now().Unix())
 	return nil
 }
 
-// expireStaleLocks removes ci-lock entries that are older than timeout
-// or whose parent UUID is no longer in the leaf table.
+// expireStaleLocks removes the ci-lock rows at least timeout old, or whose
+// check-in is no longer a leaf. As in fossil, only rows holding JSON are
+// considered; ci-unlock is what clears the others.
 func expireStaleLocks(d *db.DB, timeout time.Duration) {
 	cutoff := time.Now().Unix() - int64(timeout.Seconds())
 
-	d.Exec("DELETE FROM config WHERE name LIKE 'libfossil-ci-lock-%' AND mtime < ?", cutoff)
+	// Locks written under the old libfossil-ci-lock- key match neither this
+	// sweep nor ci-unlock, so nothing else would ever clear them.
+	d.Exec("DELETE FROM config WHERE name GLOB 'libfossil-ci-lock-*'")
 
-	rows, err := d.Query("SELECT name FROM config WHERE name LIKE 'libfossil-ci-lock-%'")
+	d.Exec("DELETE FROM config WHERE name GLOB 'ci-lock-*' AND json_valid(value)"+
+		" AND mtime <= ?", cutoff)
+
+	rows, err := d.Query("SELECT name FROM config WHERE name GLOB 'ci-lock-*'" +
+		" AND json_valid(value)")
 	if err != nil {
 		return
 	}
@@ -79,7 +115,7 @@ func expireStaleLocks(d *db.DB, timeout time.Duration) {
 		if rows.Scan(&name) != nil {
 			continue
 		}
-		uuid := strings.TrimPrefix(name, "libfossil-ci-lock-")
+		uuid := strings.TrimPrefix(name, ckinLockPrefix)
 		var rid int64
 		if d.QueryRow("SELECT rid FROM blob WHERE uuid=?", uuid).Scan(&rid) != nil {
 			toDelete = append(toDelete, name)

@@ -35,9 +35,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   time-only and now/subsec forms (a reader MAY accept forms 2 through 5), so
   `deck.Parse` keeps rejecting them while fossil(1) and the date-tag path
   (SQLite julianday) accept them.
+- The conformance suite covers eleven more sync-protocol-01 rows and part of
+  a twelfth: the peer-lacks gimme filter, the twentieth redirect, VT, FF and
+  server-side token runs, the SHA3 refusal left out of `errors N`, the Clone,
+  Private and Admin capability checks, the fossilized `uvfile` NAME, the
+  deferred clone configuration, the well-formed `uvigot` ban, the private
+  inventory under private sync, the private-igot continuation, the written
+  and kept check-in lock, and a discarded `pragma link` ARG. Where fossil(1)
+  2.28 differs (it repeats a gimme for a hash the peer lacks, refuses an
+  escaped `uvfile` NAME, and sends a well-formed `uvigot` past `max-upload`),
+  the cases follow the draft and record fossil's behavior. SP-9.5-4 stays
+  partial: go-libfossil has no share-links mode, so no link is stored.
 
 ### Fixed
 
+- The sync client answers a server's `gimme` for content it holds as
+  private, outside a private sync, with `igot HASH 1` when the server's
+  `pragma server-version` dates it 2020-04-13 or later, and with nothing for
+  an older or undated server, as sync-protocol-01 Section 8.6 and fossil's
+  `send_file` do. Such an answer to the first reply continues the session
+  once (Section 3.7 limb c). It previously sent nothing.
+- The `uvfile`, `uvigot` and `uvgimme` NAME is fossilized on the wire, as
+  sync-protocol-01 Section 7.3 and Appendix B require: a name with a space
+  goes out as `a\sb.txt`, and a received NAME is defossilized before it is
+  checked as a pathname and stored. fossil(1) 2.28 sends the name raw and
+  checks the token as sent, refusing any escape; names that need no escaping
+  are unchanged on the wire, and the code follows -01. A raw backslash escape
+  in a received NAME is now undone, where it was refused. The `uv-hash`
+  catalog hashes and sorts each name in its fossilized form (Section 8.5.1),
+  which is what fossil(1) hashes for a name it holds as sent.
+- The server's check-in locks share fossil's lock table: a lock is the config
+  row `ci-lock-HASH` holding JSON `login` and `clientid`, timed by the row's
+  `mtime`, where go-libfossil wrote `libfossil-ci-lock-HASH`, so a repository
+  served by both saw two tables. A live lock is now kept as it is, holder and
+  time, when its own client asks again, where it was refreshed (Section 9.4),
+  and a lock is stale once it is the lock timeout old, not only after. The
+  timeout is the repository's `lock-timeout` setting, 60 seconds when unset,
+  as in fossil. Rows left under the old `libfossil-ci-lock-` key are deleted
+  the next time a lock is requested. `pragma ci-lock` is taken only with
+  exactly a hash and a client id, as in fossil, where it wrote a lock for any
+  two tokens. The server still ignores `ci-lock` and `ci-unlock` from a
+  requester without Write capability, where Section 9.4 applies them to any
+  (#392).
+- The sync client's unversioned-file session now stops after request 3 when
+  that request's `uvgimme` brings back no `uvfile`, as Section 3.7(d) and
+  fossil's `nCycle<3` do; it ran one request more.
 - Looking up one file in a delta manifest follows artifact-format-01 Section
   8.4: the delta's own F cards are searched first, and a delete marker answers
   not-found without reading the baseline, so a deleted name no longer fails

@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
@@ -268,23 +270,34 @@ func ContentHash(d *db.DB) (string, error) {
 	// Compute.
 	rows, err := d.Query(
 		`SELECT name, datetime(mtime,'unixepoch'), hash
-		 FROM unversioned WHERE hash IS NOT NULL ORDER BY name`,
+		 FROM unversioned WHERE hash IS NOT NULL`,
 	)
 	if err != nil {
 		return "", fmt.Errorf("uv.ContentHash: query: %w", err)
 	}
 	defer rows.Close()
 
-	h := sha1.New()
+	// sync-protocol-01 §8.5.1 hashes "stored fossilized name bytes" sorted
+	// bytewise. This server stores the decoded name, so it encodes here: a
+	// name with a space then hashes as fossil(1) hashes it, from the raw
+	// wire bytes it never decodes. The sort must follow the encoded bytes,
+	// since SP (0x20) and the backslash of its escape (0x5c) order apart.
+	type line struct{ name, rest string }
+	var lines []line
 	for rows.Next() {
 		var name, dt, fileHash string
 		if err := rows.Scan(&name, &dt, &fileHash); err != nil {
 			return "", err
 		}
-		fmt.Fprintf(h, "%s %s %s\n", name, dt, fileHash)
+		lines = append(lines, line{deck.FossilEncode(name), " " + dt + " " + fileHash + "\n"})
 	}
 	if err := rows.Err(); err != nil {
 		return "", err
+	}
+	sort.Slice(lines, func(i, j int) bool { return lines[i].name < lines[j].name })
+	h := sha1.New()
+	for _, l := range lines {
+		io.WriteString(h, l.name+l.rest)
 	}
 
 	result := hex.EncodeToString(h.Sum(nil))

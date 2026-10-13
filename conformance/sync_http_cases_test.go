@@ -94,6 +94,13 @@ func httpRequestCases() []syncHTTPCase {
 		want:    httpEvery(samePost(1, 20), httpSent(21, "gimme {U}")),
 		fc:      true,
 	}, {
+		// The twentieth redirect is not followed: the session fails.
+		Case:    Case{ID: "sync.4.redirect-20-fatal", Req: "SP-4-4"},
+		op:      opPull,
+		respond: redirects(http.StatusTemporaryRedirect, 20),
+		want:    httpEvery(httpFailsWith("redirect limit exceeded"), httpRounds(20)),
+		fc:      true,
+	}, {
 		Case:    Case{ID: "sync.4.redirect-strips-xfer", Req: "SP-4-6"},
 		op:      opPull,
 		respond: stripXfer,

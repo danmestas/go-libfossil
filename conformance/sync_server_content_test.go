@@ -70,6 +70,13 @@ func serverUVCases() []syncServerCase {
 		want: all(completed, onlyError("malformed+uvfile+line", "malformed uvfile line"),
 			uvRow("name='n.txt'", 0), noCard("gimme {U}")),
 	}, {
+		// NAME is fossilized: the row is named with the space restored.
+		Case: Case{ID: "sync.7.3.uvfile-name", Req: "SP-7.3-1"},
+		body: with(`uvfile a\sb.txt {UVT} {N1} {N1.size} 0`, "{N1.data}", "{R}"),
+		want: all(completed, noErrors, uvRow("name='a b.txt' AND hash='{N1}'", 1)),
+		fossil: "fossil(1) 2.28 checks NAME as a pathname before it defossilizes it, and " +
+			"refuses the backslash: malformed uvfile line",
+	}, {
 		Case: Case{ID: "sync.7.3.flags-reserved", Req: "SP-7.3-2"},
 		body: with("uvfile n.txt {UVT} {N1} {N1.size} 2", "{N1.data}", "{R}"),
 		want: all(completed, noErrors, uvRow("name='n.txt' AND sz={N1.size}", 1)),

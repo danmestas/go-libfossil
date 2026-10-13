@@ -40,6 +40,15 @@ func clientCloneCases() []syncClientCase {
 		},
 		fc: true,
 	}, {
+		// Neither reqconfig nor uv-hash goes in round 0. fossil(1)'s clone
+		// asks for configuration in the next round; go-libfossil's Clone
+		// asks for neither in any round, having no option for either.
+		Case:    Case{ID: "sync.8.4.round-0-defers-config", Req: "SP-8.4-1"},
+		op:      opClone,
+		replies: [][]string{cloneReply([]string{"N1"}, "clone_seqno 0", pushCard)},
+		want:    every(atLeast(2), notSent(1, "reqconfig "), notSent(1, "pragma uv-hash ")),
+		fc:      true,
+	}, {
 		Case: Case{ID: "sync.8.2.clone-advancing-cursor", Req: "SP-8.2-2"},
 		op:   opClone,
 		replies: [][]string{cloneReply([]string{"N1"}, "clone_seqno 2", pushCard),

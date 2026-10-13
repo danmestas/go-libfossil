@@ -178,6 +178,12 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 	for ; s.sha3Refusals > 0; s.sha3Refusals-- {
 		cards = append(cards, sha3Refusal())
 	}
+	// Private content a gimme asked for outside a private sync is not sent,
+	// but the server is told it exists and is private (§8.6).
+	for _, uuid := range s.privateIGots {
+		cards = append(cards, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
+	}
+	s.privateIGots = s.privateIGots[:0]
 	fileCards, err := s.buildFileCards()
 	if err != nil {
 		return nil, fmt.Errorf("buildRequest file: %w", err)
@@ -609,9 +615,10 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
-	filesRecvd  int // file and cfile cards received
-	filesSent   int // files queued for the next request on the server's gimme
-	newPhantoms int // phantoms an igot created
+	filesRecvd   int // file and cfile cards received
+	filesSent    int // files queued for the next request on the server's gimme
+	newPhantoms  int // phantoms an igot created
+	privateIGots int // igot HASH 1 answers queued for the server's gimme
 }
 
 // handleReplyCard acts on one reply card. It reports stop when the card ends
@@ -724,6 +731,7 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 	switch {
 	case c.Name == "server-version" && len(c.Values) >= 1:
 		s.peerVersion = peerVersion(c)
+		s.peerDate = peerDate(c)
 		// §6.5: once the server's release passes the gate, later requests
 		// may carry their login in the x-f-l-c cookie.
 		if loginCookieGate(c) {
@@ -809,6 +817,12 @@ func (s *session) converged(t replyTally) (bool, error) {
 	if t.filesSent > 0 || len(s.pendingSend) > 0 {
 		return false, nil
 	}
+	// §3.7 (c): the first reply was answered with an igot HASH 1, which the
+	// server can only act on in another round. s.result.Rounds still counts
+	// the rounds before this reply's, so 0 here is fossil's nCycle==1.
+	if t.privateIGots > 0 && s.result.Rounds == 0 {
+		return false, nil
+	}
 
 	// If we sent igot cards but the server didn't gimme anything,
 	// clear the unsent table — those artifacts have been announced
@@ -834,9 +848,11 @@ func (s *session) converged(t replyTally) (bool, error) {
 }
 
 // uvPending reports whether unversioned sync has work left, resetting the
-// per-round counters it judges by.
+// per-round counters it judges by. It runs before the round count is
+// stored, so Rounds is the number of rounds before this one: fossil's
+// post-increment nCycle<3 (§3.7(d)) is Rounds+1 < 3, that is Rounds < 2.
 func (s *session) uvPending() bool {
-	if s.opts.UV && s.nUvGimmeSent > 0 && (s.nUvFileRcvd > 0 || s.result.Rounds < 3) {
+	if s.opts.UV && s.nUvGimmeSent > 0 && (s.nUvFileRcvd > 0 || s.result.Rounds < 2) {
 		s.nUvGimmeSent = 0
 		s.nUvFileRcvd = 0
 		return true
@@ -1230,8 +1246,19 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 	if uuid == "" {
 		panic("session.queueGimme: empty uuid")
 	}
-	if _, ok := blob.Exists(s.repo.DB(), uuid); ok {
+	rid, held := blob.Exists(s.repo.DB(), uuid)
+	if held {
 		s.nGimmeRcvd++
+	}
+	// fossil's send_file checks privacy first, for any row: outside a
+	// private sync, a peer dated 2020-04-13 or later is told the artifact
+	// is private, and an older or undated one nothing (§8.6).
+	if held && !s.opts.Private && content.IsPrivate(s.repo.DB(), int64(rid)) {
+		if s.peerDate >= privateIGotDate {
+			s.privateIGots = append(s.privateIGots, uuid)
+			t.privateIGots++
+		}
+		return
 	}
 	if !s.canSend(uuid) {
 		return

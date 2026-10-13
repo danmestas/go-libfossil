@@ -153,6 +153,17 @@ func clientGimmeCases() []syncClientCase {
 		want:    every(rounds(1), neverSent("gimme {U}")),
 		fc:      true,
 	}, {
+		// The peer asks for U, which the client lacks too: the next
+		// request asks it for U2, announced alongside, but not for U.
+		Case:    Case{ID: "sync.3.3.gimme-skips-peer-lacks", Req: "SP-3.3-3"},
+		op:      opSync,
+		setup:   phantomOf("U", quiet...),
+		replies: [][]string{reply("gimme {U}", "igot {U2}")},
+		want:    every(sent(1, "gimme {U}"), sent(2, "gimme {U2}"), notSent(2, "gimme {U}")),
+		fc:      true,
+		fossil: "fossil(1) 2.28 discards the peer-lacks a reply records before it builds " +
+			"the next request, so it asks again for U (the parenthetical of Section 3.3)",
+	}, {
 		Case:    Case{ID: "sync.3.3.gimme-pull-only-client", Req: "SP-3.3-4"},
 		op:      opPull,
 		replies: [][]string{reply("gimme {A1}")},
@@ -221,6 +232,16 @@ func clientTerminationCases() []syncClientCase {
 		want:    every(rounds(2), sent(2, "file {A1} {A1.size}")),
 		fc:      true,
 	}, {
+		// P is private and the sync is not: the gimme for it is answered
+		// with igot P 1 alone, which continues the session once, limb (c).
+		// A gimme the client cannot answer at all ends it (gimme-absent).
+		Case:    Case{ID: "sync.3.7.private-igot-continues", Req: "SP-3.7-3"},
+		op:      opPush,
+		setup:   quiet,
+		replies: [][]string{reply("gimme {P}")},
+		want:    every(rounds(2), sent(2, "igot {P} 1"), notSent(2, "file {P}")),
+		fc:      true,
+	}, {
 		// Content stored with no phantom left is not a reason to go on.
 		Case:    Case{ID: "sync.3.7.content-alone-stops", Req: "SP-3.7-7"},
 		op:      opPull,
@@ -233,6 +254,15 @@ func clientTerminationCases() []syncClientCase {
 		replies: [][]string{reply("pragma uv-pull-only", "uvigot n.txt {UVT} {N1} {N1.size}"),
 			reply("uvfile n.txt {UVT} {N1} {N1.size} 0", "{N1.data}")},
 		want: every(sent(2, "uvgimme n.txt"), rounds(3)),
+	}, {
+		// The uvgimme goes out in request 3 and its reply carries no uvfile:
+		// the post-increment round number 3 is not below 3, so the session
+		// ends there (§3.7(d)), as fossil's nCycle<3 ends it.
+		Case: Case{ID: "sync.3.7.uvgimme-round-3", Req: "SP-3.7-4"},
+		op:   clientOp{pull: true, uv: true},
+		replies: [][]string{reply("pragma uv-pull-only", "uvigot n.txt {UVT} {N1} {N1.size}"),
+			reply("uvigot m.txt {UVT} {N1} {N1.size}")},
+		want: every(sent(3, "uvgimme m.txt"), rounds(3)),
 	}, {
 		Case:    Case{ID: "sync.3.7.clone-first-round", Req: "SP-3.7-5"},
 		op:      opClone,

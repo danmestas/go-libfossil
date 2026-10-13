@@ -131,6 +131,12 @@ func clientCardCases() []syncClientCase {
 		want:    every(sent(2, "gimme {U}"), sent(2, "gimme {U2}")),
 		fc:      true,
 	}, {
+		Case:    Case{ID: "sync.5.2.vt-ff-runs", Req: "SP-5.2-2"},
+		op:      opPull,
+		replies: [][]string{reply("igot\v{U}", "igot\f \f{U2}")},
+		want:    every(sent(2, "gimme {U}"), sent(2, "gimme {U2}")),
+		fc:      true,
+	}, {
 		// A no-break space is not a token separator: the message has one
 		// argument, and the igot after it is read.
 		Case:    Case{ID: "sync.5.2.non-ascii-space", Req: "SP-5.2-2"},

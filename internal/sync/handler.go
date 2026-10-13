@@ -851,7 +851,10 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 		}
 	case c.Name == "req-clusters":
 		h.reqClusters = true
-	case c.Name == "ci-lock" && len(c.Values) >= 2:
+	case c.Name == "ci-lock" && len(c.Values) == 2 && hash.IsValidHash(c.Values[0]):
+		// fossil takes the pragma only with exactly HASH and CLIENT-ID, HASH
+		// a hash (xfer.c:1781); anything else is no lock request.
+		//
 		// Fossil takes a lock for any requester. A lock only matters to
 		// someone who can commit, and ci-lock-fail names the holder, so
 		// this server takes and reports locks for writers alone.
@@ -859,7 +862,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 			return
 		}
 		fail := processCkinLock(h.repo.DB(), c.Values[0], c.Values[1], h.user,
-			DefaultCkinLockTimeout)
+			lockTimeout(h.repo.DB()))
 		if fail != nil {
 			h.resp = append(h.resp, &xfer.PragmaCard{
 				Name:   "ci-lock-fail",

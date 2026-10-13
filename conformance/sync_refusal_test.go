@@ -94,6 +94,11 @@ func serverErrorCountCases() []syncServerCase {
 		body: []string{"{CV}", pullCard, "pragma send-private", "{R}"},
 		want: all(completed, onlyError("not authorized to sync private content"),
 			errorsCount("0")),
+	}, {
+		// A1 is named by SHA3 and the client predates it.
+		Case: Case{ID: "sync.5.3.errors-skips-sha3-refusal", Req: "SP-5.3-4"},
+		body: []string{"{CV0}", pullCard, "gimme {A1}", "{R}"},
+		want: all(completed, onlyError(sha3Refused), errorsCount("0")),
 	}}
 }
 

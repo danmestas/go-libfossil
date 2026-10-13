@@ -130,5 +130,39 @@ func clientShortUVIGotCases() []syncClientCase {
 		fc: true,
 		fossil: "fossil(1) 2.28 sends the short uvigot for a tombstone once its output " +
 			"passes max-upload: the source defect Section 8.5.1 names",
+	}, {
+		// The client's v.txt is newer than the peer's: its content wins and
+		// is sent, as uvfile and not as the well-formed uvigot.
+		Case: Case{ID: "sync.8.5.1.no-uvigot", Req: "SP-8.5.1-7"},
+		op:   clientOp{pull: true, push: true, uv: true},
+		setup: append(uvRows(uvN1("v.txt", "{UVT1}")),
+			"INSERT INTO config(name, value, mtime) VALUES('max-upload', '1', 0)"),
+		replies: [][]string{reply("pragma uv-push-ok", "uvigot v.txt {UVT} {UVH} 11")},
+		want:    neverSent("uvigot "),
+		fc:      true,
+		fossil: "fossil(1) 2.28 sends the well-formed uvigot for a file once its output " +
+			"passes max-upload: the source defect Section 8.5.1 names",
+	}}
+}
+
+// clientLinkCases are Section 9.5's links on the client. go-libfossil has
+// no share-links mode, so it is the client with that mode off: it sends no
+// req-links and discards a link it is sent.
+func clientLinkCases() []syncClientCase {
+	return []syncClientCase{{
+		// The igot after the link shows the reply was read on.
+		Case: Case{ID: "sync.9.5.link-not-echoed", Req: "SP-9.5-4"},
+		op:   opPull,
+		replies: [][]string{reply(`pragma link https://example.com/r opaque\sarg 1767225600`,
+			"igot {U}")},
+		want: every(sent(2, "gimme {U}"), neverSent("pragma req-links"),
+			eachCardSent(func(c wireCard) error {
+				if strings.Contains(c.line, "opaque") {
+					return expectf("%q echoes the link's ARG", c.line)
+				}
+				return nil
+			}),
+			clientRows("SELECT count(*) FROM config WHERE name GLOB 'link:*'", 0)),
+		fc: true,
 	}}
 }

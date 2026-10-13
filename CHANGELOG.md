@@ -103,6 +103,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (sha1), treats a negative stored value as unset (db.c) and leaves a value
   above 4 undefined; -01 is followed here, so every stored value outside 0
   through 4 is an error.
+- An `igot` under push reclassifies an artifact or phantom the server
+  already holds, as sync-protocol-01 Section 7.5 (SP-7.5-5) and fossil's
+  `content_make_private` and `content_make_public` in `page_xfer` do (#391).
+  A public `igot HASH` makes it public; `igot HASH 1` makes it private,
+  from any pushing requester, though one without the private capability
+  still gets no new phantom. Several igots for one name in a request apply
+  in card order. This follows fossil: a requester who may push can make a
+  private artifact public by announcing it, and a client that pushes its
+  private igots makes the server's copy private again.
+
 - A pushed `file` or `cfile` card that fails the server's handler now resets
   the reply, sends the one error and ends card processing, as
   sync-protocol-01 Section 5.2 (SP-5.2-7) and fossil's `xfer_accept_file`

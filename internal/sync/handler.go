@@ -979,24 +979,32 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 		h.badCommand(replyOnlyLine(c))
 		return nil
 	}
-	if _, exists := blob.Exists(h.repo.DB(), c.UUID); exists {
-		// Record that the client has this blob so emitIGots can skip it.
-		// Mirrors Fossil's remote_has() → onremote table (xfer.c:1471),
-		// which fossil fills only under push; it is kept for a pull too, so
-		// a pull-only client is not told about what it just announced.
-		h.recordRemoteHas(c)
-		return nil
-	}
 	// Only a pushing client can deliver what it announces. Fossil's
 	// page_xfer wraps igot handling in `if( isPush )`; asking a pull-only
 	// client for artifacts it will never send holds its pull open until
 	// MaxRounds (#277).
 	if !h.pushOK {
+		// Record that the client has this blob so emitIGots can skip it.
+		// Mirrors Fossil's remote_has() → onremote table (xfer.c:1471),
+		// which fossil fills only under push; it is kept for a pull too, so
+		// a pull-only client is not told about what it just announced.
+		if _, exists := blob.Exists(h.repo.DB(), c.UUID); exists {
+			h.recordRemoteHas(c)
+		}
 		return nil
 	}
-	// A private igot makes a phantom only for a requester who may push
-	// private content, as page_xfer checks g.perm.Private.
+	// A private igot from a requester who may not push private content
+	// makes no phantom, but reclassifies what the server holds (§7.5).
 	if c.IsPrivate && !auth.CanSyncPrivate(h.caps) {
+		return h.reclassifyPrivate(c)
+	}
+	if _, exists := blob.Exists(h.repo.DB(), c.UUID); exists {
+		// page_xfer's rid_from_uuid finds the artifact or phantom and
+		// content_make_private or content_make_public reclassifies it as
+		// the igot says (§7.5); flushPhantoms applies that in its batch.
+		h.pendingPhantoms = append(h.pendingPhantoms,
+			pendingPhantom{uuid: c.UUID, private: c.IsPrivate})
+		h.recordRemoteHas(c)
 		return nil
 	}
 	// Fossil's igot handling goes through rid_from_uuid → content_new, which
@@ -1013,6 +1021,30 @@ func (h *handler) handleIGot(c *xfer.IGotCard) error {
 		pendingPhantom{uuid: c.UUID, private: c.IsPrivate})
 	// page_xfer calls remote_has on the new phantom too, so a file card
 	// later in the request that fills it is not announced back.
+	h.recordRemoteHas(c)
+	return nil
+}
+
+// reclassifyPrivate answers igot HASH 1 from a requester without the
+// private capability, as page_xfer's rid_from_uuid(&uuid, 0, 1) branch does:
+// an artifact or phantom the server holds is made private and recorded as
+// the client's, and an absent HASH gets no phantom (§7.5). The pending
+// phantoms of the igots before it are stored first, so one of them counts
+// as held, as it does in fossil, which stores each as it reads it.
+func (h *handler) reclassifyPrivate(c *xfer.IGotCard) error {
+	if !c.IsPrivate {
+		panic("handler.reclassifyPrivate: igot is not private")
+	}
+	if err := h.flushPhantoms(); err != nil {
+		return err
+	}
+	rid, exists := blob.Exists(h.repo.DB(), c.UUID)
+	if !exists {
+		return nil
+	}
+	if err := content.MakePrivate(h.repo.DB(), int64(rid)); err != nil {
+		return fmt.Errorf("handler: private igot %s: %w", c.UUID, err)
+	}
 	h.recordRemoteHas(c)
 	return nil
 }
@@ -1037,10 +1069,12 @@ type pendingPhantom struct {
 
 // flushPhantoms records the pending igot names as phantoms in one
 // transaction, as page_xfer's rid_from_uuid(..., 1, isPriv) does: push
-// creates server phantoms from client igot (§3.3, §8.5). The gimme for them
-// is sent by requestPhantoms after the card loop, so a file card later in
-// the same request fills one without being asked for. One transaction for
-// the run avoids a WAL commit per announced artifact.
+// creates server phantoms from client igot (§3.3, §8.5). Each name, new or
+// already held, is then made private or public as its igot said, as
+// content_make_private and content_make_public follow (§7.5). The gimme for
+// the phantoms is sent by requestPhantoms after the card loop, so a file card
+// later in the same request fills one without being asked for. One
+// transaction for the run avoids a WAL commit per announced artifact.
 func (h *handler) flushPhantoms() error {
 	if len(h.pendingPhantoms) == 0 {
 		return nil
@@ -1053,11 +1087,8 @@ func (h *handler) flushPhantoms() error {
 			if err != nil {
 				return fmt.Errorf("handler: phantom for igot %s: %w", p.uuid, err)
 			}
-			if !p.private {
-				continue
-			}
-			if err := content.MakePrivate(tx, int64(rid)); err != nil {
-				return err
+			if err := recordVisibility(tx, rid, visibility(p.private)); err != nil {
+				return fmt.Errorf("handler: igot %s: %w", p.uuid, err)
 			}
 		}
 		return nil

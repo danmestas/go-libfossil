@@ -146,6 +146,20 @@ func (r *Repo) WithTx(fn func(tx *db.Tx) error) error {
 	return r.db.WithTx(fn)
 }
 
+// WithBoundTx runs fn in one write transaction with a Repo bound to it, as
+// db.DB.WithBoundTx binds its DB: everything fn does through that Repo,
+// including the transactions code running on it opens, commits together when
+// fn returns nil and rolls back together otherwise. The bound Repo is valid
+// only until fn returns and must not be closed.
+func (r *Repo) WithBoundTx(fn func(bound *Repo) error) error {
+	if fn == nil {
+		panic("repo.WithBoundTx: fn must not be nil")
+	}
+	return r.db.WithBoundTx(func(b *db.DB) error {
+		return fn(&Repo{db: b, path: r.path})
+	})
+}
+
 // Config reads a configuration value from the repo's config table.
 func (r *Repo) Config(key string) (string, error) {
 	var value string

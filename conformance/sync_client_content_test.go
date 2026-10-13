@@ -76,8 +76,8 @@ func clientFileCases() []syncClientCase {
 		fc:   true,
 	}, {
 		// The draft's commit hook aborts the whole pass, not only N1:
-		// fossil keeps neither N1 nor S. go-libfossil commits each card on its
-		// own, so it keeps S and returns only the bad delta to what it was.
+		// fossil keeps neither N1 nor S, and nor does go-libfossil, whose
+		// reply runs in one transaction that the mismatch rolls back.
 		Case: Case{ID: "sync.7.7.late-basis-aborts-pass", Req: "SP-7.7-4"},
 		op:   opPull,
 		replies: [][]string{reply("file {N1} {S} {DTS.size}", "{DTS.data}",

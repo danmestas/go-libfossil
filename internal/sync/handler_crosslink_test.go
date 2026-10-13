@@ -183,3 +183,56 @@ func TestHandleSync_LeafTransitionOnChildCheckin(t *testing.T) {
 		t.Errorf("plink rows pid=%d cid=%d: got %d, want 1", parentRID, childRID, plinkCount)
 	}
 }
+
+// TestHandleLateMismatchRollsBackRequest: a request whose late hash mismatch
+// fails the commit check (§7.7, SP-7.7-4) is rolled back whole, as fossil's
+// page_xfer transaction is: the phantom an earlier card filled is a phantom
+// again and the crosslinks its cascade wrote are gone. The reply is the
+// mismatch's error and the closing timestamp.
+func TestHandleLateMismatchRollsBackRequest(t *testing.T) {
+	// Control: without the bad delta, the fill crosslinks every child.
+	ctl := setupPushableTestRepo(t)
+	ctlUUID, ctlBase, ctlChildren := buildPhantomFillFanout(t, ctl, 3)
+	if _, err := HandleSync(context.Background(), ctl, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.FileCard{UUID: ctlUUID, Content: ctlBase},
+	}}); err != nil {
+		t.Fatalf("HandleSync control: %v", err)
+	}
+	if got := countCrosslinkedRids(t, ctl, ctlChildren); got != len(ctlChildren) {
+		t.Fatalf("control crosslinked %d of %d children", got, len(ctlChildren))
+	}
+
+	r := setupPushableTestRepo(t)
+	baseUUID, base, children := buildPhantomFillFanout(t, r, 3)
+	fx := newLateBasisFixture(t)
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.FileCard{UUID: baseUUID, Content: base},
+		&xfer.FileCard{UUID: fx.claimed, DeltaSrc: fx.baseUUID, Content: fx.evil},
+		&xfer.FileCard{UUID: fx.baseUUID, Content: []byte(fx.base)},
+	}}
+	resp, err := HandleSync(context.Background(), r, req)
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if n := len(resp.Cards); n != 2 {
+		t.Fatalf("reply has %d cards, want the error and the timestamp", n)
+	}
+	e, ok := resp.Cards[0].(*xfer.ErrorCard)
+	if !ok || e.Message != wrongHashText(fx.claimed) {
+		t.Fatalf("reply starts with %v, want the wrong-hash error", resp.Cards[0])
+	}
+	if all, phantoms := rows(t, r, baseUUID); all != 1 || phantoms != 1 {
+		t.Fatalf("filled phantom rows = %d (%d phantom), want the phantom back", all,
+			phantoms)
+	}
+	for _, uuid := range []string{fx.claimed, fx.baseUUID} {
+		if all, _ := rows(t, r, uuid); all != 0 {
+			t.Fatalf("%d rows for %s, want 0", all, uuid)
+		}
+	}
+	if got := countCrosslinkedRids(t, r, children); got != 0 {
+		t.Fatalf("%d children crosslinked by a rolled-back request, want 0", got)
+	}
+}

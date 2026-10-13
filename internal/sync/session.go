@@ -45,7 +45,7 @@ type SyncOpts struct {
 	Buggify      BuggifyChecker // nil in production — used by DST for fault injection
 	Observer     Observer       // nil defaults to no-op
 	CkinLock     *CkinLockReq   // nil = no lock requested
-	ContentCache *content.Cache // nil = no caching (every Expand walks the full delta chain)
+	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -340,6 +340,10 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// Auto-crosslink after convergence. Context-aware for the same reason the
 	// clone's sweep is (#120): this runs after the round loop, so it has no
 	// round boundary of its own at which a cancelled context could be noticed.
+	// fossil runs manifest_crosslink_end inside each round's transaction
+	// (xfer.c); here the repair runs once, after the rounds, in its own
+	// transaction, so that a cancelled sweep cannot roll back a committed
+	// reply. A rolled-back reply restores s.cascaded, so none is owed for it.
 	closed = true
 	linked, xlinkErr := manifest.CrosslinkAfterCascades(ctx, s.repo, s.cascaded)
 	if xlinkErr != nil {

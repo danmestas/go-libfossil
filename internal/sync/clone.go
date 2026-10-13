@@ -474,75 +474,91 @@ func (cs *cloneSession) buildLoginCard(cards []xfer.Card) (*xfer.LoginCard, []xf
 // processResponse handles all cards in a server response for a clone round.
 // cycle is that round's 0-based index; round 0 is the one sent before the
 // project code — and so the login card — is known.
+//
+// The round is one verification pass (§7.7) and runs in one write
+// transaction, as fossil's client_sync runs each round: a late hash mismatch
+// rolls the round back. Any other card error commits the prefix before it
+// and is returned.
 func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfer.Message) error {
 	if msg == nil {
 		panic("sync.Clone.processResponse: msg must not be nil")
 	}
-
 	filesRecvd := 0
+	defer func() { cs.roundRecvd = filesRecvd }()
+	cardErr, err := runPass(cs.repo, func(bound *repo.Repo) (error, error) {
+		defer cs.bindRepo(bound)()
+		filesRecvd = 0
+		return cs.processCards(ctx, cycle, msg, &filesRecvd), nil
+	})
+	if err != nil {
+		return err // the round rolled back
+	}
+	cs.result.BlobsRecvd += filesRecvd
+	return cardErr
+}
+
+// processCards is processResponse's card loop, inside the round's
+// transaction. It counts the files it stores in filesRecvd.
+func (cs *cloneSession) processCards(ctx context.Context, cycle int, msg *xfer.Message,
+	filesRecvd *int) error {
 	cs.roundPush = false
 	cs.pass = newReceivePass() // each round is one verification pass (§7.7)
-	defer func() { cs.roundRecvd = filesRecvd }()
-
-cardLoop:
+	defer func() { cs.pass = nil }()
 	for i, card := range msg.Cards {
 		if i%processResponseCancelCheckStride == 0 {
 			select {
 			case <-ctx.Done():
-				cs.result.BlobsRecvd += filesRecvd
 				return ctx.Err()
 			default:
 			}
 		}
-		switch c := card.(type) {
-		// §5.2: a reply card the decoder could not read ends the reply-card
-		// loop, on every round, the first included.
-		case *xfer.BadCommandCard:
-			cs.badCard("unknown command: [" + strings.TrimRight(c.Line, "\n") + "]")
-			break cardLoop
-		case *xfer.BadFileCard:
-			cs.badCard(c.Message)
-			break cardLoop
-
-		case *xfer.PushCard:
-			cs.roundPush = true
-			if err := cs.recordCodes(c); err != nil {
-				return err
-			}
-
-		case *xfer.FileCard:
-			if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
-				return err
-			}
-			filesRecvd++
-
-		case *xfer.CFileCard:
-			stored, err := cs.receiveCFile(ctx, c)
-			if err != nil {
-				return err
-			}
-			if stored {
-				filesRecvd++
-			}
-
-		case *xfer.CloneSeqNoCard:
-			cs.recordSeqNo(c)
-
-		case *xfer.ErrorCard:
-			if cs.serverError(cycle, c) {
-				break cardLoop
-			}
-
-		case *xfer.CookieCard:
-			cs.cookie = c.Value
-
-		case *xfer.MessageCard:
-			cs.result.Messages = append(cs.result.Messages, c.Message)
+		stop, err := cs.processCard(ctx, cycle, card, filesRecvd)
+		if err != nil || stop {
+			return err
 		}
 	}
-
-	cs.result.BlobsRecvd += filesRecvd
 	return nil
+}
+
+// processCard acts on one card of a clone reply. It reports stop when the
+// card ends the reply-card loop.
+func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Card,
+	filesRecvd *int) (bool, error) {
+	switch c := card.(type) {
+	// §5.2: a reply card the decoder could not read ends the reply-card
+	// loop, on every round, the first included.
+	case *xfer.BadCommandCard:
+		cs.badCard("unknown command: [" + strings.TrimRight(c.Line, "\n") + "]")
+		return true, nil
+	case *xfer.BadFileCard:
+		cs.badCard(c.Message)
+		return true, nil
+	case *xfer.PushCard:
+		cs.roundPush = true
+		return false, cs.recordCodes(c)
+	case *xfer.FileCard:
+		if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
+			return false, err
+		}
+		*filesRecvd++
+	case *xfer.CFileCard:
+		stored, err := cs.receiveCFile(ctx, c)
+		if err != nil {
+			return false, err
+		}
+		if stored {
+			*filesRecvd++
+		}
+	case *xfer.CloneSeqNoCard:
+		cs.recordSeqNo(c)
+	case *xfer.ErrorCard:
+		return cs.serverError(cycle, c), nil
+	case *xfer.CookieCard:
+		cs.cookie = c.Value
+	case *xfer.MessageCard:
+		cs.result.Messages = append(cs.result.Messages, c.Message)
+	}
+	return false, nil
 }
 
 // receiveCFile stores a cfile and reports whether it did. fossil drops a
@@ -710,4 +726,15 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 		}
 	}
 	return nil
+}
+
+// bindRepo points the clone session at bound, the repository bound to the
+// current round's transaction, and returns the function that points it back.
+func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
+	if bound == nil {
+		panic("sync.Clone.bindRepo: bound must not be nil")
+	}
+	orig := cs.repo
+	cs.repo = bound
+	return func() { cs.repo = orig }
 }

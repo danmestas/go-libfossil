@@ -27,7 +27,8 @@ func commitAt(t *testing.T, r *Repo, parent int64, comment string, at time.Time)
 
 func TestCurrentTrunk_FollowsMainBranchSetting(t *testing.T) {
 	r := newTestRepo(t)
-	base := commitBranch(t, r, 0, "trunk", "base", []FileToCommit{{Name: "f", Content: []byte("0\n")}})
+	base := commitBranch(t, r, 0, "trunk", "base",
+		[]FileToCommit{{Name: "f", Content: []byte("0\n")}})
 	feat := makeBranch(t, r, base, "feat")
 
 	got, err := r.CurrentTrunk()
@@ -69,6 +70,9 @@ func TestBranchOpenLeaf(t *testing.T) {
 	rid, open, err := r.BranchOpenLeaf("feat")
 	if err != nil || !open || rid != newer {
 		t.Errorf("BranchOpenLeaf(feat) = %d, %v, %v; want %d, true", rid, open, err, newer)
+	}
+	if _, _, err := r.BranchOpenLeaf(""); err == nil {
+		t.Error("BranchOpenLeaf(\"\") succeeded, want an error")
 	}
 	if rid, open, err := r.BranchOpenLeaf("nosuch"); err != nil || open || rid != 0 {
 		t.Errorf("BranchOpenLeaf(nosuch) = %d, %v, %v; want 0, false, nil", rid, open, err)

@@ -285,11 +285,13 @@ func (r *Repo) ResolveVersion(name string) (int64, error) {
 }
 
 // CurrentTrunk returns the current trunk (repo-state-01 Section 9): the
-// check-in that the main-branch setting's name resolves to by ResolveVersion,
-// "trunk" when the setting is unset. The setting is local and not synced, so
+// check-in that the main-branch setting's name resolves to by ResolveVersion's
+// procedure, "trunk" when the setting is unset. Only check-ins can answer, as
+// in fossil's check-in request, so a technote tagged with the name does not. The setting is local and not synced, so
 // two repositories holding the same artifacts can name different trunks.
 // fossil resolves it the same way where it needs one: update outside a
-// checkout (src/update.c) and open with no version (src/db.c). A name that
+// checkout (src/update.c, a "ci" request) and open with no version
+// (src/db.c). A name that
 // resolves to nothing returns ErrVersionNotFound (wrapped).
 func (r *Repo) CurrentTrunk() (int64, error) {
 	h := r.inner.DB()
@@ -297,7 +299,7 @@ func (r *Repo) CurrentTrunk() (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: current trunk: %w", err)
 	}
-	rid, err := resolveVersion(h, name, 0)
+	rid, err := resolveVersion(h, name, 0, true)
 	if err != nil {
 		return 0, fmt.Errorf("libfossil: current trunk: %w", err)
 	}

@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -22,6 +23,9 @@ func trunkAPICases() []rsAPICase {
 	}
 	return []rsAPICase{
 		currentTrunk("repostate.9.current-trunk", "RS-9-1", feat3, "trunk", "c2"),
+		// A technote tagged sym-trunk, newer than trunk's tip, is no check-in.
+		currentTrunk("repostate.9.current-trunk-technote", "RS-9-1",
+			with(feat3, technote("e", 9, "+sym-trunk *")), "trunk", "c2"),
 		// The same artifacts with main-branch set to feat: the setting is
 		// the only input that changed.
 		mainBranch("repostate.9.current-trunk-setting", "RS-9-1", "feat",
@@ -35,13 +39,13 @@ func trunkAPICases() []rsAPICase {
 // currentTrunk checks that Repo.CurrentTrunk gives the check-in labelled
 // want. fossil(1) has no command that prints the current trunk; where it
 // needs one (update outside a checkout, src/update.c, and open with no
-// version, src/db.c) it resolves the main-branch setting's value by
-// symbolic_name_to_rid, so the case resolves that value, setting, with
-// test-name-to-id.
+// version, src/db.c) it resolves the main-branch setting's value as a
+// check-in by symbolic_name_to_rid, so the case resolves that value,
+// setting, with test-name-to-id --type ci.
 func currentTrunk(id, req string, arts []rsArt, setting, want string) rsAPICase {
 	return rsAPICase{Case: Case{ID: id, Req: req}, arts: arts, run: func(e *rsEnv) error {
 		if e.ref != nil {
-			got, err := e.fossilResolve(setting)
+			got, err := e.fossilResolveCheckin(setting)
 			if err != nil {
 				return err
 			}
@@ -63,6 +67,23 @@ func currentTrunk(id, req string, arts []rsArt, setting, want string) rsAPICase 
 		}
 		return nil
 	}}
+}
+
+// fossilResolveCheckin is the label test-name-to-id --type ci gives name,
+// or "" when it names no check-in.
+func (e *rsEnv) fossilResolveCheckin(name string) (string, error) {
+	out, err := e.fossilRun("test-name-to-id", "--type", "ci", name)
+	if err != nil {
+		return "", err
+	}
+	_, result, ok := strings.Cut(strings.TrimSpace(out), " -> ")
+	if !ok {
+		return "", fmt.Errorf("test-name-to-id: unrecognized output %q", out)
+	}
+	if strings.HasPrefix(result, "ERROR") {
+		return "", nil
+	}
+	return labelOf(result, e.script.labels), nil
 }
 
 // branchInfo is `fossil branch info` naming an open branch's leaf.
@@ -93,7 +114,8 @@ func branchOpenLeaf(id, req string, arts []rsArt, branch, want string) rsAPICase
 			got = e.labelOfRid(r.Inner(), rid)
 		}
 		if got != want {
-			return expectf("BranchOpenLeaf(%q) = %q, want %q (\"\" for not open)", branch, got, want)
+			return expectf("BranchOpenLeaf(%q) = %q, want %q (\"\" for not open)",
+				branch, got, want)
 		}
 		return nil
 	}}

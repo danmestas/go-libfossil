@@ -400,6 +400,9 @@ func sessionEndFromClone(r *CloneResult) SessionEnd {
 func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 	var cards []xfer.Card
 
+	// A clone sends no pragma send-private (CloneOpts has no private mode).
+	// Were one added, fossil puts it before client-version in cycle 0
+	// (src/xfer.c client_sync), as headerCards does for a sync (#351).
 	// Pragma: client-version (every round)
 	cards = append(cards, versionPragma("client-version"))
 

@@ -729,8 +729,14 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) {
 			})
 		}
 	case c.Name == "xtable-hash" && len(c.Values) >= 2:
-		// The reply lists every row's key and mtime: readers only.
-		if h.canRead() {
+		// The inventory serves both directions of table sync: xgimme
+		// pulls rows from it, and a pushing client queues the rows it
+		// holds newer (client_tablesync.go handleXIGotResponse). So it
+		// needs Read and a direction card, not xgimme's pull alone. A
+		// Clone-only requester has Read by derivation (#312) but sends no
+		// direction card, so it gets no inventory (#351). Table sync is a
+		// go-libfossil extension with no fossil counterpart.
+		if h.canRead() && (h.pullOK || h.pushOK) {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
 	case c.Name == "req-clusters":

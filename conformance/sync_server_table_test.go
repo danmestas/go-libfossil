@@ -33,6 +33,12 @@ func held(name string, n int) replyCheck {
 	return repoCount("SELECT count(*) FROM blob WHERE uuid='{"+name+"}' AND size>=0", n)
 }
 
+// wrongHashAborts is why the wrong-hash file cases are not sent to fossil(1):
+// xfer_accept_file records the error but still stores the content under
+// HASH, and verify_before_commit then aborts the process at commit.
+const wrongHashAborts = "fossil(1) 2.28 stores the content after the error " +
+	"and aborts at commit when verify_before_commit sees the mismatch"
+
 // serverRoundCases are Section 3: round structure, phantoms, cookies and
 // the token window.
 func serverRoundCases() []syncServerCase {
@@ -158,6 +164,34 @@ func serverCardCases() []syncServerCase {
 			"igot {U}", "{R}"},
 		want: all(completed, onlyError("malformed+file+line", "malformed file line"),
 			noCard("file {A1}"), noCard("gimme {U}")),
+	}, {
+		// A well-framed file whose content is not HASH fails the handler
+		// the same way: reset, error, and no later card is parsed.
+		Case:    Case{ID: "sync.5.2.file-wrong-hash", Req: "SP-5.2-7"},
+		notSent: wrongHashAborts,
+		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}", "file {U} {N1.size}",
+			"{N1.data}", "igot {U2}", "{R}"},
+		want: all(completed, onlyError("wrong+hash+on+received+artifact:+{U}",
+			"wrong hash on received artifact: {U}"),
+			noCard("file {A1}"), noCard("gimme {U2}"), held("U", 0)),
+	}, {
+		// §7.5: pre-storage verification applies to a reconstructable
+		// non-clone file, so a delta against a held basis is expanded and
+		// checked against HASH before it is stored.
+		Case:    Case{ID: "sync.5.2.file-delta-wrong-hash", Req: "SP-5.2-7"},
+		notSent: wrongHashAborts,
+		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}", "file {U} {A1} {DTA1.size}",
+			"{DTA1.data}", "igot {U2}", "{R}"},
+		want: all(completed, onlyError("wrong+hash+on+received+artifact:+{U}",
+			"wrong hash on received artifact: {U}"),
+			noCard("file {A1}"), noCard("gimme {U2}")),
+	}, {
+		// A HASH that is no artifact name fails the handler's validation.
+		Case: Case{ID: "sync.5.2.file-bad-name", Req: "SP-5.2-7"},
+		body: []string{"{CV}", pushCard, pullCard, "gimme {A1}", "file {Z1}0 {N1.size}",
+			"{N1.data}", "igot {U2}", "{R}"},
+		want: all(completed, onlyError("malformed+file+line", "malformed file line"),
+			noCard("file {A1}"), noCard("gimme {U2}")),
 	}, {
 		Case: Case{ID: "sync.5.2.private-surplus-server", Req: "SP-5.2-9"},
 		body: []string{"{CV}", "private extra", "{R}"},

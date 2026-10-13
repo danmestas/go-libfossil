@@ -2326,3 +2326,35 @@ func TestCloneCookieAfterCloneCard(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleCFileWrongHashEndsCards checks that a cfile whose content is not
+// its HASH fails the handler as a file does (§5.2): the reply is reset to the
+// one error and no later card is handled. fossil(1) does not check a cfile
+// before storing it, and aborts at commit instead; this server refuses it.
+func TestHandleCFileWrongHashEndsCards(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	r.DB().Exec("UPDATE user SET cap='oi' WHERE login='nobody'")
+	named := hash.SHA1([]byte("the content its name says"))
+	later := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	resp := handleReq(t, r,
+		&xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260311", "113146"}},
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.CFileCard{UUID: named, Content: []byte("other content")},
+		&xfer.IGotCard{UUID: later},
+	)
+	errs := findCards[*xfer.ErrorCard](resp)
+	want := "wrong hash on received artifact: " + named
+	if len(errs) != 1 || errs[0].Message != want {
+		t.Fatalf("errors %+v, want one %q", errs, want)
+	}
+	if n := len(findCards[*xfer.PragmaCard](resp)); n != 0 {
+		t.Fatalf("%d pragma cards survived the reset", n)
+	}
+	if n := len(findCards[*xfer.GimmeCard](resp)); n != 0 {
+		t.Fatalf("%d gimme cards: a card after the failure was handled", n)
+	}
+	if _, ok := blob.Exists(r.DB(), named); ok {
+		t.Fatal("the mismatching content was stored")
+	}
+}

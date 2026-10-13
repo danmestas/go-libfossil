@@ -1048,6 +1048,18 @@ func recordVisibility(q db.Querier, rid libfossil.FslID, vis visibility) error {
 	return nil
 }
 
+// errHashMismatch is a received artifact whose content is not its name.
+var errHashMismatch = errors.New("wrong hash: content does not match its name")
+
+// hashMatches reports whether data hashes to uuid under the algorithm its
+// length names: 40 hex digits SHA1, 64 SHA3-256.
+func hashMatches(uuid string, data []byte) bool {
+	if len(uuid) > 40 {
+		return hash.SHA3(data) == uuid
+	}
+	return hash.SHA1(data) == uuid
+}
+
 // storeResolvedContent verifies that fullContent hashes to uuid and stores
 // it. "Verify, then store resolved content" is a single cohesive unit —
 // full (non-delta) file cards always carry content that can be hashed
@@ -1059,14 +1071,8 @@ func recordVisibility(q db.Querier, rid libfossil.FslID, vis visibility) error {
 // can run AfterDephantomize once this transaction has committed; returns 0
 // when no phantom was filled (blob already real, or newly inserted).
 func storeResolvedContent(ctx context.Context, r *repo.Repo, uuid string, fullContent []byte, storedBlob []byte, vis visibility, linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
-	var computedUUID string
-	if len(uuid) > 40 {
-		computedUUID = hash.SHA3(fullContent)
-	} else {
-		computedUUID = hash.SHA1(fullContent)
-	}
-	if computedUUID != uuid {
-		return 0, fmt.Errorf("UUID mismatch for received file: expected %s, got %s", uuid, computedUUID)
+	if !hashMatches(uuid, fullContent) {
+		return 0, fmt.Errorf("received file %s: %w", uuid, errHashMismatch)
 	}
 
 	var dephantomizedRid libfossil.FslID

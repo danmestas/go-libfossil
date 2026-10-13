@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,6 +106,73 @@ func TestVerify_DetectsHashMismatch(t *testing.T) {
 	if !found {
 		t.Fatal("expected IssueHashMismatch or IssueBlobCorrupt")
 	}
+}
+
+// TestVerify_RenamedBlobIsHashMismatch stores a blob under a name its bytes do
+// not hash to. Its content expands cleanly, so the report must call it a hash
+// mismatch, not a corrupt blob (draft-fossil-repo-state-01 Section 4.4).
+func TestVerify_RenamedBlobIsHashMismatch(t *testing.T) {
+	r := newTestRepo(t)
+	_, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "a.txt", Content: []byte("good content")}},
+		Comment: "initial",
+		User:    "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	misnamed := strings.Repeat("ab", 32)
+	_, err = r.DB().Exec(`UPDATE blob SET uuid = ?
+		WHERE rid = (SELECT MAX(rid) FROM blob WHERE size >= 0)`, misnamed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iss := range report.Issues {
+		if iss.UUID == misnamed && iss.Kind == verify.IssueHashMismatch {
+			return
+		}
+	}
+	t.Fatalf("issues %+v: none is IssueHashMismatch on %s", report.Issues, misnamed)
+}
+
+// TestVerify_MisnamedBaseNotChargedToDelta renames a delta chain's base. The
+// dependent delta's bytes hash to its own name, so the mismatch is the base's
+// and the delta is only unexpandable.
+func TestVerify_MisnamedBaseNotChargedToDelta(t *testing.T) {
+	r := newTestRepo(t)
+	base := []byte(strings.Repeat("base content line\n", 40))
+	baseRid, _, err := blob.Store(r.DB(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := append(append([]byte{}, base...), []byte("one more line\n")...)
+	childRid, childUUID, err := blob.StoreDelta(r.DB(), next, baseRid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	misnamed := strings.Repeat("cd", 32)
+	if _, err := r.DB().Exec("UPDATE blob SET uuid=? WHERE rid=?", misnamed, int64(baseRid)); err != nil {
+		t.Fatal(err)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iss := range report.Issues {
+		if iss.UUID == childUUID && iss.Kind == verify.IssueHashMismatch {
+			t.Fatalf("delta %d charged with a hash mismatch: %+v", childRid, iss)
+		}
+	}
+	for _, iss := range report.Issues {
+		if iss.UUID == misnamed && iss.Kind == verify.IssueHashMismatch {
+			return
+		}
+	}
+	t.Fatalf("issues %+v: base %s not reported as a hash mismatch", report.Issues, misnamed)
 }
 
 func TestVerify_ReportsAll(t *testing.T) {

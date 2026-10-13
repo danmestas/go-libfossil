@@ -1,6 +1,7 @@
 package content
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -10,6 +11,28 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/simio"
 )
+
+// ErrHashMismatch marks an Expand that produced bytes not hashing to the name
+// the blob is stored under. The content itself expanded; it is the binding to
+// the name that failed, which a caller may need to report apart from content
+// that cannot be read at all (draft-fossil-repo-state-01 Section 4.4).
+var ErrHashMismatch = errors.New("hash mismatch")
+
+// HashMismatchError is the error behind ErrHashMismatch. RID names the blob
+// whose name the bytes failed, which is not the blob asked for when an interior
+// delta base is the misnamed one.
+type HashMismatchError struct {
+	RID            libfossil.FslID
+	Stored, Actual string
+}
+
+func (e *HashMismatchError) Error() string {
+	return fmt.Sprintf("hash mismatch for rid=%d: stored=%s computed=%s",
+		e.RID, e.Stored, e.Actual)
+}
+
+// Is makes errors.Is(err, ErrHashMismatch) hold.
+func (e *HashMismatchError) Is(target error) bool { return target == ErrHashMismatch }
 
 func Expand(q db.Querier, rid libfossil.FslID) (result []byte, err error) {
 	if q == nil {
@@ -171,7 +194,8 @@ func bindToName(q db.Querier, rid libfossil.FslID, content []byte) error {
 		computed = hash.SHA1(content)
 	}
 	if computed != uuid {
-		return fmt.Errorf("content.Expand: hash mismatch for rid=%d: stored=%s computed=%s", rid, uuid, computed)
+		return fmt.Errorf("content.Expand: %w",
+			&HashMismatchError{RID: rid, Stored: uuid, Actual: computed})
 	}
 	return nil
 }

@@ -1,8 +1,10 @@
 package verify
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -52,34 +54,9 @@ func checkBlobs(r *repo.Repo, report *Report, cache *content.Cache) error {
 
 	for _, e := range entries {
 		report.BlobsChecked++
-		rid := libfossil.FslID(e.rid)
-		data, err := cache.Expand(r.DB(), rid)
-		if err != nil {
+		if issue := checkBlob(r.DB(), cache, libfossil.FslID(e.rid), e.uuid); issue != nil {
 			report.BlobsFailed++
-			report.addIssue(Issue{
-				Kind:    IssueBlobCorrupt,
-				RID:     rid,
-				UUID:    e.uuid,
-				Table:   "blob",
-				Message: fmt.Sprintf("rid %d: expand failed: %v", e.rid, err),
-			})
-			continue
-		}
-		var computed string
-		if len(e.uuid) == 64 {
-			computed = hash.SHA3(data)
-		} else {
-			computed = hash.SHA1(data)
-		}
-		if computed != e.uuid {
-			report.BlobsFailed++
-			report.addIssue(Issue{
-				Kind:    IssueHashMismatch,
-				RID:     rid,
-				UUID:    e.uuid,
-				Table:   "blob",
-				Message: fmt.Sprintf("rid %d: hash mismatch (stored=%s computed=%s)", e.rid, e.uuid, computed),
-			})
+			report.addIssue(*issue)
 			continue
 		}
 		report.BlobsOK++
@@ -90,5 +67,44 @@ func checkBlobs(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("checkBlobs: postcondition: BlobsChecked != BlobsOK + BlobsFailed")
 	}
 
+	return nil
+}
+
+// checkBlob expands one blob and hashes it against uuid, its stored name. It
+// returns the issue found, or nil when the blob is sound.
+func checkBlob(q db.Querier, cache *content.Cache, rid libfossil.FslID, uuid string) *Issue {
+	issue := &Issue{RID: rid, UUID: uuid, Table: "blob"}
+	data, err := cache.Expand(q, rid)
+	var mismatch *content.HashMismatchError
+	if errors.As(err, &mismatch) && mismatch.RID != rid {
+		// An interior delta base is the misnamed blob; its own row reports
+		// the mismatch. This one cannot be expanded because its base failed.
+		issue.Kind = IssueBlobCorrupt
+		issue.Message = fmt.Sprintf("rid %d: expand failed: base %v", rid, err)
+		return issue
+	}
+	if errors.Is(err, content.ErrHashMismatch) {
+		// Expand binds content to its name, so a mismatch surfaces here,
+		// not at the comparison below. The content expanded; reporting it
+		// as corrupt would hide that only the name is wrong.
+		issue.Kind = IssueHashMismatch
+		issue.Message = fmt.Sprintf("rid %d: %v", rid, err)
+		return issue
+	}
+	if err != nil {
+		issue.Kind = IssueBlobCorrupt
+		issue.Message = fmt.Sprintf("rid %d: expand failed: %v", rid, err)
+		return issue
+	}
+	computed := hash.SHA1(data)
+	if len(uuid) == 64 {
+		computed = hash.SHA3(data)
+	}
+	if computed != uuid {
+		issue.Kind = IssueHashMismatch
+		issue.Message = fmt.Sprintf("rid %d: hash mismatch (stored=%s computed=%s)",
+			rid, uuid, computed)
+		return issue
+	}
 	return nil
 }

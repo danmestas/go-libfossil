@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escaped `uvfile` NAME, and sends a well-formed `uvigot` past `max-upload`),
   the cases follow the draft and record fossil's behavior. SP-9.5-4 stays
   partial: go-libfossil has no share-links mode, so no link is stored.
+- Repo-state conformance cases now cover a misnamed artifact (RS-4.4-3), the
+  default branch and the `main-branch` setting (RS-6.1-2, RS-6.1-4), the
+  active-tag rule for leaves and the checkout's branch (RS-6.4-1), a parent
+  tag that arrives before its target (RS-4.2-8), and the leaf recheck of
+  untagged check-ins (RS-7.3-3; a check-in with a parent but no branch tag is
+  still never rechecked, as in fossil, and marked a deviation, because
+  rechecking it changed the leaf table of a real fossil-authored repository).
+  Where fossil 2.28 differs (its rebuild links a misnamed artifact, and its
+  `branch current` and `leaf_check` read cancelled branch rows), the cases
+  follow the draft and record the difference. Checkout-relative names and
+  branch-type requests (RS-8.3-4, RS-8.3-12) have cases tracked in #386.
 
 ### Fixed
 
@@ -124,6 +135,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cards before it are kept. The session continues, including the mandatory
   second clone round, and then fails naming the card, as the pull path
   already does after #373 (#385).
+- The leaf table reads a check-in's branch through its active branch row
+  only (tagtype > 0), on both the crosslink sweep and the commit path, as
+  repo-state-01 Section 6.4 requires of every branch-membership test. A
+  check-in whose branch tag was cancelled with a value no longer stays a leaf
+  on that value's account. fossil 2.28's `leaf_check` reads the row unfiltered,
+  so this departs from fossil; its `is_a_leaf` and `leaf_rebuild` filter.
+- A check-in with no active branch tag is attributed to the `main-branch`
+  setting, `trunk` only when it is unset, as repo-state-01 Section 6.1
+  requires and fossil's `branch_of_rid` does. This affects `root:`, `start:`
+  and `merge-in:` resolution, `checkout.LeafAmbiguous`, and
+  `checkout.BranchLeaves("")`, which now lists the default branch.
+  `repo.MainBranch` reads the setting; an empty value counts as unset, which
+  departs from the draft and from fossil's `db_get`. The leaf table and
+  `checkout.WouldFork` apply the same default to a check-in with no active
+  branch row, where fossil's `leaf.c` uses the literal `trunk`.
+- `verify.Verify` and `verify.Rebuild` report a blob whose bytes do not hash
+  to its stored name as `IssueHashMismatch`, not `IssueBlobCorrupt`.
+  `content.Expand` checks the name itself and its error now wraps
+  `content.ErrHashMismatch`, so the report can keep the two apart, as
+  repo-state-01 Section 4.4 asks.
 - `deck.Parse` accepts every Julian-day spelling artifact-format-01 Section
   4.6.4 form 5 allows: a sign, an exponent, a leading point and a trailing
   point. Hex, `inf`, `nan` and `_` stay rejected, and the bound is now

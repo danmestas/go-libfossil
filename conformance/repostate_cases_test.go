@@ -141,7 +141,7 @@ func crosslinkCases() []rsCase {
 			"foo c3 1 t2 c3 's' @9"),
 		ignoring: []string{"+tagxref: foo c4 2 0 c1 'v' @8"},
 		rebuild:  true,
-	}, reparentCase()}
+	}, reparentCase(), reparentFirstCase()}
 }
 
 // reparentCase moves c3 from c2 to c1 with a parent tag, which leaves c2
@@ -161,6 +161,21 @@ func reparentCase() rsCase {
 		// requires.
 		incremental: "fossil's per-artifact crosslink leaves c2, the old parent, out of leaf",
 	}
+}
+
+// reparentFirstCase is reparentCase with the parent tag arriving before c3,
+// its target. Linking c3 afterwards writes c3's P-card link, c2 to c3; the
+// recorded reparent, re-applied when the batch ends, replaces it.
+func reparentFirstCase() rsCase {
+	c := reparentCase()
+	c.ID = "repostate.4.2.reparent-before-target"
+	c.arts = with(chain()[:2], control("t", 9, "+parent {c3} {c1}"), chain()[2], chain()[3])
+	// Section 4.2 re-applies a reparent at the end of the batch that
+	// recorded it. fossil's test-crosslink links each artifact on its own,
+	// so t and c3 never share a batch there; its rebuild links them in one.
+	c.incremental = "fossil's per-artifact crosslink puts t and c3 in separate batches, " +
+		"so the reparent recorded with t is not re-applied once c3 arrives"
+	return c
 }
 
 // rejectionCases are artifacts the T-card rules reject: they derive

@@ -12,13 +12,18 @@ import (
 // BranchLeaves returns the open leaf RIDs for a named branch: a leaf whose
 // active branch tag is branch and that carries no 'closed' tag, as fossil's
 // `leaves` lists them (src/leaf.c leaf_is_closed_sql). A branch with >1 open
-// leaf is forked. An empty branch name queries trunk.
+// leaf is forked. An empty branch name queries the default branch, the
+// main-branch setting (repo.MainBranch).
 func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 	if r == nil {
 		panic("checkout.BranchLeaves: r must not be nil")
 	}
 	if branch == "" {
-		branch = "trunk"
+		name, err := repo.MainBranch(r.DB())
+		if err != nil {
+			return nil, fmt.Errorf("checkout.BranchLeaves: %w", err)
+		}
+		branch = name
 	}
 	rows, err := r.DB().Query(`
 		SELECT l.rid FROM leaf l
@@ -73,7 +78,8 @@ func (c *Checkout) WouldFork() (bool, error) {
 
 // hasSameBranchChild reports whether rid has a child check-in on the same
 // branch, computed from plink as fossil's is_a_leaf (src/leaf.c) does, with
-// no branch tag meaning trunk. Reading plink rather than the leaf table keeps
+// no active branch tag meaning the main branch (Section 6.1: the
+// main-branch setting, trunk when unset). Reading plink rather than the leaf table keeps
 // the commit check correct even if the leaf table has drifted.
 func hasSameBranchChild(r *repo.Repo, rid libfossil.FslID) (bool, error) {
 	if rid <= 0 {
@@ -86,11 +92,11 @@ func hasSameBranchChild(r *repo.Repo, rid libfossil.FslID) (bool, error) {
 		  AND coalesce((SELECT tx.value FROM tagxref tx
 		                JOIN tag t ON t.tagid = tx.tagid
 		                WHERE t.tagname = 'branch' AND tx.rid = plink.pid
-		                  AND tx.tagtype > 0), 'trunk')
+		                  AND tx.tagtype > 0), `+mainBranchSQL+`)
 		    = coalesce((SELECT tx.value FROM tagxref tx
 		                JOIN tag t ON t.tagid = tx.tagid
 		                WHERE t.tagname = 'branch' AND tx.rid = plink.cid
-		                  AND tx.tagtype > 0), 'trunk')
+		                  AND tx.tagtype > 0), `+mainBranchSQL+`)
 		LIMIT 1
 	`, int64(rid)).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -101,6 +107,10 @@ func hasSameBranchChild(r *repo.Repo, rid libfossil.FslID) (bool, error) {
 	}
 	return true, nil
 }
+
+// mainBranchSQL is repo.MainBranch as an expression, for use inside a query.
+const mainBranchSQL = `coalesce(nullif((SELECT value FROM config
+		                          WHERE name = 'main-branch'), ''), 'trunk')`
 
 // LeafAmbiguous is fossil's leaf_ambiguity (src/leaf.c) and the repo-state
 // draft's Section 7.5 ambiguity test: rid must itself be an open leaf, and
@@ -162,9 +172,10 @@ func isOpenLeaf(r *repo.Repo, rid libfossil.FslID) (bool, error) {
 	return true, nil
 }
 
-// branchOf returns the branch name for the given RID, "trunk" when the
-// check-in carries no branch tag. A real query error is returned rather than
-// masked as "trunk", so LeafAmbiguous surfaces it.
+// branchOf returns the branch name for the given RID, the default branch
+// (repo.MainBranch) when the check-in carries no active branch tag. A real
+// query error is returned rather than masked as the default, so LeafAmbiguous
+// surfaces it.
 func branchOf(r *repo.Repo, rid libfossil.FslID) (string, error) {
 	var branch string
 	err := r.DB().QueryRow(`
@@ -177,7 +188,7 @@ func branchOf(r *repo.Repo, rid libfossil.FslID) (string, error) {
 		LIMIT 1
 	`, int64(rid)).Scan(&branch)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "trunk", nil // no branch tag → trunk
+		return repo.MainBranch(r.DB())
 	}
 	if err != nil {
 		return "", fmt.Errorf("checkout.branchOf: %w", err)

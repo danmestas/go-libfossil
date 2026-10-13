@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   propagating `date` tag retimed every descendant that had inherited it; only
   a tag applied directly to the check-in now sets its time. A cancelled `date`
   tag now restores the D-card time, and a value that does not parse, or parses
-  to a time outside 0 < r < 5373484.5, is ignored and keeps the D-card time,
+  (by SQLite julianday) to a time that is not positive, is ignored and keeps the D-card time,
   where go-libfossil, like fossil 2.28, stored no time or a time of 0. The
   rule lives in one place, `tag.RefreshEventTime`, which both tag application
   and crosslinking call; `event.omtime` still keeps the D-card time. This

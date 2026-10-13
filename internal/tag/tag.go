@@ -252,9 +252,9 @@ func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 
 // RefreshEventTime sets rid's event.mtime from its date tag, following
 // draft-fossil-repo-state-01 Section 4.2, step 6: the value of a date tag
-// applied directly to rid (srcid > 0), when it parses to a time in the
-// draft's Julian-day range (0 < r < 5373484.5, artifact-format-01 Section
-// 4.6.4); otherwise the D-card time kept in event.omtime. An inherited row
+// applied directly to rid (srcid > 0), when it parses (by SQLite
+// julianday, which already bounds the upper end) to a positive time;
+// otherwise the D-card time kept in event.omtime. An inherited row
 // (srcid 0, from a propagating tag on an ancestor) and a cancel set nothing.
 //
 // Both arrival orders call this, tag application after it wins its row and

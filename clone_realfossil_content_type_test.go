@@ -54,19 +54,8 @@ func TestCloneFromRealFossilUncompressedReply(t *testing.T) {
 	port := freeTCPPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	server := exec.CommandContext(ctx, bin, "server", srcRepo,
+	testutil.StartServer(t, bin, "server", srcRepo,
 		"--localhost", "--port", fmt.Sprintf("%d", port))
-	server.Stdout = os.Stderr
-	server.Stderr = os.Stderr
-	if err := server.Start(); err != nil {
-		t.Fatalf("start fossil server: %v", err)
-	}
-	// Kill signals but does not reap; wait for the exit so the server is not
-	// still writing into the temp dir when cleanup removes it.
-	defer func() {
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	}()
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	waitTCP(t, addr)

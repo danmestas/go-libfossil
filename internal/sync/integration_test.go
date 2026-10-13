@@ -35,12 +35,7 @@ func startFossilServer(t *testing.T, repoPath string) string {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	cmd := exec.Command(bin, "server", fmt.Sprintf("--port=%d", port), repoPath)
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("fossil server start: %v", err)
-	}
+	testutil.StartServer(t, bin, "server", fmt.Sprintf("--port=%d", port), repoPath)
 
 	// Wait for the server to accept connections (poll up to 5s)
 	deadline := time.Now().Add(5 * time.Second)
@@ -52,27 +47,10 @@ func startFossilServer(t *testing.T, repoPath string) string {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	cmd.Process.Kill()
-	cmd.Wait()
 	t.Fatalf("fossil server did not become ready on port %d within 5s", port)
 
 ready:
 	serverURL := fmt.Sprintf("http://127.0.0.1:%d", port)
-	// Register cleanup via t.Cleanup so it runs before TempDir removal (LIFO).
-	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-		// Remove WAL/SHM files that fossil processes leave behind,
-		// so t.TempDir() cleanup doesn't fail with "directory not empty".
-		dir := filepath.Dir(repoPath)
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			name := e.Name()
-			if strings.HasSuffix(name, "-wal") || strings.HasSuffix(name, "-shm") || strings.HasSuffix(name, "-journal") {
-				os.Remove(filepath.Join(dir, name))
-			}
-		}
-	})
 	return serverURL
 }
 

@@ -280,24 +280,8 @@ func cardSet(t *testing.T, bin, repo, uuid string) map[string]bool {
 func serveRepo(t *testing.T, bin, repo string) string {
 	t.Helper()
 	port := freeTCPPort(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	server := exec.CommandContext(ctx, bin, "server", repo,
+	testutil.StartServer(t, bin, "server", repo,
 		"--localhost", "--port", strconv.Itoa(port))
-	server.Stdout = os.Stderr
-	server.Stderr = os.Stderr
-	if err := server.Start(); err != nil {
-		t.Fatalf("start fossil server: %v", err)
-	}
-	// Kill signals but does not reap. Wait for the process to actually exit
-	// before t.TempDir()'s cleanup runs, or fossil can still be writing its
-	// -wal/-shm files while RemoveAll walks the directory -- a file appearing
-	// mid-walk fails the cleanup with "directory not empty".
-	t.Cleanup(func() {
-		_ = server.Process.Kill()
-		_ = server.Wait()
-	})
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	waitTCP(t, addr)

@@ -30,6 +30,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // countingProxy is a loopback TCP proxy that forwards one upstream and reports
@@ -231,19 +232,8 @@ func TestMeasureServeWireAmplification(t *testing.T) {
 	// glf-clone.fossil is a native fossil repo with the same content; serve it
 	// with a real fossil server and clone it back through a fresh proxy.
 	port := freePort(t)
-	controlServe := exec.CommandContext(ctx, fossilBin, "server", glfClonePath,
+	testutil.StartServer(t, fossilBin, "server", glfClonePath,
 		"--localhost", "--port", fmt.Sprintf("%d", port))
-	controlServe.Stdout = os.Stderr
-	controlServe.Stderr = os.Stderr
-	if err := controlServe.Start(); err != nil {
-		t.Fatalf("start fossil server: %v", err)
-	}
-	// Kill signals but does not reap; wait for the exit so the server is not
-	// still writing into the temp dir when cleanup removes it.
-	defer func() {
-		_ = controlServe.Process.Kill()
-		_ = controlServe.Wait()
-	}()
 	controlUpstream := fmt.Sprintf("127.0.0.1:%d", port)
 	waitPort(t, controlUpstream)
 

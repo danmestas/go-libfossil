@@ -130,6 +130,10 @@ func branchAPICases() []rsAPICase {
 			if !hasCard(d, deck.TagCancel, "sym-trunk", "") {
 				return expectf("branch root T-cards %+v lack -sym-trunk *", d.T)
 			}
+			// The new branch's own tag is never among those cancelled.
+			if hasCard(d, deck.TagCancel, "sym-feat", "") {
+				return expectf("branch root T-cards %+v cancel the new sym-feat", d.T)
+			}
 			return nil
 		},
 	}, {
@@ -272,7 +276,35 @@ func writerAPICases() []rsAPICase {
 		{Case: Case{ID: "repostate.4.6.tag-artifact", Req: "RS-4.6-1"}, arts: chain(),
 			run: tagArtifact},
 		{Case: Case{ID: "repostate.4.2.relink-unchanged", Req: "RS-4.2-7"}, run: relinkUnchanged},
+		{Case: Case{ID: dateRelinkID, Req: "RS-4.2-12"}, run: dateTagRelinked},
 	}
+}
+
+// dateRelinkID re-derives the event rows of the propagating date-tag case.
+// relink keeps the inherited date rows c3 and c4 hold; the date tag must
+// still time c2 alone (Section 4.2, step 6).
+const dateRelinkID = "repostate.4.2.date-tag-propagating-relink"
+
+// relinkedApart are the cases relinkUnchanged leaves to a case of their own.
+var relinkedApart = map[string]string{
+	"repostate.4.2.date-tag-propagating": dateRelinkID,
+}
+
+func dateTagRelinked(e *rsEnv) error {
+	for _, c := range dateTagCases() {
+		if relinkedApart[c.ID] != dateRelinkID {
+			continue
+		}
+		d, err := relinked(e, rsBuild(c.arts))
+		if err != nil {
+			return err
+		}
+		if d != "" {
+			return expectf("%s", d)
+		}
+		return nil
+	}
+	panic("conformance: no case for " + dateRelinkID)
 }
 
 // symPrefix tags c1 release: the row must be sym-release, so release
@@ -450,7 +482,8 @@ func (e *rsEnv) sameTagRows(data []byte, uuid string) error {
 func relinkUnchanged(e *rsEnv) error {
 	var problems []string
 	for _, c := range repostateCases() {
-		if c.each || c.doctor != nil || repostateGaps[c.ID] != "" {
+		skip := c.each || c.doctor != nil || repostateGaps[c.ID] != ""
+		if skip || relinkedApart[c.ID] != "" {
 			continue
 		}
 		if d, err := relinked(e, rsBuild(c.arts)); err != nil || d != "" {

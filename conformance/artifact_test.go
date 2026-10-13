@@ -9,7 +9,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
-// The artifact suite checks draft-fossil-artifact-format-00. Most of its
+// The artifact suite checks draft-fossil-artifact-format-01. Most of its
 // cases are byte strings given to deck.Parse; each is built from one of the
 // base artifacts below by a single edit, so the edit is the only thing that
 // can explain a rejection, and every one is also given to fossil(1).

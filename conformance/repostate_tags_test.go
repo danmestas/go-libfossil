@@ -109,9 +109,8 @@ func propagationCases() []rsCase {
 			[]string{"foo c1 2 t1 c1 'a' @8", "foo c2 2 t2 c2 'b' @9",
 				"foo c3 2 0 c1 'a' @9", "foo c4 2 0 c1 'a' @9"},
 			"-tagxref: foo c3 2 0 c1 'a' @9", "+tagxref: foo c3 2 0 c2 'b' @9"),
-		// Erratum repo-state-00-s5.4-cancel-halt (Reported): a cancel walk
-		// halts at c3, which has no foo row, so c4 keeps its row. fossil
-		// 2.28 does so; the draft text would walk on and delete it.
+		// Section 5.4, step 3: a cancel walk halts at c3, which has no foo
+		// row, so c4 keeps its row, as in fossil 2.28.
 		doctored("repostate.5.4.cancel-rowless", "RS-5.4-4",
 			[]rsArt{fooFromC1(), control("x", 20, "-foo {c1}")},
 			"DELETE FROM tagxref", "c3")(

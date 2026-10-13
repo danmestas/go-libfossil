@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The repository-state suite checks draft-fossil-repo-state-00. Most of its
+// The repository-state suite checks draft-fossil-repo-state-01. Most of its
 // cases are a scripted sequence of artifacts and the derived rows the draft
 // says loading it produces. Every case is also loaded into fossil(1), whose
 // rows must equal the expectation, so an expectation cannot drift from

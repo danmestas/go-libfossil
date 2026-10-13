@@ -64,13 +64,12 @@ var framingCases = []artifactCase{
 	rejected("artifact.4.1.guard", "AF-4.1-2", "# inert fixture\n"+baseManifest),
 	says(raw("artifact.4.2.residual", "AF-4.1-3", signedControl+"garbage\n", false),
 		"extra characters at end of card"),
-	// Erratum 4.1.2 says the residue rule rejects a sterilized artifact, but
-	// fossil reads the trailing marker as a '#' card and rejects it for
-	// card order, after the Z card; the cases follow fossil.
-	says(raw("artifact.4.1.2.sterilized", "AF-4.4-1", string(withZ(baseManifest))+
+	// Section 4.1.2: the marker follows the final card, so the card loop
+	// reads it as a '#' card and rejects it for card order, after the Z card.
+	says(raw("artifact.4.1.2.sterilized", "AF-4.1.2-1", string(withZ(baseManifest))+
 		"# Remove this line to create a well-formed Fossil manifest.\n", false),
 		"cards not in lexicographical order"),
-	says(raw("artifact.4.1.2.signed-guard", "AF-4.4-1", pgpHead+signedControl+
+	says(raw("artifact.4.1.2.signed-guard", "AF-4.1.2-1", pgpHead+signedControl+
 		"# Remove this line to create a well-formed Fossil control artifact.\n"+pgpSig, false),
 		"cards not in lexicographical order"),
 }
@@ -126,9 +125,9 @@ var grammarCases = []artifactCase{
 		func(d *deck.Deck) error { return want("U", *d.U, "alice\r") }),
 	rejected("artifact.4.2.double-space", "AF-4.2-3",
 		edit(baseManifest, "F a.txt "+h1, "F a.txt  "+h1)),
-	// Erratum 4.2: a line ending in a space carries a present, empty last
+	// Section 4.2: a line ending in a space carries a present, empty last
 	// token, which the C, J, N and T cards keep as an empty value.
-	accepted("artifact.4.7.c-empty", "AF-4.2-3",
+	accepted("artifact.4.7.c-empty", "AF-4.7.4-2",
 		edit(baseManifest, "C base\\smanifest\n", "C \n"),
 		func(d *deck.Deck) error { return want("C", d.C, "") }),
 	loose("artifact.4.7.j-empty-value", "AF-4.2-3",
@@ -383,6 +382,19 @@ var reservedCases = func() []artifactCase {
 		loose("artifact.4.6.3.drop-not-anchor", "AF-4.6.3-3",
 			edit(baseManifest, "F b/c.txt", "F c/_FOSSIL_ "+h8+"\nF b/c.txt"),
 			fileNames("a.txt", "b/c.txt", "d.txt")),
+		// The C card makes it a manifest; the dropped F card adds no file.
+		loose("artifact.4.6.3.drop-only-file", "AF-4.6.3-4",
+			"C only\\sreserved\nD "+ts+"\nF _FOSSIL_ "+h1+"\nU alice\n",
+			func(d *deck.Deck) error {
+				if err := wantType(deck.Checkin)(d); err != nil {
+					return err
+				}
+				return want("F count", len(d.F), 0)
+			}),
+		// No C or P card: the dropped F card sets no type, so the artifact
+		// is a control artifact, which may not carry an F card.
+		rejected("artifact.5.3.dropped-f-control", "AF-5.3-3",
+			"D "+ts+"\nF _FOSSIL_ "+h1+"\nU alice\n"),
 	)
 }()
 
@@ -403,6 +415,16 @@ func timestampCases() []artifactCase {
 		{"no-calendar-check", "2024-02-31T03:04:05", "2024-03-02T03:04:05.000"},
 		{"after-epoch", "-4713-11-25T00:00:00", "-4713-11-25T00:00:00.000"},
 	}
+	// Julian day numbers (Section 4.6.4, form 5); 2461042.5 is
+	// 2026-01-02T00:00:00.
+	julian := []struct{ slug, token, instant string }{
+		{"julian-fraction", "2461042.5", "2026-01-02T00:00:00.000"},
+		{"julian-plus-sign", "+2461042.5", "2026-01-02T00:00:00.000"},
+		{"julian-exponent", "2.4610425e6", "2026-01-02T00:00:00.000"},
+		{"julian-exponent-upper", "24610425E-1", "2026-01-02T00:00:00.000"},
+		{"julian-leading-point", ".5", "-4713-11-25T00:00:00.000"},
+		{"julian-trailing-point", "2461042.", "2026-01-01T12:00:00.000"},
+	}
 	bad := []struct{ slug, req, token string }{
 		{"lowercase-t", "AF-4.6.4-3", "2026-01-02t03:04:05"},
 		{"invalid-month", "AF-4.6.4-4", "2026-13-02T03:04:05"},
@@ -416,9 +438,22 @@ func timestampCases() []artifactCase {
 		{"five-digit-year", "AF-4.6.4-4", "20260-01-02T03:04:05"},
 		{"one-digit-month", "AF-4.6.4-4", "2026-1-02T03:04:05"},
 		{"epoch", "AF-4.6.4-5", "-4713-11-24T12:00:00"},
-		{"zero-julian", "AF-4.6.4-5", "0"},
+		{"zero-julian", "AF-4.6.4-7", "0"},
+		{"negative-julian", "AF-4.6.4-7", "-1"},
+		{"julian-upper-bound", "AF-4.6.4-7", "5373484.5"},
+		{"julian-rounds-up-to-bound", "AF-4.6.4-7", "5373484.4999999999"},
+		{"julian-rounds-to-zero", "AF-4.6.4-7", "1e-10"},
+		{"julian-hex", "AF-4.6.4-6", "0x258000"},
+		{"julian-inf", "AF-4.6.4-6", "inf"},
+		{"julian-nan", "AF-4.6.4-6", "nan"},
 	}
 	var cases []artifactCase
+	for _, g := range julian {
+		cases = append(cases, loose("artifact.4.6.4."+g.slug, "AF-4.6.4-6",
+			edit(baseManifest, "D "+ts, "D "+g.token), func(d *deck.Deck) error {
+				return want("D", d.D.UTC().Format("2006-01-02T15:04:05.000"), g.instant)
+			}))
+	}
 	for _, g := range good {
 		cases = append(cases, loose("artifact.4.6.4."+g.slug, "AF-4.6.4-2",
 			edit(baseManifest, "D "+ts, "D "+g.token), func(d *deck.Deck) error {
@@ -479,6 +514,8 @@ var cardCases = []artifactCase{
 	accepted("artifact.4.7.2.a-no-source", "AF-4.7.2-3",
 		edit(baseAttachment, "A report.txt "+h1+" "+h2, "A report.txt "+h1),
 		cardIs("A.Source", func(d *deck.Deck) string { return d.A.Source }, "")),
+	rejected("artifact.4.7.2.a-empty-source", "AF-4.7.2-3",
+		edit(baseAttachment, "A report.txt "+h1+" "+h2, "A report.txt "+h1+" ")),
 	rejected("artifact.4.7.c-missing", "AF-4.7.4-1",
 		edit(baseAttachment, "C attached\\sa\\sreport\n", "C\n")),
 	rejected("artifact.4.7.5.e-one-token", "AF-4.7.5-1",

@@ -1,8 +1,9 @@
-# Requirements for draft-fossil-repo-state-00, written from the draft text.
-# Erratum 5.4 (cancel halt) is Reported, not accepted; fossil(1) 2.28 behaves as it says,
-# so RS-5.4-4 follows the erratum.
-# draft	draft-fossil-repo-state-00.txt	5428c83209ac09f4b86e908e0a3707d8940ccc91feb944b0cec4f02914084c1d
-# erratum	repo-state-00-s5.4-cancel-halt.md	73a8c01f4a36c00fae2c50ad73dc46bde66aee280607dbbb9827cc9ebf577368
+# Requirements for draft-fossil-repo-state-01, written from the draft text.
+# The -01 errata are applied in the draft; they are pinned for the fossil(1) 2.28
+# behavior they record, which RS-4.2-13 and RS-4.2-14 depart from.
+# draft	draft-fossil-repo-state-01.txt	028d6bd0c5a9842569e43f71449e40fb582a062b3d22ecab275f07ab8195a484
+# erratum	repo-state-01-s4.2-date-tag-event-time.md	e55108ed39857f4212c2e0ff4afac867fc42d3b762db58c269790200a33b24cf
+# erratum	repo-state-01-s6.2-cancel-cards-from-parent.md	3d24910396abea9e6a162d2578ef58fc033f664fa1a4f778204bf2a1844029aa
 #
 # id	section	requirement	scope
 RS-2-1	2	An operation that tags a check-in with a user-supplied symbolic name stores it as "sym-" + name unless the caller asks for the raw name.
@@ -22,9 +23,17 @@ RS-4.2-2	4.2	A P-card parent not yet stored yields a phantom rid and a linkage r
 RS-4.2-3	4.2	T-cards are applied only from control, check-in and technote (event) artifacts.
 RS-4.2-4	4.2	Crosslinking a cluster applies an implicit singleton "cluster" tag to the cluster itself.
 RS-4.2-5	4.2	After a check-in with a resolved primary parent is crosslinked, the parent's tags are re-propagated, so the new check-in inherits them.
-RS-4.2-6	4.2	A propagating or cancel T-card applied to a resolved target runs the propagation walk from that target; a singleton runs none.
+RS-4.2-6	4.2	A T-card of any type applied to a resolved target runs the propagation walk from that target; a singleton enters it as a cancel, removing the same-named tag the descendants inherited.
 RS-4.2-7	4.2	Crosslinking an artifact again creates no additional linkage or event rows and leaves derived state unchanged.
 RS-4.2-8	4.2	Singleton reparent operations recorded during a crosslink batch are re-applied when the batch ends.	batching is optional; only the end state of a batch that holds a parent tag is checked
+RS-4.2-9	4.2	A date tag applied to a crosslinked check-in sets its stored event time to the tag's value, which otherwise is the D-card time.
+RS-4.2-10	4.2	A date tag that arrives before its check-in sets the event time when the check-in is crosslinked.
+RS-4.2-11	4.2	A newer date tag replaces an older one, so the newest date tag's value orders the check-in.
+# RS-4.2-12 is FAILING: Tracked in #372.
+RS-4.2-12	4.2	A date tag of any type sets the time of its target only; a propagating date tag does not retime descendants.
+RS-4.2-13	4.2	Cancelling the date tag restores the D-card time.
+RS-4.2-14	4.2	A date tag whose value does not parse, or parses to a time that is not positive, is ignored, leaving the D-card time.
+RS-4.2-15	4.2	The D-card timestamp is retained separately as the original time.
 RS-4.3-1	4.3	No tag, propagation or linkage effect is applied on behalf of a manifest that fails the T-card checks.
 RS-4.4-1	4.4	An artifact that hashes to its name but is not classifiable does not make state assembly fail.
 RS-4.4-2	4.4	An unclassifiable artifact contributes no linkage, tag or branch effect.
@@ -40,7 +49,7 @@ RS-5.3-4	5.3	A singleton is propagated as a cancel: it removes the inherited sam
 RS-5.4-1	5.4	Propagation follows primary-parent links only and never crosses a merge link.
 RS-5.4-2	5.4	Re-propagating a parent's full tag set treats its singleton rows as cancels.
 RS-5.4-3	5.4	A child with a same-tag row qualifies only when that row has srcid 0 and an mtime strictly earlier than the propagating tag's; an equal mtime keeps the row.
-RS-5.4-4	5.4	A child with no same-tag row qualifies for a propagating walk but halts a cancel walk (erratum 5.4).
+RS-5.4-4	5.4	A child with no same-tag row qualifies for a propagating walk; a cancel walk does not qualify there and does not continue past it.
 RS-5.4-5	5.4	A qualifying child of a propagating walk gets tagtype 2, srcid 0, the origin's origid, value and mtime.
 RS-5.4-6	5.4	A qualifying child of a cancel walk has its same-tag row deleted.
 RS-5.4-7	5.4	Every child updated by the walk is itself walked, so the effect reaches all qualifying primary descendants.
@@ -52,7 +61,7 @@ RS-6.1-2	6.1	A check-in with no active branch tag is attributed to the default b
 RS-6.1-3	6.1	Creating a branch, including the default branch of a new repository, creates its sym-<branch> tag, propagating like its branch tag.
 RS-6.1-4	6.1	The default branch is the main-branch setting, and trunk only when that setting is unset.
 RS-6.2-1	6.2	Branch creation writes a propagating branch tag with the name as value and a propagating sym-<name> tag on the branch-root check-in.
-RS-6.2-2	6.2	Branch creation cancels every other sym-* tag active on the branch root.
+RS-6.2-2	6.2	Branch creation emits a cancel card on the root for every propagating sym-* tag active on the parent other than the new branch's own.
 RS-6.2-3	6.2	Branch creation fails, before writing anything, when an open branch already has the name.
 RS-6.3-1	6.3	The branch list has one entry per distinct active branch-tag value, with that value's greatest event.mtime and check-in count.
 RS-6.3-2	6.3	A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.
@@ -60,7 +69,7 @@ RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 
 RS-7.2-1	7.2	A check-in is a leaf exactly when no plink child of it, primary or merge, is on the same branch.
 RS-7.3-1	7.3	A full leaf recomputation selects every check-in without a same-branch child, including parentless ones.	disagreement with fossil(1); see cases
 RS-7.3-2	7.3	An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.
-RS-7.3-3	7.3	A new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.
+RS-7.3-3	7.3	Crosslinking a check-in, a new plink edge, or a branch tag applied or propagated, rechecks the check-in and each of its parents.	the crosslink trigger for a parentless check-in with no branch tag is the RS-7.3-1 deviation
 RS-7.3-4	7.3	Scheduled leaf rechecks have all been applied before the leaf table is read.
 RS-7.4-1	7.4	An open leaf is a leaf without a closed tag row of tagtype greater than 0.
 RS-7.5-1	7.5	A branch's open leaves are its leaf-table members that are not closed and share its branch.
@@ -82,7 +91,7 @@ RS-8.3-7	8.3	"merge-in:BR" resolves to the most recent merge-in point of BR from
 RS-8.3-8	8.3	Date forms and NAME:TIMESTAMP resolve to the latest eligible event with mtime at or below the expanded upper bound.
 RS-8.3-9	8.3	A hexadecimal name of 4 or more digits is tried as a hash prefix before the plain-name rule.
 RS-8.3-10	8.3	A hash prefix matching more than one artifact is rejected as ambiguous.
-RS-8.3-11	8.3	A name that matches nothing and ends in one punctuation character is retried without it.
+RS-8.3-11	8.3	A name that matches nothing is retried without one trailing . _ ) > ! ? or , when longer than four characters, or without two when longer than five; three or more are never stripped.
 RS-8.3-12	8.3	A branch-type request resolves to the first check-in of the branch the name resolves into.
 RS-8.5-1	8.5	Name resolution and open-leaf enumeration stay distinct: a newer closed sym carrier wins resolution while the leaf view omits it.
 RS-9-1	9	The current trunk is the main-branch setting's name resolved by the plain-name rule.

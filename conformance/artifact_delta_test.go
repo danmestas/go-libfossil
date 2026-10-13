@@ -99,13 +99,23 @@ func deltaManifestCases() []apiCase {
 				_, uuid := storeArtifact(t, r, baseControl)
 				return uuid
 			})},
-		{Case{ID: "artifact.4.7.3.delta-baseline-invalid", Req: "AF-4.7.3-1"},
-			deltaFails(func(t *testing.T, r *repo.Repo) string {
+		// Section 4.7.3 (-01): a delta naming a delta is accepted, and its
+		// file set is built from the named delta's own F cards only, so
+		// b.txt and c.txt, which that delta inherits, are absent.
+		{Case{ID: "artifact.4.7.3.delta-of-delta-one-level", Req: "AF-4.7.3-1"},
+			func(t *testing.T) error {
+				r := newPolicyRepo(t, "2")
 				_, baseline := storeArtifact(t, r, deltaBaseline)
-				_, uuid := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+
+				_, first := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+
 					"\nF a.txt "+h4+"\nU u\n")
-				return uuid
-			})},
+				rid, _ := storeArtifact(t, r, "B "+first+"\nC second\nD "+ts+
+					"\nF d.txt "+h5+"\nU u\n")
+				set, err := fileSet(r, rid)
+				if err != nil {
+					return err
+				}
+				return want("file set", set, []string{"a.txt=" + h4, "d.txt=" + h5})
+			}},
 	}
 }
 
@@ -113,6 +123,9 @@ func deltaManifestCases() []apiCase {
 // way ListFiles does: the delta gets no mlink rows, where a valid baseline
 // gives it the baseline's files. The files exist, so a refusal cannot be
 // mistaken for a check-in deferred on a missing blob.
+// draft-fossil-artifact-format-01 Section 4.7.3 has a reader accept a delta
+// manifest as the target; the "delta manifest" row records today's refusal
+// and changes when the artifact.4.7.3.delta-of-delta-one-level gap is fixed.
 func TestCrosslinkBaselineMustBeManifest(t *testing.T) {
 	tests := []struct {
 		name     string

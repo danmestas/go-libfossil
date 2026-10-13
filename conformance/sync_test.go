@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// The sync suite checks draft-fossil-sync-protocol-00. It drives the real
+// The sync suite checks draft-fossil-sync-protocol-01. It drives the real
 // code end to end, with nothing mocked but the far end of the wire:
 //
 //   - a server case is raw request bytes sent to Repo.XferHandler, and the

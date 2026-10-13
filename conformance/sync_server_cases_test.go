@@ -130,7 +130,7 @@ func syncServerCases() []syncServerCase {
 		serverAuthCases(), serverLoginCases(), serverContentCases(), serverUVCases(),
 		serverUVGimmeCases(), serverCloneCases(), serverDirectionCases(), serverPragmaCases(),
 		serverConfigCases(), serverVersionCases(), serverGateCases(), serverAdmissionCases(),
-		serverCookieRefusalCases(), serverPragmaMoreCases(),
+		serverCookieRefusalCases(), serverPragmaMoreCases(), serverRefusalCases(),
 	} {
 		all = append(all, group...)
 	}

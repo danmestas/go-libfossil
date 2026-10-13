@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The conformance suite now checks the -01 drafts of the artifact-format,
+  repo-state and sync-protocol specifications (the delta format stays on -00;
+  there is no -01). The -00 errata are folded into -01 and no longer pinned;
+  the six -01 errata are pinned for the fossil 2.28 behavior they record.
+  `conformance/rfcs/README.md` records the zit check-in each copy came from.
+  New cases cover the date tag's event time, the Julian-day grammar, a
+  delta manifest naming a delta, dropped reserved F cards, the
+  trailing-punctuation retry, truncated payloads, `errors N`, refused pushes
+  and the private-content gimme answer. No library behavior changes. Where
+  -01 departs from fossil 2.28, the cases follow the draft: a cancelled,
+  unparsable or `0` date tag keeps the D-card time under repo-state-01 §4.2
+  step 6, where go-libfossil, like fossil, stores no time or a time of 0;
+  those cases are marked as deviations. The draft non-conformances the
+  re-pin exposes are tracked in #370, #371, #372, #373, #374 and #375.
+
 ### Fixed
 
 - Tests that run `fossil server` no longer flake with "directory not empty"

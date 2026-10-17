@@ -30,7 +30,7 @@ func (d *Deck) Marshal() ([]byte, error) {
 }
 
 // marshalCards writes all cards to the builder in strict ASCII order
-// (A B C D E F G H I J K L M N P Q R T U W Z), in contiguous groups so each
+// (A B C D E F G H I J K L M N P Q R S T U W Z), in contiguous groups so each
 // writer stays small.
 func marshalCards(b *strings.Builder, d *Deck) {
 	if b == nil {
@@ -43,6 +43,7 @@ func marshalCards(b *strings.Builder, d *Deck) {
 	marshalCardF(b, d)
 	marshalCardsGHIJKL(b, d)
 	marshalCardsMNPQR(b, d)
+	marshalCardS(b, d)
 	marshalCardsTUW(b, d)
 }
 
@@ -206,6 +207,22 @@ func marshalCardsMNPQR(b *strings.Builder, d *Deck) {
 		// §6.3.4: the checksum is always rendered lowercase, though the
 		// parse grammar is case-insensitive.
 		fmt.Fprintf(b, "R %s\n", strings.ToLower(d.R))
+	}
+}
+
+// marshalCardS writes the S cards of a tree manifest or interior sub-manifest
+// (draft-fossil-submanifests-00 §3.6), sorted by decoded filename. Only a
+// parsed deck carries them: no writer in this library builds a tree, so this
+// exists to keep a parsed tree's Marshal a faithful round trip.
+func marshalCardS(b *strings.Builder, d *Deck) {
+	if len(d.S) == 0 {
+		return
+	}
+	sorted := make([]SubmanifestCard, len(d.S))
+	copy(sorted, d.S)
+	sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
+	for _, sc := range sorted {
+		fmt.Fprintf(b, "S %s %s\n", FossilEncode(sc.Name), sc.UUID)
 	}
 }
 

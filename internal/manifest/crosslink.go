@@ -99,7 +99,16 @@ func ensureForumPostTable(q db.Querier) error {
 // nonArtifactTable records blobs a sweep has already expanded and found to
 // hold no Fossil artifact at all -- ordinary file content, which is most of
 // any repository. See ensureNonArtifactTable.
-const nonArtifactTable = "crosslink_nonartifact"
+//
+// The name carries a version because the table's verdicts are only as good as
+// the parser that reached them. Revision 2 is the parser that reads S cards
+// and sub-manifests (draft-fossil-submanifests-00): a repository whose
+// earlier sweeps filed a tree manifest or sub-manifest here as unparseable
+// must examine it again, so revision 1's table is dropped rather than read.
+const nonArtifactTable = "crosslink_nonartifact_v2"
+
+// supersededNonArtifactTables are the earlier revisions of nonArtifactTable.
+var supersededNonArtifactTables = []string{"crosslink_nonartifact"}
 
 // ensureNonArtifactTable creates the sweep's already-examined set.
 //
@@ -128,6 +137,11 @@ const nonArtifactTable = "crosslink_nonartifact"
 func ensureNonArtifactTable(q db.Querier) error {
 	if q == nil {
 		panic("manifest.ensureNonArtifactTable: q must not be nil")
+	}
+	for _, old := range supersededNonArtifactTables {
+		if _, err := q.Exec("DROP TABLE IF EXISTS " + old); err != nil {
+			return fmt.Errorf("drop %s table: %w", old, err)
+		}
 	}
 	if _, err := q.Exec(
 		"CREATE TABLE IF NOT EXISTS " + nonArtifactTable + "(rid INTEGER PRIMARY KEY)",
@@ -553,11 +567,13 @@ func newLinkState(cacheBytes int64) *linkState {
 	if cacheBytes <= 0 {
 		panic("manifest.newLinkState: cacheBytes must be > 0")
 	}
-	return &linkState{
+	st := &linkState{
 		cache:  content.NewCache(cacheBytes),
 		guard:  newCheckinDeferralGuard(),
 		leaves: leaf.NewPending(),
 	}
+	st.guard.cache = st.cache
+	return st
 }
 
 // linkCandidatesInOrder expands and crosslinks every candidate in delta-chain
@@ -626,6 +642,9 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			// expand this blob again (see ensureNonArtifactTable).
 			batchNonArtifact = append(batchNonArtifact, c.rid)
 			continue
+		}
+		if err := noteTreeReferences(tx, c.rid, d); err != nil {
+			return err
 		}
 		if !isArtifact(d) {
 			// The card grammar was satisfied but the artifact grammar was not.
@@ -708,9 +727,84 @@ func isArtifact(d *deck.Deck) bool {
 		return !d.D.IsZero() && d.E != nil && d.W != nil && technoteTagsSelf(d)
 	case deck.ForumPost:
 		return !d.D.IsZero() && d.U != nil && d.W != nil
+	case deck.Submanifest:
+		// A sub-manifest is an artifact with no crosslink effect of its own
+		// (draft-fossil-submanifests-00 §7.3): it feeds repository state only
+		// through the trees that contain it. Answering false files it with the
+		// examined blobs, the explicit completion marker §9.2 requires, so a
+		// sweep that finds work by the absence of derived rows never selects
+		// it again. noteTreeReferences has already done what its arrival owes.
+		return false
 	default:
 		return !d.D.IsZero()
 	}
+}
+
+// noteTreeReferences does what storing an S-bearing artifact owes the
+// repository, whatever path parsed it (sweep, receive linker or cascade): it
+// sets the seen-submanifest indicator of draft-fossil-submanifests-00 §8.1,
+// which arms the transfer gate of §7.2, and reserves a phantom for every S
+// reference that has not arrived, with the referring artifact's privacy
+// (§7.1), so the next sync round asks for it and a tree of depth d converges
+// in d+1 rounds.
+func noteTreeReferences(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+	if tx == nil {
+		panic("manifest.noteTreeReferences: tx must not be nil")
+	}
+	if len(d.S) == 0 && d.Type != deck.Submanifest {
+		return nil
+	}
+	if err := MarkSeenSubmanifest(tx); err != nil {
+		return err
+	}
+	private := content.IsPrivate(tx, int64(rid))
+	for _, sc := range d.S {
+		if _, ok := blob.Exists(tx, sc.UUID); ok {
+			continue
+		}
+		phantom, err := blob.StorePhantom(tx, sc.UUID)
+		if err != nil {
+			return fmt.Errorf("phantom for S reference %s: %w", sc.UUID, err)
+		}
+		if !private {
+			continue
+		}
+		if err := content.MakePrivate(tx, int64(phantom)); err != nil {
+			return fmt.Errorf("private phantom for S reference %s: %w", sc.UUID, err)
+		}
+	}
+	return nil
+}
+
+// SeenSubmanifestSetting is the local indicator of
+// draft-fossil-submanifests-00 §8.1: set once the repository has stored an
+// S-bearing artifact, and never cleared, since such an artifact cannot be
+// retired. It is not a /project setting and never syncs.
+const SeenSubmanifestSetting = "seen-submanifest"
+
+// MarkSeenSubmanifest sets the seen-submanifest indicator.
+func MarkSeenSubmanifest(q db.Querier) error {
+	if _, err := q.Exec(
+		"INSERT OR IGNORE INTO config(name, value, mtime) VALUES(?, '1', strftime('%s','now'))",
+		SeenSubmanifestSetting,
+	); err != nil {
+		return fmt.Errorf("seen-submanifest: %w", err)
+	}
+	return nil
+}
+
+// SeenSubmanifest reports whether the repository has stored an S-bearing
+// artifact (MarkSeenSubmanifest).
+func SeenSubmanifest(q db.Querier) (bool, error) {
+	var one int
+	err := q.QueryRow("SELECT 1 FROM config WHERE name=?", SeenSubmanifestSetting).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("seen-submanifest: %w", err)
+	}
+	return true, nil
 }
 
 // hasSelfTag reports whether any T-card names the artifact carrying it.
@@ -784,6 +878,9 @@ func linkArtifact(
 // rid, so a later sweep still sees it as undiscovered. See shouldDefer.
 type checkinDeferralGuard struct {
 	avail *content.AvailabilityCache
+	// cache expands the sub-manifests a tree's walk reads; it is the owning
+	// sweep's or cascade's content cache, or nil, which expands directly.
+	cache *content.Cache
 	// checkinBaselines memoizes baselines verified to be check-in manifests.
 	checkinBaselines map[string]bool
 	// awaitFiles makes the guard also wait on a check-in's files
@@ -825,7 +922,7 @@ func (g *checkinDeferralGuard) shouldDefer(
 	if g.awaitFiles {
 		missing = missingCheckinRefs(tx, d, g)
 	} else {
-		missing = missingBaseline(tx, d, g)
+		missing = missingFileSet(tx, d, g)
 	}
 	if len(missing) == 0 {
 		return false, nil
@@ -843,8 +940,8 @@ func (g *checkinDeferralGuard) recordDeferred(
 	if len(missing) == 0 {
 		panic("manifest.recordDeferred: missing must not be empty")
 	}
-	if d.B != "" && missing[0] == d.B {
-		if err := recordBaselineGap(tx, rid, d.B); err != nil {
+	if gap := g.gapOf(tx, d, missing); gap != "" {
+		if err := recordBaselineGap(tx, rid, gap); err != nil {
 			return fmt.Errorf("manifest.%s defer rid=%d: %w", source, rid, err)
 		}
 	}
@@ -862,6 +959,20 @@ func (g *checkinDeferralGuard) recordDeferred(
 		"missing_count", len(missing),
 		"first_missing", missing[0])
 	return nil
+}
+
+// gapOf returns the reference among missing that gets a gap record: the
+// baseline, or the sub-manifest that blocks the check-in's tree. Either one,
+// when absent, is missing[0] (missingFileSet runs first). A waited-on file
+// gets none: it is not a gap in the artifact, only content not yet arrived.
+func (g *checkinDeferralGuard) gapOf(tx *db.Tx, d *deck.Deck, missing []string) string {
+	if d.B != "" && missing[0] == d.B {
+		return d.B
+	}
+	if gap := g.treeGap(tx, d); gap != "" && gap == missing[0] {
+		return gap
+	}
+	return ""
 }
 
 // recordMissingBlobSample retains only the lexicographically smallest distinct
@@ -1123,6 +1234,50 @@ func missingBaseline(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string 
 	return nil
 }
 
+// missingFileSet is missingBaseline widened to the third deferred-edge kind of
+// draft-fossil-submanifests-00 §9.4: a check-in whose tree -- its own, or its
+// baseline's for a delta over a tree -- cannot be enumerated waits on the
+// sub-manifest that blocks the walk, exactly as a delta waits on its baseline.
+// §5.2 forbids presenting a partial file set, so a sweep defers on it too.
+func missingFileSet(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
+	if missing := missingBaseline(tx, d, g); len(missing) > 0 {
+		return missing
+	}
+	if gap := g.treeGap(tx, d); gap != "" {
+		return []string{gap}
+	}
+	return nil
+}
+
+// treeGap returns the sub-manifest reference that stops check-in d's tree
+// from enumerating, or "" when it enumerates or d has no tree. A missing
+// sub-manifest is the usual answer; a reference that breaks a rule of §5.1 is
+// returned too, as a baseline that is no check-in is by missingBaseline: the
+// check-in waits on bytes that will never make it valid, and is never linked
+// with a partial file set. Its baseline, when it has one, must be available.
+func (g *checkinDeferralGuard) treeGap(tx *db.Tx, d *deck.Deck) string {
+	tree := d
+	if d.B != "" {
+		baseDeck, err := loadBaseline(tx, g.cache, d)
+		if err != nil {
+			return d.B
+		}
+		tree = baseDeck
+	}
+	if !isTree(tree) {
+		return ""
+	}
+	_, err := walkTree(tx, g.cache, tree)
+	if err == nil {
+		return ""
+	}
+	var treeErr *SubmanifestError
+	if errors.As(err, &treeErr) {
+		return treeErr.UUID
+	}
+	return tree.S[0].UUID
+}
+
 // baselineIsCheckin reports whether the available artifact uuid parses as a
 // check-in manifest. fossil's fetch_baseline asks manifest_get(rid,
 // CFTYPE_MANIFEST), which fails for a stored artifact of another type just as
@@ -1164,14 +1319,27 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
 func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
-	missing := missingBaseline(tx, d, g)
+	missing := missingFileSet(tx, d, g)
 	if len(d.P) > 0 {
 		if _, ok := g.avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
 		}
 	}
-	seen := make(map[string]struct{}, len(d.F))
-	for _, f := range d.F {
+	files := d.F
+	if isTree(d) {
+		// A tree's files are known only once it enumerates; until then the
+		// sub-manifest it waits on is all there is to wait for.
+		if len(missing) > 0 {
+			return missing
+		}
+		walked, err := walkTree(tx, g.cache, d)
+		if err != nil {
+			return missing
+		}
+		files = walked
+	}
+	seen := make(map[string]struct{}, len(files))
+	for _, f := range files {
 		if f.UUID == "" { // a deleted file in a delta manifest
 			continue
 		}

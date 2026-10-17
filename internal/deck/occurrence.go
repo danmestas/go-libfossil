@@ -27,7 +27,8 @@ func Compare(a, b string) int {
 
 // singleOccurrence marks, by letter offset from 'A', the 14 card types of
 // §4.5.1 whose duplicate MUST be rejected. F, J, M, T, P and Q are
-// repeatable and each occurrence appends. The Z card belongs to neither
+// repeatable and each occurrence appends, as is S
+// (draft-fossil-submanifests-00 §3.4). The Z card belongs to neither
 // class: it has no duplicate guard, because §4.5.1 derives "exactly one Z,
 // last" from the checksum framing rather than from a card rule, and an
 // earlier Z line is simply content covered by the final checksum.
@@ -76,7 +77,8 @@ func tagOrderKey(t TagCard) string {
 }
 
 // requireAscending enforces the single-key strictly-ascending intra-run
-// rule of §4.5.2 for the F, J and M card lists: equal or descending
+// rule of §4.5.2 for the F, J and M card lists, and for the S card list of
+// draft-fossil-submanifests-00 §3.4: equal or descending
 // neighbours are rejected. The key is always the parser's decoded form,
 // which for F is the post-decode filename rather than the raw wire token.
 func requireAscending(card byte, previous, current string) error {

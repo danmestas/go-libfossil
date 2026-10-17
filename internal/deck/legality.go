@@ -15,7 +15,7 @@ type cardTable struct {
 // masks are built from the §5.2 Table 4 letter sets.
 var cardTables = func() map[ArtifactType]cardTable {
 	rows := map[ArtifactType][2]string{
-		Checkin:    {"BCDFNPQRTUZ", "DZ"},
+		Checkin:    {"BCDFNPQRSTUZ", "DZ"},
 		Wiki:       {"CDLNPUWZ", "DLUWZ"},
 		Ticket:     {"DJKUZ", "DJKUZ"},
 		Event:      {"CDENPTUWZ", "DEWZ"},
@@ -23,6 +23,8 @@ var cardTables = func() map[ArtifactType]cardTable {
 		ForumPost:  {"DGHINPUWZ", "DUWZ"},
 		Attachment: {"ACDNUZ", "ADZ"},
 		Control:    {"DTUZ", "DTUZ"},
+		// draft-fossil-submanifests-00 §4.2, Table 1.
+		Submanifest: {"FSZ", "Z"},
 	}
 	tables := make(map[ArtifactType]cardTable, len(rows))
 	for t, r := range rows {
@@ -83,6 +85,10 @@ func checkSemantics(d *Deck) error {
 		}
 	}
 	switch d.Type {
+	case Checkin:
+		return checkTreeManifest(d)
+	case Submanifest:
+		return checkSubmanifest(d)
 	case Control:
 		// §5.4: a control artifact's tags target other artifacts, never itself.
 		if selfTags > 0 {
@@ -109,6 +115,36 @@ func checkSemantics(d *Deck) error {
 	return nil
 }
 
+// checkTreeManifest applies the two manifest rules of
+// draft-fossil-submanifests-00 §4.4: a tree manifest conveys its file set by S
+// cards alone, so it carries neither a B card nor an F card.
+func checkTreeManifest(d *Deck) error {
+	if len(d.S) == 0 {
+		return nil
+	}
+	if d.B != "" {
+		return fmt.Errorf("a manifest cannot carry both a B-card and an S-card")
+	}
+	if len(d.F) > 0 {
+		return fmt.Errorf("a manifest cannot carry both F-cards and S-cards")
+	}
+	return nil
+}
+
+// checkSubmanifest applies the sub-manifest rule of
+// draft-fossil-submanifests-00 §4.4: F cards or S cards, never both and never
+// neither. The rule that every F card carries a hash needs no check here: a
+// sub-manifest has no B card, so parseFCard already refuses a hashless one.
+func checkSubmanifest(d *Deck) error {
+	if len(d.F) > 0 && len(d.S) > 0 {
+		return fmt.Errorf("a sub-manifest cannot carry both F-cards and S-cards")
+	}
+	if len(d.F) == 0 && len(d.S) == 0 {
+		return fmt.Errorf("a sub-manifest needs an F-card or an S-card")
+	}
+	return nil
+}
+
 // typeName is the artifact type's name for an error message, matching fossil's
 // azNameOfMType.
 func typeName(t ArtifactType) string {
@@ -129,6 +165,8 @@ func typeName(t ArtifactType) string {
 		return "attachment"
 	case Control:
 		return "control artifact"
+	case Submanifest:
+		return "submanifest"
 	default:
 		return "artifact"
 	}

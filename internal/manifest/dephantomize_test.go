@@ -687,7 +687,7 @@ func TestReceiveLinkerCancelledContextRollsBackPhantomFillCascade(t *testing.T) 
 			  + (SELECT count(*) FROM mlink WHERE mid=?)
 			  + (SELECT count(*) FROM tagxref WHERE rid=?)
 			  + (SELECT count(*) FROM leaf WHERE rid=?)
-			  + (SELECT count(*) FROM crosslink_nonartifact WHERE rid=?)`,
+			  + (SELECT count(*) FROM crosslink_nonartifact_v2 WHERE rid=?)`,
 			rid, rid, rid, rid, rid, rid, rid,
 		).Scan(&terminal); err != nil {
 			t.Fatalf("query terminal state for child %d: %v", rid, err)

@@ -513,12 +513,19 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 
 	// artifact-format-01 4.7.3: a writer MUST NOT emit a B card naming a
 	// delta manifest (fossil asserts the same in checkin.c). When the parent's
-	// baseline is itself a delta, leave d a full baseline manifest.
-	if baseDeck.B != "" {
+	// baseline is itself a delta, leave d a full baseline manifest. The same
+	// goes for a tree baseline: draft-fossil-submanifests-00 §5.4 says a
+	// writer with emission off SHOULD NOT create a delta against one, and this
+	// library never emits.
+	if baseDeck.B != "" || isTree(baseDeck) {
 		return nil
 	}
-	baseFiles := make(map[string]string)
-	for _, f := range baseDeck.F {
+	baseCards, err := baselineFileCards(tx, nil, baseDeck)
+	if err != nil {
+		return fmt.Errorf("baseline files: %w", err)
+	}
+	baseFiles := make(map[string]string, len(baseCards))
+	for _, f := range baseCards {
 		baseFiles[f.Name] = f.UUID
 	}
 

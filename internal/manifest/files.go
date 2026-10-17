@@ -22,44 +22,95 @@ func ListFiles(r *repo.Repo, rid libfossil.FslID) ([]FileEntry, error) {
 }
 
 // ListFilesCached is ListFiles that serves the checkin manifest -- and, for a
-// delta manifest, its baseline -- through cache. A nil cache is exactly
-// ListFiles (content.Cache's nil receiver falls through to content.Expand).
-// A live cache helps only a caller listing many overlapping revisions, such as
-// annotate walking one file's history; see GetManifestCached.
+// delta manifest, its baseline, and for a tree manifest, its sub-manifests --
+// through cache. A nil cache is exactly ListFiles (content.Cache's nil
+// receiver falls through to content.Expand). A live cache helps only a caller
+// listing many overlapping revisions, such as annotate walking one file's
+// history; see GetManifestCached.
 func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([]FileEntry, error) {
 	d, err := GetManifestCached(r, rid, cache)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFiles: %w", err)
 	}
-	if d.B == "" {
-		return fCardsToEntries(d.F), nil
-	}
-	baseDeck, err := loadBaseline(r.DB(), cache, d)
+	cards, err := checkinFileCards(r.DB(), cache, d)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFiles: %w", err)
 	}
-	fileMap := make(map[string]FileEntry)
-	for _, f := range baseDeck.F {
-		// A named delta baseline keeps its own delete markers (-01 8.2);
-		// they carry no file, so they must not enter the set.
-		if f.UUID == "" {
-			continue
-		}
-		fileMap[f.Name] = FileEntry{Name: f.Name, UUID: f.UUID, Perm: f.Perm}
+	return fCardsToEntries(cards), nil
+}
+
+// checkinFileCards is the enumeration seam of draft-fossil-submanifests-00
+// §9.3: the one place a check-in's complete file set is assembled, in
+// comparator order and with no delete markers, whatever form the manifest
+// takes -- flat, delta (artifact-format-01 8.2), tree (§5.1) or a delta over a
+// tree (§5.4). Every reader of a whole file set goes through here, or through
+// ownFileCards for a manifest's own cards; nothing else reads F cards as a
+// file set.
+func checkinFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	if d.Type == deck.Submanifest {
+		return nil, fmt.Errorf("a sub-manifest is a slice of a check-in, not a check-in")
 	}
-	for _, f := range d.F {
+	if d.B == "" {
+		return baselineFileCards(q, cache, d)
+	}
+	baseDeck, err := loadBaseline(q, cache, d)
+	if err != nil {
+		return nil, err
+	}
+	baseCards, err := baselineFileCards(q, cache, baseDeck)
+	if err != nil {
+		return nil, err
+	}
+	return mergeDeltaCards(baseCards, d.F), nil
+}
+
+// ownFileCards returns the cards a manifest itself conveys: a delta's or a flat
+// manifest's F cards, delete markers included, or a tree manifest's walked
+// enumeration (§5.1), which has none. It is fossil's manifest_file_seek_base
+// view, which mlink derivation reads beside the merged file set.
+func ownFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	if d.Type == deck.Submanifest {
+		return nil, fmt.Errorf("a sub-manifest is a slice of a check-in, not a check-in")
+	}
+	return baselineFileCards(q, cache, d)
+}
+
+// baselineFileCards returns the cards a manifest with no B card lists as its
+// file set, or, for a delta named as another delta's baseline, that delta's
+// own cards (artifact-format-01 4.7.3: one level, its B card not followed). A
+// tree manifest's are its walked enumeration (§5.1), which can fail; any
+// other manifest's are its F cards.
+func baselineFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	if isTree(d) {
+		return walkTree(q, cache, d)
+	}
+	return d.F, nil
+}
+
+// mergeDeltaCards is the merge walk of artifact-format-01 8.2: the baseline's
+// cards overlaid with the delta's own, a delta's delete marker removing the
+// name. A delete marker on the baseline side -- a named delta's own -- adds no
+// file either (4.7.3), so no card in the result is hashless.
+func mergeDeltaCards(baseCards, own []deck.FileCard) []deck.FileCard {
+	byName := make(map[string]deck.FileCard, len(baseCards)+len(own))
+	for _, f := range baseCards {
+		if f.UUID != "" {
+			byName[f.Name] = f
+		}
+	}
+	for _, f := range own {
 		if f.UUID == "" {
-			delete(fileMap, f.Name)
+			delete(byName, f.Name)
 		} else {
-			fileMap[f.Name] = FileEntry{Name: f.Name, UUID: f.UUID, Perm: f.Perm}
+			byName[f.Name] = f
 		}
 	}
-	entries := make([]FileEntry, 0, len(fileMap))
-	for _, e := range fileMap {
-		entries = append(entries, e)
+	merged := make([]deck.FileCard, 0, len(byName))
+	for _, f := range byName {
+		merged = append(merged, f)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
-	return entries, nil
+	sort.Slice(merged, func(i, j int) bool { return deck.Compare(merged[i].Name, merged[j].Name) < 0 })
+	return merged
 }
 
 // loadBaseline resolves the B card of delta manifest d to its baseline deck.
@@ -67,8 +118,9 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 // back an empty file set as if it were whole. Per artifact-format-01 4.7.3 and
 // fossil's manifest_get, the target MAY itself be a delta manifest: only its
 // own F cards are used, its own B card is not followed (one level). -00 and
-// #275 refused that case; -01 reverses it. Every reader of a B card goes
-// through here, so the rule has one owner.
+// #275 refused that case; -01 reverses it. It MAY also be a tree manifest
+// (draft-fossil-submanifests-00 §5.4), whose file set baselineFileCards walks.
+// Every reader of a B card goes through here, so the rule has one owner.
 func loadBaseline(q db.Querier, cache *content.Cache, d *deck.Deck) (*deck.Deck, error) {
 	if d.B == "" {
 		panic("manifest.loadBaseline: d has no B card")
@@ -169,21 +221,43 @@ func LookupFileCached(
 	if err != nil {
 		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
 	}
-	if card, ok := findFileCard(d.F, name); ok {
-		return fileCardEntry(card)
-	}
-	if d.B == "" {
-		return FileEntry{}, false, nil
-	}
-	baseDeck, err := loadBaseline(r.DB(), cache, d)
+	card, found, err := lookupFileCard(r.DB(), cache, d, name)
 	if err != nil {
 		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
 	}
-	// A delete marker in the baseline is not a file.
-	if card, ok := findFileCard(baseDeck.F, name); ok {
-		return fileCardEntry(card)
+	if !found {
+		return FileEntry{}, false, nil
 	}
-	return FileEntry{}, false, nil
+	return fileCardEntry(card)
+}
+
+// lookupFileCard is the single-name half of the enumeration seam: a delta's
+// own cards first (artifact-format-01 8.4), a delete marker answering without
+// the baseline, then the baseline -- by binary search of a flat one's F cards
+// or by the tree lookup of draft-fossil-submanifests-00 §5.3. The card it
+// returns may be a delete marker; fileCardEntry reads that as absent.
+func lookupFileCard(q db.Querier, cache *content.Cache, d *deck.Deck, name string) (deck.FileCard, bool, error) {
+	if d.Type == deck.Submanifest {
+		return deck.FileCard{}, false, fmt.Errorf("a sub-manifest is a slice of a check-in, not a check-in")
+	}
+	if isTree(d) {
+		return lookupTree(q, cache, d, name)
+	}
+	if card, ok := findFileCard(d.F, name); ok {
+		return card, true, nil
+	}
+	if d.B == "" {
+		return deck.FileCard{}, false, nil
+	}
+	baseDeck, err := loadBaseline(q, cache, d)
+	if err != nil {
+		return deck.FileCard{}, false, err
+	}
+	if isTree(baseDeck) {
+		return lookupTree(q, cache, baseDeck, name)
+	}
+	card, ok := findFileCard(baseDeck.F, name)
+	return card, ok, nil
 }
 
 // findFileCard binary-searches cards, which a parsed deck keeps in comparator

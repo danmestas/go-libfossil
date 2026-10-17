@@ -892,7 +892,9 @@ type checkinDeferralGuard struct {
 	// cache expands the sub-manifests a tree's walk reads; it is the owning
 	// sweep's or cascade's content cache, or nil, which expands directly.
 	cache *content.Cache
-	// checkinBaselines memoizes baselines verified to be check-in manifests.
+	// checkinBaselines memoizes baselines verified to be check-in manifests,
+	// each mapped to whether it is a tree manifest, so a sweep over many
+	// deltas parses each baseline once and walks only a tree's.
 	checkinBaselines map[string]bool
 	// awaitFiles makes the guard also wait on a check-in's files
 	// (missingCheckinRefs), not only its baseline (missingBaseline). Only the
@@ -1269,6 +1271,11 @@ func missingFileSet(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 func (g *checkinDeferralGuard) treeGap(tx *db.Tx, d *deck.Deck) string {
 	tree := d
 	if d.B != "" {
+		// missingBaseline, which runs first, recorded whether the baseline
+		// is a tree; a flat one leaves nothing to walk.
+		if baseIsTree, known := g.checkinBaselines[d.B]; known && !baseIsTree {
+			return ""
+		}
 		baseDeck, err := loadBaseline(tx, g.cache, d)
 		if err != nil {
 			return d.B
@@ -1297,7 +1304,7 @@ func (g *checkinDeferralGuard) treeGap(tx *db.Tx, d *deck.Deck) string {
 // the verdict for a given blob never changes, but a sweep reaches many deltas
 // over few baselines, so one expansion per baseline is enough.
 func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
-	if g.checkinBaselines[uuid] {
+	if _, ok := g.checkinBaselines[uuid]; ok {
 		return true
 	}
 	rid, ok := g.avail.ByUUID(tx, uuid)
@@ -1312,7 +1319,7 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 	if err != nil || bd.Type != deck.Checkin {
 		return false
 	}
-	g.checkinBaselines[uuid] = true
+	g.checkinBaselines[uuid] = isTree(bd)
 	return true
 }
 

@@ -7,7 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- go-libfossil reads sub-manifest trees (draft-fossil-submanifests-00), the
+  check-in form zit writes, and never writes one. It parses the S card and
+  the SUBMANIFEST artifact type, and every reader of a check-in's file set
+  -- `ListFiles`, `LookupFile`, checkout, diff, annotate, crosslink,
+  rebuild, verify and commit -- walks a tree through one enumeration
+  function: depth first, at most 16 levels, never presenting a tree it
+  cannot walk in part. A delta manifest may name a tree as its baseline. A
+  tree check-in whose sub-manifest has not arrived is deferred, with
+  phantoms for its missing references, and linked when they arrive;
+  `Verify` reports it as a missing reference, not damage. A commit on a tree
+  parent is written flat. The new `submanifest` conformance suite covers 55
+  reader requirements, the Appendix A vectors included, and a test reads
+  trees zit wrote and, with zit installed, syncs with zit in both
+  directions.
+- Sync follows zit for trees: once a repository holds one, a tree manifest
+  or sub-manifest is withheld from a peer announcing a release below 2.29,
+  with an explicit error card, so no fossil release receives one. A ci-lock
+  reply carries `pragma avoid-submanifests`. The three settings
+  `enable-submanifests`, `submanifest-k` and `submanifest-auto-retune` are
+  `/project` members, and a clone asks for them once, in its cleanup round,
+  with zit's `reqconfig /config`, applying all three or none.
+
 ### Changed
+
+- go-libfossil announces release 22900 in `client-version` and
+  `server-version`, up from 22800, because zit withholds trees from any peer
+  announcing less. No fossil release behaves differently between the two.
+- `S` is no longer rejected as an undefined card letter, and a manifest
+  with no `D` card is reclassified as a sub-manifest before its cards are
+  checked, so it is rejected for its first illegal card rather than for the
+  missing `D` card. The crosslink sweep's record of examined blobs is
+  versioned; the first sweep after upgrading drops the old record and
+  examines every blob again, once, so trees an earlier version could not
+  parse are linked.
 
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format

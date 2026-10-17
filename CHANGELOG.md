@@ -25,7 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directions.
 - Sync follows zit for trees: once a repository holds one, a tree manifest
   or sub-manifest is withheld from a peer announcing a release below 2.29,
-  with an explicit error card, so no fossil release receives one. A ci-lock
+  with an explicit error card, so no fossil release receives one. An
+  artifact stored as a delta of a withheld tree goes to such a peer as full
+  content. Known gap: fossil 2.29, unreleased, already announces 22900 and
+  reads no tree, so it would not be refused (SM-7.2-1 is recorded as a
+  deviation until zit and the draft settle on another signal). A ci-lock
   reply carries `pragma avoid-submanifests`. The three settings
   `enable-submanifests`, `submanifest-k` and `submanifest-auto-retune` are
   `/project` members, and a clone asks for them once, in its cleanup round,

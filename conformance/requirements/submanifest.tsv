@@ -8,7 +8,9 @@
 # implemented: the 7.4 SHOULD (memoized sub-manifest enumeration).
 # The reference for behaviour the draft leaves open is zit, the other
 # implementation: its 2.29.0 version threshold (7.2), its avoid-submanifests
-# placement, and its configuration request (6.3, SM-6.3-3).
+# placement, and its configuration request (6.3, SM-6.3-3). That threshold
+# is also what an unreleased fossil 2.29 announces, so SM-7.2-1 records a
+# deviation for that peer until zit and the draft agree on another signal.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
 # draft	draft-fossil-submanifests-00.txt	b6cb37690b9273c92568222abe65c450c5a103c149225f94604420bc5127ad52
 SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.

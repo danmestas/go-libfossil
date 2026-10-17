@@ -1116,7 +1116,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		// delta, and a clone's, that xfer_accept_file does not pre-verify.
 		// One whose basis is not held yet is stored dangling and checked by
 		// the pass once the basis arrives.
-		verdict, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
+		verdict, target, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
 		if err != nil {
 			return 0, fmt.Errorf("received file %s: %w", uuid, err)
 		}
@@ -1124,7 +1124,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 			return 0, &hashMismatchError{uuid: uuid}
 		}
 		return 0, storeDeltaContent(ctx, r, pass, uuid, deltaSrc, payload, storedBlob, vis,
-			linker, verdict == deltaMatch)
+			linker, target)
 	}
 
 	return storeResolvedContent(ctx, r, pass, uuid, payload, storedBlob, vis, linker)
@@ -1139,11 +1139,13 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 // or not srcRid is itself currently available.
 //
 // An unverified delta joins pass, to be checked when its basis arrives. A
-// verified one is available now, so the deltas pass holds against it are
-// checked here, and a late mismatch among them aborts the pass.
+// verified one -- target holds the content checkDelta rebuilt -- is
+// available now, so the deltas pass holds against it are checked here, and a
+// late mismatch among them aborts the pass.
 func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid,
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
-	linker *manifest.ReceiveLinker, verified bool) error {
+	linker *manifest.ReceiveLinker, target []byte) error {
+	verified := target != nil
 	var dangling, root libfossil.FslID // tracked once the store succeeds
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		alreadyHeld, err := heldReal(tx, uuid)
@@ -1175,6 +1177,10 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 			if err := linker.LinkStored(ctx, tx, rid, uuid, nil); err != nil {
 				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
 			}
+		} else if verified {
+			if err := noteReceived(tx, rid, target); err != nil {
+				return fmt.Errorf("storeDeltaContent: %s: %w", uuid, err)
+			}
 		}
 		switch {
 		case alreadyHeld:
@@ -1192,6 +1198,17 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		pass.track(dangling, root, uuid)
 	}
 	return err
+}
+
+// noteReceived does for a received artifact, given its full content, what
+// storing an S-bearing artifact owes the repository (manifest.NoteStoredArtifact);
+// content that is no artifact owes nothing.
+func noteReceived(tx *db.Tx, rid libfossil.FslID, full []byte) error {
+	d, err := deck.Parse(full)
+	if err != nil {
+		return nil
+	}
+	return manifest.NoteStoredArtifact(tx, rid, d)
 }
 
 // withLinkerTx is r.WithTx for a write that may call linker.LinkStored: a
@@ -1323,9 +1340,16 @@ func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []
 	// cluster manifest, process its M-card UUIDs to create phantoms
 	// for blobs we don't have yet. This is how the client discovers
 	// individual blob UUIDs referenced by a cluster.
-	if d, parseErr := deck.Parse(fullContent); parseErr == nil && d.Type == deck.Cluster {
-		if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
-			return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+	if d, parseErr := deck.Parse(fullContent); parseErr == nil {
+		if d.Type == deck.Cluster {
+			if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
+				return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+			}
+		}
+		// A tree arms the §7.2 gate as it is stored, not at the session's
+		// closing sweep.
+		if err := manifest.NoteStoredArtifact(tx, rid, d); err != nil {
+			return 0, false, fmt.Errorf("received %s: %w", uuid, err)
 		}
 	}
 	return rid, filled, nil

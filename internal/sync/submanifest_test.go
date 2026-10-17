@@ -2,13 +2,19 @@ package sync
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -261,7 +267,7 @@ func TestStagedSubmanifestConfig(t *testing.T) {
 		for _, i := range order {
 			staged.stage([]byte(rows[i]))
 		}
-		if err := staged.apply(r.DB()); err != nil {
+		if err := applyInTx(t, r, &staged); err != nil {
 			t.Fatalf("order %v: %v", order, err)
 		}
 		if k, _ := currentSetting(r.DB(), "submanifest-k"); k != "3" {
@@ -276,7 +282,7 @@ func TestStagedSubmanifestConfig(t *testing.T) {
 		r := setupSyncTestRepo(t)
 		var staged stagedSubmanifestConfig
 		staged.stage([]byte(strings.Join(append(rows[:2:2], bad), "\n")))
-		if err := staged.apply(r.DB()); err == nil {
+		if err := applyInTx(t, r, &staged); err == nil {
 			t.Fatalf("%q accepted", bad)
 		}
 		for _, name := range submanifestSettings {
@@ -292,7 +298,7 @@ func TestStagedSubmanifestConfig(t *testing.T) {
 	}
 	var staged stagedSubmanifestConfig
 	staged.stage([]byte(rows[0]))
-	if err := staged.apply(r.DB()); err != nil {
+	if err := applyInTx(t, r, &staged); err != nil {
 		t.Fatalf("enable with a local k: %v", err)
 	}
 }
@@ -347,4 +353,212 @@ func TestTreesNeverReachFossil228(t *testing.T) {
 	if !strings.Contains(strings.Join(res.Errors, "\n"), "withheld") {
 		t.Fatalf("result errors %q do not record the withheld artifacts", res.Errors)
 	}
+}
+
+// storeFlatDeltaOfTree stores, beside a tree check-in, a flat check-in
+// stored as a delta of that tree manifest -- the normal shape once a
+// repository switches between flat and tree manifests -- and returns the
+// flat check-in's name.
+func storeFlatDeltaOfTree(t *testing.T, r *repo.Repo, a treeArtifacts) string {
+	t.Helper()
+	// A long shared comment makes the delta worth storing.
+	comment := strings.Repeat("shared comment text ", 200)
+	tree, err := (&deck.Deck{C: comment, D: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC),
+		S: []deck.SubmanifestCard{{Name: "a.txt", UUID: a.leafUUID}}, U: deck.User("u")}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	treeUUID := storeAndLink(t, r, tree)
+	flat, err := (&deck.Deck{C: comment, D: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		F: []deck.FileCard{{Name: "a.txt", UUID: a.fileUUID}}, P: []string{treeUUID},
+		U: deck.User("u")}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flatUUID := storeAndLink(t, r, flat)
+	treeRID, _ := blob.Exists(r.DB(), treeUUID)
+	flatRID, _ := blob.Exists(r.DB(), flatUUID)
+	if err := r.WithTx(func(tx *db.Tx) error {
+		_, err := content.Deltify(tx, flatRID, treeRID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if src, _ := content.DeltaSource(r.DB(), flatRID); src != treeRID {
+		t.Fatalf("the flat manifest is not stored as a delta of the tree (source %d)", src)
+	}
+	return flatUUID
+}
+
+// asOldClient rewrites a request's client-version to fossil 2.28's.
+func asOldClient(server *repo.Repo, t *testing.T) *MockTransport {
+	return &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, c := range req.Cards {
+			if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "client-version" {
+				p.Values[0] = "22800"
+			}
+		}
+		resp, err := HandleSync(context.Background(), server, req)
+		if err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+		return resp
+	}}
+}
+
+// §7.2 in a clone: a flat check-in stored as a delta of a withheld tree goes
+// to a 2.28 client as full content, never as a delta it cannot apply.
+func TestCloneSendsDeltaOfWithheldTreeInFull(t *testing.T) {
+	server := setupSyncTestRepo(t)
+	a := storeTree(t, server)
+	flatUUID := storeFlatDeltaOfTree(t, server, a)
+	path := filepath.Join(t.TempDir(), "old.fossil")
+	client, _, err := Clone(context.Background(), path, asOldClient(server, t), CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	defer client.Close()
+	rid, ok := content.AvailableByUUID(client.DB(), flatUUID)
+	if !ok {
+		t.Fatal("the flat check-in did not arrive whole")
+	}
+	if _, err := content.Expand(client.DB(), rid); err != nil {
+		t.Fatalf("the flat check-in cannot be expanded: %v", err)
+	}
+	for _, uuid := range []string{a.uuid, a.leafUUID} {
+		if _, ok := content.AvailableByUUID(client.DB(), uuid); ok {
+			t.Fatalf("a 2.28 client received %s", uuid)
+		}
+	}
+}
+
+// treeBytes builds a one-file tree check-in's artifacts without storing them.
+func treeBytes(t *testing.T, r *repo.Repo, comment string) (file, leaf, tree []byte) {
+	t.Helper()
+	marshal := func(d *deck.Deck) []byte {
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	file = []byte("file of " + comment + "\n")
+	fileUUID := hash.MustNamingFor(r.DB()).New.Hash(file)
+	leaf = marshal(&deck.Deck{F: []deck.FileCard{{Name: "a.txt", UUID: fileUUID}}})
+	leafUUID := hash.MustNamingFor(r.DB()).New.Hash(leaf)
+	tree = marshal(&deck.Deck{C: comment, D: time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC),
+		S: []deck.SubmanifestCard{{Name: "a.txt", UUID: leafUUID}}, U: deck.User("u")})
+	return file, leaf, tree
+}
+
+// §7.2 arms on arrival, not on crosslink: a tree a sync stored, before any
+// crosslink has run, is already withheld from a 2.28 peer -- full content
+// and a verified delta alike.
+func TestGateArmsWhenTreeIsReceived(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	file, leaf, tree := treeBytes(t, r, strings.Repeat("firsttree", 100))
+	pass := newReceivePass()
+	for _, data := range [][]byte{file, leaf, tree} {
+		uuid := hash.MustNamingFor(r.DB()).New.Hash(data)
+		if err := storeReceivedFile(context.Background(), r, pass, uuid, "", data, nil,
+			visibilityPublic, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	treeUUID := hash.MustNamingFor(r.DB()).New.Hash(tree)
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", treeUUID)); len(files) != 0 {
+		t.Fatal("a received, uncrosslinked tree went to a 2.28 peer")
+	}
+
+	// A second tree received as a delta of the first, on a fresh repository.
+	r2 := setupSyncTestRepo(t)
+	pass2 := newReceivePass()
+	for _, data := range [][]byte{file, leaf} {
+		if err := storeReceivedFile(context.Background(), r2, pass2,
+			hash.MustNamingFor(r2.DB()).New.Hash(data), "", data, nil, visibilityPublic, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The first tree arrives as ordinary bytes the gate never saw parsed:
+	// stored directly, so only the delta's arrival can arm the gate.
+	if _, _, err := blob.Store(r2.DB(), tree); err != nil {
+		t.Fatal(err)
+	}
+	second := []byte(strings.Replace(string(tree), "firsttree", "othertree", 1))
+	second = append(second[:len(second)-35], []byte(zCard(second[:len(second)-35]))...)
+	d, err := delta.Create(tree, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondUUID := hash.MustNamingFor(r2.DB()).New.Hash(second)
+	if err := storeReceivedFile(context.Background(), r2, pass2, secondUUID, treeUUID, d, nil,
+		visibilityPublic, nil); err != nil {
+		t.Fatal(err)
+	}
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r2, "22800", secondUUID)); len(files) != 0 {
+		t.Fatal("a tree received as a delta went to a 2.28 peer")
+	}
+}
+
+// A repository an earlier version swept may hold trees filed as unparseable
+// and no indicator: until a sweep re-examines them, the gate is armed.
+func TestGateArmsOnRepositoryAnOlderVersionSwept(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	file, leaf, tree := treeBytes(t, r, "legacy")
+	for _, data := range [][]byte{file, leaf, tree} {
+		if _, _, err := blob.Store(r.DB(), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.DB().Exec("CREATE TABLE crosslink_nonartifact(rid INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	treeUUID := hash.MustNamingFor(r.DB()).New.Hash(tree)
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", treeUUID)); len(files) != 0 {
+		t.Fatal("a tree in a repository an older version swept went to a 2.28 peer")
+	}
+}
+
+func zCard(body []byte) string {
+	sum := md5.Sum(body)
+	return "Z " + hex.EncodeToString(sum[:]) + "\n"
+}
+
+// §6.3 all or none holds against the database too: a write that fails
+// partway leaves none of the three settings applied.
+func TestStagedSubmanifestConfigWriteFailureLeavesNone(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	if _, err := r.DB().Exec(`CREATE TRIGGER refuse_k BEFORE INSERT ON config
+		WHEN NEW.name='submanifest-k' BEGIN SELECT RAISE(ABORT, 'refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	var staged stagedSubmanifestConfig
+	staged.stage([]byte("10 'enable-submanifests' value 'on'\n11 'submanifest-k' value '3'"))
+	err := r.WithTx(func(tx *db.Tx) error {
+		if err := staged.apply(tx); err == nil {
+			t.Error("apply succeeded past a failing write")
+		}
+		return nil // the caller's transaction commits: only the savepoint undoes
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range submanifestSettings {
+		if v, ok := currentSetting(r.DB(), name); ok {
+			t.Fatalf("partial state %s=%q after a failed write", name, v)
+		}
+	}
+}
+
+// applyInTx runs apply as its callers do, inside one transaction.
+func applyInTx(t *testing.T, r *repo.Repo, staged *stagedSubmanifestConfig) error {
+	t.Helper()
+	var applyErr error
+	if err := r.WithTx(func(tx *db.Tx) error {
+		applyErr = staged.apply(tx)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return applyErr
 }

@@ -787,6 +787,32 @@ func noteTreeReferences(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	return nil
 }
 
+// NoteStoredArtifact is noteTreeReferences for a path that stores an
+// artifact without crosslinking it at once -- a sync's receive, whose sweep
+// runs only at the end of the session -- so the indicator, and with it the
+// §7.2 transfer gate, is armed from the moment a tree is stored.
+func NoteStoredArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+	return noteTreeReferences(tx, rid, d)
+}
+
+// UnexaminedByThisParser reports whether an earlier version's sweep record
+// survives, so the repository may hold trees that version filed as
+// unparseable and nothing has examined since: until the next sweep drops
+// that record, a caller must assume trees are present.
+func UnexaminedByThisParser(q db.Querier) (bool, error) {
+	for _, old := range supersededNonArtifactTables {
+		var present int
+		if err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+			old).Scan(&present); err != nil {
+			return false, fmt.Errorf("find %s table: %w", old, err)
+		}
+		if present > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // SeenSubmanifestSetting is the local indicator of
 // draft-fossil-submanifests-00 §8.1: set once the repository has stored an
 // S-bearing artifact, and never cleared, since such an artifact cannot be

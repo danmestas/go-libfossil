@@ -24,8 +24,14 @@ import (
 )
 
 // submanifestVersion is the first announced release known to read
-// sub-manifests (§7.2). It is above every released fossil, none of which
-// reads them.
+// sub-manifests (§7.2): zit's threshold, matched so the two interoperate.
+//
+// KNOWN GAP: it is not above every fossil that cannot read a tree. Fossil
+// 2.29, unreleased but already announcing 22900 from its trunk, has no
+// sub-manifest support, and this gate would hand it trees. A release number
+// cannot tell zit from such a fossil; the fix needs a signal zit and the
+// draft agree on, so the conformance suite records it as a deviation of
+// SM-7.2-1 until they do. Today no fossil release announces 22900.
 const submanifestVersion = 22900
 
 // announcedVersion is the release this library announces in client-version
@@ -52,13 +58,24 @@ type submanifestGate struct {
 	armed bool
 }
 
-// newSubmanifestGate reads the arming indicator once, for one session.
+// newSubmanifestGate reads the arming indicator once, for one session. The
+// indicator is set as an S-bearing artifact is stored, by every receive path
+// and every crosslink; a repository an earlier version swept, which may hold
+// trees that version could not parse and nothing has examined since, arms
+// the gate too.
 func newSubmanifestGate(q db.Querier) (submanifestGate, error) {
 	seen, err := manifest.SeenSubmanifest(q)
 	if err != nil {
 		return submanifestGate{}, err
 	}
-	return submanifestGate{armed: seen}, nil
+	if seen {
+		return submanifestGate{armed: true}, nil
+	}
+	unexamined, err := manifest.UnexaminedByThisParser(q)
+	if err != nil {
+		return submanifestGate{}, err
+	}
+	return submanifestGate{armed: unexamined}, nil
 }
 
 // barred reports whether the artifact at rid is withheld from a peer
@@ -226,7 +243,9 @@ var errSubmanifestConfig = errors.New("sub-manifest settings rejected")
 // state with enable-submanifests on and no submanifest-k from 1 to 12, leaves
 // every one of the three as it was. A rejection is reported as an error
 // wrapping errSubmanifestConfig, which the caller records rather than fails
-// on: other configuration is unaffected.
+// on: other configuration is unaffected. q must hold one transaction -- a
+// clone round's bound repository, or a *db.Tx -- since the writes share a
+// savepoint.
 func (s *stagedSubmanifestConfig) apply(q db.Querier) error {
 	if len(s.rows) == 0 {
 		return nil
@@ -260,6 +279,18 @@ func (s *stagedSubmanifestConfig) apply(q db.Querier) error {
 		return fmt.Errorf("%w: %s on with no %s from 1 to 12",
 			errSubmanifestConfig, settingEnableSubmanifests, settingSubmanifestK)
 	}
+	return s.write(q)
+}
+
+// submanifestConfigSavepoint scopes the three writes, so a database error
+// partway undoes the ones before it whatever transaction the caller holds.
+const submanifestConfigSavepoint = "submanifest_config"
+
+// write stores the validated rows inside one savepoint: all or none.
+func (s *stagedSubmanifestConfig) write(q db.Querier) error {
+	if _, err := q.Exec("SAVEPOINT " + submanifestConfigSavepoint); err != nil {
+		return fmt.Errorf("config savepoint: %w", err)
+	}
 	for _, name := range submanifestSettings {
 		row, ok := s.rows[name]
 		if !ok {
@@ -267,8 +298,18 @@ func (s *stagedSubmanifestConfig) apply(q db.Querier) error {
 		}
 		if _, err := q.Exec("REPLACE INTO config(name, value, mtime) VALUES(?, ?, ?)",
 			row.name, row.value, row.mtime); err != nil {
-			return fmt.Errorf("config %s: %w", row.name, err)
+			werr := fmt.Errorf("config %s: %w", row.name, err)
+			if _, rerr := q.Exec("ROLLBACK TO " + submanifestConfigSavepoint); rerr != nil {
+				return errors.Join(werr, fmt.Errorf("config rollback: %w", rerr))
+			}
+			if _, rerr := q.Exec("RELEASE " + submanifestConfigSavepoint); rerr != nil {
+				return errors.Join(werr, fmt.Errorf("config release: %w", rerr))
+			}
+			return werr
 		}
+	}
+	if _, err := q.Exec("RELEASE " + submanifestConfigSavepoint); err != nil {
+		return fmt.Errorf("config release: %w", err)
 	}
 	return nil
 }

@@ -945,6 +945,30 @@ func smTransferCases() []smCase {
 			}
 			return want("file cards for ordinary content", len(smCardsOf[*xfer.FileCard](plain)), 1)
 		}),
+		{Case{ID: "submanifest.7.2.fossil-2.29-not-refused", Req: "SM-7.2-1",
+			Deviation: "the threshold is zit's 22900, which fossil 2.29 also announces " +
+				"without reading trees; refusing it needs a signal zit and the draft agree on"},
+			func(t *testing.T) error {
+				f, err := newSMFixture(t)
+				if err != nil {
+					return err
+				}
+				tree, _, _, err := smServerTree(f)
+				if err != nil {
+					return err
+				}
+				// The announcement a fossil 2.29 build makes.
+				resp, err := smGimme(f.r, "22900", tree)
+				if err != nil {
+					return err
+				}
+				if len(smCardsOf[*xfer.FileCard](resp)) != 0 {
+					return fmt.Errorf("a fossil 2.29 peer, which reads no tree, is sent one")
+				}
+				return nil
+			}},
+		smRepoCase("submanifest.7.2.clone-delta-of-withheld-tree", "SM-7.2-1", smCloneDeltaOfTree),
+		smRepoCase("submanifest.7.2.pushed-tree-withheld", "SM-7.2-1", smPushedTreeWithheld),
 		smRepoCase("submanifest.7.2.avoid-pragma", "SM-7.2-2", func(f *smFixture) error {
 			var pc string
 			f.r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
@@ -1001,6 +1025,117 @@ func smTransferCases() []smCase {
 			return smCloneWithoutGroup(t)
 		}},
 	}
+}
+
+// smOldTransport serves r to a client that announces fossil 2.28.
+func smOldTransport(r *repo.Repo) *sync.MockTransport {
+	return &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, c := range req.Cards {
+			if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "client-version" {
+				p.Values[0] = "22800"
+			}
+		}
+		resp, err := sync.HandleSync(context.Background(), r, req)
+		if err != nil {
+			return &xfer.Message{}
+		}
+		return resp
+	}}
+}
+
+// smCloneDeltaOfTree: a flat check-in stored as a delta of a tree manifest
+// -- the shape a repository takes when it moves between flat and tree
+// check-ins -- reaches a 2.28 client whole, never as a delta of a tree that
+// client is refused.
+func smCloneDeltaOfTree(f *smFixture) error {
+	refs, err := f.leaves([]string{"a"})
+	if err != nil {
+		return err
+	}
+	comment := strings.Repeat("shared comment text ", 200)
+	_, tree, err := f.link(&deck.Deck{C: comment, D: smTime, S: refs, U: deck.User("u")})
+	if err != nil {
+		return err
+	}
+	_, flat, err := f.link(&deck.Deck{C: comment, D: smTime.Add(time.Hour), P: []string{tree},
+		F: []deck.FileCard{{Name: "a", UUID: mustUUIDOf(f, "a")}}, U: deck.User("u")})
+	if err != nil {
+		return err
+	}
+	treeRID, _ := blob.Exists(f.r.DB(), tree)
+	flatRID, _ := blob.Exists(f.r.DB(), flat)
+	if err := f.r.WithTx(func(tx *db.Tx) error {
+		_, err := content.Deltify(tx, flatRID, treeRID)
+		return err
+	}); err != nil {
+		return err
+	}
+	if src, _ := content.DeltaSource(f.r.DB(), flatRID); src != treeRID {
+		return fmt.Errorf("fixture: the flat check-in is not a delta of the tree")
+	}
+	dir, err := os.MkdirTemp("", "sm-clone")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	clone, _, err := sync.Clone(context.Background(), filepath.Join(dir, "old.fossil"), smOldTransport(f.r), sync.CloneOpts{})
+	if err != nil {
+		return err
+	}
+	defer clone.Close()
+	rid, ok := content.AvailableByUUID(clone.DB(), flat)
+	if !ok {
+		return fmt.Errorf("the flat check-in did not reach the 2.28 client whole")
+	}
+	if _, err := content.Expand(clone.DB(), rid); err != nil {
+		return fmt.Errorf("the flat check-in cannot be rebuilt: %v", err)
+	}
+	if _, ok := content.AvailableByUUID(clone.DB(), tree); ok {
+		return fmt.Errorf("the 2.28 client was sent the tree")
+	}
+	return nil
+}
+
+// smPushedTreeWithheld: a tree pushed to the server is withheld from the
+// next 2.28 client that asks, whatever has or has not been crosslinked.
+func smPushedTreeWithheld(f *smFixture) error {
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	var pc string
+	f.r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
+	file := []byte("pushed file\n")
+	fileUUID := hash.AlgSHA3.Hash(file)
+	leaf, err := (&deck.Deck{F: []deck.FileCard{{Name: "a", UUID: fileUUID}}}).Marshal()
+	if err != nil {
+		return err
+	}
+	tree, err := (&deck.Deck{C: "pushed", D: smTime, U: deck.User("u"),
+		S: []deck.SubmanifestCard{{Name: "a", UUID: hash.AlgSHA3.Hash(leaf)}}}).Marshal()
+	if err != nil {
+		return err
+	}
+	cards := []xfer.Card{
+		&xfer.PragmaCard{Name: "client-version", Values: []string{"22900", "20260101", "000000"}},
+		&xfer.PushCard{ServerCode: "x", ProjectCode: pc},
+	}
+	for _, data := range [][]byte{file, leaf, tree} {
+		cards = append(cards, &xfer.FileCard{UUID: hash.AlgSHA3.Hash(data), Content: data})
+	}
+	if _, err := sync.HandleSync(context.Background(), f.r, &xfer.Message{Cards: cards}); err != nil {
+		return err
+	}
+	if _, ok := content.AvailableByUUID(f.r.DB(), hash.AlgSHA3.Hash(tree)); !ok {
+		return fmt.Errorf("fixture: the push stored no tree")
+	}
+	resp, err := smGimme(f.r, "22800", hash.AlgSHA3.Hash(tree))
+	if err != nil {
+		return err
+	}
+	if len(smCardsOf[*xfer.FileCard](resp)) != 0 {
+		return fmt.Errorf("a pushed tree went to a 2.28 client")
+	}
+	return nil
 }
 
 // smCloneWithoutGroup clones a repository whose server sends no sub-manifest

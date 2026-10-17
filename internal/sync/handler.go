@@ -1735,9 +1735,10 @@ func (h *handler) storedContent(rid int) ([]byte, error) {
 // returns the artifacts to emit, ordered DEPENDENT-FIRST (rid itself first).
 // The walk stops at the first source that is already available to the receiver
 // (emitted earlier this round) or that cannot be forwarded this clone —
-// outside the snapshot bound, a phantom, or a private source under a public
-// clone — and tags the artifact below such a source for full-content emission
-// so it never depends on a card that will not arrive.
+// outside the snapshot bound, a phantom, a private source under a public
+// clone, or a tree the §7.2 gate withholds from this client — and tags the
+// artifact below such a source for full-content emission so it never depends
+// on a card that will not arrive.
 func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]bool) ([]cloneArtifact, error) {
 	chain := make([]cloneArtifact, 0, 8)
 	curRID, curUUID, curUSize := rid, uuid, usize
@@ -1757,6 +1758,15 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		}
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
 			(!info.priv || h.syncPrivate)
+		if forwardable {
+			// Checked before sent: a withheld source is never on the wire,
+			// whatever an earlier chain recorded.
+			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerVersion)
+			if err != nil {
+				return nil, err
+			}
+			forwardable = !barred
+		}
 		if !forwardable {
 			m.expanded = true
 			return append(chain, m), nil // source unsendable: emit curRID full
@@ -1805,8 +1815,8 @@ func (h *handler) buildCloneArtifact(
 			continue
 		}
 		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client
-		// too old to read one. A delta whose source is withheld cannot be
-		// applied, so a withheld artifact's dependents are withheld too.
+		// too old to read one. walkCloneChain never names a withheld tree as
+		// a source, so a dependent stored as a delta of one goes out whole.
 		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerVersion)
 		if err != nil {
 			return nil, nil, 0, err
@@ -1816,6 +1826,9 @@ func (h *handler) buildCloneArtifact(
 				cards = append(cards, submanifestRefusal())
 				h.smRefused = true
 			}
+			// Not sent, so not recorded as sent: a later chain must never
+			// take it as a source already on the wire.
+			rids = rids[:len(rids)-1]
 			continue
 		}
 		var data []byte

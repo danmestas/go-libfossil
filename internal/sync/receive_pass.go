@@ -283,7 +283,7 @@ const (
 //
 // A delta that does not apply is a mismatch: fossil verifies what
 // blob_delta_apply left, which is not the artifact either.
-func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdict, error) {
+func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdict, []byte, error) {
 	if q == nil {
 		panic("sync.checkDelta: q must not be nil")
 	}
@@ -292,20 +292,20 @@ func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdi
 	}
 	srcRid, ok, err := content.CheckAvailableByUUID(q, deltaSrc)
 	if err != nil {
-		return deltaUnverifiable, err
+		return deltaUnverifiable, nil, err
 	}
 	if !ok {
-		return deltaUnverifiable, nil
+		return deltaUnverifiable, nil, nil
 	}
 	src, err := content.ExpandUnchecked(q, srcRid)
 	if err != nil {
-		return deltaMismatch, nil
+		return deltaMismatch, nil, nil
 	}
 	target, err := delta.Apply(src, payload)
 	if err != nil || !hashMatches(uuid, target) {
-		return deltaMismatch, nil
+		return deltaMismatch, nil, nil
 	}
-	return deltaMatch, nil
+	return deltaMatch, target, nil
 }
 
 // hashMismatchError is a received artifact whose content is not its name.

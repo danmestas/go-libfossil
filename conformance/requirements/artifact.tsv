@@ -2,10 +2,13 @@
 # the draft text. Columns: ID, section, requirement, optional scope note
 # (what the cases leave out). Requirements that cannot be observed in a
 # library (UI, wording, IANA, informative text) are not listed. The -01
-# erratum is applied in the draft; it is pinned for the fossil(1) 2.28
-# behavior it records.
-# draft	draft-fossil-artifact-format-01.txt	e91b720ba70a74b5727a5dcbeb6f40ed33b0fe0a2193010c5093ba629403c664
+# errata are applied in the draft; they are pinned for the fossil(1) 2.28
+# behavior they record.
+# draft	draft-fossil-artifact-format-01.txt	3217c01c2d5a01a4a05bd2ea71a99f96d9a47dab44ea38f84ff6c8de02764d3d
+# erratum	artifact-format-01-s4.4-z-card-last-by-ordering.md	3049c7ebc2aadea1365ec8b16d2da3e37376632563b94c253cc11403f4a04d3b
 # erratum	artifact-format-01-s4.6.4-julian-day-grammar.md	c50e6b5aef35b6540077554d1a6606d5e1bd511ac8aeea0589396a53a6b625c9
+# erratum	artifact-format-01-s4.7.3-delta-of-delta-delete-markers.md	55195d37f9e74737ef80d8577808cddaa35e535dbe3a4c6087238001d7f9332c
+# erratum	artifact-format-01-s4.7.8-j-card-empty-value.md	d0880d6735b7890d1f33ffa508729faaa848d06685aca4e269ebc183272997d9
 AF-3.1-1	3.1	An artifact's name is the hash of its exact stored bytes, with nothing added, removed or transformed; a signed artifact's name covers its wrapper.
 AF-3.2-1	3.2	A 40-digit name is the SHA-1, and a 64-digit name the SHA3-256 (FIPS 202, not Keccak), of the raw bytes.
 AF-3.2-2	3.2	A candidate name of any length other than 40 or 64 is invalid.
@@ -67,13 +70,14 @@ AF-4.7.2-1	4.7.2	Only the final path component of the A filename is kept as the 
 AF-4.7.2-2	4.7.2	The A target is a valid hash or a well-formed wiki name.
 AF-4.7.2-3	4.7.2	The A source is optional and none is recorded when absent; a present but empty source fails hash validation and is rejected.
 AF-4.7.3-1	4.7.3	A delta manifest whose baseline is itself a delta manifest is accepted, and its file set is computed from that baseline's own F cards only.
+AF-4.7.3-2	4.7.3	The named delta's delete markers enter the one-level walk on the baseline side and add no file: every merged entry without a hash is filtered out of the file set and of a lookup.
 AF-4.7.4-1	4.7.4	A C card with no token at all (a bare C line) is rejected.
 AF-4.7.4-2	4.7.4	A C card whose single token is empty is a present, empty comment and is accepted.
 AF-4.7.5-1	4.7.5	An E card carries a timestamp and a technote ID.
 AF-4.7.6-1	4.7.6	In a baseline manifest every F card carries a hash; a hashless F card needs a B card.
 AF-4.7.6-2	4.7.6	The third F token is the raw permission, accepted without validation; only the fourth is the old-name.
 AF-4.7.6-3	4.7.6	A producer that writes an old-name also writes an explicit permission token.
-AF-4.7.8-1	4.7.8	An absent J value is the empty string.
+AF-4.7.8-1	4.7.8	An absent J value and a present empty one (J, SP, name, SP, LF) both decode to the empty string, and a reader does not distinguish them.
 AF-4.7.9-1	4.7.9	A writer emits the K ticket ID in lowercase.
 AF-4.7.13-1	4.7.13	An empty P card is accepted.
 AF-4.7.14-1	4.7.14	The first Q token is + or - followed by a hash; the optional second is a plain hash, empty when absent.
@@ -103,6 +107,7 @@ AF-6.2-3	6.2	An artifact without a Z card is rejected.
 AF-6.2-4	6.2	A producer writes the Z card as Z, a space, 32 lowercase digits and LF.
 AF-6.2-5	6.2	The Z verification stage does not itself reject an artifact for lacking a Z card, or for being too short to hold one.
 AF-6.2-6	6.2	The Z verifier neither reads nor requires any value at the artifact's last byte.
+AF-6.2-7	6.2	The Z verification state is decided by the bytes at offsets n-35 and n-34, not by where card lines begin: an artifact with no Z card whose last line ends in Z, a space and 32 further bytes before its LF is verified, and fails on a mismatch.
 AF-6.3-1	6.3.1	A parser does not check the R value against file content.
 AF-6.3-2	6.3.2	The R value is the MD5 of, for each file in comparator order, its name, a space, its decimal size, LF and its content, written as 32 lowercase digits.
 AF-6.3-3	6.3.3	A delta manifest's R value covers the merged file set, not its own F cards.

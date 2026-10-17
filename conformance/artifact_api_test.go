@@ -215,6 +215,16 @@ var writerCases = []apiCase{
 	}},
 	{Case{ID: "artifact.6.2.verify-missing-z", Req: "AF-6.2-5"}, verifyZAccepts(baseControl)},
 	{Case{ID: "artifact.6.2.verify-too-short", Req: "AF-6.2-5"}, verifyZAccepts("D x\n")},
+	// Section 6.2: the state is read from the bytes at n-35 and n-34, not
+	// from where card lines begin, so a U card ending in "Z " and 32 bytes
+	// is in the mismatch state although no Z card is present.
+	{Case{ID: "artifact.6.2.verify-by-position", Req: "AF-6.2-7"}, func(*testing.T) error {
+		data := edit(baseControl, "U alice\n", "U aliceZ "+strings.Repeat("0", 32)+"\n")
+		if err := deck.VerifyZ([]byte(data)); err == nil {
+			return expectf("deck.VerifyZ accepted %q, want the mismatch state", data)
+		}
+		return nil
+	}},
 	// The last byte is not LF; Z verification must not look at it.
 	{Case{ID: "artifact.6.2.verify-last-byte", Req: "AF-6.2-6"},
 		verifyZAccepts(strings.TrimSuffix(signedControl, "\n") + "x")},

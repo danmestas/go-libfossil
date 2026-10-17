@@ -103,6 +103,17 @@ func clientPullOnlyCases() []syncClientCase {
 		want:    every(sent(2, "file {A1} {A1.size}"), notSent(2, "file {A2}")),
 		fc:      true,
 	}, {
+		// Section 6.6: fossil appends a reason under its localauth setting;
+		// the refusal is still recognized by its leading text.
+		Case:  Case{ID: "sync.6.6.refusal-suffix", Req: "SP-6.6-4"},
+		op:    opSync,
+		setup: quiet,
+		replies: [][]string{reply(`message pull\sonly\s-\snot\sauthorized\sto\spush`+
+			`\sbecause\sthe\s'localauth'\ssetting\sis\senabled`, "igot {U}"),
+			reply("igot {U2}")},
+		want: every(sentPrefix(2, "push "), sentPrefix(3, "pull "), notSent(3, "push ")),
+		fc:   true,
+	}, {
 		Case:  Case{ID: "sync.10.2.other-message", Req: "SP-10.2-3"},
 		op:    opSync,
 		setup: quiet,

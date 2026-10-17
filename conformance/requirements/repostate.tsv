@@ -1,11 +1,13 @@
 # Requirements for draft-fossil-repo-state-01, written from the draft text.
 # The -01 errata are applied in the draft; they are pinned for the fossil(1)
 # behavior they record, which RS-4.2-13 and RS-4.2-14 depart from. The errata of
-# 2026-10-13 (sections 5.3, 7.3 and 8.3) make fossil's behavior the draft's.
-# draft	draft-fossil-repo-state-01.txt	d94ba052317b718fdbcff6bda659766dbfd79150a53cfc2feb2b8ace49801f74
+# 2026-10-13 (sections 5.3, 7.3 and 8.3) and 2026-10-14 (sections 5.3 and
+# 6.2) make fossil's behavior the draft's.
+# draft	draft-fossil-repo-state-01.txt	59dd17b9588497c6c817e61d27fb7137d450f3aa9ad35b4ec81b887f3ccea55c
 # erratum	repo-state-01-s4.2-date-tag-event-time.md	e55108ed39857f4212c2e0ff4afac867fc42d3b762db58c269790200a33b24cf
 # erratum	repo-state-01-s5.3-inherited-row-blocks-direct-tag.md	2bfd0d2e76efe0bf5b3158527381ecb768df02a3925c83bbf26fee18eb935603
 # erratum	repo-state-01-s6.2-cancel-cards-from-parent.md	3d24910396abea9e6a162d2578ef58fc033f664fa1a4f778204bf2a1844029aa
+# erratum	repo-state-01-s6.2-self-cancelling-sym-tag.md	85d4f040bbede7ee8ab4829dba238ef698f73df873ab7a8a6f42f2cb601b9daf
 # erratum	repo-state-01-s7.3-leaf-recheck-branch-tag.md	25a27e819bae83cf71ae40e1de09614e2c8fa83c99c94593189da7cd3636e9cc
 # erratum	repo-state-01-s8.3-ckout-ci-plus.md	a955cf371e420ebdbcec15ab0d91aca3d25fa494de220af6a186e70192dd53ca
 #
@@ -48,9 +50,11 @@ RS-5.1-2	5.1	Any other leading character on a T-card is a fatal error and is nev
 RS-5.2-1	5.2	tagxref holds at most one row per (rid, tag), carrying tagtype, srcid, origid, value and mtime.
 RS-5.3-1	5.3	A direct application is skipped when the (tag, rid) row already has an mtime greater than or equal to the incoming one, whether that row was applied directly or inherited by propagation.
 RS-5.3-2	5.3	Otherwise the row is replaced with the card's raw tagtype, srcid = the artifact carrying the card, origid = rid = the target.
-RS-5.3-3	5.3	A cancel application stores a NULL value.
+RS-5.3-3	5.3	A cancel application keeps the T card's value on the row it writes, NULL when the card has none.
 RS-5.3-4	5.3	A singleton is propagated as a cancel: it removes the inherited same-name rows of the target's descendants.
 RS-5.3-5	5.3	When a check-in's ancestor carries a propagating tag newer than a direct tag of the same name on the check-in, the result follows arrival order: the direct tag applied first keeps the direct value and stops the propagation; the propagation arriving first makes the direct tag skipped, so the check-in keeps the inherited value and, for a date tag, its D-card time.
+RS-5.3-6	5.3	For cached state such as the event table, and for the propagation walk, a cancel's value is treated as null.
+RS-5.3-7	5.3	The tag cards of one artifact are applied in card order, all with the artifact's mtime, so between two cards of one artifact for the same tag and target the first in card order wins.
 RS-5.4-1	5.4	Propagation follows primary-parent links only and never crosses a merge link.
 RS-5.4-2	5.4	Re-propagating a parent's full tag set treats its singleton rows as cancels.
 RS-5.4-3	5.4	A child with a same-tag row qualifies only when that row has srcid 0 and an mtime strictly earlier than the propagating tag's; an equal mtime keeps the row.
@@ -68,6 +72,7 @@ RS-6.1-4	6.1	The default branch is the main-branch setting, and trunk only when 
 RS-6.2-1	6.2	Branch creation writes a propagating branch tag with the name as value and a propagating sym-<name> tag on the branch-root check-in.
 RS-6.2-2	6.2	Branch creation emits a cancel card on the root for every propagating sym-* tag active on the parent other than the new branch's own.
 RS-6.2-3	6.2	Branch creation fails, before writing anything, when an open branch already has the name.
+RS-6.2-4	6.2	A branch root carrying both a propagating and a cancel card for its own sym-<name> keeps the propagating tag: the * card precedes the - card in card order, and the cancel is skipped.
 RS-6.3-1	6.3	The branch list has one entry per distinct active branch-tag value, with that value's greatest event.mtime and check-in count.
 RS-6.3-2	6.3	A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.
 RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 rule as any branch membership.

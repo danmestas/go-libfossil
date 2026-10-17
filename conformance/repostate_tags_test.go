@@ -61,10 +61,23 @@ func tagTypeCases() []rsCase {
 		foo("repostate.5.3.direct-row-shape", "RS-5.3-2",
 			with(chain(), control("t", 9, "*foo {c2} v")), fooOn,
 			"-tagxref: foo c2 2 t c2 'v' @9", "+tagxref: foo c2 2 0 c2 'v' @9"),
-		foo("repostate.5.3.cancel-clears-value", "RS-5.3-3",
+		foo("repostate.5.3.cancel-no-value", "RS-5.3-3",
 			with(chain(), control("t1", 8, "*foo {c2} v"), control("t2", 9, "-foo {c2}")),
 			[]string{"foo c2 0 t2 c2 NULL @9"},
 			"-tagxref: foo c2 0 t2 c2 NULL @9", "+tagxref: foo c2 0 t2 c2 'v' @9"),
+		// The cancel card's own value stays on the row it writes, as
+		// fossil's tag_insert stores it.
+		foo("repostate.5.3.cancel-keeps-value", "RS-5.3-3",
+			with(chain(), control("t1", 8, "*foo {c2} v"), control("t2", 9, "-foo {c2} why")),
+			[]string{"foo c2 0 t2 c2 'why' @9"},
+			"-tagxref: foo c2 0 t2 c2 'why' @9", "+tagxref: foo c2 0 t2 c2 NULL @9"),
+		cancelValueNotCached(),
+		// Both cards are on t at second 9; the * card sorts before the -
+		// card, writes the row, and the cancel meets an equal mtime.
+		foo("repostate.5.3.card-order", "RS-5.3-7",
+			with(chain(), control("t", 9, "*foo {c2} v", "-foo {c2}")), fooOn,
+			"-tagxref: foo c2 2 t c2 'v' @9", "+tagxref: foo c2 0 t c2 NULL @9",
+			"-tagxref: foo c3 2 0 c2 'v' @9", "-tagxref: foo c4 2 0 c2 'v' @9"),
 		foo("repostate.5.3.singleton-local", "RS-5.3-4",
 			with(chain(), control("t1", 8, "*foo {c1} v"), control("t2", 9, "+foo {c2} s")),
 			[]string{"foo c1 2 t1 c1 'v' @8", "foo c2 1 t2 c2 's' @9"},

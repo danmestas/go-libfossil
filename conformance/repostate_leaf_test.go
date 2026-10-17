@@ -19,6 +19,23 @@ func branchCases() []rsCase {
 		ignoring: []string{"-tagxref: branch b2 2 0 b1 'feat' @2",
 			"+tagxref: branch b2 2 0 c1 'trunk' @1"},
 		rebuild: true,
+	}, {
+		// r re-creates feat on f1, which already carries a propagating
+		// sym-feat, so its manifest has both *sym-feat and -sym-feat, as
+		// fossil's branch new writes them. The * card comes first in card
+		// order and the cancel is skipped (Section 6.2).
+		Case: Case{ID: "repostate.6.2.self-cancelling-sym", Req: "RS-6.2-4"},
+		arts: []rsArt{
+			checkin("c1", 1, nil, rsRoot...),
+			checkin("f1", 2, of("c1"), rsFeat...),
+			checkin("r", 3, of("f1"), "*branch * feat", "*sym-feat *", "-sym-feat *"),
+		},
+		tables: []string{"tagxref"},
+		tags:   []string{"sym-feat"},
+		want:   rows("tagxref", "sym-feat f1 2 f1 f1 NULL @2", "sym-feat r 2 r r NULL @3"),
+		ignoring: []string{"-tagxref: sym-feat r 2 r r NULL @3",
+			"+tagxref: sym-feat r 0 r r NULL @3"},
+		rebuild: true,
 	}}
 }
 

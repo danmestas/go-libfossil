@@ -52,6 +52,20 @@ func eventTagCases() []rsCase {
 	}
 }
 
+// cancelValueNotCached cancels bgcolor with a value: the row keeps it, but
+// the event table takes the cancel as null (Section 5.3, step 3). Unlike the
+// cases above it names a requirement, so it runs in TestRepoState.
+func cancelValueNotCached() rsCase {
+	none := "NULL NULL NULL"
+	c := eventTagCase("repostate.5.3.cancel-value-not-cached",
+		with(chain()[:3], control("t1", 8, "*bgcolor {c2} red"),
+			control("t2", 9, "-bgcolor {c2} why")),
+		[]string{"c1 " + none, "c2 " + none, "c3 " + none},
+		"-eventcols: c2 "+none, "+eventcols: c2 'why' NULL NULL")
+	c.Req = "RS-5.3-6"
+	return c
+}
+
 func TestRepoStateEventTags(t *testing.T) {
 	runRepoStateCases(t, eventTagCases())
 }

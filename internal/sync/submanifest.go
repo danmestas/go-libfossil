@@ -26,12 +26,13 @@ import (
 // submanifestVersion is the first announced release known to read
 // sub-manifests (§7.2): zit's threshold, matched so the two interoperate.
 //
-// KNOWN GAP: it is not above every fossil that cannot read a tree. Fossil
-// 2.29, unreleased but already announcing 22900 from its trunk, has no
-// sub-manifest support, and this gate would hand it trees. A release number
-// cannot tell zit from such a fossil; the fix needs a signal zit and the
-// draft agree on, so the conformance suite records it as a deviation of
-// SM-7.2-1 until they do. Today no fossil release announces 22900.
+// KNOWN GAP: no fossil reads trees, and none plans to, yet fossil 2.29
+// (unreleased, already announcing 22900 from its trunk) and every later
+// release clear this threshold, so the gate would hand them trees. A minimum
+// cannot tell zit from a newer fossil; the fix is a version no fossil
+// announces, which zit and the draft must agree on (danmestas/zit#239). The
+// conformance suite records it as a deviation of SM-7.2-1 until then. Today
+// no fossil release announces 22900.
 const submanifestVersion = 22900
 
 // announcedVersion is the release this library announces in client-version

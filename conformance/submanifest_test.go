@@ -946,8 +946,8 @@ func smTransferCases() []smCase {
 			return want("file cards for ordinary content", len(smCardsOf[*xfer.FileCard](plain)), 1)
 		}),
 		{Case{ID: "submanifest.7.2.fossil-2.29-not-refused", Req: "SM-7.2-1",
-			Deviation: "the threshold is zit's 22900, which fossil 2.29 also announces " +
-				"without reading trees; refusing it needs a signal zit and the draft agree on"},
+			Deviation: "the threshold is zit's 22900, which fossil 2.29 and later announce " +
+				"without reading trees; refusing them needs a non-fossil version (danmestas/zit#239)"},
 			func(t *testing.T) error {
 				f, err := newSMFixture(t)
 				if err != nil {
@@ -1018,7 +1018,7 @@ func smTransferCases() []smCase {
 		{Case{ID: "submanifest.6.3.reqconfig-on-pull", Req: "SM-6.3-3",
 			Deviation: "follows zit: the request is reqconfig /config, the scalar marker zit's " +
 				"server answers (it answers /project with nothing), sent once in the clone's " +
-				"cleanup round and never on pull"}, func(t *testing.T) error {
+				"cleanup round and never on pull (draft text: danmestas/zit#240)"}, func(t *testing.T) error {
 			return fmt.Errorf("go-libfossil sends reqconfig /config in the clone cleanup round only")
 		}},
 		{Case{ID: "submanifest.6.3.clone-without-group", Req: "SM-6.3-4"}, func(t *testing.T) error {

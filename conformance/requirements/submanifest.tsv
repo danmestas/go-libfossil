@@ -1,0 +1,68 @@
+# Requirements of draft-fossil-submanifests-00, reader scope, written from the
+# draft text. go-libfossil reads trees and writes none, so the writer sections
+# are skipped, with reasons, in the suite's report: 6.1, 6.2, 6.4 and 6.5
+# (canonical construction, parameter selection and re-tuning), the parameter
+# selection and enabling rules of 6.3 and 8.1, the delta-manifest latch of
+# 5.4, 5.6 (informative), 8.2 (an operator rule for provisional repositories,
+# not observable in a library), 11 (IANA) and the writer vectors of A.5. Not
+# implemented: the 7.4 SHOULD (memoized sub-manifest enumeration).
+# The reference for behaviour the draft leaves open is zit, the other
+# implementation: its 2.29.0 version threshold (7.2), its avoid-submanifests
+# placement, and its configuration request (6.3, SM-6.3-3).
+# Format: <id>\t<section>\t<requirement>[\t<scope note>]
+# draft	draft-fossil-submanifests-00.txt	b6cb37690b9273c92568222abe65c450c5a103c149225f94604420bc5127ad52
+SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.
+SM-3.2-1	3.2	An S card carries exactly a filename and a hash; a third token, or a missing hash, is rejected.
+SM-3.3-1	3.3	The S card filename is escape-decoded; the S card hash is never decoded.
+SM-3.4-1	3.4	S cards repeat, and an S run ascends strictly by decoded filename under the canonical comparator; an equal or descending neighbour is rejected.
+SM-3.4-2	3.4	S falls between R and T in the card order, so a manifest's S run follows its R card and precedes its T cards.
+SM-3.5-1	3.5	The S card hash is exactly 40 or 64 case-insensitive hexadecimal characters.
+SM-3.6-1	3.6	The decoded S card filename passes the pathname predicate; one that does not is rejected.
+SM-4.2-1	4.2	A manifest may carry an S card alongside B C D F N P Q R T U Z, and requires D and Z.
+SM-4.2-2	4.2	A sub-manifest may carry only F, S and Z cards, and requires a Z card.
+SM-4.3-1	4.3	S is a manifest-setting letter, and a manifest with no D card is reclassified as SUBMANIFEST once its type is final and before legality is checked; no card assigns SUBMANIFEST directly.
+SM-4.3-2	4.3	No artifact valid under the base artifact format changes classification.
+SM-4.4-1	4.4	A manifest carrying both a B card and an S card is rejected.
+SM-4.4-2	4.4	A manifest carrying both F cards and S cards is rejected.
+SM-4.4-3	4.4	A sub-manifest carrying both F cards and S cards, or neither, is rejected.
+SM-4.4-4	4.4	Every F card of a sub-manifest carries a hash; a delete marker in a sub-manifest is rejected.
+SM-4.4-5	4.4	The tree walk delivers each emitted F card's hash, permission and old-name tokens to consumers unaltered.
+SM-4.5-1	4.5	An interior sub-manifest, whose first card is S, is not rejected by a pre-filter on its first card letter.
+SM-5-1	5	A manifest is a tree manifest if and only if it carries an S card, and a consumer that needs its file set derives it by the tree walk.
+SM-5.1-1	5.1	The walk enumerates a tree depth first and in order, emitting each leaf's F cards in order, through interior sub-manifests as well as leaves.
+SM-5.1-2	5.1	Each S card's decoded filename, and each emitted filename, compares strictly greater than the last filename emitted; an enumeration that does not ascend across sibling slices fails.
+SM-5.1-3	5.1	The enumeration fails when a referenced sub-manifest is absent.
+SM-5.1-4	5.1	The enumeration fails when a referenced artifact is not of type SUBMANIFEST.
+SM-5.1-5	5.1	The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.	a cycle cannot be built from content-addressed artifacts: the case shows the depth bound ending a path, and internal/manifest's TestTreeWalkRefusesRepeatedArtifact the check itself
+SM-5.1-6	5.1	The enumeration fails when a sub-manifest lies deeper than 16 sub-manifests, counting the leaf; a depth of 16 is accepted.
+SM-5.1-7	5.1	A leaf's first emitted filename is byte-identical to the filename of the S card that reached it.
+SM-5.1-8	5.1	An interior sub-manifest's first S card filename is byte-identical to the filename of the S card that reached it.
+SM-5.1-9	5.1	Downstream consumers do not distinguish a walked enumeration from a flat one: a tree check-in's file-change records are those of a flat check-in of the same files.
+SM-5.2-1	5.2	The enumeration entry points, the full walk and single-name lookup, treat an unresolvable sub-manifest as a fatal error, and no partially resolved tree is presented as a complete file set.
+SM-5.2-2	5.2	A consumer that defers records the gap, keyed by the dependent and the missing hash and inserted idempotently, and retries when the sub-manifest arrives.
+SM-5.3-1	5.3	Single-name lookup binary-searches each S run for the last card at or before the name, descending one sub-manifest per level to a leaf; a name before the first S card is absent.
+SM-5.3-2	5.3	A lookup that would resolve a sub-manifest deeper than 16 fails, and a sub-manifest it cannot resolve fails it hard.
+SM-5.4-1	5.4	A delta manifest may name a tree manifest as its baseline: the merge walk takes the tree walk as its baseline cursor, and single-name lookup takes the tree lookup as its baseline step.
+SM-5.4-2	5.4	A writer with the enable-submanifests setting off does not create a delta manifest against a tree baseline.
+SM-5.5-1	5.5	A tree manifest's R card is computed over the walked enumeration, and a delta over a tree baseline's over the composed enumeration.
+SM-6.3-1	6.3	A supporting server recognizes submanifest-k, enable-submanifests and submanifest-auto-retune as members of the /project configuration group.
+SM-6.3-2	6.3	A receiver stages the three settings through the end of the containing reply, validates them, and applies all or none; card order does not affect the result, and an invalid value, or enable-submanifests on without a submanifest-k from 1 to 12, rejects all three.
+SM-6.3-3	6.3	A client supporting this specification and holding Read permission requests reqconfig /project during pull and after clone authorization succeeds.
+SM-6.3-4	6.3	A newly cloned repository that could not retrieve the group leaves enable-submanifests false.
+SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates a phantom for each, with the referencing artifact's privacy.
+SM-7.1-2	7.1	Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.
+SM-7.2-1	7.2	A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer whose announced version predates sub-manifest support, with an explicit error and never by converting, downgrading or silently omitting it.
+SM-7.2-2	7.2	A server whose enable-submanifests setting is false sends pragma avoid-submanifests in the reply positions of avoid-delta-manifests.
+SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in commits created during the session.	go-libfossil emits no S card in any commit, so the pragma has nothing to stop
+SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
+SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.
+SM-8.1-1	8.1	A writer emits no S card unless the enable-submanifests setting is true.	go-libfossil writes no tree in any case
+SM-8.1-2	8.1	When the first S-bearing artifact is stored, a seen-submanifest indicator is recorded.
+SM-9.1-1	9.1	SUBMANIFEST is determined by the post-pass reassignment, not while cards are read, and required-card logic treats it as an exception to the D card.
+SM-9.2-1	9.2	A sweep that discovers crosslink work by the absence of derived rows excludes SUBMANIFEST artifacts or records a completion marker for them, so it never reselects them.
+SM-9.3-1	9.3	Every consumer of a check-in's file set (checkout, diff, crosslink, rebuild, annotate, commit) obtains it through one shared enumeration interface.
+SM-9.4-1	9.4	When a tree manifest's processing is deferred, enough is recorded to rediscover it when the missing sub-manifest arrives, and the dephantomization path traverses that record.
+SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.	the visit bound (2^20) is asserted by construction, not by a case that reaches it
+SM-A-1	A.2, A.3	The Appendix A.2 and A.3 artifacts parse, determine their types, recompute their names, walk to the four-file enumeration, and the R card verifies over it.
+SM-A-2	A.4	The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.
+SM-A-3	A.5	The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.

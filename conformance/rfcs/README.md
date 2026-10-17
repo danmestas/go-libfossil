@@ -19,6 +19,7 @@ second column.
 | `draft-fossil-repo-state-01.txt` | `draft-fossil-repo-state-00.txt` | `3f86ff4261` | `9980e22265` | `59dd17b9588497c6…` |
 | `draft-fossil-sync-protocol-01.txt` | `draft-fossil-sync-protocol-00.txt` | `3f86ff4261` | `bafc21adc5` | `c738d32f854495e9…` |
 | `draft-fossil-delta-format-00.txt` | `draft-fossil-delta-format-00.txt` | `3f86ff4261` | `d8025d6d75` | `6a28ee7e2e146f80…` |
+| `draft-fossil-submanifests-00.txt` | same | `3f86ff4261` | `eaef2e2e36` | `b6cb37690b9273c9…` |
 | `erratum/artifact-format-01-s4.4-z-card-last-by-ordering.md` | same | `3f86ff4261` | `dc53e482e1` | `3049c7ebc2aadea1…` |
 | `erratum/artifact-format-01-s4.6.4-julian-day-grammar.md` | same | `3f86ff4261` | `5a1adf7f9c` | `c50e6b5aef35b654…` |
 | `erratum/artifact-format-01-s4.7.3-delta-of-delta-delete-markers.md` | same | `3f86ff4261` | `fbc5c735d8` | `55195d37f9e74737…` |
@@ -60,3 +61,10 @@ which the cases use as the reference where the drafts and fossil(1)
 disagree. The -00 errata are folded into the -01 drafts (zit check-in
 `44685f33b1`) and are no longer pinned. There is no delta-format -01, so the
 delta suite stays on -00; its file is unchanged at `3f86ff4261`.
+
+The sub-manifest draft (`draft-fossil-submanifests-00`) has no -01 and no
+errata; its text is unchanged since zit check-in `307d7287fa` (2026-07-28).
+Its Appendix A vectors are byte vectors: `../testdata/submanifest/` holds
+zit's copies of them, as authored for zit, taken at check-in `3f86ff4261`
+(`src/rfc_vectors/`), each with two leading `#` lines that keep it from
+reading as a live artifact on disk; the suite drops those lines.

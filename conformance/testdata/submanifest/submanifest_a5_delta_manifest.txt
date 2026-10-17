@@ -1,0 +1,10 @@
+# rfc-vector: inert on disk. Leading "#" lines are stripped at load.
+# Without them Fossil crosslinks this blob as a live artifact into every clone.
+B 95fba39cbaba76fccb15571516659cea6a0e8a60123c3e7bda1397649d87c509
+C Delta\sover\sa\stree\sbaseline
+D 2026-07-27T00:00:00
+F src/main.c 5cde756b8d6a9f73707d6e97d1311285608a7445d996f6f59c6f6a3070e4d371
+F src/util.c
+R e92ec40944dd9a6f2ddef31b040fcd09
+U drh
+Z 4d65d93f5cdbd3497e6aa4013d0465bc

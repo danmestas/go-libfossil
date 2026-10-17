@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The conformance suite is re-pinned to the -01 drafts as zit check-in
+  `3f86ff4261` holds them, with six more errata applied. The artifact format
+  says the Z card is last by the ordering and required-card rules, and §6.2
+  decides the Z verification state from the bytes at n-35 and n-34 (AF-6.2-7).
+  §4.7.3 filters the named delta's delete markers out of a delta-of-delta's
+  file set (AF-4.7.3-2), and §4.7.8 reads an absent and a present empty `J`
+  value alike (AF-4.7.8-1). In repo-state §5.3, a cancel keeps its card's
+  value on the row it writes, while the event table and propagation treat
+  it as null (RS-5.3-3, RS-5.3-6). An artifact's tag cards apply in card
+  order (RS-5.3-7), so a branch root carrying `*sym-NAME` and `-sym-NAME`
+  keeps the tag (§6.2, RS-6.2-4). In sync-protocol §6.6, a client recognizes
+  a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
+  way; six requirements are new, two are reworded, and each has a case
+  checked against fossil 2.28.
+
 ## [0.12.0] - 2026-10-13
 
 ### Added

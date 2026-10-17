@@ -15,31 +15,48 @@ second column.
 
 | File | zit path | zit check-in | zit artifact | SHA-256 |
 |---|---|---|---|---|
-| `draft-fossil-artifact-format-01.txt` | `draft-fossil-artifact-format-00.txt` | `5a1b741b25d8` | `dd0e1a9322` | `e91b720ba70a74b5…` |
-| `draft-fossil-repo-state-01.txt` | `draft-fossil-repo-state-00.txt` | `5a1b741b25d8` | `e005e776d7` | `d94ba052317b718…` |
-| `draft-fossil-sync-protocol-01.txt` | `draft-fossil-sync-protocol-00.txt` | `5a1b741b25d8` | `bacc557b5a` | `383bd08c8923dca…` |
-| `draft-fossil-delta-format-00.txt` | `draft-fossil-delta-format-00.txt` | `5a1b741b25d8` | `d8025d6d75` | `6a28ee7e2e146f8…` |
-| `erratum/artifact-format-01-s4.6.4-julian-day-grammar.md` | same | `5a1b741b25d8` | `5a1adf7f9c` | `c50e6b5aef35b65…` |
-| `erratum/repo-state-01-s4.2-date-tag-event-time.md` | same | `5a1b741b25d8` | `b5e6383412` | `e55108ed39857f4…` |
-| `erratum/repo-state-01-s5.3-inherited-row-blocks-direct-tag.md` | same | `5a1b741b25d8` | `1ee5e540ce` | `2bfd0d2e76efe0b…` |
-| `erratum/repo-state-01-s6.2-cancel-cards-from-parent.md` | same | `5a1b741b25d8` | `43f021a207` | `3d24910396abea9…` |
-| `erratum/repo-state-01-s7.3-leaf-recheck-branch-tag.md` | same | `5a1b741b25d8` | `275509b8fc` | `25a27e819bae83c…` |
-| `erratum/repo-state-01-s8.3-ckout-ci-plus.md` | same | `5a1b741b25d8` | `7e8ecce19e` | `a955cf371e420eb…` |
-| `erratum/sync-protocol-01-s5.1-truncated-payload-receiver.md` | same | `5a1b741b25d8` | `8157e3faaf` | `0e08208def3084a…` |
-| `erratum/sync-protocol-01-s5.3-errors-count.md` | same | `5a1b741b25d8` | `ca1539a1e9` | `752da0b6944f341…` |
-| `erratum/sync-protocol-01-s6.6-file-card-after-refused-push.md` | same | `5a1b741b25d8` | `1c50fe8add` | `5857e99624ece02…` |
-| `erratum/sync-protocol-01-s9.4-avoid-delta-manifests.md` | same | `00e1711e802e` | `e29beb0afc` | `caad0402360fdcc…` |
-| `erratum/sync-protocol-01-s10.1-wrong-hash-file-fails-the-round.md` | same | `5a1b741b25d8` | `e5dd8a4c9b` | `8cb2b8cbbdfe808…` |
+| `draft-fossil-artifact-format-01.txt` | `draft-fossil-artifact-format-00.txt` | `3f86ff4261` | `b92b19b71f` | `3217c01c2d5a01a4…` |
+| `draft-fossil-repo-state-01.txt` | `draft-fossil-repo-state-00.txt` | `3f86ff4261` | `9980e22265` | `59dd17b9588497c6…` |
+| `draft-fossil-sync-protocol-01.txt` | `draft-fossil-sync-protocol-00.txt` | `3f86ff4261` | `bafc21adc5` | `c738d32f854495e9…` |
+| `draft-fossil-delta-format-00.txt` | `draft-fossil-delta-format-00.txt` | `3f86ff4261` | `d8025d6d75` | `6a28ee7e2e146f80…` |
+| `erratum/artifact-format-01-s4.4-z-card-last-by-ordering.md` | same | `3f86ff4261` | `dc53e482e1` | `3049c7ebc2aadea1…` |
+| `erratum/artifact-format-01-s4.6.4-julian-day-grammar.md` | same | `3f86ff4261` | `5a1adf7f9c` | `c50e6b5aef35b654…` |
+| `erratum/artifact-format-01-s4.7.3-delta-of-delta-delete-markers.md` | same | `3f86ff4261` | `fbc5c735d8` | `55195d37f9e74737…` |
+| `erratum/artifact-format-01-s4.7.8-j-card-empty-value.md` | same | `3f86ff4261` | `befe7488ef` | `d0880d6735b7890d…` |
+| `erratum/repo-state-01-s4.2-date-tag-event-time.md` | same | `3f86ff4261` | `b5e6383412` | `e55108ed39857f42…` |
+| `erratum/repo-state-01-s5.3-inherited-row-blocks-direct-tag.md` | same | `3f86ff4261` | `1ee5e540ce` | `2bfd0d2e76efe0bf…` |
+| `erratum/repo-state-01-s6.2-cancel-cards-from-parent.md` | same | `3f86ff4261` | `43f021a207` | `3d24910396abea9e…` |
+| `erratum/repo-state-01-s6.2-self-cancelling-sym-tag.md` | same | `3f86ff4261` | `821dd715d9` | `85d4f040bbede7ee…` |
+| `erratum/repo-state-01-s7.3-leaf-recheck-branch-tag.md` | same | `3f86ff4261` | `275509b8fc` | `25a27e819bae83cf…` |
+| `erratum/repo-state-01-s8.3-ckout-ci-plus.md` | same | `3f86ff4261` | `7e8ecce19e` | `a955cf371e420ebd…` |
+| `erratum/sync-protocol-01-s5.1-truncated-payload-receiver.md` | same | `3f86ff4261` | `8157e3faaf` | `0e08208def3084ac…` |
+| `erratum/sync-protocol-01-s5.3-errors-count.md` | same | `3f86ff4261` | `ca1539a1e9` | `752da0b6944f341a…` |
+| `erratum/sync-protocol-01-s6.6-file-card-after-refused-push.md` | same | `3f86ff4261` | `1c50fe8add` | `5857e99624ece02c…` |
+| `erratum/sync-protocol-01-s6.6-refusal-text-suffix.md` | same | `3f86ff4261` | `80923cf46f` | `19ff7626abc62a50…` |
+| `erratum/sync-protocol-01-s9.4-avoid-delta-manifests.md` | same | `3f86ff4261` | `e29beb0afc` | `caad0402360fdcca…` |
+| `erratum/sync-protocol-01-s10.1-wrong-hash-file-fails-the-round.md` | same | `3f86ff4261` | `e5dd8a4c9b` | `8cb2b8cbbdfe8089…` |
 
-The drafts carry every -01 erratum: the six of zit check-in
-`100351e26ce269a29e0567dfd81010729be80f3d` (2026-10-12) and the five of
+The drafts carry every -01 erratum, taken from zit check-in
+`3f86ff4261484cc3b57aa6bbeb1cede7515d76ad` (2026-10-17): the six of check-in
+`100351e26ce269a29e0567dfd81010729be80f3d` (2026-10-12); the five of
 2026-10-13 (repo-state §5.3, §7.3, §8.3; sync-protocol §9.4, §10.1), applied
-by check-in `5a1b741b25d8`. The §9.4 erratum was corrected afterwards, at
-check-in `00e1711e802e`: it now says the `forbid-delta-manifests` default
-is on since Fossil 2.29, while 2.28 defaults it off. The draft text is
-unchanged. The errata are pinned for the Fossil 2.28 and
-2.29 behavior they record, which the cases use as the reference where the
-drafts and fossil(1) disagree. The -00 errata are folded into the -01 drafts
-(zit check-in `44685f33b1`) and are no longer pinned. There is no
-delta-format -01, so the delta suite stays on -00; its file is unchanged at
-`5a1b741b25d8`.
+by check-in `5a1b741b25d8`, with the §9.4 erratum corrected at `00e1711e802e`
+to say the `forbid-delta-manifests` default is on since Fossil 2.29 and off
+in 2.28; and six more of 2026-10-14 and 2026-10-16: artifact-format §4.4/§6.2
+(the Z card is last by ordering and the required-card rule; verification
+reads bytes by position), §4.7.3 (a named delta's delete markers are
+filtered), §4.7.8 (an absent and an empty `J` value decode alike),
+repo-state §5.3/§6.2 (an artifact's tag cards apply in card order, so a
+self-cancelling sym tag stays), and sync-protocol §6.6 (a client matches a
+refusal by its leading text). The sixth, repo-state §5.3 step 3 (a cancel's
+value stays on the stored row), is filed in zit as
+`erratum/repo-state-00-s5.3-cancel-value.md`, an erratum to -00 applied in the
+-01 text; like the other -00 errata it is not pinned here, and the -01 draft
+carries its text. The horizon draft merged into zit trunk on 2026-10-17 was
+backed out at `3f86ff4261`, so nothing of it is pinned.
+
+The errata are pinned for the Fossil 2.28 and 2.29 behavior they record,
+which the cases use as the reference where the drafts and fossil(1)
+disagree. The -00 errata are folded into the -01 drafts (zit check-in
+`44685f33b1`) and are no longer pinned. There is no delta-format -01, so the
+delta suite stays on -00; its file is unchanged at `3f86ff4261`.

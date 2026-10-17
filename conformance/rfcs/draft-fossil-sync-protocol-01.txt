@@ -5,9 +5,9 @@
 Network Working Group                                    D. R. Hipp, Ed.
 Internet-Draft                                                    Fossil
 Intended status: Standards Track                                 S. Beal
-Expires: 16 April 2027                                         libfossil
+Expires: 19 April 2027                                         libfossil
                                                               D. Shearer
-                                                         13 October 2026
+                                                         16 October 2026
 
 
       The Fossil Distributed Version Control System: Sync Protocol
@@ -36,7 +36,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 16 April 2027.
+   This Internet-Draft will expire on 19 April 2027.
 
 Copyright Notice
 
@@ -53,7 +53,7 @@ Copyright Notice
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 1]
+Hipp, et al.              Expires 19 April 2027                 [Page 1]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -98,35 +98,35 @@ Table of Contents
      6.4.  Signature Computation . . . . . . . . . . . . . . . . . .  20
      6.5.  Cookie-Login Mode . . . . . . . . . . . . . . . . . . . .  21
      6.6.  Capability Model  . . . . . . . . . . . . . . . . . . . .  22
-   7.  Content Transfer  . . . . . . . . . . . . . . . . . . . . . .  22
-     7.1.  file Card . . . . . . . . . . . . . . . . . . . . . . . .  22
+   7.  Content Transfer  . . . . . . . . . . . . . . . . . . . . . .  23
+     7.1.  file Card . . . . . . . . . . . . . . . . . . . . . . . .  23
      7.2.  cfile Card  . . . . . . . . . . . . . . . . . . . . . . .  23
      7.3.  uvfile Card . . . . . . . . . . . . . . . . . . . . . . .  23
-     7.4.  Delta Sources and Phantom Creation  . . . . . . . . . . .  24
+     7.4.  Delta Sources and Phantom Creation  . . . . . . . . . . .  25
      7.5.  Private Content . . . . . . . . . . . . . . . . . . . . .  25
      7.6.  SHA3-256 Peer-Version Gate  . . . . . . . . . . . . . . .  26
-     7.7.  Hash-Policy Admission . . . . . . . . . . . . . . . . . .  26
+     7.7.  Hash-Policy Admission . . . . . . . . . . . . . . . . . .  27
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 2]
+Hipp, et al.              Expires 19 April 2027                 [Page 2]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
 
-   8.  Clone . . . . . . . . . . . . . . . . . . . . . . . . . . . .  27
-     8.1.  Clone Protocol Version  . . . . . . . . . . . . . . . . .  27
+   8.  Clone . . . . . . . . . . . . . . . . . . . . . . . . . . . .  28
+     8.1.  Clone Protocol Version  . . . . . . . . . . . . . . . . .  28
      8.2.  Sequence Numbers  . . . . . . . . . . . . . . . . . . . .  28
      8.3.  First Clone Round . . . . . . . . . . . . . . . . . . . .  30
      8.4.  Configuration During Clone  . . . . . . . . . . . . . . .  30
-     8.5.  Push, Pull, and Sync  . . . . . . . . . . . . . . . . . .  30
-       8.5.1.  Unversioned-File Synchronisation  . . . . . . . . . .  30
+     8.5.  Push, Pull, and Sync  . . . . . . . . . . . . . . . . . .  31
+       8.5.1.  Unversioned-File Synchronisation  . . . . . . . . . .  31
      8.6.  Announcement and Request Cards  . . . . . . . . . . . . .  33
        8.6.1.  Derived Branch, Tag, Leaf, Closed, and Current-Trunk
                Views . . . . . . . . . . . . . . . . . . . . . . . .  33
      8.7.  Phantom Records . . . . . . . . . . . . . . . . . . . . .  33
      8.8.  Gimme Eligibility Filters . . . . . . . . . . . . . . . .  33
-     8.9.  Loop Termination  . . . . . . . . . . . . . . . . . . . .  33
+     8.9.  Loop Termination  . . . . . . . . . . . . . . . . . . . .  34
    9.  Pragmas . . . . . . . . . . . . . . . . . . . . . . . . . . .  34
      9.1.  Version Negotiation . . . . . . . . . . . . . . . . . . .  34
      9.2.  Unversioned-File Pragmas  . . . . . . . . . . . . . . . .  35
@@ -143,7 +143,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
      11.4.  SHA3-256 Downgrade Prevention  . . . . . . . . . . . . .  41
    12. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  41
    13. References  . . . . . . . . . . . . . . . . . . . . . . . . .  43
-     13.1.  Normative References . . . . . . . . . . . . . . . . . .  43
+     13.1.  Normative References . . . . . . . . . . . . . . . . . .  44
      13.2.  Informative References . . . . . . . . . . . . . . . . .  45
    Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  45
      A.1.  Basic Push/Pull Convergence (Two Rounds)  . . . . . . . .  45
@@ -165,7 +165,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 3]
+Hipp, et al.              Expires 19 April 2027                 [Page 3]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -221,7 +221,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 4]
+Hipp, et al.              Expires 19 April 2027                 [Page 4]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -277,7 +277,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 5]
+Hipp, et al.              Expires 19 April 2027                 [Page 5]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -333,7 +333,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 6]
+Hipp, et al.              Expires 19 April 2027                 [Page 6]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -389,7 +389,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 7]
+Hipp, et al.              Expires 19 April 2027                 [Page 7]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -445,7 +445,7 @@ increment round number; evaluate Section 3.7; only then discard round state
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 8]
+Hipp, et al.              Expires 19 April 2027                 [Page 8]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -501,7 +501,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                 [Page 9]
+Hipp, et al.              Expires 19 April 2027                 [Page 9]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -557,7 +557,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 10]
+Hipp, et al.              Expires 19 April 2027                [Page 10]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -613,7 +613,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 11]
+Hipp, et al.              Expires 19 April 2027                [Page 11]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -669,7 +669,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 12]
+Hipp, et al.              Expires 19 April 2027                [Page 12]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -725,7 +725,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 13]
+Hipp, et al.              Expires 19 April 2027                [Page 13]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -781,7 +781,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 14]
+Hipp, et al.              Expires 19 April 2027                [Page 14]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -837,7 +837,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 15]
+Hipp, et al.              Expires 19 April 2027                [Page 15]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -893,7 +893,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 16]
+Hipp, et al.              Expires 19 April 2027                [Page 16]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -949,7 +949,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 17]
+Hipp, et al.              Expires 19 April 2027                [Page 17]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -1005,7 +1005,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 18]
+Hipp, et al.              Expires 19 April 2027                [Page 18]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -1061,7 +1061,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 19]
+Hipp, et al.              Expires 19 April 2027                [Page 19]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -1117,7 +1117,7 @@ shared-secret = SHA1(project-code "/" login-name "/" plaintext-password)
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 20]
+Hipp, et al.              Expires 19 April 2027                [Page 20]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -1173,7 +1173,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 21]
+Hipp, et al.              Expires 19 April 2027                [Page 21]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -1221,18 +1221,30 @@ VERSION >= 22700 AND (DATE > 20250727 OR (DATE == 20250727 AND TIME >= 110500))
    release are governed solely by Section 9.4’s lock-table rules, not by
    an additional Write-capability check.
 
-7.  Content Transfer
-
-7.1.  file Card
 
 
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 22]
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 22]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+   A server MAY append further words to the text of any refusal this
+   document gives in the form "not authorized to ...", including the
+   message form above.  Fossil appends " because the 'localauth' setting
+   is enabled" when it refuses a request from the loopback address
+   because that setting requires such requests to log in.  A client MUST
+   recognize a refusal by the text this document gives at the start of
+   the decoded text, not by the whole text.
+
+7.  Content Transfer
+
+7.1.  file Card
 
    file HASH SIZE
    file HASH DELTASRC SIZE
@@ -1269,6 +1281,15 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    reject negative FLAGS and ignore reserved bits completely (2 equals
    0; 6 or 20 equals 4).
 
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 23]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    The canonical sender emits deletion as HASH -, SIZE 0, and FLAGS with
    0x0001 set.  On reception, HASH - deletes when SIZE is zero or either
    0x0001 or 0x0004 suppresses payload/hash processing.  Otherwise, a
@@ -1282,14 +1303,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    remote-wins decision computed for an earlier uvigot.  Statuses 3
    through 5 make no local-row change.  Status 2 updates MTIME only.
    For status 0 or 1, HASH - applies deletion and is a no-op when no row
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 23]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    exists; otherwise, the receiver replaces or creates the row using the
    received metadata and content.  When content is omitted by FLAGS
    0x0004, or when SIZE is zero, the stored representation has size
@@ -1325,6 +1338,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    server state: it requires Read permission, as the catalog does, and
    has no UV write requirement.
 
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 24]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
 7.4.  Delta Sources and Phantom Creation
 
    If HASH already names a locally verified artifact, the receiver
@@ -1336,15 +1357,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    counts as a dangling delta for the content-received flag of
    Section 3.7.  A receiver MAY check HASH first and skip delta-source
    handling; peers MUST tolerate either behavior.
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 24]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    For an as-yet-unverified target, missing DELTASRC does not reject
    content: Fossil retains the delta under HASH, deletes HASH’s phantom,
@@ -1382,6 +1394,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    With an unauthorized marked server cfile, it returns before
    extracting the compressed payload, leaving those bytes at the parser
    cursor rather than silently discarding a complete card.  The client
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 25]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    sets its marker upon private receipt; its subsequent content
    admission follows its client receive handler rather than the server’s
    unauthorized-marker paths.  A missing DELTASRC for a marked delta
@@ -1392,15 +1412,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    not create a phantom, but reclassify an existing HASH artifact or
    phantom private; record peer possession and continue.  Pulling
    private content requires successful send-private.
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 25]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    For a received igot HASH 1, Fossil reclassifies an existing HASH
    artifact or phantom private before applying the missing-artifact
@@ -1440,6 +1451,13 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    request cards.  A preceding server request-scoped private marker is
    consumed and cleared by that substituted error handler.
 
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 26]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
 7.7.  Hash-Policy Admission
 
    For a received artifact-transfer card, shun-sha1 applies exactly when
@@ -1447,16 +1465,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    of processing that card is the shun-sha1 value defined by
    [FossilArtifact], Section 7.  No peer state or artifact-transfer card
    field participates in this predicate.
-
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 26]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    Admission applies to the received target HASH, not independently to
    DELTASRC.  A target is shunned for admission when its complete name
@@ -1493,6 +1501,19 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    under auto permanently promotes repository policy to sha3
    [FossilArtifact].
 
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 27]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
 8.  Clone
 
    Except when initial private sync places pragma send-private first,
@@ -1504,15 +1525,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 8.1.  Clone Protocol Version
 
    clone VERSION SEQNO
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 27]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    Only version 3 is interoperable here: server emits storage-order
    cfile and uses application/x-fossil-uncompressed.  Other values are
@@ -1540,6 +1552,24 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    current maximum, silently skipping gaps; clients MUST NOT infer count
    or size from range.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 28]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    An accepting clone reply emits zero or more clone cfile cards in RID
    order, interspersed with any per-artifact SHA3 error, then
    clone_seqno NEXT, push SERVERCODE PROJECTCODE, and final comment.
@@ -1551,24 +1581,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    unchanged and does not stop parsing later reply cards.  A Clone-
    authorization refusal resets the response, then emits push SERVERCODE
    PROJECTCODE immediately before error with no cfile or clone_seqno.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 28]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    For positive NEXT, Section 3.7 decides continuation; positive alone
    is insufficient.  The clone received-artifact count is the client's
@@ -1596,6 +1608,24 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
    The recorded sequence persists until overwritten.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 29]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
 SEQNO := 1
 first request := [send-private if requested];
                  client-version; clone 3 1; randomness
@@ -1619,13 +1649,6 @@ loop:
    rounds, and the reference client emits none.  A server MUST accept
    and ignore igot cards received without push enablement.
 
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 29]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
 8.3.  First Clone Round
 
    The first request sends no normal login card.  It uses client-
@@ -1648,6 +1671,16 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    sent in the current request emits pragma uv-pull-only and the full UV
    catalog immediately in the clone reply; that clone-specific catalog
    is not conditional on the deferred client uv-hash.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 30]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
 
 8.5.  Push, Pull, and Sync
 
@@ -1674,14 +1707,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    name, datetime, hash): it is the 19-byte UTC YYYY-MM-DD SP HH:MM:SS
    rendering for 0..253402300799, and an empty field when SQLite returns
    NULL.  HASH is stored lowercase SHA-1 or SHA3-256 bytes.  No CR or
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 30]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    trailing whitespace.  Tombstones are excluded from equality
    detection; when a mismatch causes a catalog response, its full
    inventory still includes tombstones represented by HASH -.
@@ -1705,6 +1730,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    4.  Different hashes and (MTIME-CMP<0 or (MTIME-CMP=0 and HASH-
        CMP<0)): status 1.
 
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 31]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    5.  Otherwise status 5.
 
    Equal-time hash lexical order is deterministic tie-breaker.  Revert
@@ -1712,31 +1745,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    messages.
 
    Actions:
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 31]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
         +========+===============================================+
         | Status | Required action                               |
@@ -1778,6 +1786,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    selected send-table rows and removes each row immediately after
    invoking its send helper, regardless of whether that helper emits a
    full, mtime-only, or tombstone uvfile, a reference-specific uvigot, a
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 32]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    SHA3 error, or no card.  The reference client emits that uvigot once
    the request has reached its upload threshold: the well-formed uvigot
    NAME MTIME HASH SIZE for a row with content, and a malformed short
@@ -1786,14 +1802,6 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    server answers either with error bad command, and the row's change is
    not uploaded in that session.  A cleanroom client MUST NOT send
    uvigot in either form.  Dry-run or revert clears the phase
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 32]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    immediately.  Otherwise the client clears the phase when its table
    scan reaches completion, including an empty table; if the current
    output exceeds the ordinary threshold, it stops with the phase still
@@ -1832,23 +1840,20 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    filters defined in Section 3.3.  Never persist peer-lacks or other
    round-local state.
 
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 33]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
 8.9.  Loop Termination
 
    Section 3.7 is authoritative; the stateless server signals no
    completion.
-
-
-
-
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 33]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
 9.  Pragmas
 
@@ -1893,19 +1898,19 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    DATE TIME carries DATE/TIME as YYYYMMDD/HHMMSS integers.  On a full
    client version, the server replaces request-local peer VERSION, DATE,
    and TIME and emits full server-version VERSION DATE TIME; before one,
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 34]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    these server peer values are 0, 00000000, and 000000.  A short three-
    or four-token version pragma updates only VERSION and retains its
    prior DATE/TIME; a short client-version emits no server-version.  The
    client applies the same full-versus-short update to received server-
    version; before one, it records peer VERSION as its own
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 34]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    RELEASE_VERSION_NUMBER and DATE/TIME as 00000000/000000.  These
    values govern the SHA3 gate, the private-content gimme answer of
    Section 8.6, and the cookie gate.
@@ -1949,18 +1954,17 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    union of all scalar groups it requested for the exchange; it does not
    need or get per-card group identity.
 
-   Table groups /shun, /user, /reportfmt, /concealed, and /subscriber
-   use config /GROUPNAME SIZE; GROUPNAME remains the response
-   correlation; row serialization is out of scope.
 
 
 
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 35]
+Hipp, et al.              Expires 19 April 2027                [Page 35]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+   Table groups /shun, /user, /reportfmt, /concealed, and /subscriber
+   use config /GROUPNAME SIZE; GROUPNAME remains the response
+   correlation; row serialization is out of scope.
 
    This document specifies scalar /config push payloads using the same
    payload and trailing LF.  The reference implementation also emits and
@@ -2006,17 +2010,18 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    behavior without a separate Write-capability or named-principal test
    at this pragma; authentication and operation-card authorization
    remain governed by their own ordered cards. ci-lock-fail is server-
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 36]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    to-client and contains only the fossilized LOGIN and unsigned-decimal
    MTIME.  The reference client treats it as a diagnostic for the
    current checkout, records the failure, and continues reply
    processing; silence after ci-lock is not a confirmation protocol.
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 36]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    pragma ci-unlock CLIENT-ID has one hash-name argument.  It emits no
    reply pragma or error.  The server deletes every ci-lock-* row whose
@@ -2061,19 +2066,19 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    https:// forms enter HTTP(S) parsing and can be stored; exact
    lowercase ssh:// and file: forms are also recognized but are not
    stored.  Other forms fall through to local-path parsing: an existing
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 37]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    repository path gets protocol file and is not stored; otherwise the
    server fails fatally as an unknown repository.  An HTTP(S) port
    consumes its run of decimal digits without range validation; parsing
    fails only when the first following non-decimal byte is neither / nor
    end-of-input.  Fossil omits user information and stores an HTTP(S)
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 37]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    URL when its parsed host pointer is non-NULL, including an empty
    host, unless the host matches SQLite's ASCII-case-insensitive LIKE
    pattern %localhost%, where % matches any sequence of bytes.  Its
@@ -2117,19 +2122,19 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    client consumes permitted trailing cards, records any push it
    subsequently receives, and attempts the mandatory second clone round.
 
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 38]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    Client reply processing preserves the successfully processed prefix
    of a reply.  Receipt of an ordinary error card commits that prefix
    and ends only the reply-card loop, after which it increments the
    cycle and evaluates Section 3.7.  A client-local unknown or card-
    parse failure records a warning and ends only the reply-card loop;
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 38]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
-
    its prefix remains effective, then the client increments the cycle
    and evaluates Section 3.7, including the forced second clone round.
    A handler-reported content error that leaves the stored artifacts
@@ -2173,18 +2178,18 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 10.2.  Message Card
 
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 39]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
    message TEXT
 
    Exactly two visible tokens are required.  Defossilize TEXT.  It is
    nonfatal.
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 39]
-
-Internet-Draft            Fossil Sync Protocol              October 2026
-
 
    If SYNC_PUSH is set and decoded bytes match SQLite GLOB pull only *,
    case-sensitively, clear SYNC_PUSH for the session and suppress
@@ -2229,18 +2234,15 @@ Internet-Draft            Fossil Sync Protocol              October 2026
    cache, so a byte-for-byte replay with a valid authentication token is
    not rejected by that cache.  A successful named login can supply the
    nonce later stored with mutation receipt provenance, whose uniqueness
-   is distinct from a protocol-level replay decision.
 
 
 
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 40]
+Hipp, et al.              Expires 19 April 2027                [Page 40]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+   is distinct from a protocol-level replay decision.
 
 11.2.  Private-Content Exposure and Protected Transport
 
@@ -2288,15 +2290,15 @@ Internet-Draft            Fossil Sync Protocol              October 2026
       Applications that use this media type: Fossil sync clients,
       servers, and compatible replication tools
 
-      Fragment identifier considerations: none
 
 
 
-
-Hipp, et al.              Expires 16 April 2027                [Page 41]
+Hipp, et al.              Expires 19 April 2027                [Page 41]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+      Fragment identifier considerations: none
 
       Additional information: * Deprecated alias names for this type:
       none * Magic number(s): none * File extension(s): none * Macintosh
@@ -2345,14 +2347,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
       Person and email address to contact for further information: Dan
       Shearer, dan@shearer.org (mailto:dan@shearer.org)
 
-      Intended usage: LIMITED USE
 
 
-
-Hipp, et al.              Expires 16 April 2027                [Page 42]
+Hipp, et al.              Expires 19 April 2027                [Page 42]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+      Intended usage: LIMITED USE
 
       Restrictions on usage: debugging and testing only
 
@@ -2401,14 +2403,14 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 13.  References
 
-13.1.  Normative References
 
 
-
-Hipp, et al.              Expires 16 April 2027                [Page 43]
+Hipp, et al.              Expires 19 April 2027                [Page 43]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+13.1.  Normative References
 
    [FossilArtifact]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -2455,16 +2457,18 @@ Internet-Draft            Fossil Sync Protocol              October 2026
               DOI 10.17487/RFC5234, January 2008,
               <https://www.rfc-editor.org/rfc/rfc5234>.
 
-   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
-              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
-              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 44]
+
+Hipp, et al.              Expires 19 April 2027                [Page 44]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
 
    [RFC9110]  Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
               Ed., "HTTP Semantics", STD 97, RFC 9110,
@@ -2513,11 +2517,7 @@ A.1.  Basic Push/Pull Convergence (Two Rounds)
 
 
 
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 45]
+Hipp, et al.              Expires 19 April 2027                [Page 45]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2573,7 +2573,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 46]
+Hipp, et al.              Expires 19 April 2027                [Page 46]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2629,7 +2629,7 @@ A.3.  Private Content Suppression
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 47]
+Hipp, et al.              Expires 19 April 2027                [Page 47]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2685,7 +2685,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 48]
+Hipp, et al.              Expires 19 April 2027                [Page 48]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2741,7 +2741,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 49]
+Hipp, et al.              Expires 19 April 2027                [Page 49]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2797,7 +2797,7 @@ A.5.  Authentication Example
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 50]
+Hipp, et al.              Expires 19 April 2027                [Page 50]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2853,7 +2853,7 @@ Appendix B.  ABNF
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 51]
+Hipp, et al.              Expires 19 April 2027                [Page 51]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2909,7 +2909,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 52]
+Hipp, et al.              Expires 19 April 2027                [Page 52]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -2965,7 +2965,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 53]
+Hipp, et al.              Expires 19 April 2027                [Page 53]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -3021,7 +3021,7 @@ link-pragma       = "pragma" SP "link" SP link-url SP link-arg SP link-mtime LF
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 54]
+Hipp, et al.              Expires 19 April 2027                [Page 54]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -3077,7 +3077,7 @@ Appendix D.  Changes from draft-fossil-sync-protocol-00
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 55]
+Hipp, et al.              Expires 19 April 2027                [Page 55]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -3133,7 +3133,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
 
 
 
-Hipp, et al.              Expires 16 April 2027                [Page 56]
+Hipp, et al.              Expires 19 April 2027                [Page 56]
 
 Internet-Draft            Fossil Sync Protocol              October 2026
 
@@ -3150,6 +3150,11 @@ Internet-Draft            Fossil Sync Protocol              October 2026
       included, and starts no further round; the prefix rule stays for
       content errors that leave the stored artifacts consistent.
       Normative change.
+
+   *  Section 6.6: A server MAY append words to a "not authorized to
+      ..." refusal, as Fossil does when its localauth setting is
+      enabled, and a client MUST recognize a refusal by its leading
+      text.  Normative change.
 
 Authors' Addresses
 
@@ -3184,9 +3189,4 @@ Authors' Addresses
 
 
 
-
-
-
-
-
-Hipp, et al.              Expires 16 April 2027                [Page 57]
+Hipp, et al.              Expires 19 April 2027                [Page 57]

@@ -553,6 +553,17 @@ var cardCases = []artifactCase{
 	accepted("artifact.4.7.j-absent-value", "AF-4.7.8-1",
 		edit(baseTicket, "J status Open", "J status"),
 		cardIs("J[1].Value", func(d *deck.Deck) string { return d.J[1].Value }, "")),
+	// Section 4.7.8: a present empty value (J, SP, name, SP, LF), the form
+	// fossil writes when a ticket field is cleared, parses to the same
+	// field as an absent one.
+	loose("artifact.4.7.8.j-present-empty", "AF-4.7.8-1",
+		edit(baseTicket, "J status Open", "J status "), func(d *deck.Deck) error {
+			absent, err := deck.Parse(withZ(edit(baseTicket, "J status Open", "J status")))
+			if err != nil {
+				return expectf("parse the absent form: %v", err)
+			}
+			return want("J", d.J, absent.J)
+		}),
 	accepted("artifact.4.7.p-empty", "AF-4.7.13-1", edit(baseManifest, "P "+h4+" "+h5+"\n", "P\n"),
 		func(d *deck.Deck) error { return want("len(P)", len(d.P), 0) }),
 	rejected("artifact.4.7.q-invalid-sign", "AF-4.7.14-1", edit(baseManifest, "Q +", "Q *")),
@@ -658,6 +669,11 @@ var checksumCases = []artifactCase{
 	zRejected("artifact.6.2.uppercase", "AF-6.2-2",
 		baseControl+strings.ToUpper(zCard(baseControl))),
 	zRejected("artifact.6.2.missing", "AF-6.2-3", baseControl),
+	// Section 6.2: with no Z card, a last line that ends in "Z " and 32
+	// more bytes is still checked, and fossil reports the checksum.
+	says(zRejected("artifact.6.2.z-by-position", "AF-6.2-7",
+		edit(baseControl, "U alice\n", "U aliceZ "+strings.Repeat("0", 32)+"\n")),
+		"Z-card cksum"),
 	// The Z card covers the escaped wire bytes, not the decoded comment.
 	accepted("artifact.6.2.raw-before-decode", "AF-6.2-2", baseManifest,
 		cardIs("C", func(d *deck.Deck) string { return d.C }, "base manifest")),

@@ -144,9 +144,9 @@ func deltaManifestCases() []apiCase {
 				}
 				return want("file set", set, []string{"a.txt=" + h4, "d.txt=" + h5})
 			}},
-		// Section 8.2: the named delta's delete marker removes b.txt from
-		// the merged set; it must not surface as a hashless entry.
-		{Case{ID: "artifact.4.7.3.delta-of-delta-baseline-delete", Req: "AF-4.7.3-1"},
+		// Sections 4.7.3 and 8.2: the named delta's delete marker removes
+		// b.txt from the merged set; it must not surface as a hashless entry.
+		{Case{ID: "artifact.4.7.3.delta-of-delta-baseline-delete", Req: "AF-4.7.3-2"},
 			func(t *testing.T) error {
 				r := newPolicyRepo(t, "2")
 				_, baseline := storeArtifact(t, r, deltaBaseline)
@@ -159,6 +159,18 @@ func deltaManifestCases() []apiCase {
 					return err
 				}
 				return want("file set", set, []string{"d.txt=" + h5})
+			}},
+		// The same marker answers a lookup of b.txt: not found, and no
+		// hashless entry.
+		{Case{ID: "artifact.4.7.3.delta-of-delta-baseline-delete-lookup", Req: "AF-4.7.3-2"},
+			func(t *testing.T) error {
+				r := newPolicyRepo(t, "2")
+				_, baseline := storeArtifact(t, r, deltaBaseline)
+				_, first := storeArtifact(t, r, "B "+baseline+"\nC first\nD "+ts+
+					"\nF b.txt\nU u\n")
+				rid, _ := storeArtifact(t, r, "B "+first+"\nC second\nD "+ts+
+					"\nF d.txt "+h5+"\nU u\n")
+				return wantLookup(r, rid, "b.txt", "", false)
 			}},
 	}
 }

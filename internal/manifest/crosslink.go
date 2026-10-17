@@ -139,7 +139,18 @@ func ensureNonArtifactTable(q db.Querier) error {
 		panic("manifest.ensureNonArtifactTable: q must not be nil")
 	}
 	for _, old := range supersededNonArtifactTables {
-		if _, err := q.Exec("DROP TABLE IF EXISTS " + old); err != nil {
+		// Read before writing: this runs before every sweep, and the drop
+		// is owed once per repository.
+		var present int
+		err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+			old).Scan(&present)
+		if err != nil {
+			return fmt.Errorf("find %s table: %w", old, err)
+		}
+		if present == 0 {
+			continue
+		}
+		if _, err := q.Exec("DROP TABLE " + old); err != nil {
 			return fmt.Errorf("drop %s table: %w", old, err)
 		}
 	}

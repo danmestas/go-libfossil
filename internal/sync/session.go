@@ -115,6 +115,11 @@ type session struct {
 	// sha3Refusals counts gimmes for SHA3 content withheld from an older
 	// server; the next request carries one refusal error card for each.
 	sha3Refusals int
+	// smGate is the draft-fossil-submanifests-00 §7.2 transfer gate and
+	// smRefusals the gimmes it withheld this round: the next request
+	// carries one refusal card for them, and the result records each.
+	smGate     submanifestGate
+	smRefusals int
 	// peerDate is the server's check-in date from server-version: 0 before
 	// one arrives, or when it carries no DATE and TIME, which no date gate
 	// passes (§8.6).
@@ -197,6 +202,15 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 			}
 		}
 	}
+
+	// A gate whose indicator cannot be read is armed: it then classifies
+	// every artifact an older peer asks for, which costs time but can never
+	// hand that peer a tree.
+	gate, err := newSubmanifestGate(r.DB())
+	if err != nil {
+		gate = submanifestGate{armed: true}
+	}
+	s.smGate = gate
 
 	return s
 }

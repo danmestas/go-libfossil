@@ -182,6 +182,10 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 	for ; s.sha3Refusals > 0; s.sha3Refusals-- {
 		cards = append(cards, sha3Refusal())
 	}
+	if s.smRefusals > 0 {
+		cards = append(cards, submanifestRefusal())
+		s.smRefusals = 0
+	}
 	// Private content a gimme asked for outside a private sync is not sent,
 	// but the server is told it exists and is private (§8.6).
 	for _, uuid := range s.privateIGots {
@@ -863,6 +867,9 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
 		s.uvPullOnly = true
+	case c.Name == "avoid-submanifests":
+		// draft-fossil-submanifests-00 §7.2: no S cards in commits made in
+		// this session. This library writes none in any session.
 	case c.Name == "avoid-delta-manifests":
 		// §9.5: a hint for the commit that asked for the lock, to write a
 		// baseline manifest. It changes nothing about the transfer, and no
@@ -1483,8 +1490,30 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 		s.sha3Refusals++
 		return
 	}
+	if s.submanifestBarred(uuid, rid) {
+		return
+	}
 	s.pendingSend[uuid] = true
 	t.filesSent++
+}
+
+// submanifestBarred applies the draft-fossil-submanifests-00 §7.2 gate to a
+// gimme: a tree or sub-manifest is withheld from a server too old to read
+// one. The withheld artifact is recorded in the result, so a push that left
+// one behind does not read as complete, and the next request says why.
+func (s *session) submanifestBarred(uuid string, rid libfossil.FslID) bool {
+	barred, err := s.smGate.barred(s.repo.DB(), s.cache, rid, s.peerVersion)
+	if err != nil {
+		s.result.Errors = append(s.result.Errors, err.Error())
+		return true
+	}
+	if !barred {
+		return false
+	}
+	s.smRefusals++
+	s.result.Errors = append(s.result.Errors, fmt.Sprintf(
+		"withheld %s: the server's version %d predates sub-manifest support", uuid, s.peerVersion))
+	return true
 }
 
 // canSend reports whether the client can answer a gimme for uuid: it holds

@@ -146,6 +146,11 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
+	gate, err := newSubmanifestGate(r.DB())
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.smGate = gate
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
@@ -198,6 +203,8 @@ type handler struct {
 	uvCatalogSent   bool                      // true after sending UV catalog
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
+	smGate          submanifestGate           // §7.2 transfer gate, read once per request
+	smRefused       bool                      // this reply already carries the §7.2 refusal
 	filesRecvd      int                       // files received from client (for observer)
 	cascaded        int                       // artifacts the phantom-fill cascades linked
 	syncPrivate     bool                      // true if pragma send-private was accepted
@@ -904,6 +911,29 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 	if forbidDeltaManifests(h.repo.DB()) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
+	// draft-fossil-submanifests-00 §7.2: a server whose enable-submanifests
+	// setting is off -- this library's always, since it writes no trees --
+	// sends avoid-submanifests where it sends avoid-delta-manifests, telling
+	// the committing client to write no S cards. A peer that does not know
+	// the pragma ignores it (§3.5).
+	if !enableSubmanifests(h.repo.DB()) {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-submanifests"})
+	}
+}
+
+// submanifestBarred applies the §7.2 gate to an answer to a gimme: a tree or
+// sub-manifest is withheld from a client too old to read one, and the reply
+// says so once, explicitly, rather than omitting it in silence.
+func (h *handler) submanifestBarred(rid libfossil.FslID) (bool, error) {
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, rid, h.peerVersion)
+	if err != nil || !barred {
+		return false, err
+	}
+	if !h.smRefused {
+		h.resp = append(h.resp, submanifestRefusal())
+		h.smRefused = true
+	}
+	return true, nil
 }
 
 func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
@@ -1159,6 +1189,9 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		h.resp = append(h.resp, sha3Refusal())
 		return nil
 	}
+	if barred, err := h.submanifestBarred(rid); err != nil || barred {
+		return err
+	}
 	data, err := h.cache.Expand(h.repo.DB(), rid)
 	if err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
@@ -1295,6 +1328,16 @@ func malformedFileLine(compressed bool) string {
 func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 	if c == nil {
 		panic("handler.handleReqConfig: c must not be nil")
+	}
+	if c.Name == configScalarMarker && h.canRead() {
+		// zit's request for the sub-manifest settings (§6.3), which fossil
+		// matches to no group and answers with nothing.
+		cards, err := submanifestConfigCards(h.repo.DB())
+		if err != nil {
+			return fmt.Errorf("handler: reqconfig %q: %w", c.Name, err)
+		}
+		h.resp = append(h.resp, cards...)
+		return nil
 	}
 	mask := configRequestMask(c.Name, h.caps, h.canRead(), h.authed)
 	if mask == 0 {
@@ -1759,6 +1802,20 @@ func (h *handler) buildCloneArtifact(
 		// §7.6, Appendix A.2: the refusal takes a SHA3 artifact's place.
 		if sha3Barred(m.uuid, h.peerVersion) {
 			cards = append(cards, sha3Refusal())
+			continue
+		}
+		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client
+		// too old to read one. A delta whose source is withheld cannot be
+		// applied, so a withheld artifact's dependents are withheld too.
+		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerVersion)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if barred {
+			if !h.smRefused {
+				cards = append(cards, submanifestRefusal())
+				h.smRefused = true
+			}
 			continue
 		}
 		var data []byte

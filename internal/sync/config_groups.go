@@ -88,6 +88,11 @@ var configScalars = []struct {
 	{"hash-policy", cfgProject}, {"comment-format", cfgProject},
 	{"mimetypes", cfgProject}, {"forbid-delta-manifests", cfgProject},
 	{"mv-rm-files", cfgProject},
+	// draft-fossil-submanifests-00 §6.3: the three sub-manifest settings
+	// are members of /project. No fossil release has them, so a fossil
+	// repository sends none.
+	{settingEnableSubmanifests, cfgProject}, {settingSubmanifestK, cfgProject},
+	{settingAutoRetune, cfgProject},
 	{"ticket-table", cfgTicket}, {"ticket-common", cfgTicket},
 	{"ticket-change", cfgTicket}, {"ticket-newpage", cfgTicket},
 	{"ticket-viewpage", cfgTicket}, {"ticket-editpage", cfgTicket},
@@ -281,4 +286,26 @@ func configRecord(t configTable, vals []string) string {
 		b.WriteString(" " + f + " " + v)
 	}
 	return b.String()
+}
+
+// configScalarMarker is the reqconfig name zit sends for the scalar
+// settings and the GROUPNAME of every scalar config card. fossil has no group
+// of that name, so a request for it reads nothing from fossil.
+const configScalarMarker = "/config"
+
+// submanifestConfigCards returns the /config cards of the three sub-manifest
+// settings the repository holds, which is what zit's reqconfig /config asks
+// for (draft-fossil-submanifests-00 §6.3).
+func submanifestConfigCards(d *db.DB) ([]xfer.Card, error) {
+	var cards []xfer.Card
+	for _, name := range submanifestSettings {
+		c, err := configScalarCard(d, name)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
+			cards = append(cards, c)
+		}
+	}
+	return cards, nil
 }

@@ -79,11 +79,14 @@ type cloneSession struct {
 	seqno                 int
 	projectCode           string
 	serverCode            string
-	roundRecvd            int    // file/cfile cards the last reply delivered
-	roundPush             bool   // the last reply carried a push card
-	cleanup               bool   // the next request is an operation-less cleanup
-	serverErr             string // an error after round 0, or an unreadable card: fails the clone
-	cookie                string // server-issued snapshot bound; echoed every round so the
+	roundRecvd            int  // file/cfile cards the last reply delivered
+	roundPush             bool // the last reply carried a push card
+	// smConfig stages the sub-manifest settings one reply's config cards
+	// carry, applied together once the reply ends (§6.3).
+	smConfig  stagedSubmanifestConfig
+	cleanup   bool   // the next request is an operation-less cleanup
+	serverErr string // an error after round 0, or an unreadable card: fails the clone
+	cookie    string // server-issued snapshot bound; echoed every round so the
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
 	obs Observer
@@ -445,6 +448,15 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		})
 	}
 
+	// The cleanup round is where a clone asks for the sub-manifest settings
+	// (draft-fossil-submanifests-00 §6.3), as zit's clone does: once, after
+	// the content, with zit's scalar marker. fossil has no group of that
+	// name and answers it with nothing, so against fossil the request costs
+	// one card and changes nothing.
+	if cs.cleanup {
+		cards = append(cards, &xfer.ReqConfigCard{Name: configScalarMarker})
+	}
+
 	// Login card: skip round 0. On round 1+, only if User is set AND projectCode received.
 	if cycle > 0 && cs.opts.User != "" && cs.projectCode != "" {
 		loginCard, signed, err := cs.buildLoginCard(cards)
@@ -497,10 +509,12 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 	cardErr, err := runPass(cs.repo, func(bound *repo.Repo) (error, error) {
 		defer cs.bindRepo(bound)()
 		filesRecvd = 0
+		cs.smConfig = stagedSubmanifestConfig{}
 		cardErr := cs.processCards(ctx, cycle, msg, &filesRecvd)
 		if failsRound(cardErr) {
 			return nil, cardErr // §10.1: the round, prefix included, rolls back
 		}
+		cs.applySubmanifestConfig()
 		return cardErr, nil
 	})
 	if err != nil {
@@ -570,8 +584,21 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		cs.cookie = c.Value
 	case *xfer.MessageCard:
 		cs.result.Messages = append(cs.result.Messages, c.Message)
+	case *xfer.ConfigCard:
+		if c.Name == configScalarMarker {
+			cs.smConfig.stage(c.Content)
+		}
 	}
 	return false, nil
+}
+
+// applySubmanifestConfig writes the sub-manifest settings the reply carried,
+// all or none (§6.3). A rejected set is reported, not fatal: the clone is
+// whole without it, and enable-submanifests simply stays off.
+func (cs *cloneSession) applySubmanifestConfig() {
+	if err := cs.smConfig.apply(cs.repo.DB()); err != nil {
+		cs.result.Messages = append(cs.result.Messages, err.Error())
+	}
 }
 
 // receiveCFile stores a cfile and reports whether it did. fossil drops a

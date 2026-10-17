@@ -6,9 +6,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// The release this library announces in pragma client-version and
-// server-version (§9.1): the fossil release whose protocol it speaks, and
-// that release's check-in date and time.
+// The fossil release whose protocol this library speaks (§9.1), and that
+// release's check-in date and time. The version it announces is
+// announcedVersion (submanifest.go), which the date and time accompany.
 const (
 	releaseVersion = 22800
 	releaseDate    = "20260315"
@@ -27,7 +27,7 @@ const sha1NameLen = 40
 func versionPragma(name string) *xfer.PragmaCard {
 	return &xfer.PragmaCard{
 		Name:   name,
-		Values: []string{strconv.Itoa(releaseVersion), releaseDate, releaseTime},
+		Values: []string{strconv.Itoa(announcedVersion), releaseDate, releaseTime},
 	}
 }
 

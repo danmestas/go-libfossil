@@ -9,6 +9,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -83,6 +84,23 @@ func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid str
 	}
 
 	if d.Type != deck.Checkin {
+		return nil
+	}
+
+	// A check-in whose tree cannot yet be walked is deferred, not damaged: it
+	// has no derived rows by design until the sub-manifest it waits on
+	// arrives (draft-fossil-submanifests-00 §5.2, §7.3). Report the gap as
+	// what it is.
+	if missing, gap := treeGap(r, d, rid, cache); gap {
+		report.MissingRefs++
+		report.addIssue(Issue{
+			Kind:  IssueMissingReference,
+			RID:   rid,
+			UUID:  uuid,
+			Table: "blob",
+			Message: fmt.Sprintf("checkin rid=%d uuid=%s waits on sub-manifest %s",
+				rid, uuid, missing),
+		})
 		return nil
 	}
 
@@ -261,4 +279,16 @@ func leafSetsEqual(a, b map[libfossil.FslID]bool) bool {
 		}
 	}
 	return true
+}
+
+// treeGap reports the sub-manifest a check-in's tree -- its own, or its
+// baseline's -- is waiting on, when that is why its file set cannot be
+// listed. Only a tree can be waiting on one, so a flat manifest is answered
+// without listing it.
+func treeGap(r *repo.Repo, d *deck.Deck, rid libfossil.FslID, cache *content.Cache) (string, bool) {
+	if len(d.S) == 0 && d.B == "" {
+		return "", false
+	}
+	_, err := manifest.ListFilesCached(r, rid, cache)
+	return manifest.MissingSubmanifest(err)
 }

@@ -73,6 +73,7 @@ func (c *Checkout) setFileMTimes(vid libfossil.FslID) error {
 		return fmt.Errorf("set mtimes: %w", err)
 	}
 	defer rows.Close()
+	set := map[string]int64{}
 	for rows.Next() {
 		var name string
 		var rid int64
@@ -92,7 +93,13 @@ func (c *Checkout) setFileMTimes(vid libfossil.FslID) error {
 			continue
 		}
 		when := time.Unix(secs, 0)
-		_ = c.env.Storage.Chtimes(fullPath, when, when)
+		if c.env.Storage.Chtimes(fullPath, when, when) == nil {
+			set[name] = recordableMTime(when, c.env.Clock.Now().Unix())
+		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("set mtimes: %w", err)
+	}
+	// As fossil's scan, the time given a file is the one vfile records.
+	return c.setRowMTimes(vid, set)
 }

@@ -40,9 +40,9 @@ func (c *Checkout) HasChanges() (bool, error) {
 }
 
 // VisitChanges calls fn for each changed file of version vid, classified by
-// vfile.Classify. With scan=true it first runs ScanChanges(ScanHash) and
-// checks each file on disk, so edits and missing files are reported; with
-// scan=false it reports what the checkout database records.
+// vfile.Classify. With scan=true it first runs ScanChanges(0), fossil's
+// default scan, and checks each file on disk, so edits and missing files are
+// reported; with scan=false it reports what the checkout database records.
 //
 // If fn returns a non-nil error, iteration stops and that error is returned.
 //
@@ -56,7 +56,7 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 	}
 
 	if scan {
-		if err := c.ScanChanges(ScanHash); err != nil {
+		if err := c.ScanChanges(0); err != nil {
 			return fmt.Errorf("checkout.VisitChanges: %w", err)
 		}
 	}

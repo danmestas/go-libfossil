@@ -222,7 +222,7 @@ func (c *Checkout) checkRenameUndoFree(
 				"checkout.Revert: cannot move %s back to %s: another tracked file has that "+
 					"name; revert or commit it first", t.Pathname, oldName)
 		}
-		committed, err := c.baselineHash(t.RID)
+		committed, _, err := c.baseline(t.RID)
 		if err != nil {
 			return fmt.Errorf("checkout.Revert: %s: %w", t.Pathname, err)
 		}
@@ -397,10 +397,16 @@ func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int
 	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
 		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
 	}
+	mtime, err := c.writtenMTime(fullPath)
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: %w", err)
+	}
 	// mrid and mhash go back to the committed version, so no merged-in
-	// content outlives the revert (fossil resets them the same way).
+	// content outlives the revert, and the mtime is the restored file's
+	// (fossil resets them the same way).
 	if _, err := c.db.Exec(
-		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL WHERE id = ?", id,
+		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL, mtime = ? WHERE id = ?",
+		mtime, id,
 	); err != nil {
 		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
 	}

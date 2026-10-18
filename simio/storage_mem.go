@@ -15,6 +15,7 @@ type MemStorage struct {
 	files  map[string][]byte
 	dirs   map[string]bool
 	mtimes map[string]time.Time
+	writes int64 // stamps each write: the nth write is dated n seconds after 1970
 }
 
 // NewMemStorage creates a new in-memory storage.
@@ -115,6 +116,10 @@ func (m *MemStorage) WriteFile(path string, data []byte, perm os.FileMode) error
 	stored := make([]byte, len(data))
 	copy(stored, data)
 	m.files[path] = stored
+	// A write moves the file's mtime, as on a filesystem; a clock of its own
+	// keeps that deterministic and never repeats a time.
+	m.writes++
+	m.mtimes[path] = time.Unix(m.writes, 0)
 	return nil
 }
 

@@ -48,9 +48,11 @@ func buildFileMaps(currentFiles, targetFiles, ancestorFiles []manifest.FileEntry
 // processFileUpdates iterates over all file names and applies update/merge
 // logic for each one. Returns the paths actually written, removed, and
 // conflicted — not merely counts — so the caller can report exactly which
-// files a consumer needs to inspect.
+// files a consumer needs to inspect. Each file written with the target's
+// content as it is (not merged) goes into fresh, with the vfile.mtime its
+// write gave it (writtenMTime).
 //
-// Bounded: the loop and the three returned slices are each bounded by
+// Bounded: the loop and the returned slices are each bounded by
 // len(maps.allNames), the union of the current and target manifests for
 // this update — finite for any real checkin.
 func (c *Checkout) processFileUpdates(
@@ -58,6 +60,7 @@ func (c *Checkout) processFileUpdates(
 	maps updateFileMaps,
 	strategy merge.Strategy,
 	opts UpdateOpts,
+	fresh map[string]int64,
 ) (filesWritten, filesRemoved, conflicted []string, err error) {
 	for name := range maps.allNames {
 		curUUID, inCurrent := maps.current[name]
@@ -66,7 +69,7 @@ func (c *Checkout) processFileUpdates(
 
 		change, ferr := c.updateFile(
 			name, curUUID, tgtUUID, ancUUID,
-			inCurrent, inTarget, strategy, opts.DryRun,
+			inCurrent, inTarget, strategy, opts.DryRun, fresh,
 		)
 		if ferr != nil {
 			return filesWritten, filesRemoved, conflicted, fmt.Errorf("checkout.Update: %w", ferr)
@@ -165,6 +168,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	})
 
 	var filesWritten, filesRemoved, conflicted []string
+	fresh := map[string]int64{}
 	var updateErr error
 	defer func() {
 		c.obs.ExtractCompleted(ctx, ExtractEnd{
@@ -197,14 +201,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, updateErr
 	}
 
-	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts)
+	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, fresh)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
 	}
 
 	// Finalize: reload vfile and update vvar
 	if !opts.DryRun {
-		if updateErr = c.finalizeUpdate(target); updateErr != nil {
+		if updateErr = c.finalizeUpdate(target, fresh); updateErr != nil {
 			return UpdateResult{}, updateErr
 		}
 		if opts.SetMTime {
@@ -268,11 +272,25 @@ func (c *Checkout) updateTarget(
 	return target, current, nil
 }
 
-// finalizeUpdate reloads vfile for the target version, looks up its UUID,
-// and updates the vvar checkout/checkout-hash entries.
-func (c *Checkout) finalizeUpdate(target libfossil.FslID) error {
+// finalizeUpdate reloads vfile for the target version, records the mtimes
+// of the fresh files (written with the target's content, by pathname), looks
+// up its UUID,
+// and updates the vvar checkout/checkout-hash entries. An unchanged file
+// keeps its mtime through LoadVFile, as fossil's update transfers it.
+func (c *Checkout) finalizeUpdate(target libfossil.FslID, fresh map[string]int64) error {
 	if err := c.LoadVFile(target, true); err != nil {
 		return fmt.Errorf("checkout.Update: reload vfile: %w", err)
+	}
+	for name, mtime := range fresh {
+		var rid int64
+		if err := c.db.QueryRow(
+			"SELECT mrid FROM vfile WHERE vid = ? AND pathname = ?", int64(target), name,
+		).Scan(&rid); err != nil {
+			return fmt.Errorf("checkout.Update: vfile row for %s: %w", name, err)
+		}
+		if err := c.recordMTime(target, name, rid, mtime); err != nil {
+			return fmt.Errorf("checkout.Update: %w", err)
+		}
 	}
 
 	var targetUUID string
@@ -298,14 +316,17 @@ func (c *Checkout) updateFile(
 	inCurrent, inTarget bool,
 	strategy merge.Strategy,
 	dryRun bool,
+	fresh map[string]int64,
 ) (UpdateChange, error) {
 	switch {
 	case !inCurrent && inTarget:
 		// New file in target — extract and write
 		if !dryRun {
-			if err := c.writeFileFromUUID(name, tgtUUID); err != nil {
+			mtime, err := c.writeFileFromUUID(name, tgtUUID)
+			if err != nil {
 				return UpdateNone, fmt.Errorf("add %s: %w", name, err)
 			}
+			fresh[name] = mtime
 		}
 		return UpdateAdded, nil
 
@@ -335,9 +356,11 @@ func (c *Checkout) updateFile(
 		if curUUID == ancUUID {
 			// Current matches ancestor, target changed — fast-forward
 			if !dryRun {
-				if err := c.writeFileFromUUID(name, tgtUUID); err != nil {
+				mtime, err := c.writeFileFromUUID(name, tgtUUID)
+				if err != nil {
 					return UpdateNone, fmt.Errorf("update %s: %w", name, err)
 				}
+				fresh[name] = mtime
 			}
 			return UpdateUpdated, nil
 		}
@@ -401,25 +424,26 @@ func (c *Checkout) mergeFile(
 	return UpdateConflictMerged, nil
 }
 
-// writeFileFromUUID expands a blob by UUID and writes it to the checkout directory.
-func (c *Checkout) writeFileFromUUID(name, uuid string) error {
+// writeFileFromUUID expands a blob by UUID and writes it to the checkout
+// directory, returning the vfile.mtime to record for it (writtenMTime).
+func (c *Checkout) writeFileFromUUID(name, uuid string) (int64, error) {
 	data, err := c.expandUUID(uuid)
 	if err != nil {
-		return fmt.Errorf("writeFileFromUUID %s: %w", name, err)
+		return 0, fmt.Errorf("writeFileFromUUID %s: %w", name, err)
 	}
 
 	fullPath, err := c.safePath(name)
 	if err != nil {
-		return fmt.Errorf("writeFileFromUUID %s: path traversal: %w", name, err)
+		return 0, fmt.Errorf("writeFileFromUUID %s: path traversal: %w", name, err)
 	}
 	parentDir := filepath.Dir(fullPath)
 	if err := c.env.Storage.MkdirAll(parentDir, os.FileMode(0o755)); err != nil {
-		return fmt.Errorf("mkdir %s: %w", parentDir, err)
+		return 0, fmt.Errorf("mkdir %s: %w", parentDir, err)
 	}
 	if err := c.env.Storage.WriteFile(fullPath, data, os.FileMode(0o644)); err != nil {
-		return fmt.Errorf("write %s: %w", fullPath, err)
+		return 0, fmt.Errorf("write %s: %w", fullPath, err)
 	}
-	return nil
+	return c.writtenMTime(fullPath)
 }
 
 // expandUUID resolves a UUID to its expanded blob content.

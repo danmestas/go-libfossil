@@ -41,11 +41,13 @@ func (c *Checkout) writtenMTime(fullPath string) (int64, error) {
 // named pathname when the row is based on artifact rid, the content that was
 // written. A row based on another artifact keeps its mtime, so a row only
 // ever vouches for the content it names.
-func (c *Checkout) recordMTime(vid libfossil.FslID, pathname string, rid, mtime int64) error {
+func (c *Checkout) recordMTime(
+	q sqlExecer, vid libfossil.FslID, pathname string, rid, mtime int64,
+) error {
 	if rid <= 0 {
 		panic("checkout.recordMTime: rid must be positive")
 	}
-	if _, err := c.db.Exec(
+	if _, err := q.Exec(
 		"UPDATE vfile SET mtime = ? WHERE vid = ? AND pathname = ? AND mrid = ?",
 		mtime, int64(vid), pathname, rid,
 	); err != nil {
@@ -59,11 +61,11 @@ func (c *Checkout) recordMTime(vid libfossil.FslID, pathname string, rid, mtime 
 // for the same artifact: unchanged (chnged=0), not removed, and with the same
 // mrid. It is fossil's update moving an unchanged file's mtime to the target
 // version's row, and its commit keeping vfile rows in place.
-func (c *Checkout) inheritMTimes(vid libfossil.FslID) error {
+func (c *Checkout) inheritMTimes(q sqlExecer, vid libfossil.FslID) error {
 	if vid <= 0 {
 		panic("checkout.inheritMTimes: vid must be positive")
 	}
-	_, err := c.db.Exec(`
+	_, err := q.Exec(`
 		UPDATE vfile SET mtime = old.mtime
 		  FROM vfile AS old
 		 WHERE vfile.vid = ? AND coalesce(vfile.mtime, 0) = 0

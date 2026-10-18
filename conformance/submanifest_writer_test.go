@@ -523,6 +523,7 @@ func smEnableCases() []smCase {
 			}
 			return smZitSelections()
 		}),
+		smWriterCase("submanifest.6.3.enable-matches-zit", "SM-6.3-7", zwCheckEnables),
 		smWriterCase("submanifest.8.1.enable-rules", "SM-8.1-3", func(t *testing.T) error {
 			r, _, four, err := withCheckins(t)
 			if err != nil {

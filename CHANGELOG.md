@@ -24,24 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with zit installed, syncs with zit in both directions.
 - go-libfossil writes sub-manifest trees when a repository opts in. Emission
   is off by default, and every commit stays byte-identical to before.
-  `Repo.EnableSubmanifests(current, k)` turns it on: it keeps an existing
-  pin of the partition parameter k, pins an explicit k from 1 to 12, or
-  selects one by the draft's cost rule over the file set of `current`. It
-  refuses, changing nothing, when no k partitions that set. It returns the
-  warning an operator must see: peers below Fossil 2.29 are refused trees,
-  and trees cannot be retired. `Repo.RetuneSubmanifests(k)` moves the pin
-  for later commits. A commit then stores its leaves and interior
-  sub-manifests before a manifest that carries only S cards and never a B
-  card. Unchanged sub-manifests are shared by content addressing. A stored
-  k outside 1..12 falls back to flat manifests with a warning. With
+  `Repo.EnableSubmanifests(k)`, or `libfossil repo submanifests enable
+  [--k N]`, turns it on. It keeps an existing pin of the partition
+  parameter k and refuses a different one. With no pin it takes an explicit
+  k from 1 to 12, or selects one as zit does: the draft's cost rule over the
+  newest check-in, refined by replaying recent history. It refuses, changing
+  nothing, when no k partitions the file set. It returns the warning an
+  operator must see: peers below Fossil 2.29 are refused trees, and trees
+  cannot be retired. `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
+  pin for later commits, and `Repo.DisableSubmanifests()` (`disable`) turns
+  emission off again. A commit then stores its leaves and interior
+  sub-manifests, rebuilt in full and shared by content addressing, before a
+  manifest that carries only S cards and never a B card. A stored k outside
+  1..12 falls back to flat manifests with a warning. With
   `submanifest-auto-retune` on, a commit re-pins k when another value costs
   more than 15% less. A commit made in a sync session whose server sent
   `avoid-submanifests` stays flat. The construction reproduces every
   Appendix A vector, and a recorded set of zit check-ins byte for byte:
   3,000 files at k = 1, 3 and 5, deep paths, and names with spaces, tabs,
-  newlines and renames. With zit installed, zit verifies and lists
-  go-libfossil's trees, and verifies a tree go-libfossil commits on top of
-  one of zit's.
+  newlines and renames. Enabling pins the k zit pins on the same history.
+  With zit installed, zit verifies and lists go-libfossil's trees, and
+  verifies a tree go-libfossil commits on top of one of zit's.
 - Sync follows zit for trees: once a repository holds one, a tree manifest
   or sub-manifest is withheld from a peer announcing a release below 2.29,
   with an explicit error card, so no fossil release receives one. An

@@ -62,7 +62,7 @@ SM-6.3-3	6.3	A client supporting this specification and holding Read permission 
 SM-6.3-4	6.3	A newly cloned repository that could not retrieve the group leaves enable-submanifests false.
 SM-6.3-5	6.3	The writer takes k from the stored pin, never derives it per commit, and supports every value from 1 to 12.
 SM-6.3-6	6.3	A stored k outside 1 to 12 makes the writer fall back to flat manifests rather than substitute a value, and report it.
-SM-6.3-7	6.3	Automatic selection costs every k from 1 to 12 over the current check-in's entries under the sha3 policy, C(k) = S + sum(L*L)/sum(L), choosing the least cost and the lowest k on a tie; with no candidate it has no result.
+SM-6.3-7	6.3	Automatic selection costs every k from 1 to 12 over the current check-in's entries under the sha3 policy, C(k) = S + sum(L*L)/sum(L), choosing the least cost and the lowest k on a tie; with no candidate it has no result. On enabling, the snapshot's choice is refined as zit refines it, by replaying recent history at that k and its neighbours.
 SM-6.4-1	6.4	A re-tune is forward-only and operator-initiated: the next commit is built under the new value, sharing exactly the byte-identical sub-manifests, and no history is rewritten.
 SM-6.4-2	6.4	A writer re-tunes automatically only while submanifest-auto-retune is true (default false), and only when a distinct candidate costs less than (1 - m) times the pin's cost; m is 15%, as zit's.
 SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates a phantom for each, with the referencing artifact's privacy.

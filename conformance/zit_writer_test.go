@@ -1,8 +1,6 @@
 package conformance
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"net/http/httptest"
@@ -52,6 +50,8 @@ type zwCommit struct {
 	renames map[string]string
 }
 
+// zwScenario is a history zit and go-libfossil both commit, at k, or flat
+// when k is 0.
 type zwScenario struct {
 	name    string
 	k       int
@@ -67,6 +67,10 @@ func zwNames(set string) []string {
 	case "small":
 		for i := 0; i < 40; i++ {
 			names = append(names, fmt.Sprintf("%s/f%02d.c", []string{"doc", "src", "src/sub", "test"}[i%4], i))
+		}
+	case "medium":
+		for i := 0; i < 600; i++ {
+			names = append(names, fmt.Sprintf("pkg%02d/sub%d/file%04d.go", i%23, i%3, i))
 		}
 	case "large":
 		for i := 0; i < 3000; i++ {
@@ -179,6 +183,9 @@ func zwReplay(t *testing.T, path string, sc zwScenario, zitManifests [][]byte) *
 	for name, value := range map[string]string{
 		manifest.SettingEnableSubmanifests: "on", manifest.SettingSubmanifestK: strconv.Itoa(sc.k),
 	} {
+		if sc.k == 0 {
+			break // a flat history
+		}
 		if err := r.SetConfig(name, value); err != nil {
 			t.Fatal(err)
 		}
@@ -282,7 +289,9 @@ func zwZitCommits(t *testing.T, bin, home, work string, sc zwScenario) [][]byte 
 		t.Fatal(err)
 	}
 	zitRun(t, bin, home, work, "init")
-	zitRun(t, bin, home, work, "submanifest", "enable", "--k", strconv.Itoa(sc.k))
+	if sc.k != 0 {
+		zitRun(t, bin, home, work, "submanifest", "enable", "--k", strconv.Itoa(sc.k))
+	}
 	var out [][]byte
 	prev := zwCommit{}
 	for _, c := range sc.commits {
@@ -334,6 +343,25 @@ func TestZitWriterInterop(t *testing.T) {
 			zwGoCommitsOnZitTrees(t, bin, home, dir, work, sc)
 		}
 	}
+	// Enabling with no k selects as zit does: over a flat two-commit
+	// history the snapshot's k refined by the replay.
+	enables := map[string]int{}
+	for _, set := range zwEnableSets {
+		sc := zwFlatHistory(set)
+		work := filepath.Join(dir, sc.name)
+		manifests := zwZitCommits(t, bin, home, work, sc)
+		recorded[sc.name] = manifests
+		out := zitRun(t, bin, home, work, "submanifest", "enable")
+		m := regexp.MustCompile(`submanifest-k pinned to (\d+)`).FindStringSubmatch(out)
+		if m == nil {
+			t.Fatalf("%s: zit enable printed no pin:\n%s", set, out)
+		}
+		zk, _ := strconv.Atoi(m[1])
+		if gk := zwEnabled(t, filepath.Join(dir, sc.name+".fossil"), sc, manifests); gk != zk {
+			t.Errorf("%s: go-libfossil enables at k=%d, zit at k=%d", set, gk, zk)
+		}
+		enables[set] = zk
+	}
 	// §6.3: go-libfossil selects the k zit's analysis reports.
 	for _, set := range []string{"a1", "small", "large", "deep", "edge"} {
 		work := filepath.Join(dir, "select-"+set)
@@ -349,7 +377,7 @@ func TestZitWriterInterop(t *testing.T) {
 		selections[set] = zk
 	}
 	if os.Getenv("ZIT_REGENERATE") == "1" {
-		writeZitWriterBundle(t, recorded, selections)
+		writeZitWriterBundle(t, recorded, selections, enables)
 	}
 }
 
@@ -399,7 +427,7 @@ func zwGoCommitsOnZitTrees(t *testing.T, bin, home, dir, work string, sc zwScena
 	if !ok {
 		t.Fatal("the clone lacks zit's tip")
 	}
-	if _, _, err := cloned.EnableSubmanifests(int64(tip), sc.k); err != nil {
+	if _, _, err := cloned.EnableSubmanifests(sc.k); err != nil {
 		t.Fatal(err)
 	}
 	last := sc.commits[len(sc.commits)-1]
@@ -431,7 +459,7 @@ func zwGoCommitsOnZitTrees(t *testing.T, bin, home, dir, work string, sc zwScena
 
 // writeZitWriterBundle records every scenario's zit manifests and the
 // selections for TestZitWriterBundle.
-func writeZitWriterBundle(t *testing.T, recorded map[string][][]byte, selections map[string]int) {
+func writeZitWriterBundle(t *testing.T, recorded map[string][][]byte, selections, enables map[string]int) {
 	t.Helper()
 	if err := os.RemoveAll(zitWriterDir); err != nil {
 		t.Fatal(err)
@@ -447,18 +475,64 @@ func writeZitWriterBundle(t *testing.T, recorded map[string][][]byte, selections
 			}
 		}
 	}
+	writeZwKs(t, "selection.txt", selections)
+	writeZwKs(t, "enable.txt", enables)
+}
+
+// writeZwKs records one k per file set.
+func writeZwKs(t *testing.T, file string, ks map[string]int) {
+	t.Helper()
 	var b strings.Builder
-	sets := make([]string, 0, len(selections))
-	for set := range selections {
+	sets := make([]string, 0, len(ks))
+	for set := range ks {
 		sets = append(sets, set)
 	}
 	sort.Strings(sets)
 	for _, set := range sets {
-		fmt.Fprintf(&b, "%s %d\n", set, selections[set])
+		fmt.Fprintf(&b, "%s %d\n", set, ks[set])
 	}
-	if err := os.WriteFile(filepath.Join(zitWriterDir, "selection.txt"), []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(zitWriterDir, file), []byte(b.String()), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// readZwKs reads a file written by writeZwKs.
+func readZwKs(file string) (map[string]int, error) {
+	data, err := os.ReadFile(filepath.Join(zitWriterDir, file))
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		set, kText, _ := strings.Cut(line, " ")
+		out[set], _ = strconv.Atoi(kText)
+	}
+	return out, nil
+}
+
+// zwEnableSets are the file sets whose enable-time selection is compared.
+var zwEnableSets = []string{"small", "medium", "deep", "edge"}
+
+// zwFlatHistory is a file set's two commits with emission off.
+func zwFlatHistory(set string) zwScenario {
+	first := zwSet(set)
+	return zwScenario{name: "enable-" + set, commits: []zwCommit{first, zwEdit(set, first)}}
+}
+
+// zwEnabled replays a flat history zit wrote, byte for byte, then enables
+// emission with no k and returns the k go-libfossil pins.
+func zwEnabled(t *testing.T, path string, sc zwScenario, manifests [][]byte) int {
+	t.Helper()
+	r := zwReplay(t, path, sc, manifests)
+	tip, ok := blob.Exists(r.DB(), hash.SHA3(manifests[len(manifests)-1]))
+	if !ok {
+		t.Fatal("no tip")
+	}
+	k, err := manifest.EnableSubmanifests(r, tip, 0)
+	if err != nil {
+		t.Fatalf("%s: EnableSubmanifests: %v", sc.name, err)
+	}
+	return k
 }
 
 // TestZitWriterBundle replays the recorded zit manifests: go-libfossil must
@@ -480,16 +554,43 @@ func TestZitWriterBundle(t *testing.T) {
 	if trees < 10 {
 		t.Fatalf("only %d of the recorded check-ins are trees", trees)
 	}
-	data, err := os.ReadFile(filepath.Join(zitWriterDir, "selection.txt"))
+	selections, err := readZwKs("selection.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	for sc.Scan() {
-		set, kText, _ := strings.Cut(sc.Text(), " ")
-		zk, _ := strconv.Atoi(kText)
+	for set, zk := range selections {
 		if gk := zwSelected(zwSet(set)); gk != zk {
 			t.Errorf("%s: go-libfossil selects k=%d, zit's analysis k=%d", set, gk, zk)
 		}
 	}
+	if err := zwCheckEnables(t); err != nil {
+		t.Error(err)
+	}
+}
+
+// zwCheckEnables replays each recorded flat history and requires the k
+// go-libfossil enables at to be the one zit pinned.
+func zwCheckEnables(t *testing.T) error {
+	enables, err := readZwKs("enable.txt")
+	if err != nil {
+		return err
+	}
+	if len(enables) != len(zwEnableSets) {
+		return fmt.Errorf("%d recorded enables, want %d", len(enables), len(zwEnableSets))
+	}
+	for _, set := range zwEnableSets {
+		sc := zwFlatHistory(set)
+		var manifests [][]byte
+		for i := range sc.commits {
+			m, err := os.ReadFile(filepath.Join(zitWriterDir, sc.name, fmt.Sprintf("c%d.manifest", i+1)))
+			if err != nil {
+				return err
+			}
+			manifests = append(manifests, m)
+		}
+		if gk := zwEnabled(t, filepath.Join(t.TempDir(), sc.name+".fossil"), sc, manifests); gk != enables[set] {
+			return fmt.Errorf("%s: go-libfossil enables at k=%d, zit at k=%d", set, gk, enables[set])
+		}
+	}
+	return nil
 }

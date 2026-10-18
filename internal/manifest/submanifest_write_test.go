@@ -3,6 +3,7 @@ package manifest
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -461,6 +462,12 @@ func TestCheckinTreeMakesSharedLeavesPublic(t *testing.T) {
 		if isPrivate(t, r, s.UUID) {
 			t.Fatalf("leaf %s stays private under a public check-in", s.UUID[:10])
 		}
+		rid, _ := blob.Exists(r.DB(), s.UUID)
+		var n int
+		r.DB().QueryRow("SELECT count(*) FROM unsent WHERE rid=?", rid).Scan(&n)
+		if n != 1 {
+			t.Fatalf("leaf %s was made public but not queued for the next push", s.UUID[:10])
+		}
 	}
 }
 
@@ -598,5 +605,34 @@ func TestEnableSelectsOutsideTheWrite(t *testing.T) {
 	if err != nil || k != 5 || settingValue(t, r, SettingSubmanifestK) != "5" ||
 		settingValue(t, r, SettingEnableSubmanifests) != "on" {
 		t.Fatalf("enable = %d, %v; want the pin that appeared, 5", k, err)
+	}
+}
+
+// The post-commit re-tune re-reads the settings: a manual re-tune, or the
+// automatic one switched off, since the commit is never overwritten.
+func TestAutoRetuneRereadsSettings(t *testing.T) {
+	var cards []deck.FileCard
+	for _, f := range retuneFiles() {
+		cards = append(cards, deck.FileCard{Name: f.Name, UUID: strings.Repeat("0", 64)})
+	}
+	sortCards(cards)
+	ct := checkinTree{settings: submanifestSettings{enabled: true, k: 1, autoRetune: true}, k: 1, files: cards}
+	target, ok := retuneTarget(partitionCosts(cards), 1)
+	if !ok {
+		t.Fatal("fixture: k = 1 shows no drift")
+	}
+	manual := strconv.Itoa(target%MaxPartitionK + 1) // neither 1 nor the target
+	for _, tc := range []struct{ k, auto, want string }{
+		{manual, "on", manual}, // re-tuned by hand meanwhile
+		{"1", "off", "1"},      // automatic re-tune switched off meanwhile
+	} {
+		r := sha3Repo(t)
+		setSettings(t, r, SettingSubmanifestK, tc.k, SettingAutoRetune, tc.auto)
+		if err := r.WithTx(ct.retune); err != nil {
+			t.Fatal(err)
+		}
+		if got := settingValue(t, r, SettingSubmanifestK); got != tc.want {
+			t.Fatalf("k %s, auto %s: re-tune left k %s, want %s", tc.k, tc.auto, got, tc.want)
+		}
 	}
 }

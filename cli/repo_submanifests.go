@@ -34,8 +34,8 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
 	// not the library's "select".
 	k := 0
 	if c.K != nil {
-		if *c.K < 1 || *c.K > 12 {
-			return fmt.Errorf("--k must be 1..12 (got %d)", *c.K)
+		if *c.K < manifest.MinPartitionK || *c.K > manifest.MaxPartitionK {
+			return fmt.Errorf("--k must be %d..%d (got %d)", manifest.MinPartitionK, manifest.MaxPartitionK, *c.K)
 		}
 		k = *c.K
 	}
@@ -130,7 +130,8 @@ func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error {
 	k := or(values[manifest.SettingSubmanifestK], "(unpinned)")
 	if raw := values[manifest.SettingSubmanifestK]; raw != "" {
 		if _, ok := manifest.ParseSettingK(raw); !ok {
-			k = raw + " (invalid: outside 1..12; commits fall back to flat manifests)"
+			k = fmt.Sprintf("%s (invalid: outside %d..%d; commits fall back to flat manifests)",
+				raw, manifest.MinPartitionK, manifest.MaxPartitionK)
 		}
 	}
 	fmt.Printf("%-24s %s\n", manifest.SettingEnableSubmanifests+":", or(values[manifest.SettingEnableSubmanifests], "off"))

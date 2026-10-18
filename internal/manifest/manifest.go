@@ -318,7 +318,17 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 
 	sort.Slice(d.F, func(i, j int) bool { return deck.Compare(d.F[i].Name, d.F[j].Name) < 0 })
 
-	// R-card (always over full file set)
+	rHash, err := checkinRCard(tx, fCards)
+	if err != nil {
+		return nil, err
+	}
+	d.R = rHash
+	return d, nil
+}
+
+// checkinRCard is the R card over a check-in's full file set, whatever form
+// its manifest takes.
+func checkinRCard(tx *db.Tx, fCards []deck.FileCard) (string, error) {
 	rDeck := &deck.Deck{F: fCards}
 	// Bare Expand: computing one checkin's R-card expands each file in the
 	// tree exactly once. Distinct blobs, single pass, no overlap to amortize.
@@ -331,11 +341,9 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 	}
 	rHash, err := rDeck.ComputeR(getContent)
 	if err != nil {
-		return nil, fmt.Errorf("R-card: %w", err)
+		return "", fmt.Errorf("R-card: %w", err)
 	}
-	d.R = rHash
-
-	return d, nil
+	return rHash, nil
 }
 
 func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error) {

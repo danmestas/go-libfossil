@@ -357,10 +357,13 @@ func storeSubmanifest(tx *db.Tx, data []byte, st *storedTree) (string, error) {
 	if outcome == blob.FilledPhantom {
 		st.filled = append(st.filled, rid)
 	}
+	wasPrivate := content.IsPrivate(tx, int64(rid))
 	if err := content.MakePublic(tx, int64(rid)); err != nil {
 		return "", fmt.Errorf("publish sub-manifest: %w", err)
 	}
-	if outcome != blob.Found {
+	// Queue what this commit wrote, and what it just made public: a private
+	// sub-manifest was never sent.
+	if outcome != blob.Found || wasPrivate {
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid); err != nil {
 			return "", fmt.Errorf("unsent sub-manifest: %w", err)
 		}
@@ -424,13 +427,21 @@ func (ct checkinTree) afterCommit(r *repo.Repo) {
 // retune is §6.4's automatic re-tune over the commit's file set, the
 // current check-in once the commit is durable: while
 // submanifest-auto-retune is on it re-pins k when the gate clears;
-// otherwise it only advises.
+// otherwise it only advises. It re-reads the settings first, so a manual
+// re-tune, or the automatic one switched off, since the commit stands.
 func (ct checkinTree) retune(tx *db.Tx) error {
 	target, ok := retuneTarget(partitionCosts(ct.files), ct.k)
 	if !ok {
 		return nil
 	}
-	if !ct.settings.autoRetune {
+	now, err := readSubmanifestSettings(tx)
+	if err != nil {
+		return err
+	}
+	if now.k != ct.k {
+		return nil
+	}
+	if !now.autoRetune {
 		slog.Info("manifest.Checkin: submanifest-k has drifted from the analyzed optimum",
 			"submanifest-k", ct.k, "optimum", target)
 		return nil

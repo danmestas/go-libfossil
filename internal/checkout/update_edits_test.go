@@ -496,3 +496,71 @@ func TestUpdateDryRunLeavesDatabase(t *testing.T) {
 		t.Fatalf("dry run changed vfile:\n%s\nwas\n%s", after, before)
 	}
 }
+
+// A checkout root the user cannot write to stops the update before the
+// first write: removing gone.txt would fail, so clash.txt must not be
+// merged first.
+func TestUpdateRefusesUnwritableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes anywhere")
+	}
+	r, a, b := editsRepo(t)
+	co := editsCheckout(t, r, a)
+	writeWorking(t, co, "clash.txt", "z\n")
+	if err := os.Chmod(co.dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(co.dir, 0o755) })
+
+	if _, err := co.Update(UpdateOpts{TargetRID: b}); err == nil {
+		t.Fatal("update in an unwritable directory succeeded")
+	}
+	if got, _ := readWorking(t, co, "clash.txt"); got != "z\n" {
+		t.Fatalf("clash.txt = %q, written by a refused update", got)
+	}
+}
+
+// A read-only untracked file where the target adds one is backed up to
+// NAME-original and replaced, as fossil does: the backup keeps its data.
+func TestUpdateReplacesReadOnlyUntrackedFile(t *testing.T) {
+	r, a, b, _ := forkRepo(t,
+		[]manifest.File{{Name: "keep.txt", Content: []byte("keep\n")}},
+		[]manifest.File{{Name: "keep.txt", Content: []byte("keep\n")}, {Name: "new.txt", Content: []byte("theirs\n")}},
+		nil)
+	co := editsCheckout(t, r, a)
+	writeWorking(t, co, "new.txt", "mine\n")
+	if err := os.Chmod(filepath.Join(co.dir, "new.txt"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := co.Update(UpdateOpts{TargetRID: b}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := readWorking(t, co, "new.txt"); got != "theirs\n" {
+		t.Fatalf("new.txt = %q, want the target's", got)
+	}
+	if got, _ := readWorking(t, co, "new.txt-original"); got != "mine\n" {
+		t.Fatalf("new.txt-original = %q, want the untracked file", got)
+	}
+}
+
+// The binary rule holds for every strategy, not only the line merge.
+func TestMergeKeepsBinaryFileForAnyStrategy(t *testing.T) {
+	for _, strategy := range []string{"three-way", "last-writer-wins", "binary"} {
+		r, _, left, right := forkRepo(t,
+			[]manifest.File{{Name: "bin.dat", Content: []byte("a\x00b\nc\n")}},
+			[]manifest.File{{Name: "bin.dat", Content: []byte("A\x00b\nc\n")}},
+			[]manifest.File{{Name: "bin.dat", Content: []byte("a\x00b\nC\n")}})
+		co := editsCheckout(t, r, left)
+		res, err := co.Merge(MergeOpts{Version: right, Strategy: strategy})
+		if err != nil {
+			t.Fatalf("%s: %v", strategy, err)
+		}
+		if got, _ := readWorking(t, co, "bin.dat"); got != "A\x00b\nc\n" {
+			t.Errorf("%s: bin.dat = %q, want the checkout's copy kept", strategy, got)
+		}
+		if len(res.Files) != 1 || res.Files[0].Action != MergeKept {
+			t.Errorf("%s: files = %+v, want bin.dat kept", strategy, res.Files)
+		}
+	}
+}

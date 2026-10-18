@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,8 +35,9 @@ import (
 //     the working copy is saved as NAME-original and the target written.
 //
 // Every file then gets the target's executable bit. An update that could
-// not finish (a directory, or a read-only file, where a file must be
-// written) is refused before anything is written, and the checkout
+// not finish (a directory where a file must be written, or a file or
+// directory this process may not change) is refused before anything is
+// written, and the checkout
 // database moves to the target in one transaction. A dry run reports the
 // same result and changes nothing, on disk or in the checkout database.
 //
@@ -360,7 +362,12 @@ func (c *Checkout) applyUpdateStep(
 			return change, nil
 		}
 		if s.action == updateAddOver {
+			// As fossil: back the untracked file up, then delete it, so a
+			// read-only one is replaced too.
 			if err := c.backUpOriginal(s.name); err != nil {
+				return UpdateNone, err
+			}
+			if err := c.removeUpdated(s.name); err != nil {
 				return UpdateNone, err
 			}
 		}
@@ -596,8 +603,8 @@ func overlayScan(rows []vfile.Row, scanned []scanWrite) {
 // checkUpdateTargets refuses, before anything is written, an update that
 // could not finish: a file it writes or deletes where something other than
 // a regular file stands or under a parent that is not a directory
-// (checkMergeTarget), or a read-only file it writes. Fossil rolls back such
-// an update; go-libfossil cannot roll back disk, so it refuses first.
+// (checkMergeTarget), or one this process may not change. Fossil rolls such
+// an update back; go-libfossil cannot roll back disk, so it refuses first.
 func (c *Checkout) checkUpdateTargets(steps []updateStep) error {
 	for _, s := range steps {
 		switch s.action {
@@ -608,19 +615,53 @@ func (c *Checkout) checkUpdateTargets(steps []updateStep) error {
 		if err := c.checkMergeTarget(s.name); err != nil {
 			return err
 		}
-		if s.action == updateRemove {
-			continue
-		}
-		fullPath, err := c.safePath(s.name)
-		if err != nil {
-			return err
-		}
-		info, err := c.env.Storage.Stat(fullPath)
-		if err == nil && info.Mode().Perm()&0o200 == 0 {
-			return fmt.Errorf("cannot update %s: it is read-only", s.name)
+		if err := c.checkWritable(s); err != nil {
+			return fmt.Errorf("cannot update %s: %w", s.name, err)
 		}
 	}
 	return nil
+}
+
+// writableChecker is the optional storage method that reports whether this
+// process may write a path. Storages without permissions do not have it.
+type writableChecker interface {
+	CheckWritable(path string) error
+}
+
+// checkWritable checks the access step s needs. Every step changes the
+// entries of the file's directory (its nearest existing ancestor, should
+// it have to be made): a remove, a new file, a NAME-original backup. A
+// write or merge over an existing file also writes the file itself; an
+// untracked file the target adds over is removed, not written.
+func (c *Checkout) checkWritable(s updateStep) error {
+	checker, ok := c.env.Storage.(writableChecker)
+	if !ok {
+		return nil
+	}
+	fullPath, err := c.safePath(s.name)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(fullPath)
+	for i := 0; ; i++ {
+		if i > maxWalkDepth {
+			return fmt.Errorf("no existing parent directory for %s", fullPath)
+		}
+		if _, err := c.env.Storage.Stat(dir); err == nil {
+			break
+		}
+		dir = filepath.Dir(dir)
+	}
+	if err := checker.CheckWritable(dir); err != nil {
+		return err
+	}
+	if s.action != updateWrite && s.action != updateMerge {
+		return nil
+	}
+	if _, err := c.env.Storage.Stat(fullPath); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return checker.CheckWritable(fullPath)
 }
 
 // setUpdatedModes gives every file of the target on disk the target's

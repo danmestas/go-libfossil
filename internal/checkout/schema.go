@@ -81,8 +81,17 @@ type sqlExecer interface {
 
 // setVVar sets a vvar value, replacing any existing value.
 func setVVar(db sqlExecer, name, value string) error {
-	if db == nil {
-		panic("checkout.setVVar: nil database")
+	switch q := db.(type) {
+	case *sql.DB:
+		if q == nil {
+			panic("checkout.setVVar: nil *sql.DB")
+		}
+	case *sql.Tx:
+		if q == nil {
+			panic("checkout.setVVar: nil *sql.Tx")
+		}
+	default:
+		panic(fmt.Sprintf("checkout.setVVar: unexpected database %T", db))
 	}
 
 	_, err := db.Exec("INSERT OR REPLACE INTO vvar (name, value) VALUES (?, ?)", name, value)

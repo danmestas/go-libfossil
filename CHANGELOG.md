@@ -66,19 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     branches' committed changes, which could write conflict markers.
   - An edited file the target deletes is kept, untracked; pending adds and
     removals stay pending; a missing file is restored; a file the target
-    adds over an untracked one is written after the untracked one is
-    copied to `NAME-original`.
+    adds over an untracked one, read-only or not, is written after the
+    untracked one is copied to `NAME-original`.
   - A binary file (a NUL byte, or a line over 32,767 bytes) is never
     line-merged. Update saves the working copy as `NAME-original` and
-    writes the target's content; Merge keeps the checkout's copy. Before,
+    writes the target's content; Merge keeps the checkout's copy, whatever
+    the file's strategy. Before,
     both spliced the versions line by line and reported a clean merge.
   - The new `UpdateResult.Unmerged` lists files left to reconcile without
     markers: kept edited-but-deleted files, files added both locally and
     by the target, and binary conflicts.
   - Every file takes the target's executable bit, including a change to the
-    bit alone. An update that could not finish (a directory or a read-only
-    file where a file must be written) is refused before anything is
-    written, the checkout database moves in one transaction, and a dry run
+    bit alone. An update that could not finish (a directory where a file
+    must be written, or a file or directory the process may not change) is
+    refused before anything is written, the checkout database moves in one transaction, and a dry run
     changes nothing, the database included.
 
   Update saves no undo state yet, so unlike fossil's update it cannot be

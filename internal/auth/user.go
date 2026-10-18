@@ -15,7 +15,8 @@ func hashPassword(projectCode, login, password string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// CreateUser inserts a new user into the user table.
+// CreateUser inserts a new user into the user table. User times are seconds
+// since 1970, as fossil's now() writes them (src/user.c).
 // Panics if d is nil or login is empty.
 func CreateUser(d *db.DB, projectCode, login, password, caps string) error {
 	if d == nil {
@@ -30,7 +31,7 @@ func CreateUser(d *db.DB, projectCode, login, password, caps string) error {
 
 	pw := hashPassword(projectCode, login, password)
 	_, err := d.Exec(
-		"INSERT INTO user(login, pw, cap, mtime) VALUES(?, ?, ?, julianday('now'))",
+		"INSERT INTO user(login, pw, cap, mtime) VALUES(?, ?, ?, strftime('%s','now'))",
 		login, pw, caps,
 	)
 	if err != nil {
@@ -104,7 +105,8 @@ func ListUsers(d *db.DB) ([]User, error) {
 	return users, nil
 }
 
-// UpdateCaps updates the capabilities for a user.
+// UpdateCaps updates the capabilities for a user and stamps the row's mtime,
+// as `fossil user capabilities` does.
 // Returns an error if the user is not found (0 rows affected).
 // Panics if d is nil.
 func UpdateCaps(d *db.DB, login, caps string) error {
@@ -115,7 +117,7 @@ func UpdateCaps(d *db.DB, login, caps string) error {
 		panic("auth.UpdateCaps: login must not be empty")
 	}
 
-	result, err := d.Exec("UPDATE user SET cap=? WHERE login=?", caps, login)
+	result, err := d.Exec("UPDATE user SET cap=?, mtime=strftime('%s','now') WHERE login=?", caps, login)
 	if err != nil {
 		return fmt.Errorf("update caps for %q: %w", login, err)
 	}
@@ -131,7 +133,8 @@ func UpdateCaps(d *db.DB, login, caps string) error {
 	return nil
 }
 
-// SetPassword updates the password for a user.
+// SetPassword updates the password for a user and stamps the row's mtime,
+// as `fossil user password` does.
 // Returns an error if the user is not found (0 rows affected).
 // Panics if d is nil.
 func SetPassword(d *db.DB, projectCode, login, password string) error {
@@ -143,7 +146,7 @@ func SetPassword(d *db.DB, projectCode, login, password string) error {
 	}
 
 	pw := hashPassword(projectCode, login, password)
-	result, err := d.Exec("UPDATE user SET pw=? WHERE login=?", pw, login)
+	result, err := d.Exec("UPDATE user SET pw=?, mtime=strftime('%s','now') WHERE login=?", pw, login)
 	if err != nil {
 		return fmt.Errorf("update password for %q: %w", login, err)
 	}

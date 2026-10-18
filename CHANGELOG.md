@@ -31,6 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way; six requirements are new, two are reworded, and each has a case
   checked against fossil 2.28.
 
+### Fixed
+
+- `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
+  `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
+  Julian day there, which fossil, comparing those times when it merges
+  configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
+  stamp the user's mtime too, as `fossil user capabilities` and
+  `fossil user password` do.
+
 ## [0.12.0] - 2026-10-13
 
 ### Added

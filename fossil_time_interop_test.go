@@ -5,6 +5,7 @@ package libfossil_test
 // with the stored or written values compared.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -108,5 +109,107 @@ func TestCardTimesMatchFossil(t *testing.T) {
 			t.Errorf("%s at %s: go-libfossil writes D %s, fossil writes D %s",
 				kind, override(i), got[i], want[i])
 		}
+	}
+}
+
+// secondsColumn reads a time column fossil keeps in seconds since 1970 and
+// requires an integer between before and after, inclusive.
+func secondsColumn(t *testing.T, bin, repoPath, what, query string, before, after int64) {
+	t.Helper()
+	out := strings.TrimSpace(fossilRun(t, bin, filepath.Dir(repoPath), "sql", "-R", repoPath, query))
+	var typ string
+	var v int64
+	if _, err := fmt.Sscanf(out, "%s %d", &typ, &v); err != nil || typ != "integer" {
+		t.Errorf("%s in %s: stored %q, want an integer count of seconds", what, filepath.Base(repoPath), out)
+		return
+	}
+	if v < before || v > after {
+		t.Errorf("%s in %s: stored %d, want seconds since 1970 in [%d, %d]",
+			what, filepath.Base(repoPath), v, before, after)
+	}
+}
+
+// TestConfigAndUserTimesMatchFossil sets a configuration value, adds a user
+// and changes its capabilities and password, with fossil and with
+// go-libfossil. Fossil stamps each row with now(), seconds since 1970, so
+// config.mtime and user.mtime must hold that in both repositories.
+func TestConfigAndUserTimesMatchFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	dir := t.TempDir()
+	fossilRepo := filepath.Join(dir, "f.fossil")
+	goRepo := filepath.Join(dir, "g.fossil")
+	fossilRun(t, bin, dir, "init", fossilRepo)
+	r, err := libfossil.Create(goRepo, libfossil.CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// goDo runs fn on the go-libfossil repository, closed again before
+	// fossil reads it.
+	goDo := func(fn func(r *libfossil.Repo) error) error {
+		r, err := libfossil.Open(goRepo)
+		if err != nil {
+			return err
+		}
+		if err := fn(r); err != nil {
+			r.Close()
+			return err
+		}
+		return r.Close()
+	}
+
+	const userTime = "SELECT typeof(mtime)||' '||mtime FROM user WHERE login='bob'"
+	const configTime = "SELECT typeof(mtime)||' '||mtime FROM config WHERE name='crlf-glob'"
+	const zeroUser = "UPDATE user SET mtime=0 WHERE login='bob'"
+	type step struct {
+		what   string
+		fossil func()
+		goside func(r *libfossil.Repo) error
+		query  string
+	}
+	steps := []step{
+		{"config.mtime after a setting",
+			func() { fossilRun(t, bin, dir, "settings", "crlf-glob", "x", "-R", fossilRepo) },
+			func(r *libfossil.Repo) error { return r.SetConfig("crlf-glob", "x") }, configTime},
+		{"user.mtime of a new user",
+			func() { fossilRun(t, bin, dir, "user", "new", "bob", "", "ei", "pw", "-R", fossilRepo) },
+			func(r *libfossil.Repo) error {
+				return r.CreateUser(libfossil.UserOpts{Login: "bob", Password: "pw", Caps: "ei"})
+			},
+			userTime},
+		{"user.mtime after a capability change",
+			func() {
+				fossilRun(t, bin, dir, "sql", "-R", fossilRepo, zeroUser)
+				fossilRun(t, bin, dir, "user", "capabilities", "bob", "eio", "-R", fossilRepo)
+			},
+			func(r *libfossil.Repo) error {
+				if _, err := r.DB().Exec(zeroUser); err != nil {
+					return err
+				}
+				return r.SetCaps("bob", "eio")
+			}, userTime},
+		{"user.mtime after a password change",
+			func() {
+				fossilRun(t, bin, dir, "sql", "-R", fossilRepo, zeroUser)
+				fossilRun(t, bin, dir, "user", "password", "bob", "pw2", "-R", fossilRepo)
+			},
+			func(r *libfossil.Repo) error {
+				if _, err := r.DB().Exec(zeroUser); err != nil {
+					return err
+				}
+				return r.SetPassword("bob", "pw2")
+			}, userTime},
+	}
+	for _, s := range steps {
+		before := time.Now().Unix()
+		s.fossil()
+		if err := goDo(s.goside); err != nil {
+			t.Fatalf("%s: %v", s.what, err)
+		}
+		after := time.Now().Unix()
+		secondsColumn(t, bin, fossilRepo, s.what, s.query, before, after)
+		secondsColumn(t, bin, goRepo, s.what, s.query, before, after)
 	}
 }

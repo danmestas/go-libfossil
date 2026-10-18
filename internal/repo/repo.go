@@ -182,7 +182,8 @@ func (r *Repo) UUIDByRID(rid int64) (string, error) {
 	return uuid, nil
 }
 
-// SetConfig writes a configuration value to the repo's config table.
+// SetConfig writes a configuration value to the repo's config table, stamped
+// with the time in seconds since 1970, as fossil's db_set stamps it (now()).
 //
 // A hash-policy value must be one of the ordinals 0 through 4, the only form
 // the reader accepts (AF-7.1-2). Fossil makes an unknown policy fatal where
@@ -195,7 +196,7 @@ func (r *Repo) SetConfig(key, value string) error {
 		}
 	}
 	_, err := r.db.Exec(
-		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, julianday('now'))",
+		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, strftime('%s','now'))",
 		key, value,
 	)
 	if err != nil {
@@ -230,7 +231,7 @@ func (r *Repo) SetHashPolicy(name string) error {
 	_, err = r.db.Exec(
 		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES('hash-policy', "+
 			"CASE WHEN EXISTS(SELECT 1 FROM blob WHERE length(uuid)>40) THEN ? ELSE ? END, "+
-			"julianday('now'))",
+			"strftime('%s','now'))",
 		strconv.Itoa(db.HashPolicySHA3), strconv.Itoa(db.HashPolicyAuto),
 	)
 	if err != nil {

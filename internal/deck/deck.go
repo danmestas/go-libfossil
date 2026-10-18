@@ -61,6 +61,12 @@ type Deck struct {
 	pPresent bool
 }
 
+// HasC reports whether the artifact carries a C card, empty or not. fossil
+// stores a check-in without one with a NULL comment.
+func (d *Deck) HasC() bool {
+	return d.C != "" || d.cPresent
+}
+
 type FileCard struct {
 	Name    string
 	UUID    string

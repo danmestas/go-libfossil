@@ -97,11 +97,8 @@ func textTime(col string) string {
 func derivedRows(t *testing.T, path string) map[string][]string {
 	t.Helper()
 	return queryRows(t, path, map[string]string{
-		// Check-in events only: Rebuild does not yet recreate the events of
-		// other artifacts (control artifacts, wiki, tickets, forum), a gap
-		// apart from the values #258 is about.
 		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
-			", user, comment FROM event WHERE type='ci' ORDER BY objid",
+			", user, comment FROM event ORDER BY objid",
 		"plink": "SELECT pid, cid, isprim, " + textTime("mtime") +
 			" FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, tagtype, quote(value), printf('%!.20g', mtime)
@@ -110,14 +107,12 @@ func derivedRows(t *testing.T, path string) map[string][]string {
 }
 
 // derivedTimes reads the times fossil derives from the artifacts into
-// event, plink and tagxref, keyed by the row each belongs to. Events are
-// check-in events: go-libfossil does not write the event fossil adds for a
-// tag's control artifact, a missing row apart from the times compared here.
+// event, plink and tagxref, keyed by the row each belongs to.
 func derivedTimes(t *testing.T, path string) map[string][]string {
 	t.Helper()
 	return queryRows(t, path, map[string]string{
 		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
-			" FROM event WHERE type='ci' ORDER BY objid",
+			" FROM event ORDER BY objid",
 		"plink": "SELECT pid, cid, " + textTime("mtime") + " FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, srcid, origid, printf('%!.20g', mtime)
 			FROM tagxref ORDER BY tagid, rid`,

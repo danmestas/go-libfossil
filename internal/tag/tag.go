@@ -51,7 +51,8 @@ type ApplyOpts struct {
 
 // AddTag creates a control artifact that adds or cancels a tag on a target checkin.
 // It stores the artifact as a blob, ensures the tag name exists in the tag table,
-// and inserts/replaces a row in the tagxref table.
+// inserts/replaces a row in the tagxref table, and writes the artifact's 'g'
+// event row, as crosslinking it would.
 func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if r == nil {
 		panic("tag.AddTag: r must not be nil")
@@ -111,6 +112,9 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 			return err
 		}
 		if err := leaves.Apply(tx); err != nil {
+			return err
+		}
+		if err := InsertControlEvent(tx, controlRid, d); err != nil {
 			return err
 		}
 

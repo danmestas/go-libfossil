@@ -1,0 +1,5 @@
+a1 1
+deep 4
+edge 3
+large 5
+small 2

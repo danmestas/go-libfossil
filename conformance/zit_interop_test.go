@@ -21,6 +21,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	fsltype "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/verify"
@@ -55,19 +56,21 @@ func zitBinary(t *testing.T) string {
 	return bin
 }
 
-// zitRun runs zit in dir with a private home and a deadline.
+// zitRun runs zit in dir with a private home and a deadline, and returns
+// its standard output.
 func zitRun(t *testing.T, bin, home, dir string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "USER=u")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("zit %v: %v\n%s", args, err, out)
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "FOSSIL_HOME="+home, "USER=u")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("zit %q: %v\n%s%s", args, err, stdout.Bytes(), stderr.Bytes())
 	}
-	return string(out)
+	return stdout.String()
 }
 
 // zitServe starts `zit serve` in dir on a free port, stopped at cleanup and
@@ -145,16 +148,25 @@ func zitSourceHistory(t *testing.T, path string) {
 	commit("four", three, one)
 }
 
-// zitListing is zit's `ls --long` of a check-in as "name hash" lines.
+// zitListing is zit's `ls --long` of a check-in as "name hash" lines. zit
+// prints a name raw, so a line that does not open with a hash continues the
+// name before it, which held a newline.
 func zitListing(t *testing.T, bin, home, dir, uuid string) []string {
 	t.Helper()
 	var out []string
-	for _, line := range strings.Split(strings.TrimSpace(zitRun(t, bin, home, dir, "ls", "--long", uuid)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 5 {
+	listing := strings.TrimSuffix(zitRun(t, bin, home, dir, "ls", "--long", uuid), "\n")
+	for _, line := range strings.Split(listing, "\n") {
+		fields := strings.SplitN(line, " ", 5)
+		if len(fields) == 5 && fields[0] != "" && hash.IsValidHash(fields[0]) {
+			out = append(out, fields[4]+" "+fields[0])
 			continue
 		}
-		out = append(out, strings.Join(fields[4:], " ")+" "+fields[0])
+		if len(out) == 0 {
+			continue
+		}
+		last := out[len(out)-1]
+		cut := strings.LastIndexByte(last, ' ')
+		out[len(out)-1] = last[:cut] + "\n" + line + last[cut:]
 	}
 	sort.Strings(out)
 	return out

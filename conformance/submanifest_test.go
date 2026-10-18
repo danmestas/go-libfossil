@@ -27,8 +27,9 @@ import (
 	"github.com/danmestas/go-libfossil/simio"
 )
 
-// The submanifest suite checks go-libfossil's reader against
-// draft-fossil-submanifests-00. Card-level cases are byte strings given to
+// The submanifest suite checks go-libfossil's reader and writer against
+// draft-fossil-submanifests-00; the writer's cases are in
+// submanifest_writer_test.go. Card-level cases are byte strings given to
 // deck.Parse, as in the artifact suite; tree cases store artifacts in a
 // repository and read them back through the same entry points every consumer
 // uses. fossil(1) reads no S card, so nothing here is checked against it;
@@ -59,7 +60,7 @@ func submanifestCases() []smCase {
 	var all []smCase
 	for _, group := range [][]smCase{
 		smCardCases(), smTypeCases(), smWalkCases(), smStateCases(),
-		smTransferCases(), smVectorCases(),
+		smTransferCases(), smVectorCases(), smWriterCases(),
 	} {
 		all = append(all, group...)
 	}
@@ -843,26 +844,6 @@ func smStateCases() []smCase {
 			}
 			seen, err := manifest.SeenSubmanifest(f.r.DB())
 			return wantNoErr(err, "SeenSubmanifest", want("seen", seen, true))
-		}),
-		smRepoCase("submanifest.8.1.no-s-in-commits", "SM-8.1-1", func(f *smFixture) error {
-			if _, err := f.r.DB().Exec(`REPLACE INTO config(name,value,mtime) VALUES
-				('enable-submanifests','on',1),('submanifest-k','1',1)`); err != nil {
-				return err
-			}
-			files := make([]manifest.File, 40)
-			for i := range files {
-				files[i] = manifest.File{Name: fmt.Sprintf("f%02d.c", i), Content: []byte{byte(i), '\n'}}
-			}
-			rid, _, err := manifest.Checkin(f.r, manifest.CheckinOpts{
-				Files: files, Comment: "c", User: "u", Time: smTime})
-			if err != nil {
-				return err
-			}
-			d, err := manifest.GetManifest(f.r, rid)
-			if err != nil {
-				return err
-			}
-			return want("S cards", len(d.S), 0)
 		}),
 		smRepoCase("submanifest.9.2.sweep-marker", "SM-9.2-1", func(f *smFixture) error {
 			refs, err := f.leaves([]string{"a"})

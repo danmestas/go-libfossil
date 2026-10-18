@@ -1,11 +1,10 @@
-# Requirements of draft-fossil-submanifests-00, reader scope, written from the
-# draft text. go-libfossil reads trees and writes none, so the writer sections
-# are skipped, with reasons, in the suite's report: 6.1, 6.2, 6.4 and 6.5
-# (canonical construction, parameter selection and re-tuning), the parameter
-# selection and enabling rules of 6.3 and 8.1, the delta-manifest latch of
-# 5.4, 5.6 (informative), 8.2 (an operator rule for provisional repositories,
-# not observable in a library), 11 (IANA) and the writer vectors of A.5. Not
-# implemented: the 7.4 SHOULD (memoized sub-manifest enumeration).
+# Requirements of draft-fossil-submanifests-00, written from the draft text,
+# reader and writer. Skipped, with reasons, in the suite's report: 5.6 and
+# 6.5 (informative), 8.2 (an operator rule for provisional repositories, not
+# observable in a library) and 11 (IANA). Not implemented: the 7.4 SHOULD
+# (memoized sub-manifest enumeration). The writer's construction is checked
+# byte for byte against the Appendix A artifacts and against check-ins zit
+# wrote (testdata/zit-writer, replayed without zit in CI).
 # The reference for behaviour the draft leaves open is zit, the other
 # implementation: its 2.29.0 version threshold (7.2), its avoid-submanifests
 # placement, and its configuration request (6.3, SM-6.3-3; the draft text is
@@ -49,19 +48,34 @@ SM-5.3-2	5.3	A lookup that would resolve a sub-manifest deeper than 16 fails, an
 SM-5.4-1	5.4	A delta manifest may name a tree manifest as its baseline: the merge walk takes the tree walk as its baseline cursor, and single-name lookup takes the tree lookup as its baseline step.
 SM-5.4-2	5.4	A writer with the enable-submanifests setting off does not create a delta manifest against a tree baseline.
 SM-5.5-1	5.5	A tree manifest's R card is computed over the walked enumeration, and a delta over a tree baseline's over the composed enumeration.
+SM-6.1-1	6.1	The partition predicate is the count of leading zero bits of the SHA3-256 digest of the decoded filename, tested against k for leaves and (h+1)*k at height h; content, permission and old name never influence the partition.
+SM-6.2-1	6.2	The construction is deterministic: leaves carry their group's F cards and a Z card, interiors one S card per member and a Z card, each S card names its child under the repository hash policy, and two writers produce byte-identical artifacts for the same check-in and k.
+SM-6.2-2	6.2	A scan yielding fewer than two groups emits a flat manifest and no sub-manifest: N = 0, N = 1, at most MAX names with no qualifying boundary, and a boundary suppressed by MIN.
+SM-6.2-3	6.2	A group holding MAX members forces a boundary whatever the predicate says.
+SM-6.2-4	6.2	A final group shorter than MIN merges into its predecessor when the two fit in MAX, at height 0 and at every interior height.
+SM-6.2-5	6.2	A scan yielding one group, or as many groups as nodes, ends the construction with the manifest carrying that height's nodes; otherwise interior sub-manifests form the next height, never a node of height 16.
+SM-6.2-6	6.2	S card filenames and a leaf's filename and old-name tokens take the canonical encoding: exactly space, newline and backslash escaped, every other byte raw.
+SM-6.2-7	6.2	Sub-manifests are stored before the manifest that references them, and an unchanged subtree is shared by content addressing.
 SM-6.3-1	6.3	A supporting server recognizes submanifest-k, enable-submanifests and submanifest-auto-retune as members of the /project configuration group.
 SM-6.3-2	6.3	A receiver stages the three settings through the end of the containing reply, validates them, and applies all or none; card order does not affect the result, and an invalid value, or enable-submanifests on without a submanifest-k from 1 to 12, rejects all three.
 SM-6.3-3	6.3	A client supporting this specification and holding Read permission requests reqconfig /project during pull and after clone authorization succeeds.
 SM-6.3-4	6.3	A newly cloned repository that could not retrieve the group leaves enable-submanifests false.
+SM-6.3-5	6.3	The writer takes k from the stored pin, never derives it per commit, and supports every value from 1 to 12.
+SM-6.3-6	6.3	A stored k outside 1 to 12 makes the writer fall back to flat manifests rather than substitute a value, and report it.
+SM-6.3-7	6.3	Automatic selection costs every k from 1 to 12 over the current check-in's entries under the sha3 policy, C(k) = S + sum(L*L)/sum(L), choosing the least cost and the lowest k on a tie; with no candidate it has no result.
+SM-6.4-1	6.4	A re-tune is forward-only and operator-initiated: the next commit is built under the new value, sharing exactly the byte-identical sub-manifests, and no history is rewritten.
+SM-6.4-2	6.4	A writer re-tunes automatically only while submanifest-auto-retune is true (default false), and only when a distinct candidate costs less than (1 - m) times the pin's cost; m is 15%, as zit's.
 SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates a phantom for each, with the referencing artifact's privacy.
 SM-7.1-2	7.1	Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.
 SM-7.2-1	7.2	A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer whose announced version predates sub-manifest support, with an explicit error and never by converting, downgrading or silently omitting it.
 SM-7.2-2	7.2	A server whose enable-submanifests setting is false sends pragma avoid-submanifests in the reply positions of avoid-delta-manifests.
-SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in commits created during the session.	go-libfossil emits no S card in any commit, so the pragma has nothing to stop
+SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in commits created during the session.	the root package makes no commit within a sync session: the internal session reports the pragma (SyncResult.AvoidSubmanifests) and manifest.Checkin honours it (CheckinOpts.AvoidSubmanifests)
 SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
 SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.
-SM-8.1-1	8.1	A writer emits no S card unless the enable-submanifests setting is true.	go-libfossil writes no tree in any case
+SM-8.1-1	8.1	A writer emits no S card unless the enable-submanifests setting is true, which is false by default.
 SM-8.1-2	8.1	When the first S-bearing artifact is stored, a seen-submanifest indicator is recorded.
+SM-8.1-3	8.1	A local request to enable emission keeps a valid pin and refuses a different explicit k; with no valid pin it pins an explicit k from 1 to 12, refuses one outside, or selects one automatically; a request that cannot be met changes neither setting.
+SM-8.1-4	8.1	Disabling the setting stops new tree manifests and leaves existing ones in place.
 SM-9.1-1	9.1	SUBMANIFEST is determined by the post-pass reassignment, not while cards are read, and required-card logic treats it as an exception to the D card.
 SM-9.2-1	9.2	A sweep that discovers crosslink work by the absence of derived rows excludes SUBMANIFEST artifacts or records a completion marker for them, so it never reselects them.
 SM-9.3-1	9.3	Every consumer of a check-in's file set (checkout, diff, crosslink, rebuild, annotate, commit) obtains it through one shared enumeration interface.
@@ -70,3 +84,4 @@ SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact chec
 SM-A-1	A.2, A.3	The Appendix A.2 and A.3 artifacts parse, determine their types, recompute their names, walk to the four-file enumeration, and the R card verifies over it.
 SM-A-2	A.4	The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.
 SM-A-3	A.5	The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.
+SM-A-4	A.5	The writer vectors of A.5: the A.4 set reproduced at k = 3, the height-0 merge and three-level vectors reproduced, flat output for N = 1 and a MIN-suppressed boundary, no selection over one name with a first enable failing atomically, and an injected persistence failure leaving no setting applied.

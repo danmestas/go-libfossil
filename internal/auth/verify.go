@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -48,7 +49,8 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 	// 1. Look up user by card.User and retrieve stored password + cexpire.
 	// The reserved logins are capability templates, never accounts.
 	var storedPW string
-	var cexpire sql.NullString
+	var hasExpiry bool
+	var expiry sql.NullFloat64
 	var u User
 	var info sql.NullString
 	var mtimeRaw any
@@ -58,11 +60,12 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 	// the signature is SHA1(nonce), which anyone can compute. A new
 	// repository's creator starts that way, holding Setup.
 	err := d.QueryRow(
-		"SELECT uid, login, pw, cap, cexpire, info, mtime FROM user WHERE login=?"+
+		"SELECT uid, login, pw, cap, cexpire IS NOT NULL, julianday(cexpire), info, mtime"+
+			" FROM user WHERE login=?"+
 			" AND login NOT IN ('anonymous','nobody','developer','reader')"+
 			" AND length(pw)>0",
 		card.User,
-	).Scan(&u.UID, &u.Login, &storedPW, &u.Cap, &cexpire, &info, &mtimeRaw)
+	).Scan(&u.UID, &u.Login, &storedPW, &u.Cap, &hasExpiry, &expiry, &info, &mtimeRaw)
 
 	// 2. If not found → ErrAuthFailed
 	if err != nil {
@@ -73,10 +76,15 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 		u.Info = info.String
 	}
 
-	// 3. If cexpire is set and in the past → ErrAuthFailed
-	if cexpire.Valid {
-		expireTime, ok := parseCExpire(cexpire.String)
-		if !ok || time.Now().After(expireTime) {
+	// 3. If cexpire is set and in the past → ErrAuthFailed. Fossil stores it
+	// as a Julian day; julianday() also reads a date written as text. One
+	// that reads as no date at all is treated as expired, for safety.
+	if hasExpiry {
+		if !expiry.Valid {
+			return User{}, ErrAuthFailed
+		}
+		expireTime := fsltype.JulianToTime(expiry.Float64)
+		if time.Now().After(expireTime) {
 			return User{}, ErrAuthFailed
 		}
 		u.CExpire = expireTime
@@ -105,17 +113,6 @@ func signatureMatches(card *xfer.LoginCard, storedPW, projectCode string) bool {
 	}
 	secret := hashPassword(projectCode, card.User, storedPW)
 	return subtle.ConstantTimeCompare([]byte(sha1hex([]byte(card.Nonce+secret))), sig) == 1
-}
-
-// parseCExpire parses a user.cexpire value. SQLite may return either ISO 8601
-// or "2006-01-02 15:04:05". An expiry that does not parse reports !ok, which
-// the caller treats as expired for safety.
-func parseCExpire(s string) (time.Time, bool) {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		t, err = time.Parse("2006-01-02 15:04:05", s)
-	}
-	return t, err == nil
 }
 
 func sha1hex(data []byte) string {

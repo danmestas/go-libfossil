@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
   stamp the user's mtime too, as `fossil user capabilities` and
   `fossil user password` do.
+- A sync login reads `user.cexpire` as fossil stores it, a Julian day. Any
+  value fossil had written there, as its web login does, failed to parse and
+  refused the login; now only an expiry in the past refuses it, as before
+  for a date written as text. `repo invite --ttl` stores its expiry as a
+  Julian day too.
 
 ## [0.12.0] - 2026-10-13
 

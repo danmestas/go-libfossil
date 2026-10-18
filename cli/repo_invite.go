@@ -37,8 +37,11 @@ func (c *RepoInviteCmd) Run(g *Globals) error {
 	}
 
 	if c.TTL > 0 {
-		expiry := time.Now().Add(c.TTL).Format("2006-01-02 15:04:05")
-		r.Inner().DB().Exec("UPDATE user SET cexpire=? WHERE login=?", expiry, c.Login)
+		// cexpire is a Julian day, as fossil keeps it.
+		expiry := libfossil.TimeToJulian(time.Now().Add(c.TTL))
+		if _, err := r.Inner().DB().Exec("UPDATE user SET cexpire=? WHERE login=?", expiry, c.Login); err != nil {
+			return fmt.Errorf("setting invite expiry: %w", err)
+		}
 	}
 
 	url := c.URL

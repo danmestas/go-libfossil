@@ -278,3 +278,31 @@ func TestVerifyLoginRefusesReservedLogins(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyLoginReadsJulianExpiry sets cexpire the way fossil writes it, a
+// Julian day (src/login.c: julianday('now')+N/86400.0), and checks an expiry
+// still ahead lets the login through while one passed does not.
+func TestVerifyLoginReadsJulianExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	if err := CreateUser(d, code, "alice", "secret123", "o"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	payload := []byte("push sc pc\nigot abc123\n")
+	card := buildLoginCard("alice", "secret123", code, payload)
+
+	for _, c := range []struct {
+		expiry string
+		want   error
+	}{
+		{"julianday('now')+1", nil},
+		{"julianday('now')-1", ErrAuthFailed},
+	} {
+		if _, err := d.Exec("UPDATE user SET cexpire=" + c.expiry + " WHERE login='alice'"); err != nil {
+			t.Fatalf("set cexpire: %v", err)
+		}
+		if _, err := VerifyLogin(d, code, card); err != c.want {
+			t.Errorf("cexpire=%s: VerifyLogin = %v, want %v", c.expiry, err, c.want)
+		}
+	}
+}

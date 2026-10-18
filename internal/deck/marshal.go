@@ -88,41 +88,53 @@ func marshalCardsABCDE(b *strings.Builder, d *Deck) {
 	}
 }
 
-// marshalCardF writes the F (file) cards, sorted by decoded filename.
+// marshalCardF writes the F (file) cards, sorted by decoded filename. A
+// sub-manifest's filenames take the canonical encoding of
+// draft-fossil-submanifests-00 §6.2; every other artifact's take §4.3's.
 func marshalCardF(b *strings.Builder, d *Deck) {
-	if len(d.F) > 0 {
-		sorted := make([]FileCard, len(d.F))
-		copy(sorted, d.F)
-		sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
-		for _, f := range sorted {
-			b.WriteString("F ")
-			b.WriteString(FossilEncode(f.Name))
-			if f.UUID != "" {
-				b.WriteString(" ")
-				b.WriteString(f.UUID)
-				// Canonical Fossil forces a "w" permission placeholder on a
-				// rename card whose perm would otherwise be empty, so the
-				// prior-name field keeps its 4th positional slot rather than
-				// being misread as the permission (src/checkin.c:1999).
-				perm := f.Perm
-				if perm == "" && f.OldName != "" {
-					perm = "w"
-				}
-				if perm != "" {
-					b.WriteString(" ")
-					b.WriteString(perm)
-				}
-				// The prior name is positional and only meaningful after a
-				// UUID; a deletion card (no UUID) must never carry one, or
-				// the old name would be misread as the hash.
-				if f.OldName != "" {
-					b.WriteString(" ")
-					b.WriteString(FossilEncode(f.OldName))
-				}
-			}
-			b.WriteString("\n")
+	if len(d.F) == 0 {
+		return
+	}
+	encode := FossilEncode
+	if d.Type == Submanifest {
+		encode = CanonicalEncode
+	}
+	sorted := make([]FileCard, len(d.F))
+	copy(sorted, d.F)
+	sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
+	for _, f := range sorted {
+		writeFileCard(b, f, encode)
+	}
+}
+
+// writeFileCard writes one F card, its filename and old name through encode.
+func writeFileCard(b *strings.Builder, f FileCard, encode func(string) string) {
+	b.WriteString("F ")
+	b.WriteString(encode(f.Name))
+	if f.UUID != "" {
+		b.WriteString(" ")
+		b.WriteString(f.UUID)
+		// Canonical Fossil forces a "w" permission placeholder on a
+		// rename card whose perm would otherwise be empty, so the
+		// prior-name field keeps its 4th positional slot rather than
+		// being misread as the permission (src/checkin.c:1999).
+		perm := f.Perm
+		if perm == "" && f.OldName != "" {
+			perm = "w"
+		}
+		if perm != "" {
+			b.WriteString(" ")
+			b.WriteString(perm)
+		}
+		// The prior name is positional and only meaningful after a
+		// UUID; a deletion card (no UUID) must never carry one, or
+		// the old name would be misread as the hash.
+		if f.OldName != "" {
+			b.WriteString(" ")
+			b.WriteString(encode(f.OldName))
 		}
 	}
+	b.WriteString("\n")
 }
 
 // marshalCardsGHIJKL writes the G, H, I, J, K and L cards.
@@ -211,9 +223,8 @@ func marshalCardsMNPQR(b *strings.Builder, d *Deck) {
 }
 
 // marshalCardS writes the S cards of a tree manifest or interior sub-manifest
-// (draft-fossil-submanifests-00 §3.6), sorted by decoded filename. Only a
-// parsed deck carries them: no writer in this library builds a tree, so this
-// exists to keep a parsed tree's Marshal a faithful round trip.
+// (draft-fossil-submanifests-00 §3.6), sorted by decoded filename, under the
+// canonical encoding of §6.2.
 func marshalCardS(b *strings.Builder, d *Deck) {
 	if len(d.S) == 0 {
 		return
@@ -222,8 +233,48 @@ func marshalCardS(b *strings.Builder, d *Deck) {
 	copy(sorted, d.S)
 	sort.Slice(sorted, func(i, j int) bool { return Compare(sorted[i].Name, sorted[j].Name) < 0 })
 	for _, sc := range sorted {
-		fmt.Fprintf(b, "S %s %s\n", FossilEncode(sc.Name), sc.UUID)
+		fmt.Fprintf(b, "S %s %s\n", CanonicalEncode(sc.Name), sc.UUID)
 	}
+}
+
+// MarshalLeaf serializes a leaf sub-manifest (draft-fossil-submanifests-00
+// §6.2 step 2): files, in canonical filename order, as F cards and a Z card.
+// Every file must carry a hash, since a sub-manifest holds no delete marker
+// (§4.4).
+func MarshalLeaf(files []FileCard) []byte {
+	if len(files) == 0 {
+		panic("deck.MarshalLeaf: files must not be empty")
+	}
+	for _, f := range files {
+		if f.UUID == "" {
+			panic("deck.MarshalLeaf: every file must carry a hash")
+		}
+	}
+	return marshalSubmanifest(&Deck{Type: Submanifest, F: files})
+}
+
+// MarshalInterior serializes an interior sub-manifest (§6.2 step 3): one S
+// card per member, in key order, and a Z card.
+func MarshalInterior(refs []SubmanifestCard) []byte {
+	if len(refs) == 0 {
+		panic("deck.MarshalInterior: refs must not be empty")
+	}
+	return marshalSubmanifest(&Deck{Type: Submanifest, S: refs})
+}
+
+// LeafCard is the F card line a leaf sub-manifest carries for f, its
+// terminating newline included: what the cost of §6.3 measures a leaf by.
+func LeafCard(f FileCard) string {
+	var b strings.Builder
+	writeFileCard(&b, f, CanonicalEncode)
+	return b.String()
+}
+
+func marshalSubmanifest(d *Deck) []byte {
+	var b strings.Builder
+	marshalCards(&b, d)
+	body := b.String()
+	return []byte(body + "Z " + computeZ([]byte(body)) + "\n")
 }
 
 // marshalCardsTUW writes the T, U and W cards.

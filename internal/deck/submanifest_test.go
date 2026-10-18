@@ -148,3 +148,82 @@ func TestUndefinedLettersStillRejected(t *testing.T) {
 		mustReject(t, "D 2026-07-26T00:00:00\n"+letter+" x\n", "")
 	}
 }
+
+// §6.2: canonical emission escapes exactly SP, LF and backslash; the
+// decoder's other escape octets are written raw.
+func TestCanonicalEncodeIsMinimal(t *testing.T) {
+	cases := map[string]string{
+		"a b":        `a\sb`,
+		"a\nb":       `a\nb`,
+		`a\b`:        `a\\b`,
+		"a\tb\rc":    "a\tb\rc",
+		"v\vf\f\x00": "v\vf\f\x00",
+		"plain.c":    "plain.c",
+	}
+	for in, want := range cases {
+		if got := CanonicalEncode(in); got != want {
+			t.Errorf("CanonicalEncode(%q) = %q, want %q", in, got, want)
+		}
+		if back := FossilDecode(CanonicalEncode(in)); back != in {
+			t.Errorf("FossilDecode(CanonicalEncode(%q)) = %q", in, back)
+		}
+	}
+}
+
+// Appendix A.2: the first leaf of the example tree, byte for byte.
+func TestMarshalLeafReproducesAppendixA2(t *testing.T) {
+	got := MarshalLeaf([]FileCard{
+		{Name: "README.md", UUID: "a4ab3d6bba47168d231f8ebdfaeb9bce15e134d7150bf20800a42551409bfbfb"},
+		{Name: "src/main.c", UUID: "ef30bf8ab404da88c777979d0eeb8729f59cff33423382cfb212ed7b70a7f31c"},
+	})
+	want := "F README.md a4ab3d6bba47168d231f8ebdfaeb9bce15e134d7150bf20800a42551409bfbfb\n" +
+		"F src/main.c ef30bf8ab404da88c777979d0eeb8729f59cff33423382cfb212ed7b70a7f31c\n" +
+		"Z bdbb5692981c3a9e28c8320434534bf1\n"
+	if string(got) != want {
+		t.Fatalf("MarshalLeaf:\n got %q\nwant %q", got, want)
+	}
+}
+
+// §6.2: a leaf writes its filename and old-name tokens canonically, keeps
+// the permission token, and forces the "w" placeholder on a rename.
+func TestMarshalLeafCanonicalTokens(t *testing.T) {
+	got := MarshalLeaf([]FileCard{
+		{Name: "a b\tc", UUID: smH1, Perm: "x"},
+		{Name: "d", UUID: smH2, OldName: "old name"},
+	})
+	body := "F a\\sb\tc " + smH1 + " x\nF d " + smH2 + " w old\\sname\n"
+	if string(got) != string(withZCard(body)) {
+		t.Fatalf("MarshalLeaf:\n got %q\nwant %q", got, withZCard(body))
+	}
+	d := mustParse(t, body)
+	if d.Type != Submanifest || d.F[0].Name != "a b\tc" || d.F[1].OldName != "old name" {
+		t.Fatalf("leaf parses as %+v", d)
+	}
+}
+
+// §6.2 step 3: an interior sub-manifest is one S card per member and a Z
+// card; S filenames are canonical.
+func TestMarshalInterior(t *testing.T) {
+	got := MarshalInterior([]SubmanifestCard{{Name: "a\tb", UUID: smH1}, {Name: "c d", UUID: smH2}})
+	body := "S a\tb " + smH1 + "\nS c\\sd " + smH2 + "\n"
+	if string(got) != string(withZCard(body)) {
+		t.Fatalf("MarshalInterior:\n got %q\nwant %q", got, withZCard(body))
+	}
+	if d := mustParse(t, body); d.Type != Submanifest || d.S[0].Name != "a\tb" {
+		t.Fatalf("interior parses as %+v", d)
+	}
+}
+
+// A tree manifest's S filenames are canonical too (§6.2), so a manifest the
+// writer builds and the one it marshals agree byte for byte.
+func TestManifestSCardsMarshalCanonically(t *testing.T) {
+	d := &Deck{D: mustParse(t, "D 2026-07-26T00:00:00\nS a "+smH1+"\nS b "+smH2+"\n").D,
+		S: []SubmanifestCard{{Name: "a\tb", UUID: smH1}, {Name: "c d", UUID: smH2}}}
+	out, err := d.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "S a\tb "+smH1+"\nS c\\sd "+smH2+"\n") {
+		t.Fatalf("manifest S cards not canonical: %q", out)
+	}
+}

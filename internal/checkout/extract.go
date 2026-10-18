@@ -226,6 +226,14 @@ func (c *Checkout) extractRow(
 		if err := c.recordMTime(c.db, vid, row.pathname, row.blobRid, mtime); err != nil {
 			return fmt.Errorf("checkout.Extract: %w", err)
 		}
+		// The file now holds the content its row names, so an edit or
+		// missing file the row recorded is gone.
+		if _, err := c.db.Exec(
+			"UPDATE vfile SET chnged = 0 WHERE vid = ? AND pathname = ? AND mrid = ? AND chnged = 1",
+			int64(vid), row.pathname, row.blobRid,
+		); err != nil {
+			return fmt.Errorf("checkout.Extract: reset %s: %w", row.pathname, err)
+		}
 	}
 
 	c.obs.ExtractFileCompleted(ctx, row.pathname, UpdateAdded)
@@ -312,6 +320,16 @@ func (c *Checkout) firstChangeAtRisk(
 	for _, r := range rows {
 		change := vfile.Classify(r, false)
 		if change == ChangeNone {
+			continue
+		}
+		// The scan marks a missing file changed, as fossil's does, but
+		// nothing on disk is lost by writing it; Create leaves every file
+		// missing until the first Extract.
+		missing, err := c.isMissing(r)
+		if err != nil {
+			return "", err
+		}
+		if missing && change == ChangeModified && !r.PendingMerge() {
 			continue
 		}
 		// Only a plain edit (no merge pending, not a merge state) of a file

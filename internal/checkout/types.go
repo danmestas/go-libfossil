@@ -35,6 +35,11 @@ const (
 	ChangeMissing  = vfile.ChangeMissing
 	ChangeRenamed  = vfile.ChangeRenamed
 	ChangeModified = vfile.ChangeModified
+
+	ChangeExecutable = vfile.ChangeExecutable
+	ChangeSymlink    = vfile.ChangeSymlink
+	ChangeUnexec     = vfile.ChangeUnexec
+	ChangeUnlink     = vfile.ChangeUnlink
 )
 
 // UpdateChange — file states during extract/update (maps to fsl_ckup_fchange_e)
@@ -76,7 +81,7 @@ type ScanFlags uint32
 
 const (
 	ScanHash       ScanFlags = 1 << iota // hash file content (not just mtime)
-	ScanENotFile                         // mark non-regular files
+	ScanENotFile                         // refuse non-regular files (fossil's CKSIG_ENOTFILE)
 	ScanSetMTime                         // update mtime in vfile
 	ScanKeepOthers                       // keep other version entries
 )

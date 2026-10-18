@@ -31,3 +31,12 @@ func (OSStorage) Chtimes(path string, atime, mtime time.Time) error           { 
 // Chmod changes a file's mode. It is not part of Storage, since not every
 // storage has file modes; callers that need it check for it.
 func (OSStorage) Chmod(path string, mode os.FileMode) error { return os.Chmod(path, mode) }
+
+// Lstat is Stat without following a final symbolic link. It is not part of
+// Storage, since not every storage has symbolic links or file modes;
+// callers that need it check for it.
+func (OSStorage) Lstat(path string) (os.FileInfo, error) { return os.Lstat(path) }
+
+// Readlink returns the target a symbolic link names. Like Lstat, it is not
+// part of Storage.
+func (OSStorage) Readlink(path string) (string, error) { return os.Readlink(path) }

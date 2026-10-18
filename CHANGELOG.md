@@ -52,6 +52,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The checkout scan sets `vfile.chnged` as fossil's `vfile_check_signature`
+  does in every case. A file missing from disk is marked changed, with
+  mtime -1, and so is a removed file. A change to the executable bit is
+  recorded as 6 (became executable) or 8 (lost it), and a change to or from
+  a symlink as 7 or 9, and a mode change that is undone returns to 0.
+  Symlinks follow fossil's `allow-symlinks` setting, off by default: off,
+  a symlink is seen as what it points to; on, as itself, its content being
+  its target's name. Status reports the mode changes as fossil's `changes`
+  command does, with the new change types `executable`, `symlink`, `unexec`
+  and `unlink` (`CheckoutChange.Change`). Commit records the permission it
+  finds on disk, `l` included, and a symlink's target as its content. As on
+  Windows in fossil, permissions are not read where the storage has no file
+  modes (`MemStorage`) or on Windows: the recorded ones are kept, where
+  commit used to drop every `x`. `ScanENotFile` now refuses something other
+  than a file where a tracked file belongs, as fossil's merge does.
+  Extract still writes a missing file without asking for `Force`, since
+  nothing on disk is lost; it still writes a symlink as a plain file holding
+  the target's name.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

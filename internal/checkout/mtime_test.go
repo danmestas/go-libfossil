@@ -200,34 +200,55 @@ func TestScanDoesNotRecordCurrentSecond(t *testing.T) {
 	}
 }
 
-// fossil's vfile_check_signature, for a file present on disk.
+// fossil's vfile_check_signature, the content half.
 func TestNextChangedState(t *testing.T) {
+	base := scanFacts{hasBaseline: true}
+	with := func(f func(*scanFacts)) scanFacts {
+		s := base
+		f(&s)
+		return s
+	}
+	trusted := with(func(s *scanFacts) { s.mtimeTrusted = true })
+	sized := with(func(s *scanFacts) { s.sizeDiffers = true })
 	cases := []struct {
-		name                      string
-		chnged                    int64
-		baseline, sizeDiff, trust bool
-		differs                   bool
-		want                      int64
-		wantHash                  bool
+		name     string
+		chnged   int64
+		facts    scanFacts
+		differs  bool
+		want     int64
+		wantHash bool
 	}{
-		{"unchanged, trusted", 0, true, false, true, true, 0, false},
-		{"unchanged, mtime moved, same", 0, true, false, false, false, 0, true},
-		{"unchanged, mtime moved, edited", 0, true, false, false, true, 1, true},
-		{"unchanged, size moved", 0, true, true, true, false, 1, false},
-		{"edited, same size, back to baseline", 1, true, false, true, false, 0, true},
-		{"edited, same size, still edited", 1, true, false, true, true, 1, true},
-		{"edited, size moved", 1, true, true, false, false, 1, false},
-		{"merged, trusted", 2, true, false, true, true, 2, false},
-		{"merged, mtime moved, edited", 2, true, false, false, true, 1, true},
-		{"integrated, mtime moved, edited", 4, true, false, false, true, 1, true},
-		{"merge-added, size moved", 3, true, true, false, false, 1, false},
-		{"merge-added, same size", 3, true, false, false, true, 3, false},
-		{"became exec, size moved", 6, true, true, false, false, 1, false},
-		{"became exec, same size", 6, true, false, false, true, 6, false},
-		{"integrate-added, same size", 5, true, false, false, true, 5, false},
-		{"integrate-added, size moved", 5, true, true, false, false, 1, false},
-		{"pending add", 0, false, true, false, false, 1, false},
-		{"pending add, empty", 0, false, false, true, false, 1, false},
+		{"unchanged, trusted", 0, trusted, true, 0, false},
+		{"unchanged, mtime moved, same", 0, base, false, 0, true},
+		{"unchanged, mtime moved, edited", 0, base, true, 1, true},
+		{"unchanged, size moved", 0, with(func(s *scanFacts) {
+			s.sizeDiffers, s.mtimeTrusted = true, true
+		}), false, 1, false},
+		{"edited, same size, back to baseline", 1, trusted, false, 0, true},
+		{"edited, same size, still edited", 1, trusted, true, 1, true},
+		{"edited, size moved", 1, sized, false, 1, false},
+		{"merged, trusted", 2, trusted, true, 2, false},
+		{"merged, mtime moved, edited", 2, base, true, 1, true},
+		{"integrated, mtime moved, edited", 4, base, true, 1, true},
+		{"merge-added, size moved", 3, sized, false, 1, false},
+		{"merge-added, same size", 3, base, true, 3, false},
+		{"became exec, size moved", 6, sized, false, 1, false},
+		{"became exec, same size", 6, base, true, 6, false},
+		{"integrate-added, same size", 5, base, true, 5, false},
+		{"integrate-added, size moved", 5, sized, false, 1, false},
+		{"pending add", 0, scanFacts{sizeDiffers: true}, false, 1, false},
+		{"pending add, empty", 0, scanFacts{mtimeTrusted: true}, false, 1, false},
+		{"removed", 0, with(func(s *scanFacts) { s.deleted, s.mtimeTrusted = true, true }),
+			false, 1, false},
+		{"removed, same size, not rehashed", 0, with(func(s *scanFacts) { s.deleted = true }),
+			false, 1, false},
+		{"removed after merge, mtime moved", 2, with(func(s *scanFacts) { s.deleted = true }),
+			true, 1, true},
+		{"missing", 0, with(func(s *scanFacts) { s.sizeDiffers = true }), false, 1, false},
+		{"not a file", 0, with(func(s *scanFacts) { s.notFile, s.mtimeTrusted = true, true }),
+			true, 1, true},
+		{"not a file, believed edited", 1, with(func(s *scanFacts) { s.notFile = true }),
+			true, 1, true},
 	}
 	for _, tc := range cases {
 		hashed := false
@@ -235,7 +256,7 @@ func TestNextChangedState(t *testing.T) {
 			hashed = true
 			return tc.differs, nil
 		}
-		got, err := nextChangedState(tc.chnged, tc.baseline, tc.sizeDiff, tc.trust, differs)
+		got, err := nextChangedState(tc.chnged, tc.facts, differs)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}

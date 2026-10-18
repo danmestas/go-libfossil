@@ -117,8 +117,8 @@ func Save(ckout *sql.DB, repoDB *sql.DB, dir string, comment string) error {
 		return err
 	}
 
-	// Insert stash header.
-	if _, err := tx.Exec("INSERT INTO stash(stashid, hash, comment) VALUES(?,?,?)",
+	// Insert stash header, its time a Julian day as fossil's stash writes it.
+	if _, err := tx.Exec("INSERT INTO stash(stashid, hash, comment, ctime) VALUES(?,?,?,julianday('now'))",
 		stashID, checkoutHash, comment); err != nil {
 		return fmt.Errorf("stash.Save: insert stash: %w", err)
 	}
@@ -409,7 +409,9 @@ func List(ckout *sql.DB) ([]Entry, error) {
 		return nil, err
 	}
 
-	rows, err := ckout.Query("SELECT stashid, hash, comment, ctime FROM stash ORDER BY stashid DESC")
+	// datetime() shows the time as fossil's stash ls does, whether the row
+	// holds a Julian day or text.
+	rows, err := ckout.Query("SELECT stashid, hash, comment, datetime(ctime) FROM stash ORDER BY stashid DESC")
 	if err != nil {
 		return nil, fmt.Errorf("stash.List: %w", err)
 	}

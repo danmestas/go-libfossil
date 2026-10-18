@@ -50,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and every unedited file gets it, not only the files the update wrote. A
   file with local edits is left alone. It used to give every written file
   the target check-in's time, to the millisecond.
+- A stash records its creation time as a Julian day and lists it as
+  `YYYY-MM-DD HH:MM:SS`, as fossil's stash does; it stored SQLite's
+  `CURRENT_TIMESTAMP` text, which the drivers handed back in different forms,
+  and listed a fossil-written time as a bare number. A bisect listing shows
+  each check-in's date as `fossil bisect ls` does, instead of a raw Julian
+  day.
 
 ## [0.12.0] - 2026-10-13
 

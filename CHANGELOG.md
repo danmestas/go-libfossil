@@ -52,6 +52,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
+  It used to compare only committed versions, so it wrote the target's
+  content over a locally edited file, deleted an edited file the target
+  removed, and merged the current and target check-ins with their common
+  ancestor while ignoring the working file. It now scans the checkout first.
+  A locally edited file is merged three ways, with the checkout's version
+  as the base, the working file as the local side and the target as the
+  other; conflicts are written as markers and listed in `Conflicted`. An
+  edited file the target deletes is kept, untracked. Pending adds and
+  removals stay pending, a missing file is restored, and a file the target
+  adds over an untracked one is written after the untracked one is copied
+  to `NAME-original`. A file without local changes takes the target's
+  content, including on an update to another branch, which used to merge
+  the two branches' committed changes. Files are matched by name: a file
+  the target renamed is not followed, as fossil follows it. Tracked in #443.
+
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

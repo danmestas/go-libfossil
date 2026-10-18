@@ -195,8 +195,11 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 	return nil
 }
 
-// Update updates the checkout to a new version, performing 3-way merge
-// where needed to preserve local modifications. See UpdateResult for how to
+// Update moves the checkout to a new version as fossil's update does,
+// carrying uncommitted changes into it: a locally edited file is merged
+// three ways (the checkout's version as base, the working file as local,
+// the target as other), one the target deletes is kept untracked, and
+// pending adds and removals stay pending. See UpdateResult for how to
 // distinguish a clean update from one that wrote conflict markers into
 // working-tree files.
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {

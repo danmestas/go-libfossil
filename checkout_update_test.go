@@ -145,9 +145,9 @@ func TestCheckoutUpdate_CleanReportsWrittenPaths(t *testing.T) {
 	}
 }
 
-// TestCheckoutUpdate_ConflictedSurfacesPaths builds a genuine fork at the
-// public API level — two commits from the same parent, both editing the
-// same line — and updates across it. The merge cannot resolve the
+// TestCheckoutUpdate_ConflictedSurfacesPaths builds a fork at the public
+// API level — two commits from the same parent — checks out one with an
+// uncommitted edit to the line the other changed, and updates across it. The merge cannot resolve the
 // overlapping edit, so it writes conflict markers into the working file.
 // This is a SUCCESSFUL update (err == nil): the caller must be able to see
 // which paths now contain markers via Conflicted.
@@ -194,6 +194,11 @@ func TestCheckoutUpdate_ConflictedSurfacesPaths(t *testing.T) {
 	t.Cleanup(func() { _ = checkout.Close() })
 	if err := checkout.Extract(ridA, libfossil.ExtractOpts{Force: true}); err != nil {
 		t.Fatalf("Extract ridA: %v", err)
+	}
+	// An uncommitted edit to the line branch B changed: update merges the
+	// working file, as fossil's update does.
+	if err := os.WriteFile(filepath.Join(checkoutDir, "conflict.txt"), []byte("my edit\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	result, err := checkout.Update(libfossil.UpdateOpts{TargetRID: ridB})

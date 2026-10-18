@@ -50,6 +50,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through this library as soon as it is added, as fossil's timeline does.
 - A check-in with no C card has a NULL event comment, as fossil stores it,
   not an empty one.
+- Ticket artifacts link in a repository whose ticket schema lacks the
+  optional columns, as fossil's own repository's does. Crosslinking and
+  `Rebuild` failed there with "table ticketchng has no column named
+  tkt_user". As fossil's `ticket_insert` does, `tkt_ctime`, `tkt_rid` and
+  `tkt_user` are written only where they exist, and a `ticketchng` row is
+  written only when the artifact sets one of its fields or the table records
+  the artifact or its user. A field both tables share that the artifact
+  leaves unset is copied from the ticket row, and an INTEGER
+  `baseline for NAME` column records the artifact that last set NAME.
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

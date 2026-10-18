@@ -466,3 +466,139 @@ func TestCommitSeesSameSecondEdit(t *testing.T) {
 	}
 	t.Fatal("hello.txt missing from the new check-in")
 }
+
+// memCheckout is a checkout of r's tip whose files live in a MemStorage
+// under /checkout, with clock as its clock.
+func memCheckout(t *testing.T, r *repo.Repo, clock simio.Clock) (*Checkout, *simio.MemStorage) {
+	t.Helper()
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { co.Close() })
+	mem := simio.NewMemStorage()
+	co.env = &simio.Env{Storage: mem, Clock: clock, Rand: simio.NewSeededRand(1)}
+	co.dir = "/checkout"
+	return co, mem
+}
+
+// Fossil stats a file right after writing it. An edit made after the write
+// but before Extract finishes must not be recorded as the written content.
+func TestExtractRecordsMTimeOfItsOwnWrite(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, mem := memCheckout(t, r, simio.RealClock{})
+	rid, _, _ := co.Version()
+	edit := func(name string, _ UpdateChange) error {
+		if name != "hello.txt" {
+			return nil
+		}
+		return mem.WriteFile("/checkout/hello.txt", []byte("HELLO WORLD\n"), 0o644)
+	}
+	if err := co.Extract(rid, ExtractOpts{Force: true, Callback: edit}); err != nil {
+		t.Fatal(err)
+	}
+	got := statusOf(t, co)
+	if len(got) != 1 || got["hello.txt"] != ChangeModified {
+		t.Fatalf("status = %v, want hello.txt modified", got)
+	}
+}
+
+// As for Extract, Update records the mtime its own write gave a file.
+func TestUpdateRecordsMTimeOfItsOwnWrite(t *testing.T) {
+	r, rid1, rid2, cleanup := newTestRepoWithTwoCheckins(t)
+	defer cleanup()
+	co, mem := memCheckout(t, r, simio.RealClock{})
+	if err := co.Extract(rid1, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	edit := func(name string, _ UpdateChange) error {
+		if name != "new.txt" {
+			return nil
+		}
+		return mem.WriteFile("/checkout/new.txt", []byte("NEW FILE\n"), 0o644)
+	}
+	if _, err := co.Update(UpdateOpts{TargetRID: rid2, Callback: edit}); err != nil {
+		t.Fatal(err)
+	}
+	got := statusOf(t, co)
+	if len(got) != 1 || got["new.txt"] != ChangeModified {
+		t.Fatalf("status = %v, want new.txt modified", got)
+	}
+}
+
+// A stored 0 means not known: even a file whose mtime is 0 (1970) is hashed.
+func TestScanNeverTrustsStoredZero(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co := agedCheckout(t, r)
+
+	epoch := time.Unix(0, 0)
+	rewrite(t, co, "hello.txt", "HELLO WORLD\n", epoch)
+	if _, err := co.db.Exec("UPDATE vfile SET mtime = 0 WHERE pathname = 'hello.txt'"); err != nil {
+		t.Fatal(err)
+	}
+	got := statusOf(t, co)
+	if len(got) != 1 || got["hello.txt"] != ChangeModified {
+		t.Fatalf("status = %v, want hello.txt modified", got)
+	}
+}
+
+// Under simulation with the clock at a realistic time, a scan records mtimes
+// and then trusts them, as on a real filesystem: an edit that keeps size and
+// mtime is not seen, one that changes either is.
+func TestSimEnvScanTrustsRecordedMTimes(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, mem := memCheckout(t, r, simio.NewSimClockAt(time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)))
+	rid, _, _ := co.Version()
+	if err := co.Extract(rid, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, co); len(got) != 0 {
+		t.Fatalf("fresh checkout: status = %v, want nothing", got)
+	}
+	info, err := mem.Stat("/checkout/hello.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := vfileMTime(t, co, "hello.txt"); m == 0 || m != info.ModTime().Unix() {
+		t.Fatalf("vfile.mtime = %d, want the file's %d", m, info.ModTime().Unix())
+	}
+
+	if err := mem.WriteFile("/checkout/hello.txt", []byte("HELLO WORLD\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := mem.Chtimes("/checkout/hello.txt", info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, co); len(got) != 0 {
+		t.Fatalf("edit keeping size and mtime: status = %v, want nothing (fast path)", got)
+	}
+	if err := mem.WriteFile("/checkout/README.md", []byte("# Te\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := statusOf(t, co)
+	if len(got) != 1 || got["README.md"] != ChangeModified {
+		t.Fatalf("status = %v, want README.md modified", got)
+	}
+}
+
+// A caller's Env without a Clock gets the real one, as Storage defaults to
+// the OS: a scan reads the clock.
+func TestEnvWithoutClockScans(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, err := Create(r, t.TempDir(), CreateOpts{Env: &simio.Env{Storage: simio.OSStorage{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	rid, _, _ := co.Version()
+	if err := co.Extract(rid, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := statusOf(t, co); len(got) != 0 {
+		t.Fatalf("status = %v, want nothing", got)
+	}
+}

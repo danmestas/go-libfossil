@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fossil's `vfile_check_signature` does: a file whose size matches its
   artifact and whose mtime matches the recorded one is taken as unchanged
   without being read, unless `ScanHash` is given or the repository's
-  `mtime-changes` setting is off. Status, commit, merge, revert and extract
-  use this scan, as fossil's commands do; before, every scan hashed every
+  `mtime-changes` setting is off. A global `mtime-changes` in `~/.fossil`,
+  which fossil falls back to, is not read: go-libfossil reads no global
+  settings. Status, commit, merge, revert and extract use this scan, as fossil's commands do; before, every scan hashed every
   file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
   checkout on every command too. Extract, update, revert, commit and
   `SetMTime` record mtimes where fossil does. One deliberate difference:

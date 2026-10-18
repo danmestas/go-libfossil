@@ -262,7 +262,10 @@ func (c *Checkout) newScanPolicy(flags ScanFlags) (scanPolicy, error) {
 }
 
 // mtimeChanges reads fossil's mtime-changes setting, on by default, as
-// db_get_boolean reads it from the repository's config table.
+// db_get_boolean reads it from the repository's config table. Fossil's
+// db_get falls back to global_config in ~/.fossil (`fossil settings
+// mtime-changes off --global`); go-libfossil reads no global fossil settings,
+// so a global value is not seen here.
 func (c *Checkout) mtimeChanges() (bool, error) {
 	var value sql.NullString
 	err := c.repo.DB().QueryRow(

@@ -24,23 +24,27 @@ func recordableMTime(mtime time.Time, now int64) int64 {
 	return secs
 }
 
-// recordWrittenMTime stores in vfile the mtime of the file pathname of
-// version vid, just written with the content of artifact rid, as fossil's
-// vfile_to_disk does. A row based on another artifact keeps its mtime, so a
-// row only ever vouches for the content it names.
-func (c *Checkout) recordWrittenMTime(vid libfossil.FslID, pathname string, rid int64) error {
-	if rid <= 0 {
-		panic("checkout.recordWrittenMTime: rid must be positive")
-	}
-	fullPath, err := c.safePath(pathname)
-	if err != nil {
-		return fmt.Errorf("record mtime: path traversal in %s: %w", pathname, err)
-	}
+// writtenMTime returns the vfile.mtime to record for the file at fullPath,
+// statting it right after it was written, as fossil's vfile_to_disk does.
+// now is read before the stat, so a write after the stat cannot slip past
+// the guard with an mtime equal to the one recorded.
+func (c *Checkout) writtenMTime(fullPath string) (int64, error) {
+	now := c.env.Clock.Now().Unix()
 	info, err := c.env.Storage.Stat(fullPath)
 	if err != nil {
-		return fmt.Errorf("record mtime: stat %s: %w", fullPath, err)
+		return 0, fmt.Errorf("stat %s: %w", fullPath, err)
 	}
-	mtime := recordableMTime(info.ModTime(), c.env.Clock.Now().Unix())
+	return recordableMTime(info.ModTime(), now), nil
+}
+
+// recordMTime stores mtime, from writtenMTime, on the row of version vid
+// named pathname when the row is based on artifact rid, the content that was
+// written. A row based on another artifact keeps its mtime, so a row only
+// ever vouches for the content it names.
+func (c *Checkout) recordMTime(vid libfossil.FslID, pathname string, rid, mtime int64) error {
+	if rid <= 0 {
+		panic("checkout.recordMTime: rid must be positive")
+	}
 	if _, err := c.db.Exec(
 		"UPDATE vfile SET mtime = ? WHERE vid = ? AND pathname = ? AND mrid = ?",
 		mtime, int64(vid), pathname, rid,

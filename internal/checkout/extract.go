@@ -15,28 +15,29 @@ import (
 	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
-// extractSingleFile expands a blob and writes it to the checkout directory.
+// extractSingleFile expands a blob and writes it to the checkout directory,
+// returning the vfile.mtime to record for it (writtenMTime).
 // Skips writing if dryRun is true.
 func (c *Checkout) extractSingleFile(
 	pathname string, blobRid int64, isexe int64, dryRun bool,
-) error {
+) (int64, error) {
 	if dryRun {
-		return nil
+		return 0, nil
 	}
 
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(blobRid))
 	if err != nil {
-		return fmt.Errorf("checkout.Extract: expand blob for %s: %w", pathname, err)
+		return 0, fmt.Errorf("checkout.Extract: expand blob for %s: %w", pathname, err)
 	}
 
 	fullPath, err := c.safePath(pathname)
 	if err != nil {
-		return fmt.Errorf("checkout.Extract: path traversal in %s: %w", pathname, err)
+		return 0, fmt.Errorf("checkout.Extract: path traversal in %s: %w", pathname, err)
 	}
 
 	parentDir := filepath.Dir(fullPath)
 	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
-		return fmt.Errorf("checkout.Extract: mkdir %s: %w", parentDir, err)
+		return 0, fmt.Errorf("checkout.Extract: mkdir %s: %w", parentDir, err)
 	}
 
 	perm := os.FileMode(0o644)
@@ -45,10 +46,13 @@ func (c *Checkout) extractSingleFile(
 	}
 
 	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
-		return fmt.Errorf("checkout.Extract: write %s: %w", fullPath, err)
+		return 0, fmt.Errorf("checkout.Extract: write %s: %w", fullPath, err)
 	}
-
-	return nil
+	mtime, err := c.writtenMTime(fullPath)
+	if err != nil {
+		return 0, fmt.Errorf("checkout.Extract: %w", err)
+	}
+	return mtime, nil
 }
 
 // Extract writes files from the specified checkin to disk via simio.Storage.
@@ -106,7 +110,7 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	}
 
 	for _, row := range vfRows {
-		if err := c.extractRow(ctx, row, opts); err != nil {
+		if err := c.extractRow(ctx, rid, row, opts); err != nil {
 			extractErr = err
 			return extractErr
 		}
@@ -118,11 +122,6 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	}
 	if extractErr = c.finalizeExtract(rid, opts.Force); extractErr != nil {
 		return extractErr
-	}
-	for _, row := range vfRows {
-		if extractErr = c.recordWrittenMTime(rid, row.pathname, row.blobRid); extractErr != nil {
-			return fmt.Errorf("checkout.Extract: %w", extractErr)
-		}
 	}
 	if opts.SetMTime {
 		extractErr = c.setFileMTimes(rid)
@@ -214,15 +213,19 @@ func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 	return out, nil
 }
 
-// extractRow writes one file and reports it to the observer and the
-// caller's callback.
+// extractRow writes one file of version vid, records the mtime the write
+// gave it, and reports it to the observer and the caller's callback.
 func (c *Checkout) extractRow(
-	ctx context.Context, row extractRow, opts ExtractOpts,
+	ctx context.Context, vid libfossil.FslID, row extractRow, opts ExtractOpts,
 ) error {
-	if err := c.extractSingleFile(
-		row.pathname, row.blobRid, row.isexe, opts.DryRun,
-	); err != nil {
+	mtime, err := c.extractSingleFile(row.pathname, row.blobRid, row.isexe, opts.DryRun)
+	if err != nil {
 		return err
+	}
+	if !opts.DryRun {
+		if err := c.recordMTime(vid, row.pathname, row.blobRid, mtime); err != nil {
+			return fmt.Errorf("checkout.Extract: %w", err)
+		}
 	}
 
 	c.obs.ExtractFileCompleted(ctx, row.pathname, UpdateAdded)

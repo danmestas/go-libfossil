@@ -397,16 +397,16 @@ func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int
 	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
 		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
 	}
-	info, err := c.env.Storage.Stat(fullPath)
+	mtime, err := c.writtenMTime(fullPath)
 	if err != nil {
-		return fmt.Errorf("checkout.Revert: stat %s: %w", fullPath, err)
+		return fmt.Errorf("checkout.Revert: %w", err)
 	}
 	// mrid and mhash go back to the committed version, so no merged-in
 	// content outlives the revert, and the mtime is the restored file's
 	// (fossil resets them the same way).
 	if _, err := c.db.Exec(
 		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL, mtime = ? WHERE id = ?",
-		recordableMTime(info.ModTime(), c.env.Clock.Now().Unix()), id,
+		mtime, id,
 	); err != nil {
 		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
 	}

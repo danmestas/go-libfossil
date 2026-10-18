@@ -236,7 +236,7 @@ var ErrVersionNotFound = errors.New("libfossil: version not found")
 ```
 
 <a name="Clone"></a>
-## func Clone
+## func [Clone](<https://github.com/danmestas/go-libfossil/blob/main/fossil.go#L89>)
 
 ```go
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo, *CloneResult, error)
@@ -245,7 +245,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 Clone performs a full repository clone from a remote Fossil server. It creates a new repository at the given path, runs the clone protocol until convergence, and returns the opened Repo handle and a result summary. On error, the partially\-created repo file is removed. Artifacts the clone rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 
 <a name="JulianToTime"></a>
-## func JulianToTime
+## func [JulianToTime](<https://github.com/danmestas/go-libfossil/blob/main/julian.go#L15>)
 
 ```go
 func JulianToTime(j float64) time.Time
@@ -254,7 +254,7 @@ func JulianToTime(j float64) time.Time
 JulianToTime converts a Fossil Julian day number to time.Time.
 
 <a name="TimeToJulian"></a>
-## func TimeToJulian
+## func [TimeToJulian](<https://github.com/danmestas/go-libfossil/blob/main/julian.go#L10>)
 
 ```go
 func TimeToJulian(t time.Time) float64
@@ -263,7 +263,7 @@ func TimeToJulian(t time.Time) float64
 TimeToJulian converts a time.Time to a Fossil Julian day number.
 
 <a name="AnnotateOpts"></a>
-## type AnnotateOpts
+## type [AnnotateOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L101-L104>)
 
 AnnotateOpts configures an annotate operation.
 
@@ -275,7 +275,7 @@ type AnnotateOpts struct {
 ```
 
 <a name="AnnotatedLine"></a>
-## type AnnotatedLine
+## type [AnnotatedLine](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L93-L98>)
 
 AnnotatedLine is a single line of blame/annotate output.
 
@@ -289,7 +289,7 @@ type AnnotatedLine struct {
 ```
 
 <a name="BisectSession"></a>
-## type BisectSession
+## type [BisectSession](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L107-L109>)
 
 BisectSession holds state for a binary\-search bisect operation.
 
@@ -300,7 +300,7 @@ type BisectSession struct {
 ```
 
 <a name="BuggifyChecker"></a>
-## type BuggifyChecker
+## type [BuggifyChecker](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L36-L38>)
 
 BuggifyChecker controls fault injection for deterministic simulation testing.
 
@@ -311,7 +311,7 @@ type BuggifyChecker interface {
 ```
 
 <a name="Checkout"></a>
-## type Checkout
+## type [Checkout](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L16-L18>)
 
 Checkout represents a working directory linked to a Fossil repository. A Checkout is not safe for concurrent use. Callers must serialize access to a single Checkout instance.
 
@@ -322,7 +322,7 @@ type Checkout struct {
 ```
 
 <a name="Checkout.Add"></a>
-### func \(\*Checkout\) Add
+### func \(\*Checkout\) [Add](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L253>)
 
 ```go
 func (c *Checkout) Add(patterns []string) (int, error)
@@ -331,7 +331,7 @@ func (c *Checkout) Add(patterns []string) (int, error)
 Add adds files to version tracking. Returns the number of files added. Files already tracked are silently skipped.
 
 <a name="Checkout.Checkin"></a>
-### func \(\*Checkout\) Checkin
+### func \(\*Checkout\) [Checkin](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L308>)
 
 ```go
 func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err error)
@@ -340,7 +340,7 @@ func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err
 Checkin creates a new checkin from the checkout working directory: every change, or only opts.Files \(a directory names every tracked file under it\). Pending merges become merge parents. Like fossil's commit, it refuses a name it does not track, a commit with nothing changed and no merge pending \(unless opts.AllowEmpty\), files that still hold merge conflict markers \(unless opts.AllowConflict\), and committing only some files of a pending merge. Returns the RID and UUID of the new checkin manifest.
 
 <a name="Checkout.Close"></a>
-### func \(\*Checkout\) Close
+### func \(\*Checkout\) [Close](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L163>)
 
 ```go
 func (c *Checkout) Close() error
@@ -349,7 +349,7 @@ func (c *Checkout) Close() error
 Close closes the checkout database. Does NOT close the repo.
 
 <a name="Checkout.Conflicts"></a>
-### func \(\*Checkout\) Conflicts
+### func \(\*Checkout\) [Conflicts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L372>)
 
 ```go
 func (c *Checkout) Conflicts() ([]string, error)
@@ -358,7 +358,7 @@ func (c *Checkout) Conflicts() ([]string, error)
 Conflicts lists the files, sorted, that hold merge conflict markers: the files a merge or update left in conflict and nobody has resolved yet.
 
 <a name="Checkout.Dir"></a>
-### func \(\*Checkout\) Dir
+### func \(\*Checkout\) [Dir](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L171>)
 
 ```go
 func (c *Checkout) Dir() string
@@ -367,7 +367,7 @@ func (c *Checkout) Dir() string
 Dir returns the checkout directory path.
 
 <a name="Checkout.Extract"></a>
-### func \(\*Checkout\) Extract
+### func \(\*Checkout\) [Extract](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L188>)
 
 ```go
 func (c *Checkout) Extract(rid int64, opts ExtractOpts) error
@@ -376,7 +376,7 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error
 Extract writes files from the specified checkin to the working directory and makes it the checkout's current version. Unless opts.Force is set it refuses, changing nothing, when the checkout has unsaved changes or when an untracked file sits where the checkin would write different content.
 
 <a name="Checkout.HasChanges"></a>
-### func \(\*Checkout\) HasChanges
+### func \(\*Checkout\) [HasChanges](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L220>)
 
 ```go
 func (c *Checkout) HasChanges() (bool, error)
@@ -385,7 +385,7 @@ func (c *Checkout) HasChanges() (bool, error)
 HasChanges reports whether the checkout has any added, removed, renamed or modified files. It reads only the checkout database, so an edit on disk counts once Status \(or an Extract or Commit\) has scanned it; adds, removals and renames always count. Missing files need the disk; Status reports them.
 
 <a name="Checkout.Merge"></a>
-### func \(\*Checkout\) Merge
+### func \(\*Checkout\) [Merge](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L349>)
 
 ```go
 func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error)
@@ -396,7 +396,7 @@ Merge merges another checkin into the checkout, as fossil's merge command does, 
 Merge refuses, changing nothing, when the repository lacks content it needs or an added file would overwrite an untracked one. A file edited here but deleted in the merged\-in version is kept and reported. Renames are not followed. Merging the checkout's own version or one of its ancestors does nothing.
 
 <a name="Checkout.Remove"></a>
-### func \(\*Checkout\) Remove
+### func \(\*Checkout\) [Remove](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L265>)
 
 ```go
 func (c *Checkout) Remove(patterns []string) error
@@ -405,7 +405,7 @@ func (c *Checkout) Remove(patterns []string) error
 Remove removes files from version tracking. Newly added files are deleted from vfile; committed files are marked as deleted.
 
 <a name="Checkout.Rename"></a>
-### func \(\*Checkout\) Rename
+### func \(\*Checkout\) [Rename](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L276>)
 
 ```go
 func (c *Checkout) Rename(oldName, newName string) error
@@ -414,7 +414,7 @@ func (c *Checkout) Rename(oldName, newName string) error
 Rename marks a tracked file as renamed and moves it on disk.
 
 <a name="Checkout.ResolveVersion"></a>
-### func \(\*Checkout\) ResolveVersion
+### func \(\*Checkout\) [ResolveVersion](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L525>)
 
 ```go
 func (c *Checkout) ResolveVersion(name string) (int64, error)
@@ -431,7 +431,7 @@ ResolveVersion resolves name as Repo.ResolveVersion does and also resolves the n
 A keyword that names nothing, such as "prev" at a root, falls through to the other forms, as in fossil. The forms that take a name, such as "root:current", resolve it the same way. "ckout" is an ordinary name here: it is a keyword only in the checkout\-inclusive request, ResolveWorking.
 
 <a name="Checkout.ResolveWorking"></a>
-### func \(\*Checkout\) ResolveWorking
+### func \(\*Checkout\) [ResolveWorking](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L555>)
 
 ```go
 func (c *Checkout) ResolveWorking(name string) (WorkingVersion, error)
@@ -442,7 +442,7 @@ ResolveWorking is fossil's checkout\-inclusive request \("ci\+", symbolic\_name\
 As repo\-state\-01 Section 8.3 says, only "ci\+" has the keyword, so ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary name. It is a keyword only as the whole name: in "root:ckout" or "ckout." the inner name is resolved as a plain check\-in request, as in fossil.
 
 <a name="Checkout.Revert"></a>
-### func \(\*Checkout\) Revert
+### func \(\*Checkout\) [Revert](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L290>)
 
 ```go
 func (c *Checkout) Revert(opts RevertOpts) error
@@ -451,7 +451,7 @@ func (c *Checkout) Revert(opts RevertOpts) error
 Revert restores files to their checkout version state. If opts.Files is empty, reverts all changed files.
 
 <a name="Checkout.Status"></a>
-### func \(\*Checkout\) Status
+### func \(\*Checkout\) [Status](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L231>)
 
 ```go
 func (c *Checkout) Status() ([]CheckoutChange, error)
@@ -460,7 +460,7 @@ func (c *Checkout) Status() ([]CheckoutChange, error)
 Status scans the working directory and returns the changed files, each classified as added, deleted, missing, renamed or modified, the way fossil's changes command classifies them. Wraps ScanChanges \+ VisitChanges.
 
 <a name="Checkout.Update"></a>
-### func \(\*Checkout\) Update
+### func \(\*Checkout\) [Update](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L202>)
 
 ```go
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error)
@@ -469,7 +469,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error)
 Update updates the checkout to a new version, performing 3\-way merge where needed to preserve local modifications. See UpdateResult for how to distinguish a clean update from one that wrote conflict markers into working\-tree files.
 
 <a name="Checkout.Version"></a>
-### func \(\*Checkout\) Version
+### func \(\*Checkout\) [Version](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L176>)
 
 ```go
 func (c *Checkout) Version() (int64, string, error)
@@ -478,7 +478,7 @@ func (c *Checkout) Version() (int64, string, error)
 Version returns the current checkout version \(RID and UUID\).
 
 <a name="Checkout.WouldFork"></a>
-### func \(\*Checkout\) WouldFork
+### func \(\*Checkout\) [WouldFork](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L409>)
 
 ```go
 func (c *Checkout) WouldFork() (bool, error)
@@ -487,7 +487,7 @@ func (c *Checkout) WouldFork() (bool, error)
 WouldFork reports whether committing on the checkout's version would create a fork: the version already has a child on its own branch \(for example after a pull\), so the commit would become a second leaf. This is fossil's "Would fork" commit refusal; run Update first, or commit to a new branch. Another open leaf elsewhere on the branch does not count.
 
 <a name="CheckoutChange"></a>
-## type CheckoutChange
+## type [CheckoutChange](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L130-L133>)
 
 CheckoutChange describes a single file change in the checkout.
 
@@ -499,7 +499,7 @@ type CheckoutChange struct {
 ```
 
 <a name="CheckoutCommitOpts"></a>
-## type CheckoutCommitOpts
+## type [CheckoutCommitOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L82-L97>)
 
 CommitOpts configures creating a checkin from the checkout. \(This type is distinct from the existing libfossil.CommitOpts which takes explicit file content for direct repo commits without a checkout.\)
 
@@ -523,7 +523,7 @@ type CheckoutCommitOpts struct {
 ```
 
 <a name="CheckoutCreateOpts"></a>
-## type CheckoutCreateOpts
+## type [CheckoutCreateOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L21-L24>)
 
 CheckoutCreateOpts configures creating a new checkout.
 
@@ -535,7 +535,7 @@ type CheckoutCreateOpts struct {
 ```
 
 <a name="CheckoutMergeFile"></a>
-## type CheckoutMergeFile
+## type [CheckoutMergeFile](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L122-L127>)
 
 CheckoutMergeFile reports what a merge did to one file. Action is one of:
 
@@ -560,7 +560,7 @@ type CheckoutMergeFile struct {
 ```
 
 <a name="CheckoutMergeOpts"></a>
-## type CheckoutMergeOpts
+## type [CheckoutMergeOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L100-L104>)
 
 CheckoutMergeOpts configures Checkout.Merge.
 
@@ -573,7 +573,7 @@ type CheckoutMergeOpts struct {
 ```
 
 <a name="CheckoutMergeResult"></a>
-## type CheckoutMergeResult
+## type [CheckoutMergeResult](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L107-L110>)
 
 CheckoutMergeResult reports a merge.
 
@@ -585,7 +585,7 @@ type CheckoutMergeResult struct {
 ```
 
 <a name="CheckoutObserver"></a>
-## type CheckoutObserver
+## type [CheckoutObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L24-L33>)
 
 CheckoutObserver receives lifecycle callbacks during checkout/commit operations. Use NopCheckoutObserver\(\) for a silent no\-op, or StdoutCheckoutObserver\(\) for stderr logging.
 
@@ -603,7 +603,7 @@ type CheckoutObserver interface {
 ```
 
 <a name="NopCheckoutObserver"></a>
-### func NopCheckoutObserver
+### func [NopCheckoutObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L146>)
 
 ```go
 func NopCheckoutObserver() CheckoutObserver
@@ -612,7 +612,7 @@ func NopCheckoutObserver() CheckoutObserver
 NopCheckoutObserver returns a CheckoutObserver that silently discards all events.
 
 <a name="StdoutCheckoutObserver"></a>
-### func StdoutCheckoutObserver
+### func [StdoutCheckoutObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L224>)
 
 ```go
 func StdoutCheckoutObserver() CheckoutObserver
@@ -621,7 +621,7 @@ func StdoutCheckoutObserver() CheckoutObserver
 StdoutCheckoutObserver returns a CheckoutObserver that logs events to stderr.
 
 <a name="CheckoutOpenOpts"></a>
-## type CheckoutOpenOpts
+## type [CheckoutOpenOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L27-L31>)
 
 CheckoutOpenOpts configures opening an existing checkout.
 
@@ -634,7 +634,7 @@ type CheckoutOpenOpts struct {
 ```
 
 <a name="CheckpointMode"></a>
-## type CheckpointMode
+## type [CheckpointMode](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L15>)
 
 CheckpointMode mirrors SQLite's PRAGMA wal\_checkpoint\(\<mode\>\) argument.
 
@@ -643,7 +643,7 @@ type CheckpointMode = db.CheckpointMode
 ```
 
 <a name="CloneOpts"></a>
-## type CloneOpts
+## type [CloneOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L61-L73>)
 
 CloneOpts configures a clone operation.
 
@@ -664,7 +664,7 @@ type CloneOpts struct {
 ```
 
 <a name="CloneResult"></a>
-## type CloneResult
+## type [CloneResult](<https://github.com/danmestas/go-libfossil/blob/main/fossil.go#L75-L82>)
 
 CloneResult reports what happened during a clone.
 
@@ -680,7 +680,7 @@ type CloneResult struct {
 ```
 
 <a name="CommitEnd"></a>
-## type CommitEnd
+## type [CommitEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L112-L115>)
 
 CommitEnd describes the completion of a commit operation.
 
@@ -692,7 +692,7 @@ type CommitEnd struct {
 ```
 
 <a name="CommitOpts"></a>
-## type CommitOpts
+## type [CommitOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L13-L40>)
 
 CommitOpts configures a commit operation.
 
@@ -728,7 +728,7 @@ type CommitOpts struct {
 ```
 
 <a name="CommitStart"></a>
-## type CommitStart
+## type [CommitStart](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L105-L109>)
 
 CommitStart describes the beginning of a commit operation.
 
@@ -741,7 +741,7 @@ type CommitStart struct {
 ```
 
 <a name="CreateOpts"></a>
-## type CreateOpts
+## type [CreateOpts](<https://github.com/danmestas/go-libfossil/blob/main/fossil.go#L14-L26>)
 
 CreateOpts configures repository creation.
 
@@ -762,7 +762,7 @@ type CreateOpts struct {
 ```
 
 <a name="Cursor"></a>
-## type Cursor
+## type [Cursor](<https://github.com/danmestas/go-libfossil/blob/main/types.go#L51>)
 
 Cursor is an opaque pagination token for Timeline. Obtain one from a returned TimelineEntry's Cursor field and pass it back as the next TimelineOpts.After to resume enumeration immediately after that entry. The zero Cursor means "start from the newest event".
 
@@ -773,7 +773,7 @@ type Cursor = fsltype.Cursor
 ```
 
 <a name="DiffEntry"></a>
-## type DiffEntry
+## type [DiffEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L87-L90>)
 
 DiffEntry describes a unified diff for a single file.
 
@@ -785,7 +785,7 @@ type DiffEntry struct {
 ```
 
 <a name="EventKind"></a>
-## type EventKind
+## type [EventKind](<https://github.com/danmestas/go-libfossil/blob/main/types.go#L19>)
 
 EventKind is the type discriminator on a Timeline entry: one of the single\-letter codes fossil assigns per event.type row. The zero value means "all kinds" — the default Timeline uses when no Type is given.
 
@@ -813,7 +813,7 @@ const (
 ```
 
 <a name="ExtractEnd"></a>
-## type ExtractEnd
+## type [ExtractEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L86-L88>)
 
 ExtractEnd describes the completion of a checkout extraction.
 
@@ -824,7 +824,7 @@ type ExtractEnd struct {
 ```
 
 <a name="ExtractOpts"></a>
-## type ExtractOpts
+## type [ExtractOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L34-L36>)
 
 ExtractOpts configures file extraction from a checkin.
 
@@ -835,7 +835,7 @@ type ExtractOpts struct {
 ```
 
 <a name="ExtractStart"></a>
-## type ExtractStart
+## type [ExtractStart](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L80-L83>)
 
 ExtractStart describes the beginning of a checkout extraction.
 
@@ -847,7 +847,7 @@ type ExtractStart struct {
 ```
 
 <a name="FileEntry"></a>
-## type FileEntry
+## type [FileEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L56-L60>)
 
 FileEntry describes a file in a manifest.
 
@@ -860,7 +860,7 @@ type FileEntry struct {
 ```
 
 <a name="FileToCommit"></a>
-## type FileToCommit
+## type [FileToCommit](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L43-L47>)
 
 FileToCommit describes a file to include in a commit.
 
@@ -873,7 +873,7 @@ type FileToCommit struct {
 ```
 
 <a name="Fork"></a>
-## type Fork
+## type [Fork](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L30-L34>)
 
 Fork describes a divergence point between two branches.
 
@@ -886,7 +886,7 @@ type Fork struct {
 ```
 
 <a name="FramedTransport"></a>
-## type FramedTransport
+## type [FramedTransport](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L36-L42>)
 
 FramedTransport is an optional interface a Transport may also implement when it can report the framing signal — such as an HTTP Content\-Type header — that accompanied a reply. Sync uses that signal to select the reply's §4 framing instead of assuming the §4.1 compressed container, which matters when the peer is a different Fossil\-protocol implementation that legitimately replies with the uncompressed plain\-card framing \(e.g. a real Fossil server's clone reply\).
 
@@ -903,7 +903,7 @@ type FramedTransport interface {
 ```
 
 <a name="FslError"></a>
-## type FslError
+## type [FslError](<https://github.com/danmestas/go-libfossil/blob/main/errors.go#L61-L65>)
 
 
 
@@ -916,7 +916,7 @@ type FslError struct {
 ```
 
 <a name="FslError.Error"></a>
-### func \(\*FslError\) Error
+### func \(\*FslError\) [Error](<https://github.com/danmestas/go-libfossil/blob/main/errors.go#L67>)
 
 ```go
 func (e *FslError) Error() string
@@ -925,7 +925,7 @@ func (e *FslError) Error() string
 
 
 <a name="FslError.Unwrap"></a>
-### func \(\*FslError\) Unwrap
+### func \(\*FslError\) [Unwrap](<https://github.com/danmestas/go-libfossil/blob/main/errors.go#L71>)
 
 ```go
 func (e *FslError) Unwrap() error
@@ -934,7 +934,7 @@ func (e *FslError) Unwrap() error
 
 
 <a name="FslID"></a>
-## type FslID
+## type [FslID](<https://github.com/danmestas/go-libfossil/blob/main/types.go#L6>)
 
 FslID is a row\-id in the blob table \(content\-addressed artifacts\).
 
@@ -943,7 +943,7 @@ type FslID = fsltype.FslID
 ```
 
 <a name="FslSize"></a>
-## type FslSize
+## type [FslSize](<https://github.com/danmestas/go-libfossil/blob/main/types.go#L9>)
 
 FslSize represents a blob size; negative values indicate phantom blobs.
 
@@ -952,7 +952,7 @@ type FslSize = fsltype.FslSize
 ```
 
 <a name="HTTPOption"></a>
-## type HTTPOption
+## type [HTTPOption](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L54>)
 
 HTTPOption configures an HTTP transport.
 
@@ -961,7 +961,7 @@ type HTTPOption func(*httpTransport)
 ```
 
 <a name="WithHTTPClient"></a>
-### func WithHTTPClient
+### func [WithHTTPClient](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L57>)
 
 ```go
 func WithHTTPClient(c *http.Client) HTTPOption
@@ -970,7 +970,7 @@ func WithHTTPClient(c *http.Client) HTTPOption
 WithHTTPClient sets a custom http.Client for the transport.
 
 <a name="HandleEnd"></a>
-## type HandleEnd
+## type [HandleEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L64-L66>)
 
 HandleEnd describes the completion of a server\-side sync handle.
 
@@ -981,7 +981,7 @@ type HandleEnd struct {
 ```
 
 <a name="HandleOpts"></a>
-## type HandleOpts
+## type [HandleOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L47-L58>)
 
 HandleOpts configures server\-side sync handling.
 
@@ -1001,7 +1001,7 @@ type HandleOpts struct {
 ```
 
 <a name="HandleStart"></a>
-## type HandleStart
+## type [HandleStart](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L59-L61>)
 
 HandleStart describes the beginning of a server\-side sync handle.
 
@@ -1012,7 +1012,7 @@ type HandleStart struct {
 ```
 
 <a name="LogEntry"></a>
-## type LogEntry
+## type [LogEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L61-L69>)
 
 LogEntry represents a single event, as returned by Ancestry. Parents is populated for Kind == EventKindCheckin and empty for every other kind — plink, which Parents is derived from, only relates check\-in artifacts, so that is correct, not a gap.
 
@@ -1031,7 +1031,7 @@ type LogEntry struct {
 ```
 
 <a name="LogOpts"></a>
-## type LogOpts
+## type [LogOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L27-L30>)
 
 LogOpts configures an Ancestry query: a first\-parent walk starting from a specific check\-in.
 
@@ -1043,7 +1043,7 @@ type LogOpts struct {
 ```
 
 <a name="MergeConflict"></a>
-## type MergeConflict
+## type [MergeConflict](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L23-L27>)
 
 MergeConflict describes a conflict region in a file.
 
@@ -1056,7 +1056,7 @@ type MergeConflict struct {
 ```
 
 <a name="MergeConflictError"></a>
-## type MergeConflictError
+## type [MergeConflictError](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L43-L45>)
 
 MergeConflictError reports which files had unresolved merge conflicts. Files is sorted alphabetically for deterministic output.
 
@@ -1067,7 +1067,7 @@ type MergeConflictError struct {
 ```
 
 <a name="MergeConflictError.Error"></a>
-### func \(\*MergeConflictError\) Error
+### func \(\*MergeConflictError\) [Error](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L47>)
 
 ```go
 func (e *MergeConflictError) Error() string
@@ -1076,7 +1076,7 @@ func (e *MergeConflictError) Error() string
 
 
 <a name="MergeConflictError.Is"></a>
-### func \(\*MergeConflictError\) Is
+### func \(\*MergeConflictError\) [Is](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L51>)
 
 ```go
 func (e *MergeConflictError) Is(target error) bool
@@ -1085,7 +1085,7 @@ func (e *MergeConflictError) Is(target error) bool
 
 
 <a name="MergeResult"></a>
-## type MergeResult
+## type [MergeResult](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L17-L20>)
 
 MergeResult describes the outcome of a merge.
 
@@ -1097,7 +1097,7 @@ type MergeResult struct {
 ```
 
 <a name="MockTransport"></a>
-## type MockTransport
+## type [MockTransport](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L124-L126>)
 
 MockTransport is a test double that delegates to a handler function.
 
@@ -1108,7 +1108,7 @@ type MockTransport struct {
 ```
 
 <a name="MockTransport.RoundTrip"></a>
-### func \(\*MockTransport\) RoundTrip
+### func \(\*MockTransport\) [RoundTrip](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L129>)
 
 ```go
 func (t *MockTransport) RoundTrip(_ context.Context, payload []byte) ([]byte, error)
@@ -1117,7 +1117,7 @@ func (t *MockTransport) RoundTrip(_ context.Context, payload []byte) ([]byte, er
 RoundTrip calls the Handler function if set, otherwise returns empty bytes.
 
 <a name="PullOpts"></a>
-## type PullOpts
+## type [PullOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_pull.go#L11-L22>)
 
 PullOpts configures a pull\-only sync. Fields are a subset of SyncOpts; Pull is hard\-coded true and Push is hard\-coded false to keep the API surface honest about what Pull does.
 
@@ -1137,7 +1137,7 @@ type PullOpts struct {
 ```
 
 <a name="RC"></a>
-## type RC
+## type [RC](<https://github.com/danmestas/go-libfossil/blob/main/errors.go#L8>)
 
 
 
@@ -1181,7 +1181,7 @@ const (
 ```
 
 <a name="RC.String"></a>
-### func \(RC\) String
+### func \(RC\) [String](<https://github.com/danmestas/go-libfossil/blob/main/errors.go#L54>)
 
 ```go
 func (rc RC) String() string
@@ -1190,7 +1190,7 @@ func (rc RC) String() string
 
 
 <a name="Repo"></a>
-## type Repo
+## type [Repo](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L9-L12>)
 
 Repo is an opaque handle to a Fossil repository.
 
@@ -1201,7 +1201,7 @@ type Repo struct {
 ```
 
 <a name="Create"></a>
-### func Create
+### func [Create](<https://github.com/danmestas/go-libfossil/blob/main/fossil.go#L29>)
 
 ```go
 func Create(path string, opts CreateOpts) (*Repo, error)
@@ -1210,7 +1210,7 @@ func Create(path string, opts CreateOpts) (*Repo, error)
 Create creates a new Fossil repository at the given path.
 
 <a name="Open"></a>
-### func Open
+### func [Open](<https://github.com/danmestas/go-libfossil/blob/main/fossil.go#L66>)
 
 ```go
 func Open(path string) (*Repo, error)
@@ -1219,7 +1219,7 @@ func Open(path string) (*Repo, error)
 Open opens an existing Fossil repository.
 
 <a name="Repo.Ancestry"></a>
-### func \(\*Repo\) Ancestry
+### func \(\*Repo\) [Ancestry](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L128>)
 
 ```go
 func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error)
@@ -1228,7 +1228,7 @@ func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error)
 Ancestry walks the primary\-parent chain starting from opts.Start: it emits that check\-in, follows plink where isprim=1 to its parent, and repeats until the chain ends or opts.Limit is reached. This only ever sees first\-parent ancestors of opts.Start — a merge's second parent, a sibling branch head, or any check\-in outside that one chain will never appear. Use Timeline for a repository\-wide view.
 
 <a name="Repo.Annotate"></a>
-### func \(\*Repo\) Annotate
+### func \(\*Repo\) [Annotate](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L112>)
 
 ```go
 func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error)
@@ -1237,7 +1237,7 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error)
 Annotate attributes each line of a file to the commit that last changed it.
 
 <a name="Repo.BranchOpenLeaf"></a>
-### func \(\*Repo\) BranchOpenLeaf
+### func \(\*Repo\) [BranchOpenLeaf](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L133>)
 
 ```go
 func (r *Repo) BranchOpenLeaf(name string) (rid int64, open bool, err error)
@@ -1248,7 +1248,7 @@ BranchOpenLeaf names one open leaf of the named branch \(repo\-state\-01 Section
 Unlike BranchTip, which returns the branch's newest check\-in whether or not it is a leaf or closed, this is fossil's \`branch info\` answer. fossil's query \(branch\_is\_open, src/branch.c\) takes whichever open leaf it meets first; this follows the draft's greatest\-mtime rule.
 
 <a name="Repo.BranchTip"></a>
-### func \(\*Repo\) BranchTip
+### func \(\*Repo\) [BranchTip](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L99>)
 
 ```go
 func (r *Repo) BranchTip(name string) (int64, error)
@@ -1257,7 +1257,7 @@ func (r *Repo) BranchTip(name string) (int64, error)
 BranchTip returns the RID of the most recent checkin on the named branch. Resolves via the 'branch' propagating tag: the tip is the checkin with the latest event.mtime whose tagxref still has that branch value active. Returns an error if no such branch exists in the repository.
 
 <a name="Repo.Checkpoint"></a>
-### func \(\*Repo\) Checkpoint
+### func \(\*Repo\) [Checkpoint](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L47>)
 
 ```go
 func (r *Repo) Checkpoint(mode CheckpointMode) error
@@ -1266,7 +1266,7 @@ func (r *Repo) Checkpoint(mode CheckpointMode) error
 Checkpoint runs PRAGMA wal\_checkpoint\(\<mode\>\) against the repository. Safe to call on a live repo. CheckpointPassive is non\-blocking and appropriate for periodic background checkpoints. CheckpointTruncate produces a maximally compact on\-disk file readable by external fossil tooling without a subsequent Close.
 
 <a name="Repo.Close"></a>
-### func \(\*Repo\) Close
+### func \(\*Repo\) [Close](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L35>)
 
 ```go
 func (r *Repo) Close() error
@@ -1275,7 +1275,7 @@ func (r *Repo) Close() error
 Close closes the repository and releases resources. As part of close, a WAL TRUNCATE checkpoint is run so the on\-disk repo file is readable by external fossil/SQLite tooling.
 
 <a name="Repo.Commit"></a>
-### func \(\*Repo\) Commit
+### func \(\*Repo\) [Commit](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L73>)
 
 ```go
 func (r *Repo) Commit(opts CommitOpts) (int64, string, error)
@@ -1284,7 +1284,7 @@ func (r *Repo) Commit(opts CommitOpts) (int64, string, error)
 Commit creates a new checkin manifest with the given files and returns the RID \(row ID\) and UUID of the newly created artifact. When ParentID is non\-zero, files tracked at the parent but absent from opts.Files are carried forward into the new manifest \(full\-tree semantics — see the CommitOpts.Files doc\).
 
 <a name="Repo.Config"></a>
-### func \(\*Repo\) Config
+### func \(\*Repo\) [Config](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L73>)
 
 ```go
 func (r *Repo) Config(key string) (string, error)
@@ -1293,7 +1293,7 @@ func (r *Repo) Config(key string) (string, error)
 Config reads a configuration value from the repo's config table.
 
 <a name="Repo.CreateCheckout"></a>
-### func \(\*Repo\) CreateCheckout
+### func \(\*Repo\) [CreateCheckout](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L138>)
 
 ```go
 func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, error)
@@ -1302,7 +1302,7 @@ func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, e
 CreateCheckout creates a new checkout directory linked to this repository. The directory is created if it does not exist. The checkout is initialized to the tip checkin.
 
 <a name="Repo.CreateUser"></a>
-### func \(\*Repo\) CreateUser
+### func \(\*Repo\) [CreateUser](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L23>)
 
 ```go
 func (r *Repo) CreateUser(opts UserOpts) error
@@ -1311,7 +1311,7 @@ func (r *Repo) CreateUser(opts UserOpts) error
 CreateUser creates a new user in the repository.
 
 <a name="Repo.CurrentTrunk"></a>
-### func \(\*Repo\) CurrentTrunk
+### func \(\*Repo\) [CurrentTrunk](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L296>)
 
 ```go
 func (r *Repo) CurrentTrunk() (int64, error)
@@ -1320,7 +1320,7 @@ func (r *Repo) CurrentTrunk() (int64, error)
 CurrentTrunk returns the current trunk \(repo\-state\-01 Section 9\): the check\-in that the main\-branch setting's name resolves to by ResolveVersion's procedure, "trunk" when the setting is unset. Only check\-ins can answer, as in fossil's check\-in request, so a technote tagged with the name does not. The setting is local and not synced, so two repositories holding the same artifacts can name different trunks. fossil resolves it the same way where it needs one: update outside a checkout \(src/update.c, a "ci" request\) and open with no version \(src/db.c\). A name that resolves to nothing returns ErrVersionNotFound \(wrapped\).
 
 <a name="Repo.DB"></a>
-### func \(\*Repo\) DB
+### func \(\*Repo\) [DB](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L56>)
 
 ```go
 func (r *Repo) DB() *db.DB
@@ -1329,7 +1329,7 @@ func (r *Repo) DB() *db.DB
 DB returns the underlying database handle for raw SQL queries. Use this when the high\-level Repo methods don't cover your use case.
 
 <a name="Repo.DeleteUser"></a>
-### func \(\*Repo\) DeleteUser
+### func \(\*Repo\) [DeleteUser](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L54>)
 
 ```go
 func (r *Repo) DeleteUser(login string) error
@@ -1338,7 +1338,7 @@ func (r *Repo) DeleteUser(login string) error
 DeleteUser removes a user from the repository.
 
 <a name="Repo.DetectForks"></a>
-### func \(\*Repo\) DetectForks
+### func \(\*Repo\) [DetectForks](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L65>)
 
 ```go
 func (r *Repo) DetectForks() ([]Fork, error)
@@ -1347,7 +1347,7 @@ func (r *Repo) DetectForks() ([]Fork, error)
 DetectForks finds divergent branches in the repository.
 
 <a name="Repo.Diff"></a>
-### func \(\*Repo\) Diff
+### func \(\*Repo\) [Diff](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L151>)
 
 ```go
 func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error)
@@ -1362,7 +1362,7 @@ When filePath is empty, returns one entry per file that changed between the two 
 Whole\-checkin enumeration is currently name\-keyed: a rename with no content change surfaces as a delete of the old name plus an add of the new name, and permission\-only changes are not reflected. Proper rename and perm\-change detection \(via the underlying mlink table\) is tracked as a follow\-up; per\-file diff behaviour for an explicitly named file is unchanged.
 
 <a name="Repo.DisableSubmanifests"></a>
-### func \(\*Repo\) DisableSubmanifests
+### func \(\*Repo\) [DisableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L54>)
 
 ```go
 func (r *Repo) DisableSubmanifests() error
@@ -1371,7 +1371,7 @@ func (r *Repo) DisableSubmanifests() error
 DisableSubmanifests turns tree manifest emission off: later commits are flat, and the pinned k is kept for a later EnableSubmanifests. Existing trees are untouched \-\- artifact names are immutable, so they cannot be retired \-\- and peers older than Fossil 2.29 are still refused them.
 
 <a name="Repo.EnableSubmanifests"></a>
-### func \(\*Repo\) EnableSubmanifests
+### func \(\*Repo\) [EnableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L24>)
 
 ```go
 func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error)
@@ -1380,7 +1380,7 @@ func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error)
 EnableSubmanifests turns on tree manifest emission \(draft\-fossil\-submanifests\-00 §8.1\): from the next commit, check\-ins carry their file sets as sub\-manifest trees. k is the partition parameter, 1 to 12, or 0 to select one. A valid pinned k is kept, and an explicit k that differs from it is refused: changing it is RetuneSubmanifests. With no valid pin, an explicit k is pinned, or one is selected as zit selects it: the §6.3 cost over the file set of the current trunk \(CurrentTrunk, the main\-branch tip, the check\-in the next commit most plausibly descends from\), refined by replaying recent history. A request that cannot be met \-\- k outside 1..12, no check\-in to select from, or a file set no k partitions \-\- changes neither setting. It returns the pinned k and the warning the operator must be shown: peers older than Fossil 2.29 are refused trees, and trees cannot be retired.
 
 <a name="Repo.FindCommonAncestor"></a>
-### func \(\*Repo\) FindCommonAncestor
+### func \(\*Repo\) [FindCommonAncestor](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L56>)
 
 ```go
 func (r *Repo) FindCommonAncestor(ridA, ridB int64) (int64, error)
@@ -1389,7 +1389,7 @@ func (r *Repo) FindCommonAncestor(ridA, ridB int64) (int64, error)
 FindCommonAncestor finds the nearest common ancestor of two checkins.
 
 <a name="Repo.GetUser"></a>
-### func \(\*Repo\) GetUser
+### func \(\*Repo\) [GetUser](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L32>)
 
 ```go
 func (r *Repo) GetUser(login string) (User, error)
@@ -1398,7 +1398,7 @@ func (r *Repo) GetUser(login string) (User, error)
 GetUser returns information about a user.
 
 <a name="Repo.HandleSync"></a>
-### func \(\*Repo\) HandleSync
+### func \(\*Repo\) [HandleSync](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L249>)
 
 ```go
 func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error)
@@ -1407,7 +1407,7 @@ func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error)
 HandleSync processes an incoming xfer request \(server\-side\). The payload is a raw xfer\-encoded byte slice; the response is also raw bytes.
 
 <a name="Repo.HandleSyncWithOpts"></a>
-### func \(\*Repo\) HandleSyncWithOpts
+### func \(\*Repo\) [HandleSyncWithOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L254>)
 
 ```go
 func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts HandleOpts) ([]byte, error)
@@ -1416,7 +1416,7 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 HandleSyncWithOpts processes an incoming xfer request with optional configuration.
 
 <a name="Repo.Inner"></a>
-### func \(\*Repo\) Inner
+### func \(\*Repo\) [Inner](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L30>)
 
 ```go
 func (r *Repo) Inner() *repo.Repo
@@ -1425,7 +1425,7 @@ func (r *Repo) Inner() *repo.Repo
 Inner returns the underlying internal repo handle. This is exported for use by in\-module packages \(e.g., cli/\) that need direct access to the repo DB for raw SQL or internal package calls.
 
 <a name="Repo.ListConflictForks"></a>
-### func \(\*Repo\) ListConflictForks
+### func \(\*Repo\) [ListConflictForks](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L82>)
 
 ```go
 func (r *Repo) ListConflictForks() ([]string, error)
@@ -1434,7 +1434,7 @@ func (r *Repo) ListConflictForks() ([]string, error)
 ListConflictForks returns filenames with unresolved conflict\-fork entries.
 
 <a name="Repo.ListFiles"></a>
-### func \(\*Repo\) ListFiles
+### func \(\*Repo\) [ListFiles](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L194>)
 
 ```go
 func (r *Repo) ListFiles(rid int64) ([]FileEntry, error)
@@ -1443,7 +1443,7 @@ func (r *Repo) ListFiles(rid int64) ([]FileEntry, error)
 ListFiles returns the files in a manifest identified by blob row\-id.
 
 <a name="Repo.ListUsers"></a>
-### func \(\*Repo\) ListUsers
+### func \(\*Repo\) [ListUsers](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L41>)
 
 ```go
 func (r *Repo) ListUsers() ([]User, error)
@@ -1452,7 +1452,7 @@ func (r *Repo) ListUsers() ([]User, error)
 ListUsers returns all users in the repository.
 
 <a name="Repo.Merge"></a>
-### func \(\*Repo\) Merge
+### func \(\*Repo\) [Merge](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L157>)
 
 ```go
 func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string, error)
@@ -1470,7 +1470,7 @@ File handling:
 - In ancestor, missing on one side, modified on the other: modify/delete conflict.
 
 <a name="Repo.OpenCheckout"></a>
-### func \(\*Repo\) OpenCheckout
+### func \(\*Repo\) [OpenCheckout](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L150>)
 
 ```go
 func (r *Repo) OpenCheckout(dir string, opts CheckoutOpenOpts) (*Checkout, error)
@@ -1479,7 +1479,7 @@ func (r *Repo) OpenCheckout(dir string, opts CheckoutOpenOpts) (*Checkout, error
 OpenCheckout opens an existing checkout directory linked to this repository.
 
 <a name="Repo.Path"></a>
-### func \(\*Repo\) Path
+### func \(\*Repo\) [Path](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L25>)
 
 ```go
 func (r *Repo) Path() string
@@ -1488,7 +1488,7 @@ func (r *Repo) Path() string
 Path returns the filesystem path to the repository file.
 
 <a name="Repo.Pull"></a>
-### func \(\*Repo\) Pull
+### func \(\*Repo\) [Pull](<https://github.com/danmestas/go-libfossil/blob/main/repo_pull.go#L30>)
 
 ```go
 func (r *Repo) Pull(ctx context.Context, url string, opts PullOpts) (*SyncResult, error)
@@ -1499,7 +1499,7 @@ Pull fetches commits and ancillary objects from a Fossil HTTP peer and applies t
 Tiger Style: hostile inputs panic via assert at the boundary; transport failures return wrapped errors. Idempotent on a repo already at peer's tip \(returns a SyncResult with Rounds=0–1 and FilesRecvd=0\).
 
 <a name="Repo.ReadFile"></a>
-### func \(\*Repo\) ReadFile
+### func \(\*Repo\) [ReadFile](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L243>)
 
 ```go
 func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error)
@@ -1508,7 +1508,7 @@ func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error)
 ReadFile returns the bytes of filePath as they existed in checkin rid. Returns ErrFileNotFound \(wrapped\) if the file is not tracked in that checkin. A file that exists but is empty returns \(\[\]byte\{\}, nil\).
 
 <a name="Repo.ReadFileAt"></a>
-### func \(\*Repo\) ReadFileAt
+### func \(\*Repo\) [ReadFileAt](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L827>)
 
 ```go
 func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error)
@@ -1517,7 +1517,7 @@ func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error)
 ReadFileAt reads filePath from the checkin identified by a symbolic version name \(e.g. "tip", "trunk", a branch name, a UUID, or a UUID prefix\). It calls ResolveVersion to obtain the RID, then delegates to ReadFile. Use ReadFile directly when you already have a numeric RID.
 
 <a name="Repo.Redo"></a>
-### func \(\*Repo\) Redo
+### func \(\*Repo\) [Redo](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L132>)
 
 ```go
 func (r *Repo) Redo(dir string) error
@@ -1526,7 +1526,7 @@ func (r *Repo) Redo(dir string) error
 Redo re\-applies the last undone operation. Requires a checkout database; not yet wired.
 
 <a name="Repo.ResolveBranchStart"></a>
-### func \(\*Repo\) ResolveBranchStart
+### func \(\*Repo\) [ResolveBranchStart](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L320>)
 
 ```go
 func (r *Repo) ResolveBranchStart(name string) (int64, error)
@@ -1537,7 +1537,7 @@ ResolveBranchStart resolves name as ResolveVersion does, then returns the first 
 Section 8.3 walks back from the result of every form. fossil\(1\) walks only from a "tag:NAME" or plain\-name result \(symbolic\_name\_to\_rid, src/name.c\), so there a hash, "tip" or a date names the check\-in itself; this follows the draft.
 
 <a name="Repo.ResolveConflictFork"></a>
-### func \(\*Repo\) ResolveConflictFork
+### func \(\*Repo\) [ResolveConflictFork](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L91>)
 
 ```go
 func (r *Repo) ResolveConflictFork(filename string) error
@@ -1546,7 +1546,7 @@ func (r *Repo) ResolveConflictFork(filename string) error
 ResolveConflictFork marks a conflict\-fork entry as resolved.
 
 <a name="Repo.ResolveVersion"></a>
-### func \(\*Repo\) ResolveVersion
+### func \(\*Repo\) [ResolveVersion](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L283>)
 
 ```go
 func (r *Repo) ResolveVersion(name string) (int64, error)
@@ -1570,7 +1570,7 @@ No match returns ErrVersionNotFound \(wrapped\); a hex prefix matching more than
 The names relative to an open checkout \("current", "prev", "next"\) are ordinary names here, as in fossil outside a checkout; Checkout's ResolveVersion resolves them.
 
 <a name="Repo.RetuneSubmanifests"></a>
-### func \(\*Repo\) RetuneSubmanifests
+### func \(\*Repo\) [RetuneSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L43>)
 
 ```go
 func (r *Repo) RetuneSubmanifests(k int) error
@@ -1579,7 +1579,7 @@ func (r *Repo) RetuneSubmanifests(k int) error
 RetuneSubmanifests pins a new partition parameter k, 1 to 12, for the commits that follow \(draft\-fossil\-submanifests\-00 §6.4\). It is forward only: existing check\-ins are unchanged, and the next tree shares only the sub\-manifests whose bytes are the same under both values.
 
 <a name="Repo.ServeHTTP"></a>
-### func \(\*Repo\) ServeHTTP
+### func \(\*Repo\) [ServeHTTP](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L288>)
 
 ```go
 func (r *Repo) ServeHTTP(ctx context.Context, addr string) error
@@ -1590,7 +1590,7 @@ ServeHTTP starts an HTTP server that accepts Fossil xfer requests. Blocks until 
 Requests are authorized against the user table: one without a login card gets nobody's capabilities, which in a new repository allow clone and pull but not push. Grant more with SetCaps.
 
 <a name="Repo.SetCaps"></a>
-### func \(\*Repo\) SetCaps
+### func \(\*Repo\) [SetCaps](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L68>)
 
 ```go
 func (r *Repo) SetCaps(login, caps string) error
@@ -1599,7 +1599,7 @@ func (r *Repo) SetCaps(login, caps string) error
 SetCaps updates a user's capability string.
 
 <a name="Repo.SetConfig"></a>
-### func \(\*Repo\) SetConfig
+### func \(\*Repo\) [SetConfig](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L82>)
 
 ```go
 func (r *Repo) SetConfig(key, value string) error
@@ -1608,7 +1608,7 @@ func (r *Repo) SetConfig(key, value string) error
 SetConfig writes a configuration value to the repo's config table.
 
 <a name="Repo.SetHashPolicy"></a>
-### func \(\*Repo\) SetHashPolicy
+### func \(\*Repo\) [SetHashPolicy](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L94>)
 
 ```go
 func (r *Repo) SetHashPolicy(name string) error
@@ -1617,7 +1617,7 @@ func (r *Repo) SetHashPolicy(name string) error
 SetHashPolicy sets the repository's hash policy by name, as \`fossil hash\-policy NEW\-POLICY\` does. name must be exactly one of sha1, auto, sha3, sha3\-only or shun\-sha1: the match is case\-sensitive, and any other string is an error that leaves the policy unchanged. Asking for auto in a repository that already holds a SHA3\-named artifact sets sha3.
 
 <a name="Repo.SetPassword"></a>
-### func \(\*Repo\) SetPassword
+### func \(\*Repo\) [SetPassword](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L59>)
 
 ```go
 func (r *Repo) SetPassword(login, password string) error
@@ -1626,7 +1626,7 @@ func (r *Repo) SetPassword(login, password string) error
 SetPassword updates a user's password.
 
 <a name="Repo.StashApply"></a>
-### func \(\*Repo\) StashApply
+### func \(\*Repo\) [StashApply](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L105>)
 
 ```go
 func (r *Repo) StashApply(dir string, id int64) error
@@ -1635,7 +1635,7 @@ func (r *Repo) StashApply(dir string, id int64) error
 StashApply restores a stash entry by ID without removing it.
 
 <a name="Repo.StashClear"></a>
-### func \(\*Repo\) StashClear
+### func \(\*Repo\) [StashClear](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L120>)
 
 ```go
 func (r *Repo) StashClear() error
@@ -1644,7 +1644,7 @@ func (r *Repo) StashClear() error
 StashClear removes all stash entries.
 
 <a name="Repo.StashDrop"></a>
-### func \(\*Repo\) StashDrop
+### func \(\*Repo\) [StashDrop](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L115>)
 
 ```go
 func (r *Repo) StashDrop(id int64) error
@@ -1653,7 +1653,7 @@ func (r *Repo) StashDrop(id int64) error
 StashDrop removes a stash entry by ID.
 
 <a name="Repo.StashList"></a>
-### func \(\*Repo\) StashList
+### func \(\*Repo\) [StashList](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L110>)
 
 ```go
 func (r *Repo) StashList() ([]StashEntry, error)
@@ -1662,7 +1662,7 @@ func (r *Repo) StashList() ([]StashEntry, error)
 StashList returns all stash entries.
 
 <a name="Repo.StashPop"></a>
-### func \(\*Repo\) StashPop
+### func \(\*Repo\) [StashPop](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L100>)
 
 ```go
 func (r *Repo) StashPop(dir string) error
@@ -1671,7 +1671,7 @@ func (r *Repo) StashPop(dir string) error
 StashPop restores the most recent stash entry and removes it.
 
 <a name="Repo.StashSave"></a>
-### func \(\*Repo\) StashSave
+### func \(\*Repo\) [StashSave](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L95>)
 
 ```go
 func (r *Repo) StashSave(dir, comment string) error
@@ -1680,7 +1680,7 @@ func (r *Repo) StashSave(dir, comment string) error
 StashSave saves working\-tree changes to the stash. Requires a checkout database; not yet wired \(Repo only wraps the repo DB\).
 
 <a name="Repo.Sync"></a>
-### func \(\*Repo\) Sync
+### func \(\*Repo\) [Sync](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L205>)
 
 ```go
 func (r *Repo) Sync(ctx context.Context, t Transport, opts SyncOpts) (*SyncResult, error)
@@ -1689,7 +1689,7 @@ func (r *Repo) Sync(ctx context.Context, t Transport, opts SyncOpts) (*SyncResul
 Sync runs a sync session against the given transport.
 
 <a name="Repo.Tag"></a>
-### func \(\*Repo\) Tag
+### func \(\*Repo\) [Tag](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L53>)
 
 ```go
 func (r *Repo) Tag(opts TagOpts) (int64, error)
@@ -1700,7 +1700,7 @@ Tag creates a control artifact that adds a tag to a target artifact. Returns the
 As \`fossil tag add\` does, a name with a reserved prefix \("wiki\-", "tkt\-", "event\-"\) is refused, and when the target is a check\-in the name is placed in the symbolic namespace with a "sym\-" prefix so it resolves as a tag in commands such as update and merge; other artifact types keep the name bare. Pass the raw name: fossil prefixes the raw name, so "x" becomes "sym\-x" and "sym\-x" becomes "sym\-sym\-x" on a check\-in.
 
 <a name="Repo.Timeline"></a>
-### func \(\*Repo\) Timeline
+### func \(\*Repo\) [Timeline](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L166>)
 
 ```go
 func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error)
@@ -1711,7 +1711,7 @@ Timeline enumerates the repository's events newest\-first: every row of the even
 Ordering is \(mtime DESC, rid DESC\), a total order with rid as a true tie\-break at exact mtime equality — a deliberate improvement over canonical fossil, which orders by mtime DESC alone with no tie\-break, and paginates with a bare\-timestamp web cursor carrying a one\-second slop, so rows at a page boundary there can repeat or be skipped. Do not "fix" this back to canonical: it is intentional. To page through the full result set, pass the last entry's Cursor back as the next call's TimelineOpts.After — never construct a cursor from a TimelineEntry's Time by hand; see Cursor's doc comment for why that round trip is lossy.
 
 <a name="Repo.UUIDFromRID"></a>
-### func \(\*Repo\) UUIDFromRID
+### func \(\*Repo\) [UUIDFromRID](<https://github.com/danmestas/go-libfossil/blob/main/repo_ids.go#L16>)
 
 ```go
 func (r *Repo) UUIDFromRID(rid int64) (string, error)
@@ -1722,7 +1722,7 @@ UUIDFromRID returns the UUID \(manifest hash\) of the artifact identified by rid
 Returns ErrArtifactNotFound \(wrapped\) if no artifact with the given rid exists in the repository. The wrapped error message includes the offending rid. Other errors surface as\-is.
 
 <a name="Repo.UVDelete"></a>
-### func \(\*Repo\) UVDelete
+### func \(\*Repo\) [UVDelete](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L149>)
 
 ```go
 func (r *Repo) UVDelete(name string, mtime time.Time) error
@@ -1731,7 +1731,7 @@ func (r *Repo) UVDelete(name string, mtime time.Time) error
 UVDelete marks an unversioned file as deleted \(tombstone\).
 
 <a name="Repo.UVList"></a>
-### func \(\*Repo\) UVList
+### func \(\*Repo\) [UVList](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L167>)
 
 ```go
 func (r *Repo) UVList() ([]UVEntry, error)
@@ -1740,7 +1740,7 @@ func (r *Repo) UVList() ([]UVEntry, error)
 UVList returns all unversioned file entries.
 
 <a name="Repo.UVRead"></a>
-### func \(\*Repo\) UVRead
+### func \(\*Repo\) [UVRead](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L162>)
 
 ```go
 func (r *Repo) UVRead(name string) ([]byte, int64, string, error)
@@ -1749,7 +1749,7 @@ func (r *Repo) UVRead(name string) ([]byte, int64, string, error)
 UVRead reads an unversioned file from the repository. Returns the content, mtime \(unix seconds\), and content hash.
 
 <a name="Repo.UVWrite"></a>
-### func \(\*Repo\) UVWrite
+### func \(\*Repo\) [UVWrite](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L137>)
 
 ```go
 func (r *Repo) UVWrite(name string, content []byte, mtime time.Time) error
@@ -1758,7 +1758,7 @@ func (r *Repo) UVWrite(name string, content []byte, mtime time.Time) error
 UVWrite writes an unversioned file to the repository.
 
 <a name="Repo.Undo"></a>
-### func \(\*Repo\) Undo
+### func \(\*Repo\) [Undo](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L126>)
 
 ```go
 func (r *Repo) Undo(dir string) error
@@ -1767,7 +1767,7 @@ func (r *Repo) Undo(dir string) error
 Undo reverts the last commit or merge. Requires a checkout database; not yet wired.
 
 <a name="Repo.Verify"></a>
-### func \(\*Repo\) Verify
+### func \(\*Repo\) [Verify](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L62>)
 
 ```go
 func (r *Repo) Verify() error
@@ -1776,7 +1776,7 @@ func (r *Repo) Verify() error
 Verify checks repository integrity \(blob checksums, delta chains\).
 
 <a name="Repo.WithTx"></a>
-### func \(\*Repo\) WithTx
+### func \(\*Repo\) [WithTx](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L59>)
 
 ```go
 func (r *Repo) WithTx(fn func(tx *db.Tx) error) error
@@ -1785,7 +1785,7 @@ func (r *Repo) WithTx(fn func(tx *db.Tx) error) error
 WithTx executes fn within a database transaction.
 
 <a name="Repo.XferHandler"></a>
-### func \(\*Repo\) XferHandler
+### func \(\*Repo\) [XferHandler](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L277>)
 
 ```go
 func (r *Repo) XferHandler() http.HandlerFunc
@@ -1794,7 +1794,7 @@ func (r *Repo) XferHandler() http.HandlerFunc
 XferHandler returns an http.HandlerFunc that decodes Fossil xfer requests, dispatches to HandleSync, and encodes the response. Use this to compose a custom mux alongside operational endpoints \(e.g., /healthz\).
 
 <a name="RevertOpts"></a>
-## type RevertOpts
+## type [RevertOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L75-L77>)
 
 RevertOpts configures reverting file changes.
 
@@ -1805,7 +1805,7 @@ type RevertOpts struct {
 ```
 
 <a name="RoundStats"></a>
-## type RoundStats
+## type [RoundStats](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L54-L56>)
 
 RoundStats describes the outcome of a single sync round.
 
@@ -1816,7 +1816,7 @@ type RoundStats struct {
 ```
 
 <a name="ScanEnd"></a>
-## type ScanEnd
+## type [ScanEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L100-L102>)
 
 ScanEnd describes the completion of a working\-tree scan.
 
@@ -1827,7 +1827,7 @@ type ScanEnd struct {
 ```
 
 <a name="SessionEnd"></a>
-## type SessionEnd
+## type [SessionEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L49-L51>)
 
 SessionEnd describes the completion of a sync session.
 
@@ -1838,7 +1838,7 @@ type SessionEnd struct {
 ```
 
 <a name="SessionStart"></a>
-## type SessionStart
+## type [SessionStart](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L43-L46>)
 
 SessionStart describes the beginning of a sync session.
 
@@ -1850,7 +1850,7 @@ type SessionStart struct {
 ```
 
 <a name="StashEntry"></a>
-## type StashEntry
+## type [StashEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L21-L25>)
 
 StashEntry describes a saved stash.
 
@@ -1863,7 +1863,7 @@ type StashEntry struct {
 ```
 
 <a name="StatusEntry"></a>
-## type StatusEntry
+## type [StatusEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L63-L66>)
 
 StatusEntry describes a changed file in the working tree.
 
@@ -1875,7 +1875,7 @@ type StatusEntry struct {
 ```
 
 <a name="SyncObserver"></a>
-## type SyncObserver
+## type [SyncObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L10-L20>)
 
 SyncObserver receives lifecycle callbacks during sync operations. Use NopSyncObserver\(\) for a silent no\-op, or StdoutSyncObserver\(\) for stderr logging.
 
@@ -1894,7 +1894,7 @@ type SyncObserver interface {
 ```
 
 <a name="NopSyncObserver"></a>
-### func NopSyncObserver
+### func [NopSyncObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L132>)
 
 ```go
 func NopSyncObserver() SyncObserver
@@ -1903,7 +1903,7 @@ func NopSyncObserver() SyncObserver
 NopSyncObserver returns a SyncObserver that silently discards all events.
 
 <a name="StdoutSyncObserver"></a>
-### func StdoutSyncObserver
+### func [StdoutSyncObserver](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L188>)
 
 ```go
 func StdoutSyncObserver() SyncObserver
@@ -1912,7 +1912,7 @@ func StdoutSyncObserver() SyncObserver
 StdoutSyncObserver returns a SyncObserver that logs events to stderr.
 
 <a name="SyncOpts"></a>
-## type SyncOpts
+## type [SyncOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L13-L31>)
 
 SyncOpts configures a sync operation.
 
@@ -1939,7 +1939,7 @@ type SyncOpts struct {
 ```
 
 <a name="SyncResult"></a>
-## type SyncResult
+## type [SyncResult](<https://github.com/danmestas/go-libfossil/blob/main/repo_sync.go#L34-L44>)
 
 SyncResult describes the outcome of a sync session.
 
@@ -1958,7 +1958,7 @@ type SyncResult struct {
 ```
 
 <a name="TableSyncEnd"></a>
-## type TableSyncEnd
+## type [TableSyncEnd](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L74-L77>)
 
 TableSyncEnd describes the completion of a config table sync.
 
@@ -1970,7 +1970,7 @@ type TableSyncEnd struct {
 ```
 
 <a name="TableSyncStart"></a>
-## type TableSyncStart
+## type [TableSyncStart](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L69-L71>)
 
 TableSyncStart describes the beginning of a config table sync.
 
@@ -1981,7 +1981,7 @@ type TableSyncStart struct {
 ```
 
 <a name="TagOpts"></a>
-## type TagOpts
+## type [TagOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L28-L34>)
 
 TagOpts configures a tag operation.
 
@@ -1996,7 +1996,7 @@ type TagOpts struct {
 ```
 
 <a name="TagSpec"></a>
-## type TagSpec
+## type [TagSpec](<https://github.com/danmestas/go-libfossil/blob/main/repo_checkout.go#L50-L53>)
 
 TagSpec describes a tag to attach to an artifact.
 
@@ -2008,7 +2008,7 @@ type TagSpec struct {
 ```
 
 <a name="TimelineEntry"></a>
-## type TimelineEntry
+## type [TimelineEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L81-L84>)
 
 TimelineEntry represents a single event as returned by Timeline. It extends LogEntry with Cursor, the pagination token for this row: pass it back as the next call's TimelineOpts.After to resume enumeration immediately after this entry. Cursor is always valid \(Cursor.Valid\(\) == true\) on every TimelineEntry Timeline produces.
 
@@ -2022,7 +2022,7 @@ type TimelineEntry struct {
 ```
 
 <a name="TimelineOpts"></a>
-## type TimelineOpts
+## type [TimelineOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L34-L48>)
 
 TimelineOpts configures a Timeline query: a repository\-wide enumeration of the event table.
 
@@ -2045,7 +2045,7 @@ type TimelineOpts struct {
 ```
 
 <a name="Transport"></a>
-## type Transport
+## type [Transport](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L16-L18>)
 
 Transport delivers sync payloads between peers. Implementations handle the network layer \(HTTP, NATS, etc.\). Payloads are opaque zlib\-compressed xfer card streams.
 
@@ -2056,7 +2056,7 @@ type Transport interface {
 ```
 
 <a name="NewHTTPTransport"></a>
-### func NewHTTPTransport
+### func [NewHTTPTransport](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L45>)
 
 ```go
 func NewHTTPTransport(url string, opts ...HTTPOption) Transport
@@ -2065,7 +2065,7 @@ func NewHTTPTransport(url string, opts ...HTTPOption) Transport
 NewHTTPTransport creates a Transport that speaks Fossil's HTTP /xfer protocol.
 
 <a name="TransportFunc"></a>
-## type TransportFunc
+## type [TransportFunc](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L138>)
 
 TransportFunc adapts a plain function to the Transport interface. This is the Transport equivalent of http.HandlerFunc.
 
@@ -2074,7 +2074,7 @@ type TransportFunc func(ctx context.Context, payload []byte) ([]byte, error)
 ```
 
 <a name="TransportFunc.RoundTrip"></a>
-### func \(TransportFunc\) RoundTrip
+### func \(TransportFunc\) [RoundTrip](<https://github.com/danmestas/go-libfossil/blob/main/transport.go#L141>)
 
 ```go
 func (f TransportFunc) RoundTrip(ctx context.Context, payload []byte) ([]byte, error)
@@ -2083,7 +2083,7 @@ func (f TransportFunc) RoundTrip(ctx context.Context, payload []byte) ([]byte, e
 RoundTrip calls the function.
 
 <a name="UVEntry"></a>
-## type UVEntry
+## type [UVEntry](<https://github.com/danmestas/go-libfossil/blob/main/repo_extras.go#L37-L42>)
 
 UVEntry describes an unversioned file.
 
@@ -2097,7 +2097,7 @@ type UVEntry struct {
 ```
 
 <a name="UpdateChange"></a>
-## type UpdateChange
+## type [UpdateChange](<https://github.com/danmestas/go-libfossil/blob/main/observer.go#L91>)
 
 UpdateChange classifies how a file changed.
 
@@ -2116,7 +2116,7 @@ const (
 ```
 
 <a name="UpdateOpts"></a>
-## type UpdateOpts
+## type [UpdateOpts](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L39-L44>)
 
 UpdateOpts configures updating to a new version with merge.
 
@@ -2130,7 +2130,7 @@ type UpdateOpts struct {
 ```
 
 <a name="UpdateResult"></a>
-## type UpdateResult
+## type [UpdateResult](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L68-L72>)
 
 UpdateResult reports what Update actually did. Paths, not counts: a caller needs to know which files to show a user, not merely how many changed. All three slices are sorted \(sort.Strings\) before Update returns, so the order is deterministic — safe for golden\-file tests or reflect.DeepEqual — rather than depending on Go's randomized map iteration order.
 
@@ -2153,7 +2153,7 @@ type UpdateResult struct {
 ```
 
 <a name="User"></a>
-## type User
+## type [User](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L17-L20>)
 
 User describes a Fossil user.
 
@@ -2165,7 +2165,7 @@ type User struct {
 ```
 
 <a name="UserOpts"></a>
-## type UserOpts
+## type [UserOpts](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L10-L14>)
 
 UserOpts configures a user creation or update.
 
@@ -2178,7 +2178,7 @@ type UserOpts struct {
 ```
 
 <a name="WorkingVersion"></a>
-## type WorkingVersion
+## type [WorkingVersion](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L535-L542>)
 
 WorkingVersion is the answer of a checkout\-inclusive request: a check\-in, or the checkout's working files.
 

@@ -69,7 +69,7 @@ SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates
 SM-7.1-2	7.1	Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.
 SM-7.2-1	7.2	A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer whose announced version predates sub-manifest support, with an explicit error and never by converting, downgrading or silently omitting it.
 SM-7.2-2	7.2	A server whose enable-submanifests setting is false sends pragma avoid-submanifests in the reply positions of avoid-delta-manifests.
-SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in commits created during the session.	the root package makes no commit within a sync session: the internal session reports the pragma (SyncResult.AvoidSubmanifests) and manifest.Checkin honours it (CheckinOpts.AvoidSubmanifests)
+SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in commits created during the session.	covered internally only: the internal sync session reports the pragma (SyncResult.AvoidSubmanifests) and manifest.Checkin honours it (CheckinOpts.AvoidSubmanifests), but neither is reachable from the public API, so a caller of the root package cannot carry the pragma from a sync to its commit
 SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
 SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.
 SM-8.1-1	8.1	A writer emits no S card unless the enable-submanifests setting is true, which is false by default.

@@ -18,7 +18,7 @@ type RepoSubmanifestsCmd struct {
 
 // RepoSubmanifestsEnableCmd turns tree emission on, pinning k the first time.
 type RepoSubmanifestsEnableCmd struct {
-	K int `name:"k" help:"Partition parameter, 1..12 (default: selected from the main-branch tip)"`
+	K *int `name:"k" help:"Partition parameter, 1..12 (default: selected from the main-branch tip)"`
 }
 
 func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
@@ -28,7 +28,16 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	k, warning, err := r.EnableSubmanifests(c.K)
+	// An absent --k selects; a given one must be 1..12 (§8.1), so --k 0 is
+	// not the library's "select".
+	k := 0
+	if c.K != nil {
+		if *c.K < 1 || *c.K > 12 {
+			return fmt.Errorf("--k must be 1..12 (got %d)", *c.K)
+		}
+		k = *c.K
+	}
+	k, warning, err := r.EnableSubmanifests(k)
 	if err != nil {
 		return err
 	}

@@ -141,3 +141,41 @@ func captureStdout(t *testing.T, fn func() error) string {
 	}
 	return string(out)
 }
+
+// §8.1: an explicit k outside 1..12 is refused, --k 0 included; only an
+// absent --k selects.
+func TestRepoSubmanifestsEnableExplicitZero(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.fossil")
+	r, err := libfossil.Create(path, libfossil.CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.Commit(libfossil.CommitOpts{Comment: "c", User: "u", Time: time.Now(),
+		Files: []libfossil.FileToCommit{
+			{Name: "README.md", Content: []byte("# Example\n")},
+			{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+			{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+			{Name: "src/util.c", Content: []byte("/* util */\n")},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	run := func(args ...string) error {
+		var c submanifestsTestCLI
+		parser, err := kong.New(&c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, err := parser.Parse(append([]string{"-R", path, "repo", "submanifests", "enable"}, args...))
+		if err != nil {
+			return err
+		}
+		return ctx.Run(&c.Globals)
+	}
+	if err := run("--k", "0"); err == nil {
+		t.Fatal("enable --k 0 accepted")
+	}
+	if err := run(); err != nil {
+		t.Fatalf("enable with no --k: %v", err)
+	}
+}

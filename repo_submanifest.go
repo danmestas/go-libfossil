@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"errors"
 	"fmt"
 
 	fsltype "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -9,15 +10,23 @@ import (
 
 // EnableSubmanifests turns on tree manifest emission
 // (draft-fossil-submanifests-00 §8.1): from the next commit, check-ins carry
-// their file sets as sub-manifest trees. A pinned partition parameter is kept,
-// and an explicit k (1 to 12) that differs from it is refused, since
-// changing it is a re-tune. With no pin, k is pinned as given, or, when k is
-// 0, selected over the file set of current, the check-in the next commit
-// descends from (0 for none); a set no k partitions is refused. A refused
-// request changes nothing. It returns the pinned k and the warning the
-// operator must be shown: trees cannot be retired, and peers older than
-// Fossil 2.29 are refused them.
-func (r *Repo) EnableSubmanifests(current int64, k int) (pinned int, warning string, err error) {
+// their file sets as sub-manifest trees. k is the partition parameter, 1 to
+// 12, or 0 to select one. A valid pinned k is kept, and an explicit k that
+// differs from it is refused: changing it is RetuneSubmanifests. With no
+// valid pin, an explicit k is pinned, or one is selected as zit selects it:
+// the §6.3 cost over the newest check-in's file set, refined by replaying
+// recent history. A request that cannot be met -- k outside 1..12, or a file
+// set no k partitions -- changes neither setting. It returns the pinned k and
+// the warning the operator must be shown: peers older than Fossil 2.29 are
+// refused trees, and trees cannot be retired.
+func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error) {
+	current, err := r.ResolveVersion("tip")
+	if errors.Is(err, ErrVersionNotFound) {
+		current, err = 0, nil
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("libfossil: enable sub-manifests: %w", err)
+	}
 	pinned, err = manifest.EnableSubmanifests(r.inner, fsltype.FslID(current), k)
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: enable sub-manifests: %w", err)
@@ -26,12 +35,24 @@ func (r *Repo) EnableSubmanifests(current int64, k int) (pinned int, warning str
 }
 
 // RetuneSubmanifests pins a new partition parameter k, 1 to 12, for the
-// commits that follow (draft-fossil-submanifests-00 §6.4). Existing
-// check-ins are unchanged; the next tree shares only the sub-manifests whose
-// bytes are the same under both values.
+// commits that follow (draft-fossil-submanifests-00 §6.4). It is forward
+// only: existing check-ins are unchanged, and the next tree shares only the
+// sub-manifests whose bytes are the same under both values.
 func (r *Repo) RetuneSubmanifests(k int) error {
 	if err := manifest.RetuneSubmanifests(r.inner, k); err != nil {
 		return fmt.Errorf("libfossil: re-tune sub-manifests: %w", err)
 	}
 	return nil
+}
+
+// DisableSubmanifests turns tree manifest emission off: later commits are
+// flat, and the pinned k is kept for a later EnableSubmanifests. Existing
+// trees cannot be retired; when the repository holds any, it returns a note
+// saying so for the operator, and otherwise "".
+func (r *Repo) DisableSubmanifests() (note string, err error) {
+	note, err = manifest.DisableSubmanifests(r.inner)
+	if err != nil {
+		return "", fmt.Errorf("libfossil: disable sub-manifests: %w", err)
+	}
+	return note, nil
 }

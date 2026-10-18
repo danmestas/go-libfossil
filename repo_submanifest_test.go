@@ -30,10 +30,10 @@ func TestEnableSubmanifestsWritesTrees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.EnableSubmanifests(first, 13); err == nil {
+	if _, _, err := r.EnableSubmanifests(13); err == nil {
 		t.Fatal("k 13 accepted")
 	}
-	k, warning, err := r.EnableSubmanifests(first, 0)
+	k, warning, err := r.EnableSubmanifests(0)
 	if err != nil || k != 1 || !strings.Contains(warning, "Fossil 2.29") {
 		t.Fatalf("EnableSubmanifests = %d, %q, %v", k, warning, err)
 	}
@@ -51,5 +51,36 @@ func TestEnableSubmanifestsWritesTrees(t *testing.T) {
 	}
 	if len(d.S) != 2 || len(d.F) != 0 {
 		t.Fatalf("second commit: %d S cards, %d F cards", len(d.S), len(d.F))
+	}
+	note, err := r.DisableSubmanifests()
+	if err != nil || !strings.Contains(note, "cannot retire") {
+		t.Fatalf("DisableSubmanifests = %q, %v", note, err)
+	}
+	third, _, err := r.Commit(CommitOpts{Files: files[:1], Comment: "flat again", User: "u",
+		Time: at.Add(2 * time.Hour), ParentID: second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, err := manifest.GetManifest(r.Inner(), fsltype.FslID(third)); err != nil || len(d.S) != 0 {
+		t.Fatalf("a tree after DisableSubmanifests (%v)", err)
+	}
+}
+
+// With no check-in there is nothing to select from, and the refusal leaves
+// emission off.
+func TestEnableSubmanifestsWithoutHistory(t *testing.T) {
+	r, err := Create(filepath.Join(t.TempDir(), "t.fossil"), CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, _, err := r.EnableSubmanifests(0); err == nil {
+		t.Fatal("selection over no check-in succeeded")
+	}
+	if v, _ := r.Config("enable-submanifests"); v != "" {
+		t.Fatalf("enable-submanifests = %q after a refusal", v)
+	}
+	if k, _, err := r.EnableSubmanifests(4); err != nil || k != 4 {
+		t.Fatalf("explicit k = %d, %v", k, err)
 	}
 }

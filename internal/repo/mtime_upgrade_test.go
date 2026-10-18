@@ -1,9 +1,11 @@
 package repo
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -67,5 +69,67 @@ func TestOpenConvertsJulianConfigAndUserTimes(t *testing.T) {
 		if err := r.Close(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The conversion is best-effort: while another connection holds the write
+// lock, Open still succeeds and leaves the rows for a later open.
+func TestOpenSkipsJulianConversionWhenLocked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.fossil")
+	r, err := Create(path, "admin", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("INSERT OR REPLACE INTO config(name, value, mtime) VALUES('old', 'x', 2461332.5)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	holder, err := db.OpenSQL(path, db.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	ctx := context.Background()
+	conn, err := holder.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open while another connection holds the write lock: %v", err)
+	}
+	var mtime float64
+	if err := locked.DB().QueryRow("SELECT CAST(mtime AS REAL) FROM config WHERE name='old'").Scan(&mtime); err != nil {
+		t.Fatal(err)
+	}
+	if mtime != 2461332.5 {
+		t.Errorf("mtime = %v while locked, want it left for a later open", mtime)
+	}
+	if err := locked.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := conn.ExecContext(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	r, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var secs int64
+	if err := r.DB().QueryRow("SELECT CAST(mtime AS INTEGER) FROM config WHERE name='old'").Scan(&secs); err != nil {
+		t.Fatal(err)
+	}
+	if secs != 1792368000 {
+		t.Errorf("mtime after the lock is released = %d, want 1792368000", secs)
 	}
 }

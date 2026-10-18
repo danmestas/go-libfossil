@@ -3,6 +3,7 @@ package repo
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -120,7 +121,9 @@ func OpenWithEnv(path string, env *simio.Env) (*Repo, error) {
 		return nil, fmt.Errorf("repo.OpenWithEnv: not a fossil repo (application_id=%d, want %d)",
 			id, libfossil.FossilApplicationID)
 	}
-	if err := upgradeJulianSeconds(d); err != nil {
+	// The conversion is best-effort: while another connection holds the
+	// write lock it is left for a later open, rather than failing this one.
+	if err := upgradeJulianSeconds(d); err != nil && !isBusy(err) {
 		d.Close()
 		return nil, fmt.Errorf("repo.OpenWithEnv: %w", err)
 	}
@@ -133,6 +136,19 @@ func OpenWithEnv(path string, env *simio.Env) (*Repo, error) {
 // does. A Julian day now is about 2.46e6; as seconds that is January 1970,
 // a time no row fossil or go-libfossil writes today holds.
 const julianSecondsRows = "mtime BETWEEN 2000000 AND 3000000"
+
+// isBusy reports whether err is SQLite's SQLITE_BUSY or SQLITE_LOCKED, as
+// either driver words it.
+func isBusy(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{"database is locked", "database table is locked",
+		"SQLITE_BUSY", "SQLITE_LOCKED"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
 
 // upgradeJulianSeconds converts those rows to the seconds they stand for.
 // It reads first and writes only when a row needs it, so opening an

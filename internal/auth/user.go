@@ -30,14 +30,20 @@ func CreateUser(d *db.DB, projectCode, login, password, caps string) error {
 	}
 
 	pw := hashPassword(projectCode, login, password)
-	_, err := d.Exec(
-		"INSERT INTO user(login, pw, cap, mtime) VALUES(?, ?, ?, strftime('%s','now'))",
-		login, pw, caps,
-	)
-	if err != nil {
-		return fmt.Errorf("insert user %q: %w", login, err)
-	}
-	return nil
+	return d.WithTx(func(tx *db.Tx) error {
+		if _, err := tx.Exec(
+			"INSERT INTO user(login, pw, cap, mtime) VALUES(?, ?, ?, strftime('%s','now'))",
+			login, pw, caps,
+		); err != nil {
+			return fmt.Errorf("insert user %q: %w", login, err)
+		}
+		// An invite expiry left by an earlier user of this login, one fossil
+		// deleted, is not this user's. repo invite sets its own afterwards.
+		if _, err := tx.Exec("DELETE FROM config WHERE name=?", InviteExpiryKey(login)); err != nil {
+			return fmt.Errorf("clear invite expiry for %q: %w", login, err)
+		}
+		return nil
+	})
 }
 
 // GetUser retrieves a user by login.
@@ -173,23 +179,23 @@ func DeleteUser(d *db.DB, login string) error {
 		panic("auth.DeleteUser: login must not be empty")
 	}
 
-	result, err := d.Exec("DELETE FROM user WHERE login=?", login)
-	if err != nil {
-		return fmt.Errorf("delete user %q: %w", login, err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if rows == 0 {
-		return fmt.Errorf("user %q not found", login)
-	}
-	// The invite expiry belongs to this user, not to a later one of the
-	// same login.
-	if _, err := d.Exec("DELETE FROM config WHERE name=?", InviteExpiryKey(login)); err != nil {
-		return fmt.Errorf("delete invite expiry for %q: %w", login, err)
-	}
-
-	return nil
+	// The user and its invite expiry go together: the expiry belongs to this
+	// user, not to a later one of the same login.
+	return d.WithTx(func(tx *db.Tx) error {
+		result, err := tx.Exec("DELETE FROM user WHERE login=?", login)
+		if err != nil {
+			return fmt.Errorf("delete user %q: %w", login, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
+		if rows == 0 {
+			return fmt.Errorf("user %q not found", login)
+		}
+		if _, err := tx.Exec("DELETE FROM config WHERE name=?", InviteExpiryKey(login)); err != nil {
+			return fmt.Errorf("delete invite expiry for %q: %w", login, err)
+		}
+		return nil
+	})
 }

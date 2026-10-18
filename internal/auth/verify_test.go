@@ -316,3 +316,42 @@ func TestDeleteUserDropsInviteExpiry(t *testing.T) {
 		t.Errorf("VerifyLogin after re-creating alice = %v, want success", err)
 	}
 }
+
+// A user fossil deleted leaves its invite expiry behind; creating a user of
+// that login clears it, so the new user does not inherit it.
+func TestCreateUserClearsStaleInviteExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	if err := SetInviteExpiry(d, "alice", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	card := aliceCard(t, d, code)
+	if _, err := VerifyLogin(d, code, card); err != nil {
+		t.Errorf("VerifyLogin for a newly created alice = %v, want success", err)
+	}
+}
+
+// DeleteUser removes the user and its invite expiry together: when the
+// second delete fails, the user is still there.
+func TestDeleteUserIsAtomic(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	aliceCard(t, d, code)
+	if err := SetInviteExpiry(d, "alice", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`CREATE TEMP TRIGGER keep_invites BEFORE DELETE ON config
+		WHEN old.name GLOB 'invite-expire:*' BEGIN SELECT RAISE(ABORT, 'kept'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteUser(d, "alice"); err == nil {
+		t.Fatal("DeleteUser succeeded although the invite expiry could not be removed")
+	}
+	var n int
+	if err := d.QueryRow("SELECT count(*) FROM user WHERE login='alice'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("alice rows after a failed DeleteUser = %d, want 1", n)
+	}
+}

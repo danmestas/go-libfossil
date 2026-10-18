@@ -8,11 +8,14 @@ import (
 )
 
 // recordableMTime is the vfile.mtime a scan or a write stores for a file
-// whose mtime is mtime, in fossil's unit: whole seconds since 1970. Fossil
-// stores it as it is; here an mtime not older than now's second is stored as
-// 0, the value that makes the next scan, fossil's or ours, hash the file.
-// An mtime of the current second cannot vouch for the content, since a write
-// later in that second can leave it unchanged.
+// whose mtime is mtime, in fossil's unit: whole seconds since 1970.
+//
+// This is the one deliberate difference from fossil. Fossil's
+// vfile_check_signature (src/vfile.c) stores the mtime as it is and later
+// skips hashing while size and mtime match, so it misses an edit that keeps
+// the size within the second it recorded. Here an mtime not older than now's
+// second is stored as 0, which makes the next scan, fossil's or ours, hash
+// the file once; a stored 0 is never trusted (scanSingleEntry).
 func recordableMTime(mtime time.Time, now int64) int64 {
 	secs := mtime.Unix()
 	if secs >= now {

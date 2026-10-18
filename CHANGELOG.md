@@ -40,10 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   use this scan, as fossil's commands do; before, every scan hashed every
   file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
   checkout on every command too. Extract, update, revert, commit and
-  `SetMTime` record mtimes where fossil does. One deliberate difference: an
-  mtime not older than the current second is recorded as 0 (hash it next
-  time), so an edit that keeps the size within the second a file was written
-  or scanned is still seen; fossil can miss such an edit. On the sqlite
+  `SetMTime` record mtimes where fossil does. One deliberate difference:
+  fossil would miss an edit that keeps a file's size within the same second
+  its mtime was recorded, in status and in commit; go-libfossil records such
+  an mtime as 0 and rehashes the file instead, and fossil reading those rows
+  rehashes it too. On the sqlite
   repository's 2,220-file checkout, status takes about 30 ms instead of
   about 250 ms. `simio.MemStorage` now gives each write a new mtime, as a
   filesystem does.

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/simio"
 )
@@ -418,4 +420,49 @@ func TestSetMTimeRecordsMTime(t *testing.T) {
 			t.Errorf("vfile.mtime of %s = %d, want %d", name, got, want)
 		}
 	}
+}
+
+// A same-size edit in the second the file was scanned is committed. Fossil
+// records that second and would commit nothing; go-libfossil records 0 and
+// rehashes. The clock is fixed so the scan and the edit share a second.
+func TestCommitSeesSameSecondEdit(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	co, err := Create(r, t.TempDir(), CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	rid, _, _ := co.Version()
+	if err := co.Extract(rid, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := past
+	co.env = &simio.Env{Storage: simio.OSStorage{}, Clock: simio.NewSimClockAt(second), Rand: simio.CryptoRand{}}
+	for _, name := range []string{"hello.txt", "src/main.go", "README.md"} {
+		setFileTime(t, co, name, second)
+	}
+	if err := co.ScanChanges(0); err != nil {
+		t.Fatal(err)
+	}
+
+	rewrite(t, co, "hello.txt", "HELLO WORLD\n", second)
+	newRID, _, err := co.Commit(CommitOpts{Message: "same second", User: "test"})
+	if err != nil {
+		t.Fatalf("commit of a same-second edit: %v", err)
+	}
+	got, err := manifest.ListFiles(r, newRID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range got {
+		if f.Name != "hello.txt" {
+			continue
+		}
+		if want := hash.ContentHash([]byte("HELLO WORLD\n"), f.UUID); f.UUID != want {
+			t.Fatalf("committed hello.txt is %s, want the edit %s", f.UUID, want)
+		}
+		return
+	}
+	t.Fatal("hello.txt missing from the new check-in")
 }

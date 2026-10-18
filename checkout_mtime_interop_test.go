@@ -174,3 +174,52 @@ func TestLibfossilRecordedMTimesTrustedByFossil(t *testing.T) {
 	editKeepingSignature(t, ckDir)
 	assertBothSee(t, bin, ckDir, ck, "b.txt")
 }
+
+// A file whose mtime is not older than the scan's second is recorded with
+// mtime 0, so fossil reading the row hashes the file and sees a same-size
+// edit that keeps the mtime; fossil's own row would have hidden it. A time
+// ahead of the clock stands in for the current second, deterministically.
+func TestFossilSeesEditBehindUnrecordedMTime(t *testing.T) {
+	bin, repoPath, fossilDir := newFossilCheckout(t)
+	fossilRun(t, bin, fossilDir, "close")
+
+	ckDir := filepath.Join(t.TempDir(), "ck")
+	if err := os.Mkdir(ckDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	ck, err := r.CreateCheckout(ckDir, libfossil.CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ck.Close() })
+	rid, _, err := ck.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ck.Extract(rid, libfossil.ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	current := time.Now().Truncate(time.Second).Add(time.Hour)
+	setMTime(t, filepath.Join(ckDir, "a.txt"), current)
+	setMTime(t, filepath.Join(ckDir, "b.txt"), agedTime)
+	if got := statusLines(t, ck); len(got) != 0 {
+		t.Fatalf("fresh checkout: Status = %q, want none", got)
+	}
+	if m := vfileMTimes(t, ckDir)["a.txt"]; m != 0 {
+		t.Fatalf("a.txt recorded with mtime %d, want 0", m)
+	}
+
+	writeFile(t, filepath.Join(ckDir, "a.txt"), "ONE\n")
+	setMTime(t, filepath.Join(ckDir, "a.txt"), current)
+	if got := strings.Join(fossilEdited(t, bin, ckDir), ","); got != "a.txt" {
+		t.Errorf("fossil edited = %q, want %q", got, "a.txt")
+	}
+	if got := strings.Join(libfossilEdited(t, ck), ","); got != "a.txt" {
+		t.Errorf("go-libfossil edited = %q, want %q", got, "a.txt")
+	}
+}

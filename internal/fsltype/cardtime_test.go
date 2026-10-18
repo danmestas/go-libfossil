@@ -6,15 +6,14 @@ import (
 )
 
 // fossilCardTimes are D-card times the fossil 2.28 binary wrote for a given
-// date, from `fossil test-date-format`: it rounds to the millisecond, except
-// that a fraction past .999 stays in its second, and the rounding carries
-// SQLite's floating-point error (.7895 goes down).
+// date, from `fossil test-date-format`: to the nearest millisecond, except
+// that a fraction past .999 stays in its second.
 var fossilCardTimes = []struct {
 	in   time.Time
 	want string
 }{
-	{time.Date(2026, 10, 18, 12, 34, 56, 789500000, time.UTC), "2026-10-18T12:34:56.789"},
 	{time.Date(2026, 10, 18, 12, 34, 56, 789600000, time.UTC), "2026-10-18T12:34:56.790"},
+	{time.Date(2026, 10, 18, 12, 34, 56, 789499999, time.UTC), "2026-10-18T12:34:56.789"},
 	{time.Date(2026, 10, 18, 23, 59, 59, 999600000, time.UTC), "2026-10-18T23:59:59.999"},
 	{time.Date(2026, 10, 18, 12, 34, 56, 0, time.UTC), "2026-10-18T12:34:56.000"},
 	{time.Date(2026, 10, 18, 12, 34, 56, 123456700, time.UTC), "2026-10-18T12:34:56.123"},
@@ -60,6 +59,27 @@ func TestCardTimeKeepsMilliseconds(t *testing.T) {
 		in := base.Add(time.Duration(ms) * time.Millisecond)
 		if got := CardTime(in); !got.Equal(in) {
 			t.Fatalf("CardTime(%v) = %v, want it unchanged", in, got)
+		}
+	}
+}
+
+// An exact half millisecond rounds up. Fossil's answer there depends on how
+// its bundled SQLite prints a double (2.28 gives .124 for .1245 and .020 for
+// .0195), so CardTime does not follow it.
+func TestCardTimeRoundsTiesUp(t *testing.T) {
+	for _, c := range []struct {
+		nsec int
+		want string
+	}{
+		{789500000, "12:34:56.790"},
+		{124500000, "12:34:56.125"},
+		{19500000, "12:34:56.020"},
+		{500000, "12:34:56.001"},
+		{998500000, "12:34:56.999"},
+	} {
+		in := time.Date(2026, 10, 18, 12, 34, 56, c.nsec, time.UTC)
+		if got := CardTime(in).Format("15:04:05.000"); got != c.want {
+			t.Errorf("CardTime(%d ns) = %s, want %s", c.nsec, got, c.want)
 		}
 	}
 }

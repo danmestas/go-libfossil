@@ -91,7 +91,7 @@ func TestSyncedTimesMatchRealFossil(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tag.AddTag(srv, tag.TagOpts{TargetRID: rid, TagName: "sym-rel",
-		TagType: tag.TagSingleton, User: "testuser", Time: base.Add(time.Minute + 789500000)}); err != nil {
+		TagType: tag.TagSingleton, User: "testuser", Time: base.Add(time.Minute + 789499999)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := uv.EnsureSchema(srv.DB()); err != nil {

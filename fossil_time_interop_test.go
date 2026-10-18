@@ -47,7 +47,7 @@ func TestCardTimesMatchFossil(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	at := []time.Time{
 		time.Date(2030, 3, 4, 12, 34, 56, 789600000, time.UTC), // rounds up
-		time.Date(2030, 3, 4, 12, 35, 56, 789500000, time.UTC), // .7895 rounds down
+		time.Date(2030, 3, 4, 12, 35, 56, 789499999, time.UTC), // rounds down
 		time.Date(2030, 3, 4, 12, 36, 59, 999700000, time.UTC), // held at .999
 	}
 	override := func(i int) string { return at[i].Format("2006-01-02 15:04:05.000000000") }

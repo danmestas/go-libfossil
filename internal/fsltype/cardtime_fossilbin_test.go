@@ -12,39 +12,52 @@ import (
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
-// cardTimeCases are dates whose seconds probe every way the fraction can
-// round: random nanoseconds, values whose double lies just below or above a
-// half millisecond, exact binary halves (k/16 of a second), the .999 cap, and
-// the first and last instants of a minute and a day.
+// isTie reports whether t falls exactly on a half millisecond, where
+// fossil's rounding depends on its SQLite version and is not compared.
+func isTie(t time.Time) bool { return t.Nanosecond()%1000000 == 500000 }
+
+// cardTimeCases are dates whose fraction probes every way it can round:
+// random nanoseconds at random dates, values a nanosecond either side of a
+// half millisecond, and fractions past .999 at the end of a second, minute,
+// day and year, which must not carry. Exact half-millisecond ties are left
+// out (TestCardTimeRoundsTiesUp covers them).
 func cardTimeCases() []time.Time {
-	base := time.Date(2026, 10, 18, 12, 34, 0, 0, time.UTC)
 	var out []time.Time
-	add := func(sec, nsec int) {
-		out = append(out, base.Add(time.Duration(sec)*time.Second+time.Duration(nsec)))
-	}
-	for k := 0; k < 16; k++ {
-		add(56, k*62500000)
-	}
-	for _, nsec := range []int{0, 1, 499999, 500000, 999999, 789500000, 789600000,
-		999000000, 999499999, 999500000, 999600000, 999999999} {
-		add(0, nsec)
-		add(59, nsec)
+	add := func(t time.Time) {
+		if !isTie(t) {
+			out = append(out, t)
+		}
 	}
 	rng := rand.New(rand.NewSource(440))
-	for i := 0; i < 400; i++ {
-		add(rng.Intn(60), rng.Intn(1e9))
+	start := time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	for i := 0; i < 3000; i++ {
+		add(time.Unix(start+rng.Int63n(60*365*86400), rng.Int63n(1e9)).UTC())
 	}
-	for i := 0; i < 200; i++ {
-		add(rng.Intn(60), rng.Intn(1e5)*10000+5000)
+	base := time.Date(2026, 10, 18, 12, 34, 56, 0, time.UTC)
+	for i := 0; i < 1000; i++ {
+		ms := rng.Int63n(1000)
+		add(base.Add(time.Duration(ms*1000000 + 499999)))
+		add(base.Add(time.Duration(ms*1000000 + 500001)))
 	}
-	out = append(out, time.Date(2026, 12, 31, 23, 59, 59, 999700000, time.UTC))
+	ends := []time.Time{
+		time.Date(2026, 10, 18, 12, 34, 56, 0, time.UTC),
+		time.Date(2026, 10, 18, 12, 34, 59, 0, time.UTC),
+		time.Date(2026, 10, 18, 23, 59, 59, 0, time.UTC),
+		time.Date(2026, 12, 31, 23, 59, 59, 0, time.UTC),
+	}
+	for _, e := range ends {
+		for _, nsec := range []int{998999999, 999000000, 999000001, 999499999,
+			999500001, 999700000, 999999999} {
+			add(e.Add(time.Duration(nsec)))
+		}
+	}
 	return out
 }
 
 // TestCardTimeMatchesFossilBinary asks fossil, through test-date-format (the
 // date_in_standard_format a check-in, tag or branch date goes through), what
 // it writes for each date given to the nanosecond, and requires CardTime to
-// agree on every one.
+// agree on every one that is not a half-millisecond tie.
 func TestCardTimeMatchesFossilBinary(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	dir := t.TempDir()

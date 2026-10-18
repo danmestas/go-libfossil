@@ -12,10 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
-  clock. A caller time with finer precision is rounded as fossil rounds a
-  `--date-override`: to the nearest millisecond as SQLite prints it, so
-  `.7896` becomes `.790` and `.7895` becomes `.789`, and never past `.999`
-  into the next second.
+  clock. A caller time with finer precision is rounded to the nearest
+  millisecond, as fossil rounds a `--date-override`, except that a fraction
+  past `.999` stays at `.999` rather than carrying into the next second, as
+  in fossil. An exact half millisecond rounds up; fossil's result there
+  depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
+  `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2

@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -107,13 +105,8 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		}
 	}
 
-	var mtime time.Time
-	if opts.SetMTime && !opts.DryRun {
-		mtime = c.checkinTime(rid)
-	}
-
 	for _, row := range vfRows {
-		if err := c.extractRow(ctx, row, opts, mtime); err != nil {
+		if err := c.extractRow(ctx, row, opts); err != nil {
 			extractErr = err
 			return extractErr
 		}
@@ -123,7 +116,12 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	if opts.DryRun {
 		return nil
 	}
-	extractErr = c.finalizeExtract(rid, opts.Force)
+	if extractErr = c.finalizeExtract(rid, opts.Force); extractErr != nil {
+		return extractErr
+	}
+	if opts.SetMTime {
+		extractErr = c.setFileMTimes(rid)
+	}
 	return extractErr
 }
 
@@ -211,41 +209,15 @@ func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 	return out, nil
 }
 
-// checkinTime returns the check-in time of rid, or the zero time when it
-// cannot be read. SetMTime is best-effort: a missing event row leaves files
-// with the time they were written.
-func (c *Checkout) checkinTime(rid libfossil.FslID) time.Time {
-	var mtimeRaw any
-	err := c.repo.DB().QueryRow(
-		"SELECT mtime FROM event WHERE objid = ? AND type = 'ci'", int64(rid),
-	).Scan(&mtimeRaw)
-	if err != nil {
-		return time.Time{}
-	}
-	t, ok := db.ScanTime(mtimeRaw)
-	if !ok {
-		return time.Time{}
-	}
-	return t
-}
-
-// extractRow writes one file, applies mtime when it is set, and reports the
-// file to the observer and the caller's callback.
+// extractRow writes one file and reports it to the observer and the
+// caller's callback.
 func (c *Checkout) extractRow(
-	ctx context.Context, row extractRow, opts ExtractOpts, mtime time.Time,
+	ctx context.Context, row extractRow, opts ExtractOpts,
 ) error {
 	if err := c.extractSingleFile(
 		row.pathname, row.blobRid, row.isexe, opts.DryRun,
 	); err != nil {
 		return err
-	}
-
-	if !mtime.IsZero() {
-		// Best-effort, as in fossil: a file whose mtime cannot be set is
-		// still correctly extracted.
-		if fullPath, err := c.safePath(row.pathname); err == nil {
-			_ = c.env.Storage.Chtimes(fullPath, mtime, mtime)
-		}
 	}
 
 	c.obs.ExtractFileCompleted(ctx, row.pathname, UpdateAdded)

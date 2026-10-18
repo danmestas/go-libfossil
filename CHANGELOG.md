@@ -44,6 +44,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused the login; now only an expiry in the past refuses it, as before
   for a date written as text. `repo invite --ttl` stores its expiry as a
   Julian day too.
+- `SetMTime` on a checkout's extract and update now does what fossil's
+  `--setmtime` does: each file takes the time of the newest check-in in the
+  version's primary ancestry that recorded its content, in whole seconds,
+  and every unedited file gets it, not only the files the update wrote. A
+  file with local edits is left alone. It used to give every written file
+  the target check-in's time, to the millisecond.
 
 ## [0.12.0] - 2026-10-13
 

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // A sparse checkout stays a checkout fossil can open safely
@@ -17,7 +18,8 @@ import (
 // away -- and its revert brings them back, after which go-libfossil still
 // works within the cone and ignores the restored files.
 func TestSparseCheckoutUnderFossil(t *testing.T) {
-	bin, repoPath, _ := newFossilCheckout(t)
+	bin := testutil.RequireFossilBin(t)
+	_, repoPath, _ := newFossilCheckout(t)
 	r, err := libfossil.Open(repoPath)
 	if err != nil {
 		t.Fatal(err)

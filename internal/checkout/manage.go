@@ -29,16 +29,11 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		return counts, err
 	}
 	for _, path := range opts.Paths {
-		// Check if already tracked
-		var existingID int64
-		err := c.db.QueryRow(
-			"SELECT id FROM vfile WHERE vid=? AND pathname=?",
-			int64(vid), path,
-		).Scan(&existingID)
-		if err != nil && err != sql.ErrNoRows {
-			return counts, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+		tracked, err := c.isTracked(vid, path)
+		if err != nil {
+			return counts, err
 		}
-		if err == nil {
+		if tracked {
 			// Already tracked
 			counts.Skipped++
 			if opts.Callback != nil {
@@ -86,6 +81,21 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 	}
 
 	return counts, nil
+}
+
+// isTracked reports whether version vid's record has a row for path.
+func (c *Checkout) isTracked(vid libfossil.FslID, path string) (bool, error) {
+	var id int64
+	err := c.db.QueryRow(
+		"SELECT id FROM vfile WHERE vid=? AND pathname=?", int64(vid), path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+	}
+	return true, nil
 }
 
 // Unmanage removes files from tracking. For each path:

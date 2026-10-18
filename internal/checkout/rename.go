@@ -10,6 +10,27 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
+// renameOnDisk moves a renamed file's working copy from one name to the
+// other, keeping its permission.
+func (c *Checkout) renameOnDisk(vfileID int64, from, to string) error {
+	perm, err := c.vfilePerm(vfileID)
+	if err != nil {
+		return fmt.Errorf("checkout.Rename: %w", err)
+	}
+	oldPath, err := c.safePath(from)
+	if err != nil {
+		return fmt.Errorf("checkout.Rename: path traversal in %s: %w", from, err)
+	}
+	newPath, err := c.safePath(to)
+	if err != nil {
+		return fmt.Errorf("checkout.Rename: path traversal in %s: %w", to, err)
+	}
+	if err := c.moveFile(oldPath, newPath, perm); err != nil {
+		return fmt.Errorf("checkout.Rename: %w", err)
+	}
+	return nil
+}
+
 // moveFile reads a file from oldPath, writes it to newPath with the given
 // permissions, and removes the original. Ignores NotExist on remove.
 func (c *Checkout) moveFile(oldPath, newPath string, perm os.FileMode) error {
@@ -114,21 +135,8 @@ func (c *Checkout) Rename(opts RenameOpts) error {
 
 	// If DoFsMove, move the file in Storage
 	if opts.DoFsMove {
-		perm, err := c.vfilePerm(vfileID)
-		if err != nil {
-			return fmt.Errorf("checkout.Rename: %w", err)
-		}
-
-		oldPath, err := c.safePath(opts.From)
-		if err != nil {
-			return fmt.Errorf("checkout.Rename: path traversal in %s: %w", opts.From, err)
-		}
-		newPath, err := c.safePath(opts.To)
-		if err != nil {
-			return fmt.Errorf("checkout.Rename: path traversal in %s: %w", opts.To, err)
-		}
-		if err := c.moveFile(oldPath, newPath, perm); err != nil {
-			return fmt.Errorf("checkout.Rename: %w", err)
+		if err := c.renameOnDisk(vfileID, opts.From, opts.To); err != nil {
+			return err
 		}
 	}
 

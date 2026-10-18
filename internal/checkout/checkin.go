@@ -213,73 +213,11 @@ func (c *Checkout) buildCommitFiles(
 			continue
 		}
 
-		// A tracked file this commit is scoped to (shouldInclude) but that
-		// is missing from disk cannot be silently carried forward with its
-		// stale content — that would record a commit claiming content that
-		// no longer exists (issue #79). A file outside this commit's scope
-		// (relevant only for an explicit Enqueue) is left untouched exactly
-		// as before: canonical Fossil only fails on a missing file that is
-		// actually part of the commit being made.
-		//
-		// Only files with a live vfile row are checked — matching
-		// restatCommitPerms and canonical Fossil's own vfile-driven manifest
-		// loop. A name present only in the parent manifest (no vfEntries
-		// row) isn't tracked by this checkout's vfile at all; there is
-		// nothing to have "gone missing" from a local scan that never
-		// covered it.
-		if _, hasVFileRow := vfEntries[name]; hasVFileRow && shouldInclude(name) {
-			fullPath, err := c.safePath(name)
-			if err != nil {
-				return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
-			}
-			if _, err := c.env.Storage.Stat(fullPath); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return nil, fmt.Errorf(
-						"checkout.Commit: tracked file missing from disk: %s", name,
-					)
-				}
-				return nil, fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
-			}
-		}
-
-		// A file outside a sparse checkout's cone is the baseline's entry,
-		// carried by its name, never read from disk or re-stored
-		// (draft-fossil-sparse-cone-00 §4.2).
-		if _, managed := vfEntries[name]; !managed && !c.covers(name) {
-			fileMap[name] = manifest.File{
-				Name: name, Perm: entry.Perm, UUID: parentFileMap[name].UUID,
-			}
-			continue
-		}
-
-		var fileRID int64
-		if ve, ok := vfEntries[name]; ok {
-			fileRID = ve.rid
-		} else if pf, ok := parentFileMap[name]; ok {
-			// File is in parent but not in vfile — look up RID by UUID
-			var rid int64
-			err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid = ?", pf.UUID).Scan(&rid)
-			if err != nil {
-				return nil, fmt.Errorf("checkout.Commit: resolve RID for %s: %w", name, err)
-			}
-			fileRID = rid
-		}
-
-		if fileRID == 0 {
-			return nil, fmt.Errorf("checkout.Commit: no RID for unchanged file %s", name)
-		}
-
-		fileData, err := content.Expand(c.repo.DB(), libfossil.FslID(fileRID))
+		file, err := c.unchangedFile(name, entry, vfEntries, parentFileMap, shouldInclude)
 		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: expand %s: %w", name, err)
+			return nil, err
 		}
-
-		fileMap[name] = manifest.File{
-			Name:    name,
-			Content: fileData,
-			Perm:    entry.Perm,
-			OldName: entry.OldName,
-		}
+		fileMap[name] = file
 	}
 
 	// 4. Independently re-stat every included file's on-disk executable bit,
@@ -294,6 +232,88 @@ func (c *Checkout) buildCommitFiles(
 		commitFiles = append(commitFiles, f)
 	}
 	return commitFiles, nil
+}
+
+// unchangedFile is step 3 of buildCommitFiles for one file the commit does
+// not read from disk: its committed content, loaded from the repository, or,
+// outside a sparse checkout's cone, its baseline entry carried by name.
+func (c *Checkout) unchangedFile(
+	name string,
+	entry manifest.File,
+	vfEntries map[string]vfileCommitEntry,
+	parentFileMap map[string]manifest.FileEntry,
+	shouldInclude func(string) bool,
+) (manifest.File, error) {
+	// A tracked file this commit is scoped to (shouldInclude) but that
+	// is missing from disk cannot be silently carried forward with its
+	// stale content — that would record a commit claiming content that
+	// no longer exists (issue #79). A file outside this commit's scope
+	// (relevant only for an explicit Enqueue) is left untouched exactly
+	// as before: canonical Fossil only fails on a missing file that is
+	// actually part of the commit being made.
+	//
+	// Only files with a live vfile row are checked — matching
+	// restatCommitPerms and canonical Fossil's own vfile-driven manifest
+	// loop. A name present only in the parent manifest (no vfEntries
+	// row) isn't tracked by this checkout's vfile at all; there is
+	// nothing to have "gone missing" from a local scan that never
+	// covered it.
+	if _, hasVFileRow := vfEntries[name]; hasVFileRow && shouldInclude(name) {
+		if err := c.requireOnDisk(name); err != nil {
+			return manifest.File{}, err
+		}
+	}
+
+	// A file outside a sparse checkout's cone is the baseline's entry,
+	// carried by its name, never read from disk or re-stored
+	// (draft-fossil-sparse-cone-00 §4.2).
+	if _, managed := vfEntries[name]; !managed && !c.covers(name) {
+		return manifest.File{Name: name, Perm: entry.Perm, UUID: parentFileMap[name].UUID}, nil
+	}
+
+	var fileRID int64
+	if ve, ok := vfEntries[name]; ok {
+		fileRID = ve.rid
+	} else if pf, ok := parentFileMap[name]; ok {
+		// File is in parent but not in vfile — look up RID by UUID
+		var rid int64
+		err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid = ?", pf.UUID).Scan(&rid)
+		if err != nil {
+			return manifest.File{}, fmt.Errorf("checkout.Commit: resolve RID for %s: %w", name, err)
+		}
+		fileRID = rid
+	}
+
+	if fileRID == 0 {
+		return manifest.File{}, fmt.Errorf("checkout.Commit: no RID for unchanged file %s", name)
+	}
+
+	fileData, err := content.Expand(c.repo.DB(), libfossil.FslID(fileRID))
+	if err != nil {
+		return manifest.File{}, fmt.Errorf("checkout.Commit: expand %s: %w", name, err)
+	}
+
+	return manifest.File{
+		Name:    name,
+		Content: fileData,
+		Perm:    entry.Perm,
+		OldName: entry.OldName,
+	}, nil
+}
+
+// requireOnDisk refuses a commit of a tracked file missing from disk.
+func (c *Checkout) requireOnDisk(name string) error {
+	fullPath, err := c.safePath(name)
+	if err != nil {
+		return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+	}
+	if _, err := c.env.Storage.Stat(fullPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("checkout.Commit: tracked file missing from disk: %s", name)
+		}
+		return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
+	}
+	return nil
 }
 
 // applyRenames rewrites fileMap so each renamed file is emitted exactly once,

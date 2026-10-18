@@ -85,6 +85,15 @@ func initUndoState(ckdb *sql.DB) error {
 	return nil
 }
 
+// initLocalRecords records the repository, so tools can find it, and the
+// sparse cone, if any.
+func initLocalRecords(ckdb *sql.DB, r *repo.Repo, sparse *cone.Cone) error {
+	if err := setVVar(ckdb, "repository", r.Path()); err != nil {
+		return err
+	}
+	return writeCone(ckdb, sparse)
+}
+
 // Create creates a new checkout database at dir/.fslckout (or dir/_FOSSIL_ on Windows),
 // finds the tip checkin from the repo, and sets vvar checkout/checkout-hash.
 //
@@ -136,12 +145,7 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, err
 	}
 
-	// Set the repository vvar so tools can find the repo.
-	if err := setVVar(ckdb, "repository", r.Path()); err != nil {
-		ckdb.Close()
-		return nil, fmt.Errorf("checkout.Create: %w", err)
-	}
-	if err := writeCone(ckdb, opts.Cone); err != nil {
+	if err := initLocalRecords(ckdb, r, opts.Cone); err != nil {
 		ckdb.Close()
 		return nil, fmt.Errorf("checkout.Create: %w", err)
 	}

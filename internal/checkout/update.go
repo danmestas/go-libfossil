@@ -125,7 +125,13 @@ func (c *Checkout) processFileUpdates(
 
 // buildUpdateMaps gathers file lists for current, target, and their common
 // ancestor, then builds the combined name→UUID maps for 3-way comparison.
+// It first refuses a target whose content is not all here, before Update
+// writes any file, as fossil's update does; finalizeUpdate would refuse it
+// too, but only after disk had moved.
 func (c *Checkout) buildUpdateMaps(currentRID, target libfossil.FslID) (updateFileMaps, error) {
+	if _, _, err := c.resolveFiles(target, nil); err != nil {
+		return updateFileMaps{}, fmt.Errorf("checkout.Update: %w", err)
+	}
 	currentFiles, err := manifest.ListFiles(c.repo, currentRID)
 	if err != nil {
 		return updateFileMaps{}, fmt.Errorf("checkout.Update: list current files: %w", err)
@@ -186,6 +192,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	})
 
 	var filesWritten, filesRemoved, conflicted []string
+	var outOfCone int
 	var updateErr error
 	defer func() {
 		c.obs.ExtractCompleted(ctx, ExtractEnd{
@@ -197,14 +204,6 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 			Err:          updateErr,
 		})
 	}()
-
-	// Refuse a target whose content is not all here before writing any file,
-	// as fossil's update does; finalizeUpdate would refuse it too, but only
-	// after disk had moved.
-	if _, _, err := c.resolveFiles(target, nil); err != nil {
-		updateErr = fmt.Errorf("checkout.Update: %w", err)
-		return UpdateResult{}, updateErr
-	}
 
 	maps, err := c.buildUpdateMaps(currentRID, target)
 	if err != nil {
@@ -223,7 +222,6 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		checkinTime = c.checkinTime(target)
 	}
 
-	var outOfCone int
 	filesWritten, filesRemoved, conflicted, outOfCone, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
@@ -236,16 +234,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		}
 	}
 
-	result := sortedUpdateResult(filesWritten, filesRemoved, conflicted)
-	result.OutOfCone = outOfCone
-	return result, nil
+	return sortedUpdateResult(filesWritten, filesRemoved, conflicted, outOfCone), nil
 }
 
 // sortedUpdateResult builds Update's result with each path list sorted.
 // processFileUpdates walks a map, so the order the lists were built in is
 // randomized by the Go runtime; sorting makes the result deterministic, so
 // golden-file and reflect.DeepEqual assertions against it are meaningful.
-func sortedUpdateResult(written, removed, conflicted []string) UpdateResult {
+func sortedUpdateResult(written, removed, conflicted []string, outOfCone int) UpdateResult {
 	sort.Strings(written)
 	sort.Strings(removed)
 	sort.Strings(conflicted)
@@ -253,6 +249,7 @@ func sortedUpdateResult(written, removed, conflicted []string) UpdateResult {
 		FilesWritten: written,
 		FilesRemoved: removed,
 		Conflicted:   conflicted,
+		OutOfCone:    outOfCone,
 	}
 }
 

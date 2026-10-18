@@ -28,6 +28,8 @@ func suites() []suite {
 		{name: "repostate", table: "requirements/repostate.tsv", cases: repostateSuiteCases()},
 		{name: "sync", table: "requirements/sync.tsv", cases: syncSuiteCases()},
 		{name: "submanifest", table: "requirements/submanifest.tsv", cases: submanifestSuiteCases()},
+		{name: "sparsecone", table: "requirements/sparse-cone.tsv", cases: sparseconeSuiteCases()},
+		{name: "horizon", table: "requirements/horizon.tsv", cases: horizonSuiteCases()},
 	}
 }
 

@@ -20,6 +20,8 @@ second column.
 | `draft-fossil-sync-protocol-01.txt` | `draft-fossil-sync-protocol-00.txt` | `3f86ff4261` | `bafc21adc5` | `c738d32f854495e9…` |
 | `draft-fossil-delta-format-00.txt` | `draft-fossil-delta-format-00.txt` | `3f86ff4261` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | same | `3f86ff4261` | `eaef2e2e36` | `b6cb37690b9273c9…` |
+| `draft-fossil-sparse-cone-00.txt` | same | `86d4b67372` (branch `horizon-rfc`) | `cc2c259c19` | `22f7c2d847a31bc8…` |
+| `draft-fossil-horizon-00.txt` | same | `86d4b67372` (branch `horizon-rfc`) | `56bf5c0553` | `e1e92af6fa1c2acf…` |
 | `erratum/artifact-format-01-s4.4-z-card-last-by-ordering.md` | same | `3f86ff4261` | `dc53e482e1` | `3049c7ebc2aadea1…` |
 | `erratum/artifact-format-01-s4.6.4-julian-day-grammar.md` | same | `3f86ff4261` | `5a1adf7f9c` | `c50e6b5aef35b654…` |
 | `erratum/artifact-format-01-s4.7.3-delta-of-delta-delete-markers.md` | same | `3f86ff4261` | `fbc5c735d8` | `55195d37f9e74737…` |
@@ -68,3 +70,14 @@ Its Appendix A vectors are byte vectors: `../testdata/submanifest/` holds
 zit's copies of them, as authored for zit, taken at check-in `3f86ff4261`
 (`src/rfc_vectors/`), each with two leading `#` lines that keep it from
 reading as a live artifact on disk; the suite drops those lines.
+
+The sparse-cone and horizon drafts are not on zit's trunk yet. They are
+taken from check-in `86d4b6737219c3d403868015d6d396367e89c11c`
+(2026-10-18) on zit's `horizon-rfc` branch, and are re-pinned when zit
+lands them on trunk. The sparse-cone draft's §3.6 still says exclusion
+members are out of scope; that paragraph is stale (tracked in
+danmestas/zit#242), and the suite follows §3.3 and zit, which implement
+them. The same check-in adds the pragma names these two drafts define
+(`cone`, `cone-not`, and the `horizon` family) to the sync draft's §9
+list of extension pragmas; the sync draft here is not re-pinned to it, so
+that addition is pending.

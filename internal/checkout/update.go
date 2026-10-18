@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strconv"
 
-	"time"
-
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -60,7 +58,6 @@ func (c *Checkout) processFileUpdates(
 	maps updateFileMaps,
 	strategy merge.Strategy,
 	opts UpdateOpts,
-	checkinTime time.Time,
 ) (filesWritten, filesRemoved, conflicted []string, err error) {
 	for name := range maps.allNames {
 		curUUID, inCurrent := maps.current[name]
@@ -77,14 +74,6 @@ func (c *Checkout) processFileUpdates(
 
 		if change == UpdateNone {
 			continue
-		}
-
-		// Apply checkin mtime to written files.
-		if opts.SetMTime && !opts.DryRun && !checkinTime.IsZero() && change != UpdateRemoved {
-			fullPath, _ := c.safePath(name)
-			if fullPath != "" {
-				_ = c.env.Storage.Chtimes(fullPath, checkinTime, checkinTime)
-			}
 		}
 
 		switch change {
@@ -208,12 +197,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, updateErr
 	}
 
-	var checkinTime time.Time
-	if opts.SetMTime && !opts.DryRun {
-		checkinTime = c.checkinTime(target)
-	}
-
-	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
+	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
 	}
@@ -222,6 +206,11 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	if !opts.DryRun {
 		if updateErr = c.finalizeUpdate(target); updateErr != nil {
 			return UpdateResult{}, updateErr
+		}
+		if opts.SetMTime {
+			if updateErr = c.setFileMTimes(target); updateErr != nil {
+				return UpdateResult{}, updateErr
+			}
 		}
 	}
 

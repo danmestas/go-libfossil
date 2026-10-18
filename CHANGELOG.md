@@ -9,10 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Check-ins and tags record their time to the millisecond, as fossil and
-  zit write it. A caller time with finer precision is truncated, and so is
-  the default clock time, which carried nanoseconds that zit cannot read
-  (danmestas/zit#244).
+- Check-ins, tags and branches record their time to the millisecond, as
+  fossil and zit write it. The default clock time, which carried nanoseconds
+  that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
+  clock. A caller time with finer precision is rounded to the nearest
+  millisecond, as fossil rounds a `--date-override`, except that a fraction
+  past `.999` stays at `.999` rather than carrying into the next second, as
+  in fossil. An exact half millisecond rounds up; fossil's result there
+  depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
+  `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2
@@ -27,6 +32,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
   way; six requirements are new, two are reworded, and each has a case
   checked against fossil 2.28.
+
+### Fixed
+
+- `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
+  `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
+  Julian day there, which fossil, comparing those times when it merges
+  configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
+  stamp the user's mtime too, as `fossil user capabilities` and
+  `fossil user password` do. Opening a repository converts the Julian days
+  already written there to seconds, or leaves them for a later open while
+  another connection holds the write lock.
+- A sync login no longer reads `user.cexpire`. That column is the expiry of
+  fossil's web-login cookie, which fossil's own sync login ignores; reading
+  it refused any user who had logged into or out of fossil's web UI, or
+  whose cookie had lapsed (#441). `repo invite --ttl` keeps its expiry in a
+  config row of its own, `invite-expire:LOGIN`, in UTC, and a sync login
+  checks that instead. Creating or deleting a user clears that row. The expiry used to be written in local time and read
+  as UTC, so it was off by the local offset.
+- `SetMTime` on a checkout's extract and update now does what fossil's
+  `--setmtime` does: each file takes the time of the newest check-in in the
+  version's primary ancestry that recorded its content, in whole seconds,
+  and every unedited file gets it, not only the files the update wrote. A
+  file with local edits is left alone. It used to give every written file
+  the target check-in's time, to the millisecond.
+- A stash records its creation time as a Julian day and lists it as
+  `YYYY-MM-DD HH:MM:SS`, as fossil's stash does; it stored SQLite's
+  `CURRENT_TIMESTAMP` text, which the drivers handed back in different forms,
+  and listed a fossil-written time as a bare number. Stashes list oldest
+  first, by creation time, as `fossil stash ls` orders them, rather than
+  newest first by id. A bisect listing shows
+  each check-in's date as `fossil bisect ls` does, instead of a raw Julian
+  day.
+- `ResolveVersion("NAME:TIMESTAMP")` bounds the search with SQLite's
+  `julianday()` of the rounded-up time, as fossil does, rather than the text
+  form of that time that event rows hold. On a millisecond where the two
+  differ, a check-in at the bound itself resolved here but not in fossil.
 
 ## [0.12.0] - 2026-10-13
 

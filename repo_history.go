@@ -695,7 +695,10 @@ func hashPrefix(h *db.DB, name string, ciOnly bool) (rid int64, matched bool, er
 // splitNameTimestamp detects fossil's "NAME:TIMESTAMP" form: the first colon
 // whose suffix is at least seven characters (fossil's i<nTag-8 gate) and
 // parses as a date-time. It returns the base name and the inclusive upper
-// bound of the timestamp as a text Julian day matching event.mtime.
+// bound of the timestamp as fossil computes it, julianday() of the rounded-up
+// time. Fossil compares that with event.mtime, which it wrote as text, so on
+// a millisecond where the text form is the larger a check-in at the bound
+// itself is not at or before it; the same comparison here agrees.
 func splitNameTimestamp(name string) (base string, julian float64, ok bool) {
 	i := strings.IndexByte(name, ':')
 	if i < 0 || len(name)-i-1 < 7 {
@@ -705,7 +708,7 @@ func splitNameTimestamp(name string) (base string, julian float64, ok bool) {
 	if !ok {
 		return "", 0, false
 	}
-	return name[:i], fsltype.TimeToTextJulian(t), true
+	return name[:i], fsltype.TimeToJulian(t), true
 }
 
 // parseFossilTimestamp parses the date-time forms fossil accepts and rounds

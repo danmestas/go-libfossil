@@ -5,7 +5,9 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"testing"
+	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -99,64 +101,6 @@ func TestVerifyLoginUnknownUser(t *testing.T) {
 	_, err := VerifyLogin(d, code, card)
 	if err != ErrAuthFailed {
 		t.Errorf("VerifyLogin unknown user: got %v, want ErrAuthFailed", err)
-	}
-}
-
-func TestVerifyLoginExpired(t *testing.T) {
-	d := setupTestDB(t)
-	code := projectCode(t, d)
-
-	// Create user
-	err := CreateUser(d, code, "alice", "secret123", "o")
-	if err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-
-	// Set cexpire to past (2020-01-01)
-	_, err = d.Exec("UPDATE user SET cexpire='2020-01-01 00:00:00' WHERE login='alice'")
-	if err != nil {
-		t.Fatalf("set cexpire: %v", err)
-	}
-
-	// Build valid login card
-	payload := []byte("push sc pc\nigot abc123\n")
-	card := buildLoginCard("alice", "secret123", code, payload)
-
-	// Verify should fail due to expiration
-	_, err = VerifyLogin(d, code, card)
-	if err != ErrAuthFailed {
-		t.Errorf("VerifyLogin expired: got %v, want ErrAuthFailed", err)
-	}
-}
-
-func TestVerifyLoginNonExpired(t *testing.T) {
-	d := setupTestDB(t)
-	code := projectCode(t, d)
-
-	// Create user
-	err := CreateUser(d, code, "alice", "secret123", "ios")
-	if err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-
-	// Set cexpire to future (2030-01-01)
-	_, err = d.Exec("UPDATE user SET cexpire='2030-01-01 00:00:00' WHERE login='alice'")
-	if err != nil {
-		t.Fatalf("set cexpire: %v", err)
-	}
-
-	// Build valid login card
-	payload := []byte("push sc pc\nigot abc123\n")
-	card := buildLoginCard("alice", "secret123", code, payload)
-
-	// Verify should succeed
-	user, err := VerifyLogin(d, code, card)
-	if err != nil {
-		t.Fatalf("VerifyLogin non-expired: expected success, got %v", err)
-	}
-
-	if user.Login != "alice" {
-		t.Errorf("user.Login = %q, want alice", user.Login)
 	}
 }
 
@@ -276,5 +220,138 @@ func TestVerifyLoginRefusesReservedLogins(t *testing.T) {
 		if _, err := VerifyLogin(d, code, card); err != ErrAuthFailed {
 			t.Fatalf("VerifyLogin %s: got %v, want ErrAuthFailed", login, err)
 		}
+	}
+}
+
+// aliceCard creates alice with a password and returns a valid login card.
+func aliceCard(t *testing.T, d *db.DB, code string) *xfer.LoginCard {
+	t.Helper()
+	if err := CreateUser(d, code, "alice", "secret123", "o"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	return buildLoginCard("alice", "secret123", code, []byte("push sc pc\nigot abc123\n"))
+}
+
+// TestVerifyLoginIgnoresCookieExpiry: user.cexpire is the expiry of fossil's
+// web-login cookie, which fossil's sync login never reads (#441). A Julian
+// expiry fossil wrote, the 0 its logout writes, and an expiry long past all
+// still log in.
+func TestVerifyLoginIgnoresCookieExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	card := aliceCard(t, d, code)
+	for _, cexpire := range []string{"julianday('now')+365", "0", "julianday('now')-1",
+		"'2020-01-01 00:00:00'"} {
+		if _, err := d.Exec("UPDATE user SET cexpire=" + cexpire + " WHERE login='alice'"); err != nil {
+			t.Fatalf("set cexpire: %v", err)
+		}
+		if _, err := VerifyLogin(d, code, card); err != nil {
+			t.Errorf("cexpire=%s: VerifyLogin = %v, want success", cexpire, err)
+		}
+	}
+}
+
+// TestVerifyLoginChecksInviteExpiry: an invite's expiry, kept apart from
+// cexpire, refuses the login once past and admits it before, whatever
+// cexpire holds. The expiry is an instant, so the zone it was computed in
+// does not move it.
+func TestVerifyLoginChecksInviteExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	card := aliceCard(t, d, code)
+	east := time.FixedZone("UTC+10", 10*3600)
+	west := time.FixedZone("UTC-6", -6*3600)
+	cases := []struct {
+		expiry  time.Time
+		cexpire string
+		want    error
+	}{
+		{time.Now().Add(time.Hour).In(east), "0", nil},
+		{time.Now().Add(time.Hour).In(west), "julianday('now')-1", nil},
+		{time.Now().Add(-time.Hour).In(east), "julianday('now')+365", ErrAuthFailed},
+		{time.Now().Add(-time.Hour).In(west), "NULL", ErrAuthFailed},
+	}
+	for _, c := range cases {
+		if err := SetInviteExpiry(d, "alice", c.expiry); err != nil {
+			t.Fatalf("SetInviteExpiry: %v", err)
+		}
+		if _, err := d.Exec("UPDATE user SET cexpire=" + c.cexpire + " WHERE login='alice'"); err != nil {
+			t.Fatalf("set cexpire: %v", err)
+		}
+		if _, err := VerifyLogin(d, code, card); err != c.want {
+			t.Errorf("invite expiry %v, cexpire=%s: VerifyLogin = %v, want %v",
+				c.expiry, c.cexpire, err, c.want)
+		}
+	}
+}
+
+// An invite expiry that does not read as a time refuses the login.
+func TestVerifyLoginRefusesUnreadableInviteExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	card := aliceCard(t, d, code)
+	if _, err := d.Exec("INSERT INTO config(name, value) VALUES(?, 'soon')",
+		InviteExpiryKey("alice")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := VerifyLogin(d, code, card); err != ErrAuthFailed {
+		t.Errorf("VerifyLogin = %v, want ErrAuthFailed", err)
+	}
+}
+
+// Deleting a user drops its invite expiry, so a later user of that login
+// does not inherit it.
+func TestDeleteUserDropsInviteExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	aliceCard(t, d, code)
+	if err := SetInviteExpiry(d, "alice", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteUser(d, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	card := aliceCard(t, d, code)
+	if _, err := VerifyLogin(d, code, card); err != nil {
+		t.Errorf("VerifyLogin after re-creating alice = %v, want success", err)
+	}
+}
+
+// A user fossil deleted leaves its invite expiry behind; creating a user of
+// that login clears it, so the new user does not inherit it.
+func TestCreateUserClearsStaleInviteExpiry(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	if err := SetInviteExpiry(d, "alice", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	card := aliceCard(t, d, code)
+	if _, err := VerifyLogin(d, code, card); err != nil {
+		t.Errorf("VerifyLogin for a newly created alice = %v, want success", err)
+	}
+}
+
+// DeleteUser removes the user and its invite expiry together: when the
+// second delete fails, the user is still there.
+func TestDeleteUserIsAtomic(t *testing.T) {
+	d := setupTestDB(t)
+	code := projectCode(t, d)
+	aliceCard(t, d, code)
+	if err := SetInviteExpiry(d, "alice", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`CREATE TEMP TRIGGER keep_invites BEFORE DELETE ON config
+		WHEN old.name GLOB 'invite-expire:*' BEGIN SELECT RAISE(ABORT, 'kept'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeleteUser(d, "alice"); err == nil {
+		t.Fatal("DeleteUser succeeded although the invite expiry could not be removed")
+	}
+	var n int
+	if err := d.QueryRow("SELECT count(*) FROM user WHERE login='alice'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("alice rows after a failed DeleteUser = %d, want 1", n)
 	}
 }

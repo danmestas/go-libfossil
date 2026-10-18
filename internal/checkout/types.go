@@ -105,7 +105,7 @@ type CreateOpts struct {
 // ExtractOpts configures file extraction from a checkin.
 type ExtractOpts struct {
 	Callback func(name string, change UpdateChange) error // per-file notification
-	SetMTime bool                                         // set file mtime to checkin timestamp
+	SetMTime bool                                         // as fossil's --setmtime: each file's last check-in time
 	DryRun   bool
 	Force    bool // overwrite locally modified files
 }
@@ -114,7 +114,7 @@ type ExtractOpts struct {
 type UpdateOpts struct {
 	TargetRID libfossil.FslID // 0 → auto-calculate via CalcUpdateVersion
 	Callback  func(name string, change UpdateChange) error
-	SetMTime  bool // set file mtime to checkin timestamp
+	SetMTime  bool // as fossil's --setmtime: each file's last check-in time
 	DryRun    bool
 }
 

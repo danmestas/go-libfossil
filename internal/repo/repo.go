@@ -120,8 +120,43 @@ func OpenWithEnv(path string, env *simio.Env) (*Repo, error) {
 		return nil, fmt.Errorf("repo.OpenWithEnv: not a fossil repo (application_id=%d, want %d)",
 			id, libfossil.FossilApplicationID)
 	}
+	if err := upgradeJulianSeconds(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("repo.OpenWithEnv: %w", err)
+	}
 
 	return &Repo{db: d, path: path}, nil
+}
+
+// julianSecondsRows matches the config and user rows whose mtime is a Julian
+// day, as go-libfossil wrote it before writing seconds since 1970 as fossil
+// does. A Julian day now is about 2.46e6; as seconds that is January 1970,
+// a time no row fossil or go-libfossil writes today holds.
+const julianSecondsRows = "mtime BETWEEN 2000000 AND 3000000"
+
+// upgradeJulianSeconds converts those rows to the seconds they stand for.
+// It reads first and writes only when a row needs it, so opening an
+// up-to-date repository takes no write lock.
+func upgradeJulianSeconds(d *db.DB) error {
+	var n int
+	err := d.QueryRow("SELECT (SELECT count(*) FROM config WHERE " + julianSecondsRows +
+		") + (SELECT count(*) FROM user WHERE " + julianSecondsRows + ")").Scan(&n)
+	if err != nil {
+		return fmt.Errorf("check julian mtimes: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	return d.WithTx(func(tx *db.Tx) error {
+		for _, table := range []string{"config", "user"} {
+			if _, err := tx.Exec("UPDATE " + table +
+				" SET mtime=CAST((mtime-2440587.5)*86400 AS INTEGER) WHERE " +
+				julianSecondsRows); err != nil {
+				return fmt.Errorf("convert %s julian mtimes: %w", table, err)
+			}
+		}
+		return nil
+	})
 }
 
 func (r *Repo) Close() error {

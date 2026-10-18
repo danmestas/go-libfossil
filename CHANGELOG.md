@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Julian day there, which fossil, comparing those times when it merges
   configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
   stamp the user's mtime too, as `fossil user capabilities` and
-  `fossil user password` do.
+  `fossil user password` do. Opening a repository converts the Julian days
+  already written there to seconds.
 - A sync login no longer reads `user.cexpire`. That column is the expiry of
   fossil's web-login cookie, which fossil's own sync login ignores; reading
   it refused any user who had logged into or out of fossil's web UI, or

@@ -400,7 +400,8 @@ func Pop(ckout *sql.DB, repoDB *sql.DB, dir string) error {
 	return Drop(ckout, stashID)
 }
 
-// List returns all stash entries ordered by ID descending (most recent first).
+// List returns all stash entries oldest first, ordered by creation time as
+// fossil's stash ls orders them, with the stash id breaking a tie.
 func List(ckout *sql.DB) ([]Entry, error) {
 	if ckout == nil {
 		panic("stash.List: ckout must not be nil")
@@ -411,7 +412,7 @@ func List(ckout *sql.DB) ([]Entry, error) {
 
 	// datetime() shows the time as fossil's stash ls does, whether the row
 	// holds a Julian day or text.
-	rows, err := ckout.Query("SELECT stashid, hash, comment, datetime(ctime) FROM stash ORDER BY stashid DESC")
+	rows, err := ckout.Query("SELECT stashid, hash, comment, datetime(ctime) FROM stash ORDER BY ctime, stashid")
 	if err != nil {
 		return nil, fmt.Errorf("stash.List: %w", err)
 	}

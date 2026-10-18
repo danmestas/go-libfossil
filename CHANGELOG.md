@@ -58,7 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A stash records its creation time as a Julian day and lists it as
   `YYYY-MM-DD HH:MM:SS`, as fossil's stash does; it stored SQLite's
   `CURRENT_TIMESTAMP` text, which the drivers handed back in different forms,
-  and listed a fossil-written time as a bare number. A bisect listing shows
+  and listed a fossil-written time as a bare number. Stashes list oldest
+  first, by creation time, as `fossil stash ls` orders them, rather than
+  newest first by id. A bisect listing shows
   each check-in's date as `fossil bisect ls` does, instead of a raw Julian
   day.
 - `ResolveVersion("NAME:TIMESTAMP")` bounds the search with SQLite's

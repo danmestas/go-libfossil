@@ -106,7 +106,7 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) DeleteUser\(login string\) error](<#Repo.DeleteUser>)
   - [func \(r \*Repo\) DetectForks\(\) \(\[\]Fork, error\)](<#Repo.DetectForks>)
   - [func \(r \*Repo\) Diff\(ridA, ridB int64, filePath string\) \(\[\]DiffEntry, error\)](<#Repo.Diff>)
-  - [func \(r \*Repo\) DisableSubmanifests\(\) \(note string, err error\)](<#Repo.DisableSubmanifests>)
+  - [func \(r \*Repo\) DisableSubmanifests\(\) error](<#Repo.DisableSubmanifests>)
   - [func \(r \*Repo\) EnableSubmanifests\(k int\) \(pinned int, warning string, err error\)](<#Repo.EnableSubmanifests>)
   - [func \(r \*Repo\) FindCommonAncestor\(ridA, ridB int64\) \(int64, error\)](<#Repo.FindCommonAncestor>)
   - [func \(r \*Repo\) GetUser\(login string\) \(User, error\)](<#Repo.GetUser>)
@@ -1365,10 +1365,10 @@ Whole\-checkin enumeration is currently name\-keyed: a rename with no content ch
 ### func \(\*Repo\) DisableSubmanifests
 
 ```go
-func (r *Repo) DisableSubmanifests() (note string, err error)
+func (r *Repo) DisableSubmanifests() error
 ```
 
-DisableSubmanifests turns tree manifest emission off: later commits are flat, and the pinned k is kept for a later EnableSubmanifests. Existing trees cannot be retired; when the repository holds any, it returns a note saying so for the operator, and otherwise "".
+DisableSubmanifests turns tree manifest emission off: later commits are flat, and the pinned k is kept for a later EnableSubmanifests. Existing trees are untouched \-\- artifact names are immutable, so they cannot be retired \-\- and peers older than Fossil 2.29 are still refused them.
 
 <a name="Repo.EnableSubmanifests"></a>
 ### func \(\*Repo\) EnableSubmanifests
@@ -1377,7 +1377,7 @@ DisableSubmanifests turns tree manifest emission off: later commits are flat, an
 func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error)
 ```
 
-EnableSubmanifests turns on tree manifest emission \(draft\-fossil\-submanifests\-00 §8.1\): from the next commit, check\-ins carry their file sets as sub\-manifest trees. k is the partition parameter, 1 to 12, or 0 to select one. A valid pinned k is kept, and an explicit k that differs from it is refused: changing it is RetuneSubmanifests. With no valid pin, an explicit k is pinned, or one is selected as zit selects it: the §6.3 cost over the newest check\-in's file set, refined by replaying recent history. A request that cannot be met \-\- k outside 1..12, or a file set no k partitions \-\- changes neither setting. It returns the pinned k and the warning the operator must be shown: peers older than Fossil 2.29 are refused trees, and trees cannot be retired.
+EnableSubmanifests turns on tree manifest emission \(draft\-fossil\-submanifests\-00 §8.1\): from the next commit, check\-ins carry their file sets as sub\-manifest trees. k is the partition parameter, 1 to 12, or 0 to select one. A valid pinned k is kept, and an explicit k that differs from it is refused: changing it is RetuneSubmanifests. With no valid pin, an explicit k is pinned, or one is selected as zit selects it: the §6.3 cost over the file set of the current trunk \(CurrentTrunk, the main\-branch tip, the check\-in the next commit most plausibly descends from\), refined by replaying recent history. A request that cannot be met \-\- k outside 1..12, no check\-in to select from, or a file set no k partitions \-\- changes neither setting. It returns the pinned k and the warning the operator must be shown: peers older than Fossil 2.29 are refused trees, and trees cannot be retired.
 
 <a name="Repo.FindCommonAncestor"></a>
 ### func \(\*Repo\) FindCommonAncestor

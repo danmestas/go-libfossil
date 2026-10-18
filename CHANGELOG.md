@@ -28,12 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [--k N]`, turns it on. It keeps an existing pin of the partition
   parameter k and refuses a different one. With no pin it takes an explicit
   k from 1 to 12, or selects one as zit does: the draft's cost rule over the
-  newest check-in, refined by replaying recent history. It refuses, changing
+  main-branch tip, refined by replaying recent history. It refuses, changing
   nothing, when no k partitions the file set. It returns the warning an
   operator must see: peers below Fossil 2.29 are refused trees, and trees
   cannot be retired. `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
-  pin for later commits, and `Repo.DisableSubmanifests()` (`disable`) turns
-  emission off again. A commit then stores its leaves and interior
+  pin for later commits, `Repo.DisableSubmanifests()` (`disable`) turns
+  emission off again, leaving existing trees in place, and `status` shows
+  the settings and whether the repository holds a tree. A commit then stores its leaves and interior
   sub-manifests, rebuilt in full and shared by content addressing, before a
   manifest that carries only S cards and never a B card. A stored k outside
   1..12 falls back to flat manifests with a warning. With

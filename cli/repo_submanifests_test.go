@@ -1,7 +1,10 @@
 package cli_test
 
 import (
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,4 +75,69 @@ func TestRepoSubmanifestsCmd(t *testing.T) {
 	if err := run("disable"); err != nil || setting("enable-submanifests") != "off" {
 		t.Fatalf("disable: %v", err)
 	}
+	if err := run("status"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// status reports the settings and whether the repository holds a tree.
+func TestRepoSubmanifestsStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.fossil")
+	r, err := libfossil.Create(path, libfossil.CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() string {
+		g := &cli.Globals{Repo: path}
+		out := captureStdout(t, func() error { return (&cli.RepoSubmanifestsStatusCmd{}).Run(g) })
+		return out
+	}
+	r.Close()
+	if got := status(); !strings.Contains(got, "enable-submanifests:     off") ||
+		!strings.Contains(got, "(unpinned)") || !strings.Contains(got, "trees in repository:     no") {
+		t.Fatalf("status of a new repository:\n%s", got)
+	}
+	r, err = libfossil.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.EnableSubmanifests(3); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.Commit(libfossil.CommitOpts{Comment: "tree", User: "u", Time: time.Now(),
+		Files: []libfossil.FileToCommit{
+			{Name: "README.md", Content: []byte("# Example\n")},
+			{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+			{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+			{Name: "src/util.c", Content: []byte("/* util */\n")},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if got := status(); !strings.Contains(got, "enable-submanifests:     on") ||
+		!strings.Contains(got, "submanifest-k:           3") || !strings.Contains(got, "trees in repository:     yes") {
+		t.Fatalf("status after a tree commit:\n%s", got)
+	}
+}
+
+// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
+func captureStdout(t *testing.T, fn func() error) string {
+	t.Helper()
+	old := os.Stdout
+	rd, wr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = wr
+	runErr := fn()
+	wr.Close()
+	os.Stdout = old
+	out, err := io.ReadAll(rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	return string(out)
 }

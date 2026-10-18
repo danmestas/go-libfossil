@@ -139,6 +139,8 @@ import "github.com/danmestas/go-libfossil/cli"
   - [func \(c \*RepoSubmanifestsEnableCmd\) Run\(g \*Globals\) error](<#RepoSubmanifestsEnableCmd.Run>)
 - [type RepoSubmanifestsRetuneCmd](<#RepoSubmanifestsRetuneCmd>)
   - [func \(c \*RepoSubmanifestsRetuneCmd\) Run\(g \*Globals\) error](<#RepoSubmanifestsRetuneCmd.Run>)
+- [type RepoSubmanifestsStatusCmd](<#RepoSubmanifestsStatusCmd>)
+  - [func \(c \*RepoSubmanifestsStatusCmd\) Run\(g \*Globals\) error](<#RepoSubmanifestsStatusCmd.Run>)
 - [type RepoTagAddCmd](<#RepoTagAddCmd>)
   - [func \(c \*RepoTagAddCmd\) Run\(g \*Globals\) error](<#RepoTagAddCmd.Run>)
 - [type RepoTagCmd](<#RepoTagCmd>)
@@ -1509,6 +1511,7 @@ type RepoSubmanifestsCmd struct {
     Enable  RepoSubmanifestsEnableCmd  `cmd:"" help:"Write new check-ins as sub-manifest trees"`
     Retune  RepoSubmanifestsRetuneCmd  `cmd:"" help:"Re-pin the partition parameter for later commits"`
     Disable RepoSubmanifestsDisableCmd `cmd:"" help:"Write new check-ins as flat manifests again"`
+    Status  RepoSubmanifestsStatusCmd  `cmd:"" help:"Show the sub-manifest settings and whether trees exist"`
 }
 ```
 
@@ -1537,7 +1540,7 @@ RepoSubmanifestsEnableCmd turns tree emission on, pinning k the first time.
 
 ```go
 type RepoSubmanifestsEnableCmd struct {
-    K int `name:"k" help:"Partition parameter, 1..12 (default: selected from the newest check-in)"`
+    K int `name:"k" help:"Partition parameter, 1..12 (default: selected from the main-branch tip)"`
 }
 ```
 
@@ -1557,7 +1560,7 @@ RepoSubmanifestsRetuneCmd re\-pins k; a re\-tune is always explicit.
 
 ```go
 type RepoSubmanifestsRetuneCmd struct {
-    K int `name:"k" help:"New partition parameter, 1..12"`
+    K int `name:"k" required:"" help:"New partition parameter, 1..12"`
 }
 ```
 
@@ -1566,6 +1569,24 @@ type RepoSubmanifestsRetuneCmd struct {
 
 ```go
 func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error
+```
+
+
+
+<a name="RepoSubmanifestsStatusCmd"></a>
+## type RepoSubmanifestsStatusCmd
+
+RepoSubmanifestsStatusCmd prints the three settings and whether the repository holds any S\-bearing artifact.
+
+```go
+type RepoSubmanifestsStatusCmd struct{}
+```
+
+<a name="RepoSubmanifestsStatusCmd.Run"></a>
+### func \(\*RepoSubmanifestsStatusCmd\) Run
+
+```go
+func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error
 ```
 
 

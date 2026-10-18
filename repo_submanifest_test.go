@@ -52,9 +52,8 @@ func TestEnableSubmanifestsWritesTrees(t *testing.T) {
 	if len(d.S) != 2 || len(d.F) != 0 {
 		t.Fatalf("second commit: %d S cards, %d F cards", len(d.S), len(d.F))
 	}
-	note, err := r.DisableSubmanifests()
-	if err != nil || !strings.Contains(note, "cannot retire") {
-		t.Fatalf("DisableSubmanifests = %q, %v", note, err)
+	if err := r.DisableSubmanifests(); err != nil {
+		t.Fatal(err)
 	}
 	third, _, err := r.Commit(CommitOpts{Files: files[:1], Comment: "flat again", User: "u",
 		Time: at.Add(2 * time.Hour), ParentID: second})
@@ -63,6 +62,34 @@ func TestEnableSubmanifestsWritesTrees(t *testing.T) {
 	}
 	if d, err := manifest.GetManifest(r.Inner(), fsltype.FslID(third)); err != nil || len(d.S) != 0 {
 		t.Fatalf("a tree after DisableSubmanifests (%v)", err)
+	}
+}
+
+// Selection analyzes the main-branch tip, not the newest check-in: a newer
+// one-file check-in on another branch would leave nothing to select from.
+func TestEnableSubmanifestsAnalyzesTrunk(t *testing.T) {
+	r, err := Create(filepath.Join(t.TempDir(), "t.fossil"), CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	_, _, err = r.Commit(CommitOpts{Comment: "trunk", User: "u", Time: at, Files: []FileToCommit{
+		{Name: "README.md", Content: []byte("# Example\n")},
+		{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+		{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+		{Name: "src/util.c", Content: []byte("/* util */\n")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.Commit(CommitOpts{Comment: "branch", User: "u", Time: at.Add(time.Hour),
+		Tags:  []TagSpec{{Name: "branch", Value: "side"}, {Name: "sym-side"}},
+		Files: []FileToCommit{{Name: "only.txt", Content: []byte("x\n")}}}); err != nil {
+		t.Fatal(err)
+	}
+	if k, _, err := r.EnableSubmanifests(0); err != nil || k != 1 {
+		t.Fatalf("EnableSubmanifests(0) = %d, %v; want trunk's A.1 set selected at 1", k, err)
 	}
 }
 

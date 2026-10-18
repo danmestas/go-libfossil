@@ -14,13 +14,15 @@ import (
 // 12, or 0 to select one. A valid pinned k is kept, and an explicit k that
 // differs from it is refused: changing it is RetuneSubmanifests. With no
 // valid pin, an explicit k is pinned, or one is selected as zit selects it:
-// the §6.3 cost over the newest check-in's file set, refined by replaying
-// recent history. A request that cannot be met -- k outside 1..12, or a file
-// set no k partitions -- changes neither setting. It returns the pinned k and
-// the warning the operator must be shown: peers older than Fossil 2.29 are
+// the §6.3 cost over the file set of the current trunk (CurrentTrunk, the
+// main-branch tip, the check-in the next commit most plausibly descends
+// from), refined by replaying recent history. A request that cannot be met
+// -- k outside 1..12, no check-in to select from, or a file set no k
+// partitions -- changes neither setting. It returns the pinned k and the
+// warning the operator must be shown: peers older than Fossil 2.29 are
 // refused trees, and trees cannot be retired.
 func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error) {
-	current, err := r.ResolveVersion("tip")
+	current, err := r.CurrentTrunk()
 	if errors.Is(err, ErrVersionNotFound) {
 		current, err = 0, nil
 	}
@@ -47,12 +49,11 @@ func (r *Repo) RetuneSubmanifests(k int) error {
 
 // DisableSubmanifests turns tree manifest emission off: later commits are
 // flat, and the pinned k is kept for a later EnableSubmanifests. Existing
-// trees cannot be retired; when the repository holds any, it returns a note
-// saying so for the operator, and otherwise "".
-func (r *Repo) DisableSubmanifests() (note string, err error) {
-	note, err = manifest.DisableSubmanifests(r.inner)
-	if err != nil {
-		return "", fmt.Errorf("libfossil: disable sub-manifests: %w", err)
+// trees are untouched -- artifact names are immutable, so they cannot be
+// retired -- and peers older than Fossil 2.29 are still refused them.
+func (r *Repo) DisableSubmanifests() error {
+	if _, err := manifest.DisableSubmanifests(r.inner); err != nil {
+		return fmt.Errorf("libfossil: disable sub-manifests: %w", err)
 	}
-	return note, nil
+	return nil
 }

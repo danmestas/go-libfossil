@@ -1,8 +1,9 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
 // RepoSubmanifestsCmd groups the sub-manifest settings
@@ -12,11 +13,12 @@ type RepoSubmanifestsCmd struct {
 	Enable  RepoSubmanifestsEnableCmd  `cmd:"" help:"Write new check-ins as sub-manifest trees"`
 	Retune  RepoSubmanifestsRetuneCmd  `cmd:"" help:"Re-pin the partition parameter for later commits"`
 	Disable RepoSubmanifestsDisableCmd `cmd:"" help:"Write new check-ins as flat manifests again"`
+	Status  RepoSubmanifestsStatusCmd  `cmd:"" help:"Show the sub-manifest settings and whether trees exist"`
 }
 
 // RepoSubmanifestsEnableCmd turns tree emission on, pinning k the first time.
 type RepoSubmanifestsEnableCmd struct {
-	K int `name:"k" help:"Partition parameter, 1..12 (default: selected from the newest check-in)"`
+	K int `name:"k" help:"Partition parameter, 1..12 (default: selected from the main-branch tip)"`
 }
 
 func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
@@ -39,13 +41,10 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
 
 // RepoSubmanifestsRetuneCmd re-pins k; a re-tune is always explicit.
 type RepoSubmanifestsRetuneCmd struct {
-	K int `name:"k" help:"New partition parameter, 1..12"`
+	K int `name:"k" required:"" help:"New partition parameter, 1..12"`
 }
 
 func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error {
-	if c.K == 0 {
-		return errors.New("retune needs an explicit value: --k N")
-	}
 	r, err := g.OpenRepo()
 	if err != nil {
 		return err
@@ -71,13 +70,45 @@ func (c *RepoSubmanifestsDisableCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	note, err := r.DisableSubmanifests()
-	if err != nil {
+	if err := r.DisableSubmanifests(); err != nil {
 		return err
 	}
 	fmt.Println("enable-submanifests: off")
-	if note != "" {
-		fmt.Println(note)
+	seen, err := manifest.SeenSubmanifest(r.Inner().DB())
+	if err != nil {
+		return err
 	}
+	if seen {
+		fmt.Println(manifest.SubmanifestDisableNote)
+	}
+	return nil
+}
+
+// RepoSubmanifestsStatusCmd prints the three settings and whether the
+// repository holds any S-bearing artifact.
+type RepoSubmanifestsStatusCmd struct{}
+
+func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	setting := func(name, unset string) string {
+		v, err := r.Config(name)
+		if err != nil || v == "" {
+			return unset
+		}
+		return v
+	}
+	seen, err := manifest.SeenSubmanifest(r.Inner().DB())
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%-24s %s\n", manifest.SettingEnableSubmanifests+":", setting(manifest.SettingEnableSubmanifests, "off"))
+	fmt.Printf("%-24s %s\n", manifest.SettingSubmanifestK+":", setting(manifest.SettingSubmanifestK, "(unpinned)"))
+	fmt.Printf("%-24s %s\n", manifest.SettingAutoRetune+":", setting(manifest.SettingAutoRetune, "off"))
+	fmt.Printf("%-24s %s\n", "trees in repository:", map[bool]string{true: "yes", false: "no"}[seen])
 	return nil
 }

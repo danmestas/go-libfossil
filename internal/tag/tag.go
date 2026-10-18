@@ -65,13 +65,14 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if opts.User == "" {
 		panic("tag.AddTag: opts.User must not be empty")
 	}
+	// The D card holds the time as fossil writes it: to the millisecond, a
+	// caller's time rounded as fossil rounds a --date-override. Finer digits
+	// are legal (§4.6.4) but zit cannot read them.
 	if opts.Time.IsZero() {
-		opts.Time = time.Now().UTC()
+		opts.Time = libfossil.CardTimeNow(time.Now())
+	} else {
+		opts.Time = libfossil.CardTime(opts.Time)
 	}
-	// Fossil and zit write D cards to the millisecond. Finer digits are
-	// legal (§4.6.4) but zit cannot read them, and neither tool would
-	// produce them, so a new artifact never carries them.
-	opts.Time = opts.Time.UTC().Truncate(time.Millisecond)
 
 	var controlRid libfossil.FslID
 

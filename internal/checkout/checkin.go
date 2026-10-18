@@ -772,9 +772,11 @@ func (c *Checkout) checkNoConflicts(in commitInputs) error {
 func (c *Checkout) checkinOptions(
 	opts CommitOpts, in commitInputs, files []manifest.File,
 ) manifest.CheckinOpts {
+	// A clock reading is "now", which fossil keeps to the whole millisecond;
+	// a caller's time is rounded by manifest.Checkin as a --date-override.
 	commitTime := opts.Time
 	if commitTime.IsZero() {
-		commitTime = c.env.Clock.Now()
+		commitTime = libfossil.CardTimeNow(c.env.Clock.Now())
 	}
 	checkinOpts := manifest.CheckinOpts{
 		Files:   files,

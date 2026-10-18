@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	libfossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -147,7 +146,6 @@ func (c *RepoBranchNewCmd) Run(g *Globals) error {
 		Comment:  comment,
 		User:     user,
 		ParentID: parentRid,
-		Time:     time.Now().UTC(),
 		Tags: []libfossil.TagSpec{
 			{Name: "branch", Value: c.Name},
 			{Name: "sym-" + c.Name},

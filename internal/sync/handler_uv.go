@@ -6,6 +6,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
@@ -230,7 +231,11 @@ func (h *handler) handleUVFile(c *xfer.UVFileCard) error {
 		return fmt.Errorf("handler.handleUVFile: ensure schema: %w", err)
 	}
 
-	if err := uv.Receive(h.repo.DB(), c.Name, c.MTime, c.Hash, c.Content); err != nil {
+	// Bound, so the row names this request's receipt.
+	err := h.repo.WithBoundTx(func(b *repo.Repo) error {
+		return uv.Receive(b.DB(), c.Name, c.MTime, c.Hash, c.Content)
+	})
+	if err != nil {
 		return fmt.Errorf("handler.handleUVFile: %w", err)
 	}
 	return nil

@@ -65,6 +65,14 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 		)`,
 		`CREATE INDEX delta_i1 ON delta(srcid)`,
 		`CREATE TABLE unclustered(rid INTEGER PRIMARY KEY)`,
+		// Every stored blob names the rcvfrom row of its receipt.
+		`CREATE TABLE rcvfrom(
+			rcvid INTEGER PRIMARY KEY,
+			uid INTEGER,
+			mtime DATETIME,
+			nonce TEXT UNIQUE,
+			ipaddr TEXT
+		)`,
 	}
 	_ = repoSchema
 	for _, s := range repoSchema2 {

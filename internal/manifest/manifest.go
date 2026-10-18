@@ -78,7 +78,13 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		opts.Time = libfossil.CardTime(opts.Time)
 	}
 
-	err = r.WithTx(func(tx *db.Tx) error {
+	// A check-in is one receipt, credited to its user, as a fossil commit
+	// records one rcvfrom row for everything it stores.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		if opts.Precheck != nil {
 			if txErr := opts.Precheck(tx); txErr != nil {
 				return txErr

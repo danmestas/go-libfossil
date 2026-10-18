@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Each arrival of content is recorded in `rcvfrom` as fossil records it:
+  one row per check-in, tag, sync, clone, served request that stores
+  something, and unversioned write, made when the first content arrives, with
+  the time as a Julian day, the credited user, the login card's nonce on a
+  server, and the peer's address (or `#!fossil unversioned add` for a local
+  unversioned write). Every blob and unversioned file stored names its row in
+  `rcvid`, a phantom names none, and an applied deletion keeps the row's
+  `rcvid`. A new repository no longer starts with a placeholder row that every
+  blob pointed at; an existing repository keeps it, and new receipts follow
+  it. `HandleOpts.RemoteAddr` passes the client's address to a server that
+  is not `ServeHTTP` or `XferHandler`.
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

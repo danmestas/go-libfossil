@@ -1342,10 +1342,14 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 	if err != nil {
 		return 0, false, false, err
 	}
+	rcvid, err := db.ReceiptID(tx)
+	if err != nil {
+		return 0, false, false, err
+	}
 	if exists {
 		// Fill phantom: update blob content, remove from phantom table.
-		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=1 WHERE rid=?",
-			len(fullContent), compressed, existingRid); err != nil {
+		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=? WHERE rid=?",
+			len(fullContent), compressed, rcvid, existingRid); err != nil {
 			return 0, false, false, err
 		}
 		if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
@@ -1355,8 +1359,8 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 		filled = true
 	} else {
 		result, err := tx.Exec(
-			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-			uuid, len(fullContent), compressed)
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
+			uuid, len(fullContent), compressed, rcvid)
 		if err != nil {
 			return 0, false, false, err
 		}
@@ -1706,7 +1710,11 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		}
 	}
 
-	if err := uv.Receive(s.repo.DB(), c.Name, c.MTime, c.Hash, c.Content); err != nil {
+	// Bound, so the row names this sync's receipt.
+	err := s.repo.WithBoundTx(func(b *repo.Repo) error {
+		return uv.Receive(b.DB(), c.Name, c.MTime, c.Hash, c.Content)
+	})
+	if err != nil {
 		return fmt.Errorf("handleUVFileCard: %w", err)
 	}
 	return nil

@@ -1362,22 +1362,22 @@ When filePath is empty, returns one entry per file that changed between the two 
 Whole\-checkin enumeration is currently name\-keyed: a rename with no content change surfaces as a delete of the old name plus an add of the new name, and permission\-only changes are not reflected. Proper rename and perm\-change detection \(via the underlying mlink table\) is tracked as a follow\-up; per\-file diff behaviour for an explicitly named file is unchanged.
 
 <a name="Repo.DisableSubmanifests"></a>
-### func \(\*Repo\) [DisableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L54>)
+### func \(\*Repo\) [DisableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L60>)
 
 ```go
 func (r *Repo) DisableSubmanifests() error
 ```
 
-DisableSubmanifests turns tree manifest emission off: later commits are flat, and the pinned k is kept for a later EnableSubmanifests. Existing trees are untouched \-\- artifact names are immutable, so they cannot be retired \-\- and peers older than Fossil 2.29 are still refused them.
+DisableSubmanifests turns tree manifest emission off: later commits are flat, and the pinned k is kept for a later EnableSubmanifests. Existing trees remain \-\- artifact names are immutable, so they cannot be retired \-\- and keep being served, though peers older than Fossil 2.29 are still refused them. Unlike the CLI's disable, it returns no note saying so; an embedder that wants to tell its operator must do it itself.
 
 <a name="Repo.EnableSubmanifests"></a>
-### func \(\*Repo\) [EnableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L24>)
+### func \(\*Repo\) [EnableSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L26>)
 
 ```go
 func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error)
 ```
 
-EnableSubmanifests turns on tree manifest emission \(draft\-fossil\-submanifests\-00 §8.1\): from the next commit, check\-ins carry their file sets as sub\-manifest trees. k is the partition parameter, 1 to 12, or 0 to select one. A valid pinned k is kept, and an explicit k that differs from it is refused: changing it is RetuneSubmanifests. With no valid pin, an explicit k is pinned, or one is selected as zit selects it: the §6.3 cost over the file set of the current trunk \(CurrentTrunk, the main\-branch tip, the check\-in the next commit most plausibly descends from\), refined by replaying recent history. A request that cannot be met \-\- k outside 1..12, no check\-in to select from, or a file set no k partitions \-\- changes neither setting. It returns the pinned k and the warning the operator must be shown: peers older than Fossil 2.29 are refused trees, and trees cannot be retired.
+EnableSubmanifests turns on tree manifest emission \(draft\-fossil\-submanifests\-00 §8.1\): from the next commit, check\-ins carry their file sets as sub\-manifest trees. k is the partition parameter, 1 to 12, or 0 to select one. A valid pinned k is kept, and an explicit k that differs from it is refused: changing it is RetuneSubmanifests. With no valid pin, an explicit k is pinned, or one is selected as zit selects it: the §6.3 cost over one check\-in's file set, refined by replaying recent history. The check\-in analyzed is the current trunk \(CurrentTrunk, the main\-branch tip, which the next commit most plausibly descends from\); when no check\-in is on the main branch, it is the newest check\-in by time, the highest rid breaking a tie. A request that cannot be met \-\- k outside 1..12, no check\-in at all to select from, or a file set no k partitions \-\- changes neither setting. It returns the pinned k and the warning the operator must be shown: peers older than Fossil 2.29 are refused trees, and trees cannot be retired.
 
 <a name="Repo.FindCommonAncestor"></a>
 ### func \(\*Repo\) [FindCommonAncestor](<https://github.com/danmestas/go-libfossil/blob/main/repo_merge.go#L56>)
@@ -1570,7 +1570,7 @@ No match returns ErrVersionNotFound \(wrapped\); a hex prefix matching more than
 The names relative to an open checkout \("current", "prev", "next"\) are ordinary names here, as in fossil outside a checkout; Checkout's ResolveVersion resolves them.
 
 <a name="Repo.RetuneSubmanifests"></a>
-### func \(\*Repo\) [RetuneSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L43>)
+### func \(\*Repo\) [RetuneSubmanifests](<https://github.com/danmestas/go-libfossil/blob/main/repo_submanifest.go#L47>)
 
 ```go
 func (r *Repo) RetuneSubmanifests(k int) error

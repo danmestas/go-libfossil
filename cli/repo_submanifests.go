@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -104,20 +106,36 @@ func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	setting := func(name, unset string) string {
-		v, err := r.Config(name)
-		if err != nil || v == "" {
+	q := r.Inner().DB()
+	values := map[string]string{}
+	for _, name := range []string{manifest.SettingEnableSubmanifests, manifest.SettingSubmanifestK,
+		manifest.SettingAutoRetune} {
+		var v sql.NullString
+		err := q.QueryRow("SELECT value FROM config WHERE name=?", name).Scan(&v)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		values[name] = v.String
+	}
+	seen, err := manifest.SeenSubmanifest(q)
+	if err != nil {
+		return err
+	}
+	or := func(v, unset string) string {
+		if v == "" {
 			return unset
 		}
 		return v
 	}
-	seen, err := manifest.SeenSubmanifest(r.Inner().DB())
-	if err != nil {
-		return err
+	k := or(values[manifest.SettingSubmanifestK], "(unpinned)")
+	if raw := values[manifest.SettingSubmanifestK]; raw != "" {
+		if _, ok := manifest.ParseSettingK(raw); !ok {
+			k = raw + " (invalid: outside 1..12; commits fall back to flat manifests)"
+		}
 	}
-	fmt.Printf("%-24s %s\n", manifest.SettingEnableSubmanifests+":", setting(manifest.SettingEnableSubmanifests, "off"))
-	fmt.Printf("%-24s %s\n", manifest.SettingSubmanifestK+":", setting(manifest.SettingSubmanifestK, "(unpinned)"))
-	fmt.Printf("%-24s %s\n", manifest.SettingAutoRetune+":", setting(manifest.SettingAutoRetune, "off"))
+	fmt.Printf("%-24s %s\n", manifest.SettingEnableSubmanifests+":", or(values[manifest.SettingEnableSubmanifests], "off"))
+	fmt.Printf("%-24s %s\n", manifest.SettingSubmanifestK+":", k)
+	fmt.Printf("%-24s %s\n", manifest.SettingAutoRetune+":", or(values[manifest.SettingAutoRetune], "off"))
 	fmt.Printf("%-24s %s\n", "trees in repository:", map[bool]string{true: "yes", false: "no"}[seen])
 	return nil
 }

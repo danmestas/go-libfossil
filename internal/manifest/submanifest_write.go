@@ -227,6 +227,20 @@ func selectK(q db.Querier, current libfossil.FslID) (int, error) {
 	return k, nil
 }
 
+// NewestCheckin is the newest check-in by time, the highest rid breaking a
+// tie, or 0 when the repository has none.
+func NewestCheckin(q db.Querier) (libfossil.FslID, error) {
+	var rid int64
+	err := q.QueryRow("SELECT objid FROM event WHERE type='ci' ORDER BY mtime DESC, objid DESC LIMIT 1").Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("newest check-in: %w", err)
+	}
+	return libfossil.FslID(rid), nil
+}
+
 // selectForCheckin runs §6.3's automatic selection over current's file set.
 func selectForCheckin(q db.Querier, current libfossil.FslID) (int, error) {
 	if current <= 0 {

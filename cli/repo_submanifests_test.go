@@ -179,3 +179,37 @@ func TestRepoSubmanifestsEnableExplicitZero(t *testing.T) {
 		t.Fatalf("enable with no --k: %v", err)
 	}
 }
+
+// status shows a stored k outside 1..12 as invalid, and fails rather than
+// print defaults when the settings cannot be read.
+func TestRepoSubmanifestsStatusInvalidAndUnreadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.fossil")
+	r, err := libfossil.Create(path, libfossil.CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetConfig("submanifest-k", "13"); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	g := &cli.Globals{Repo: path}
+	got := captureStdout(t, func() error { return (&cli.RepoSubmanifestsStatusCmd{}).Run(g) })
+	if !strings.Contains(got, "13 (invalid") || !strings.Contains(got, "flat") {
+		t.Fatalf("status with k 13:\n%s", got)
+	}
+	r, err = libfossil.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sub-manifest rows fail to read; every other config row reads, so
+	// the repository still opens.
+	if _, err := r.Inner().DB().Exec(`ALTER TABLE config RENAME TO config_rows;
+		CREATE VIEW config AS SELECT name, CASE WHEN name LIKE '%submanifest%'
+		THEN json('not json') ELSE value END AS value, mtime FROM config_rows`); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if err := (&cli.RepoSubmanifestsStatusCmd{}).Run(g); err == nil || !strings.Contains(err.Error(), "reading") {
+		t.Fatalf("status over unreadable settings: %v", err)
+	}
+}

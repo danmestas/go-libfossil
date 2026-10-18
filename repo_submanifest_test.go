@@ -111,3 +111,30 @@ func TestEnableSubmanifestsWithoutHistory(t *testing.T) {
 		t.Fatalf("explicit k = %d, %v", k, err)
 	}
 }
+
+// With no check-in on the main branch -- everything on "main" while the
+// setting names "trunk" -- selection falls back to the newest check-in.
+func TestEnableSubmanifestsFallsBackToNewest(t *testing.T) {
+	r, err := Create(filepath.Join(t.TempDir(), "t.fossil"), CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	at := time.Date(2026, 7, 26, 0, 0, 0, 0, time.UTC)
+	if _, _, err := r.Commit(CommitOpts{Comment: "main", User: "u", Time: at,
+		Tags: []TagSpec{{Name: "branch", Value: "main"}, {Name: "sym-main"}},
+		Files: []FileToCommit{
+			{Name: "README.md", Content: []byte("# Example\n")},
+			{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+			{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+			{Name: "src/util.c", Content: []byte("/* util */\n")},
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.CurrentTrunk(); err == nil {
+		t.Fatal("fixture: a trunk check-in resolves")
+	}
+	if k, _, err := r.EnableSubmanifests(0); err != nil || k != 1 {
+		t.Fatalf("EnableSubmanifests(0) = %d, %v; want the newest check-in's A.1 set at 1", k, err)
+	}
+}

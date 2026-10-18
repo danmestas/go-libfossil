@@ -1502,7 +1502,7 @@ func (c *RepoStatusCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsCmd"></a>
-## type [RepoSubmanifestsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L12-L17>)
+## type [RepoSubmanifestsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L14-L19>)
 
 RepoSubmanifestsCmd groups the sub\-manifest settings \(draft\-fossil\-submanifests\-00\): whether new check\-ins are written as trees, and the partition parameter k they are built with.
 
@@ -1516,7 +1516,7 @@ type RepoSubmanifestsCmd struct {
 ```
 
 <a name="RepoSubmanifestsDisableCmd"></a>
-## type [RepoSubmanifestsDisableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L73>)
+## type [RepoSubmanifestsDisableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L75>)
 
 RepoSubmanifestsDisableCmd turns tree emission off; existing trees stay.
 
@@ -1525,7 +1525,7 @@ type RepoSubmanifestsDisableCmd struct{}
 ```
 
 <a name="RepoSubmanifestsDisableCmd.Run"></a>
-### func \(\*RepoSubmanifestsDisableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L75>)
+### func \(\*RepoSubmanifestsDisableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L77>)
 
 ```go
 func (c *RepoSubmanifestsDisableCmd) Run(g *Globals) error
@@ -1534,7 +1534,7 @@ func (c *RepoSubmanifestsDisableCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsEnableCmd"></a>
-## type [RepoSubmanifestsEnableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L20-L22>)
+## type [RepoSubmanifestsEnableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L22-L24>)
 
 RepoSubmanifestsEnableCmd turns tree emission on, pinning k the first time.
 
@@ -1545,7 +1545,7 @@ type RepoSubmanifestsEnableCmd struct {
 ```
 
 <a name="RepoSubmanifestsEnableCmd.Run"></a>
-### func \(\*RepoSubmanifestsEnableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L24>)
+### func \(\*RepoSubmanifestsEnableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L26>)
 
 ```go
 func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error
@@ -1554,7 +1554,7 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsRetuneCmd"></a>
-## type [RepoSubmanifestsRetuneCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L52-L54>)
+## type [RepoSubmanifestsRetuneCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L54-L56>)
 
 RepoSubmanifestsRetuneCmd re\-pins k; a re\-tune is always explicit.
 
@@ -1565,7 +1565,7 @@ type RepoSubmanifestsRetuneCmd struct {
 ```
 
 <a name="RepoSubmanifestsRetuneCmd.Run"></a>
-### func \(\*RepoSubmanifestsRetuneCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L56>)
+### func \(\*RepoSubmanifestsRetuneCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L58>)
 
 ```go
 func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error
@@ -1574,7 +1574,7 @@ func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsStatusCmd"></a>
-## type [RepoSubmanifestsStatusCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L98>)
+## type [RepoSubmanifestsStatusCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L100>)
 
 RepoSubmanifestsStatusCmd prints the three settings and whether the repository holds any S\-bearing artifact.
 
@@ -1583,7 +1583,7 @@ type RepoSubmanifestsStatusCmd struct{}
 ```
 
 <a name="RepoSubmanifestsStatusCmd.Run"></a>
-### func \(\*RepoSubmanifestsStatusCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L100>)
+### func \(\*RepoSubmanifestsStatusCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L102>)
 
 ```go
 func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error

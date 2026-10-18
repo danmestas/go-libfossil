@@ -99,7 +99,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	deletedFiles []string,
 	err error,
 ) {
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("checkout.Commit: %w", err)
 	}
@@ -240,6 +240,16 @@ func (c *Checkout) buildCommitFiles(
 				}
 				return nil, fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
 			}
+		}
+
+		// A file outside a sparse checkout's cone is the baseline's entry,
+		// carried by its name, never read from disk or re-stored
+		// (draft-fossil-sparse-cone-00 §4.2).
+		if _, managed := vfEntries[name]; !managed && !c.covers(name) {
+			fileMap[name] = manifest.File{
+				Name: name, Perm: entry.Perm, UUID: parentFileMap[name].UUID,
+			}
+			continue
 		}
 
 		var fileRID int64
@@ -660,6 +670,9 @@ func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[strin
 		if !found {
 			unknown = append(unknown, queued)
 		}
+	}
+	if err := c.refuseUnreachable("Commit", unknown); err != nil {
+		return nil, err
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)

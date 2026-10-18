@@ -41,7 +41,7 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 
 	// Resolve every file before changing anything, so a refusal leaves
 	// vfile as it was.
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, nil)
 	if err != nil {
 		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}
@@ -72,12 +72,13 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 	return nil
 }
 
-// resolveFiles lists the files of checkin rid with the blob each one's
-// content lives in. It fails, wrapping errMissingContent, when the repository
-// does not hold all of that content; callers run it before changing anything
-// so that a version they cannot finish is refused up front.
+// resolveFiles lists the files of checkin rid that filter covers (all of
+// them for a nil filter) with the blob each one's content lives in. It
+// fails, wrapping errMissingContent, when the repository does not hold all
+// of that content; callers run it before changing anything so that a
+// version they cannot finish is refused up front.
 func (c *Checkout) resolveFiles(
-	rid libfossil.FslID,
+	rid libfossil.FslID, filter manifest.FileFilter,
 ) ([]manifest.FileEntry, []libfossil.FslID, error) {
 	if rid <= 0 {
 		panic("checkout.resolveFiles: rid must be positive")
@@ -86,7 +87,7 @@ func (c *Checkout) resolveFiles(
 		panic("checkout.resolveFiles: nil repo")
 	}
 
-	files, err := manifest.ListFiles(c.repo, rid)
+	files, err := manifest.ListFilesFiltered(c.repo, rid, filter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}
@@ -295,7 +296,7 @@ func (c *Checkout) scanSingleEntry(
 	return changed, false, err
 }
 
-// loadScanEntries reads every vfile row of version rid. The rows are
+// loadScanEntries reads every vfile row of version rid the cone covers. The rows are
 // collected up front so no cursor is held open during file I/O and the
 // per-row chnged updates.
 func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error) {
@@ -318,7 +319,11 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 		if err := rows.Scan(&e.id, &e.pathname, &e.mergeRid, &e.chnged, &e.deleted); err != nil {
 			return nil, fmt.Errorf("checkout.ScanChanges: scan vfile row: %w", err)
 		}
-		entries = append(entries, e)
+		// An uncovered file is not on disk by design: it is never
+		// scanned, so it is never missing (§4.1).
+		if c.covers(e.pathname) {
+			entries = append(entries, e)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("checkout.ScanChanges: iterate vfile rows: %w", err)
@@ -472,14 +477,19 @@ func (c *Checkout) walkDir(dir string) (map[string]bool, error) {
 			}
 
 			fullPath := filepath.Join(top.path, name)
+			relPath, err := filepath.Rel(c.dir, fullPath)
+			if err != nil {
+				return nil, fmt.Errorf("walkDir: compute relative path for %s: %w", fullPath, err)
+			}
 
+			// A sparse checkout neither walks a subtree its cone cannot
+			// reach nor reports an uncovered file: an uncovered path is
+			// not untracked (draft-fossil-sparse-cone-00 §4.1, §4.5).
 			if entry.IsDir() {
-				stack = append(stack, walkDirEntry{path: fullPath, depth: top.depth + 1})
-			} else {
-				relPath, err := filepath.Rel(c.dir, fullPath)
-				if err != nil {
-					return nil, fmt.Errorf("walkDir: compute relative path for %s: %w", fullPath, err)
+				if c.cone == nil || c.cone.IntersectsSubtree(filepath.ToSlash(relPath)) {
+					stack = append(stack, walkDirEntry{path: fullPath, depth: top.depth + 1})
 				}
+			} else if c.covers(filepath.ToSlash(relPath)) {
 				result[relPath] = true
 			}
 		}

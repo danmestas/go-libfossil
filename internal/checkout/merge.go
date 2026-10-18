@@ -81,7 +81,9 @@ type MergeResult struct {
 // itself a vmerge row with id 0.
 //
 // Merge refuses, changing nothing, when the repository is missing content
-// it needs or when an added file would overwrite an untracked file. Where
+// it needs, when an added file would overwrite an untracked file, or, in a
+// sparse checkout, when the merge would change a file outside the cone
+// (ErrOutsideCone). Where
 // fossil relies on its undo copy, Merge keeps the checkout's file instead:
 // a file edited here but deleted in the merged-in version is kept and
 // reported, not deleted. Renames are not followed: a file renamed on one
@@ -126,6 +128,9 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if err := c.planMerge(&plan, opts.Strategy); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
+	if err := c.checkMergeInCone(plan.steps); err != nil {
+		return MergeResult{}, err
+	}
 	if err := c.checkMergeTargets(plan.steps); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
@@ -135,6 +140,24 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 		}
 	}
 	return plan.result(), nil
+}
+
+// checkMergeInCone refuses a merge that would change a file outside a sparse
+// checkout's cone. Applying such a change to the record alone, as
+// draft-fossil-sparse-cone-00 §4.4 requires, is not implemented: the merge
+// would otherwise write the file or lose the change, so it is refused by
+// naming the cone, before anything changes.
+func (c *Checkout) checkMergeInCone(steps []mergeStep) error {
+	var outside []string
+	for _, s := range steps {
+		if !c.covers(s.file.Name) {
+			outside = append(outside, s.file.Name)
+		}
+	}
+	if len(outside) == 0 {
+		return nil
+	}
+	return c.outsideCone("Merge", outside)
 }
 
 // mergePlan is a merge worked out in full before anything is changed.
@@ -324,7 +347,7 @@ func mergeNames(rows map[string]*vfile.Row, p, m map[string]mergeSide) []string 
 // mergeSides lists checkin rid's files by name. It refuses a checkin whose
 // content the repository does not fully hold, as fossil's merge does.
 func (c *Checkout) mergeSides(rid libfossil.FslID) (map[string]mergeSide, error) {
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -814,7 +837,7 @@ func (c *Checkout) Conflicts() ([]string, error) {
 	if err := c.ScanChanges(ScanHash); err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}

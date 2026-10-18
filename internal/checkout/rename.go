@@ -79,6 +79,10 @@ func (c *Checkout) Rename(opts RenameOpts) error {
 		panic("checkout.Rename: empty To")
 	}
 
+	if err := c.refuseUncovered("Rename", opts.From, opts.To); err != nil {
+		return err
+	}
+
 	// Get current version
 	vid, _, err := c.Version()
 	if err != nil {

@@ -27,7 +27,7 @@ func (c *Checkout) HasChanges() (bool, error) {
 	if rid < 0 {
 		panic("checkout.HasChanges: negative checkout version")
 	}
-	rows, err := vfile.Load(c.db, int64(rid))
+	rows, err := c.managedRows(rid)
 	if err != nil {
 		return false, fmt.Errorf("checkout.HasChanges: %w", err)
 	}
@@ -60,7 +60,7 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 			return fmt.Errorf("checkout.VisitChanges: %w", err)
 		}
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return fmt.Errorf("checkout.VisitChanges: %w", err)
 	}

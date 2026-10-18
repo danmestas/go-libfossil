@@ -25,6 +25,9 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		return nil, fmt.Errorf("checkout.Manage: %w", err)
 	}
 
+	if err := c.refuseUncovered("Manage", opts.Paths...); err != nil {
+		return counts, err
+	}
 	for _, path := range opts.Paths {
 		// Check if already tracked
 		var existingID int64
@@ -115,6 +118,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 			if err != nil {
 				return fmt.Errorf("checkout.Unmanage: query vfile id=%d: %w", vfileID, err)
 			}
+			if err := c.refuseUncovered("Unmanage", pathname); err != nil {
+				return err
+			}
 
 			if err := c.unmanageFile(vfileID, rid, pathname, opts.Callback); err != nil {
 				return fmt.Errorf("checkout.Unmanage: %w", err)
@@ -124,6 +130,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 	}
 
 	// Handle Paths
+	if err := c.refuseUncovered("Unmanage", opts.Paths...); err != nil {
+		return err
+	}
 	for _, path := range opts.Paths {
 		var vfileID libfossil.FslID
 		var rid int64

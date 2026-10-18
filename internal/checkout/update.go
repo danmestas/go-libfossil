@@ -61,18 +61,28 @@ func (c *Checkout) processFileUpdates(
 	strategy merge.Strategy,
 	opts UpdateOpts,
 	checkinTime time.Time,
-) (filesWritten, filesRemoved, conflicted []string, err error) {
+) (filesWritten, filesRemoved, conflicted []string, outOfCone int, err error) {
 	for name := range maps.allNames {
 		curUUID, inCurrent := maps.current[name]
 		tgtUUID, inTarget := maps.target[name]
 		ancUUID := maps.ancestor[name]
+
+		// An uncovered file has no local change to merge: the record moves
+		// to the target's copy when vfile is reloaded, and the disk is not
+		// touched (draft-fossil-sparse-cone-00 §4.4).
+		if !c.covers(name) {
+			if curUUID != tgtUUID {
+				outOfCone++
+			}
+			continue
+		}
 
 		change, ferr := c.updateFile(
 			name, curUUID, tgtUUID, ancUUID,
 			inCurrent, inTarget, strategy, opts.DryRun,
 		)
 		if ferr != nil {
-			return filesWritten, filesRemoved, conflicted, fmt.Errorf("checkout.Update: %w", ferr)
+			return filesWritten, filesRemoved, conflicted, outOfCone, fmt.Errorf("checkout.Update: %w", ferr)
 		}
 
 		if change == UpdateNone {
@@ -104,13 +114,13 @@ func (c *Checkout) processFileUpdates(
 
 		if opts.Callback != nil {
 			if cerr := opts.Callback(name, change); cerr != nil {
-				return filesWritten, filesRemoved, conflicted, fmt.Errorf(
+				return filesWritten, filesRemoved, conflicted, outOfCone, fmt.Errorf(
 					"checkout.Update: callback for %s: %w", name, cerr,
 				)
 			}
 		}
 	}
-	return filesWritten, filesRemoved, conflicted, nil
+	return filesWritten, filesRemoved, conflicted, outOfCone, nil
 }
 
 // buildUpdateMaps gathers file lists for current, target, and their common
@@ -191,7 +201,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 	// Refuse a target whose content is not all here before writing any file,
 	// as fossil's update does; finalizeUpdate would refuse it too, but only
 	// after disk had moved.
-	if _, _, err := c.resolveFiles(target); err != nil {
+	if _, _, err := c.resolveFiles(target, nil); err != nil {
 		updateErr = fmt.Errorf("checkout.Update: %w", err)
 		return UpdateResult{}, updateErr
 	}
@@ -213,7 +223,8 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		checkinTime = c.checkinTime(target)
 	}
 
-	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
+	var outOfCone int
+	filesWritten, filesRemoved, conflicted, outOfCone, updateErr = c.processFileUpdates(ctx, maps, strategy, opts, checkinTime)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
 	}
@@ -225,7 +236,9 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		}
 	}
 
-	return sortedUpdateResult(filesWritten, filesRemoved, conflicted), nil
+	result := sortedUpdateResult(filesWritten, filesRemoved, conflicted)
+	result.OutOfCone = outOfCone
+	return result, nil
 }
 
 // sortedUpdateResult builds Update's result with each path list sorted.

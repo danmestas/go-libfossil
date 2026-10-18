@@ -17,8 +17,13 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/branch"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/verify"
+	"github.com/danmestas/go-libfossil/simio"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
@@ -91,16 +96,7 @@ func textTime(col string) string {
 // bit for bit; see textTime for the others.
 func derivedRows(t *testing.T, path string) map[string][]string {
 	t.Helper()
-	d, err := db.OpenSQL(path, db.OpenConfig{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := d.Close(); err != nil {
-			t.Errorf("close %s: %v", path, err)
-		}
-	}()
-	queries := map[string]string{
+	return queryRows(t, path, map[string]string{
 		// Check-in events only: Rebuild does not yet recreate the events of
 		// other artifacts (control artifacts, wiki, tickets, forum), a gap
 		// apart from the values #258 is about.
@@ -110,7 +106,37 @@ func derivedRows(t *testing.T, path string) map[string][]string {
 			" FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, tagtype, quote(value), printf('%!.20g', mtime)
 			FROM tagxref ORDER BY tagid, rid`,
+	})
+}
+
+// derivedTimes reads the times fossil derives from the artifacts into
+// event, plink and tagxref, keyed by the row each belongs to. Events are
+// check-in events: go-libfossil does not write the event fossil adds for a
+// tag's control artifact, a missing row apart from the times compared here.
+func derivedTimes(t *testing.T, path string) map[string][]string {
+	t.Helper()
+	return queryRows(t, path, map[string]string{
+		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
+			" FROM event WHERE type='ci' ORDER BY objid",
+		"plink": "SELECT pid, cid, " + textTime("mtime") + " FROM plink ORDER BY cid, pid",
+		"tagxref": `SELECT tagid, rid, srcid, origid, printf('%!.20g', mtime)
+			FROM tagxref ORDER BY tagid, rid`,
+	})
+}
+
+// queryRows runs each named query against the repository at path and
+// returns its rows, each rendered as one string.
+func queryRows(t *testing.T, path string, queries map[string]string) map[string][]string {
+	t.Helper()
+	d, err := db.OpenSQL(path, db.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("close %s: %v", path, err)
+		}
+	}()
 	out := map[string][]string{}
 	for name, q := range queries {
 		rows, err := d.Query(q)
@@ -182,6 +208,63 @@ func TestRebuildMatchesFossilDerivedValues(t *testing.T) {
 		if !reflect.DeepEqual(got[table], want[table]) {
 			t.Errorf("%s after Rebuild:\n  %s\nfossil wrote:\n  %s", table,
 				strings.Join(got[table], "\n  "), strings.Join(want[table], "\n  "))
+		}
+	}
+}
+
+// goTimesHistory commits with go-libfossil at times given to the nanosecond
+// and at the clock's, tags one check-in and branches from it.
+func goTimesHistory(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "g.fossil")
+	r, err := repo.Create(path, "u", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := r.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	base := time.Date(2026, 10, 18, 12, 34, 56, 0, time.UTC)
+	times := []time.Time{base.Add(789600 * time.Microsecond), base.Add(time.Minute + 789500*time.Microsecond), {}}
+	var parent fsltype.FslID
+	for i, when := range times {
+		rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+			Files:   []manifest.File{{Name: "f.txt", Content: []byte(fmt.Sprintf("v%d\n", i))}},
+			Comment: fmt.Sprintf("v%d", i), User: "u", Parent: parent, Time: when,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent = rid
+	}
+	if _, err := tag.AddTag(r, tag.TagOpts{TargetRID: parent, TagName: "sym-rel",
+		TagType: tag.TagSingleton, User: "u", Time: base.Add(2*time.Minute + 123456789)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := branch.Create(r, branch.CreateOpts{Name: "feat", Parent: parent, User: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestFossilRebuildKeepsGoTimes rebuilds a repository go-libfossil wrote with
+// the fossil binary: every event, plink and tagxref time fossil derives from
+// the artifacts must be the one go-libfossil stored, bit for bit where this
+// machine's fossil computes text times as go-libfossil does (textTime).
+func TestFossilRebuildKeepsGoTimes(t *testing.T) {
+	testutil.RequireFossilBin(t)
+	path := goTimesHistory(t)
+	stored := derivedTimes(t, path)
+	if err := testutil.FossilRebuild(path); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := derivedTimes(t, path)
+	for table := range stored {
+		if !reflect.DeepEqual(stored[table], rebuilt[table]) {
+			t.Errorf("%s as go-libfossil stored it:\n  %s\nafter fossil rebuild:\n  %s", table,
+				strings.Join(stored[table], "\n  "), strings.Join(rebuilt[table], "\n  "))
 		}
 	}
 }

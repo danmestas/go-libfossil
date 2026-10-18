@@ -43,4 +43,5 @@ type RepoCmd struct {
 	Invite       RepoInviteCmd       `cmd:"" help:"Generate invite token for a user"`
 	Serve        RepoServeCmd        `cmd:"" help:"Serve repository over HTTP for sync/clone"`
 	Submanifests RepoSubmanifestsCmd `cmd:"" help:"Sub-manifest tree settings"`
+	Cone         RepoConeCmd         `cmd:"" help:"Show or edit a checkout's sparse cone"`
 }

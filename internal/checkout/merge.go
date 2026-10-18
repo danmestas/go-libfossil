@@ -464,6 +464,14 @@ func (c *Checkout) planThreeWay(
 	if err != nil {
 		return err
 	}
+	if strat.Name() == "three-way" && !(merge.IsText(base) && merge.IsText(local) && merge.IsText(remote)) {
+		// Fossil's merge_3way refuses binary content: "cannot merge binary
+		// file", and the checkout's copy stays.
+		step.file.Strategy = strat.Name()
+		step.file.Action = MergeKept
+		step.file.Reason = "it is a binary file"
+		return nil
+	}
 	res, err := strat.Merge(base, local, remote)
 	if err != nil {
 		return err

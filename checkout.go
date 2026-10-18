@@ -65,10 +65,18 @@ type UpdateOpts struct {
 // user about marker text in their files must check Conflicted. Every path
 // in Conflicted also appears in FilesWritten: the marker text is what was
 // written there.
+//
+// Unmerged lists files left for the caller to reconcile that hold no
+// markers: a file edited locally that the target deletes (kept on disk,
+// no longer tracked), a file added both locally and by the target (the
+// local file kept, so it shows as edited), and a binary file both sides
+// changed (the target's content written, the working copy saved as
+// NAME-original). Like Conflicted, it is not an error.
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers — not an error; also present in FilesWritten
+	Unmerged     []string // paths left to reconcile without markers — not an error
 }
 
 // RevertOpts configures reverting file changes.
@@ -213,6 +221,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		FilesWritten: res.FilesWritten,
 		FilesRemoved: res.FilesRemoved,
 		Conflicted:   res.Conflicted,
+		Unmerged:     res.Unmerged,
 	}, nil
 }
 

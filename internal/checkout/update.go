@@ -29,10 +29,18 @@ import (
 //     tracked;
 //   - a pending add stays added, and a pending removal stays removed;
 //   - a file the target adds over an untracked file is written after the
-//     untracked one is copied to NAME-original.
+//     untracked one is copied to NAME-original;
+//   - a binary file edited locally and changed by the target is not merged:
+//     the working copy is saved as NAME-original and the target written.
+//
+// Every file then gets the target's executable bit. An update that could
+// not finish (a directory, or a read-only file, where a file must be
+// written) is refused before anything is written, and the checkout
+// database moves to the target in one transaction. A dry run reports the
+// same result and changes nothing, on disk or in the checkout database.
 //
 // Unlike fossil, nothing follows a file the target renamed: files are
-// matched by name. A dry run reports the same result without writing.
+// matched by name, and no undo state is saved.
 //
 // If opts.TargetRID is 0, CalcUpdateVersion is used to find the target.
 // If the target equals the current version, Update returns a zero-value
@@ -75,7 +83,10 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		})
 	}()
 
-	steps, err := c.planUpdate(current, target)
+	steps, err := c.planUpdate(current, target, opts.DryRun)
+	if err == nil && !opts.DryRun {
+		err = c.checkUpdateTargets(steps)
+	}
 	if err != nil {
 		updateErr = fmt.Errorf("checkout.Update: %w", err)
 		return UpdateResult{}, updateErr
@@ -205,14 +216,21 @@ func (c *Checkout) updateTarget(
 
 // planUpdate scans the checkout, as fossil's update does first, and decides
 // each file of the current version vid and the target. It refuses a target
-// whose content is not all here before anything is written.
-func (c *Checkout) planUpdate(vid, target libfossil.FslID) ([]updateStep, error) {
+// whose content is not all here before anything is written. A dry run keeps
+// the scan's findings to itself.
+func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updateStep, error) {
 	files, rids, err := c.resolveFiles(target)
 	if err != nil {
 		return nil, err
 	}
+	var scanned []scanWrite
 	if vid > 0 {
-		if err := c.refreshChanged(vid); err != nil {
+		if scanned, err = c.scanVersion(vid); err != nil {
+			return nil, err
+		}
+	}
+	if !dryRun {
+		if err := c.storeScan(scanned); err != nil {
 			return nil, err
 		}
 	}
@@ -224,6 +242,7 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID) ([]updateStep, error)
 	if err != nil {
 		return nil, err
 	}
+	overlayScan(rows, scanned)
 	steps := make([]updateStep, 0, len(rows)+len(files))
 	for i := range rows {
 		row := &rows[i]
@@ -295,6 +314,11 @@ func (c *Checkout) applyUpdate(
 			res.FilesWritten = append(res.FilesWritten, s.name)
 			res.Conflicted = append(res.Conflicted, s.name)
 			c.obs.Error(ctx, fmt.Errorf("checkout.Update: merge conflict in %s", s.name))
+		case UpdateConflictBinary:
+			res.FilesWritten = append(res.FilesWritten, s.name)
+			res.Unmerged = append(res.Unmerged, s.name)
+		case UpdateConflictRm, UpdateConflictAdded:
+			res.Unmerged = append(res.Unmerged, s.name)
 		case UpdateRemoved:
 			res.FilesRemoved = append(res.FilesRemoved, s.name)
 		}
@@ -305,9 +329,15 @@ func (c *Checkout) applyUpdate(
 			}
 		}
 	}
+	if !opts.DryRun {
+		if err := c.setUpdatedModes(steps); err != nil {
+			return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
+		}
+	}
 	sort.Strings(res.FilesWritten)
 	sort.Strings(res.FilesRemoved)
 	sort.Strings(res.Conflicted)
+	sort.Strings(res.Unmerged)
 	return res, nil
 }
 
@@ -336,7 +366,7 @@ func (c *Checkout) applyUpdateStep(
 		}
 		return change, c.writeUpdateTarget(s, fresh)
 	case updateMerge:
-		return c.mergeUpdate(s, strategy, dryRun)
+		return c.mergeUpdate(s, strategy, dryRun, fresh)
 	case updateRemove:
 		if dryRun {
 			return UpdateRemoved, nil
@@ -377,7 +407,12 @@ func (c *Checkout) writeUpdateTarget(s updateStep, fresh map[string]writtenFile)
 // mergeUpdate merges the working file's changes into the target's content:
 // the checkout's version of the file is the base, the working file the
 // local side, the target the other, as fossil's update calls merge_3way.
-func (c *Checkout) mergeUpdate(s updateStep, strategy merge.Strategy, dryRun bool) (UpdateChange, error) {
+//
+// Binary content is not line-merged: as fossil does, the working copy is
+// saved as NAME-original and the target's content written.
+func (c *Checkout) mergeUpdate(
+	s updateStep, strategy merge.Strategy, dryRun bool, fresh map[string]writtenFile,
+) (UpdateChange, error) {
 	if s.row == nil || s.row.RID <= 0 || s.target == nil {
 		panic("checkout.mergeUpdate: merge needs both versions")
 	}
@@ -395,6 +430,15 @@ func (c *Checkout) mergeUpdate(s updateStep, strategy merge.Strategy, dryRun boo
 	other, err := content.Expand(c.repo.DB(), libfossil.FslID(s.target.rid))
 	if err != nil {
 		return UpdateNone, fmt.Errorf("expand rid %d: %w", s.target.rid, err)
+	}
+	if !(merge.IsText(base) && merge.IsText(local) && merge.IsText(other)) {
+		if dryRun {
+			return UpdateConflictBinary, nil
+		}
+		if err := c.backUpOriginal(s.name); err != nil {
+			return UpdateNone, err
+		}
+		return UpdateConflictBinary, c.writeUpdateTarget(s, fresh)
 	}
 	merged, err := strategy.Merge(base, local, other)
 	if err != nil {
@@ -456,55 +500,139 @@ func (c *Checkout) backUpOriginal(name string) error {
 // backupNamesMax bounds the search for a free backup name.
 const backupNamesMax = 1000
 
-// finalizeUpdate moves the checkout to target. A pending add keeps its row,
-// now in the target version, as fossil's update moves it; the target's
-// files are loaded, a file removed locally stays removed, and each file
-// written with the target's content records the mtime of that write (an
-// unchanged file keeps its mtime through LoadVFile, as fossil's update
-// transfers it). Last, vvar names the new version.
+// finalizeUpdate moves the checkout database to target in one
+// transaction. A pending add keeps its row, now in the target version, as
+// fossil's update moves it; the target's files are loaded, a file removed
+// locally stays removed, and each file written with the target's content
+// records the mtime of that write (an unchanged file keeps its mtime
+// through loadVFile, as fossil's update transfers it). Last, vvar names the
+// new version.
 func (c *Checkout) finalizeUpdate(
 	target libfossil.FslID, steps []updateStep, fresh map[string]writtenFile,
-) error {
+) (err error) {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return fmt.Errorf("checkout.Update: begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	if err := c.moveUpdateRows(tx, target, steps); err != nil {
+		return err
+	}
+	for name, w := range fresh {
+		if err := c.recordMTime(tx, target, name, w.rid, w.mtime); err != nil {
+			return fmt.Errorf("checkout.Update: %w", err)
+		}
+	}
+	if err := c.setUpdatedVersion(tx, target); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("checkout.Update: commit: %w", err)
+	}
+	return nil
+}
+
+// moveUpdateRows carries the rows of the steps over to version target
+// through q: pending adds move, the target's files load, and local removals
+// stay.
+func (c *Checkout) moveUpdateRows(q sqlExecer, target libfossil.FslID, steps []updateStep) error {
 	for _, s := range steps {
 		if s.action != updateKeepAdd {
 			continue
 		}
-		if _, err := c.db.Exec("UPDATE vfile SET vid = ? WHERE id = ?", int64(target), s.row.ID); err != nil {
+		if _, err := q.Exec("UPDATE vfile SET vid = ? WHERE id = ?", int64(target), s.row.ID); err != nil {
 			return fmt.Errorf("checkout.Update: keep the add of %s: %w", s.name, err)
 		}
 	}
-	if err := c.LoadVFile(target, true); err != nil {
+	if err := c.loadVFile(q, target, true); err != nil {
 		return fmt.Errorf("checkout.Update: reload vfile: %w", err)
 	}
 	for _, s := range steps {
 		if s.row == nil || s.row.Deleted == 0 || s.target == nil {
 			continue
 		}
-		if _, err := c.db.Exec("UPDATE vfile SET deleted = 1 WHERE vid = ? AND pathname = ?",
+		if _, err := q.Exec("UPDATE vfile SET deleted = 1 WHERE vid = ? AND pathname = ?",
 			int64(target), s.name); err != nil {
 			return fmt.Errorf("checkout.Update: keep the removal of %s: %w", s.name, err)
 		}
 	}
-	for name, w := range fresh {
-		if err := c.recordMTime(target, name, w.rid, w.mtime); err != nil {
-			return fmt.Errorf("checkout.Update: %w", err)
-		}
-	}
-	return c.setUpdatedVersion(target)
+	return nil
 }
 
 // setUpdatedVersion records target as the checked-out version in vvar.
-func (c *Checkout) setUpdatedVersion(target libfossil.FslID) error {
+func (c *Checkout) setUpdatedVersion(q sqlExecer, target libfossil.FslID) error {
 	var targetUUID string
 	err := c.repo.DB().QueryRow("SELECT uuid FROM blob WHERE rid = ?", int64(target)).Scan(&targetUUID)
 	if err != nil {
 		return fmt.Errorf("checkout.Update: query target uuid: %w", err)
 	}
-	if err := setVVar(c.db, "checkout", strconv.FormatInt(int64(target), 10)); err != nil {
+	if err := setVVar(q, "checkout", strconv.FormatInt(int64(target), 10)); err != nil {
 		return fmt.Errorf("checkout.Update: %w", err)
 	}
-	if err := setVVar(c.db, "checkout-hash", targetUUID); err != nil {
+	if err := setVVar(q, "checkout-hash", targetUUID); err != nil {
 		return fmt.Errorf("checkout.Update: %w", err)
+	}
+	return nil
+}
+
+// overlayScan applies a scan's findings to rows read before they were
+// stored, so a dry run plans from them without writing them.
+func overlayScan(rows []vfile.Row, scanned []scanWrite) {
+	chnged := make(map[int64]int64, len(scanned))
+	for _, w := range scanned {
+		chnged[w.id] = w.chnged
+	}
+	for i := range rows {
+		if v, ok := chnged[rows[i].ID]; ok {
+			rows[i].Chnged = v
+		}
+	}
+}
+
+// checkUpdateTargets refuses, before anything is written, an update that
+// could not finish: a file it writes or deletes where something other than
+// a regular file stands or under a parent that is not a directory
+// (checkMergeTarget), or a read-only file it writes. Fossil rolls back such
+// an update; go-libfossil cannot roll back disk, so it refuses first.
+func (c *Checkout) checkUpdateTargets(steps []updateStep) error {
+	for _, s := range steps {
+		switch s.action {
+		case updateWrite, updateAddOver, updateMerge, updateRemove:
+		default:
+			continue
+		}
+		if err := c.checkMergeTarget(s.name); err != nil {
+			return err
+		}
+		if s.action == updateRemove {
+			continue
+		}
+		fullPath, err := c.safePath(s.name)
+		if err != nil {
+			return err
+		}
+		info, err := c.env.Storage.Stat(fullPath)
+		if err == nil && info.Mode().Perm()&0o200 == 0 {
+			return fmt.Errorf("cannot update %s: it is read-only", s.name)
+		}
+	}
+	return nil
+}
+
+// setUpdatedModes gives every file of the target on disk the target's
+// executable bit, as fossil's checkout_set_all_exe does after an update.
+func (c *Checkout) setUpdatedModes(steps []updateStep) error {
+	for _, s := range steps {
+		if s.target == nil {
+			continue
+		}
+		if err := c.setMergedMode(s.name, s.target.exe); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -27,15 +27,17 @@ func updateEditsRepo(t *testing.T) (bin, repoPath, a, b string) {
 	write("gone.txt", "gone\n")
 	write("plain.txt", "plain\n")
 	write("same.txt", "same\n")
-	fossilRun(t, bin, ck, "add", "merge.txt", "clash.txt", "gone.txt", "plain.txt", "same.txt")
-	fossilRun(t, bin, ck, "commit", "--hash", "-m", "A")
+	write("bin.dat", "a\x00b\nc\n")
+	fossilRun(t, bin, ck, "add", "merge.txt", "clash.txt", "gone.txt", "plain.txt", "same.txt", "bin.dat")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "A")
 	write("merge.txt", "A\nb\nc\n")
 	write("clash.txt", "y\n")
 	write("plain.txt", "plain, B\n")
 	write("added.txt", "added by B\n")
+	write("bin.dat", "A\x00b\nc\n")
 	fossilRun(t, bin, ck, "add", "added.txt")
 	fossilRun(t, bin, ck, "rm", "gone.txt")
-	fossilRun(t, bin, ck, "commit", "--hash", "-m", "B")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "B")
 	fossilRun(t, bin, ck, "close")
 	a = strings.TrimSpace(fossilRun(t, bin, ck, "sql", "-R", repoPath,
 		"SELECT uuid FROM blob JOIN event ON objid=rid WHERE comment='A'"))
@@ -46,14 +48,15 @@ func updateEditsRepo(t *testing.T) (bin, repoPath, a, b string) {
 
 // localEdits makes the uncommitted changes both checkouts get on top of A:
 // edits merge.txt where B did not, clashes with B in clash.txt, edits
-// gone.txt which B deletes, and writes new.txt for adding. The edits keep
+// gone.txt which B deletes, edits binary bin.dat which B also changed, and
+// writes new.txt for adding. The edits keep
 // their sizes, so each is dated agedTime: fossil would not see an edit dated
 // the second it recorded when it wrote the file.
 func localEdits(t *testing.T, dir string) {
 	t.Helper()
 	for name, body := range map[string]string{
 		"merge.txt": "a\nb\nC\n", "clash.txt": "z\n",
-		"gone.txt": "gone, edited\n", "new.txt": "new\n",
+		"gone.txt": "gone, edited\n", "new.txt": "new\n", "bin.dat": "a\x00b\nC\n",
 	} {
 		writeFile(t, filepath.Join(dir, name), body)
 		setMTime(t, filepath.Join(dir, name), agedTime)
@@ -175,6 +178,9 @@ func TestUpdateWithLocalEditsMatchesFossil(t *testing.T) {
 	}
 	if strings.Join(res.Conflicted, ",") != "clash.txt" {
 		t.Errorf("Conflicted = %v, want [clash.txt]", res.Conflicted)
+	}
+	if strings.Join(res.Unmerged, ",") != "bin.dat,gone.txt" {
+		t.Errorf("Unmerged = %v, want [bin.dat gone.txt]", res.Unmerged)
 	}
 
 	// The conflicted file holds markers in both. Their text differs: fossil

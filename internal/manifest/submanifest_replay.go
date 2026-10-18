@@ -44,13 +44,14 @@ type replayCommit struct {
 // replayK is zit's replay over the last replayWindow check-ins at snapshot,
 // snapshot-1 and snapshot+1 within 1..12. It reports false when fewer than
 // two check-ins replay or every candidate stays flat throughout; the caller
-// then keeps the snapshot's value.
+// then keeps the snapshot's value. It only reads, one check-in at a time, so
+// it holds one file set and the arms' tallies, never the window.
 func replayK(q db.Querier, snapshot int) (int, bool, error) {
 	if !validPartitionK(snapshot) {
 		panic("manifest.replayK: snapshot must be from 1 to 12")
 	}
-	commits, name, err := replayCommits(q)
-	if err != nil || len(commits) < 2 {
+	rids, name, err := replayWindowRids(q)
+	if err != nil {
 		return 0, false, err
 	}
 	var arms []*replayArm
@@ -59,16 +60,25 @@ func replayK(q db.Querier, snapshot int) (int, bool, error) {
 			arms = append(arms, &replayArm{k: k, allFlat: true, seen: map[string]bool{}})
 		}
 	}
-	for i, c := range commits {
+	replayed := 0
+	for _, rid := range rids {
+		c, ok := loadReplayCommit(q, rid)
+		if !ok {
+			continue
+		}
 		for _, arm := range arms {
 			bytes, err := arm.replay(c, name)
 			if err != nil {
 				return 0, false, err
 			}
-			if i > 0 {
+			if replayed > 0 {
 				arm.steady += bytes
 			}
 		}
+		replayed++
+	}
+	if replayed < 2 {
+		return 0, false, nil
 	}
 	var best *replayArm
 	for _, arm := range arms {
@@ -113,10 +123,9 @@ func (a *replayArm) replay(c replayCommit, name func([]byte) (string, error)) (i
 	return total, nil
 }
 
-// replayCommits loads the window's check-ins, oldest first, skipping one
-// whose file set cannot be enumerated, and the naming the newest one's name
-// implies, as zit names by its tip.
-func replayCommits(q db.Querier) ([]replayCommit, func([]byte) (string, error), error) {
+// replayWindowRids is the window's check-ins, oldest first, and the naming
+// the newest one's name implies, as zit names by its tip.
+func replayWindowRids(q db.Querier) ([]libfossil.FslID, func([]byte) (string, error), error) {
 	rows, err := q.Query(`SELECT objid FROM (SELECT objid FROM event WHERE type='ci'
 		ORDER BY objid DESC LIMIT ?) ORDER BY objid`, replayWindow)
 	if err != nil {
@@ -143,18 +152,11 @@ func replayCommits(q db.Querier) ([]replayCommit, func([]byte) (string, error), 
 	if len(tip) == 40 {
 		alg = hash.AlgSHA1
 	}
-	name := func(data []byte) (string, error) { return alg.Hash(data), nil }
-	var out []replayCommit
-	for _, rid := range rids {
-		if c, ok := loadReplayCommit(q, rid); ok {
-			out = append(out, c)
-		}
-	}
-	return out, name, nil
+	return rids, func(data []byte) (string, error) { return alg.Hash(data), nil }, nil
 }
 
 // loadReplayCommit reads one check-in for the replay, reporting false when
-// it cannot be read or enumerated.
+// it cannot be read or enumerated, which zit skips uncounted.
 func loadReplayCommit(q db.Querier, rid libfossil.FslID) (replayCommit, bool) {
 	data, err := content.Expand(q, rid)
 	if err != nil {

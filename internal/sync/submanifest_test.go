@@ -370,6 +370,16 @@ func TestTreesNeverReachFossil228(t *testing.T) {
 	}
 }
 
+// writtenTreeFiles is the Appendix A.1 file set.
+func writtenTreeFiles() []manifest.File {
+	return []manifest.File{
+		{Name: "README.md", Content: []byte("# Example\n")},
+		{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+		{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+		{Name: "src/util.c", Content: []byte("/* util */\n")},
+	}
+}
+
 // writeTree commits a two-leaf tree with emission enabled and returns the
 // names of its manifest and leaves, and of one of its files.
 func writeTree(t *testing.T, r *repo.Repo) ([]string, string) {
@@ -378,12 +388,8 @@ func writeTree(t *testing.T, r *repo.Repo) ([]string, string) {
 		('enable-submanifests', 'on', 1), ('submanifest-k', '3', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	rid, uuid, err := manifest.Checkin(r, manifest.CheckinOpts{Files: []manifest.File{
-		{Name: "README.md", Content: []byte("# Example\n")},
-		{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
-		{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
-		{Name: "src/util.c", Content: []byte("/* util */\n")},
-	}, Comment: "written tree", User: "u"})
+	rid, uuid, err := manifest.Checkin(r, manifest.CheckinOpts{Files: writtenTreeFiles(),
+		Comment: "written tree", User: "u"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -648,6 +654,59 @@ func TestAvoidSubmanifestsReachesTheSessionsCommit(t *testing.T) {
 		}
 		if tree := len(d.S) > 0; tree == avoid {
 			t.Fatalf("avoid=%v: %d S cards", avoid, len(d.S))
+		}
+	}
+}
+
+// A leaf a private check-in stored first is made public by the public tree
+// commit that shares it, and the push carries the whole tree.
+func TestPublicTreeSendsSharedPrivateLeaves(t *testing.T) {
+	server, client := newTestRepoPair(t)
+	name := hash.MustNamingFor(client.DB()).New.Hash
+	var cards []deck.FileCard
+	for _, f := range writtenTreeFiles() {
+		cards = append(cards, deck.FileCard{Name: f.Name, UUID: name(f.Content)})
+	}
+	built, err := manifest.BuildTree(cards, 3, func(b []byte) (string, error) { return name(b), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.WithTx(func(tx *db.Tx) error {
+		for _, sub := range built.Subs {
+			rid, _, err := blob.Store(tx, sub)
+			if err != nil {
+				return err
+			}
+			if err := content.MakePrivate(tx, int64(rid)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tree, _ := writeTree(t, client)
+	if _, err := server.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		resp, err := HandleSync(context.Background(), server, req)
+		if err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+		return resp
+	}}
+	if _, err := Sync(context.Background(), client, transport, SyncOpts{Push: true}); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	for _, uuid := range tree {
+		if rid, ok := blob.Exists(server.DB(), uuid); !ok || content.IsPrivate(server.DB(), int64(rid)) {
+			t.Fatalf("the server did not receive %s publicly", uuid[:10])
+		}
+		var size int64
+		server.DB().QueryRow("SELECT size FROM blob WHERE uuid=?", uuid).Scan(&size)
+		if size < 0 {
+			t.Fatalf("the server holds %s only as a phantom", uuid[:10])
 		}
 	}
 }

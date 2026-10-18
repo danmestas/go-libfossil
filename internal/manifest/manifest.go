@@ -78,73 +78,71 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		opts.Time = time.Now().UTC()
 	}
 
+	var tree checkinTree
 	err = r.WithTx(func(tx *db.Tx) error {
-		if opts.Precheck != nil {
-			if txErr := opts.Precheck(tx); txErr != nil {
-				return txErr
-			}
-		}
-		fCards, fileRids, txErr := storeFileBlobs(tx, opts.Files)
-		if txErr != nil {
-			return txErr
-		}
-
-		d, tree, txErr := checkinDeck(tx, opts, fCards)
-		if txErr != nil {
-			return txErr
-		}
-
-		cache := content.NewCache(crosslinkCacheBytes)
-		if txErr := preflightCheckinMlinks(tx, cache, d); txErr != nil {
-			return fmt.Errorf("preflight checkin mlinks: %w", txErr)
-		}
-
-		manifestRid, manifestUUID, txErr = insertCheckinBlob(tx, d)
-		if txErr != nil {
-			return txErr
-		}
-
-		if txErr := VerifyRCard(tx, cache, manifestRid); txErr != nil {
-			return txErr
-		}
-
-		if txErr := insertCheckinMlinks(tx, cache, manifestRid, d); txErr != nil {
-			return txErr
-		}
-
-		// Store the parent check-in manifest as a delta against this one,
-		// the same backwards direction used for file content. Canonical does
-		// this at the end of commit (src/checkin.c:3234,
-		// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
-		// insertCheckinMlinks above; this covers the manifests themselves.
-		if opts.Parent > 0 {
-			if _, txErr := content.Deltify(tx, opts.Parent, manifestRid); txErr != nil {
-				return fmt.Errorf("deltify parent manifest: %w", txErr)
-			}
-		}
-
-		if txErr := markPlinkAndEvent(tx, opts, manifestRid); txErr != nil {
-			return txErr
-		}
-
-		// Mark file blobs as unsent so sync pushes them.
-		// (unclustered is handled by blob.Store automatically.)
-		for _, frid := range fileRids {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
-				return fmt.Errorf("unsent file: %w", err)
-			}
-		}
-
-		if txErr := linkCheckinTags(tx, opts, manifestRid, d.T); txErr != nil {
-			return txErr
-		}
-		return tree.retune(tx)
+		var txErr error
+		manifestRid, manifestUUID, tree, txErr = checkinTx(tx, opts)
+		return txErr
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
 	}
-
+	tree.afterCommit(r)
 	return manifestRid, manifestUUID, nil
+}
+
+// checkinTx stores a check-in and derives its rows, all in tx.
+func checkinTx(tx *db.Tx, opts CheckinOpts) (libfossil.FslID, string, checkinTree, error) {
+	if opts.Precheck != nil {
+		if err := opts.Precheck(tx); err != nil {
+			return 0, "", checkinTree{}, err
+		}
+	}
+	fCards, fileRids, err := storeFileBlobs(tx, opts.Files)
+	if err != nil {
+		return 0, "", checkinTree{}, err
+	}
+	d, tree, err := checkinDeck(tx, opts, fCards)
+	if err != nil {
+		return 0, "", tree, err
+	}
+	cache := content.NewCache(crosslinkCacheBytes)
+	if err := preflightCheckinMlinks(tx, cache, d); err != nil {
+		return 0, "", tree, fmt.Errorf("preflight checkin mlinks: %w", err)
+	}
+	rid, uuid, err := insertCheckinBlob(tx, d)
+	if err != nil {
+		return 0, "", tree, err
+	}
+	if err := VerifyRCard(tx, cache, rid); err != nil {
+		return 0, "", tree, err
+	}
+	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
+		return 0, "", tree, err
+	}
+
+	// Store the parent check-in manifest as a delta against this one,
+	// the same backwards direction used for file content. Canonical does
+	// this at the end of commit (src/checkin.c:3234,
+	// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
+	// insertCheckinMlinks above; this covers the manifests themselves.
+	if opts.Parent > 0 {
+		if _, err := content.Deltify(tx, opts.Parent, rid); err != nil {
+			return 0, "", tree, fmt.Errorf("deltify parent manifest: %w", err)
+		}
+	}
+	if err := markPlinkAndEvent(tx, opts, rid); err != nil {
+		return 0, "", tree, err
+	}
+
+	// Mark file blobs as unsent so sync pushes them.
+	// (unclustered is handled by blob.Store automatically.)
+	for _, frid := range fileRids {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
+			return 0, "", tree, fmt.Errorf("unsent file: %w", err)
+		}
+	}
+	return rid, uuid, tree, linkCheckinTags(tx, opts, rid, d.T)
 }
 
 // linkCheckinTags derives a new check-in's tag and leaf state on the check-in's

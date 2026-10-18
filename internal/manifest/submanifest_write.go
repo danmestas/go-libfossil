@@ -8,6 +8,7 @@ package manifest
 // never heard of trees.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -139,51 +140,51 @@ var errNoSelection = errors.New("no partition parameter can be selected")
 // EnableSubmanifests is §8.1's local request to turn emission on. A valid
 // pin takes precedence: an explicit k that differs from it is refused, since
 // changing it is a re-tune. With no valid pin, an explicit k (1 to 12) is
-// pinned, and k = 0 asks for §6.3's automatic selection over current, the
-// check-in the next commit will descend from (0 for none). A request that
-// cannot be met changes nothing. Selection is zit's: the §6.3 snapshot
-// over current, refined by a replay of recent history when there is one. It
-// returns the pinned k; the caller owes the operator
-// SubmanifestEnableWarning.
+// pinned, and k = 0 asks for automatic selection over current, the
+// check-in the next commit will descend from (0 for none). Selection is
+// zit's: the §6.3 snapshot over current, refined by a replay of recent
+// history when there is one. It only reads, outside any write transaction;
+// the settings are then re-read and written in a short one, and a pin that
+// appeared meanwhile takes precedence as §8.1 says. A request that cannot
+// be met changes nothing. It returns the pinned k; the caller owes the
+// operator SubmanifestEnableWarning.
 func EnableSubmanifests(r *repo.Repo, current libfossil.FslID, k int) (pinned int, err error) {
 	if r == nil {
 		panic("manifest.EnableSubmanifests: r must not be nil")
 	}
+	return enableWith(r, k, func() (int, error) { return selectK(r.DB(), current) })
+}
+
+// enableWith is EnableSubmanifests with its selection supplied.
+func enableWith(r *repo.Repo, k int, selection func() (int, error)) (pinned int, err error) {
+	before, err := readSubmanifestSettings(r.DB())
+	if err != nil {
+		return 0, fmt.Errorf("manifest.EnableSubmanifests: %w", err)
+	}
+	proposed, err := enableDecision(before, k, selection)
+	if err != nil {
+		return 0, fmt.Errorf("manifest.EnableSubmanifests: %w", err)
+	}
 	err = r.WithTx(func(tx *db.Tx) error {
-		s, err := readSubmanifestSettings(tx)
+		now, err := readSubmanifestSettings(tx)
 		if err != nil {
 			return err
 		}
-		switch {
-		case s.k != 0 && k != 0 && k != s.k:
-			return fmt.Errorf("submanifest-k is pinned to %d; changing it is a re-tune", s.k)
-		case s.k != 0:
-			pinned = s.k
-		case k != 0:
-			if !validPartitionK(k) {
-				return fmt.Errorf("submanifest-k %d is outside %d..%d", k, MinPartitionK, MaxPartitionK)
-			}
-			pinned = k
-		default:
-			if pinned, err = selectForCheckin(tx, current); err != nil {
-				return err
-			}
-			// As zit does, recent history outranks the snapshot when it can
-			// speak (submanifest_replay.go).
-			k, ok, err := replayK(tx, pinned)
+		pinned = proposed
+		if now.k != before.k {
+			pinned, err = enableDecision(now, k, func() (int, error) {
+				return 0, errors.New("the pin changed while selecting; retry")
+			})
 			if err != nil {
 				return err
 			}
-			if ok {
-				pinned = k
-			}
 		}
-		if pinned != s.k {
+		if pinned != now.k {
 			if err := writeSubmanifestSetting(tx, SettingSubmanifestK, strconv.Itoa(pinned)); err != nil {
 				return err
 			}
 		}
-		if s.enabled {
+		if now.enabled {
 			return nil
 		}
 		return writeSubmanifestSetting(tx, SettingEnableSubmanifests, "on")
@@ -192,6 +193,38 @@ func EnableSubmanifests(r *repo.Repo, current libfossil.FslID, k int) (pinned in
 		return 0, fmt.Errorf("manifest.EnableSubmanifests: %w", err)
 	}
 	return pinned, nil
+}
+
+// enableDecision is §8.1's precedence for a request with explicit k (0 for
+// none) against settings s; selection runs only when nothing else decides.
+func enableDecision(s submanifestSettings, k int, selection func() (int, error)) (int, error) {
+	switch {
+	case s.k != 0 && k != 0 && k != s.k:
+		return 0, fmt.Errorf("submanifest-k is pinned to %d; changing it is a re-tune", s.k)
+	case s.k != 0:
+		return s.k, nil
+	case k != 0:
+		if !validPartitionK(k) {
+			return 0, fmt.Errorf("submanifest-k %d is outside %d..%d", k, MinPartitionK, MaxPartitionK)
+		}
+		return k, nil
+	}
+	return selection()
+}
+
+// selectK is zit's selection: the §6.3 snapshot over current, then the
+// replay of recent history, which outranks it when it can speak
+// (submanifest_replay.go).
+func selectK(q db.Querier, current libfossil.FslID) (int, error) {
+	snapshot, err := selectForCheckin(q, current)
+	if err != nil {
+		return 0, err
+	}
+	k, ok, err := replayK(q, snapshot)
+	if err != nil || !ok {
+		return snapshot, err
+	}
+	return k, nil
 }
 
 // selectForCheckin runs §6.3's automatic selection over current's file set.
@@ -274,41 +307,61 @@ func RetuneSubmanifests(r *repo.Repo, k int) error {
 	})
 }
 
+// storedTree is what storing a check-in's tree did: its S run, empty when
+// the construction is flat, and the sub-manifests that filled phantoms.
+type storedTree struct {
+	s      []deck.SubmanifestCard
+	filled []libfossil.FslID
+}
+
 // storeCheckinTree stores the canonical tree of files at k, children before
-// parents (§6.2), marks each new sub-manifest for sync and records the
-// seen-submanifest indicator (§8.1). It returns the manifest's S run, empty
-// when the construction is flat.
-func storeCheckinTree(tx *db.Tx, files []deck.FileCard, k int) ([]deck.SubmanifestCard, error) {
+// parents (§6.2), each named under the repository's hash policy alone. A
+// check-in is public, so every sub-manifest it names is made public, as
+// fossil's commit makes its blobs public; only sub-manifests it wrote are
+// queued for sync. It records the seen-submanifest indicator (§8.1).
+func storeCheckinTree(tx *db.Tx, files []deck.FileCard, k int) (storedTree, error) {
+	var st storedTree
 	tree, err := BuildTree(files, k, func(data []byte) (string, error) {
-		rid, uuid, err := blob.Store(tx, data)
-		if err != nil {
-			return "", fmt.Errorf("store sub-manifest: %w", err)
-		}
+		return storeSubmanifest(tx, data, &st)
+	})
+	if err != nil || len(tree.S) == 0 {
+		return storedTree{}, err
+	}
+	if err := MarkSeenSubmanifest(tx); err != nil {
+		return storedTree{}, err
+	}
+	st.s = tree.S
+	return st, nil
+}
+
+// storeSubmanifest stores one sub-manifest for storeCheckinTree.
+func storeSubmanifest(tx *db.Tx, data []byte, st *storedTree) (string, error) {
+	rid, uuid, outcome, err := blob.StoreUnderPolicy(tx, data)
+	if err != nil {
+		return "", fmt.Errorf("store sub-manifest: %w", err)
+	}
+	if outcome == blob.FilledPhantom {
+		st.filled = append(st.filled, rid)
+	}
+	if err := content.MakePublic(tx, int64(rid)); err != nil {
+		return "", fmt.Errorf("publish sub-manifest: %w", err)
+	}
+	if outcome != blob.Found {
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid); err != nil {
 			return "", fmt.Errorf("unsent sub-manifest: %w", err)
 		}
-		return uuid, nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	if len(tree.S) == 0 {
-		return nil, nil
-	}
-	if err := MarkSeenSubmanifest(tx); err != nil {
-		return nil, err
-	}
-	return tree.S, nil
+	return uuid, nil
 }
 
 // checkinTree is a commit's tree decision: the settings it read, the k it
-// partitions at (0 for flat), its files in canonical order and the S run of
-// the stored tree, empty when the manifest stays flat.
+// partitions at (0 for flat), its files in canonical order and what storing
+// the tree did.
 type checkinTree struct {
 	settings submanifestSettings
 	k        int
 	files    []deck.FileCard
-	s        []deck.SubmanifestCard
+	storedTree
 }
 
 // storeTreeFor makes the tree decision for a check-in of fCards and, when
@@ -330,18 +383,35 @@ func storeTreeFor(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (checkinT
 			return ct, fmt.Errorf("file %q is listed twice", ct.files[i].Name)
 		}
 	}
-	ct.s, err = storeCheckinTree(tx, ct.files, ct.k)
+	ct.storedTree, err = storeCheckinTree(tx, ct.files, ct.k)
 	return ct, err
 }
 
-// retune is §6.4's automatic re-tune, run once the commit is the current
-// check-in, over its file set, when it partitioned at a pinned k: while
+// afterCommit is what a tree commit owes once it is durable, as zit runs it:
+// the check-ins waiting on a sub-manifest it filled are linked now rather
+// than at the next sweep (§7.1, §7.3), and the §6.4 automatic re-tune runs.
+// Neither can fail the commit; a failure is reported.
+func (ct checkinTree) afterCommit(r *repo.Repo) {
+	if len(ct.filled) > 0 {
+		ctx := context.Background()
+		linked := AfterDephantomizeBatch(ctx, r, ct.filled)
+		if _, err := CrosslinkAfterCascades(ctx, r, linked); err != nil {
+			slog.Warn("manifest.Checkin: linking check-ins that waited on a sub-manifest", "err", err)
+		}
+	}
+	if ct.k == 0 {
+		return
+	}
+	if err := r.WithTx(ct.retune); err != nil {
+		slog.Warn("manifest.Checkin: sub-manifest re-tune failed; the commit stands", "err", err)
+	}
+}
+
+// retune is §6.4's automatic re-tune over the commit's file set, the
+// current check-in once the commit is durable: while
 // submanifest-auto-retune is on it re-pins k when the gate clears;
 // otherwise it only advises.
 func (ct checkinTree) retune(tx *db.Tx) error {
-	if ct.k == 0 {
-		return nil
-	}
 	target, ok := retuneTarget(partitionCosts(ct.files), ct.k)
 	if !ok {
 		return nil

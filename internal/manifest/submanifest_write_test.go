@@ -9,8 +9,10 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -404,5 +406,197 @@ func TestDisableSubmanifests(t *testing.T) {
 		Time: writeTime.Add(time.Hour)})
 	if len(d.S) != 0 || settingValue(t, r, SettingSubmanifestK) != "3" {
 		t.Fatalf("after disable: %d S cards, k %q", len(d.S), settingValue(t, r, SettingSubmanifestK))
+	}
+}
+
+// a1Tree is the A.1 tree at k = 3 named by alg: the leaves' bytes and the
+// manifest's S run.
+func a1Tree(t *testing.T, alg func([]byte) string) Tree {
+	t.Helper()
+	var cards []deck.FileCard
+	for _, f := range a1CheckinFiles() {
+		cards = append(cards, deck.FileCard{Name: f.Name, UUID: alg(f.Content)})
+	}
+	tree, err := BuildTree(cards, 3, func(b []byte) (string, error) { return alg(b), nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tree
+}
+
+func isPrivate(t *testing.T, r *repo.Repo, uuid string) bool {
+	t.Helper()
+	rid, ok := blob.Exists(r.DB(), uuid)
+	if !ok {
+		t.Fatalf("%s not stored", uuid)
+	}
+	var n int
+	r.DB().QueryRow("SELECT count(*) FROM private WHERE rid=?", rid).Scan(&n)
+	return n > 0
+}
+
+// A public check-in makes every sub-manifest it names public, even one
+// already stored privately (a private branch sharing a leaf), so sync sends
+// the whole tree.
+func TestCheckinTreeMakesSharedLeavesPublic(t *testing.T) {
+	r := sha3Repo(t)
+	tree := a1Tree(t, hash.SHA3)
+	if err := r.WithTx(func(tx *db.Tx) error {
+		for _, sub := range tree.Subs {
+			rid, _, err := blob.Store(tx, sub)
+			if err != nil {
+				return err
+			}
+			if err := content.MakePrivate(tx, int64(rid)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+	_, d := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "public"})
+	for _, s := range d.S {
+		if isPrivate(t, r, s.UUID) {
+			t.Fatalf("leaf %s stays private under a public check-in", s.UUID[:10])
+		}
+	}
+}
+
+// §6.2: an S card names its child under the repository's hash policy: a
+// sha1-named copy of a leaf in a sha3 repository is not reused, and a sha1
+// repository names its tree in sha1.
+func TestCheckinTreeNamesByPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, before, after string
+		alg                 func([]byte) string
+	}{
+		{"sha3 over a sha1 copy", "0", "2", hash.SHA3},
+		{"sha1", "0", "0", hash.SHA1},
+		{"auto with sha1 history", "0", "1", hash.SHA1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := setupTestRepo(t)
+			setSettings(t, r, "hash-policy", tc.before)
+			if err := r.WithTx(func(tx *db.Tx) error {
+				_, _, err := blob.Store(tx, a1Tree(t, tc.alg).Subs[0])
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			setSettings(t, r, "hash-policy", tc.after, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+			_, d := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "c"})
+			want := a1Tree(t, tc.alg).S
+			if len(d.S) != 2 || d.S[0] != want[0] || d.S[1] != want[1] {
+				t.Fatalf("S run %+v, want %+v", d.S, want)
+			}
+		})
+	}
+}
+
+// Only sub-manifests the commit wrote are queued for sync; one it shares
+// with an earlier, already sent tree is not queued again.
+func TestCheckinTreeQueuesOnlyNewSubmanifests(t *testing.T) {
+	r := sha3Repo(t)
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+	parent, first := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "one"})
+	if _, err := r.DB().Exec("DELETE FROM unsent"); err != nil {
+		t.Fatal(err)
+	}
+	files := a1CheckinFiles()
+	files[3].Content = []byte("/* util 2 */\n")
+	_, second := commit(t, r, CheckinOpts{Files: files, Comment: "two", Parent: parent,
+		Time: writeTime.Add(time.Hour)})
+	unsent := func(uuid string) bool {
+		rid, _ := blob.Exists(r.DB(), uuid)
+		var n int
+		r.DB().QueryRow("SELECT count(*) FROM unsent WHERE rid=?", rid).Scan(&n)
+		return n > 0
+	}
+	if second.S[0] != first.S[0] || unsent(second.S[0].UUID) {
+		t.Fatal("the shared leaf was queued again")
+	}
+	if !unsent(second.S[1].UUID) {
+		t.Fatal("the new leaf was not queued")
+	}
+}
+
+// §7.1 and §7.3: a received tree check-in waiting on a sub-manifest is linked
+// as soon as a local commit stores that sub-manifest, not at the next sweep.
+func TestCheckinFillingPhantomLinksWaitingTree(t *testing.T) {
+	r := sha3Repo(t)
+	tree := a1Tree(t, hash.SHA3)
+	var waiting string
+	if err := r.WithTx(func(tx *db.Tx) error {
+		for _, f := range a1CheckinFiles() {
+			if _, _, err := blob.Store(tx, f.Content); err != nil {
+				return err
+			}
+		}
+		if _, _, err := blob.Store(tx, tree.Subs[0]); err != nil {
+			return err
+		}
+		data, err := (&deck.Deck{C: "received", D: writeTime, S: tree.S, U: deck.User("u"),
+			T: []deck.TagCard{{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}}}).Marshal()
+		if err != nil {
+			return err
+		}
+		_, waiting, err = blob.Store(tx, data)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Crosslink(r); err != nil {
+		t.Fatal(err)
+	}
+	waitingRid, _ := blob.Exists(r.DB(), waiting)
+	events := func() int {
+		var n int
+		r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?", waitingRid).Scan(&n)
+		return n
+	}
+	if events() != 0 {
+		t.Fatal("fixture: the tree was linked without its second leaf")
+	}
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+	commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "local", Time: writeTime.Add(time.Hour)})
+	if events() != 1 {
+		t.Fatal("the waiting tree was not linked when its sub-manifest was stored")
+	}
+}
+
+// §6.4: the automatic re-tune runs after the commit is durable; its failure
+// is reported, never the commit's.
+func TestAutoRetuneFailureKeepsCommit(t *testing.T) {
+	r := sha3Repo(t)
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "1", SettingAutoRetune, "on")
+	if _, err := r.DB().Exec(`CREATE TRIGGER fail_retune BEFORE INSERT ON config
+		WHEN NEW.name='submanifest-k' BEGIN SELECT RAISE(ABORT, 'injected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	rid, _, err := Checkin(r, CheckinOpts{Files: retuneFiles(), Comment: "c", User: "u", Time: writeTime})
+	if err != nil || rid <= 0 {
+		t.Fatalf("a failed re-tune failed the commit: %v", err)
+	}
+	if got := settingValue(t, r, SettingSubmanifestK); got != "1" {
+		t.Fatalf("k %s after a failed re-tune", got)
+	}
+}
+
+// Selection runs outside the write transaction -- here it writes a pin
+// itself, as a concurrent writer might -- and a pin that appears meanwhile
+// takes §8.1's precedence over the value selected.
+func TestEnableSelectsOutsideTheWrite(t *testing.T) {
+	r := sha3Repo(t)
+	k, err := enableWith(r, 0, func() (int, error) {
+		if err := r.SetConfig(SettingSubmanifestK, "5"); err != nil {
+			return 0, err
+		}
+		return 2, nil
+	})
+	if err != nil || k != 5 || settingValue(t, r, SettingSubmanifestK) != "5" ||
+		settingValue(t, r, SettingEnableSubmanifests) != "on" {
+		t.Fatalf("enable = %d, %v; want the pin that appeared, 5", k, err)
 	}
 }

@@ -39,6 +39,52 @@ func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([
 	return fCardsToEntries(cards), nil
 }
 
+// FileFilter narrows an enumeration to the files a sparse cone covers: the
+// range predicate draft-fossil-sparse-cone-00 §4.1 applies at this seam, so
+// every consumer of a narrowed file set gets it from one place. Covers
+// decides one name; MayCover reports whether any covered name n could have
+// first <= n < limit (an empty limit is unbounded), and may err toward true.
+type FileFilter interface {
+	Covers(name string) bool
+	MayCover(first, limit string) bool
+}
+
+// ListFilesFiltered is ListFiles narrowed to the files filter covers; a nil
+// filter lists every file. On a tree manifest the walk skips every
+// sub-manifest whose key range filter cannot cover, so the cost follows the
+// covered part and the spine rather than the whole tree (§1.3, §4.5), and a
+// skipped node need not be held at all.
+func ListFilesFiltered(r *repo.Repo, rid libfossil.FslID, filter FileFilter) ([]FileEntry, error) {
+	if filter == nil {
+		return ListFiles(r, rid)
+	}
+	d, err := GetManifestCached(r, rid, nil)
+	if err != nil {
+		return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
+	}
+	if d.Type == deck.Submanifest {
+		return nil, fmt.Errorf("manifest.ListFilesFiltered: a sub-manifest is a slice of a check-in, not a check-in")
+	}
+	if d.B == "" && isTree(d) {
+		cards, err := walkTreeFiltered(r.DB(), nil, d, filter)
+		if err != nil {
+			return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
+		}
+		return fCardsToEntries(cards), nil
+	}
+	cards, err := checkinFileCards(r.DB(), nil, d)
+	if err != nil {
+		return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
+	}
+	kept := cards[:0:0]
+	for _, c := range cards {
+		if filter.Covers(c.Name) {
+			kept = append(kept, c)
+		}
+	}
+	return fCardsToEntries(kept), nil
+}
+
 // checkinFileCards is the enumeration seam of draft-fossil-submanifests-00
 // §9.3: the one place a check-in's complete file set is assembled, in
 // comparator order and with no delete markers, whatever form the manifest

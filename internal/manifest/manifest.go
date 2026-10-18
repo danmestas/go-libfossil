@@ -45,6 +45,11 @@ type File struct {
 	Content []byte
 	Perm    string
 	OldName string // prior pathname when this file card records a rename
+	// UUID, when set, carries an artifact the repository already holds into
+	// the check-in by its name, with Content nil: the F card names it
+	// verbatim and nothing is stored. A sparse checkout's commit carries its
+	// out-of-cone files this way (draft-fossil-sparse-cone-00 §4.2).
+	UUID string
 }
 
 func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manifestUUID string, err error) {
@@ -232,6 +237,13 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		if err := checkWriterName(f.OldName); err != nil {
 			return nil, nil, err
 		}
+		if f.UUID != "" {
+			if err := checkCarried(tx, f); err != nil {
+				return nil, nil, err
+			}
+			fCards[i] = deck.FileCard{Name: f.Name, UUID: f.UUID, Perm: f.Perm, OldName: f.OldName}
+			continue
+		}
 		rid, uuid, err := blob.Store(tx, f.Content)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
@@ -240,6 +252,19 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		rids = append(rids, rid)
 	}
 	return fCards, rids, nil
+}
+
+// checkCarried requires a carried file's artifact to be held: the R card
+// reads its content, and a check-in naming content its writer lacks would
+// be committed blind.
+func checkCarried(tx *db.Tx, f File) error {
+	if f.Content != nil {
+		panic("manifest.checkCarried: a carried file has content: " + f.Name)
+	}
+	if _, ok := content.AvailableByUUID(tx, f.UUID); !ok {
+		return fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	}
+	return nil
 }
 
 // checkinDeck builds a check-in's manifest. With sub-manifest emission

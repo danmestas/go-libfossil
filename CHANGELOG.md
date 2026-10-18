@@ -56,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and listed a fossil-written time as a bare number. A bisect listing shows
   each check-in's date as `fossil bisect ls` does, instead of a raw Julian
   day.
+- `ResolveVersion("NAME:TIMESTAMP")` bounds the search with SQLite's
+  `julianday()` of the rounded-up time, as fossil does, rather than the text
+  form of that time that event rows hold. On a millisecond where the two
+  differ, a check-in at the bound itself resolved here but not in fossil.
 
 ## [0.12.0] - 2026-10-13
 

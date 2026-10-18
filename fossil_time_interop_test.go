@@ -213,3 +213,51 @@ func TestConfigAndUserTimesMatchFossil(t *testing.T) {
 		secondsColumn(t, bin, goRepo, s.what, s.query, before, after)
 	}
 }
+
+// TestNameTimestampBoundaryMatchesFossil resolves BRANCH:TIMESTAMP where a
+// check-in sits on the very millisecond the timestamp rounds up to. Fossil
+// compares the stored event time, which it wrote as text, with julianday()
+// of the bound, and for this millisecond the text form is the larger, so
+// fossil does not count the check-in as at or before the bound. Both must
+// resolve to the same check-in.
+func TestNameTimestampBoundaryMatchesFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	dir := t.TempDir()
+	repoPath := filepath.Join(dir, "r.fossil")
+	ck := filepath.Join(dir, "ck")
+	if err := os.Mkdir(ck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fossilRun(t, bin, dir, "init", repoPath)
+	fossilRun(t, bin, ck, "open", repoPath)
+	writeFile(t, filepath.Join(ck, "a.txt"), "one\n")
+	fossilRun(t, bin, ck, "add", "a.txt")
+	fossilRun(t, bin, ck, "commit", "-m", "first", "--date-override", "2030-01-02 03:03:00.000")
+	writeFile(t, filepath.Join(ck, "a.txt"), "two, longer\n")
+	fossilRun(t, bin, ck, "commit", "-m", "second", "--date-override", "2030-01-02 03:04:00.999")
+	fossilRun(t, bin, ck, "close")
+
+	const query = "trunk:2030-01-02 03:04:00"
+	info := fossilRun(t, bin, dir, "info", query, "-R", repoPath)
+	m := regexp.MustCompile(`(?m)^hash:\s+([0-9a-f]+)`).FindStringSubmatch(info)
+	if m == nil {
+		t.Fatalf("fossil info %q printed no hash:\n%s", query, info)
+	}
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	rid, err := r.ResolveVersion(query)
+	if err != nil {
+		t.Fatalf("ResolveVersion(%q): %v", query, err)
+	}
+	got, err := r.UUIDFromRID(rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// fossil info shows the hash's first 40 digits.
+	if !strings.HasPrefix(got, m[1]) {
+		t.Errorf("ResolveVersion(%q) = %s, fossil resolves %s", query, got, m[1])
+	}
+}

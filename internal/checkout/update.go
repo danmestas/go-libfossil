@@ -48,9 +48,10 @@ func buildFileMaps(currentFiles, targetFiles, ancestorFiles []manifest.FileEntry
 // processFileUpdates iterates over all file names and applies update/merge
 // logic for each one. Returns the paths actually written, removed, and
 // conflicted — not merely counts — so the caller can report exactly which
-// files a consumer needs to inspect.
+// files a consumer needs to inspect. fresh lists the written paths that now
+// hold the target's content as it is (not merged).
 //
-// Bounded: the loop and the three returned slices are each bounded by
+// Bounded: the loop and the returned slices are each bounded by
 // len(maps.allNames), the union of the current and target manifests for
 // this update — finite for any real checkin.
 func (c *Checkout) processFileUpdates(
@@ -58,7 +59,7 @@ func (c *Checkout) processFileUpdates(
 	maps updateFileMaps,
 	strategy merge.Strategy,
 	opts UpdateOpts,
-) (filesWritten, filesRemoved, conflicted []string, err error) {
+) (filesWritten, filesRemoved, conflicted, fresh []string, err error) {
 	for name := range maps.allNames {
 		curUUID, inCurrent := maps.current[name]
 		tgtUUID, inTarget := maps.target[name]
@@ -69,7 +70,7 @@ func (c *Checkout) processFileUpdates(
 			inCurrent, inTarget, strategy, opts.DryRun,
 		)
 		if ferr != nil {
-			return filesWritten, filesRemoved, conflicted, fmt.Errorf("checkout.Update: %w", ferr)
+			return filesWritten, filesRemoved, conflicted, fresh, fmt.Errorf("checkout.Update: %w", ferr)
 		}
 
 		if change == UpdateNone {
@@ -77,7 +78,10 @@ func (c *Checkout) processFileUpdates(
 		}
 
 		switch change {
-		case UpdateAdded, UpdateUpdated, UpdateMerged:
+		case UpdateAdded, UpdateUpdated:
+			filesWritten = append(filesWritten, name)
+			fresh = append(fresh, name)
+		case UpdateMerged:
 			filesWritten = append(filesWritten, name)
 		case UpdateConflictMerged:
 			filesWritten = append(filesWritten, name)
@@ -93,13 +97,13 @@ func (c *Checkout) processFileUpdates(
 
 		if opts.Callback != nil {
 			if cerr := opts.Callback(name, change); cerr != nil {
-				return filesWritten, filesRemoved, conflicted, fmt.Errorf(
+				return filesWritten, filesRemoved, conflicted, fresh, fmt.Errorf(
 					"checkout.Update: callback for %s: %w", name, cerr,
 				)
 			}
 		}
 	}
-	return filesWritten, filesRemoved, conflicted, nil
+	return filesWritten, filesRemoved, conflicted, fresh, nil
 }
 
 // buildUpdateMaps gathers file lists for current, target, and their common
@@ -164,7 +168,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		TargetRID: target,
 	})
 
-	var filesWritten, filesRemoved, conflicted []string
+	var filesWritten, filesRemoved, conflicted, fresh []string
 	var updateErr error
 	defer func() {
 		c.obs.ExtractCompleted(ctx, ExtractEnd{
@@ -197,14 +201,14 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, updateErr
 	}
 
-	filesWritten, filesRemoved, conflicted, updateErr = c.processFileUpdates(ctx, maps, strategy, opts)
+	filesWritten, filesRemoved, conflicted, fresh, updateErr = c.processFileUpdates(ctx, maps, strategy, opts)
 	if updateErr != nil {
 		return UpdateResult{}, updateErr
 	}
 
 	// Finalize: reload vfile and update vvar
 	if !opts.DryRun {
-		if updateErr = c.finalizeUpdate(target); updateErr != nil {
+		if updateErr = c.finalizeUpdate(target, fresh); updateErr != nil {
 			return UpdateResult{}, updateErr
 		}
 		if opts.SetMTime {
@@ -268,11 +272,24 @@ func (c *Checkout) updateTarget(
 	return target, current, nil
 }
 
-// finalizeUpdate reloads vfile for the target version, looks up its UUID,
-// and updates the vvar checkout/checkout-hash entries.
-func (c *Checkout) finalizeUpdate(target libfossil.FslID) error {
+// finalizeUpdate reloads vfile for the target version, records the mtimes
+// of the fresh files (written with the target's content), looks up its UUID,
+// and updates the vvar checkout/checkout-hash entries. An unchanged file
+// keeps its mtime through LoadVFile, as fossil's update transfers it.
+func (c *Checkout) finalizeUpdate(target libfossil.FslID, fresh []string) error {
 	if err := c.LoadVFile(target, true); err != nil {
 		return fmt.Errorf("checkout.Update: reload vfile: %w", err)
+	}
+	for _, name := range fresh {
+		var rid int64
+		if err := c.db.QueryRow(
+			"SELECT mrid FROM vfile WHERE vid = ? AND pathname = ?", int64(target), name,
+		).Scan(&rid); err != nil {
+			return fmt.Errorf("checkout.Update: vfile row for %s: %w", name, err)
+		}
+		if err := c.recordWrittenMTime(target, name, rid); err != nil {
+			return fmt.Errorf("checkout.Update: %w", err)
+		}
 	}
 
 	var targetUUID string

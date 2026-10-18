@@ -592,8 +592,9 @@ func TestUpdateSetMTimeFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal("stat:", err)
 	}
-	if !info.ModTime().IsZero() {
-		t.Fatalf("mtime should be zero when SetMTime is false, got %v", info.ModTime())
+	// The write's own time, not the check-in's.
+	if info.ModTime().Equal(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("mtime set to the check-in time when SetMTime is false: %v", info.ModTime())
 	}
 }
 

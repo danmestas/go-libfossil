@@ -265,34 +265,3 @@ func TestVisitChangesFossilRowShapes(t *testing.T) {
 		}
 	}
 }
-
-// TestNextChangedState pins the chnged transitions against fossil's
-// vfile_check_signature, for a file present on disk.
-func TestNextChangedState(t *testing.T) {
-	cases := []struct {
-		chnged      int64
-		hasBaseline bool
-		differs     bool
-		want        int64
-	}{
-		{0, false, false, 1}, // fossil add: always a change
-		{1, false, false, 1},
-		{3, false, false, 3}, // added by merge: kept
-		{0, true, false, 0},
-		{0, true, true, 1},
-		{1, true, false, 0}, // edit reverted by hand
-		{1, true, true, 1},
-		{2, true, false, 2}, // updated by merge: kept while untouched
-		{2, true, true, 1},  // ...and edited on top
-		{4, true, true, 1},
-		{5, true, true, 5}, // merge conflict: kept
-		{5, true, false, 5},
-	}
-	for _, tc := range cases {
-		got := nextChangedState(tc.chnged, tc.hasBaseline, tc.differs)
-		if got != tc.want {
-			t.Errorf("nextChangedState(%d, %v, %v) = %d, want %d",
-				tc.chnged, tc.hasBaseline, tc.differs, got, tc.want)
-		}
-	}
-}

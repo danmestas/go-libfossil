@@ -269,16 +269,16 @@ func TestScanChangesNoHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Modify a file on disk.
+	// Modify a file on disk, keeping its size: MemStorage gives the write a
+	// new mtime, as a filesystem does.
 	if err := mem.WriteFile(
-		"/checkout/hello.txt", []byte("changed"), 0644,
+		"/checkout/hello.txt", []byte("HELLO WORLD\n"), 0644,
 	); err != nil {
 		t.Fatal(err)
 	}
 
-	// ScanChanges(0) — no ScanHash flag — should NOT detect content
-	// changes (only mtime-based, which is not yet implemented, so
-	// chnged should remain 0).
+	// ScanChanges(0) — no ScanHash flag — is fossil's default scan: the
+	// new mtime makes it hash the file and see the edit.
 	if err := co.ScanChanges(0); err != nil {
 		t.Fatal(err)
 	}
@@ -291,8 +291,8 @@ func TestScanChangesNoHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if chnged != 0 {
-		t.Fatalf("without ScanHash, chnged = %d, want 0", chnged)
+	if chnged != 1 {
+		t.Fatalf("without ScanHash, chnged = %d, want 1", chnged)
 	}
 }
 

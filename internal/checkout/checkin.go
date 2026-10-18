@@ -506,8 +506,22 @@ func (c *Checkout) mergeParents(parent libfossil.FslID) (parents []libfossil.Fsl
 }
 
 // finalizeCommit updates vvar, reloads vfile, and clears the checkin queue
-// after a successful manifest.Checkin.
-func (c *Checkout) finalizeCommit(newRID libfossil.FslID, newUUID string) error {
+// after a successful manifest.Checkin. The committed files keep the mtimes
+// their rows recorded, as fossil's commit updates vfile in place: what they
+// hold on disk is now the new version's content.
+func (c *Checkout) finalizeCommit(
+	in commitInputs, newRID libfossil.FslID, newUUID string,
+) error {
+	var committed []string
+	for _, name := range in.changed {
+		if in.include(name) {
+			committed = append(committed, name)
+		}
+	}
+	mtimes, err := c.rowMTimes(in.parent, committed)
+	if err != nil {
+		return fmt.Errorf("checkout.Commit: %w", err)
+	}
 	if err := setVVar(c.db, "checkout", strconv.FormatInt(int64(newRID), 10)); err != nil {
 		return fmt.Errorf("checkout.Commit: set checkout vvar: %w", err)
 	}
@@ -516,6 +530,9 @@ func (c *Checkout) finalizeCommit(newRID libfossil.FslID, newUUID string) error 
 	}
 	if err := c.LoadVFile(newRID, true); err != nil {
 		return fmt.Errorf("checkout.Commit: reload vfile: %w", err)
+	}
+	if err := c.setRowMTimes(newRID, mtimes); err != nil {
+		return fmt.Errorf("checkout.Commit: %w", err)
 	}
 	// The merges are part of the new checkin now.
 	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
@@ -565,7 +582,7 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 		return 0, "", result.Err
 	}
 
-	if err := c.finalizeCommit(newRID, newUUID); err != nil {
+	if err := c.finalizeCommit(in, newRID, newUUID); err != nil {
 		result.Err = err
 		return 0, "", err
 	}
@@ -596,7 +613,7 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 	if in.parent, _, err = c.Version(); err != nil {
 		return in, fmt.Errorf("checkout.Commit: %w", err)
 	}
-	if err := c.ScanChanges(ScanHash); err != nil {
+	if err := c.ScanChanges(0); err != nil {
 		return in, fmt.Errorf("checkout.Commit: scan: %w", err)
 	}
 	if opts.PreCommitCheck != nil {

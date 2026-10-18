@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -26,7 +27,9 @@ const missingNamesMax = 10
 const _ = uint(missingNamesMax - 1)
 
 // LoadVFile populates the vfile table with the files of checkin rid.
-// If clear=true, deletes all vfile rows for OTHER versions (keeps only vid=rid).
+// If clear=true, deletes all vfile rows for OTHER versions (keeps only vid=rid),
+// after a new row has taken the mtime of an unchanged row it replaces
+// (inheritMTimes).
 //
 // Like fossil's checkout, it refuses a version whose content is not all in
 // the repository, before writing anything: a row it cannot back with content
@@ -46,11 +49,6 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}
 
-	if clear {
-		if _, err := c.db.Exec("DELETE FROM vfile WHERE vid != ?", int64(rid)); err != nil {
-			return fmt.Errorf("checkout.LoadVFile: clear: %w", err)
-		}
-	}
 	for i, file := range files {
 		if blobRIDs[i] <= 0 {
 			panic("checkout.LoadVFile: unresolved blob for " + file.Name)
@@ -68,6 +66,15 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 		if err != nil {
 			return fmt.Errorf("checkout.LoadVFile: insert %s: %w", file.Name, err)
 		}
+	}
+	if !clear {
+		return nil
+	}
+	if err := c.inheritMTimes(rid); err != nil {
+		return fmt.Errorf("checkout.LoadVFile: %w", err)
+	}
+	if _, err := c.db.Exec("DELETE FROM vfile WHERE vid != ?", int64(rid)); err != nil {
+		return fmt.Errorf("checkout.LoadVFile: clear: %w", err)
 	}
 	return nil
 }
@@ -159,85 +166,188 @@ type scanVFileEntry struct {
 	mergeRid int64 // vfile.mrid: the artifact last written for the file, 0 if none
 	chnged   int64
 	deleted  int64
+	mtime    int64 // vfile.mtime: seconds since 1970, 0 when not known
 }
 
-// baselineHash returns the artifact hash a file on disk is judged against:
-// the uuid of vfile.mrid. mrid equals rid except while a merge is pending,
-// when it names the merged-in version. This is fossil's rule (its scan joins
-// blob on mrid). vfile.mhash is deliberately not read: fossil only fills it
-// during a merge, so it is NULL on ordinary rows (#228).
-func (c *Checkout) baselineHash(mergeRid int64) (string, error) {
+// baseline returns the hash and size of the artifact a file on disk is
+// judged against: the blob vfile.mrid names. mrid equals rid except while a
+// merge is pending, when it names the merged-in version. This is fossil's
+// rule (its scan joins blob on mrid). vfile.mhash is deliberately not read:
+// fossil only fills it during a merge, so it is NULL on ordinary rows (#228).
+func (c *Checkout) baseline(mergeRid int64) (string, int64, error) {
 	if mergeRid <= 0 {
-		panic("checkout.baselineHash: mergeRid must be positive")
+		panic("checkout.baseline: mergeRid must be positive")
 	}
 
 	var uuid string
+	var size int64
 	err := c.repo.DB().QueryRow(
-		"SELECT uuid FROM blob WHERE rid = ?", mergeRid,
-	).Scan(&uuid)
+		"SELECT uuid, size FROM blob WHERE rid = ?", mergeRid,
+	).Scan(&uuid, &size)
 	if err != nil {
-		return "", fmt.Errorf("blob uuid for rid %d: %w", mergeRid, err)
+		return "", 0, fmt.Errorf("blob for rid %d: %w", mergeRid, err)
 	}
 	if !hash.IsValidHash(uuid) {
-		return "", fmt.Errorf("blob rid %d has malformed uuid %q", mergeRid, uuid)
+		return "", 0, fmt.Errorf("blob rid %d has malformed uuid %q", mergeRid, uuid)
 	}
-	return uuid, nil
+	return uuid, size, nil
 }
 
-// nextChangedState returns the vfile.chnged value fossil's own scan
-// (vfile_check_signature) stores for a file that is present on disk. A row
-// with no artifact behind it (mrid=0) is a pending add, which fossil writes
-// with chnged=0 and the scan promotes to 1. Otherwise differs reports whether
-// the content differs from the artifact mrid names: unchanged (0) and the
-// clean merge outcomes (2, 4) become edited (1), an edited file whose content
-// is back at its baseline returns to 0, and every other state is kept: the
+// nextChangedState is the content half of fossil's vfile_check_signature:
+// the vfile.chnged value its scan stores for a file present on disk. A row
+// with no artifact behind it (mrid=0) is a pending add, written with
+// chnged=0, which the scan promotes to 1. A size other than the artifact's is
+// an edit outright. A file believed edited (1) is hashed, and returns to 0
+// when its content is back at the baseline. An unchanged file (0) or a clean
+// merge outcome (2, 4) is hashed only when its mtime cannot be trusted, and
+// becomes 1 when its content differs. Every other state is kept: the
 // remaining merge outcomes (3, 5) and the mode changes (6 through 9).
-func nextChangedState(chnged int64, hasBaseline, differs bool) int64 {
+// differs hashes the file; it is called only when the verdict needs it.
+func nextChangedState(
+	chnged int64, hasBaseline, sizeDiffers, mtimeTrusted bool,
+	differs func() (bool, error),
+) (int64, error) {
 	if chnged < 0 {
 		panic("checkout.nextChangedState: negative chnged")
 	}
-	if !hasBaseline {
-		if differs {
-			panic("checkout.nextChangedState: differs without a baseline")
-		}
-		if chnged == 0 {
-			return 1
-		}
-		return chnged
+	if differs == nil {
+		panic("checkout.nextChangedState: nil differs")
 	}
-	if differs {
-		if chnged == 0 || chnged == 2 || chnged == 4 {
-			return 1
+	if chnged == 0 && !hasBaseline {
+		chnged = 1
+	}
+	unchanged := chnged == 0 || chnged == 2 || chnged == 4
+	switch {
+	case sizeDiffers:
+		return 1, nil
+	case chnged == 1 && hasBaseline:
+		d, err := differs()
+		if err != nil || d {
+			return 1, err
 		}
-		return chnged
+		return 0, nil
+	case unchanged && !mtimeTrusted:
+		if !hasBaseline {
+			return 1, nil // nothing to verify against, as fossil finds
+		}
+		d, err := differs()
+		if err != nil || d {
+			return 1, err
+		}
+		return chnged, nil
 	}
-	if chnged == 1 {
-		return 0
-	}
-	return chnged
+	return chnged, nil
 }
 
-// syncChangedFlag stores the scan's verdict for e in vfile.chnged and reports
-// whether the file newly became edited.
-func (c *Checkout) syncChangedFlag(e scanVFileEntry, hasBaseline, differs bool) (bool, error) {
-	next := nextChangedState(e.chnged, hasBaseline, differs)
-	if next == e.chnged {
-		return false, nil
-	}
-	if _, err := c.db.Exec(
-		"UPDATE vfile SET chnged = ? WHERE id = ?", next, e.id,
-	); err != nil {
-		return false, fmt.Errorf(
-			"checkout.ScanChanges: update chnged for %s: %w", e.pathname, err,
-		)
-	}
-	return next == 1, nil
+// scanPolicy is how a scan decides whether a file needs hashing.
+type scanPolicy struct {
+	trustMTime bool  // fossil's useMtime: no ScanHash and mtime-changes on
+	now        int64 // the scan's time; see recordableMTime
 }
 
-// scanSingleEntry checks a single vfile entry against the file on disk,
-// updating vfile.chnged as needed. Returns (changed, missing) booleans.
+// newScanPolicy reads the policy for flags: a hash scan (fossil's --hash)
+// never trusts mtimes, and neither does any scan while the repository's
+// mtime-changes setting is off.
+func (c *Checkout) newScanPolicy(flags ScanFlags) (scanPolicy, error) {
+	p := scanPolicy{now: c.env.Clock.Now().Unix()}
+	if flags&ScanHash != 0 {
+		return p, nil
+	}
+	on, err := c.mtimeChanges()
+	if err != nil {
+		return p, err
+	}
+	p.trustMTime = on
+	return p, nil
+}
+
+// mtimeChanges reads fossil's mtime-changes setting, on by default, as
+// db_get_boolean reads it from the repository's config table.
+func (c *Checkout) mtimeChanges() (bool, error) {
+	var value sql.NullString
+	err := c.repo.DB().QueryRow(
+		"SELECT value FROM config WHERE name = 'mtime-changes'",
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && !value.Valid) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read mtime-changes: %w", err)
+	}
+	return settingBoolean(value.String, true), nil
+}
+
+// settingBoolean is fossil's db_get_boolean on a stored value: is_truth
+// ("on", "yes", "true" in any case, or a nonzero C atoi) gives true, is_false
+// ("off", "no", "false", "0" in any case) gives false, anything else dflt.
+func settingBoolean(value string, dflt bool) bool {
+	switch strings.ToLower(value) {
+	case "on", "yes", "true":
+		return true
+	case "off", "no", "false", "0":
+		return false
+	}
+	digits := strings.TrimLeft(value, " \t\n\v\f\r")
+	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
+		digits = digits[1:]
+	}
+	digits = strings.TrimLeft(digits, "0")
+	if digits != "" && digits[0] >= '1' && digits[0] <= '9' {
+		return true // a nonzero atoi
+	}
+	return dflt
+}
+
+// fileDiffers reports whether the file at fullPath hashes to other than
+// uuid.
+func (c *Checkout) fileDiffers(fullPath, uuid string) (bool, error) {
+	data, err := c.env.Storage.ReadFile(fullPath)
+	if err != nil {
+		return false, fmt.Errorf("read %s: %w", fullPath, err)
+	}
+	return hash.ContentHash(data, uuid) != uuid, nil
+}
+
+// scanWrite is one vfile row a scan updates.
+type scanWrite struct {
+	id, mtime, chnged int64
+}
+
+// storeScan stores a scan's updates in one transaction, as fossil's scan
+// runs in one.
+func (c *Checkout) storeScan(writes []scanWrite) (err error) {
+	if len(writes) == 0 {
+		return nil
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		return fmt.Errorf("checkout.ScanChanges: begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}()
+	for _, w := range writes {
+		if _, err := tx.Exec(
+			"UPDATE vfile SET mtime = ?, chnged = ? WHERE id = ?", w.mtime, w.chnged, w.id,
+		); err != nil {
+			return fmt.Errorf("checkout.ScanChanges: update vfile row %d: %w", w.id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("checkout.ScanChanges: commit: %w", err)
+	}
+	return nil
+}
+
+// scanSingleEntry checks a single vfile entry against the file on disk the
+// way fossil's vfile_check_signature does, appending to writes the update
+// that stores the verdict in vfile.chnged and the file's mtime in
+// vfile.mtime. Returns (changed, missing): changed when the file newly
+// became edited.
 func (c *Checkout) scanSingleEntry(
-	e scanVFileEntry, flags ScanFlags,
+	e scanVFileEntry, p scanPolicy, writes *[]scanWrite,
 ) (changed, missing bool, err error) {
 	if e.deleted != 0 {
 		return false, false, nil
@@ -252,8 +362,7 @@ func (c *Checkout) scanSingleEntry(
 	}
 
 	// Anything that is not a regular file is missing, as fossil's scan
-	// treats a directory where a file belongs (NOT_A_FILE); reading it
-	// would only fail.
+	// treats a directory where a file belongs (NOT_A_FILE).
 	info, err := c.env.Storage.Stat(fullPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -266,45 +375,39 @@ func (c *Checkout) scanSingleEntry(
 	if !info.Mode().IsRegular() {
 		return false, true, nil
 	}
-	data, err := c.env.Storage.ReadFile(fullPath)
-	if err != nil {
-		return false, false, fmt.Errorf(
-			"checkout.ScanChanges: read %s: %w", fullPath, err,
-		)
-	}
 
-	if flags&ScanHash == 0 {
+	uuid, size := "", int64(0)
+	if e.mergeRid > 0 {
+		if uuid, size, err = c.baseline(e.mergeRid); err != nil {
+			return false, false, fmt.Errorf("checkout.ScanChanges: %s: %w", e.pathname, err)
+		}
+	}
+	// A recorded 0 means not known, even for a file dated 1970.
+	trusted := p.trustMTime && e.mtime != 0 && info.ModTime().Unix() == e.mtime
+	next, err := nextChangedState(e.chnged, e.mergeRid > 0, info.Size() != size, trusted,
+		func() (bool, error) { return c.fileDiffers(fullPath, uuid) })
+	if err != nil {
+		return false, false, fmt.Errorf("checkout.ScanChanges: %w", err)
+	}
+	mtime := recordableMTime(info.ModTime(), p.now)
+	if next == e.chnged && mtime == e.mtime {
 		return false, false, nil
 	}
-
-	if e.mergeRid == 0 {
-		// Added and not yet committed: there is no artifact to compare against.
-		changed, err = c.syncChangedFlag(e, false, false)
-		return changed, false, err
-	}
-
-	baseline, err := c.baselineHash(e.mergeRid)
-	if err != nil {
-		return false, false, fmt.Errorf(
-			"checkout.ScanChanges: %s: %w", e.pathname, err,
-		)
-	}
-	differs := hash.ContentHash(data, baseline) != baseline
-
-	changed, err = c.syncChangedFlag(e, true, differs)
-	return changed, false, err
+	*writes = append(*writes, scanWrite{id: e.id, mtime: mtime, chnged: next})
+	return next == 1 && e.chnged != 1, false, nil
 }
 
 // loadScanEntries reads every vfile row of version rid. The rows are
 // collected up front so no cursor is held open during file I/O and the
-// per-row chnged updates.
+// per-row updates. Fossil leaves mtime NULL on a row it adds.
 func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error) {
 	if rid < 0 {
 		panic("checkout.loadScanEntries: negative rid")
 	}
 
 	rows, err := c.db.Query(`
-		SELECT id, pathname, mrid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER)
+		SELECT id, pathname, mrid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
+		       CAST(coalesce(mtime, 0) AS INTEGER)
 		FROM vfile WHERE vid = ?
 	`, int64(rid))
 	if err != nil {
@@ -315,7 +418,9 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 	var entries []scanVFileEntry
 	for rows.Next() {
 		var e scanVFileEntry
-		if err := rows.Scan(&e.id, &e.pathname, &e.mergeRid, &e.chnged, &e.deleted); err != nil {
+		if err := rows.Scan(
+			&e.id, &e.pathname, &e.mergeRid, &e.chnged, &e.deleted, &e.mtime,
+		); err != nil {
 			return nil, fmt.Errorf("checkout.ScanChanges: scan vfile row: %w", err)
 		}
 		entries = append(entries, e)
@@ -327,32 +432,39 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 }
 
 // refreshChanged brings vfile.chnged for every row of version vid up to date
-// with the files on disk, by hash, without observer notifications. It is the
-// part of ScanChanges that other operations need before they judge what is
-// safe to do; the scan they run is their own detail, not a scan to report.
+// with the files on disk, as fossil's default scan does, without observer
+// notifications. It is the part of ScanChanges that other operations need
+// before they judge what is safe to do; the scan they run is their own
+// detail, not a scan to report.
 func (c *Checkout) refreshChanged(vid libfossil.FslID) error {
 	if vid <= 0 {
 		panic("checkout.refreshChanged: vid must be positive")
 	}
 
+	p, err := c.newScanPolicy(0)
+	if err != nil {
+		return err
+	}
 	entries, err := c.loadScanEntries(vid)
 	if err != nil {
 		return err
 	}
+	var writes []scanWrite
 	for _, e := range entries {
-		if _, _, err := c.scanSingleEntry(e, ScanHash); err != nil {
+		if _, _, err := c.scanSingleEntry(e, p, &writes); err != nil {
 			return err
 		}
 	}
-	return nil
+	return c.storeScan(writes)
 }
 
 // ScanChanges detects modified and missing files in the checkout.
 // Walks the vfile table, checks each file on disk, and updates vfile.chnged accordingly.
 //
-// If flags includes ScanHash, hashes file content and compares it to the
-// hash of the artifact vfile.mrid names (see baselineHash).
-// Otherwise, uses mtime-based detection (future enhancement).
+// As fossil's scan, a file whose size and mtime match what vfile records is
+// taken as unchanged without reading it, unless flags includes ScanHash
+// (fossil's --hash) or the mtime-changes setting is off; any other file is
+// hashed and compared with the artifact vfile.mrid names (see baseline).
 //
 // Panics if c is nil (TigerStyle precondition).
 func (c *Checkout) ScanChanges(flags ScanFlags) error {
@@ -378,6 +490,10 @@ func (c *Checkout) ScanChanges(flags ScanFlags) error {
 		return fmt.Errorf("checkout.ScanChanges: %w", err)
 	}
 
+	p, err := c.newScanPolicy(flags)
+	if err != nil {
+		return fmt.Errorf("checkout.ScanChanges: %w", err)
+	}
 	entries, err := c.loadScanEntries(rid)
 	if err != nil {
 		return err
@@ -385,11 +501,12 @@ func (c *Checkout) ScanChanges(flags ScanFlags) error {
 
 	// Build a set of tracked pathnames for extra-file detection.
 	tracked := make(map[string]bool, len(entries))
+	var writes []scanWrite
 	for _, e := range entries {
 		tracked[e.pathname] = true
 		filesScanned++
 
-		changed, missing, scanErr := c.scanSingleEntry(e, flags)
+		changed, missing, scanErr := c.scanSingleEntry(e, p, &writes)
 		if scanErr != nil {
 			return scanErr
 		}
@@ -403,21 +520,29 @@ func (c *Checkout) ScanChanges(flags ScanFlags) error {
 			))
 		}
 	}
+	if err := c.storeScan(writes); err != nil {
+		return err
+	}
 
-	// Walk the checkout directory to detect EXTRA files (on disk but
-	// not in vfile). Errors are non-fatal: log via observer and continue.
+	filesExtra = c.countExtra(ctx, tracked)
+	return nil
+}
+
+// countExtra walks the checkout directory to count EXTRA files (on disk but
+// not in vfile). Errors are non-fatal: logged via observer, counting none.
+func (c *Checkout) countExtra(ctx context.Context, tracked map[string]bool) int {
 	diskFiles, walkErr := c.walkDir(c.dir)
 	if walkErr != nil {
 		c.obs.Error(ctx, walkErr)
-	} else {
-		for relPath := range diskFiles {
-			if !tracked[relPath] {
-				filesExtra++
-			}
+		return 0
+	}
+	extra := 0
+	for relPath := range diskFiles {
+		if !tracked[relPath] {
+			extra++
 		}
 	}
-
-	return nil
+	return extra
 }
 
 // maxWalkDepth is the maximum directory nesting depth walkDir will traverse.

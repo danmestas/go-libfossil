@@ -32,6 +32,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
   way; six requirements are new, two are reworded, and each has a case
   checked against fossil 2.28.
+- Checkouts record each file's mtime in `vfile.mtime` and scan the way
+  fossil's `vfile_check_signature` does: a file whose size matches its
+  artifact and whose mtime matches the recorded one is taken as unchanged
+  without being read, unless `ScanHash` is given or the repository's
+  `mtime-changes` setting is off. Status, commit, merge, revert and extract
+  use this scan, as fossil's commands do; before, every scan hashed every
+  file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
+  checkout on every command too. Extract, update, revert, commit and
+  `SetMTime` record mtimes where fossil does. One deliberate difference: an
+  mtime not older than the current second is recorded as 0 (hash it next
+  time), so an edit that keeps the size within the second a file was written
+  or scanned is still seen; fossil can miss such an edit. On the sqlite
+  repository's 2,220-file checkout, status takes about 30 ms instead of
+  about 250 ms. `simio.MemStorage` now gives each write a new mtime, as a
+  filesystem does.
 
 ### Fixed
 

@@ -119,6 +119,11 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 	if extractErr = c.finalizeExtract(rid, opts.Force); extractErr != nil {
 		return extractErr
 	}
+	for _, row := range vfRows {
+		if extractErr = c.recordWrittenMTime(rid, row.pathname, row.blobRid); extractErr != nil {
+			return fmt.Errorf("checkout.Extract: %w", extractErr)
+		}
+	}
 	if opts.SetMTime {
 		extractErr = c.setFileMTimes(rid)
 	}

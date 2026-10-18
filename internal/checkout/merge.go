@@ -119,7 +119,7 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 
 	// Which files are edited decides between taking the merged-in version
 	// and merging, so chnged must be current.
-	if err := c.ScanChanges(ScanHash); err != nil {
+	if err := c.ScanChanges(0); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
 	plan := mergePlan{vid: vid, pivot: pivot, mid: opts.Version}
@@ -619,6 +619,10 @@ func (c *Checkout) applyMergeTx(tx *sql.Tx, plan mergePlan) error {
 	return insertVMerge(tx, 0, plan.mid, mhash)
 }
 
+// alwaysDiffers stands in for hashing a file known to differ from its
+// baseline.
+func alwaysDiffers() (bool, error) { return true, nil }
+
 // applyMergeStep writes one file and records it the way fossil's merge
 // does.
 func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) error {
@@ -660,7 +664,10 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 		}
 		// What a scan would make of content that now differs from the
 		// baseline; a scan corrects it should the merge have changed nothing.
-		next := nextChangedState(s.row.Chnged, true, true)
+		next, err := nextChangedState(s.row.Chnged, true, false, false, alwaysDiffers)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec("UPDATE vfile SET mtime=0, chnged=?, isexe=? WHERE id=?",
 			next, s.exe, s.row.ID); err != nil {
 			return err
@@ -811,7 +818,7 @@ func (c *Checkout) Conflicts() ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
-	if err := c.ScanChanges(ScanHash); err != nil {
+	if err := c.ScanChanges(0); err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
 	rows, err := vfile.Load(c.db, int64(vid))

@@ -487,3 +487,25 @@ func TestMemStorageReadDirNotExist(t *testing.T) {
 		t.Errorf("expected IsNotExist error, got: %v", err)
 	}
 }
+
+// Each write moves a file's mtime forward by a whole second, as a write on a
+// real filesystem gives it a new time: checkout scans trust an mtime that
+// has not moved.
+func TestMemStorageWriteAdvancesMTime(t *testing.T) {
+	storage := NewMemStorage()
+	path := "/a.txt"
+	var last time.Time
+	for i := 0; i < 3; i++ {
+		if err := storage.WriteFile(path, []byte("same"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := storage.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i > 0 && info.ModTime().Unix() <= last.Unix() {
+			t.Fatalf("write %d: mtime %v, want after %v", i, info.ModTime(), last)
+		}
+		last = info.ModTime()
+	}
+}

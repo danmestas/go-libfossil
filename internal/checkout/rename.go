@@ -177,9 +177,11 @@ func (c *Checkout) RevertRename(name string, doFsMove bool) (bool, error) {
 
 	oldOrigName := origname.String
 
-	// Update vfile: restore origname as pathname, clear origname, reset chnged
+	// Update vfile: restore origname as pathname, clear origname, reset
+	// chnged. The file was not checked, so its recorded mtime is dropped and
+	// the next scan hashes it.
 	_, err = c.db.Exec(
-		"UPDATE vfile SET pathname=?, origname=NULL, chnged=0 WHERE id=?",
+		"UPDATE vfile SET pathname=?, origname=NULL, chnged=0, mtime=0 WHERE id=?",
 		oldOrigName, vfileID,
 	)
 	if err != nil {

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
-	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -46,11 +45,9 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 		return User{Login: card.User}, nil
 	}
 
-	// 1. Look up user by card.User and retrieve stored password + cexpire.
+	// 1. Look up user by card.User and retrieve the stored password.
 	// The reserved logins are capability templates, never accounts.
 	var storedPW string
-	var hasExpiry bool
-	var expiry sql.NullFloat64
 	var u User
 	var info sql.NullString
 	var mtimeRaw any
@@ -60,12 +57,11 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 	// the signature is SHA1(nonce), which anyone can compute. A new
 	// repository's creator starts that way, holding Setup.
 	err := d.QueryRow(
-		"SELECT uid, login, pw, cap, cexpire IS NOT NULL, julianday(cexpire), info, mtime"+
-			" FROM user WHERE login=?"+
+		"SELECT uid, login, pw, cap, info, mtime FROM user WHERE login=?"+
 			" AND login NOT IN ('anonymous','nobody','developer','reader')"+
 			" AND length(pw)>0",
 		card.User,
-	).Scan(&u.UID, &u.Login, &storedPW, &u.Cap, &hasExpiry, &expiry, &info, &mtimeRaw)
+	).Scan(&u.UID, &u.Login, &storedPW, &u.Cap, &info, &mtimeRaw)
 
 	// 2. If not found → ErrAuthFailed
 	if err != nil {
@@ -76,18 +72,12 @@ func VerifyLogin(d *db.DB, projectCode string, card *xfer.LoginCard) (User, erro
 		u.Info = info.String
 	}
 
-	// 3. If cexpire is set and in the past → ErrAuthFailed. Fossil stores it
-	// as a Julian day; julianday() also reads a date written as text. One
-	// that reads as no date at all is treated as expired, for safety.
-	if hasExpiry {
-		if !expiry.Valid {
-			return User{}, ErrAuthFailed
-		}
-		expireTime := fsltype.JulianToTime(expiry.Float64)
-		if time.Now().After(expireTime) {
-			return User{}, ErrAuthFailed
-		}
-		u.CExpire = expireTime
+	// 3. An invite whose expiry has passed → ErrAuthFailed. user.cexpire is
+	// not read: it is fossil's web-login cookie expiry, which fossil's own
+	// check_login ignores too (#441).
+	expired, err := inviteExpired(d, u.Login, time.Now())
+	if err != nil || expired {
+		return User{}, ErrAuthFailed
 	}
 
 	// 4. Check the signature against the stored password.

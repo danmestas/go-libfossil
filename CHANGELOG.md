@@ -41,11 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
   stamp the user's mtime too, as `fossil user capabilities` and
   `fossil user password` do.
-- A sync login reads `user.cexpire` as fossil stores it, a Julian day. Any
-  value fossil had written there, as its web login does, failed to parse and
-  refused the login; now only an expiry in the past refuses it, as before
-  for a date written as text. `repo invite --ttl` stores its expiry as a
-  Julian day too.
+- A sync login no longer reads `user.cexpire`. That column is the expiry of
+  fossil's web-login cookie, which fossil's own sync login ignores; reading
+  it refused any user who had logged into or out of fossil's web UI, or
+  whose cookie had lapsed (#441). `repo invite --ttl` keeps its expiry in a
+  config row of its own, `invite-expire:LOGIN`, in UTC, and a sync login
+  checks that instead. The expiry used to be written in local time and read
+  as UTC, so it was off by the local offset.
 - `SetMTime` on a checkout's extract and update now does what fossil's
   `--setmtime` does: each file takes the time of the newest check-in in the
   version's primary ancestry that recorded its content, in whole seconds,

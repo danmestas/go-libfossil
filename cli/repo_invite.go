@@ -36,11 +36,12 @@ func (c *RepoInviteCmd) Run(g *Globals) error {
 		return err
 	}
 
+	// The expiry is kept in go-libfossil's own config row, not user.cexpire,
+	// which is fossil's web-login cookie expiry (#441).
+	expiry := time.Now().Add(c.TTL)
 	if c.TTL > 0 {
-		// cexpire is a Julian day, as fossil keeps it.
-		expiry := libfossil.TimeToJulian(time.Now().Add(c.TTL))
-		if _, err := r.Inner().DB().Exec("UPDATE user SET cexpire=? WHERE login=?", expiry, c.Login); err != nil {
-			return fmt.Errorf("setting invite expiry: %w", err)
+		if err := auth.SetInviteExpiry(r.Inner().DB(), c.Login, expiry); err != nil {
+			return err
 		}
 	}
 
@@ -63,7 +64,7 @@ func (c *RepoInviteCmd) Run(g *Globals) error {
 
 	fmt.Printf("Invite for %q (capabilities: %s", c.Login, c.Cap)
 	if c.TTL > 0 {
-		fmt.Printf(", expires: %s", time.Now().Add(c.TTL).Format(time.RFC3339))
+		fmt.Printf(", expires: %s", expiry.UTC().Format(time.RFC3339))
 	}
 	fmt.Println("):")
 	fmt.Println()

@@ -6,12 +6,11 @@ import (
 )
 
 type User struct {
-	UID     int
-	Login   string
-	Cap     string
-	CExpire time.Time // zero value = no expiry
-	Info    string
-	MTime   time.Time
+	UID   int
+	Login string
+	Cap   string
+	Info  string
+	MTime time.Time
 }
 
 func HasCapability(caps string, required byte) bool {

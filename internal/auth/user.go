@@ -185,6 +185,11 @@ func DeleteUser(d *db.DB, login string) error {
 	if rows == 0 {
 		return fmt.Errorf("user %q not found", login)
 	}
+	// The invite expiry belongs to this user, not to a later one of the
+	// same login.
+	if _, err := d.Exec("DELETE FROM config WHERE name=?", InviteExpiryKey(login)); err != nil {
+		return fmt.Errorf("delete invite expiry for %q: %w", login, err)
+	}
 
 	return nil
 }

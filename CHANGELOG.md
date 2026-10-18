@@ -71,7 +71,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versioned; the first sweep after upgrading drops the old record and
   examines every blob again, once, so trees an earlier version could not
   parse are linked.
-
+- Check-ins and tags record their time to the millisecond, as fossil and
+  zit write it. A caller time with finer precision is truncated, and so is
+  the default clock time, which carried nanoseconds that zit cannot read
+  (danmestas/zit#244).
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2

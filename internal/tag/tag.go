@@ -68,6 +68,10 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if opts.Time.IsZero() {
 		opts.Time = time.Now().UTC()
 	}
+	// Fossil and zit write D cards to the millisecond. Finer digits are
+	// legal (§4.6.4) but zit cannot read them, and neither tool would
+	// produce them, so a new artifact never carries them.
+	opts.Time = opts.Time.UTC().Truncate(time.Millisecond)
 
 	var controlRid libfossil.FslID
 

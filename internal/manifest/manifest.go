@@ -77,6 +77,10 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	if opts.Time.IsZero() {
 		opts.Time = time.Now().UTC()
 	}
+	// Fossil and zit write D cards to the millisecond. Finer digits are
+	// legal (§4.6.4) but zit cannot read them, and neither tool would
+	// produce them, so a new artifact never carries them.
+	opts.Time = opts.Time.UTC().Truncate(time.Millisecond)
 
 	var tree checkinTree
 	err = r.WithTx(func(tx *db.Tx) error {

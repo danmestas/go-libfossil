@@ -362,3 +362,47 @@ func TestCheckinTreeRefusesDuplicateName(t *testing.T) {
 		t.Fatalf("%d events after a refused commit (%v)", n, err)
 	}
 }
+
+// zit's replay refinement of §6.3: it needs two replayable check-ins, and it
+// keeps to the snapshot's k and its neighbours, the lowest on a tie.
+func TestReplayK(t *testing.T) {
+	r := sha3Repo(t)
+	if _, ok, err := replayK(r.DB(), 3); ok || err != nil {
+		t.Fatalf("an empty history replayed: %v", err)
+	}
+	one, _ := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "one"})
+	if _, ok, _ := replayK(r.DB(), 3); ok {
+		t.Fatal("one check-in replayed")
+	}
+	files := a1CheckinFiles()
+	files[3].Content = []byte("/* util 2 */\n")
+	commit(t, r, CheckinOpts{Files: files, Comment: "two", Parent: one, Time: writeTime.Add(time.Hour)})
+	// A.1 partitions alike at k = 1, 2 and 3: every arm ties, the lowest wins.
+	if k, ok, err := replayK(r.DB(), 2); err != nil || !ok || k != 1 {
+		t.Fatalf("replayK(2) = %d, %v, %v", k, ok, err)
+	}
+	// From k = 4 every arm is flat: no result.
+	if k, ok, err := replayK(r.DB(), 6); err != nil || ok {
+		t.Fatalf("replayK(6) = %d, %v, %v", k, ok, err)
+	}
+}
+
+// §8.1: disabling stops trees and keeps the pin; once trees exist it says
+// they cannot be retired.
+func TestDisableSubmanifests(t *testing.T) {
+	r := sha3Repo(t)
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+	if note, err := DisableSubmanifests(r); err != nil || note != "" {
+		t.Fatalf("disable before any tree = %q, %v", note, err)
+	}
+	setSettings(t, r, SettingEnableSubmanifests, "on")
+	parent, _ := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "tree"})
+	if note, err := DisableSubmanifests(r); err != nil || note != SubmanifestDisableNote {
+		t.Fatalf("disable after a tree = %q, %v", note, err)
+	}
+	_, d := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "flat", Parent: parent,
+		Time: writeTime.Add(time.Hour)})
+	if len(d.S) != 0 || settingValue(t, r, SettingSubmanifestK) != "3" {
+		t.Fatalf("after disable: %d S cards, k %q", len(d.S), settingValue(t, r, SettingSubmanifestK))
+	}
+}

@@ -115,8 +115,10 @@ func emissionK(s submanifestSettings, avoid bool) int {
 		return 0
 	}
 	if s.k == 0 {
-		slog.Warn("manifest.Checkin: sub-manifests: pinned submanifest-k is out of range; emitting a flat manifest",
-			"submanifest-k", s.rawK, "range", fmt.Sprintf("%d..%d", MinPartitionK, MaxPartitionK))
+		// zit's report, naming this library's re-tune command.
+		slog.Warn(fmt.Sprintf("sub-manifests: pinned submanifest-k is out of range (%s; must be %d..%d)"+
+			" — emitting a flat manifest. Re-pin with 'libfossil repo submanifests retune --k N'.",
+			s.rawK, MinPartitionK, MaxPartitionK))
 	}
 	return s.k
 }
@@ -139,8 +141,10 @@ var errNoSelection = errors.New("no partition parameter can be selected")
 // changing it is a re-tune. With no valid pin, an explicit k (1 to 12) is
 // pinned, and k = 0 asks for §6.3's automatic selection over current, the
 // check-in the next commit will descend from (0 for none). A request that
-// cannot be met changes nothing. It returns the pinned k; the caller owes
-// the operator SubmanifestEnableWarning.
+// cannot be met changes nothing. Selection is zit's: the §6.3 snapshot
+// over current, refined by a replay of recent history when there is one. It
+// returns the pinned k; the caller owes the operator
+// SubmanifestEnableWarning.
 func EnableSubmanifests(r *repo.Repo, current libfossil.FslID, k int) (pinned int, err error) {
 	if r == nil {
 		panic("manifest.EnableSubmanifests: r must not be nil")
@@ -163,6 +167,15 @@ func EnableSubmanifests(r *repo.Repo, current libfossil.FslID, k int) (pinned in
 		default:
 			if pinned, err = selectForCheckin(tx, current); err != nil {
 				return err
+			}
+			// As zit does, recent history outranks the snapshot when it can
+			// speak (submanifest_replay.go).
+			k, ok, err := replayK(tx, pinned)
+			if err != nil {
+				return err
+			}
+			if ok {
+				pinned = k
 			}
 		}
 		if pinned != s.k {
@@ -216,6 +229,35 @@ func loadCheckinDeck(q db.Querier, rid libfossil.FslID) (*deck.Deck, error) {
 		return nil, fmt.Errorf("artifact %d is not a check-in", rid)
 	}
 	return d, nil
+}
+
+// SubmanifestDisableNote is zit's note on disabling emission in a
+// repository that already holds trees.
+const SubmanifestDisableNote = "note: this repository already holds S-bearing artifacts. Disabling stops new\n" +
+	"tree manifests; it cannot retire the existing ones, and peers below Fossil\n" +
+	"2.29 are still refused every one of them."
+
+// DisableSubmanifests turns emission off (§8.1): later commits are flat, and
+// the pin stays, so re-enabling is not a re-tune. Existing trees cannot be
+// retired; when the repository holds any it returns SubmanifestDisableNote.
+func DisableSubmanifests(r *repo.Repo) (note string, err error) {
+	if r == nil {
+		panic("manifest.DisableSubmanifests: r must not be nil")
+	}
+	err = r.WithTx(func(tx *db.Tx) error {
+		if err := writeSubmanifestSetting(tx, SettingEnableSubmanifests, "off"); err != nil {
+			return err
+		}
+		seen, err := SeenSubmanifest(tx)
+		if seen {
+			note = SubmanifestDisableNote
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("manifest.DisableSubmanifests: %w", err)
+	}
+	return note, nil
 }
 
 // RetuneSubmanifests is §6.4's manual, operator-initiated re-tune: it pins

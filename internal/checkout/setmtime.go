@@ -79,10 +79,10 @@ func (c *Checkout) setFileMTimes(vid libfossil.FslID) error {
 		if err := rows.Scan(&name, &rid); err != nil {
 			return fmt.Errorf("set mtimes: %w", err)
 		}
-		secs, ok := times[rid]
-		if !ok {
-			continue
-		}
+		// An artifact no check-in in the ancestry recorded is absent from
+		// times, and gets 0: fossil's max() over no rows is NULL, which it
+		// reads as 0, setting the file to 1970.
+		secs := times[rid]
 		fullPath, err := c.safePath(name)
 		if err != nil {
 			continue

@@ -106,10 +106,14 @@ func ridOf(t *testing.T, r *repo.Repo, uuid string) libfossil.FslID {
 // from the oldest with a local edit pending, with fossil (--setmtime) and with
 // go-libfossil (SetMTime). Fossil gives each unedited file the time of the
 // newest check-in in the version's primary ancestry that recorded its content,
-// in whole seconds, and leaves an edited file alone; both must agree.
+// in whole seconds, and leaves an edited file alone; both must agree. e.txt's
+// mlink rows are removed first: with no check-in recording a file, fossil's
+// max() is NULL, read as 0, and the file is set to 1970.
 func TestSetMTimeMatchesFossil(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	repoPath, v := setmtimeHistory(t, bin)
+	runFossilIn(t, bin, filepath.Dir(repoPath), "sql", "-R", repoPath,
+		"DELETE FROM mlink WHERE fnid=(SELECT fnid FROM filename WHERE name='e.txt')")
 	names := []string{"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"}
 
 	fossilOpen := t.TempDir()

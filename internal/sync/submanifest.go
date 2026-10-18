@@ -1,12 +1,12 @@
 package sync
 
-// Transfer and configuration rules of draft-fossil-submanifests-00 for a
-// library that reads trees and never writes them: the peer-version gate of
-// §7.2, the avoid-submanifests pragma, and the three project-scope settings
-// of §6.3 and §8.1 as configuration exchange carries them. The thresholds and
-// wire spellings are zit's, the one other implementation, so the two
-// interoperate: zit fixes the draft's open "threshold to be fixed at the
-// first release implementing this specification" at 2.29.0.
+// Transfer and configuration rules of draft-fossil-submanifests-00: the
+// peer-version gate of §7.2, the avoid-submanifests pragma, and the three
+// project-scope settings of §6.3 and §8.1 as configuration exchange carries
+// them. The thresholds and wire spellings are zit's, the one other
+// implementation, so the two interoperate: zit fixes the draft's open
+// "threshold to be fixed at the first release implementing this
+// specification" at 2.29.0.
 
 import (
 	"database/sql"
@@ -105,11 +105,11 @@ func transferGated(data []byte) bool {
 }
 
 // The three project-scope settings, named as configuration exchange carries
-// them (§6.3, §8.1, §6.4).
+// them (§6.3, §8.1, §6.4); the writer that reads them is internal/manifest's.
 const (
-	settingEnableSubmanifests = "enable-submanifests"
-	settingSubmanifestK       = "submanifest-k"
-	settingAutoRetune         = "submanifest-auto-retune"
+	settingEnableSubmanifests = manifest.SettingEnableSubmanifests
+	settingSubmanifestK       = manifest.SettingSubmanifestK
+	settingAutoRetune         = manifest.SettingAutoRetune
 )
 
 // submanifestSettings lists them in the order a reply carries them.
@@ -126,29 +126,8 @@ func enableSubmanifests(d *db.DB) bool {
 	if err != nil || !value.Valid {
 		return false
 	}
-	on, ok := parseSettingBool(value.String)
+	on, ok := manifest.ParseSettingBool(value.String)
 	return ok && on
-}
-
-// parseSettingBool reads a boolean setting as zit and fossil write one: on,
-// off, 1 or 0, and fossil's yes, no, true and false.
-func parseSettingBool(v string) (value, ok bool) {
-	switch strings.ToLower(v) {
-	case "on", "1", "yes", "true":
-		return true, true
-	case "off", "0", "no", "false":
-		return false, true
-	}
-	return false, false
-}
-
-// parseSettingK reads submanifest-k: a decimal from 1 to 12 inclusive (§6.3).
-func parseSettingK(v string) (int, bool) {
-	k, err := strconv.Atoi(v)
-	if err != nil || k < 1 || k > 12 {
-		return 0, false
-	}
-	return k, true
 }
 
 // configRow is one scalar row of a config /config card: "MTIME NAME value
@@ -253,15 +232,15 @@ func (s *stagedSubmanifestConfig) apply(q db.Querier) error {
 	}
 	enable, k := false, 0
 	if v, ok := currentSetting(q, settingEnableSubmanifests); ok {
-		enable, _ = parseSettingBool(v)
+		enable, _ = manifest.ParseSettingBool(v)
 	}
 	if v, ok := currentSetting(q, settingSubmanifestK); ok {
-		k, _ = parseSettingK(v)
+		k, _ = manifest.ParseSettingK(v)
 	}
 	for name, row := range s.rows {
 		switch name {
 		case settingEnableSubmanifests, settingAutoRetune:
-			on, ok := parseSettingBool(row.value)
+			on, ok := manifest.ParseSettingBool(row.value)
 			if !ok {
 				return fmt.Errorf("%w: %s=%q", errSubmanifestConfig, name, row.value)
 			}
@@ -269,7 +248,7 @@ func (s *stagedSubmanifestConfig) apply(q db.Querier) error {
 				enable = on
 			}
 		case settingSubmanifestK:
-			v, ok := parseSettingK(row.value)
+			v, ok := manifest.ParseSettingK(row.value)
 			if !ok {
 				return fmt.Errorf("%w: %s=%q", errSubmanifestConfig, name, row.value)
 			}

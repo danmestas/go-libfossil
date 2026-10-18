@@ -64,6 +64,11 @@ type SyncResult struct {
 	ArtifactsLinked               int
 	Errors                        []string
 	CkinLockFail                  *CkinLockFail // nil = no conflict
+	// AvoidSubmanifests reports that the server sent pragma
+	// avoid-submanifests: a commit made in this session must not emit S
+	// cards (draft-fossil-submanifests-00 §7.2), which the caller asks of
+	// manifest.Checkin with CheckinOpts.AvoidSubmanifests.
+	AvoidSubmanifests bool
 }
 
 // session holds the mutable state of a running sync.

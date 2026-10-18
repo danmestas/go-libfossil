@@ -33,6 +33,11 @@ type CheckinOpts struct {
 	// cannot both commit. It must only read: a write would land in the
 	// check-in's transaction.
 	Precheck func(q db.Querier) error
+	// AvoidSubmanifests suppresses tree emission for this commit, as
+	// draft-fossil-submanifests-00 §7.2 requires of a commit made in a
+	// sync session whose server sent pragma avoid-submanifests (the
+	// session's SyncResult.AvoidSubmanifests).
+	AvoidSubmanifests bool
 }
 
 type File struct {
@@ -84,7 +89,7 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			return txErr
 		}
 
-		d, txErr := buildCheckinDeck(tx, opts, fCards)
+		d, tree, txErr := checkinDeck(tx, opts, fCards)
 		if txErr != nil {
 			return txErr
 		}
@@ -130,7 +135,10 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 			}
 		}
 
-		return linkCheckinTags(tx, opts, manifestRid, d.T)
+		if txErr := linkCheckinTags(tx, opts, manifestRid, d.T); txErr != nil {
+			return txErr
+		}
+		return tree.retune(tx)
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
@@ -234,6 +242,28 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		rids = append(rids, rid)
 	}
 	return fCards, rids, nil
+}
+
+// checkinDeck builds a check-in's manifest. With sub-manifest emission
+// enabled the file set goes to a tree, stored first
+// (draft-fossil-submanifests-00 §6.2), and a tree carries no B card (§4.4),
+// so a tree check-in is never a delta.
+func checkinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Deck, checkinTree, error) {
+	tree, err := storeTreeFor(tx, opts, fCards)
+	if err != nil {
+		return nil, tree, err
+	}
+	if len(tree.s) > 0 {
+		opts.Delta = false
+	}
+	d, err := buildCheckinDeck(tx, opts, fCards)
+	if err != nil {
+		return nil, tree, err
+	}
+	if len(tree.s) > 0 {
+		d.F, d.S = nil, tree.s
+	}
+	return d, tree, nil
 }
 
 func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Deck, error) {
@@ -515,8 +545,8 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 	// delta manifest (fossil asserts the same in checkin.c). When the parent's
 	// baseline is itself a delta, leave d a full baseline manifest. The same
 	// goes for a tree baseline: draft-fossil-submanifests-00 §5.4 says a
-	// writer with emission off SHOULD NOT create a delta against one, and this
-	// library never emits.
+	// writer with emission off SHOULD NOT create a delta against one, and with
+	// emission on this writer keeps zit's rule of none either.
 	if baseDeck.B != "" || isTree(baseDeck) {
 		return nil
 	}

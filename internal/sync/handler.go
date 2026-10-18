@@ -912,10 +912,9 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
 	// draft-fossil-submanifests-00 §7.2: a server whose enable-submanifests
-	// setting is off -- this library's always, since it writes no trees --
-	// sends avoid-submanifests where it sends avoid-delta-manifests, telling
-	// the committing client to write no S cards. A peer that does not know
-	// the pragma ignores it (§3.5).
+	// setting is off -- the default -- sends avoid-submanifests where it
+	// sends avoid-delta-manifests, telling the committing client to write no
+	// S cards. A peer that does not know the pragma ignores it (§3.5).
 	if !enableSubmanifests(h.repo.DB()) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-submanifests"})
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -325,34 +326,76 @@ func TestTreesNeverReachFossil228(t *testing.T) {
 		t.Fatalf("fossil answered reqconfig /config with %d cards", len(cfg))
 	}
 
-	client, err := repo.Create(filepath.Join(t.TempDir(), "client.fossil"), "u", simio.CryptoRand{}, pc)
+	// A tree stored as received, and one this library's writer made.
+	for _, tc := range []struct {
+		name  string
+		build func(t *testing.T, r *repo.Repo) (tree []string, file string)
+	}{
+		{"stored", func(t *testing.T, r *repo.Repo) ([]string, string) {
+			a := storeTree(t, r)
+			return []string{a.uuid, a.leafUUID}, a.fileUUID
+		}},
+		{"written", writeTree},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, err := repo.Create(filepath.Join(t.TempDir(), "client.fossil"), "u", simio.CryptoRand{}, pc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { client.Close() })
+			tree, file := tc.build(t, client)
+			transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+				return fossilHTTPXfer(t, bin, repoPath, req)
+			}}
+			res, err := Sync(context.Background(), client, transport, SyncOpts{Push: true, Pull: true})
+			if err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+			for _, uuid := range tree {
+				n := strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
+					"SELECT count(*) FROM blob WHERE uuid='"+uuid+"' AND size>=0"))
+				if n != "0" {
+					t.Fatalf("fossil 2.28 stored %s", uuid)
+				}
+			}
+			n := strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
+				"SELECT count(*) FROM blob WHERE uuid='"+file+"' AND size>=0"))
+			if n != "1" {
+				t.Fatalf("fossil 2.28 did not receive the ordinary file (count %s)", n)
+			}
+			if !strings.Contains(strings.Join(res.Errors, "\n"), "withheld") {
+				t.Fatalf("result errors %q do not record the withheld artifacts", res.Errors)
+			}
+		})
+	}
+}
+
+// writeTree commits a two-leaf tree with emission enabled and returns the
+// names of its manifest and leaves, and of one of its files.
+func writeTree(t *testing.T, r *repo.Repo) ([]string, string) {
+	t.Helper()
+	if _, err := r.DB().Exec(`REPLACE INTO config(name, value, mtime) VALUES
+		('enable-submanifests', 'on', 1), ('submanifest-k', '3', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	rid, uuid, err := manifest.Checkin(r, manifest.CheckinOpts{Files: []manifest.File{
+		{Name: "README.md", Content: []byte("# Example\n")},
+		{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+		{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+		{Name: "src/util.c", Content: []byte("/* util */\n")},
+	}, Comment: "written tree", User: "u"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { client.Close() })
-	a := storeTree(t, client)
-	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
-		return fossilHTTPXfer(t, bin, repoPath, req)
-	}}
-	res, err := Sync(context.Background(), client, transport, SyncOpts{Push: true, Pull: true})
+	d, err := manifest.GetManifest(r, rid)
+	if err != nil || len(d.S) != 2 {
+		t.Fatalf("the commit is not a tree (%v)", err)
+	}
+	files, err := manifest.ListFiles(r, rid)
 	if err != nil {
-		t.Fatalf("Sync: %v", err)
+		t.Fatal(err)
 	}
-	for _, uuid := range []string{a.uuid, a.leafUUID} {
-		n := strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
-			"SELECT count(*) FROM blob WHERE uuid='"+uuid+"' AND size>=0"))
-		if n != "0" {
-			t.Fatalf("fossil 2.28 stored %s", uuid)
-		}
-	}
-	n := strings.TrimSpace(fossilOut(t, bin, "sql", "-R", repoPath,
-		"SELECT count(*) FROM blob WHERE uuid='"+a.fileUUID+"' AND size>=0"))
-	if n != "1" {
-		t.Fatalf("fossil 2.28 did not receive the ordinary file (count %s)", n)
-	}
-	if !strings.Contains(strings.Join(res.Errors, "\n"), "withheld") {
-		t.Fatalf("result errors %q do not record the withheld artifacts", res.Errors)
-	}
+	return []string{uuid, d.S[0].UUID, d.S[1].UUID}, files[0].UUID
 }
 
 // storeFlatDeltaOfTree stores, beside a tree check-in, a flat check-in
@@ -561,4 +604,50 @@ func applyInTx(t *testing.T, r *repo.Repo, staged *stagedSubmanifestConfig) erro
 		t.Fatal(err)
 	}
 	return applyErr
+}
+
+// §7.2 and §8.1: a session whose server sends avoid-submanifests reports
+// it, and a commit made in that session emits no S card even with emission
+// enabled locally; without the pragma the same commit is a tree.
+func TestAvoidSubmanifestsReachesTheSessionsCommit(t *testing.T) {
+	server, client := newTestRepoPair(t)
+	if _, err := client.DB().Exec(`REPLACE INTO config(name, value, mtime) VALUES
+		('enable-submanifests', 'on', 1), ('submanifest-k', '3', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		resp, err := HandleSync(context.Background(), server, req)
+		if err != nil {
+			t.Fatalf("HandleSync: %v", err)
+		}
+		return resp
+	}}
+	res, err := Sync(context.Background(), client, transport, SyncOpts{Push: true, Pull: true,
+		CkinLock: &CkinLockReq{ParentUUID: testPC, ClientID: "client-1"}})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if !res.AvoidSubmanifests {
+		t.Fatal("the session did not report avoid-submanifests")
+	}
+	files := []manifest.File{
+		{Name: "README.md", Content: []byte("# Example\n")},
+		{Name: "src/main.c", Content: []byte("int main(void){return 0;}\n")},
+		{Name: "src/node11.c", Content: []byte("/* node11 */\n")},
+		{Name: "src/util.c", Content: []byte("/* util */\n")},
+	}
+	for _, avoid := range []bool{true, false} {
+		rid, _, err := manifest.Checkin(client, manifest.CheckinOpts{Files: files, Comment: "c",
+			User: "u", AvoidSubmanifests: avoid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d, err := manifest.GetManifest(client, rid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tree := len(d.S) > 0; tree == avoid {
+			t.Fatalf("avoid=%v: %d S cards", avoid, len(d.S))
+		}
+	}
 }

@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through this library as soon as it is added, as fossil's timeline does.
 - A check-in with no C card has a NULL event comment, as fossil stores it,
   not an empty one.
+- Event, plink, attachment and forum post times match fossil 2.28's in
+  every bit. fossil writes these times as 16-digit SQL text and reads them
+  back with its bundled SQLite 3.52.0, whose text-to-double conversion is
+  not correctly rounded. go-libfossil parsed the same text with a correctly
+  rounded conversion, so about one time in 3,000 was one unit in the last
+  place away from fossil's (13 rows of fossil's own repository). It now
+  uses SQLite 3.52.0's conversion.
 - Ticket artifacts link in a repository whose ticket schema lacks the
   optional columns, as fossil's own repository's does. Crosslinking and
   `Rebuild` failed there with "table ticketchng has no column named

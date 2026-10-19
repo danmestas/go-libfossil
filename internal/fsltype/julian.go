@@ -64,6 +64,9 @@ func textJulianDay(millis int64, prec uint) float64 {
 
 // longDoubleBits is the significand width of the C long double fossil uses
 // on the platform this program runs on: see the package comment above.
+// Platforms it does not name fall back to 53 bits, which is wrong for some:
+// ppc64le's long double is IBM double-double and mips64's is binary128, so
+// fossil's last digit there may differ from ours.
 var longDoubleBits = platformLongDoubleBits(runtime.GOOS, runtime.GOARCH)
 
 func platformLongDoubleBits(goos, goarch string) uint {

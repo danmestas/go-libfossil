@@ -78,3 +78,57 @@ func TestJulianFormsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// fossilX87EventTimes are event.mtime values the pinned linux-x64 fossil 2.28
+// binary stored in CI, where its printf runs in 80-bit x87 long double: each
+// differs from the value a macOS arm64 fossil stores for the same time.
+var fossilX87EventTimes = []struct {
+	millis int64
+	stored float64
+}{
+	{1500607170788, 2457955.6385507882}, // 2017-07-21T03:19:30.788
+	{1703782442848, 2460307.2041996298}, // 2023-12-28T16:54:02.848
+	{1213801528799, 2454636.1288055442}, // 2008-06-18T15:05:28.799
+	{2749748851292, 2472413.2968899538}, // 2057-02-18T19:07:31.292
+	{398468886501, 2445199.4084085771},  // 1982-08-17T21:48:06.501
+	{2913052665765, 2474303.3873352441}, // 2062-04-23T21:17:45.765
+	{4035926687809, 2487299.6144422339}, // 2097-11-22T02:44:47.809
+	{2325908021947, 2467507.7317354982}, // 2043-09-15T05:33:41.947
+	{2797736607283, 2472968.7107324428}, // 2058-08-28T05:03:27.283
+	{1437264789630, 2457222.5091392361}, // 2015-07-19T00:13:09.630
+}
+
+// The text form follows the long double fossil's printf computes in: a
+// 64-bit double reproduces macOS arm64 fossil's values, an 80-bit x87 long
+// double (64-bit significand) linux-x64 fossil's.
+func TestTextJulianDayPerLongDouble(t *testing.T) {
+	for _, c := range fossilEventTimes {
+		if got := textJulianDay(c.millis, 53); got != c.stored {
+			t.Errorf("53-bit: %d = %.17g, macOS fossil stored %.17g", c.millis, got, c.stored)
+		}
+	}
+	for _, c := range fossilX87EventTimes {
+		if got := textJulianDay(c.millis, 64); got != c.stored {
+			t.Errorf("64-bit: %d = %.17g, linux-x64 fossil stored %.17g", c.millis, got, c.stored)
+		}
+		if textJulianDay(c.millis, 53) == c.stored {
+			t.Errorf("%d does not tell the long doubles apart", c.millis)
+		}
+	}
+}
+
+func TestPlatformLongDoubleBits(t *testing.T) {
+	cases := []struct {
+		goos, goarch string
+		want         uint
+	}{
+		{"darwin", "arm64", 53}, {"windows", "amd64", 53}, {"windows", "arm64", 53},
+		{"linux", "amd64", 64}, {"darwin", "amd64", 64}, {"freebsd", "amd64", 64},
+		{"linux", "arm64", 113}, {"linux", "riscv64", 113}, {"js", "wasm", 53},
+	}
+	for _, c := range cases {
+		if got := platformLongDoubleBits(c.goos, c.goarch); got != c.want {
+			t.Errorf("%s/%s: %d bits, want %d", c.goos, c.goarch, got, c.want)
+		}
+	}
+}

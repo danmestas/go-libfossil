@@ -67,3 +67,40 @@ func TestCheckinRecordsOneReceipt(t *testing.T) {
 		}
 	}
 }
+
+// A tree check-in's sub-manifests are stored by the commit that stores its
+// manifest, so they name the commit's receipt, not one of their own.
+func TestTreeCheckinSubmanifestsShareTheReceipt(t *testing.T) {
+	r := sha3Repo(t)
+	commit(t, r, CheckinOpts{Files: []File{{Name: "first.txt", Content: []byte("1\n")}},
+		Comment: "an earlier receipt"})
+	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "3")
+	rid, d := commit(t, r, CheckinOpts{Files: a1CheckinFiles(), Comment: "tree"})
+	if len(d.S) == 0 {
+		t.Fatal("fixture: the check-in carries no S card")
+	}
+	rcvidOf := func(where string, arg any) int64 {
+		t.Helper()
+		var id int64
+		if err := r.DB().QueryRow("SELECT rcvid FROM blob WHERE "+where, arg).Scan(&id); err != nil {
+			t.Fatalf("rcvid where %s: %v", where, err)
+		}
+		return id
+	}
+	want := rcvidOf("rid=?", rid)
+	if want <= 1 {
+		t.Fatalf("manifest rcvid = %d, want the tree commit's own receipt", want)
+	}
+	for _, s := range d.S {
+		if got := rcvidOf("uuid=?", s.UUID); got != want {
+			t.Errorf("sub-manifest %s rcvid = %d, want the commit's %d", s.UUID[:10], got, want)
+		}
+	}
+	var rows int
+	if err := r.DB().QueryRow("SELECT count(*) FROM rcvfrom").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("rcvfrom rows = %d, want 2, one per commit", rows)
+	}
+}

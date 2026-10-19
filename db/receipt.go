@@ -1,8 +1,6 @@
 package db
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -29,13 +27,27 @@ type Receipt struct {
 	IPAddr string
 	Clock  simio.Clock
 
-	rcvid int64   // the row made for this receipt, 0 before one is
-	mtime float64 // that row's mtime, which tells it from a reused rcvid
+	rcvid int64 // the row made for this receipt, 0 before one is or once it is undone
+}
+
+// madeReceipt is a receipt whose row a transaction made at savepoint depth
+// level and has not yet committed.
+type madeReceipt struct {
+	rc    *Receipt
+	level int
 }
 
 // ID returns the rcvid of the receipt's row, making the row through q if the
-// receipt has none yet. A row made in a transaction that rolled back is gone,
-// so the receipt checks its row is still there and makes another if not.
+// receipt has none yet. Fossil holds that id for its process in g.rcvid and
+// never looks at the row again (src/content.c, content_rcvid_init); a fossil
+// whose transaction rolls back ends with it. A Receipt outlives transactions,
+// so the transaction or savepoint that makes its row also forgets it if it
+// rolls back (Tx.forgetFrom), and the next use makes a fresh row rather than
+// naming one some other insert may since have taken. A kept id costs no query.
+//
+// A row made through a Querier that is neither a Tx nor a DB is taken as
+// kept; a row made in one transaction should not be used from another
+// connection before that transaction commits.
 func (rc *Receipt) ID(q Querier) (int64, error) {
 	if rc == nil {
 		panic("db.Receipt.ID: receiver must not be nil")
@@ -44,15 +56,7 @@ func (rc *Receipt) ID(q Querier) (int64, error) {
 		panic("db.Receipt.ID: q must not be nil")
 	}
 	if rc.rcvid != 0 {
-		var one int
-		err := q.QueryRow("SELECT 1 FROM rcvfrom WHERE rcvid=? AND mtime=?",
-			rc.rcvid, rc.mtime).Scan(&one)
-		if err == nil {
-			return rc.rcvid, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("db.Receipt: check rcvfrom %d: %w", rc.rcvid, err)
-		}
+		return rc.rcvid, nil
 	}
 	clock := rc.Clock
 	if clock == nil {
@@ -71,8 +75,47 @@ func (rc *Receipt) ID(q Querier) (int64, error) {
 	if id <= 0 {
 		panic("db.Receipt.ID: rcvfrom insert returned a non-positive rcvid")
 	}
-	rc.rcvid, rc.mtime = id, mtime
+	rc.rcvid = id
+	if tx := txOf(q); tx != nil {
+		tx.made = append(tx.made, madeReceipt{rc: rc, level: tx.savepoints})
+	}
 	return id, nil
+}
+
+// txOf returns the transaction q runs in: q itself, the transaction a bound
+// DB is bound to, or nil for the pool, whose writes commit as they run.
+func txOf(q Querier) *Tx {
+	switch v := q.(type) {
+	case *Tx:
+		return v
+	case *DB:
+		return v.boundTx()
+	}
+	return nil
+}
+
+// forgetFrom undoes the receipts whose rows t made at savepoint depth level
+// or deeper, which a rollback to that depth removed.
+func (t *Tx) forgetFrom(level int) {
+	kept := t.made[:0]
+	for _, m := range t.made {
+		if m.level >= level {
+			m.rc.rcvid = 0
+			continue
+		}
+		kept = append(kept, m)
+	}
+	t.made = kept
+}
+
+// keepTo moves the receipts made at savepoint depth level to the enclosing
+// depth, whose fate they now share, when that savepoint is released.
+func (t *Tx) keepTo(level int) {
+	for i := range t.made {
+		if t.made[i].level == level {
+			t.made[i].level = level - 1
+		}
+	}
 }
 
 // nullIfEmpty binds "" as NULL.
@@ -115,10 +158,7 @@ func ReceiptID(q Querier) (int64, error) {
 	if q == nil {
 		panic("db.ReceiptID: q must not be nil")
 	}
-	tx, _ := q.(*Tx)
-	if d, ok := q.(*DB); ok {
-		tx = d.boundTx()
-	}
+	tx := txOf(q)
 	if tx == nil {
 		return (&Receipt{}).ID(q)
 	}

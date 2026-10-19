@@ -20,7 +20,9 @@ import (
 // averaging hundreds of nodes) is O(depth^2) blob reads and hashes per chain.
 //
 // visit receives what Cache.Expand would return for that blob alone: its
-// content, bound to its name, or the same error. A node below a failed one
+// content, bound to its name, or an error for the same failure (the wording
+// can differ; a corrupt compressed delta reads "zlib reset", not "zlib
+// decompress"). A node below a failed one
 // gets the failure that stopped its chain. A blob no sound root reaches -- its
 // chain cycles, ends in a phantom or a missing row, or exceeds
 // maxDeltaChainDepth -- is expanded on its own after the walk, for that

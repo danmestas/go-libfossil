@@ -330,6 +330,23 @@ func TestSparseUpdateAppliesOutOfConeToRecord(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(co.Dir(), "docs")); err != nil {
 		t.Fatal(err)
 	}
+	// Undo saves only what the update changed on disk: no uncovered file.
+	var saved []string
+	rows, err := co.db.Query("SELECT pathname FROM undo ORDER BY pathname")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		saved = append(saved, name)
+	}
+	rows.Close()
+	if !slices.Equal(saved, []string{"src/a.c"}) {
+		t.Fatalf("undo saved %q, want only src/a.c", saved)
+	}
 	if !slices.Equal(res.FilesWritten, []string{"src/a.c"}) || len(res.FilesRemoved) != 0 {
 		t.Fatalf("Update wrote %q, removed %q", res.FilesWritten, res.FilesRemoved)
 	}
@@ -487,5 +504,34 @@ func TestSetConeProtectsWork(t *testing.T) {
 	}
 	if _, err := co.SetCone(wider); err == nil || !strings.Contains(err.Error(), "tools/t.c") {
 		t.Fatalf("widening over an untracked file: %v", err)
+	}
+}
+
+// A local edit the target's rename would carry out of the cone cannot be
+// represented, so the update is refused, naming the cone, and nothing moves.
+func TestSparseUpdateRefusesRenameOutOfCone(t *testing.T) {
+	f := newSparseRepo(t, false)
+	var mf []manifest.File
+	for name, text := range sparseFiles {
+		file := manifest.File{Name: name, Content: []byte(text)}
+		if name == "src/a.c" {
+			file.Name, file.OldName = "tools/a.c", "src/a.c"
+		}
+		mf = append(mf, file)
+	}
+	sort.Slice(mf, func(i, j int) bool { return mf[i].Name < mf[j].Name })
+	f.time = f.time.Add(time.Hour)
+	c2, _, err := manifest.Checkin(f.repo, manifest.CheckinOpts{
+		Files: mf, Comment: "rename", User: "test", Parent: f.c1, Time: f.time,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	co := f.open(t, sparseCone(t), f.c1)
+	writeFile(t, co, "src/a.c", "edited\n")
+	_, err = co.Update(UpdateOpts{TargetRID: c2})
+	assertOutsideCone(t, err, "tools/a.c")
+	if v, _, _ := co.Version(); v != f.c1 {
+		t.Fatalf("a refused update moved the checkout to %d", v)
 	}
 }

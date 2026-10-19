@@ -105,7 +105,7 @@ type CreateOpts struct {
 // ExtractOpts configures file extraction from a checkin.
 type ExtractOpts struct {
 	Callback func(name string, change UpdateChange) error // per-file notification
-	SetMTime bool                                         // set file mtime to checkin timestamp
+	SetMTime bool                                         // as fossil's --setmtime: each file's last check-in time
 	DryRun   bool
 	Force    bool // overwrite locally modified files
 }
@@ -114,13 +114,13 @@ type ExtractOpts struct {
 type UpdateOpts struct {
 	TargetRID libfossil.FslID // 0 → auto-calculate via CalcUpdateVersion
 	Callback  func(name string, change UpdateChange) error
-	SetMTime  bool // set file mtime to checkin timestamp
+	SetMTime  bool // as fossil's --setmtime: each file's last check-in time
 	DryRun    bool
 }
 
 // UpdateResult reports what Update actually did. Paths, not counts: a
 // caller needs to know which files to show a user, not merely how many
-// changed. All three slices are sorted (sort.Strings) before Update
+// changed. All four slices are sorted (sort.Strings) before Update
 // returns, so the order is deterministic and safe to compare with
 // reflect.DeepEqual — it does not depend on Go's randomized map iteration.
 //
@@ -131,10 +131,21 @@ type UpdateOpts struct {
 // a caller that wants to detect marker text in the working tree must
 // inspect Conflicted. Every path in Conflicted also appears in
 // FilesWritten: the marker text is what was written there.
+//
+// Unmerged lists the files fossil's update also counts as conflicts but
+// that hold no markers, left for the caller to reconcile:
+//   - a file edited locally that the target deletes: kept on disk as it
+//     was, no longer tracked;
+//   - a file added locally that the target also adds: the local file kept,
+//     now tracked as the target's file, so it shows as edited;
+//   - a binary file both the working copy and the target changed: the
+//     target's content written (so also in FilesWritten), the working
+//     copy saved beside it as NAME-original.
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers; also present in FilesWritten
+	Unmerged     []string // paths left to reconcile without markers (see above)
 }
 
 // ManageOpts configures adding files to tracking.

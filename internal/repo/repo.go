@@ -3,6 +3,7 @@ package repo
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -120,8 +121,58 @@ func OpenWithEnv(path string, env *simio.Env) (*Repo, error) {
 		return nil, fmt.Errorf("repo.OpenWithEnv: not a fossil repo (application_id=%d, want %d)",
 			id, libfossil.FossilApplicationID)
 	}
+	// The conversion is best-effort: while another connection holds the
+	// write lock it is left for a later open, rather than failing this one.
+	if err := upgradeJulianSeconds(d); err != nil && !isBusy(err) {
+		d.Close()
+		return nil, fmt.Errorf("repo.OpenWithEnv: %w", err)
+	}
 
 	return &Repo{db: d, path: path}, nil
+}
+
+// julianSecondsRows matches the config and user rows whose mtime is a Julian
+// day, as go-libfossil wrote it before writing seconds since 1970 as fossil
+// does. A Julian day now is about 2.46e6; as seconds that is January 1970,
+// a time no row fossil or go-libfossil writes today holds.
+const julianSecondsRows = "mtime BETWEEN 2000000 AND 3000000"
+
+// isBusy reports whether err is SQLite's SQLITE_BUSY or SQLITE_LOCKED, as
+// either driver words it.
+func isBusy(err error) bool {
+	msg := err.Error()
+	for _, s := range []string{"database is locked", "database table is locked",
+		"SQLITE_BUSY", "SQLITE_LOCKED"} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// upgradeJulianSeconds converts those rows to the seconds they stand for.
+// It reads first and writes only when a row needs it, so opening an
+// up-to-date repository takes no write lock.
+func upgradeJulianSeconds(d *db.DB) error {
+	var n int
+	err := d.QueryRow("SELECT (SELECT count(*) FROM config WHERE " + julianSecondsRows +
+		") + (SELECT count(*) FROM user WHERE " + julianSecondsRows + ")").Scan(&n)
+	if err != nil {
+		return fmt.Errorf("check julian mtimes: %w", err)
+	}
+	if n == 0 {
+		return nil
+	}
+	return d.WithTx(func(tx *db.Tx) error {
+		for _, table := range []string{"config", "user"} {
+			if _, err := tx.Exec("UPDATE " + table +
+				" SET mtime=CAST((mtime-2440587.5)*86400 AS INTEGER) WHERE " +
+				julianSecondsRows); err != nil {
+				return fmt.Errorf("convert %s julian mtimes: %w", table, err)
+			}
+		}
+		return nil
+	})
 }
 
 func (r *Repo) Close() error {
@@ -182,7 +233,8 @@ func (r *Repo) UUIDByRID(rid int64) (string, error) {
 	return uuid, nil
 }
 
-// SetConfig writes a configuration value to the repo's config table.
+// SetConfig writes a configuration value to the repo's config table, stamped
+// with the time in seconds since 1970, as fossil's db_set stamps it (now()).
 //
 // A hash-policy value must be one of the ordinals 0 through 4, the only form
 // the reader accepts (AF-7.1-2). Fossil makes an unknown policy fatal where
@@ -195,7 +247,7 @@ func (r *Repo) SetConfig(key, value string) error {
 		}
 	}
 	_, err := r.db.Exec(
-		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, julianday('now'))",
+		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, strftime('%s','now'))",
 		key, value,
 	)
 	if err != nil {
@@ -230,7 +282,7 @@ func (r *Repo) SetHashPolicy(name string) error {
 	_, err = r.db.Exec(
 		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES('hash-policy', "+
 			"CASE WHEN EXISTS(SELECT 1 FROM blob WHERE length(uuid)>40) THEN ? ELSE ? END, "+
-			"julianday('now'))",
+			"strftime('%s','now'))",
 		strconv.Itoa(db.HashPolicySHA3), strconv.Itoa(db.HashPolicyAuto),
 	)
 	if err != nil {

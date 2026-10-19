@@ -73,10 +73,25 @@ func getVVar(db *sql.DB, name string) (string, error) {
 	return value, nil
 }
 
+// sqlExecer is what the checkout writes its tables through: the checkout
+// database, or a transaction on it.
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
 // setVVar sets a vvar value, replacing any existing value.
-func setVVar(db *sql.DB, name, value string) error {
-	if db == nil {
-		panic("checkout.setVVar: nil *sql.DB")
+func setVVar(db sqlExecer, name, value string) error {
+	switch q := db.(type) {
+	case *sql.DB:
+		if q == nil {
+			panic("checkout.setVVar: nil *sql.DB")
+		}
+	case *sql.Tx:
+		if q == nil {
+			panic("checkout.setVVar: nil *sql.Tx")
+		}
+	default:
+		panic(fmt.Sprintf("checkout.setVVar: unexpected database %T", db))
 	}
 
 	_, err := db.Exec("INSERT OR REPLACE INTO vvar (name, value) VALUES (?, ?)", name, value)

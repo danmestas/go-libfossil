@@ -71,10 +71,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   versioned; the first sweep after upgrading drops the old record and
   examines every blob again, once, so trees an earlier version could not
   parse are linked.
-- Check-ins and tags record their time to the millisecond, as fossil and
-  zit write it. A caller time with finer precision is truncated, and so is
-  the default clock time, which carried nanoseconds that zit cannot read
-  (danmestas/zit#244).
+- Check-ins, tags and branches record their time to the millisecond, as
+  fossil and zit write it. The default clock time, which carried nanoseconds
+  that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
+  clock. A caller time with finer precision is rounded to the nearest
+  millisecond, as fossil rounds a `--date-override`, except that a fraction
+  past `.999` stays at `.999` rather than carrying into the next second, as
+  in fossil. An exact half millisecond rounds up; fossil's result there
+  depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
+  `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2
@@ -89,6 +94,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
   way; six requirements are new, two are reworded, and each has a case
   checked against fossil 2.28.
+- Checkouts record each file's mtime in `vfile.mtime` and scan the way
+  fossil's `vfile_check_signature` does: a file whose size matches its
+  artifact and whose mtime matches the recorded one is taken as unchanged
+  without being read, unless `ScanHash` is given or the repository's
+  `mtime-changes` setting is off. A global `mtime-changes` in `~/.fossil`,
+  which fossil falls back to, is not read: go-libfossil reads no global
+  settings. Status, commit, merge, revert and extract use this scan, as fossil's commands do; before, every scan hashed every
+  file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
+  checkout on every command too. Extract, update, revert, commit and
+  `SetMTime` record mtimes where fossil does. One deliberate difference:
+  fossil would miss an edit that keeps a file's size within the same second
+  its mtime was recorded, in status and in commit; go-libfossil records such
+  an mtime as 0 and rehashes the file instead, and fossil reading those rows
+  rehashes it too. On the sqlite
+  repository's 2,220-file checkout, status takes about 30 ms instead of
+  about 250 ms. `simio.MemStorage` now gives each write a new mtime, as a
+  filesystem does.
+
+### Fixed
+
+- `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
+  It used to compare only committed versions, so it wrote the target's
+  content over a locally edited file, deleted an edited file the target
+  removed, and merged the current and target check-ins with their common
+  ancestor while ignoring the working file. Visible changes:
+  - Local edits are preserved. A locally edited file is merged three ways,
+    with the checkout's version as the base, the working file as the local
+    side and the target as the other; conflicts are written as markers and
+    listed in `Conflicted`.
+  - An update to another branch now takes the target's content for every
+    file without local changes, as fossil does; it used to merge the two
+    branches' committed changes, which could write conflict markers.
+  - An edited file the target deletes is kept, untracked; pending adds and
+    removals stay pending; a missing file is restored; a file the target
+    adds over an untracked one, read-only or not, is written after the
+    untracked one is copied to `NAME-original`.
+  - A binary file (a NUL byte, or a line over 32,767 bytes) is never
+    line-merged. Update saves the working copy as `NAME-original` and
+    writes the target's content; Merge keeps the checkout's copy, whatever
+    the file's strategy. Before,
+    both spliced the versions line by line and reported a clean merge.
+  - The new `UpdateResult.Unmerged` lists files left to reconcile without
+    markers: kept edited-but-deleted files, files added both locally and
+    by the target, and binary conflicts.
+  - Every file takes the target's executable bit, including a change to the
+    bit alone. An update that could not finish (a directory where a file
+    must be written, or a file or directory the process may not change) is
+    refused before anything is written, the checkout database moves in one transaction, and a dry run
+    changes nothing, the database included.
+
+  Update saves no undo state yet, so unlike fossil's update it cannot be
+  undone: a removed file restored from the target, or a working copy merged
+  or replaced, cannot be brought back with undo. Files are matched by name:
+  a file the target renamed is not followed, as fossil follows it. Tracked
+  in #443.
+
+- `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
+  `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
+  Julian day there, which fossil, comparing those times when it merges
+  configuration, read as a moment in 1970. `SetCaps` and `SetPassword` now
+  stamp the user's mtime too, as `fossil user capabilities` and
+  `fossil user password` do. Opening a repository converts the Julian days
+  already written there to seconds, or leaves them for a later open while
+  another connection holds the write lock.
+- A sync login no longer reads `user.cexpire`. That column is the expiry of
+  fossil's web-login cookie, which fossil's own sync login ignores; reading
+  it refused any user who had logged into or out of fossil's web UI, or
+  whose cookie had lapsed (#441). `repo invite --ttl` keeps its expiry in a
+  config row of its own, `invite-expire:LOGIN`, in UTC, and a sync login
+  checks that instead. Creating or deleting a user clears that row. The expiry used to be written in local time and read
+  as UTC, so it was off by the local offset.
+- `SetMTime` on a checkout's extract and update now does what fossil's
+  `--setmtime` does: each file takes the time of the newest check-in in the
+  version's primary ancestry that recorded its content, in whole seconds,
+  and every unedited file gets it, not only the files the update wrote. A
+  file with local edits is left alone. It used to give every written file
+  the target check-in's time, to the millisecond.
+- A stash records its creation time as a Julian day and lists it as
+  `YYYY-MM-DD HH:MM:SS`, as fossil's stash does; it stored SQLite's
+  `CURRENT_TIMESTAMP` text, which the drivers handed back in different forms,
+  and listed a fossil-written time as a bare number. Stashes list oldest
+  first, by creation time, as `fossil stash ls` orders them, rather than
+  newest first by id. A bisect listing shows
+  each check-in's date as `fossil bisect ls` does, instead of a raw Julian
+  day.
+- `ResolveVersion("NAME:TIMESTAMP")` bounds the search with SQLite's
+  `julianday()` of the rounded-up time, as fossil does, rather than the text
+  form of that time that event rows hold. On a millisecond where the two
+  differ, a check-in at the bound itself resolved here but not in fossil.
 
 ## [0.12.0] - 2026-10-13
 

@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -75,4 +76,15 @@ func TestVVarRoundTrip(t *testing.T) {
 	if got != "" {
 		t.Errorf("getVVar(nonexistent) = %q, want empty string", got)
 	}
+}
+
+// setVVar's precondition catches a nil database even inside the interface.
+func TestSetVVarRejectsNilDB(t *testing.T) {
+	defer func() {
+		msg, _ := recover().(string)
+		if !strings.Contains(msg, "checkout.setVVar") {
+			t.Fatalf("panic %q, want setVVar's precondition", msg)
+		}
+	}()
+	_ = setVVar((*sql.DB)(nil), "checkout", "1")
 }

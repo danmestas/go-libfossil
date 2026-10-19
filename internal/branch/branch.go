@@ -44,9 +44,6 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 	if opts.User == "" {
 		panic("branch.Create: opts.User must not be empty")
 	}
-	if opts.Time.IsZero() {
-		opts.Time = time.Now().UTC()
-	}
 
 	// 1. Get parent's file list.
 	entries, err := manifest.ListFiles(r, opts.Parent)

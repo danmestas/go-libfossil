@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -41,6 +42,38 @@ func TestCheckinWritesMillisecondTimestamps(t *testing.T) {
 		}
 		if !dCardMillis.Match(data) {
 			t.Fatalf("%s: D card is not millisecond precision:\n%s", c.name, data)
+		}
+	}
+}
+
+// TestCheckinRoundsCallerTimeAsFossil commits with caller times finer than a
+// millisecond. Fossil reads such a date (commit --date-override) to the
+// millisecond by rounding, not truncating, and never into the next second.
+func TestCheckinRoundsCallerTimeAsFossil(t *testing.T) {
+	r := setupTestRepo(t)
+	cases := []struct {
+		when time.Time
+		want string
+	}{
+		{time.Date(2024, 1, 15, 10, 30, 0, 789600000, time.UTC), "D 2024-01-15T10:30:00.790\n"},
+		{time.Date(2024, 1, 15, 10, 30, 59, 999600000, time.UTC), "D 2024-01-15T10:30:59.999\n"},
+	}
+	for i, c := range cases {
+		rid, _, err := Checkin(r, CheckinOpts{
+			Files:   []File{{Name: "f.txt", Content: []byte{byte('a' + i)}}},
+			Comment: "rounding",
+			User:    "testuser",
+			Time:    c.when,
+		})
+		if err != nil {
+			t.Fatalf("Checkin: %v", err)
+		}
+		data, err := content.Expand(r.DB(), rid)
+		if err != nil {
+			t.Fatalf("Expand: %v", err)
+		}
+		if !strings.Contains(string(data), c.want) {
+			t.Errorf("for %v want %q in:\n%s", c.when, c.want, data)
 		}
 	}
 }

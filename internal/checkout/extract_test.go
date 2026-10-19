@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -211,13 +212,14 @@ func TestExtractSetMTimeFalse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify mtime was NOT set (should be zero in MemStorage).
+	// Verify mtime was NOT set to the check-in time.
 	info, err := mem.Stat("/checkout/hello.txt")
 	if err != nil {
 		t.Fatal("stat hello.txt:", err)
 	}
-	if !info.ModTime().IsZero() {
-		t.Fatalf("mtime should be zero when SetMTime is false, got %v", info.ModTime())
+	// The write's own time, not the check-in's.
+	if info.ModTime().Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("mtime set to the check-in time when SetMTime is false: %v", info.ModTime())
 	}
 }
 

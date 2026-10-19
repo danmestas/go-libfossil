@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -289,8 +291,8 @@ func TestDropAndClear(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	// Drop first (oldest = last in list since ordered DESC).
-	firstID := entries[len(entries)-1].ID
+	// Drop first (oldest = first in list, which is ordered by creation).
+	firstID := entries[0].ID
 	if err := Drop(ckout, firstID); err != nil {
 		t.Fatalf("Drop: %v", err)
 	}
@@ -404,5 +406,68 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "merge") {
 		t.Fatalf("a mode change was reported as a merge: %v", err)
+	}
+}
+
+// A stash's creation time is stored as fossil stores it, a Julian day
+// (src/stash.c: julianday('now')), and listed as fossil's stash ls shows it,
+// datetime(ctime). A row fossil wrote lists the same way.
+func TestStashTimeAsFossil(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if err := Save(ckout, repoDB, dir, "test stash"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	var typ string
+	if err := ckout.QueryRow("SELECT typeof(ctime) FROM stash").Scan(&typ); err != nil {
+		t.Fatal(err)
+	}
+	if typ != "real" {
+		t.Errorf("stash.ctime stored as %s, want a Julian day (real)", typ)
+	}
+	if _, err := ckout.Exec("INSERT INTO stash(stashid, hash, comment, ctime)" +
+		" VALUES(99, '', 'fossil', 2461332.5)"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := List(ckout)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	shape := regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`)
+	for _, e := range entries {
+		if !shape.MatchString(e.CTime) {
+			t.Errorf("stash %d: CTime %q, want datetime(ctime)'s YYYY-MM-DD HH:MM:SS", e.ID, e.CTime)
+		}
+		if e.ID == 99 && e.CTime != "2026-10-19 00:00:00" {
+			t.Errorf("fossil's stash: CTime %q, want 2026-10-19 00:00:00", e.CTime)
+		}
+	}
+}
+
+// Stashes list in creation order, oldest first, as fossil's stash ls orders
+// them (ORDER BY ctime); stash ids break a tie.
+func TestListOrdersByCreationTime(t *testing.T) {
+	_, ckout, _ := testEnv(t)
+	if err := EnsureTables(ckout); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{
+		"(1, '', 'b', 2461332.6)", "(2, '', 'a', 2461332.5)",
+		"(3, '', 'd', 2461332.7)", "(4, '', 'c', 2461332.6)",
+	} {
+		if _, err := ckout.Exec("INSERT INTO stash(stashid, hash, comment, ctime) VALUES" + row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := List(ckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int64
+	for _, e := range entries {
+		got = append(got, e.ID)
+	}
+	if want := []int64{2, 1, 4, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("List order = %v, want %v", got, want)
 	}
 }

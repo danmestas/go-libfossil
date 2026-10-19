@@ -12,7 +12,7 @@ import (
 
 // TestAddTagWritesMillisecondTimestamps tags a check-in with a time carrying
 // nanoseconds and checks the control artifact's D card has exactly three
-// fractional digits, as fossil and zit write it.
+// fractional digits, rounded as `fossil tag add --date-override` rounds them.
 func TestAddTagWritesMillisecondTimestamps(t *testing.T) {
 	r := setupTestRepo(t)
 	rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
@@ -38,7 +38,7 @@ func TestAddTagWritesMillisecondTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
-	millis := regexp.MustCompile(`(?m)^D 2024-01-15T11:00:00\.987$`)
+	millis := regexp.MustCompile(`(?m)^D 2024-01-15T11:00:00\.988$`)
 	if !millis.Match(data) {
 		t.Fatalf("D card is not millisecond precision:\n%s", data)
 	}

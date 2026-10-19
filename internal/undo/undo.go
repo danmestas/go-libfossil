@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/vfile"
@@ -40,81 +41,140 @@ func Save(ckout *sql.DB, env *simio.Env, dir string, pathnames []string) error {
 	if dir == "" {
 		panic("undo.Save: dir must not be empty")
 	}
+	names, err := savedPathnames(ckout, pathnames)
+	if err != nil {
+		return err
+	}
+	files := make([]File, 0, len(names))
+	for _, name := range names {
+		f, err := ReadFile(env.Storage, dir, name)
+		if err != nil {
+			return fmt.Errorf("undo.Save: %w", err)
+		}
+		files = append(files, f)
+	}
 	tx, err := ckout.Begin()
 	if err != nil {
 		return fmt.Errorf("undo.Save: begin tx: %w", err)
 	}
 	defer tx.Rollback()
-
-	if err := createUndoTables(tx); err != nil {
-		return err
+	if err := SaveTx(tx, files); err != nil {
+		return fmt.Errorf("undo.Save: %w", err)
 	}
-	names, err := savedPathnames(tx, pathnames)
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		if err := saveFile(tx, env.Storage, dir, name); err != nil {
-			return err
-		}
-	}
-
-	// Save current checkout vid from vvar.
-	if _, err := tx.Exec("DELETE FROM vvar WHERE name='undo_checkout'"); err != nil {
-		return fmt.Errorf("undo.Save: clear undo_checkout: %w", err)
-	}
-	if _, err := tx.Exec("INSERT INTO vvar(name,value) SELECT 'undo_checkout', value FROM vvar WHERE name='checkout'"); err != nil {
-		return fmt.Errorf("undo.Save: copy checkout: %w", err)
-	}
-
-	// Mark undo available.
-	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_available','1')"); err != nil {
-		return fmt.Errorf("undo.Save: set undo_available: %w", err)
-	}
-
 	return tx.Commit()
 }
 
-// createUndoTables replaces the undo tables: an empty undo table for file
-// content and copies of vfile and vmerge.
+// File is a working file as fossil's undo_save records it: its content, or
+// that it does not exist, read before an operation changes it.
+type File struct {
+	pathname string
+	disk     diskFile
+}
+
+// ReadFile reads the working file pathname, relative to the checkout
+// directory dir, for SaveTx. A missing file is recorded as missing.
+func ReadFile(storage simio.Storage, dir, pathname string) (File, error) {
+	if storage == nil || dir == "" || pathname == "" {
+		panic("undo.ReadFile: storage, dir and pathname must be set")
+	}
+	disk, err := readDisk(storage, filepath.Join(dir, pathname))
+	if err != nil {
+		return File{}, err
+	}
+	return File{pathname: pathname, disk: disk}, nil
+}
+
+// SaveTx replaces the undo state within tx, as fossil's undo_begin and
+// undo_save do: copies of vfile and vmerge as they are now, files (each
+// pathname once, the first kept), and the checked-out version, with undo
+// marked available. The caller runs it before the operation's own changes
+// to vfile, in the same transaction.
+func SaveTx(tx *sql.Tx, files []File) error {
+	if tx == nil {
+		panic("undo.SaveTx: tx must not be nil")
+	}
+	if err := createUndoTables(tx); err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := saveFile(tx, f); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec("REPLACE INTO vvar(name,value)" +
+		" SELECT 'undo_checkout', value FROM vvar WHERE name='checkout'"); err != nil {
+		return fmt.Errorf("copy checkout: %w", err)
+	}
+	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_available','1')"); err != nil {
+		return fmt.Errorf("set undo_available: %w", err)
+	}
+	return nil
+}
+
+// RestoreFiles puts files back on disk as ReadFile found them, as fossil's
+// undo_rollback does for an operation that failed partway.
+func RestoreFiles(env *simio.Env, dir string, files []File) error {
+	if env == nil || dir == "" {
+		panic("undo.RestoreFiles: env and dir must be set")
+	}
+	var errs []error
+	for _, f := range files {
+		e := undoEntry{pathname: f.pathname, oldContent: f.disk.content,
+			oldExists: f.disk.exists, oldExec: f.disk.exec}
+		if _, err := swapDiskFile(env, filepath.Join(dir, f.pathname), e); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// createUndoTables replaces the undo tables, as fossil's undo_reset and
+// undo_begin do: an empty undo table for file content, in fossil's schema
+// so fossil's undo reads it, and copies of vfile and vmerge. A stash's undo
+// tables go too, so an older stash is not brought back.
 func createUndoTables(tx *sql.Tx) error {
-	for _, tbl := range []string{"undo", "undo_vfile", "undo_vmerge"} {
+	for _, tbl := range []string{"undo", "undo_vfile", "undo_vmerge", "undo_stash", "undo_stashfile"} {
 		if _, err := tx.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
-			return fmt.Errorf("undo.Save: drop %s: %w", tbl, err)
+			return fmt.Errorf("drop %s: %w", tbl, err)
 		}
 	}
 	if _, err := tx.Exec(`CREATE TABLE undo(
-		pathname TEXT,
-		content  BLOB,
+		pathname   TEXT UNIQUE,
+		redoflag   BOOLEAN,
 		existsflag BOOLEAN,
-		isExec   BOOLEAN,
-		isLink   BOOLEAN,
-		redoflag BOOLEAN DEFAULT 0
+		isExe      BOOLEAN,
+		isLink     BOOLEAN,
+		content    BLOB
 	)`); err != nil {
-		return fmt.Errorf("undo.Save: create undo: %w", err)
+		return fmt.Errorf("create undo: %w", err)
 	}
 	if _, err := tx.Exec("CREATE TABLE undo_vfile AS SELECT * FROM vfile"); err != nil {
-		return fmt.Errorf("undo.Save: copy vfile: %w", err)
+		return fmt.Errorf("copy vfile: %w", err)
 	}
 	if _, err := tx.Exec("CREATE TABLE undo_vmerge AS SELECT * FROM vmerge"); err != nil {
-		return fmt.Errorf("undo.Save: copy vmerge: %w", err)
+		return fmt.Errorf("copy vmerge: %w", err)
 	}
 	return nil
+}
+
+// querier is what savedPathnames reads vfile through.
+type querier interface {
+	Query(query string, args ...any) (*sql.Rows, error)
 }
 
 // savedPathnames returns the vfile pathnames Save snapshots: those named in
 // pathnames, or every one when pathnames is empty. They are read up front,
 // so no cursor is held open during file I/O.
-func savedPathnames(tx *sql.Tx, pathnames []string) ([]string, error) {
-	q := "SELECT pathname FROM vfile"
+func savedPathnames(q querier, pathnames []string) ([]string, error) {
+	query := "SELECT pathname FROM vfile"
 	args := make([]any, len(pathnames))
 	if len(pathnames) > 0 {
-		q += " WHERE pathname IN (?" + strings.Repeat(",?", len(pathnames)-1) + ")"
+		query += " WHERE pathname IN (?" + strings.Repeat(",?", len(pathnames)-1) + ")"
 		for i, p := range pathnames {
 			args[i] = p
 		}
 	}
-	rows, err := tx.Query(q, args...)
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("undo.Save: query vfile: %w", err)
 	}
@@ -133,31 +193,24 @@ func savedPathnames(tx *sql.Tx, pathnames []string) ([]string, error) {
 	return names, nil
 }
 
-// saveFile snapshots the file name, as on disk, into the undo table, and
-// clears the saved row's mtime unless it vouches for that content.
-func saveFile(tx *sql.Tx, storage simio.Storage, dir, name string) error {
-	disk, err := readDisk(storage, filepath.Join(dir, name))
-	if err != nil {
-		return fmt.Errorf("undo.Save: %w", err)
-	}
-	var isExec, isLink bool
-	if err := tx.QueryRow(
-		"SELECT coalesce(isexe, 0), coalesce(islink, 0) FROM vfile WHERE pathname=?", name,
-	).Scan(&isExec, &isLink); err != nil {
-		return fmt.Errorf("undo.Save: read vfile %s: %w", name, err)
-	}
+// saveFile records f in the undo table, as fossil's undo_save does (the
+// executable bit from disk, a pathname saved once), and clears the saved
+// vfile row's mtime unless it vouches for that content.
+func saveFile(tx *sql.Tx, f File) error {
 	if _, err := tx.Exec(
-		"INSERT INTO undo(pathname, content, existsflag, isExec, isLink) VALUES(?,?,?,?,?)",
-		name, disk.blob(), disk.exists, isExec, isLink,
+		"INSERT OR IGNORE INTO undo(pathname, redoflag, existsflag, isExe, isLink, content)"+
+			" VALUES(?, 0, ?, ?, 0, ?)",
+		f.pathname, f.disk.exists, f.disk.exec, f.disk.blob(),
 	); err != nil {
-		return fmt.Errorf("undo.Save: insert undo row: %w", err)
+		return fmt.Errorf("save %s: %w", f.pathname, err)
 	}
-	return unvouch(tx, name, disk)
+	return unvouch(tx, f.pathname, f.disk)
 }
 
 // diskFile is a working file as read from storage.
 type diskFile struct {
 	exists  bool
+	exec    bool
 	content []byte
 	mtime   int64 // seconds since 1970
 }
@@ -188,7 +241,10 @@ func readDisk(storage simio.Storage, fullPath string) (diskFile, error) {
 	if err != nil {
 		return diskFile{}, fmt.Errorf("stat %s: %w", fullPath, err)
 	}
-	return diskFile{exists: true, content: data, mtime: info.ModTime().Unix()}, nil
+	return diskFile{
+		exists: true, exec: info.Mode().Perm()&0o100 != 0,
+		content: data, mtime: info.ModTime().Unix(),
+	}, nil
 }
 
 // unvouch clears the mtime of name's saved row in undo_vfile unless it is
@@ -248,7 +304,7 @@ func Undo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
 	if dir == "" {
 		panic("undo.Undo: dir must not be empty")
 	}
-	return swapState(ckout, env, dir, false)
+	return swapState(ckout, env, dir, false, nil)
 }
 
 // Redo reverses the most recent Undo, returning the working files it changed
@@ -263,14 +319,31 @@ func Redo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
 	if dir == "" {
 		panic("undo.Redo: dir must not be empty")
 	}
-	return swapState(ckout, env, dir, true)
+	return swapState(ckout, env, dir, true, nil)
+}
+
+// Swap is Undo, or Redo when redo is set, that also keeps vvar's
+// checkout-hash naming the checked-out version, as fossil's db_set_checkout
+// does: hashOf returns the hash of a check-in rid.
+func Swap(
+	ckout *sql.DB, env *simio.Env, dir string, redo bool, hashOf func(int64) (string, error),
+) ([]Change, error) {
+	if ckout == nil || env == nil || dir == "" {
+		panic("undo.Swap: ckout, env and dir must be set")
+	}
+	if hashOf == nil {
+		panic("undo.Swap: hashOf must not be nil")
+	}
+	return swapState(ckout, env, dir, redo, hashOf)
 }
 
 // swapState swaps the working files, vfile, vmerge and the checkout version
 // with the saved ones. Files are read and written through env.Storage, and
 // each written file's mtime is recorded on its restored row where that row
 // vouched for the content when it was saved (see Save).
-func swapState(ckout *sql.DB, env *simio.Env, dir string, redo bool) ([]Change, error) {
+func swapState(
+	ckout *sql.DB, env *simio.Env, dir string, redo bool, hashOf func(int64) (string, error),
+) ([]Change, error) {
 	label := "undo"
 	wantAvail := "1"
 	setAvail := "2"
@@ -317,7 +390,7 @@ func swapState(ckout *sql.DB, env *simio.Env, dir string, redo bool) ([]Change, 
 			changes = append(changes, Change{Pathname: f.pathname, Action: f.action})
 		}
 	}
-	if err := swapCheckout(tx, label, setAvail); err != nil {
+	if err := swapCheckout(tx, label, setAvail, hashOf); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -369,7 +442,8 @@ type undoEntry struct {
 // cursor is held open during file I/O.
 func loadUndoEntries(tx *sql.Tx, label string, wantFlag bool) ([]undoEntry, error) {
 	rows, err := tx.Query(
-		"SELECT rowid, pathname, content, existsflag, coalesce(isExec, 0) FROM undo WHERE redoflag=? ORDER BY rowid",
+		"SELECT rowid, pathname, content, existsflag, coalesce(isExe, 0) FROM undo"+
+			" WHERE redoflag=? ORDER BY rowid",
 		wantFlag)
 	if err != nil {
 		return nil, fmt.Errorf("undo.%s: query undo: %w", label, err)
@@ -404,8 +478,8 @@ func swapDiskFiles(
 			return nil, fmt.Errorf("undo.%s: %w", label, err)
 		}
 		// Swap: update undo row with current content and flip redoflag.
-		if _, err := tx.Exec("UPDATE undo SET content=?, existsflag=?, redoflag=? WHERE rowid=?",
-			f.was.blob(), f.was.exists, !wantFlag, e.rowid); err != nil {
+		if _, err := tx.Exec("UPDATE undo SET content=?, existsflag=?, isExe=?, redoflag=? WHERE rowid=?",
+			f.was.blob(), f.was.exists, f.was.exec, !wantFlag, e.rowid); err != nil {
 			return nil, fmt.Errorf("undo.%s: update undo row: %w", label, err)
 		}
 		swapped = append(swapped, f)
@@ -479,7 +553,8 @@ func swapTables(tx *sql.Tx, label string) error {
 }
 
 // swapCheckout swaps the checkout vid in vvar and updates undo_available.
-func swapCheckout(tx *sql.Tx, label, setAvail string) error {
+// With hashOf, checkout-hash follows the restored vid.
+func swapCheckout(tx *sql.Tx, label, setAvail string, hashOf func(int64) (string, error)) error {
 	var curCheckout, undoCheckout string
 	if err := tx.QueryRow("SELECT value FROM vvar WHERE name='checkout'").Scan(&curCheckout); err != nil {
 		return fmt.Errorf("undo.%s: read checkout: %w", label, err)
@@ -493,10 +568,34 @@ func swapCheckout(tx *sql.Tx, label, setAvail string) error {
 	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_checkout',?)", curCheckout); err != nil {
 		return fmt.Errorf("undo.%s: set undo_checkout: %w", label, err)
 	}
+	if hashOf != nil {
+		if err := setCheckoutHash(tx, undoCheckout, hashOf); err != nil {
+			return fmt.Errorf("undo.%s: %w", label, err)
+		}
+	}
 
 	// Update undo_available.
 	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_available',?)", setAvail); err != nil {
 		return fmt.Errorf("undo.%s: set undo_available: %w", label, err)
+	}
+	return nil
+}
+
+// setCheckoutHash sets vvar's checkout-hash to the hash of version vid,
+// given as vvar holds it.
+func setCheckoutHash(tx *sql.Tx, vid string, hashOf func(int64) (string, error)) error {
+	rid, err := strconv.ParseInt(vid, 10, 64)
+	if err != nil {
+		return fmt.Errorf("checkout %q: %w", vid, err)
+	}
+	hash := ""
+	if rid > 0 {
+		if hash, err = hashOf(rid); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('checkout-hash',?)", hash); err != nil {
+		return fmt.Errorf("set checkout-hash: %w", err)
 	}
 	return nil
 }

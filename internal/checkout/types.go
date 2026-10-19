@@ -146,6 +146,9 @@ type UpdateOpts struct {
 //   - a binary file both the working copy and the target changed: the
 //     target's content written (so also in FilesWritten), the working
 //     copy saved beside it as NAME-original.
+//   - a file edited locally that the target renamed without changing it:
+//     left under its old name, untracked, the new name not written (as
+//     fossil does; the new name shows as missing).
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree

@@ -3,7 +3,8 @@
 // Register strategies at init time via [Register], then look them up by
 // name with [StrategyByName]. The built-in strategies are:
 //
-//   - ThreeWayText: line-level LCS-based merge with conflict markers
+//   - ThreeWayText: fossil's line-level merge (merge3.c), byte for byte,
+//     with its conflict markers
 //   - Binary: treats any difference as a conflict
 //   - LastWriterWins: always picks the remote side
 //   - ConflictFork: creates a fork instead of merging

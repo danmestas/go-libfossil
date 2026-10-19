@@ -52,6 +52,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.Update` follows renames between the checkout's version and the
+  target, as fossil's `update` does (`find_filename_changes`). A file with
+  local changes that the target renamed and changed is merged under the
+  new name, and the old name is removed; before, the edit was left behind
+  as an untracked file under the old name and the new name got the
+  target's content. The rename path runs through the two versions' common
+  ancestor, so a rename on the checkout's own branch is followed backwards.
+  Two cases follow fossil rather than the issue's wish: when the target
+  only renamed the file, the edit stays under the old name, untracked, and
+  the new name is not written (it shows as missing; the file is listed in
+  `UpdateResult.Unmerged`); and a local rename of a file the target edited
+  is not followed: the target's file is written under the old name, and the
+  renamed copy is removed if unedited or kept, untracked, if edited.
+  Tracked in #445.
+
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

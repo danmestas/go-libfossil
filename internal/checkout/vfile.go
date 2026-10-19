@@ -42,6 +42,11 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 	if c == nil {
 		panic("checkout.LoadVFile: nil *Checkout")
 	}
+	return c.loadVFile(c.db, rid, clear)
+}
+
+// loadVFile is LoadVFile writing through q.
+func (c *Checkout) loadVFile(q sqlExecer, rid libfossil.FslID, clear bool) error {
 
 	// Resolve every file before changing anything, so a refusal leaves
 	// vfile as it was.
@@ -59,7 +64,7 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 			isexe = 1
 		}
 		// INSERT OR IGNORE keeps an existing row for this version as it is.
-		_, err := c.db.Exec(`
+		_, err := q.Exec(`
 			INSERT OR IGNORE INTO vfile(vid, pathname, rid, mrid, isexe, islink)
 			VALUES(?, ?, ?, ?, ?, 0)`,
 			int64(rid), file.Name, int64(blobRIDs[i]), int64(blobRIDs[i]), isexe,
@@ -71,10 +76,10 @@ func (c *Checkout) LoadVFile(rid libfossil.FslID, clear bool) error {
 	if !clear {
 		return nil
 	}
-	if err := c.inheritMTimes(rid); err != nil {
+	if err := c.inheritMTimes(q, rid); err != nil {
 		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}
-	if _, err := c.db.Exec("DELETE FROM vfile WHERE vid != ?", int64(rid)); err != nil {
+	if _, err := q.Exec("DELETE FROM vfile WHERE vid != ?", int64(rid)); err != nil {
 		return fmt.Errorf("checkout.LoadVFile: clear: %w", err)
 	}
 	return nil
@@ -445,21 +450,34 @@ func (c *Checkout) refreshChanged(vid libfossil.FslID) error {
 		panic("checkout.refreshChanged: vid must be positive")
 	}
 
-	p, err := c.newScanPolicy(0)
+	writes, err := c.scanVersion(vid)
 	if err != nil {
 		return err
 	}
+	return c.storeScan(writes)
+}
+
+// scanVersion runs fossil's default scan over version vid and returns the
+// vfile updates it found, without storing them.
+func (c *Checkout) scanVersion(vid libfossil.FslID) ([]scanWrite, error) {
+	if vid <= 0 {
+		panic("checkout.scanVersion: vid must be positive")
+	}
+	p, err := c.newScanPolicy(0)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := c.loadScanEntries(vid)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var writes []scanWrite
 	for _, e := range entries {
 		if _, _, err := c.scanSingleEntry(e, p, &writes); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return c.storeScan(writes)
+	return writes, nil
 }
 
 // ScanChanges detects modified and missing files in the checkout.

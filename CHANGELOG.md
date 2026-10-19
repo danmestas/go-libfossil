@@ -66,6 +66,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row's mtime matched the file when it was saved, the case where the row
   vouches for the content; otherwise the row is restored with mtime 0 and
   the next scan hashes the file.
+- `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
+  It used to compare only committed versions, so it wrote the target's
+  content over a locally edited file, deleted an edited file the target
+  removed, and merged the current and target check-ins with their common
+  ancestor while ignoring the working file. Visible changes:
+  - Local edits are preserved. A locally edited file is merged three ways,
+    with the checkout's version as the base, the working file as the local
+    side and the target as the other; conflicts are written as markers and
+    listed in `Conflicted`.
+  - An update to another branch now takes the target's content for every
+    file without local changes, as fossil does; it used to merge the two
+    branches' committed changes, which could write conflict markers.
+  - An edited file the target deletes is kept, untracked; pending adds and
+    removals stay pending; a missing file is restored; a file the target
+    adds over an untracked one, read-only or not, is written after the
+    untracked one is copied to `NAME-original`.
+  - A binary file (a NUL byte, or a line over 32,767 bytes) is never
+    line-merged. Update saves the working copy as `NAME-original` and
+    writes the target's content; Merge keeps the checkout's copy, whatever
+    the file's strategy. Before,
+    both spliced the versions line by line and reported a clean merge.
+  - The new `UpdateResult.Unmerged` lists files left to reconcile without
+    markers: kept edited-but-deleted files, files added both locally and
+    by the target, and binary conflicts.
+  - Every file takes the target's executable bit, including a change to the
+    bit alone. An update that could not finish (a directory where a file
+    must be written, or a file or directory the process may not change) is
+    refused before anything is written, the checkout database moves in one transaction, and a dry run
+    changes nothing, the database included.
+
+  Update saves no undo state yet, so unlike fossil's update it cannot be
+  undone: a removed file restored from the target, or a working copy merged
+  or replaced, cannot be brought back with undo. Files are matched by name:
+  a file the target renamed is not followed, as fossil follows it. Tracked
+  in #443.
+
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

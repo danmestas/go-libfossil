@@ -69,8 +69,10 @@ func TestReceiptRecordsOneRowWhenFirstUsed(t *testing.T) {
 	var uid int64
 	var mtime float64
 	var nonce, ip string
-	if err := d.QueryRow("SELECT uid, mtime, nonce, ipaddr FROM rcvfrom WHERE rcvid=?",
-		first).Scan(&uid, &mtime, &nonce, &ip); err != nil {
+	// mtime+0 reads the stored REAL as a number: the column is declared
+	// DATETIME, which some drivers would otherwise scan as a time.
+	if err := d.QueryRow("SELECT uid, mtime+0, nonce, ipaddr FROM rcvfrom"+
+		" WHERE rcvid=? AND typeof(mtime)='real'", first).Scan(&uid, &mtime, &nonce, &ip); err != nil {
 		t.Fatalf("read row: %v", err)
 	}
 	want := libfossil.JulianDayFromMillis(at.UnixMilli())

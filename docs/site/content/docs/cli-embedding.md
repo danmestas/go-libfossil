@@ -55,8 +55,8 @@ Every JSON document is a single line on stdout. Fields are never renamed or remo
 | --- | --- |
 | 0 | Success, including a `snapshot` that changed nothing and a `diff` with no differences. |
 | 1 | Any other failure: a bad `--path`, an unreadable repository, an ambiguous version prefix, an I/O error. The message is on stderr. |
-| 80 | Usage error: an unknown command or flag, or a missing required flag or argument. The command-line parser sets this status. |
 | 2 | Not found: the version does not resolve, the file is not in that version (`cat`), or the path has no history (`log`). Nothing is written to stdout. |
+| 80 | Usage error: an unknown command or flag, or a missing required flag or argument. The command-line parser sets this status. |
 
 ## Concurrency
 

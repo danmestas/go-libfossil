@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
@@ -398,5 +400,38 @@ func TestSnapshotConcurrentProcesses(t *testing.T) {
 	out, err := exec.Command(fossilBin, "test-integrity", repoPath).CombinedOutput()
 	if err != nil {
 		t.Errorf("fossil test-integrity: %v\n%s", err, out)
+	}
+}
+
+// TestLogPathFollowsRename checks that a path's history reports the check-in
+// that renamed it, with the old name.
+func TestLogPathFollowsRename(t *testing.T) {
+	repoPath := newSnapshotRepo(t)
+	snapshot(t, repoPath, "a.md", "one\n")
+
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := r.ResolveVersion("tip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, renameUUID, err := manifest.Checkin(r.Inner(), manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "b.md", Content: []byte("one\n"), OldName: "a.md"}},
+		Comment: "rename",
+		User:    "tester",
+		Parent:  fsltype.FslID(parent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rows := pathLog(t, repoPath, "--path", "b.md")
+	if len(rows) == 0 || rows[0].UUID != renameUUID || rows[0].Action != "renamed" || rows[0].PrevName != "a.md" {
+		t.Fatalf("log --path b.md = %+v, want the rename from a.md first", rows)
 	}
 }

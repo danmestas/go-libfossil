@@ -40,3 +40,7 @@ func (OSStorage) Lstat(path string) (os.FileInfo, error) { return os.Lstat(path)
 // Readlink returns the target a symbolic link names. Like Lstat, it is not
 // part of Storage.
 func (OSStorage) Readlink(path string) (string, error) { return os.Readlink(path) }
+
+// Symlink creates newname as a symbolic link to oldname. Like Lstat, it is
+// not part of Storage.
+func (OSStorage) Symlink(oldname, newname string) error { return os.Symlink(oldname, newname) }

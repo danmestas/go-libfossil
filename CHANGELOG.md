@@ -146,10 +146,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows in fossil, permissions are not read where the storage has no file
   modes (`MemStorage`) or on Windows: the recorded ones are kept, where
   commit used to drop every `x`. `ScanENotFile` now refuses something other
-  than a file where a tracked file belongs, as fossil's merge does.
-  Extract still writes a missing file without asking for `Force`, since
-  nothing on disk is lost; it still writes a symlink as a plain file holding
-  the target's name.
+  than a file where a tracked file belongs, as fossil's merge does, except
+  at a pending add or removal, which fossil does not check.
+  Extract and Update write a symlink entry as a symlink while
+  `allow-symlinks` is on and the storage has symlinks, and otherwise as a
+  plain file holding the target's name, as fossil does. They delete a symlink
+  before writing a file over it, and never change a symlink's mode.
+  With `allow-symlinks` off, fossil reports such a file `UNLINK`, and its
+  checkout then refuses without `--force`; Extract does the same. Extract
+  still writes a missing file without asking for `Force`, an unlinked
+  symlink entry included, since nothing on disk is lost. That keeps
+  Create followed by Extract working, as fossil's open does.
 - Stash and undo read and write working files through the checkout's
   storage (`simio.Storage`) instead of the `os` package, so they work on a
   `MemStorage` checkout and under simulation (tracked in #448). Their

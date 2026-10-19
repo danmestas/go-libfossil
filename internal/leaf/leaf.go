@@ -153,6 +153,84 @@ func Rebuild(q db.Querier) error {
 	return nil
 }
 
+// Findings are the leaf-table errors Audit finds, each in ascending rid order.
+type Findings struct {
+	// Stale are rows a recheck has removed: check-ins with a same-branch
+	// child whose branch row was written once the child was linked.
+	Stale []libfossil.FslID
+	// Missing are check-ins a recheck has inserted: each carries a branch
+	// row and has no same-branch child, yet has no row.
+	Missing []libfossil.FslID
+}
+
+// Audit checks the leaf table against what Section 7.3 lets a reader decide
+// without knowing the order the artifacts arrived in. The table is not a
+// function of the repository: a check-in keeps its verdict when a child that
+// carries no branch row is linked to it in a later batch, or when a reparent
+// moves a child onto or off it, since neither schedules a recheck. So the
+// incremental table and a full rebuild can differ, and both are consistent.
+// Audit applies the Section 7.2 test, the one Check applies, only where every
+// arrival order agrees:
+//
+//   - A row is stale when a same-branch child carries a branch row that was
+//     written once the child was linked: propagated along the link (srcid 0),
+//     or the child's own T card (srcid the child), on a child no parent tag
+//     has moved. Writing it scheduled the child's parents, and that recheck
+//     removed the row. A row a control artifact wrote proves nothing, as the
+//     tag may have arrived before the check-in it names, and neither does a
+//     reparented child, whose link may be newer than its branch row.
+//   - A check-in carrying a branch row of any type is missing when it has no
+//     same-branch child, no row, and is not in detached. Its last branch
+//     write rechecked it, and after that only a branch write to it or to a
+//     child, which schedules it again, or a reparent taking a child away can
+//     change its verdict. detached names the check-ins a reparent took a
+//     child from: the P-card parents a check-in's plink no longer holds, which
+//     only its manifest records.
+//
+// A check-in with no branch row and no same-branch child may lack a row,
+// being a candidate only as the parent of a tagged check-in, and Audit does
+// not report it. Changing the main-branch setting rechecks nothing either, so
+// Audit reads the setting as it is now, as Check does.
+func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error) {
+	if q == nil {
+		panic("leaf.Audit: q must not be nil")
+	}
+	var f Findings
+	var err error
+	f.Stale, err = rids(q, fmt.Sprintf(`
+		SELECT leaf.rid FROM leaf
+		 WHERE EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = leaf.rid AND %[2]s
+		       AND EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%[1]d AND rid=plink.cid
+		                     AND srcid IN (0, plink.cid))
+		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
+		                       WHERE tag.tagname='parent' AND tagxref.tagtype=1
+		                         AND tagxref.rid=plink.cid))
+		 ORDER BY leaf.rid`, BranchTagID, sameBranchSQL))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit stale: %w", err)
+	}
+	missing, err := rids(q, fmt.Sprintf(`
+		SELECT t.rid FROM tagxref t
+		 WHERE t.tagid=%[1]d
+		   AND NOT EXISTS(SELECT 1 FROM leaf WHERE leaf.rid = t.rid)
+		   AND NOT EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = t.rid AND %[2]s)
+		 ORDER BY t.rid`, BranchTagID, sameBranchSQL))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit missing: %w", err)
+	}
+	for _, rid := range missing {
+		if _, ok := detached[rid]; !ok {
+			f.Missing = append(f.Missing, rid)
+		}
+	}
+	return f, nil
+}
+
 // Pending is Section 7.3's deferred schedule, fossil's needToCheck bag
 // (src/leaf.c leaf_eventually_check, leaf_do_pending_checks): the check-ins a
 // batch must recheck before its leaf table is read.
@@ -315,18 +393,23 @@ func (p *Pending) Reset() {
 
 // parentsOf lists rid's plink parents, merge parents included.
 func parentsOf(q db.Querier, rid libfossil.FslID) ([]libfossil.FslID, error) {
-	rows, err := q.Query("SELECT pid FROM plink WHERE cid=? AND pid>0", rid)
+	return rids(q, "SELECT pid FROM plink WHERE cid=? AND pid>0", rid)
+}
+
+// rids runs a query selecting one rid column.
+func rids(q db.Querier, query string, args ...any) ([]libfossil.FslID, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []libfossil.FslID
 	for rows.Next() {
-		var pid int64
-		if err := rows.Scan(&pid); err != nil {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
 			return nil, err
 		}
-		out = append(out, libfossil.FslID(pid))
+		out = append(out, libfossil.FslID(rid))
 	}
 	return out, rows.Err()
 }

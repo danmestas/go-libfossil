@@ -186,3 +186,114 @@ func TestRebuildIsSingleBatch(t *testing.T) {
 	}
 	g.wantLeaves("after check", 2, 3)
 }
+
+// tagFrom gives rid an active branch row written by the artifact src: 0 for a
+// row propagated from a parent, another rid for a control artifact.
+func (g graph) tagFrom(rid int64, name string, src int64) {
+	g.exec("REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) "+
+		"VALUES(?, 2, ?, ?, ?, 2460000.5, ?)", leaf.BranchTagID, src, rid, name, rid)
+}
+
+func (g graph) wantAudit(stage string, stale, missing []libfossil.FslID) {
+	g.t.Helper()
+	g.wantAuditDetached(stage, nil, stale, missing)
+}
+
+func (g graph) wantAuditDetached(stage string, detached map[libfossil.FslID]struct{}, stale, missing []libfossil.FslID) {
+	g.t.Helper()
+	got, err := leaf.Audit(g.q, detached)
+	if err != nil {
+		g.t.Fatalf("%s: Audit: %v", stage, err)
+	}
+	if !slices.Equal(got.Stale, stale) || !slices.Equal(got.Missing, missing) {
+		g.t.Errorf("%s: Audit = stale %v missing %v, want stale %v missing %v",
+			stage, got.Stale, got.Missing, stale, missing)
+	}
+}
+
+// TestAuditAcceptsArrivalOrder pins the tables Section 7.3 allows that the
+// test of Section 7.2 alone would reject: an untagged check-in with no child
+// may lack a row, and a parent may keep its row when its same-branch child
+// carries no branch row, since that child's arrival scheduled nothing.
+func TestAuditAcceptsArrivalOrder(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.link(1, 2, true) // 2 untagged, on trunk
+	g.exec("INSERT INTO leaf(rid) VALUES(1)")
+	g.wantAudit("kept verdict", nil, nil)
+
+	// The same repository rebuilt in one batch is just as consistent.
+	if err := leaf.Rebuild(g.q); err != nil {
+		t.Fatal(err)
+	}
+	g.wantLeaves("rebuilt")
+	g.wantAudit("rebuilt", nil, nil)
+}
+
+// TestAuditFollowsBranches pins the Section 7.2 test Audit applies: a merged
+// branch tip and a branch point whose children are all on other branches are
+// leaves, though each has a child.
+func TestAuditFollowsBranches(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.branch(2, "feat")
+	g.link(1, 2, true) // 1's only child is on feat
+	g.branch(3, "trunk")
+	g.link(2, 3, false) // 3 merges feat's tip 2 into trunk
+	if err := leaf.Rebuild(g.q); err != nil {
+		t.Fatal(err)
+	}
+	g.wantLeaves("rebuilt", 1, 2, 3)
+	g.wantAudit("rebuilt", nil, nil)
+}
+
+// TestAuditReportsDecidable pins the two findings no arrival order excuses: a
+// row whose same-branch child carries a branch row written after the link,
+// and a tagged check-in with no same-branch child and no row.
+func TestAuditReportsDecidable(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.link(1, 2, true)
+	g.tagFrom(2, "trunk", 0) // propagated to 2 along the link
+	g.branch(3, "feat")
+	g.link(1, 3, true)
+	g.branch(4, "feat")
+	g.link(3, 4, true) // 4's own T card: written as it was linked
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (3)")
+	g.wantAudit("planted", []libfossil.FslID{1, 3}, []libfossil.FslID{2, 4})
+
+	if err := leaf.Rebuild(g.q); err != nil {
+		t.Fatal(err)
+	}
+	g.wantAudit("rebuilt", nil, nil)
+}
+
+// TestAuditToleratesControlTag pins the limit of the stale finding: a branch
+// row a control artifact wrote may predate the child's link, when the tag
+// arrived before the check-in it names, so it schedules nothing on the parent.
+func TestAuditToleratesControlTag(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.link(1, 2, true)
+	g.tagFrom(2, "trunk", 9)
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (2)")
+	g.wantAudit("control-tagged child", nil, nil)
+}
+
+// TestAuditToleratesReparent pins the reparent exceptions: moving a child
+// schedules no recheck, so its new parent may keep a row and its old parent,
+// named in detached, may lack one.
+func TestAuditToleratesReparent(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.branch(2, "feat")
+	g.link(1, 2, true)
+	g.branch(3, "trunk")
+	g.link(1, 3, true) // 3 was 2's child, on trunk by its own T card
+	g.exec("INSERT OR IGNORE INTO tag(tagname) VALUES('parent')")
+	g.exec("INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) " +
+		"SELECT tagid, 1, 9, 3, 'h1', 2460000.5, 3 FROM tag WHERE tagname='parent'")
+	g.exec("INSERT INTO leaf(rid) VALUES(1)")
+	g.wantAudit("reparented, 2 not detached", nil, []libfossil.FslID{2, 3})
+	g.wantAuditDetached("reparented", map[libfossil.FslID]struct{}{2: {}}, nil, []libfossil.FslID{3})
+}

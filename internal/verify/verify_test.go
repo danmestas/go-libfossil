@@ -545,6 +545,104 @@ func TestVerify_DetectsIncorrectLeaf(t *testing.T) {
 	}
 }
 
+// mergedFeature commits root on trunk, feat branching from it, and a trunk
+// child of root that merges feat back. feat's tip and root each have a child,
+// but none on their own branch, so Section 7.2 keeps both leaves.
+func mergedFeature(t *testing.T, r *repo.Repo) (root, feat, merge libfossil.FslID) {
+	t.Helper()
+	commit := func(content string, parent libfossil.FslID, merged []libfossil.FslID, tags ...deck.TagCard) libfossil.FslID {
+		t.Helper()
+		rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+			Files:        []manifest.File{{Name: "a.txt", Content: []byte(content)}},
+			Comment:      content,
+			User:         "test",
+			Parent:       parent,
+			MergeParents: merged,
+			Tags:         tags,
+		})
+		if err != nil {
+			t.Fatalf("checkin %s: %v", content, err)
+		}
+		return rid
+	}
+	root = commit("root", 0, nil)
+	feat = commit("feat", root, nil,
+		deck.TagCard{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "feat"},
+		deck.TagCard{Type: deck.TagPropagating, Name: "sym-feat", UUID: "*"},
+		deck.TagCard{Type: deck.TagCancel, Name: "sym-trunk", UUID: "*"})
+	merge = commit("merge", root, []libfossil.FslID{feat})
+	return root, feat, merge
+}
+
+// leafIssues returns the RIDs of the leaf issues Verify reports.
+func leafIssues(t *testing.T, r *repo.Repo) []libfossil.FslID {
+	t.Helper()
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rids []libfossil.FslID
+	for _, iss := range report.Issues {
+		if iss.Kind == verify.IssueLeafIncorrect {
+			rids = append(rids, iss.RID)
+		}
+	}
+	return rids
+}
+
+// TestVerify_LeafSameBranchRule pins Section 7.2 in Verify: a merged branch
+// tip, and a branch point whose only same-branch child came later, are leaves
+// although each has a child.
+func TestVerify_LeafSameBranchRule(t *testing.T) {
+	r := newTestRepo(t)
+	_, feat, merge := mergedFeature(t, r)
+	if got := leafIssues(t, r); len(got) != 0 {
+		t.Fatalf("leaf issues on a merged branch: %v", got)
+	}
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM leaf WHERE rid IN (?, ?)", feat, merge).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("leaf holds %d of feat and merge, want 2", n)
+	}
+}
+
+// TestVerify_LeafKeptVerdict pins Section 7.3's arrival-order states: a child
+// that carries no branch row, linked in a later batch, rechecks nothing, so
+// its parent may keep its row and the child may have none.
+func TestVerify_LeafKeptVerdict(t *testing.T) {
+	r := newTestRepo(t)
+	_, _, merge := mergedFeature(t, r)
+	// An untagged trunk child of merge, as a later batch links it.
+	if _, err := r.DB().Exec("INSERT INTO plink(pid, cid, isprim, mtime) VALUES(?, 999, 1, 2460000.5)", merge); err != nil {
+		t.Fatal(err)
+	}
+	if got := leafIssues(t, r); len(got) != 0 {
+		t.Fatalf("leaf issues for a kept verdict: %v", got)
+	}
+}
+
+// TestVerify_LeafDecidable pins what Verify must report: a row whose
+// same-branch child carries a branch row, and a tagged check-in with no
+// same-branch child that has no row.
+func TestVerify_LeafDecidable(t *testing.T) {
+	r := newTestRepo(t)
+	root, feat, _ := mergedFeature(t, r)
+	if _, err := r.DB().Exec("DELETE FROM leaf WHERE rid=?", feat); err != nil {
+		t.Fatal(err)
+	}
+	// root's trunk child merge inherited its branch row along the link.
+	if _, err := r.DB().Exec("INSERT INTO leaf(rid) VALUES(?)", root); err != nil {
+		t.Fatal(err)
+	}
+	got := leafIssues(t, r)
+	want := []libfossil.FslID{root, feat}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("leaf issues = %v, want %v", got, want)
+	}
+}
+
 func TestRebuild_BuggifyResilience(t *testing.T) {
 	r := newTestRepo(t)
 

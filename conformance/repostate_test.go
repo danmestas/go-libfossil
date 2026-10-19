@@ -169,6 +169,16 @@ func (c rsCase) goConforms(t *testing.T, script rsScript, v rsVariant) error {
 		if d := diffState(c.expected(), got, "want", load.String()); d != "" {
 			problems = append(problems, d)
 		}
+		if slices.Contains(c.tables, "leaf") {
+			issues, err := verifyLeafIssues(path, script.labels)
+			if err != nil {
+				return err
+			}
+			if len(issues) > 0 {
+				problems = append(problems, fmt.Sprintf("%s: verify.Verify reports leaf issues on %v",
+					load, issues))
+			}
+		}
 	}
 	if len(problems) > 0 {
 		return expectf("%s", strings.Join(problems, " | "))

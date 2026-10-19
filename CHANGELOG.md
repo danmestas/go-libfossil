@@ -52,6 +52,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify.Verify` checks the leaf table by the same-branch rule of
+  repo-state §7.2, through the test `leaf.Check` applies, rather than
+  expecting a leaf for every check-in with no child at all. A merged branch
+  tip and a branch point whose children are all on other branches are no
+  longer reported. §7.3 lets the table depend on arrival order, so Verify
+  reports only what every order agrees on: a row whose same-branch child
+  carries a branch row written once it was linked, and a check-in carrying a
+  branch row with no same-branch child and no row. A parent that keeps its
+  row when an untagged child arrives later, and a parent a reparent took a
+  child from, are accepted. Every conformance case comparing the leaf table
+  now also runs Verify on it, and `repostate.7.2.verify-leaf-table` checks
+  that Verify reports a dropped and a planted row (RS-7.2-1, RS-7.3-1).
+  Tracked in #433.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"database/sql"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -9,6 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -21,10 +21,13 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("verify: checkDerived: nil report")
 	}
 
-	if err := checkCheckins(r, report, cache); err != nil {
+	// detached collects the P-card parents a check-in's plink no longer
+	// holds, which checkLeaves must not expect a leaf row for.
+	detached := make(map[libfossil.FslID]struct{})
+	if err := checkCheckins(r, report, cache, detached); err != nil {
 		return err
 	}
-	if err := checkLeaves(r, report); err != nil {
+	if err := checkLeaves(r, report, detached); err != nil {
 		return err
 	}
 
@@ -32,7 +35,7 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 }
 
 // checkCheckins verifies event and plink tables against checkin manifests.
-func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
+func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache, detached map[libfossil.FslID]struct{}) error {
 	if r == nil {
 		panic("verify: checkCheckins: nil repo")
 	}
@@ -53,7 +56,7 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
 			return fmt.Errorf("checkCheckins scan: %w", err)
 		}
 
-		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache); err != nil {
+		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache, detached); err != nil {
 			return err
 		}
 	}
@@ -62,7 +65,10 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
 }
 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
-func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache) error {
+func checkOneCheckin(
+	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache,
+	detached map[libfossil.FslID]struct{},
+) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
 	}
@@ -93,7 +99,7 @@ func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid str
 
 	// Check plink table
 	for _, parentUUID := range d.P {
-		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID); err != nil {
+		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, detached); err != nil {
 			return err
 		}
 	}
@@ -129,13 +135,20 @@ func checkEvent(q db.Querier, report *Report, rid libfossil.FslID, uuid string) 
 	return nil
 }
 
-// checkPlink verifies that a parent relationship has a corresponding plink row.
-func checkPlink(q db.Querier, report *Report, cid libfossil.FslID, childUUID string, parentUUID string) error {
+// checkPlink verifies that a parent relationship has a corresponding plink row,
+// adding a parent that lacks one to detached.
+func checkPlink(
+	q db.Querier, report *Report, cid libfossil.FslID, childUUID string, parentUUID string,
+	detached map[libfossil.FslID]struct{},
+) error {
 	if q == nil {
 		panic("verify: checkPlink: nil querier")
 	}
 	if report == nil {
 		panic("verify: checkPlink: nil report")
+	}
+	if detached == nil {
+		panic("verify: checkPlink: nil detached")
 	}
 
 	pid, ok := blob.Exists(q, parentUUID)
@@ -151,6 +164,7 @@ func checkPlink(q db.Querier, report *Report, cid libfossil.FslID, childUUID str
 	}
 
 	if count == 0 {
+		detached[pid] = struct{}{}
 		report.addIssue(Issue{
 			Kind:    IssuePlinkMissing,
 			RID:     cid,
@@ -163,8 +177,12 @@ func checkPlink(q db.Querier, report *Report, cid libfossil.FslID, childUUID str
 	return nil
 }
 
-// checkLeaves verifies that the leaf table matches actual leaves in the DAG.
-func checkLeaves(r *repo.Repo, report *Report) error {
+// checkLeaves reports the leaf-table errors leaf.Audit can decide. Section 7.3
+// lets the table depend on the order artifacts arrived in, so Verify does not
+// recompute one expected table: it reports a row that a recheck has removed
+// and a tagged check-in that a recheck has inserted. detached are the parents
+// a reparent may have taken a child from, as checkPlink found them.
+func checkLeaves(r *repo.Repo, report *Report, detached map[libfossil.FslID]struct{}) error {
 	if r == nil {
 		panic("verify: checkLeaves: nil repo")
 	}
@@ -172,93 +190,25 @@ func checkLeaves(r *repo.Repo, report *Report) error {
 		panic("verify: checkLeaves: nil report")
 	}
 
-	expected, err := computeExpectedLeaves(r.DB())
+	f, err := leaf.Audit(r.DB(), detached)
 	if err != nil {
-		return err
+		return fmt.Errorf("checkLeaves: %w", err)
 	}
-
-	actual, err := getActualLeaves(r.DB())
-	if err != nil {
-		return err
-	}
-
-	if !leafSetsEqual(expected, actual) {
+	for _, rid := range f.Stale {
 		report.addIssue(Issue{
 			Kind:    IssueLeafIncorrect,
+			RID:     rid,
 			Table:   "leaf",
-			Message: fmt.Sprintf("leaf table incorrect: expected %d leaves, got %d", len(expected), len(actual)),
+			Message: fmt.Sprintf("leaf rid=%d has a same-branch child that carries a branch tag", rid),
 		})
 	}
-
+	for _, rid := range f.Missing {
+		report.addIssue(Issue{
+			Kind:    IssueLeafIncorrect,
+			RID:     rid,
+			Table:   "leaf",
+			Message: fmt.Sprintf("leaf missing rid=%d, which carries a branch tag and has no same-branch child", rid),
+		})
+	}
 	return nil
-}
-
-// computeExpectedLeaves finds all checkins with no children.
-func computeExpectedLeaves(q db.Querier) (map[libfossil.FslID]bool, error) {
-	if q == nil {
-		panic("verify: computeExpectedLeaves: nil querier")
-	}
-
-	leaves := make(map[libfossil.FslID]bool)
-	query := `
-		SELECT e.objid
-		FROM event e
-		WHERE e.type='ci'
-		AND NOT EXISTS (SELECT 1 FROM plink WHERE pid=e.objid)
-	`
-	rows, err := q.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("computeExpectedLeaves: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rid int64
-		if err := rows.Scan(&rid); err != nil {
-			return nil, fmt.Errorf("computeExpectedLeaves scan: %w", err)
-		}
-		leaves[libfossil.FslID(rid)] = true
-	}
-
-	return leaves, rows.Err()
-}
-
-// getActualLeaves reads the current leaf table.
-func getActualLeaves(q db.Querier) (map[libfossil.FslID]bool, error) {
-	if q == nil {
-		panic("verify: getActualLeaves: nil querier")
-	}
-
-	leaves := make(map[libfossil.FslID]bool)
-	rows, err := q.Query("SELECT rid FROM leaf")
-	if err == sql.ErrNoRows {
-		return leaves, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("getActualLeaves: %w", err)
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rid int64
-		if err := rows.Scan(&rid); err != nil {
-			return nil, fmt.Errorf("getActualLeaves scan: %w", err)
-		}
-		leaves[libfossil.FslID(rid)] = true
-	}
-
-	return leaves, rows.Err()
-}
-
-// leafSetsEqual compares two sets of leaves.
-func leafSetsEqual(a, b map[libfossil.FslID]bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for rid := range a {
-		if !b[rid] {
-			return false
-		}
-	}
-	return true
 }

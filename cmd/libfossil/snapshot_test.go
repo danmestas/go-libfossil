@@ -228,6 +228,41 @@ func TestLogPathListsOnlyCheckinsThatChangedIt(t *testing.T) {
 	}
 }
 
+// TestLogTimeIsTheDCard checks that each log row's time is its check-in's D
+// card to the millisecond. Converting the stored Julian day by truncation put
+// most rows 1ms early; a dozen check-ins make that near certain to show.
+func TestLogTimeIsTheDCard(t *testing.T) {
+	repoPath := newSnapshotRepo(t)
+	for i := 0; i < 12; i++ {
+		snapshot(t, repoPath, "a.md", fmt.Sprintf("v%d\n", i))
+	}
+	rows := pathLog(t, repoPath, "--path", "a.md")
+	if len(rows) != 12 {
+		t.Fatalf("log has %d rows, want 12", len(rows))
+	}
+	for i, r := range rows {
+		if want := dCard(t, repoPath, r.UUID) + "Z"; r.Time != want {
+			t.Errorf("row %d time = %s, its D card says %s", i, r.Time, want)
+		}
+	}
+}
+
+// dCard returns the D card of check-in uuid, as the manifest records it.
+func dCard(t *testing.T, repoPath, uuid string) string {
+	t.Helper()
+	stdout, stderr, code := runCLI(t, "-R", repoPath, "repo", "cat", uuid)
+	if code != 0 {
+		t.Fatalf("repo cat %s exited %d: %s", uuid, code, stderr)
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		if d, ok := strings.CutPrefix(line, "D "); ok {
+			return d
+		}
+	}
+	t.Fatalf("check-in %s has no D card:\n%s", uuid, stdout)
+	return ""
+}
+
 func TestLogPathTextOutput(t *testing.T) {
 	repoPath := newSnapshotRepo(t)
 	uuid := snapshot(t, repoPath, "a.md", "one\n")

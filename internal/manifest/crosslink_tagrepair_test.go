@@ -13,6 +13,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
 // countPropagation replaces the repair gate's propagation step with one that
@@ -42,12 +43,7 @@ func ridOf(t *testing.T, r *repo.Repo, uuid string) libfossil.FslID {
 // and the leaf rule write, so two repositories compare row for row.
 func tagLeafState(t *testing.T, r *repo.Repo) (tags, leaves string) {
 	t.Helper()
-	if err := r.DB().QueryRow(`SELECT coalesce(group_concat(v, '|'), '') FROM
-	    (SELECT rid || ':' || tagid || ':' || tagtype || ':' || coalesce(srcid,'') || ':' ||
-	            coalesce(origid,'') || ':' || coalesce(value,'') || ':' || mtime AS v
-	       FROM tagxref ORDER BY rid, tagid)`).Scan(&tags); err != nil {
-		t.Fatalf("digest tagxref: %v", err)
-	}
+	tags = tagDigest(t, r.DB())
 	if err := r.DB().QueryRow(`SELECT coalesce(group_concat(rid, '|'), '') FROM
 	    (SELECT rid FROM leaf ORDER BY rid)`).Scan(&leaves); err != nil {
 		t.Fatalf("digest leaf: %v", err)
@@ -56,6 +52,19 @@ func tagLeafState(t *testing.T, r *repo.Repo) (tags, leaves string) {
 		t.Fatal("tagLeafState: empty digest; the comparison would be vacuous")
 	}
 	return tags, leaves
+}
+
+// tagDigest is every tagxref row, every column, in one string.
+func tagDigest(t *testing.T, q db.Querier) string {
+	t.Helper()
+	var tags string
+	if err := q.QueryRow(`SELECT coalesce(group_concat(v, '|'), '') FROM
+	    (SELECT rid || ':' || tagid || ':' || tagtype || ':' || coalesce(srcid,'') || ':' ||
+	            coalesce(origid,'') || ':' || coalesce(value,'') || ':' || mtime AS v
+	       FROM tagxref ORDER BY rid, tagid)`).Scan(&tags); err != nil {
+		t.Fatalf("digest tagxref: %v", err)
+	}
+	return tags
 }
 
 // assertMatchesFullRebuild compares r's tag and leaf tables with what a
@@ -294,4 +303,157 @@ func TestBatchScheduleRollbackKeepsEarlierParents(t *testing.T) {
 	if got := s.parents.sorted(); len(got) != 0 {
 		t.Fatalf("parents after reset = %v, want none", got)
 	}
+}
+
+// errRolledBack ends a probe transaction so it leaves nothing behind.
+var errRolledBack = errors.New("probe rolled back")
+
+// assertFullyPropagated fails if propagating from every primary parent in the
+// repository would still write a tagxref row: a committed plink edge whose
+// parent's tags never reached the child. The probe runs in a transaction it
+// rolls back.
+func assertFullyPropagated(t *testing.T, r *repo.Repo, where string) {
+	t.Helper()
+	before := tagDigest(t, r.DB())
+	var after string
+	err := r.WithTx(func(tx *db.Tx) error {
+		rows, err := tx.Query("SELECT DISTINCT pid FROM plink WHERE isprim=1 ORDER BY pid")
+		if err != nil {
+			return err
+		}
+		var pids []libfossil.FslID
+		for rows.Next() {
+			var pid int64
+			if err := rows.Scan(&pid); err != nil {
+				rows.Close()
+				return err
+			}
+			pids = append(pids, libfossil.FslID(pid))
+		}
+		rows.Close()
+		for _, pid := range pids {
+			if err := tag.PropagateAllLeaves(tx, pid, leaf.NewPending()); err != nil {
+				return err
+			}
+		}
+		after = tagDigest(t, tx)
+		return errRolledBack
+	})
+	if !errors.Is(err, errRolledBack) {
+		t.Fatalf("%s: propagation probe: %v", where, err)
+	}
+	if before != after {
+		t.Fatalf("%s: committed plink edges whose tags were never propagated:\n have %s\n owe  %s",
+			where, before, after)
+	}
+}
+
+// failPropagation makes the gate's propagation step fail until the returned
+// func is called.
+func failPropagation(t *testing.T) (restore func()) {
+	t.Helper()
+	orig := propagateAllLeaves
+	boom := errors.New("injected propagation failure")
+	propagateAllLeaves = func(db.Querier, libfossil.FslID, *leaf.Pending) error { return boom }
+	restore = func() { propagateAllLeaves = orig }
+	t.Cleanup(restore)
+	return restore
+}
+
+// A link batch propagates from its parents before it commits, as fossil's
+// manifest_crosslink does as it links each check-in: no committed state holds
+// a plink edge whose parent's tags were not propagated, even before the
+// sweep's closing gate runs.
+func TestSweepBatchCommitsPropagated(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	storeCheckin(t, r, "c2", "", base.Add(time.Minute), c1)
+
+	st := newLinkState(crosslinkCacheBytes)
+	linked, err := crosslinkSweepWithState(context.Background(), r, st)
+	if err != nil || linked != 2 {
+		t.Fatalf("sweep without its closing gate: linked=%d err=%v", linked, err)
+	}
+	assertFullyPropagated(t, r, "after the batch commits")
+	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
+}
+
+// A batch whose propagation fails rolls its links back with it, so nothing is
+// committed that owes propagation, and a later run converges.
+func TestSweepBatchRollsBackLinksWhenPropagationFails(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c1: %v", err)
+	}
+	c2 := storeCheckin(t, r, "c2", "", base.Add(time.Minute), c1)
+
+	restore := failPropagation(t)
+	if _, err := Crosslink(r); err == nil {
+		t.Fatal("Crosslink with failing propagation succeeded")
+	}
+	assertFullyPropagated(t, r, "after the failed batch")
+	var events int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?",
+		ridOf(t, r, c2)).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("c2 event rows after the failed batch = %d, %v; want 0", events, err)
+	}
+
+	restore()
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink re-run: %v", err)
+	}
+	assertFullyPropagated(t, r, "after the re-run")
+	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
+	assertMatchesFullRebuild(t, r)
+}
+
+// A receive transaction propagates from the parents it linked before it
+// commits; one whose propagation fails rolls back with its parents.
+func TestReceiveLinkerWithTxCommitsPropagated(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c1: %v", err)
+	}
+	body, c2 := buildCheckin(t, r, "c2", base.Add(time.Minute), nil, c1)
+	rid, _, err := blob.Store(r.DB(), body)
+	if err != nil {
+		t.Fatalf("blob.Store(c2): %v", err)
+	}
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	link := func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, rid, c2, body)
+	}
+
+	restore := failPropagation(t)
+	if err := linker.WithTx(r, link); err == nil {
+		t.Fatal("WithTx with failing propagation succeeded")
+	}
+	assertFullyPropagated(t, r, "after the failed transaction")
+	if got := linker.state.sched.parents.order; len(got) != 0 {
+		t.Fatalf("parents after a rolled-back transaction = %v, want none", got)
+	}
+
+	// The re-run is a new receive session: the failed one's linker keeps the
+	// blob as settled and leaves it to its Finalize sweep.
+	restore()
+	if linker, err = NewReceiveLinker(r); err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	if err := linker.WithTx(r, link); err != nil {
+		t.Fatalf("WithTx re-run: %v", err)
+	}
+	assertFullyPropagated(t, r, "after the transaction commits, before Finalize")
+	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
+	if _, err := linker.Finalize(context.Background()); err != nil {
+		t.Fatalf("Finalize: %v", err)
+	}
+	assertMatchesFullRebuild(t, r)
 }

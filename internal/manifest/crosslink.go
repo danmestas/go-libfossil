@@ -288,9 +288,9 @@ func (h *ridHeap) Pop() any {
 // tagxref-origin rows during that reordered pass is safe because each row
 // is a pure function of its own artifact; tag-propagation state, which
 // depends on the plink graph rather than any one artifact, is deferred to
-// repairTagPropagation at the end, which starts from the parents the sweep
-// linked, and so are the leaf rechecks the sweep's branch rows schedule
-// (batchSchedule, run by repairOnTx).
+// the end of each batch's transaction, where repairTagPropagation starts from
+// the parents the batch linked (linkTx). The leaf rechecks the sweep's branch
+// rows schedule wait for the closing gate (batchSchedule, run by repairOnTx).
 // Crosslink runs the sweep with no cancellation, supplying its own background
 // context. It is the historical entry point; callers that can be interrupted
 // (a clone bounded by a deadline) should use CrosslinkContext instead.
@@ -309,13 +309,15 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 // phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) linked
 // cascaded artifacts between its rounds. A cascade batch runs its own repair
 // gate before it commits, propagating from the parents it linked and applying
-// the leaf rechecks it scheduled; the sweep's gate runs here, once, when the
-// sweep or the cascades linked anything (draft-fossil-repo-state-01 Section
-// 7.3: every scheduled leaf recheck is applied before the leaf table is read).
-// Without the count, a session whose cascades linked everything ended in a
-// sweep that linked nothing and skipped the repair, leaving a pulled check-in
-// with no leaf row (issue #414), when cascades left propagation to this gate.
-// It returns what the sweep alone linked.
+// the leaf rechecks it scheduled; the closing gate runs here, once, when the
+// sweep or the cascades linked anything, and applies the sweep's rechecks
+// (draft-fossil-repo-state-01 Section 7.3: every scheduled leaf recheck is
+// applied before the leaf table is read). Without the count, a session whose
+// cascades linked everything ended in a sweep that linked nothing and skipped
+// the repair, leaving a pulled check-in with no leaf row (issue #414), when
+// cascades left propagation to this gate. Each cascade batch now runs its own
+// gate, so for cascades the count only keeps the session's reparent pass. It
+// returns what the sweep alone linked.
 func CrosslinkAfterCascades(ctx context.Context, r *repo.Repo, cascaded int) (int, error) {
 	if r == nil {
 		panic("manifest.CrosslinkAfterCascades: r must not be nil")
@@ -403,7 +405,12 @@ func prepareCrosslinkTables(q db.Querier) error {
 }
 
 // repairCrosslinkState runs the single order-sensitive repair gate after every
-// derivation that the caller owns has committed. sched is the batch's schedule:
+// derivation that the caller owns has committed. Each link transaction has
+// already propagated from the parents it linked (linkTx), so what the gate
+// still owes is the leaf rechecks the whole batch scheduled, applied once
+// (Section 7.3), and the reparents a parent tag calls for that no link
+// transaction ran because it linked no parent; it also propagates from any
+// parent a link outside linkTx left on sched. sched is the batch's schedule:
 // cleared once the gate commits, and returned to its extent before the gate
 // when the gate rolls back, so a retry neither loses a recheck or a parent nor
 // keeps one only the rolled-back gate scheduled.
@@ -581,11 +588,9 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 		if end > len(candidates) {
 			end = len(candidates)
 		}
-		mark := st.sched.mark()
-		if err := r.WithTx(func(tx *db.Tx) error {
+		if err := linkTx(r, st.sched, func(tx *db.Tx) error {
 			return linkBatch(ctx, tx, candidates[start:end], st)
 		}); err != nil {
-			st.sched.rollback(mark)
 			return st.linked - startLinked, err
 		}
 	}
@@ -1019,8 +1024,9 @@ func sampledList(items []string, total int) string {
 }
 
 // repairTagPropagation re-runs tag propagation from every primary parent the
-// batch wrote a plink row for (sched.parents), once, now that the batch's
-// plink edges are in place.
+// batch wrote a plink row for (sched.parents), once those plink edges are in
+// place: at the end of the transaction that wrote them (linkTx), and at the
+// repair gate for any left over.
 //
 // Canonical fossil seeds propagation the same way: having inserted a new
 // check-in's plink edges it calls tag_propagate_all on the *primary parent*

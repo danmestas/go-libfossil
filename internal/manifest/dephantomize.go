@@ -203,12 +203,7 @@ func (rl *ReceiveLinker) WithTx(r *repo.Repo, fn func(tx *db.Tx) error) error {
 	if r == nil {
 		panic("manifest.ReceiveLinker.WithTx: r must not be nil")
 	}
-	mark := rl.state.sched.mark()
-	err := r.WithTx(fn)
-	if err != nil {
-		rl.state.sched.rollback(mark)
-	}
-	return err
+	return linkTx(r, rl.state.sched, fn)
 }
 
 // Finalize retries the bounded deferred set, sweeps only residual candidates
@@ -581,7 +576,7 @@ func (rl *ReceiveLinker) retryAllWaiters(ctx context.Context) error {
 			}
 		}
 		rl.removeWaiter(rid)
-		if err := rl.r.WithTx(func(tx *db.Tx) error {
+		if err := linkTx(rl.r, rl.state.sched, func(tx *db.Tx) error {
 			remaining := receiveCascadeLimit
 			return rl.linkStored(ctx, tx, rid, nil, &remaining)
 		}); err != nil {

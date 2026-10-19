@@ -3,8 +3,10 @@ package manifest
 import (
 	"slices"
 
+	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // batchSchedule is the work a crosslink batch defers to its repair gate: the
@@ -18,6 +20,40 @@ import (
 type batchSchedule struct {
 	leaves  *leaf.Pending
 	parents parentSet
+}
+
+// linkTx runs link in one transaction on r and, before that transaction
+// commits, reparents and propagates tags from the parents sched holds, as
+// fossil's manifest_crosslink propagates from a check-in's parent in the
+// transaction that links it. A link and the propagation it owes therefore
+// commit or roll back together: no committed plink row waits on a later gate
+// for its parent's tags (issue #432). On commit the parents this transaction
+// added are dropped, propagated; on rollback everything it scheduled is. The
+// leaf rechecks stay on sched for the closing gate, which applies the whole
+// batch's at once (draft-fossil-repo-state-01 Section 7.3).
+func linkTx(r *repo.Repo, sched *batchSchedule, link func(tx *db.Tx) error) error {
+	if r == nil {
+		panic("manifest.linkTx: r must not be nil")
+	}
+	if sched == nil {
+		panic("manifest.linkTx: sched must not be nil")
+	}
+	mark := sched.mark()
+	err := r.WithTx(func(tx *db.Tx) error {
+		if err := link(tx); err != nil {
+			return err
+		}
+		if len(sched.parents.order) == mark.parents {
+			return nil // linked no parent: nothing owes propagation
+		}
+		return repairPlinkAndTags(tx, sched)
+	})
+	if err != nil {
+		sched.rollback(mark)
+		return err
+	}
+	sched.parents.truncate(mark.parents)
+	return nil
 }
 
 // scheduleMark is a point a batchSchedule can be rolled back to.

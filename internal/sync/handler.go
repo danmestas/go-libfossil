@@ -1247,9 +1247,9 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	// storeReceivedFile's cascade, inline, to keep its count: the cascade
-	// leaves the leaf and tag repair to crosslinkReceived (issue #414), and
-	// both run in the request transaction.
+	// storeReceivedFile's cascade, inline, to keep its count: crosslinkReceived
+	// owes the closing repair gate for it (issue #414), and both run in the
+	// request transaction.
 	rid, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
 	if rid > 0 {

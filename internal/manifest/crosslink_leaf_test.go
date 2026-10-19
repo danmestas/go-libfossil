@@ -291,7 +291,7 @@ func TestReceiveLinkerWithTxDropsRechecksOnFailure(t *testing.T) {
 		if err := linker.LinkStored(context.Background(), tx, rid, uuid, body); err != nil {
 			return err
 		}
-		if linker.state.leaves.Len() == 0 {
+		if linker.state.sched.leaves.Len() == 0 {
 			t.Fatal("LinkStored scheduled no recheck for a branch tag")
 		}
 		return boom
@@ -299,7 +299,7 @@ func TestReceiveLinkerWithTxDropsRechecksOnFailure(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("WithTx error = %v, want %v", err, boom)
 	}
-	if got := linker.state.leaves.Len(); got != 0 {
+	if got := linker.state.sched.leaves.Len(); got != 0 {
 		t.Fatalf("schedule after a rolled-back transaction has %d entries, want 0", got)
 	}
 }

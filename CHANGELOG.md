@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The repair gate at the end of a crosslink sweep, clone or sync now
+  propagates tags only from the primary parents its batch wrote plink rows
+  for, and from the new parents of a reparent, rather than from every primary
+  parent in the repository. Its cost now follows the batch, not the
+  repository: linking one check-in onto sqlite.fossil went from 2.7s to 0.6s.
+  A phantom-fill cascade runs this gate for each batch before it commits, so
+  the check-ins it links inherit their parents' tags and get their leaf rows
+  then, not at the session's close. A rebuild links every check-in, so it
+  propagates from every parent as before. Tracked in #432.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

@@ -11,7 +11,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
@@ -25,10 +24,11 @@ import (
 // mirroring the whole-repository sweep's CrosslinkContext contract. Callers with
 // no deadline pass context.Background().
 //
-// It returns how many artifacts the cascade linked. The cascade writes each
-// artifact's own rows but not the leaf and tag-propagation state, which
-// depends on the whole plink graph; the caller owes that repair once per
-// session, by passing the sum to CrosslinkAfterCascades (issue #414).
+// It returns how many artifacts the cascade linked. Each batch the cascade
+// commits runs its own repair gate first: it propagates tags from the parents
+// its plink rows name and applies the leaf rechecks it scheduled (issue #432).
+// The caller still passes the sum to CrosslinkAfterCascades, which closes the
+// session with a gate even when its own sweep links nothing (issue #414).
 func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) int {
 	if r == nil {
 		panic("manifest.AfterDephantomize: r must not be nil")
@@ -191,10 +191,11 @@ func (rl *ReceiveLinker) LinkStored(ctx context.Context, tx *db.Tx, rid libfossi
 }
 
 // WithTx runs fn in a transaction on r, as r.WithTx does, for a caller whose
-// fn calls LinkStored. If the transaction fails, the leaf rechecks LinkStored
-// scheduled in it are dropped with it: a rolled-back blob's rid can be handed
-// to an unrelated blob later (rid is not AUTOINCREMENT), and a recheck left
-// behind would then insert a leaf row for a blob that is no check-in.
+// fn calls LinkStored. If the transaction fails, the leaf rechecks and the
+// parents LinkStored scheduled in it are dropped with it: a rolled-back blob's
+// rid can be handed to an unrelated blob later (rid is not AUTOINCREMENT), and
+// a recheck left behind would then insert a leaf row for a blob that is no
+// check-in.
 func (rl *ReceiveLinker) WithTx(r *repo.Repo, fn func(tx *db.Tx) error) error {
 	if rl == nil {
 		panic("manifest.ReceiveLinker.WithTx: linker must not be nil")
@@ -202,10 +203,10 @@ func (rl *ReceiveLinker) WithTx(r *repo.Repo, fn func(tx *db.Tx) error) error {
 	if r == nil {
 		panic("manifest.ReceiveLinker.WithTx: r must not be nil")
 	}
-	mark := rl.state.leaves.Mark()
+	mark := rl.state.sched.mark()
 	err := r.WithTx(fn)
 	if err != nil {
-		rl.state.leaves.Rollback(mark)
+		rl.state.sched.rollback(mark)
 	}
 	return err
 }
@@ -218,14 +219,14 @@ func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 		panic("manifest.ReceiveLinker.Finalize: linker must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.leaves, rl.repairDue(), err)
+		_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, rl.repairDue(), err)
 		return 0, repairErr
 	}
 	if err := rl.retryAllWaiters(ctx); err != nil {
 		// A cancellation or savepoint-control failure stops new derivation, but
 		// receive-time batches may already have committed plink/tagxref rows.
 		// They still get the same single repair gate before the cause returns.
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.leaves, rl.repairDue(), err)
+		_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, rl.repairDue(), err)
 		return 0, repairErr
 	}
 	linked, sweepErr := crosslinkSweepWithState(ctx, rl.r, rl.state)
@@ -235,7 +236,7 @@ func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 	if !rl.needsRepair {
 		return linked, sweepErr
 	}
-	_, repairErr := repairCrosslinkState(rl.r, rl.state.leaves, 1, sweepErr)
+	_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, 1, sweepErr)
 	if repairErr == nil {
 		rl.needsRepair = false
 	}
@@ -364,11 +365,11 @@ func (rl *ReceiveLinker) linkInSavepoint(
 	if _, err := tx.Exec("SAVEPOINT " + receiveSavepoint); err != nil {
 		return false, fmt.Errorf("manifest.ReceiveLinker savepoint rid=%d: %w", rid, err)
 	}
-	mark := rl.state.leaves.Mark()
-	handled, linkErr := linkArtifact(tx, rid, d, rl.state.cache, rl.state.leaves)
+	mark := rl.state.sched.mark()
+	handled, linkErr := linkArtifact(tx, rid, d, rl.state.cache, rl.state.sched)
 	if linkErr != nil {
-		// The artifact's branch rows roll back, and so do their rechecks.
-		rl.state.leaves.Rollback(mark)
+		// The artifact's rows roll back, and so does what they scheduled.
+		rl.state.sched.rollback(mark)
 		if _, err := tx.Exec("ROLLBACK TO " + receiveSavepoint); err != nil {
 			return false, errors.Join(
 				fmt.Errorf("manifest.ReceiveLinker crosslink rid=%d: %w", rid, linkErr),
@@ -658,13 +659,15 @@ type cascadeLinker struct {
 	// fills, and once more when the walk finishes.
 	pending []cascadeItem
 
-	// leaves is the leaf-recheck schedule of the batch being flushed. Each
-	// flush is its own transaction, and applies the rechecks its artifacts'
-	// branch rows schedule before it commits, as fossil does at the end of
-	// each transaction (src/db.c, leaf_do_pending_checks). The rechecks that
-	// tag propagation schedules wait for the session's repair gate, which is
-	// where propagation runs.
-	leaves *leaf.Pending
+	// sched is the schedule of the batch being flushed. Each flush is its own
+	// transaction and runs its own repair gate before it commits: it
+	// propagates tags from the parents its artifacts' plink rows name, as
+	// fossil's manifest_crosslink does as it links each one, and applies the
+	// leaf rechecks its branch rows and that propagation schedule, as fossil
+	// does at the end of each transaction (src/db.c, leaf_do_pending_checks).
+	// A batch's parents are known only to the batch, so the gate cannot wait
+	// for the session's (issue #432).
+	sched *batchSchedule
 
 	stats cascadeStats
 }
@@ -676,10 +679,10 @@ func newCascadeLinker(r *repo.Repo) *cascadeLinker {
 	// whatever is still waiting (see missingCheckinRefs).
 	guard.awaitFiles = true
 	return &cascadeLinker{
-		r:      r,
-		cache:  content.NewCache(crosslinkCacheBytes),
-		guard:  guard,
-		leaves: leaf.NewPending(),
+		r:     r,
+		cache: content.NewCache(crosslinkCacheBytes),
+		guard: guard,
+		sched: newBatchSchedule(),
 	}
 }
 
@@ -859,12 +862,12 @@ func (cl *cascadeLinker) flush(ctx context.Context) bool {
 				return err
 			}
 		}
-		return cl.leaves.Apply(tx)
+		return repairOnTx(tx, cl.sched)
 	})
-	// Committed or rolled back, the batch's rechecks are spent: a rolled-back
-	// batch's branch rows are gone, and the sweep that relinks its artifacts
+	// Committed or rolled back, the batch's schedule is spent: a rolled-back
+	// batch's rows are gone, and the sweep that relinks its artifacts
 	// schedules them again.
-	cl.leaves.Reset()
+	cl.sched.reset()
 
 	if err != nil {
 		if ctx.Err() != nil {
@@ -927,11 +930,11 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) error {
 	if _, err := tx.Exec("SAVEPOINT " + cascadeSavepoint); err != nil {
 		return fmt.Errorf("manifest.AfterDephantomize savepoint rid=%d: %w", rid, err)
 	}
-	mark := cl.leaves.Mark()
-	handled, linkErr := linkArtifact(tx, rid, d, cl.cache, cl.leaves)
+	mark := cl.sched.mark()
+	handled, linkErr := linkArtifact(tx, rid, d, cl.cache, cl.sched)
 	if linkErr != nil {
-		// The artifact's branch rows roll back, and so do their rechecks.
-		cl.leaves.Rollback(mark)
+		// The artifact's rows roll back, and so does what they scheduled.
+		cl.sched.rollback(mark)
 		if _, err := tx.Exec("ROLLBACK TO " + cascadeSavepoint); err != nil {
 			return fmt.Errorf("manifest.AfterDephantomize rollback rid=%d: %w", rid, err)
 		}

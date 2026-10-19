@@ -31,9 +31,15 @@ import (
 // parent tag does one indexed query and returns. This matches fossil's
 // manifest_crosslink_end, which the receive path's repair gate runs once per
 // round rather than once per repository.
-func ReparentCheckins(tx *db.Tx) error {
+//
+// The new primary parent of each rewritten check-in is recorded on parents,
+// so the gate's propagation reaches the check-in under its new parent.
+func ReparentCheckins(tx *db.Tx, parents *parentSet) error {
 	if tx == nil {
 		panic("manifest.ReparentCheckins: tx must not be nil")
+	}
+	if parents == nil {
+		panic("manifest.ReparentCheckins: parents must not be nil")
 	}
 	type reparent struct {
 		rid   libfossil.FslID
@@ -65,7 +71,7 @@ func ReparentCheckins(tx *db.Tx) error {
 	}
 	cache := content.NewCache(crosslinkCacheBytes)
 	for _, r := range todo {
-		if err := reparentCheckin(tx, cache, r.rid, r.value); err != nil {
+		if err := reparentCheckin(tx, cache, r.rid, r.value, parents); err != nil {
 			return err
 		}
 	}
@@ -77,13 +83,13 @@ func ReparentCheckins(tx *db.Tx) error {
 // the same builders a normal crosslink uses, over a deck whose P-card is the
 // override: fossil reuses manifest_add_checkin_linkages the same way.
 func reparentCheckin(
-	tx *db.Tx, cache *content.Cache, rid libfossil.FslID, value string,
+	tx *db.Tx, cache *content.Cache, rid libfossil.FslID, value string, parents *parentSet,
 ) error {
-	parents := strings.Fields(value)
-	if len(parents) == 0 {
+	hashes := strings.Fields(value)
+	if len(hashes) == 0 {
 		return nil
 	}
-	for _, p := range parents {
+	for _, p := range hashes {
 		if !isHash(p) {
 			return nil // malformed value: fossil leaves the plink rows untouched
 		}
@@ -98,7 +104,7 @@ func reparentCheckin(
 	}
 
 	reparented := *d
-	reparented.P = parents
+	reparented.P = hashes
 
 	if _, err := tx.Exec("DELETE FROM plink WHERE cid=?", rid); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin plink delete rid=%d: %w", rid, err)
@@ -106,7 +112,7 @@ func reparentCheckin(
 	if _, err := tx.Exec("DELETE FROM mlink WHERE mid=?", rid); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin mlink delete rid=%d: %w", rid, err)
 	}
-	if err := insertCheckinPlinks(tx, rid, &reparented, checkinBaseid(tx, d)); err != nil {
+	if err := insertCheckinPlinks(tx, rid, &reparented, checkinBaseid(tx, d), parents); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin plink rid=%d: %w", rid, err)
 	}
 	if err := insertCheckinMlinks(tx, cache, rid, &reparented); err != nil {

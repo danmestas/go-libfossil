@@ -214,6 +214,11 @@ func bindToName(q db.Querier, rid libfossil.FslID, content []byte) error {
 	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
 		return fmt.Errorf("content.Expand: query uuid for rid=%d: %w", rid, err)
 	}
+	return bindToUUID(rid, uuid, content)
+}
+
+// bindToUUID is bindToName for a caller that already holds rid's name.
+func bindToUUID(rid libfossil.FslID, uuid string, content []byte) error {
 	var computed string
 	if len(uuid) == 64 {
 		computed = hash.SHA3(content)

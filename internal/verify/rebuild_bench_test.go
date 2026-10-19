@@ -22,11 +22,12 @@ import (
 // strided subset of lines off the previous, so Checkin deltifies every older
 // file blob into a backward chain against its successor. Rebuild then sweeps
 // every blob through checkBlobs and again through the manifest.Crosslink
-// derivation, each of which would, uncached, replay every blob's whole delta
-// chain from its whole tip: O(revisions^2) per sweep. Each sweep's content
-// cache walks each chain once.
+// derivation. Blob by blob, either sweep would replay every blob's whole delta
+// chain from its tip: O(revisions^2). checkBlobs instead walks each delta
+// tree once from its root (content.ExpandAll), and the crosslink sweep's
+// content cache walks each chain once.
 func BenchmarkRebuildDeepHistory(b *testing.B) {
-	for _, revisions := range []int{20, 60, 150} {
+	for _, revisions := range []int{20, 60, 150, 400} {
 		b.Run(fmt.Sprintf("revisions=%d", revisions), func(b *testing.B) {
 			r := buildRebuildHistory(b, revisions)
 
@@ -35,6 +36,27 @@ func BenchmarkRebuildDeepHistory(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				if _, err := verify.Rebuild(r); err != nil {
 					b.Fatalf("Rebuild: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkVerifyDeepHistory measures verify.Verify over the same histories:
+// the blob-integrity sweep plus the derived-table checks, which re-expand every
+// check-in manifest through Verify's content cache. ns/op should grow about
+// linearly in revisions; a quadratic blob sweep shows as ns/op growing with
+// the square.
+func BenchmarkVerifyDeepHistory(b *testing.B) {
+	for _, revisions := range []int{20, 60, 150, 400} {
+		b.Run(fmt.Sprintf("revisions=%d", revisions), func(b *testing.B) {
+			r := buildRebuildHistory(b, revisions)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := verify.Verify(r); err != nil {
+					b.Fatalf("Verify: %v", err)
 				}
 			}
 		})

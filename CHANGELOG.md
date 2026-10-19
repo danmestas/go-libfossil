@@ -164,6 +164,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row's mtime matched the file when it was saved, the case where the row
   vouches for the content; otherwise the row is restored with mtime 0 and
   the next scan hashes the file.
+- `verify.Rebuild` and `verify.Verify` check blob integrity in time linear
+  in the repository, as fossil's rebuild does. They expanded blob by blob
+  through a bounded cache, so on a real repository, whose delta chains run
+  hundreds of revisions deep, every evicted chain was walked again from its
+  root: the blob check on the Fossil SCM repository ran for over 45 minutes.
+  The new `content.ExpandAll` walks each delta tree once from its root,
+  expanding every blob from its parent's content, and reports for each blob
+  what an expansion of it alone reports. On the same repository the blob
+  check takes about 12 seconds and a whole `Verify` about 40; the issues
+  reported are unchanged.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

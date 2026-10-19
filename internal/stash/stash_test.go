@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // testEnv sets up a repo DB with one blob ("hello" in a.txt), a checkout DB
@@ -63,6 +66,14 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 		)`,
 		`CREATE INDEX delta_i1 ON delta(srcid)`,
 		`CREATE TABLE unclustered(rid INTEGER PRIMARY KEY)`,
+		// Every stored blob names the rcvfrom row of its receipt.
+		`CREATE TABLE rcvfrom(
+			rcvid INTEGER PRIMARY KEY,
+			uid INTEGER,
+			mtime DATETIME,
+			nonce TEXT UNIQUE,
+			ipaddr TEXT
+		)`,
 	}
 	_ = repoSchema
 	for _, s := range repoSchema2 {
@@ -154,7 +165,7 @@ func TestSaveAndList(t *testing.T) {
 	modifyFile(t, ckout, dir)
 
 	// Save.
-	if err := Save(ckout, repoDB, dir, "test stash"); err != nil {
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -198,7 +209,7 @@ func TestPopRestoresChanges(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, dir, "pop test"); err != nil {
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "pop test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -208,7 +219,7 @@ func TestPopRestoresChanges(t *testing.T) {
 	}
 
 	// Pop.
-	if err := Pop(ckout, repoDB, dir); err != nil {
+	if err := Pop(ckout, repoDB, simio.RealEnv(), dir); err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
 
@@ -233,7 +244,7 @@ func TestApplyKeepsStash(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, dir, "apply test"); err != nil {
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "apply test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -247,7 +258,7 @@ func TestApplyKeepsStash(t *testing.T) {
 	}
 
 	// Apply.
-	if err := Apply(ckout, repoDB, dir, entries[0].ID); err != nil {
+	if err := Apply(ckout, repoDB, simio.RealEnv(), dir, entries[0].ID); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -272,12 +283,12 @@ func TestDropAndClear(t *testing.T) {
 
 	// Save twice (need to re-modify between saves).
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, dir, "first"); err != nil {
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "first"); err != nil {
 		t.Fatalf("Save 1: %v", err)
 	}
 
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, dir, "second"); err != nil {
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "second"); err != nil {
 		t.Fatalf("Save 2: %v", err)
 	}
 
@@ -289,8 +300,8 @@ func TestDropAndClear(t *testing.T) {
 		t.Fatalf("expected 2 entries, got %d", len(entries))
 	}
 
-	// Drop first (oldest = last in list since ordered DESC).
-	firstID := entries[len(entries)-1].ID
+	// Drop first (oldest = first in list, which is ordered by creation).
+	firstID := entries[0].ID
 	if err := Drop(ckout, firstID); err != nil {
 		t.Fatalf("Drop: %v", err)
 	}
@@ -330,7 +341,7 @@ func TestSaveRefusesPendingMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "merge")
+	err := Save(ckout, repoDB, simio.RealEnv(), dir, "merge")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save over a pending merge = %v, want a pending-merge refusal", err)
 	}
@@ -349,7 +360,7 @@ func TestSaveRefusesCleanThreeWayMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "merged")
+	err := Save(ckout, repoDB, simio.RealEnv(), dir, "merged")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save during a merge = %v, want a pending-merge refusal", err)
 	}
@@ -368,7 +379,7 @@ func TestSaveRefusesRename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "rename")
+	err := Save(ckout, repoDB, simio.RealEnv(), dir, "rename")
 	if err == nil || !strings.Contains(err.Error(), "rename") {
 		t.Fatalf("Save over a rename = %v, want a rename refusal", err)
 	}
@@ -383,7 +394,7 @@ func TestSaveRefusesEditOnTopOfMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "edited merge")
+	err := Save(ckout, repoDB, simio.RealEnv(), dir, "edited merge")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save over an edited merge = %v, want a pending-merge refusal", err)
 	}
@@ -398,11 +409,74 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "mode")
+	err := Save(ckout, repoDB, simio.RealEnv(), dir, "mode")
 	if err == nil || !strings.Contains(err.Error(), "permission") {
 		t.Fatalf("Save over a mode change = %v, want a permission-change refusal", err)
 	}
 	if strings.Contains(err.Error(), "merge") {
 		t.Fatalf("a mode change was reported as a merge: %v", err)
+	}
+}
+
+// A stash's creation time is stored as fossil stores it, a Julian day
+// (src/stash.c: julianday('now')), and listed as fossil's stash ls shows it,
+// datetime(ctime). A row fossil wrote lists the same way.
+func TestStashTimeAsFossil(t *testing.T) {
+	repoDB, ckout, dir := testEnv(t)
+	modifyFile(t, ckout, dir)
+	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	var typ string
+	if err := ckout.QueryRow("SELECT typeof(ctime) FROM stash").Scan(&typ); err != nil {
+		t.Fatal(err)
+	}
+	if typ != "real" {
+		t.Errorf("stash.ctime stored as %s, want a Julian day (real)", typ)
+	}
+	if _, err := ckout.Exec("INSERT INTO stash(stashid, hash, comment, ctime)" +
+		" VALUES(99, '', 'fossil', 2461332.5)"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := List(ckout)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	shape := regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$`)
+	for _, e := range entries {
+		if !shape.MatchString(e.CTime) {
+			t.Errorf("stash %d: CTime %q, want datetime(ctime)'s YYYY-MM-DD HH:MM:SS", e.ID, e.CTime)
+		}
+		if e.ID == 99 && e.CTime != "2026-10-19 00:00:00" {
+			t.Errorf("fossil's stash: CTime %q, want 2026-10-19 00:00:00", e.CTime)
+		}
+	}
+}
+
+// Stashes list in creation order, oldest first, as fossil's stash ls orders
+// them (ORDER BY ctime); stash ids break a tie.
+func TestListOrdersByCreationTime(t *testing.T) {
+	_, ckout, _ := testEnv(t)
+	if err := EnsureTables(ckout); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range []string{
+		"(1, '', 'b', 2461332.6)", "(2, '', 'a', 2461332.5)",
+		"(3, '', 'd', 2461332.7)", "(4, '', 'c', 2461332.6)",
+	} {
+		if _, err := ckout.Exec("INSERT INTO stash(stashid, hash, comment, ctime) VALUES" + row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := List(ckout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int64
+	for _, e := range entries {
+		got = append(got, e.ID)
+	}
+	if want := []int64{2, 1, 4, 3}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("List order = %v, want %v", got, want)
 	}
 }

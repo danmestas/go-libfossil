@@ -51,7 +51,8 @@ type ApplyOpts struct {
 
 // AddTag creates a control artifact that adds or cancels a tag on a target checkin.
 // It stores the artifact as a blob, ensures the tag name exists in the tag table,
-// and inserts/replaces a row in the tagxref table.
+// inserts/replaces a row in the tagxref table, and writes the artifact's 'g'
+// event row, as crosslinking it would.
 func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if r == nil {
 		panic("tag.AddTag: r must not be nil")
@@ -65,13 +66,23 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if opts.User == "" {
 		panic("tag.AddTag: opts.User must not be empty")
 	}
+	// The D card holds the time as fossil writes it: to the millisecond, a
+	// caller's time rounded as fossil rounds a --date-override. Finer digits
+	// are legal (§4.6.4) but zit cannot read them.
 	if opts.Time.IsZero() {
-		opts.Time = time.Now().UTC()
+		opts.Time = libfossil.CardTimeNow(time.Now())
+	} else {
+		opts.Time = libfossil.CardTime(opts.Time)
 	}
 
 	var controlRid libfossil.FslID
 
-	err := r.WithTx(func(tx *db.Tx) error {
+	// The control artifact is one receipt, credited to the tagging user.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, fmt.Errorf("tag.AddTag: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		d, err := controlDeck(tx, opts)
 		if err != nil {
 			return err
@@ -106,6 +117,9 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 			return err
 		}
 		if err := leaves.Apply(tx); err != nil {
+			return err
+		}
+		if err := InsertControlEvent(tx, controlRid, d); err != nil {
 			return err
 		}
 

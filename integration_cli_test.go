@@ -123,7 +123,7 @@ func TestIntegrationStash(t *testing.T) {
 	}
 
 	// Stash save — should revert file to original.
-	if err := stash.Save(ckout, r.DB().SqlDB(), dir, "test stash"); err != nil {
+	if err := stash.Save(ckout, r.DB().SqlDB(), simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("stash.Save: %v", err)
 	}
 
@@ -136,7 +136,7 @@ func TestIntegrationStash(t *testing.T) {
 	}
 
 	// Stash pop — should restore modified content.
-	if err := stash.Pop(ckout, r.DB().SqlDB(), dir); err != nil {
+	if err := stash.Pop(ckout, r.DB().SqlDB(), simio.RealEnv(), dir); err != nil {
 		t.Fatalf("stash.Pop: %v", err)
 	}
 
@@ -181,7 +181,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Save undo state.
-	if err := undo.Save(ckout, dir, nil); err != nil {
+	if err := undo.Save(ckout, simio.RealEnv(), dir, nil); err != nil {
 		t.Fatalf("undo.Save: %v", err)
 	}
 
@@ -192,7 +192,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Undo — should restore original.
-	if err := undo.Undo(ckout, dir); err != nil {
+	if err := undo.Undo(ckout, simio.RealEnv(), dir); err != nil {
 		t.Fatalf("undo.Undo: %v", err)
 	}
 
@@ -205,7 +205,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Redo — should restore modification.
-	if err := undo.Redo(ckout, dir); err != nil {
+	if err := undo.Redo(ckout, simio.RealEnv(), dir); err != nil {
 		t.Fatalf("undo.Redo: %v", err)
 	}
 

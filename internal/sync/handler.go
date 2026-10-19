@@ -118,7 +118,11 @@ type HandleOpts struct {
 	Buggify      BuggifyChecker // nil in production.
 	Observer     Observer       // nil defaults to no-op.
 	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
-	Clock        simio.Clock    // time for the reply's timestamp comment; nil = real time
+	Clock        simio.Clock    // time for the reply's timestamp comment and receipt; nil = real time
+	// RemoteAddr is the address the request came from, recorded with what it
+	// pushes (fossil's REMOTE_ADDR). "" takes the one WithRemoteAddr put in
+	// the context, if any.
+	RemoteAddr string
 }
 
 // HandleSync processes an incoming xfer request and produces a response.
@@ -151,6 +155,11 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		return nil, fmt.Errorf("sync.HandleSync: %w", err)
 	}
 	h.smGate = gate
+	rc, err := serverReceipt(ctx, r, opts)
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.repo, h.receipt = r.WithReceipt(rc), rc
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
@@ -218,6 +227,7 @@ type handler struct {
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
+	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -278,6 +288,12 @@ func (h *handler) handleLoginCard(c *xfer.LoginCard) string {
 	h.user = u.Login
 	h.caps += u.Cap
 	h.authed = true
+	// check_login credits what the request stores to the user and records
+	// the card's nonce; a nobody or anonymous login changes neither.
+	if u.UID != 0 {
+		h.receipt.UID = int64(u.UID)
+		h.receipt.Nonce = c.Nonce
+	}
 	return ""
 }
 

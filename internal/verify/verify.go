@@ -4,24 +4,9 @@ package verify
 import (
 	"time"
 
-	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
-
-// verifyCacheBytes bounds the expanded content one Verify or Rebuild blob-check
-// keeps live. checkBlobs expands every blob once; Verify's checkCheckins then
-// re-expands the same blobs, so one cache shared across those sweeps walks each
-// blob's delta chain once instead of once per sweep. Rebuild's own derivation
-// runs through manifest.Crosslink, which carries its own expansion cache. A miss
-// costs throughput, not correctness; blob content is immutable and neither pass
-// rewrites it, so no cached entry can go stale.
-//
-// It was once the same number as manifest.crosslinkCacheBytes and no longer
-// is: that budget was measured down against clone wall time and peak RSS
-// (see its comment), and this pass has not been measured the same way. Sharing
-// a number is not a reason to inherit someone else's measurement.
-const verifyCacheBytes = 256 << 20
 
 // IssueKind categorizes the type of verification issue found.
 type IssueKind int
@@ -83,11 +68,8 @@ func Verify(r *repo.Repo) (*Report, error) {
 	start := time.Now()
 	report := &Report{}
 
-	// One expansion cache for the whole pass; see verifyCacheBytes.
-	cache := content.NewCache(verifyCacheBytes)
-
 	// Phase 1: Blob integrity (content hash verification)
-	if err := checkBlobs(r, report, cache); err != nil {
+	if err := checkBlobs(r, report); err != nil {
 		return nil, err
 	}
 
@@ -100,7 +82,7 @@ func Verify(r *repo.Repo) (*Report, error) {
 	}
 
 	// Phase 3: Derived tables (event, mlink, plink, tagxref, filename, leaf)
-	if err := checkDerived(r, report, cache); err != nil {
+	if err := checkDerived(r, report); err != nil {
 		return nil, err
 	}
 

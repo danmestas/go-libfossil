@@ -146,8 +146,16 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		return
 	}
 
+	// The clone is one receipt, credited to its admin user. The Repo it
+	// returns does not carry it: what the caller stores later is its own.
+	recv, recvErr := withClientReceipt(r, user, env.Clock)
+	if recvErr != nil {
+		err = fmt.Errorf("sync.Clone: %w", recvErr)
+		return
+	}
+
 	cs := &cloneSession{
-		repo:                  r,
+		repo:                  recv,
 		env:                   env,
 		opts:                  opts,
 		linker:                linker,
@@ -325,6 +333,7 @@ func (cs *cloneSession) run(ctx context.Context, t Transport) (*CloneResult, err
 			cs.obs.Completed(ctx, sessionEndFromClone(&cs.result), err)
 			return &cs.result, fmt.Errorf("sync.Clone: exchange round %d: %w", cycle, err)
 		}
+		notePeer(cs.repo, t)
 
 		recvdBefore := cs.result.BlobsRecvd
 

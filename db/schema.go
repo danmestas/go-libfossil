@@ -230,7 +230,6 @@ CREATE TABLE forumpost(
   fmtime REAL
 );
 CREATE INDEX forumpost_froot ON forumpost(froot);
-INSERT INTO rcvfrom(rcvid, uid, mtime, nonce, ipaddr) VALUES(1, 0, 0, NULL, NULL);
 `
 
 func CreateRepoSchema(d *DB) error {
@@ -356,10 +355,6 @@ func SeedConfig(d *DB, rng simio.Rand, projectCode string) error {
 		if err != nil {
 			return fmt.Errorf("seed config %q: %w", s.name, err)
 		}
-	}
-	_, err = d.Exec("INSERT OR REPLACE INTO rcvfrom(rcvid, uid, mtime, nonce, ipaddr) VALUES(1, 1, julianday('now'), NULL, NULL)")
-	if err != nil {
-		return fmt.Errorf("seed rcvfrom: %w", err)
 	}
 	return nil
 }

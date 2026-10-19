@@ -215,7 +215,7 @@ func (c *Checkout) SetCone(next *cone.Cone) (ConeChange, error) {
 		}
 	}
 	for _, r := range plan.entering {
-		if err := c.extractSingleFile(r.Pathname, r.RID, r.IsExe, false); err != nil {
+		if err := c.materialize(vid, r); err != nil {
 			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 		}
 	}
@@ -287,7 +287,7 @@ func (c *Checkout) checkEntering(r vfile.Row) error {
 	if r.RID <= 0 || r.PendingMerge() || r.IsRemoved() || r.RenamedFrom() != "" {
 		return fmt.Errorf("file %s outside the cone has changes recorded; revert it first", r.Pathname)
 	}
-	uuid, err := c.baselineHash(r.RID)
+	uuid, err := blobUUID(c.repo.DB(), libfossil.FslID(r.RID))
 	if err != nil {
 		return err
 	}
@@ -312,6 +312,16 @@ func (p conePlan) change() ConeChange {
 	sort.Strings(out.Materialized)
 	sort.Strings(out.Dematerialized)
 	return out
+}
+
+// materialize writes r's committed content to disk and records the mtime
+// the write gave it, as Extract does.
+func (c *Checkout) materialize(vid libfossil.FslID, r vfile.Row) error {
+	mtime, err := c.extractSingleFile(r.Pathname, r.RID, r.IsExe, false)
+	if err != nil {
+		return err
+	}
+	return c.recordMTime(c.db, vid, r.Pathname, r.RID, mtime)
 }
 
 // dematerialize removes name from disk, and then each parent directory the

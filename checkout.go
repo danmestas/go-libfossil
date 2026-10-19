@@ -69,10 +69,18 @@ type UpdateOpts struct {
 // user about marker text in their files must check Conflicted. Every path
 // in Conflicted also appears in FilesWritten: the marker text is what was
 // written there.
+//
+// Unmerged lists files left for the caller to reconcile that hold no
+// markers: a file edited locally that the target deletes (kept on disk,
+// no longer tracked), a file added both locally and by the target (the
+// local file kept, so it shows as edited), and a binary file both sides
+// changed (the target's content written, the working copy saved as
+// NAME-original). Like Conflicted, it is not an error.
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers — not an error; also present in FilesWritten
+	Unmerged     []string // paths left to reconcile without markers — not an error
 	// OutOfCone counts the changes a sparse checkout's update applied to files
 	// outside its cone: recorded for the next checkin, never written to disk.
 	OutOfCone int
@@ -134,9 +142,14 @@ type CheckoutMergeFile struct {
 }
 
 // CheckoutChange describes a single file change in the checkout.
+//
+// Change is "added", "modified", "deleted", "renamed" or "missing", or one of
+// the mode changes fossil's changes command reports: "executable" (became
+// executable), "symlink" (became a symlink), "unexec" (lost the executable
+// bit) or "unlink" (was a symlink, now is not).
 type CheckoutChange struct {
 	Name   string
-	Change string // "added", "modified", "deleted", "renamed", "missing"
+	Change string
 }
 
 // CreateCheckout creates a new checkout directory linked to this repository.
@@ -203,8 +216,11 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 	return nil
 }
 
-// Update updates the checkout to a new version, performing 3-way merge
-// where needed to preserve local modifications. See UpdateResult for how to
+// Update moves the checkout to a new version as fossil's update does,
+// carrying uncommitted changes into it: a locally edited file is merged
+// three ways (the checkout's version as base, the working file as local,
+// the target as other), one the target deletes is kept untracked, and
+// pending adds and removals stay pending. See UpdateResult for how to
 // distinguish a clean update from one that wrote conflict markers into
 // working-tree files.
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
@@ -218,6 +234,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		FilesWritten: res.FilesWritten,
 		FilesRemoved: res.FilesRemoved,
 		Conflicted:   res.Conflicted,
+		Unmerged:     res.Unmerged,
 		OutOfCone:    res.OutOfCone,
 	}, nil
 }
@@ -436,6 +453,14 @@ func fileChangeString(fc checkout.FileChange) string {
 		return "renamed"
 	case checkout.ChangeModified:
 		return "modified"
+	case checkout.ChangeExecutable:
+		return "executable"
+	case checkout.ChangeSymlink:
+		return "symlink"
+	case checkout.ChangeUnexec:
+		return "unexec"
+	case checkout.ChangeUnlink:
+		return "unlink"
 	default:
 		return "unknown"
 	}

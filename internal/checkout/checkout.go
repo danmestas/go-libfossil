@@ -193,13 +193,17 @@ func (c *Checkout) loadInitialVFile() error {
 }
 
 // resolveEnv fills in the defaults Create and Open share: the real
-// environment when none is given, and OS storage when it has none.
+// environment when none is given, and OS storage and the real clock when it
+// has none.
 func resolveEnv(env *simio.Env) *simio.Env {
 	if env == nil {
 		env = simio.RealEnv()
 	}
 	if env.Storage == nil {
 		env.Storage = simio.OSStorage{}
+	}
+	if env.Clock == nil {
+		env.Clock = simio.RealClock{}
 	}
 	return env
 }

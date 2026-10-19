@@ -592,8 +592,9 @@ func TestUpdateSetMTimeFalse(t *testing.T) {
 	if err != nil {
 		t.Fatal("stat:", err)
 	}
-	if !info.ModTime().IsZero() {
-		t.Fatalf("mtime should be zero when SetMTime is false, got %v", info.ModTime())
+	// The write's own time, not the check-in's.
+	if info.ModTime().Equal(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("mtime set to the check-in time when SetMTime is false: %v", info.ModTime())
 	}
 }
 
@@ -615,7 +616,8 @@ func containsPath(paths []string, name string) bool {
 // TestUpdateResultPathsAreSorted builds an update touching four files whose
 // names are deliberately not in the order the underlying map would build
 // them (allNames is a map[string]bool; Go randomizes iteration over it).
-// Two files conflict (alpha.txt, zeta.txt) and two are clean additions
+// Two files with uncommitted edits conflict (alpha.txt, zeta.txt) and two
+// are clean additions
 // (new_a.txt, new_z.txt). Every returned slice must come back sorted
 // regardless of iteration order, so a caller can use reflect.DeepEqual or a
 // golden file against the result instead of getting an intermittently
@@ -703,6 +705,14 @@ func TestUpdateResultPathsAreSorted(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Uncommitted edits that clash with branch B: fossil's update merges the
+	// working files, so these are what conflict.
+	for _, name := range []string{"/checkout/zeta.txt", "/checkout/alpha.txt"} {
+		if err := mem.WriteFile(name, []byte("my edit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	result, err := co.Update(UpdateOpts{TargetRID: ridB})
 	if err != nil {
 		t.Fatalf("Update with conflicts should still succeed (err==nil): %v", err)
@@ -726,10 +736,11 @@ func TestUpdateResultPathsAreSorted(t *testing.T) {
 	}
 }
 
-// TestUpdateConflictSurfacesPaths builds a genuine fork — two checkins with
-// the same parent, both editing the same line of the same file — and updates
-// across it. The three-way merge cannot resolve the overlapping edit cleanly,
-// so it writes conflict markers into conflict.txt. The update must still
+// TestUpdateConflictSurfacesPaths builds a fork — two checkins with the
+// same parent — checks out one with an uncommitted edit to the line the
+// other changed, and updates across it. The three-way merge cannot resolve
+// the overlapping edit cleanly, so it writes conflict markers into
+// conflict.txt. The update must still
 // report err == nil (this is a successful update — the working tree is
 // usable, just not clean) and must list conflict.txt in Conflicted.
 func TestUpdateConflictSurfacesPaths(t *testing.T) {
@@ -812,8 +823,12 @@ func TestUpdateConflictSurfacesPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Update from leaf A to leaf B — this must 3-way merge conflict.txt
-	// against the common ancestor (ridBase) and fail to merge cleanly.
+	// An uncommitted edit to conflict.txt. Update from leaf A to leaf B
+	// merges it, with A as the base and B as the other side, as fossil's
+	// update does, and the edits clash.
+	if err := mem.WriteFile("/checkout/conflict.txt", []byte("my edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	result, err := co.Update(UpdateOpts{TargetRID: ridB})
 	if err != nil {
 		t.Fatalf("Update with conflict should still succeed (err==nil): %v", err)

@@ -1,9 +1,7 @@
 package checkout
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/vfile"
@@ -40,9 +38,9 @@ func (c *Checkout) HasChanges() (bool, error) {
 }
 
 // VisitChanges calls fn for each changed file of version vid, classified by
-// vfile.Classify. With scan=true it first runs ScanChanges(ScanHash) and
-// checks each file on disk, so edits and missing files are reported; with
-// scan=false it reports what the checkout database records.
+// vfile.Classify. With scan=true it first runs ScanChanges(0), fossil's
+// default scan, and checks each file on disk, so edits and missing files are
+// reported; with scan=false it reports what the checkout database records.
 //
 // If fn returns a non-nil error, iteration stops and that error is returned.
 //
@@ -56,7 +54,7 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 	}
 
 	if scan {
-		if err := c.ScanChanges(ScanHash); err != nil {
+		if err := c.ScanChanges(0); err != nil {
 			return fmt.Errorf("checkout.VisitChanges: %w", err)
 		}
 	}
@@ -64,10 +62,14 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 	if err != nil {
 		return fmt.Errorf("checkout.VisitChanges: %w", err)
 	}
+	disk, err := c.newDiskView()
+	if err != nil {
+		return fmt.Errorf("checkout.VisitChanges: %w", err)
+	}
 	for _, r := range rows {
 		missing := false
 		if scan {
-			if missing, err = c.isMissing(r); err != nil {
+			if missing, err = c.isMissingOn(disk, r); err != nil {
 				return fmt.Errorf("checkout.VisitChanges: %w", err)
 			}
 		}
@@ -90,15 +92,22 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 	return nil
 }
 
-// isMissing reports whether a row's file is absent from disk, the way
-// fossil's changes command decides MISSING: anything that is not a regular
-// file counts. A removed row is never missing; it is meant to be gone.
+// isMissing reports whether a row's file is absent from disk: anything
+// that is not a regular file, a symlink followed to what it points to,
+// counts. A removed row is never missing; it is meant to be gone.
 func (c *Checkout) isMissing(r vfile.Row) (bool, error) {
+	return c.isMissingOn(diskView{}, r)
+}
+
+// isMissingOn is isMissing seen through disk, the way fossil's changes
+// command decides MISSING: with allow-symlinks on, a symlink is not missing
+// whatever it points to.
+func (c *Checkout) isMissingOn(disk diskView, r vfile.Row) (bool, error) {
 	if r.Pathname == "" {
-		panic("checkout.isMissing: empty pathname")
+		panic("checkout.isMissingOn: empty pathname")
 	}
 	if c.env == nil {
-		panic("checkout.isMissing: nil env")
+		panic("checkout.isMissingOn: nil env")
 	}
 	if r.Deleted > 0 {
 		return false, nil
@@ -107,12 +116,9 @@ func (c *Checkout) isMissing(r vfile.Row) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("path traversal in %s: %w", r.Pathname, err)
 	}
-	info, err := c.env.Storage.Stat(fullPath)
+	info, err := disk.stat(c, fullPath)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return true, nil
-		}
-		return false, fmt.Errorf("stat %s: %w", fullPath, err)
+		return false, err
 	}
-	return !info.Mode().IsRegular(), nil
+	return !isFileOrLink(info), nil
 }

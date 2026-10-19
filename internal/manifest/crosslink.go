@@ -29,14 +29,6 @@ import (
 // candidates' worth of work.
 const crosslinkCancelCheckStride = 256
 
-// attachTargetTypeName maps attachment target type codes to human-readable names.
-// Used by crosslinkAttachment and updateAttachmentComments.
-var attachTargetTypeName = map[byte]string{
-	'w': "wiki page",
-	't': "ticket",
-	'e': "tech note",
-}
-
 // crosslinkCacheBytes bounds the expanded content one crosslink run keeps live
 // -- a whole-repository sweep, or one phantom-fill cascade (see
 // cascadeLinker). A miss costs throughput, not correctness: the walk simply
@@ -1478,7 +1470,7 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 		     AND tagid=(SELECT tagid FROM tag WHERE tagname='user')),
 		   (SELECT value FROM tagxref WHERE rid=?2
 		     AND tagid=(SELECT tagid FROM tag WHERE tagname='comment')))`,
-		mtime, rid, d.U, d.C,
+		mtime, rid, d.U, sql.NullString{String: d.C, Valid: d.HasC()},
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
@@ -1737,56 +1729,11 @@ func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck, leaves *l
 		}
 	}
 
-	// Generate event row with type='g' and descriptive comment.
-	comment := buildControlComment(d)
-	if _, err := tx.Exec(
-		"REPLACE INTO event(type, mtime, objid, user, comment) VALUES('g', ?, ?, ?, ?)",
-		libfossil.TimeToTextJulian(d.D), srcRID, d.U, comment,
-	); err != nil {
+	if err := tag.InsertControlEvent(tx, srcRID, d); err != nil {
 		return fmt.Errorf("control event: %w", err)
 	}
 
 	return nil
-}
-
-// buildControlComment generates a human-readable comment from a control artifact's T-cards.
-func buildControlComment(d *deck.Deck) string {
-	var comment string
-	for _, tc := range d.T {
-		if tc.UUID == "*" {
-			continue
-		}
-		prefix := string(tc.Type)
-		name := tc.Name
-		val := tc.Value
-		switch {
-		case prefix == "*" && name == "branch":
-			comment += fmt.Sprintf(" Move to branch %s.", val)
-		case prefix == "*" && name == "bgcolor":
-			comment += fmt.Sprintf(" Change branch background color to %q.", val)
-		case prefix == "+" && name == "bgcolor":
-			comment += fmt.Sprintf(" Change background color to %q.", val)
-		case prefix == "-" && name == "bgcolor":
-			comment += " Cancel background color."
-		case prefix == "+" && name == "comment":
-			comment += " Edit check-in comment."
-		case prefix == "+" && name == "user":
-			comment += fmt.Sprintf(" Change user to %q.", val)
-		default:
-			switch prefix {
-			case "-":
-				comment += fmt.Sprintf(" Cancel %q.", name)
-			case "+":
-				comment += fmt.Sprintf(" Add %q.", name)
-			case "*":
-				comment += fmt.Sprintf(" Add propagating %q.", name)
-			}
-		}
-	}
-	if comment == "" {
-		comment = " "
-	}
-	return comment
 }
 
 // addFWTPlink inserts plink rows for wiki/forum/technote/ticket P-cards.
@@ -2072,7 +2019,7 @@ func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 
 	if _, err := tx.Exec(
 		"INSERT INTO attachment(attachid, mtime, src, target, filename, comment, user) VALUES(?, ?, ?, ?, ?, ?, ?)",
-		rid, mtime, src, target, filename, d.C, d.U,
+		rid, mtime, sql.NullString{String: src, Valid: src != ""}, target, filename, d.C, d.U,
 	); err != nil {
 		return fmt.Errorf("attachment insert: %w", err)
 	}
@@ -2095,13 +2042,8 @@ func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		}
 	}
 
-	typeName := attachTargetTypeName[attachToType]
-	var evComment string
-	if src != "" {
-		evComment = fmt.Sprintf("Add attachment %s to %s %s", filename, typeName, target)
-	} else {
-		evComment = fmt.Sprintf("Delete attachment %q from %s %s", filename, typeName, target)
-	}
+	human, url := libfossil.HashDigits(tx)
+	evComment := attachmentComment(attachToType, src, filename, target, false, human, url)
 	if _, err := tx.Exec("REPLACE INTO event(type, mtime, objid, user, comment) VALUES(?, ?, ?, ?, ?)",
 		string(attachToType), mtime, rid, d.U, evComment); err != nil {
 		return fmt.Errorf("attachment event: %w", err)
@@ -2134,9 +2076,9 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	// running the UPDATEs below would use that connection for two statements at
 	// once. Materializing first keeps read and writes strictly sequential.
 	type attachRow struct {
-		attachid    int64
-		src, target string
-		filename    string
+		attachid         int64
+		src              sql.NullString
+		target, filename string
 	}
 	rows, err := tx.Query("SELECT attachid, src, target, filename FROM attachment WHERE target=?", targetID)
 	if err != nil {
@@ -2145,8 +2087,9 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	var attachments []attachRow
 	for rows.Next() {
 		var a attachRow
-		if rows.Scan(&a.attachid, &a.src, &a.target, &a.filename) != nil {
-			continue
+		if err := rows.Scan(&a.attachid, &a.src, &a.target, &a.filename); err != nil {
+			rows.Close()
+			return fmt.Errorf("updateAttachmentComments scan: %w", err)
 		}
 		attachments = append(attachments, a)
 	}
@@ -2156,19 +2099,47 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	}
 	rows.Close()
 
-	typeName := attachTargetTypeName[targetType]
+	human, url := libfossil.HashDigits(tx)
 	for _, a := range attachments {
-		var comment string
-		if a.src != "" {
-			comment = fmt.Sprintf("Add attachment %s to %s %s", a.filename, typeName, a.target)
-		} else {
-			comment = fmt.Sprintf("Delete attachment %q from %s %s", a.filename, typeName, a.target)
-		}
+		comment := attachmentComment(targetType, a.src.String, a.filename, a.target, true, human, url)
 		if _, err := tx.Exec("UPDATE event SET comment=?, type=? WHERE objid=?", comment, string(targetType), a.attachid); err != nil {
 			return fmt.Errorf("updateAttachmentComments event update: %w", err)
 		}
 	}
 	return nil
+}
+
+// attachmentComment builds the comment of an attachment's event row as
+// fossil 2.28 does, for an attachment to a wiki page ('w'), a ticket ('t')
+// or a tech note ('e'); an empty src deletes. refresh selects the text
+// written when the ticket or tech note is crosslinked after the attachment,
+// which differs for a tech note deletion: crosslinking the attachment links
+// the file name as though it were an artifact hash, refreshing does not.
+func attachmentComment(kind byte, src, file, target string, refresh bool, human, url int) string {
+	if kind != 'w' && kind != 't' && kind != 'e' {
+		panic(fmt.Sprintf("manifest.attachmentComment: unknown target kind %q", kind))
+	}
+	name := libfossil.HTMLize(file)
+	switch {
+	case kind == 'w' && src != "":
+		return fmt.Sprintf("Add attachment [/artifact/%s|%s] to wiki page [%s]",
+			libfossil.HashPrefix(src, url), name, libfossil.HTMLize(target))
+	case kind == 'w':
+		return fmt.Sprintf("Delete attachment \"%s\" from wiki page [%s]", name, libfossil.HTMLize(target))
+	}
+	noun, link := "ticket", fmt.Sprintf("[%s|%s]", libfossil.HashPrefix(target, url), libfossil.HashPrefix(target, human))
+	if kind == 'e' {
+		noun, link = "tech note", "[/technote/"+link[1:]
+	}
+	switch {
+	case src != "":
+		return fmt.Sprintf("Add attachment [/artifact/%s|%s] to %s %s", libfossil.HashPrefix(src, url), name, noun, link)
+	case kind == 'e' && !refresh:
+		return fmt.Sprintf("Delete attachment \"/artifact/%s|%s\" from %s %s",
+			libfossil.HashPrefix(file, url), name, noun, link)
+	default:
+		return fmt.Sprintf("Delete attachment \"%s\" from %s %s", name, noun, link)
+	}
 }
 
 func crosslinkForum(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {

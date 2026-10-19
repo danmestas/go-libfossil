@@ -271,6 +271,14 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}()
 
 	obs := resolveObserver(opts.Observer)
+	var clock simio.Clock
+	if opts.Env != nil {
+		clock = opts.Env.Clock
+	}
+	r, err = withClientReceipt(r, opts.User, clock)
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
+	}
 	s := newSession(r, opts)
 	closed := false
 	defer func() {
@@ -331,6 +339,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, fmt.Errorf("sync: exchange round %d: %w", cycle, err)
 		}
+		notePeer(s.repo, t)
 
 		sentBefore := s.result.FilesSent
 		recvdBefore := s.result.FilesRecvd

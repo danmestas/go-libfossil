@@ -61,7 +61,11 @@ func Write(d *db.DB, name string, content []byte, mtime int64) error {
 		return fmt.Errorf("uv.Write: %w", err)
 	}
 	contentHash := naming.New.Hash(content)
-	if err := storeRow(d, name, mtime, contentHash, content); err != nil {
+	rcvid, err := db.ReceiptID(d)
+	if err != nil {
+		return fmt.Errorf("uv.Write: %w", err)
+	}
+	if err := storeRow(d, rcvid, name, mtime, contentHash, content); err != nil {
 		return fmt.Errorf("uv.Write: %w", err)
 	}
 	return InvalidateHash(d)
@@ -74,13 +78,19 @@ func Write(d *db.DB, name string, content []byte, mtime int64) error {
 // content, takes the card's mtime alone. Otherwise a HASH of "-" makes a
 // tombstone, and any other replaces the row under the HASH the card gave,
 // not one this repository's policy computes, so the catalogs of both sides
-// agree. Omitted content is stored as NULL, with size 0.
+// agree. Omitted content is stored as NULL, with size 0. A row it writes
+// names d's receipt (db.ReceiptID), which is made before the status check
+// whether or not anything is written, as fossil makes g.rcvid there.
 func Receive(d *db.DB, name string, mtime int64, fileHash string, content []byte) error {
 	if d == nil {
 		panic("uv.Receive: d must not be nil")
 	}
 	if name == "" || fileHash == "" {
 		panic("uv.Receive: name and hash must not be empty")
+	}
+	rcvid, err := db.ReceiptID(d)
+	if err != nil {
+		return fmt.Errorf("uv.Receive: %w", err)
 	}
 	_, localMtime, localHash, err := Read(d, name)
 	if err != nil {
@@ -93,8 +103,8 @@ func Receive(d *db.DB, name string, mtime int64, fileHash string, content []byte
 	case fileHash == "-":
 		// A received deletion only updates a row the repository holds, as
 		// fossil's UPDATE does; for an absent name it changes nothing.
-		_, err := d.Exec(`UPDATE unversioned SET rcvid=1, mtime=?, hash=NULL, sz=0,
-			encoding=0, content=NULL WHERE name=?`, mtime, name)
+		_, err := d.Exec(`UPDATE unversioned SET rcvid=?, mtime=?, hash=NULL, sz=0,
+			encoding=0, content=NULL WHERE name=?`, rcvid, mtime, name)
 		if err != nil {
 			return fmt.Errorf("uv.Receive: %w", err)
 		}
@@ -107,16 +117,18 @@ func Receive(d *db.DB, name string, mtime int64, fileHash string, content []byte
 		if len(content) == 0 {
 			content = nil // fossil stores an empty or omitted payload as NULL
 		}
-		if err := storeRow(d, name, mtime, fileHash, content); err != nil {
+		if err := storeRow(d, rcvid, name, mtime, fileHash, content); err != nil {
 			return fmt.Errorf("uv.Receive: %w", err)
 		}
 	}
 	return InvalidateHash(d)
 }
 
-// storeRow writes name's row under fileHash, compressing content when that
-// saves a fifth or more, as fossil does. nil content is stored as NULL.
-func storeRow(d *db.DB, name string, mtime int64, fileHash string, content []byte) error {
+// storeRow writes name's row under fileHash, received as rcvid, compressing
+// content when that saves a fifth or more, as fossil does. nil content is
+// stored as NULL.
+func storeRow(d *db.DB, rcvid int64, name string, mtime int64, fileHash string,
+	content []byte) error {
 	if d == nil {
 		panic("uv.storeRow: d must not be nil")
 	}
@@ -144,12 +156,15 @@ func storeRow(d *db.DB, name string, mtime int64, fileHash string, content []byt
 	}
 	_, err := d.Exec(
 		`REPLACE INTO unversioned(name, rcvid, mtime, hash, sz, encoding, content)
-		 VALUES(?, 1, ?, ?, ?, ?, ?)`,
-		name, mtime, fileHash, sz, encoding, bound,
+		 VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		name, rcvid, mtime, fileHash, sz, encoding, bound,
 	)
 	return err
 }
 
+// Delete marks name deleted as of mtime. A held row keeps its rcvid, as
+// fossil's `uv rm` and its client's applied deletion leave it; a name the
+// repository lacks gets a tombstone that names no receipt.
 func Delete(d *db.DB, name string, mtime int64) error {
 	if d == nil {
 		panic("uv.Delete: d must not be nil")
@@ -166,14 +181,14 @@ func Delete(d *db.DB, name string, mtime int64) error {
 	if exists == 0 {
 		_, err := d.Exec(
 			`INSERT INTO unversioned(name, rcvid, mtime, hash, sz, encoding, content)
-			 VALUES(?, 1, ?, NULL, 0, 0, NULL)`, name, mtime,
+			 VALUES(?, NULL, ?, NULL, 0, 0, NULL)`, name, mtime,
 		)
 		if err != nil {
 			return fmt.Errorf("uv.Delete insert: %w", err)
 		}
 	} else {
 		_, err := d.Exec(
-			`UPDATE unversioned SET rcvid=1, mtime=?, hash=NULL, sz=0, encoding=0, content=NULL
+			`UPDATE unversioned SET mtime=?, hash=NULL, sz=0, encoding=0, content=NULL
 			 WHERE name=?`, mtime, name,
 		)
 		if err != nil {

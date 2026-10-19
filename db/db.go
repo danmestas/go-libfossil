@@ -364,6 +364,9 @@ type Tx struct {
 	// savepoints is how many savepoints a bound DB's nested WithTx has open
 	// in this transaction; it names the next one.
 	savepoints int
+	// receipt is what content stored in this transaction is recorded under;
+	// see ReceiptID.
+	receipt *Receipt
 }
 
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {

@@ -7,8 +7,8 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/leaf"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
@@ -828,5 +828,41 @@ func TestPropagateEqualMtimeKeepsFirst(t *testing.T) {
 	}
 	if v, _, ok := pTagRow(t, r, b); !ok || v != "first" {
 		t.Errorf("b value after equal-mtime re-propagation = %q (ok=%v), want first kept", v, ok)
+	}
+}
+
+// TestAddTagWritesControlEvent checks AddTag writes the event row fossil's
+// `tag add` writes when it crosslinks the control artifact.
+func TestAddTagWritesControlEvent(t *testing.T) {
+	r := setupTestRepo(t)
+	rid, uuid, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "hello.txt", Content: []byte("hello")}},
+		Comment: "initial commit",
+		User:    "testuser",
+		Time:    time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+	when := time.Date(2024, 1, 15, 11, 0, 0, 0, time.UTC)
+	tagRid, err := tag.AddTag(r, tag.TagOpts{
+		TargetRID: rid, TagName: "sym-rel", TagType: tag.TagSingleton,
+		Value: "a<b", User: "tagger", Time: when,
+	})
+	if err != nil {
+		t.Fatalf("tag.AddTag: %v", err)
+	}
+	var typ, user, comment string
+	var mtime float64
+	if err := r.DB().QueryRow("SELECT type, user, comment, CAST(mtime AS REAL) FROM event WHERE objid=?", tagRid).
+		Scan(&typ, &user, &comment, &mtime); err != nil {
+		t.Fatalf("event query: %v", err)
+	}
+	want := "Edit [" + uuid[:16] + "|" + uuid[:10] + `]: Add tag "rel" with note "a&lt;b".`
+	if typ != "g" || user != "tagger" || comment != want {
+		t.Errorf("event = (%q, %q, %q), want (g, tagger, %q)", typ, user, comment, want)
+	}
+	if mtime != libfossil.TimeToTextJulian(when) {
+		t.Errorf("event mtime = %v, want %v", mtime, libfossil.TimeToTextJulian(when))
 	}
 }

@@ -308,8 +308,26 @@ func TestSparseUpdateAppliesOutOfConeToRecord(t *testing.T) {
 	}, "README")
 	c2 := f.commit(t, next, f.c1)
 	co := f.open(t, sparseCone(t), f.c1)
+	// An uncovered file standing where the target adds one is not the
+	// update's business: it is neither backed up nor replaced.
+	writeFile(t, co, "docs/new.txt", "stray\n")
+	if err := os.Chmod(filepath.Join(co.Dir(), "docs/new.txt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	res, err := co.Update(UpdateOpts{TargetRID: c2})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(co.Dir(), "docs/new.txt")); err != nil || string(data) != "stray\n" {
+		t.Fatalf("update touched an uncovered stray file: %q, %v", data, err)
+	}
+	if info, err := os.Stat(filepath.Join(co.Dir(), "docs/new.txt")); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("update changed an uncovered file's mode: %v, %v", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(co.Dir(), "docs/new.txt-original")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("update backed up an uncovered file: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(co.Dir(), "docs")); err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(res.FilesWritten, []string{"src/a.c"}) || len(res.FilesRemoved) != 0 {

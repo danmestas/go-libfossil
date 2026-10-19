@@ -761,8 +761,14 @@ func TestCrosslinkControlArtifact(t *testing.T) {
 		t.Fatalf("AddTag: %v", err)
 	}
 
-	// Clear tagxref to simulate post-clone.
-	r.DB().Exec("DELETE FROM tagxref")
+	// Clear tagxref and the control artifact's event row to simulate
+	// post-clone: the event row is what marks an artifact crosslinked.
+	if _, err := r.DB().Exec("DELETE FROM tagxref"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("DELETE FROM event WHERE type='g'"); err != nil {
+		t.Fatal(err)
+	}
 
 	n, err := Crosslink(r)
 	if err != nil {
@@ -1232,7 +1238,7 @@ func TestCrosslinkAttachment(t *testing.T) {
 	if eventType != "w" {
 		t.Errorf("event type=%q, want 'w'", eventType)
 	}
-	if comment != "Add attachment test.txt to wiki page TestPage" {
+	if comment != "Add attachment [/artifact/1234567890abcdef|test.txt] to wiki page [TestPage]" {
 		t.Errorf("event comment=%q", comment)
 	}
 }

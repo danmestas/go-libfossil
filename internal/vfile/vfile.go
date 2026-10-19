@@ -27,7 +27,14 @@ const (
 	ChangeMissing
 	ChangeRenamed
 	ChangeModified
+	ChangeExecutable // became executable (chnged 6)
+	ChangeSymlink    // became a symlink (chnged 7)
+	ChangeUnexec     // lost the executable bit (chnged 8)
+	ChangeUnlink     // was a symlink, now is not (chnged 9)
 )
+
+// modeChanges maps chnged 6 through 9 to their change, in order.
+var modeChanges = [...]Change{ChangeExecutable, ChangeSymlink, ChangeUnexec, ChangeUnlink}
 
 // Row is one vfile row.
 type Row struct {
@@ -92,11 +99,11 @@ func (r Row) ModeChanged() bool {
 }
 
 // Classify maps a row to its change type, in fossil's priority order (the
-// changes command): removed > missing > added > renamed > modified. missing
-// reports that the file is absent from disk; callers that have not looked
-// pass false. One difference from fossil: a renamed file that is also edited
-// is Renamed, not Modified, so callers that see only the change type keep
-// the rename.
+// changes command): removed > missing > added > renamed > a change to the
+// executable or symlink bit > modified. missing reports that the file is
+// absent from disk; callers that have not looked pass false. One difference
+// from fossil: a renamed file that is also edited or has its mode changed is
+// Renamed, so callers that see only the change type keep the rename.
 func Classify(r Row, missing bool) Change {
 	if r.Pathname == "" {
 		panic("vfile.Classify: empty pathname")
@@ -115,6 +122,9 @@ func Classify(r Row, missing bool) Change {
 	}
 	if r.RenamedFrom() != "" {
 		return ChangeRenamed
+	}
+	if r.ModeChanged() {
+		return modeChanges[r.Chnged-6]
 	}
 	if r.Chnged > 0 {
 		return ChangeModified

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/danmestas/go-libfossil/db"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/path"
 )
@@ -168,16 +167,13 @@ func (s *Session) List(currentRID libfossil.FslID) ([]ListEntry, error) {
 
 	entries := make([]ListEntry, 0, len(p))
 	for _, node := range p {
+		// The date as fossil's bisect ls shows it: datetime(event.mtime).
 		var uuid, date string
-		row := s.db.QueryRow(`SELECT b.uuid, COALESCE(e.mtime, 0)
+		row := s.db.QueryRow(`SELECT b.uuid, COALESCE(datetime(e.mtime), '')
 			FROM blob b LEFT JOIN event e ON e.objid=b.rid
 			WHERE b.rid=?`, node.RID)
-		var mtimeRaw any
-		if err := row.Scan(&uuid, &mtimeRaw); err != nil {
+		if err := row.Scan(&uuid, &date); err != nil {
 			uuid = "?"
-		}
-		if mtime, ok := db.ScanTextJulianDay(mtimeRaw); ok && mtime != 0 {
-			date = fmt.Sprintf("%.6f", mtime)
 		}
 
 		label := ""

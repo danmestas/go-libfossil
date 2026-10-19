@@ -68,9 +68,15 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 	if err := hash.PromoteFor(q, uuid); err != nil {
 		return 0, fmt.Errorf("hash policy: %w", err)
 	}
+	// The receipt is made only once there is content to store under it, as
+	// content_put_ex calls content_rcvid_init after its already-held check.
+	rcvid, err := db.ReceiptID(q)
+	if err != nil {
+		return 0, fmt.Errorf("receipt: %w", err)
+	}
 	if rid, ok := Exists(q, uuid); ok {
-		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
-			size, compressed, rid); err != nil {
+		if _, err := q.Exec("UPDATE blob SET rcvid=?, size=?, content=? WHERE rid=?",
+			rcvid, size, compressed, rid); err != nil {
 			return 0, fmt.Errorf("fill phantom: %w", err)
 		}
 		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
@@ -79,8 +85,8 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 		return rid, nil
 	}
 	result, err := q.Exec(
-		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-		uuid, size, compressed,
+		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
+		uuid, size, compressed, rcvid,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert: %w", err)

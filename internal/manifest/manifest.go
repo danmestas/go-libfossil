@@ -79,12 +79,23 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		}
 	}()
 
+	// The D card holds the time as fossil writes it: to the millisecond, a
+	// caller's time rounded as fossil rounds a --date-override. Finer digits
+	// are legal (§4.6.4) but zit cannot read them.
 	if opts.Time.IsZero() {
-		opts.Time = time.Now().UTC()
+		opts.Time = libfossil.CardTimeNow(time.Now())
+	} else {
+		opts.Time = libfossil.CardTime(opts.Time)
 	}
 
 	var tree checkinTree
-	err = r.WithTx(func(tx *db.Tx) error {
+	// A check-in is one receipt, credited to its user, as a fossil commit
+	// records one rcvfrom row for everything it stores.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		var txErr error
 		manifestRid, manifestUUID, tree, txErr = checkinTx(tx, opts)
 		return txErr
@@ -247,6 +258,11 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		rid, uuid, err := blob.Store(tx, f.Content)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
+		}
+		// Every check-in is public, so the content it names is too, even
+		// content first stored privately; fossil's commit does the same.
+		if err := content.MakePublic(tx, int64(rid)); err != nil {
+			return nil, nil, fmt.Errorf("publish file %q: %w", f.Name, err)
 		}
 		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm, OldName: f.OldName}
 		rids = append(rids, rid)

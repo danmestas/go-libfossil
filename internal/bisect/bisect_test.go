@@ -214,3 +214,25 @@ func TestBisectList(t *testing.T) {
 		t.Error("expected entry with RID=3 labelled CURRENT")
 	}
 }
+
+// Each listed check-in's date is shown as fossil's bisect ls shows it,
+// datetime(event.mtime).
+func TestBisectListDateAsFossil(t *testing.T) {
+	db := setupBisectDB(t)
+	s := NewSession(db)
+	if err := s.MarkGood(1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkBad(8); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := s.List(libfossil.FslID(3))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.RID == 1 && e.Date != "2023-02-26 00:00:00" {
+			t.Fatalf("rid 1 Date = %q, want 2023-02-26 00:00:00", e.Date)
+		}
+	}
+}

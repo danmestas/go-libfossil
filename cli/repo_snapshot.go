@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
-	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 )
@@ -166,13 +165,22 @@ func checkinUUID(r *libfossil.Repo, rid int64) (string, error) {
 	return uuid, err
 }
 
-// validateRepoPath rejects a name that is not a clean relative path, as
-// fossil does for a file card: no leading or doubled slash, no "." or ".."
-// element.
+// validateRepoPath rejects a name fossil would not accept as a new
+// repository file: one that is not a simple pathname in strict UTF-8 (file.c
+// file_is_simple_pathname: no leading, doubled or trailing slash, no "." or
+// ".." element, no backslash), one holding a control character, or one of the
+// names fossil reserves for its own files (file_is_reserved_name).
 func validateRepoPath(name string) error {
-	if name == "" || path.IsAbs(name) || path.Clean(name) != name ||
-		name == "." || name == ".." || strings.HasPrefix(name, "../") {
+	if !deck.StrictPathname(name) {
 		return fmt.Errorf("--path %q: want a clean relative path such as notes/x.md", name)
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < 0x20 {
+			return fmt.Errorf("--path %q: a file name may not hold a control character (byte 0x%02x)", name, name[i])
+		}
+	}
+	if deck.IsReservedName(name) {
+		return fmt.Errorf("--path %q: the name is reserved for fossil's own files", name)
 	}
 	return nil
 }

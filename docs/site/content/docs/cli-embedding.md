@@ -14,7 +14,7 @@ libfossil -R repo.fossil repo cat      --at VERSION notes/x.md
 libfossil -R repo.fossil repo diff     [--json] A B [PATH]
 ```
 
-**snapshot** commits one file's bytes onto trunk and carries every other file forward. The bytes come from stdin with `--stdin`, otherwise from `--path` read on disk relative to the working directory. `--path` must be a clean relative path (`notes/x.md`; not `/x`, `../x`, `./x`, `a//b`). When the bytes equal the file at the trunk tip, nothing is committed and the existing tip is reported. The first snapshot into an empty repository becomes the root check-in. The check-in time is the current time.
+**snapshot** commits one file's bytes onto trunk and carries every other file forward. The bytes come from stdin with `--stdin`, otherwise from `--path` read on disk relative to the working directory. `--path` must be a name fossil accepts for a new file: a clean relative path (`notes/x.md`; not `/x`, `../x`, `./x`, `a//b`, `a/`, `a\b`) in valid UTF-8, with no control character (a byte below 0x20), and not one of the names fossil reserves for its own files (`_FOSSIL_` or `.fslckout`, in any case, with or without a `-wal`, `-shm` or `-journal` suffix, at the top or as the last element of the path). A rejected path exits 1 and says why. When the bytes equal the file at the trunk tip, nothing is committed and the existing tip is reported. The first snapshot into an empty repository becomes the root check-in. The check-in time is the current time.
 
 **log** lists the check-ins that changed the path, newest first, as `fossil finfo` does. `-n` caps the count; the default is all.
 

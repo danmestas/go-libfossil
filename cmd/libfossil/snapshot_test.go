@@ -164,13 +164,45 @@ func TestSnapshotReadsPathFromDiskWithoutStdin(t *testing.T) {
 	}
 }
 
+// TestSnapshotRejectsBadPaths checks that a --path fossil would not accept
+// as a repository file name fails at exit 1 with a message saying why, and
+// commits nothing: not a simple pathname, a control byte, or one of the names
+// fossil reserves (file.c file_is_reserved_name).
 func TestSnapshotRejectsBadPaths(t *testing.T) {
 	repoPath := newSnapshotRepo(t)
-	for _, bad := range []string{"../x.md", "/abs.md", "a/../../x", "", "a//b", "./x"} {
-		_, _, code := runCLIStdin(t, "x",
-			"-R", repoPath, "repo", "snapshot", "-m", "m", "--path", bad, "--stdin")
-		if code == 0 {
-			t.Errorf("snapshot --path %q exited 0, want a failure", bad)
+	for _, tc := range []struct{ path, why string }{
+		{"../x.md", "clean relative path"},
+		{"/abs.md", "clean relative path"},
+		{"a/../../x", "clean relative path"},
+		{"", "clean relative path"},
+		{"a//b", "clean relative path"},
+		{"./x", "clean relative path"},
+		{"a/", "clean relative path"},
+		{`a\b.md`, "clean relative path"},
+		{"a\tb.md", "control character"},
+		{"a\nb.md", "control character"},
+		{"x\x1f.md", "control character"},
+		{"\x7f", ""}, // DEL is not below 0x20: accepted
+		{"_FOSSIL_", "reserved"},
+		{"sub/_fossil_", "reserved"},
+		{".fslckout", "reserved"},
+		{"sub/.FSLCKOUT", "reserved"},
+		{".fslckout-journal", "reserved"},
+		{"_FOSSIL_-wal", "reserved"},
+		{"sub/.fslckout-shm", "reserved"},
+		{"my_FOSSIL_", ""}, // a tail match without a separator is a plain name
+	} {
+		stdout, stderr, code := runCLIStdin(t, "x",
+			"-R", repoPath, "repo", "snapshot", "-m", "m", "--path", tc.path, "--stdin")
+		if tc.why == "" {
+			if code != 0 {
+				t.Errorf("snapshot --path %q exited %d, want 0: %s", tc.path, code, stderr)
+			}
+			continue
+		}
+		if code != 1 || stdout != "" || !strings.Contains(stderr, tc.why) {
+			t.Errorf("snapshot --path %q: exit %d, stdout %q, stderr %q; want exit 1 naming %q",
+				tc.path, code, stdout, stderr, tc.why)
 		}
 	}
 }

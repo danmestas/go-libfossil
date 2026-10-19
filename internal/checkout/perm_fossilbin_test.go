@@ -220,3 +220,38 @@ func TestModeCommitMatchesFossil(t *testing.T) {
 		t.Errorf("fossil changes after go commit: %v, want nothing", out)
 	}
 }
+
+// A fresh checkout of a symlink entry, written without Force, looks the same
+// to go-libfossil as fossil's open does to fossil: clean with allow-symlinks
+// on, where both write a symlink, and UNLINK with it off, where both write a
+// plain file holding the target and keep islink.
+func TestFreshSymlinkCheckoutMatchesFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	for _, allow := range []string{"on", "off"} {
+		repoPath := permHistory(t, bin, allow)
+		fossilCk := t.TempDir()
+		runFossilIn(t, bin, fossilCk, "open", repoPath)
+		want := fossilChanges(t, bin, fossilCk)
+		runFossilIn(t, bin, fossilCk, "close", "--force")
+
+		r, err := repo.Open(repoPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		co, rid := createdCheckout(t, r)
+		if err := co.Extract(rid, ExtractOpts{}); err != nil {
+			r.Close()
+			t.Fatalf("allow-symlinks %s: Extract without Force: %v", allow, err)
+		}
+		got := map[string]string{}
+		for name, change := range statusOf(t, co) {
+			got[name] = fossilLabel[change]
+		}
+		co.Close()
+		r.Close()
+		sameLabels(t, "allow-symlinks "+allow+", fresh checkout", got, want)
+		if allow == "off" && want["link"] != "UNLINK" {
+			t.Errorf("fossil reports %v with allow-symlinks off; the test's premise is wrong", want)
+		}
+	}
+}

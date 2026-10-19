@@ -727,7 +727,8 @@ type modeSetter interface {
 }
 
 // setMergedMode gives name's file the executable bit exe, where the storage
-// has file modes.
+// has file modes. As fossil's file_setexe, a symlink seen as itself
+// (allow-symlinks on) or a directory is left alone.
 func (c *Checkout) setMergedMode(name string, exe bool) error {
 	setter, ok := c.env.Storage.(modeSetter)
 	if !ok {
@@ -737,12 +738,16 @@ func (c *Checkout) setMergedMode(name string, exe bool) error {
 	if err != nil {
 		return err
 	}
-	info, err := c.env.Storage.Stat(fullPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	disk, err := c.newDiskView()
 	if err != nil {
-		return fmt.Errorf("stat %s: %w", fullPath, err)
+		return err
+	}
+	info, err := disk.stat(c, fullPath)
+	if err != nil {
+		return err
+	}
+	if info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil
 	}
 	if modeIsExecutable(info.Mode()) == exe {
 		return nil

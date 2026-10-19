@@ -400,7 +400,10 @@ func (c *Checkout) scanSingleEntry(
 	if err != nil {
 		return false, false, fmt.Errorf("checkout.ScanChanges: %w", err)
 	}
-	if p.enotfile && info != nil && !isFileOrLink(info) {
+	// Fossil's else-if: a pending add or removal still recorded with
+	// chnged=0 is promoted to changed and never checked for being a file.
+	promoted := e.chnged == 0 && (e.deleted != 0 || e.mergeRid == 0)
+	if p.enotfile && !promoted && info != nil && !isFileOrLink(info) {
 		return false, false, fmt.Errorf("checkout.ScanChanges: not a regular file: %s", e.pathname)
 	}
 	next, err := c.scanVerdict(e, p, fullPath, info)

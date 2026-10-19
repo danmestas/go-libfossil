@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // filePerm is a file's permission as fossil records it: fossil's PERM_REG,
@@ -45,6 +47,11 @@ func (p filePerm) manifestPerm() string {
 type linkStorage interface {
 	Lstat(path string) (os.FileInfo, error)
 	Readlink(path string) (string, error)
+}
+
+// symlinker is the optional storage method that creates a symbolic link.
+type symlinker interface {
+	Symlink(oldname, newname string) error
 }
 
 // diskView is how a checkout sees files on disk, as fossil's RepoFILE does.
@@ -112,6 +119,56 @@ func (v diskView) perm(info os.FileInfo, recorded filePerm) filePerm {
 		return permLnk
 	}
 	return permReg
+}
+
+// mtime returns the vfile.mtime to record for the file at fullPath, just
+// written, statting it as fossil's vfile_to_disk does (vfile.WrittenMTime),
+// a symlink seen as itself.
+func (v diskView) mtime(c *Checkout, fullPath string) (int64, error) {
+	now := c.env.Clock.Now().Unix()
+	info, err := v.stat(c, fullPath)
+	if err != nil {
+		return 0, err
+	}
+	if info == nil {
+		return 0, fmt.Errorf("stat %s: %w", fullPath, os.ErrNotExist)
+	}
+	return vfile.RecordableMTime(info.ModTime(), now), nil
+}
+
+// write puts data at fullPath as fossil's vfile_to_disk does. Something
+// already there is deleted first when it is a symlink or a symlink is to be
+// written, so a write never goes through a link. A symlink entry (link) is
+// written as a symlink to data where links are seen (allow-symlinks on) and
+// the storage can make them; otherwise, as in fossil, as a plain file
+// holding the target's name.
+func (v diskView) write(c *Checkout, fullPath string, data []byte, exe, link bool) error {
+	info, err := v.stat(c, fullPath)
+	if err != nil {
+		return err
+	}
+	if info != nil && info.IsDir() {
+		return fmt.Errorf("%s is a directory, cannot overwrite", fullPath)
+	}
+	if info != nil && (link || info.Mode()&os.ModeSymlink != 0) {
+		if err := c.env.Storage.Remove(fullPath); err != nil {
+			return fmt.Errorf("remove %s: %w", fullPath, err)
+		}
+	}
+	if maker, ok := c.env.Storage.(symlinker); ok && link && v.symlinks {
+		if err := maker.Symlink(string(data), fullPath); err != nil {
+			return fmt.Errorf("symlink %s: %w", fullPath, err)
+		}
+		return nil
+	}
+	perm := os.FileMode(0o644)
+	if exe {
+		perm = 0o755
+	}
+	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
+		return fmt.Errorf("write %s: %w", fullPath, err)
+	}
+	return nil
 }
 
 // read returns a checkout file's content as fossil reads it: a symlink seen

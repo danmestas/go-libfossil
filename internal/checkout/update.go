@@ -159,8 +159,9 @@ const (
 
 // updateTargetFile is a file of the version Update moves to.
 type updateTargetFile struct {
-	rid int64
-	exe bool
+	rid  int64
+	exe  bool
+	link bool // a symlink entry (F-card permission l)
 }
 
 // writtenFile is a file Update wrote with the target's artifact rid, and
@@ -282,7 +283,11 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 	}
 	targets := make(map[string]*updateTargetFile, len(files))
 	for i, f := range files {
-		targets[f.Name] = &updateTargetFile{rid: int64(rids[i]), exe: strings.Contains(f.Perm, "x")}
+		targets[f.Name] = &updateTargetFile{
+			rid:  int64(rids[i]),
+			exe:  strings.Contains(f.Perm, "x"),
+			link: strings.Contains(f.Perm, "l"),
+		}
 	}
 	renames := map[string]string{}
 	if vid > 0 {
@@ -477,21 +482,33 @@ func (c *Checkout) applyUpdateStep(
 	panic(fmt.Sprintf("checkout.applyUpdateStep: unknown action %d", s.action))
 }
 
-// writeUpdateTarget writes the target's content for s and records in fresh
+// writeUpdateTarget writes the target's content for s, a symlink entry as
+// fossil's vfile_to_disk writes it (diskView.write), and records in fresh
 // the mtime the write gave it.
 func (c *Checkout) writeUpdateTarget(s updateStep, fresh map[string]writtenFile) error {
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(s.target.rid))
 	if err != nil {
 		return fmt.Errorf("expand rid %d: %w", s.target.rid, err)
 	}
-	if err := c.writeMergedFile(s.tname, data, s.target.exe); err != nil {
-		return err
-	}
 	fullPath, err := c.safePath(s.tname)
 	if err != nil {
 		return err
 	}
-	mtime, err := c.writtenMTime(fullPath)
+	if err := c.env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return fmt.Errorf("mkdir: %w", err)
+	}
+	disk, err := c.newDiskView()
+	if err != nil {
+		return err
+	}
+	if err := disk.write(c, fullPath, data, s.target.exe, s.target.link); err != nil {
+		return err
+	}
+	// WriteFile keeps an existing file's mode.
+	if err := c.setMergedMode(s.tname, s.target.exe); err != nil {
+		return err
+	}
+	mtime, err := disk.mtime(c, fullPath)
 	if err != nil {
 		return err
 	}

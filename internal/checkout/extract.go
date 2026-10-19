@@ -223,7 +223,7 @@ func (c *Checkout) extractRow(
 		return err
 	}
 	if !opts.DryRun {
-		if err := c.recordMTime(vid, row.pathname, row.blobRid, mtime); err != nil {
+		if err := c.recordMTime(c.db, vid, row.pathname, row.blobRid, mtime); err != nil {
 			return fmt.Errorf("checkout.Extract: %w", err)
 		}
 	}

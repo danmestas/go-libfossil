@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
+  set of paths, each a directory subtree or a single file, included or
+  excluded; the longest member covering a path decides. `NewCone` builds
+  one, normalized and serialized byte for byte as zit does;
+  `CheckoutCreateOpts.Cone` makes a checkout sparse, and `Checkout.SetCone`
+  widens, narrows or drops it (`libfossil repo open --cone/--cone-not`,
+  `libfossil repo cone show|add|remove|set|dense|test`). A sparse checkout
+  materializes, scans and tracks only the covered files, over flat and tree
+  manifests; adding, removing, renaming or reverting an uncovered path is
+  refused with `ErrOutsideCone`, naming the cone. A commit carries the
+  uncovered files from its parent unchanged and is the same check-in a
+  dense checkout makes of the same change. `Update` records uncovered
+  changes without writing them and counts them in `UpdateResult.OutOfCone`;
+  a merge that would change an uncovered file is refused. The checkout
+  stays readable by fossil, which sees the uncovered files as missing and
+  will not commit until they are restored. New `sparsecone` and `horizon`
+  conformance suites pin both drafts; with zit installed, a test checks the
+  serialized cones, the materialized files and commits in both directions
+  against zit, and its recorded answers are replayed without it.
 - go-libfossil reads sub-manifest trees (draft-fossil-submanifests-00), the
   check-in form zit writes. It parses the S card and
   the SUBMANIFEST artifact type, and every reader of a check-in's file set

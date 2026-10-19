@@ -65,6 +65,17 @@ func TestRepoConeCmd(t *testing.T) {
 	if out, err := run("cone", "-d", work); err != nil || out != "src\n!src/vendor\n" {
 		t.Fatalf("cone = %q, %v", out, err)
 	}
+	// Status works within the cone: the uncovered files are not missing,
+	// and an uncovered file on disk is not extra.
+	if err := os.WriteFile(filepath.Join(work, "stray.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("status", "-d", work); err != nil || out != "" {
+		t.Fatalf("status of a clean sparse checkout = %q, %v", out, err)
+	}
+	if err := os.Remove(filepath.Join(work, "stray.txt")); err != nil {
+		t.Fatal(err)
+	}
 	out, err := run("cone", "test", "-d", work, "src/a.c", "src/vendor/v.c", "README")
 	if !errors.Is(err, cli.ErrConeTestElided) {
 		t.Fatalf("cone test with elided paths: %v", err)

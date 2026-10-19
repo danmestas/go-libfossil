@@ -7,9 +7,7 @@ package stash
 import (
 	"bytes"
 	"database/sql"
-	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 
@@ -153,7 +151,11 @@ func Save(
 		return fmt.Errorf("stash.Save: no changes to stash")
 	}
 
-	if err := storeAndRevertFiles(tx, repoDB, env, dir, stashID, files); err != nil {
+	disk, err := vfile.OpenDisk(env, repoDB)
+	if err != nil {
+		return fmt.Errorf("stash.Save: %w", err)
+	}
+	if err := storeAndRevertFiles(tx, repoDB, disk, dir, stashID, files); err != nil {
 		return err
 	}
 
@@ -213,9 +215,10 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 }
 
 // storeAndRevertFiles records each changed file in the stash, then reverts
-// it to its committed version.
+// it to its committed version. Files are read and written through disk, as
+// fossil's stash and revert see them with RepoFILE.
 func storeAndRevertFiles(
-	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, dir string, stashID int64, files []vfile.Row,
+	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, dir string, stashID int64, files []vfile.Row,
 ) error {
 	if stashID <= 0 {
 		panic("stash.storeAndRevertFiles: stashID must be positive")
@@ -229,66 +232,82 @@ func storeAndRevertFiles(
 
 	for _, f := range files {
 		fullPath := filepath.Join(dir, f.Pathname)
-		baselineHash, deltaBytes, err := stashRecord(repoDB, env.Storage, fullPath, f)
+		rec, err := stashRecord(repoDB, disk, fullPath, f)
 		if err != nil {
 			return err
 		}
-		if _, err := ins.Exec(stashID, f.IsAdded(), f.IsRemoved(), f.IsExe != 0, f.IsLink != 0,
-			nullStr(baselineHash), f.Pathname, f.Pathname, deltaBytes); err != nil {
+		if _, err := ins.Exec(stashID, f.IsAdded(), f.IsRemoved(), f.IsExe != 0, rec.isLink,
+			nullStr(rec.baselineHash), f.Pathname, f.Pathname, rec.delta); err != nil {
 			return fmt.Errorf("stash.Save: insert stashfile %s: %w", f.Pathname, err)
 		}
-		if err := revertStashedFile(tx, repoDB, env, fullPath, f); err != nil {
+		if err := revertStashedFile(tx, repoDB, disk, fullPath, f); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// stashRecord returns what the stash keeps for f: an added file's content
-// with no baseline, a removed file's baseline hash with an empty delta, or a
+// stashed is what the stash keeps for a changed file.
+type stashed struct {
+	baselineHash string // the committed artifact; empty for an added file
+	delta        []byte // an added file's content, or a delta to the working content
+	isLink       bool   // the working file is a symlink seen as itself
+}
+
+// stashRecord returns what the stash keeps for f, read through disk as
+// fossil's stash_add_file_or_dir reads it: an added file's content with no
+// baseline, a removed file's baseline hash with an empty delta, or a
 // modified file's baseline hash with a delta from baseline to its content.
+// A symlink's content is its target's name, and it is recorded as a link
+// whatever vfile says, as fossil records file_islink.
 func stashRecord(
-	repoDB *sql.DB, storage simio.Storage, fullPath string, f vfile.Row,
-) (baselineHash string, deltaBytes []byte, err error) {
+	repoDB *sql.DB, disk vfile.Disk, fullPath string, f vfile.Row,
+) (stashed, error) {
+	info, err := disk.Stat(fullPath)
+	if err != nil {
+		return stashed{}, fmt.Errorf("stash.Save: %w", err)
+	}
+	rec := stashed{isLink: vfile.IsLink(info)}
 	if f.IsAdded() {
-		data, err := storage.ReadFile(fullPath)
-		if err != nil {
-			return "", nil, fmt.Errorf("stash.Save: read added %s: %w", f.Pathname, err)
+		if rec.delta, err = disk.Read(fullPath, info); err != nil {
+			return stashed{}, fmt.Errorf("stash.Save: read added %s: %w", f.Pathname, err)
 		}
-		return "", data, nil
+		return rec, nil
 	}
 
 	if err := repoDB.QueryRow(
 		"SELECT uuid FROM blob WHERE rid=?", f.RID,
-	).Scan(&baselineHash); err != nil {
-		return "", nil, fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.RID, err)
+	).Scan(&rec.baselineHash); err != nil {
+		return stashed{}, fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.RID, err)
 	}
 	if f.IsRemoved() {
-		return baselineHash, []byte{}, nil
+		rec.delta = []byte{}
+		return rec, nil
 	}
 	baseline, err := content.Expand(repoDB, libfossil.FslID(f.RID))
 	if err != nil {
-		return "", nil, fmt.Errorf("stash.Save: expand rid=%d: %w", f.RID, err)
+		return stashed{}, fmt.Errorf("stash.Save: expand rid=%d: %w", f.RID, err)
 	}
-	working, err := storage.ReadFile(fullPath)
+	working, err := disk.Read(fullPath, info)
 	if err != nil {
-		return "", nil, fmt.Errorf("stash.Save: read %s: %w", f.Pathname, err)
+		return stashed{}, fmt.Errorf("stash.Save: read %s: %w", f.Pathname, err)
 	}
-	d, err := delta.Create(baseline, working)
-	if err != nil {
-		return "", nil, fmt.Errorf("stash.Save: delta %s: %w", f.Pathname, err)
+	if rec.delta, err = delta.Create(baseline, working); err != nil {
+		return stashed{}, fmt.Errorf("stash.Save: delta %s: %w", f.Pathname, err)
 	}
-	return baselineHash, d, nil
+	return rec, nil
 }
 
-// revertStashedFile undoes f's change: an added file is removed from disk
-// and vfile; a removed or modified file gets its committed content back and
-// its row is marked unchanged, with the mtime it was written with.
+// revertStashedFile undoes f's change as fossil's revert does: an added
+// file is removed from disk and vfile; a removed or modified file gets its
+// committed content back, with the row's executable and symlink bits
+// (vfile.Disk.Write), and its row is marked unchanged, with the mtime it
+// was written with.
 func revertStashedFile(
-	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, fullPath string, f vfile.Row,
+	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, fullPath string, f vfile.Row,
 ) error {
 	if f.IsAdded() {
-		if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := disk.Remove(fullPath); err != nil {
 			return fmt.Errorf("stash.Save: remove added %s: %w", f.Pathname, err)
 		}
 		if _, err := tx.Exec("DELETE FROM vfile WHERE id=?", f.ID); err != nil {
@@ -301,7 +320,7 @@ func revertStashedFile(
 	if err != nil {
 		return fmt.Errorf("stash.Save: expand rid=%d for revert: %w", f.RID, err)
 	}
-	mtime, err := writeFile(env, fullPath, baseline, f.IsExe != 0)
+	mtime, err := writeFile(disk, fullPath, baseline, f.IsExe != 0, f.IsLink != 0)
 	if err != nil {
 		return fmt.Errorf("stash.Save: %w", err)
 	}
@@ -313,23 +332,13 @@ func revertStashedFile(
 	return nil
 }
 
-// writeFile writes data to fullPath through env's storage, creating its
-// directory, and returns the vfile.mtime to record for it.
-func writeFile(env *simio.Env, fullPath string, data []byte, isExec bool) (int64, error) {
-	if err := env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		return 0, fmt.Errorf("mkdir for %s: %w", fullPath, err)
+// writeFile writes data to fullPath through disk, a symlink to data when
+// link is set, and returns the vfile.mtime to record for it.
+func writeFile(disk vfile.Disk, fullPath string, data []byte, isExec, link bool) (int64, error) {
+	if err := disk.Write(fullPath, data, isExec, link); err != nil {
+		return 0, err
 	}
-	perm := os.FileMode(0o644)
-	if isExec {
-		perm = 0o755
-	}
-	if data == nil {
-		data = []byte{} // an empty stored blob scans as nil
-	}
-	if err := env.Storage.WriteFile(fullPath, data, perm); err != nil {
-		return 0, fmt.Errorf("write %s: %w", fullPath, err)
-	}
-	return vfile.WrittenMTime(env, fullPath)
+	return disk.MTime(fullPath)
 }
 
 // stashedFile is one stashfile row, as Apply reads it.
@@ -337,6 +346,7 @@ type stashedFile struct {
 	isAdded   bool
 	isRemoved bool
 	isExec    bool
+	isLink    bool
 	hash      sql.NullString
 	name      string
 	delta     []byte
@@ -344,7 +354,9 @@ type stashedFile struct {
 
 // Apply restores stashed files to the working directory without removing the stash entry.
 //
-// Files are written through env.Storage. As fossil's stash_apply does, an
+// Files are written through env's storage as fossil sees them with RepoFILE
+// (vfile.Disk): a stashed symlink is made a symlink again, and nothing is
+// written through one. As fossil's stash_apply does, an
 // added file is added again, and a removed file is deleted from disk with its
 // row left as it is, so it shows as missing. A modified file's row records
 // what a scan would find: whether the written content differs from the row's
@@ -384,8 +396,12 @@ func Apply(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID in
 	if err != nil {
 		return fmt.Errorf("stash.Apply: %w", err)
 	}
+	disk, err := vfile.OpenDisk(env, repoDB)
+	if err != nil {
+		return fmt.Errorf("stash.Apply: %w", err)
+	}
 	for _, f := range files {
-		if err := applyStashedFile(tx, repoDB, env, vid, filepath.Join(dir, f.name), f); err != nil {
+		if err := applyStashedFile(tx, repoDB, disk, vid, filepath.Join(dir, f.name), f); err != nil {
 			return fmt.Errorf("stash.Apply: %w", err)
 		}
 	}
@@ -395,7 +411,7 @@ func Apply(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID in
 // loadStashedFiles reads stash stashID's files up front, so no cursor is
 // held open while they are written and their rows updated.
 func loadStashedFiles(ckout *sql.DB, stashID int64) ([]stashedFile, error) {
-	rows, err := ckout.Query(`SELECT isAdded, isRemoved, isExec, hash, newname, delta
+	rows, err := ckout.Query(`SELECT isAdded, isRemoved, isExec, isLink, hash, newname, delta
 		FROM stashfile WHERE stashid=?`, stashID)
 	if err != nil {
 		return nil, fmt.Errorf("stash.Apply: query stashfile: %w", err)
@@ -405,11 +421,14 @@ func loadStashedFiles(ckout *sql.DB, stashID int64) ([]stashedFile, error) {
 	var files []stashedFile
 	for rows.Next() {
 		var f stashedFile
-		var isExec sql.NullBool
-		if err := rows.Scan(&f.isAdded, &f.isRemoved, &isExec, &f.hash, &f.name, &f.delta); err != nil {
+		var isExec, isLink sql.NullBool
+		if err := rows.Scan(
+			&f.isAdded, &f.isRemoved, &isExec, &isLink, &f.hash, &f.name, &f.delta,
+		); err != nil {
 			return nil, fmt.Errorf("stash.Apply: scan stashfile: %w", err)
 		}
 		f.isExec = isExec.Bool
+		f.isLink = isLink.Bool
 		files = append(files, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -418,21 +437,20 @@ func loadStashedFiles(ckout *sql.DB, stashID int64) ([]stashedFile, error) {
 	return files, nil
 }
 
-// applyStashedFile restores one stashed file in version vid's checkout.
+// applyStashedFile restores one stashed file in version vid's checkout,
+// writing through disk. As fossil's stash_apply does, an added file is
+// written as a plain file, and a modified symlink as a symlink.
 func applyStashedFile(
-	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, vid int64, fullPath string, f stashedFile,
+	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, vid int64, fullPath string, f stashedFile,
 ) error {
 	switch {
 	case f.isAdded:
-		if _, err := writeFile(env, fullPath, f.delta, f.isExec); err != nil {
+		if _, err := writeFile(disk, fullPath, f.delta, f.isExec, false); err != nil {
 			return err
 		}
 		return readd(tx, vid, f)
 	case f.isRemoved:
-		if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove %s: %w", f.name, err)
-		}
-		return nil
+		return disk.Remove(fullPath)
 	}
 
 	if !f.hash.Valid {
@@ -450,7 +468,7 @@ func applyStashedFile(
 	if err != nil {
 		return fmt.Errorf("apply delta for %s: %w", f.name, err)
 	}
-	mtime, err := writeFile(env, fullPath, result, f.isExec)
+	mtime, err := writeFile(disk, fullPath, result, f.isExec, f.isLink)
 	if err != nil {
 		return err
 	}

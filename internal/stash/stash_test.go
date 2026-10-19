@@ -75,6 +75,8 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 			nonce TEXT UNIQUE,
 			ipaddr TEXT
 		)`,
+		// Settings such as allow-symlinks are read from it.
+		`CREATE TABLE config(name TEXT PRIMARY KEY NOT NULL, value CLOB, mtime DATE)`,
 	}
 	_ = repoSchema
 	for _, s := range repoSchema2 {

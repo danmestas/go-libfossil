@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // snapshotAttempts bounds the retries when another process commits between
@@ -99,6 +100,16 @@ func snapshotOnce(r *libfossil.Repo, name string, data []byte, msg, user string)
 	}
 
 	parent, err := r.CurrentTrunk()
+	if errors.Is(err, libfossil.ErrVersionNotFound) && stamp != 0 {
+		// Check-ins exist but none on the main branch: a root here would
+		// start a second, unrelated history.
+		branch, berr := repo.MainBranch(h.DB())
+		if berr != nil {
+			return snapshotResult{}, berr
+		}
+		return snapshotResult{}, fmt.Errorf(
+			"snapshot: the repository has check-ins but none on its main branch %q", branch)
+	}
 	if errors.Is(err, libfossil.ErrVersionNotFound) {
 		parent = 0 // an empty repository: this is the root check-in
 	} else if err != nil {

@@ -207,6 +207,37 @@ func TestSnapshotRejectsBadPaths(t *testing.T) {
 	}
 }
 
+// TestSnapshotRefusesRepoWithoutTrunk checks that a snapshot into a
+// repository that has check-ins but none its main branch names fails at exit
+// 1 and commits nothing, rather than starting a second, unrelated root.
+func TestSnapshotRefusesRepoWithoutTrunk(t *testing.T) {
+	repoPath := newSnapshotRepo(t)
+	snapshot(t, repoPath, "a.md", "one\n")
+	if _, stderr, code := runCLI(t, "-R", repoPath, "repo", "config", "set", "main-branch", "develop"); code != 0 {
+		t.Fatalf("config set main-branch exited %d: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runCLIStdin(t, "two\n",
+		"-R", repoPath, "repo", "snapshot", "-m", "m", "--user", "tester", "--path", "a.md", "--stdin")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, `"develop"`) {
+		t.Errorf("snapshot with no develop check-in: exit %d, stdout %q, stderr %q; want exit 1 naming the branch",
+			code, stdout, stderr)
+	}
+
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var checkins int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE type='ci'").Scan(&checkins); err != nil {
+		t.Fatal(err)
+	}
+	if checkins != 1 {
+		t.Errorf("repository has %d check-ins after the refused snapshot, want 1", checkins)
+	}
+}
+
 func TestSnapshotKeepsOtherFilesOnTrunk(t *testing.T) {
 	repoPath := newSnapshotRepo(t)
 	snapshot(t, repoPath, "a.md", "a\n")

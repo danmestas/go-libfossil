@@ -145,6 +145,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.Update` no longer merges a symlink: one edited locally and
+  changed by the target is left as it is and listed in
+  `UpdateResult.Unmerged`, as fossil's update reports "Cannot merge
+  symlink", instead of writing conflict markers through the link into the
+  file it points at. In a sparse checkout, a rename outside the cone no
+  longer refuses the update: the rename moves the record, or writes the
+  file when its new name is in the cone.
 - `Checkout.Update` saves undo state as fossil's `update` does, and the new
   `Checkout.Undo` and `Checkout.Redo` reverse and replay it: the files the
   update wrote, merged or removed come back, with the file list, pending

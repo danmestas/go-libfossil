@@ -59,12 +59,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer reported. §7.3 lets the table depend on arrival order, so Verify
   reports only what every order agrees on: a row whose same-branch child
   carries a branch row written once it was linked, and a check-in carrying a
-  branch row with no same-branch child and no row. A parent that keeps its
-  row when an untagged child arrives later, and a parent a reparent took a
-  child from, are accepted. Every conformance case comparing the leaf table
-  now also runs Verify on it, and `repostate.7.2.verify-leaf-table` checks
-  that Verify reports a dropped and a planted row (RS-7.2-1, RS-7.3-1).
-  Tracked in #433.
+  branch row with no same-branch child and no row, and a row for a rid no
+  recheck reaches, such as a file artifact or a rid with no artifact. A
+  parent that keeps its row when an untagged child arrives later is
+  accepted, and so is a parent that a reparent took a child from, whether a
+  P-card or an earlier, since replaced, parent tag named it. A child moved
+  by a parent tag that was later cancelled is accepted too. Every
+  conformance case comparing the leaf table now also runs Verify on the
+  tables go-libfossil and fossil(1) derive.
+  `repostate.7.3.reparent-twice-no-recheck` reparents a check-in twice, and
+  `repostate.7.2.verify-leaf-table` checks that Verify reports a dropped and
+  a planted row (RS-7.2-1, RS-7.3-1, RS-7.3-3). Tracked in #433.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

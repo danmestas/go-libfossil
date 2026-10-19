@@ -161,6 +161,8 @@ type Findings struct {
 	// Missing are check-ins a recheck has inserted: each carries a branch
 	// row and has no same-branch child, yet has no row.
 	Missing []libfossil.FslID
+	// Stray are rows no recheck writes: rids that are no candidate at all.
+	Stray []libfossil.FslID
 }
 
 // Audit checks the leaf table against what Section 7.3 lets a reader decide
@@ -174,18 +176,30 @@ type Findings struct {
 //
 //   - A row is stale when a same-branch child carries a branch row that was
 //     written once the child was linked: propagated along the link (srcid 0),
-//     or the child's own T card (srcid the child), on a child no parent tag
-//     has moved. Writing it scheduled the child's parents, and that recheck
-//     removed the row. A row a control artifact wrote proves nothing, as the
-//     tag may have arrived before the check-in it names, and neither does a
-//     reparented child, whose link may be newer than its branch row.
+//     or the child's own T card (srcid the child), on a child that carries no
+//     parent tag row. Writing it scheduled the child's parents, and that
+//     recheck removed the row. A row a control artifact wrote proves nothing,
+//     as the tag may have arrived before the check-in it names, and neither
+//     does a reparented child, whose link may be newer than its branch row.
+//     That holds for a cancelled parent tag too: the cancel re-derives
+//     nothing, so the link the reparent wrote stays until a full rebuild
+//     re-derives plink from the P-card (fossil's reparent pass reads only
+//     tagtype 1 rows, src/manifest.c manifest_crosslink_end).
 //   - A check-in carrying a branch row of any type is missing when it has no
 //     same-branch child, no row, and is not in detached. Its last branch
 //     write rechecked it, and after that only a branch write to it or to a
 //     child, which schedules it again, or a reparent taking a child away can
-//     change its verdict. detached names the check-ins a reparent took a
-//     child from: the P-card parents a check-in's plink no longer holds, which
-//     only its manifest records.
+//     change its verdict. detached names the check-ins a reparent may have
+//     taken a child from: the parents a check-in's P-card or any parent tag
+//     naming it lists, that its plink no longer holds. Only those artifacts
+//     record them, and a later parent tag replaces an earlier one's row.
+//   - A row is stray when its rid carries no branch row, appears in no plink
+//     row and is not in detached: a file artifact, say, or a rid with no
+//     artifact. fossil's leaf_check runs only on a check-in a branch write
+//     scheduled and on that check-in's plink parents (src/leaf.c
+//     leaf_eventually_check), and leaf_rebuild, behind `fossil leaves
+//     --recompute`, inserts only plink children; Check and Rebuild here
+//     reach no other rid either.
 //
 // A check-in with no branch row and no same-branch child may lack a row,
 // being a candidate only as the parent of a tagged check-in, and Audit does
@@ -206,7 +220,7 @@ func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error
 		                   WHERE tagid=%[1]d AND rid=plink.cid
 		                     AND srcid IN (0, plink.cid))
 		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
-		                       WHERE tag.tagname='parent' AND tagxref.tagtype=1
+		                       WHERE tag.tagname='parent'
 		                         AND tagxref.rid=plink.cid))
 		 ORDER BY leaf.rid`, BranchTagID, sameBranchSQL))
 	if err != nil {
@@ -223,12 +237,30 @@ func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error
 	if err != nil {
 		return Findings{}, fmt.Errorf("leaf.Audit missing: %w", err)
 	}
-	for _, rid := range missing {
+	stray, err := rids(q, fmt.Sprintf(`
+		SELECT leaf.rid FROM leaf
+		 WHERE NOT EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%d AND rid=leaf.rid)
+		   AND NOT EXISTS(SELECT 1 FROM plink WHERE pid=leaf.rid)
+		   AND NOT EXISTS(SELECT 1 FROM plink WHERE cid=leaf.rid)
+		 ORDER BY leaf.rid`, BranchTagID))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit stray: %w", err)
+	}
+	f.Missing = undetached(missing, detached)
+	f.Stray = undetached(stray, detached)
+	return f, nil
+}
+
+// undetached drops the rids in detached, keeping the order.
+func undetached(rids []libfossil.FslID, detached map[libfossil.FslID]struct{}) []libfossil.FslID {
+	var kept []libfossil.FslID
+	for _, rid := range rids {
 		if _, ok := detached[rid]; !ok {
-			f.Missing = append(f.Missing, rid)
+			kept = append(kept, rid)
 		}
 	}
-	return f, nil
+	return kept
 }
 
 // Pending is Section 7.3's deferred schedule, fossil's needToCheck bag

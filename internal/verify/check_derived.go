@@ -2,6 +2,7 @@ package verify
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -21,8 +22,9 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("verify: checkDerived: nil report")
 	}
 
-	// detached collects the P-card parents a check-in's plink no longer
-	// holds, which checkLeaves must not expect a leaf row for.
+	// detached collects the parents a P-card or a parent tag names that the
+	// check-in's plink no longer holds, which checkLeaves must not hold to a
+	// leaf verdict.
 	detached := make(map[libfossil.FslID]struct{})
 	if err := checkCheckins(r, report, cache, detached); err != nil {
 		return err
@@ -88,6 +90,9 @@ func checkOneCheckin(
 		return nil
 	}
 
+	if err := collectReparents(r.DB(), d, uuid, detached); err != nil {
+		return err
+	}
 	if d.Type != deck.Checkin {
 		return nil
 	}
@@ -104,6 +109,50 @@ func checkOneCheckin(
 		}
 	}
 
+	return nil
+}
+
+// collectReparents adds to detached each parent that a parent tag in d names
+// and its target's plink does not hold. A later parent tag replaces an
+// earlier one's tagxref row, so only the artifacts still record a parent an
+// earlier reparent linked and a later one dropped.
+func collectReparents(q db.Querier, d *deck.Deck, uuid string, detached map[libfossil.FslID]struct{}) error {
+	if q == nil {
+		panic("verify: collectReparents: nil querier")
+	}
+	if d == nil {
+		panic("verify: collectReparents: nil deck")
+	}
+	if detached == nil {
+		panic("verify: collectReparents: nil detached")
+	}
+	for _, t := range d.T {
+		if t.Name != "parent" || t.Type != deck.TagSingleton {
+			continue
+		}
+		target := t.UUID
+		if target == "*" {
+			target = uuid
+		}
+		cid, ok := blob.Exists(q, target)
+		if !ok {
+			continue
+		}
+		for _, parent := range strings.Fields(t.Value) {
+			pid, ok := blob.Exists(q, parent)
+			if !ok {
+				continue
+			}
+			var count int
+			err := q.QueryRow("SELECT COUNT(*) FROM plink WHERE pid = ? AND cid = ?", pid, cid).Scan(&count)
+			if err != nil {
+				return fmt.Errorf("collectReparents query: %w", err)
+			}
+			if count == 0 {
+				detached[pid] = struct{}{}
+			}
+		}
+	}
 	return nil
 }
 
@@ -180,8 +229,9 @@ func checkPlink(
 // checkLeaves reports the leaf-table errors leaf.Audit can decide. Section 7.3
 // lets the table depend on the order artifacts arrived in, so Verify does not
 // recompute one expected table: it reports a row that a recheck has removed
-// and a tagged check-in that a recheck has inserted. detached are the parents
-// a reparent may have taken a child from, as checkPlink found them.
+// and a tagged check-in that a recheck has inserted, and a row no recheck
+// writes. detached are the parents a reparent may have taken a child from, as
+// checkPlink and collectReparents found them.
 func checkLeaves(r *repo.Repo, report *Report, detached map[libfossil.FslID]struct{}) error {
 	if r == nil {
 		panic("verify: checkLeaves: nil repo")
@@ -200,6 +250,14 @@ func checkLeaves(r *repo.Repo, report *Report, detached map[libfossil.FslID]stru
 			RID:     rid,
 			Table:   "leaf",
 			Message: fmt.Sprintf("leaf rid=%d has a same-branch child that carries a branch tag", rid),
+		})
+	}
+	for _, rid := range f.Stray {
+		report.addIssue(Issue{
+			Kind:    IssueLeafIncorrect,
+			RID:     rid,
+			Table:   "leaf",
+			Message: fmt.Sprintf("leaf rid=%d is no check-in a leaf recheck reaches", rid),
 		})
 	}
 	for _, rid := range f.Missing {

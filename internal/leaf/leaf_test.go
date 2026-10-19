@@ -209,6 +209,9 @@ func (g graph) wantAuditDetached(stage string, detached map[libfossil.FslID]stru
 		g.t.Errorf("%s: Audit = stale %v missing %v, want stale %v missing %v",
 			stage, got.Stale, got.Missing, stale, missing)
 	}
+	if len(got.Stray) != 0 {
+		g.t.Errorf("%s: Audit stray %v, want none", stage, got.Stray)
+	}
 }
 
 // TestAuditAcceptsArrivalOrder pins the tables Section 7.3 allows that the
@@ -290,10 +293,56 @@ func TestAuditToleratesReparent(t *testing.T) {
 	g.link(1, 2, true)
 	g.branch(3, "trunk")
 	g.link(1, 3, true) // 3 was 2's child, on trunk by its own T card
-	g.exec("INSERT OR IGNORE INTO tag(tagname) VALUES('parent')")
-	g.exec("INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) " +
-		"SELECT tagid, 1, 9, 3, 'h1', 2460000.5, 3 FROM tag WHERE tagname='parent'")
+	g.parentTag(3, 1)
 	g.exec("INSERT INTO leaf(rid) VALUES(1)")
 	g.wantAudit("reparented, 2 not detached", nil, []libfossil.FslID{2, 3})
 	g.wantAuditDetached("reparented", map[libfossil.FslID]struct{}{2: {}}, nil, []libfossil.FslID{3})
+}
+
+// parentTag gives rid a parent tag row of tagtype: 1 for a reparent, 0 once a
+// later control artifact cancels it.
+func (g graph) parentTag(rid int64, tagtype int) {
+	g.exec("INSERT OR IGNORE INTO tag(tagname) VALUES('parent')")
+	g.exec("REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) "+
+		"SELECT tagid, ?, 9, ?, 'h1', 2460000.5, ? FROM tag WHERE tagname='parent'",
+		tagtype, rid, rid)
+}
+
+// TestAuditToleratesCancelledReparent pins a cancelled parent tag: the cancel
+// re-derives nothing, so the plink row the reparent wrote stays until a full
+// rebuild, and its new parent may keep the row it had before.
+func TestAuditToleratesCancelledReparent(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.branch(2, "feat")
+	g.link(1, 2, true)
+	g.branch(3, "trunk")
+	g.link(1, 3, true)
+	g.parentTag(3, 0)
+	g.exec("INSERT INTO leaf(rid) VALUES(1)")
+	g.wantAuditDetached("cancelled", map[libfossil.FslID]struct{}{2: {}}, nil, []libfossil.FslID{3})
+}
+
+// TestAuditReportsStray pins the rows no recheck writes: a rid that is not a
+// candidate of Section 7.3 -- no branch row, in no plink row -- such as a
+// file artifact or a rid with no artifact at all. A parent a reparent took
+// its only child from is excused.
+func TestAuditReportsStray(t *testing.T) {
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (7), (424242)")
+	got, err := leaf.Audit(g.q, map[libfossil.FslID]struct{}{7: {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []libfossil.FslID{424242}; !slices.Equal(got.Stray, want) {
+		t.Errorf("stray = %v, want %v", got.Stray, want)
+	}
+	got, err = leaf.Audit(g.q, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []libfossil.FslID{7, 424242}; !slices.Equal(got.Stray, want) {
+		t.Errorf("stray without detached = %v, want %v", got.Stray, want)
+	}
 }

@@ -45,6 +45,25 @@ func verifyLeafIssues(path string, labels map[string]string) ([]string, error) {
 	return named, nil
 }
 
+// verifyFossilLeaves runs verifyLeafIssues on a repository fossil(1) derived,
+// for a case comparing leaf: Verify must accept the tables fossil itself
+// writes. A case whose fossil field is set records fossil departing from the
+// draft, so Verify, which follows the draft, is not held to fossil's table
+// there. It returns one problem naming how fossil derived it, or none.
+func verifyFossilLeaves(c rsCase, path, how string, labels map[string]string) ([]string, error) {
+	if !slices.Contains(c.tables, "leaf") || c.fossil != "" {
+		return nil, nil
+	}
+	issues, err := verifyLeafIssues(path, labels)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", how, err)
+	}
+	if len(issues) == 0 {
+		return nil, nil
+	}
+	return []string{fmt.Sprintf("%s: leaf issues on %v", how, issues)}, nil
+}
+
 func verifyLeafCases() []rsAPICase {
 	return []rsAPICase{{
 		// b1, merged into trunk by m, and m are the leaves of merged(); b1's

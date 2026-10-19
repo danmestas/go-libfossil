@@ -643,6 +643,25 @@ func TestVerify_LeafDecidable(t *testing.T) {
 	}
 }
 
+// TestVerify_LeafStrayRow pins the rows no recheck writes: a file artifact and
+// a rid with no artifact are no check-in, so neither belongs in leaf.
+func TestVerify_LeafStrayRow(t *testing.T) {
+	r := newTestRepo(t)
+	mergedFeature(t, r)
+	var file libfossil.FslID
+	if err := r.DB().QueryRow("SELECT min(fid) FROM mlink WHERE fid > 0").Scan(&file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("INSERT INTO leaf(rid) VALUES(?), (424242)", file); err != nil {
+		t.Fatal(err)
+	}
+	got := leafIssues(t, r)
+	want := []libfossil.FslID{file, 424242}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("leaf issues = %v, want %v", got, want)
+	}
+}
+
 func TestRebuild_BuggifyResilience(t *testing.T) {
 	r := newTestRepo(t)
 

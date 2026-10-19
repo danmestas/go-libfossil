@@ -5,6 +5,7 @@
 package stash
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/vfile"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // Entry represents a single stash entry.
@@ -84,12 +86,15 @@ func nextStashID(tx *sql.Tx) (int64, error) {
 }
 
 // Save stashes all changed files in the checkout, then reverts the working directory.
-func Save(ckout *sql.DB, repoDB *sql.DB, dir string, comment string) error {
+func Save(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, comment string) error {
 	if ckout == nil {
 		panic("stash.Save: ckout must not be nil")
 	}
 	if repoDB == nil {
 		panic("stash.Save: repoDB must not be nil")
+	}
+	if env == nil {
+		panic("stash.Save: env must not be nil")
 	}
 	if dir == "" {
 		panic("stash.Save: dir must not be empty")
@@ -131,7 +136,7 @@ func Save(ckout *sql.DB, repoDB *sql.DB, dir string, comment string) error {
 		return fmt.Errorf("stash.Save: no changes to stash")
 	}
 
-	if err := storeAndRevertFiles(tx, repoDB, dir, stashID, files); err != nil {
+	if err := storeAndRevertFiles(tx, repoDB, env, dir, stashID, files); err != nil {
 		return err
 	}
 
@@ -148,13 +153,9 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 		panic("stash.snapshotChangedFiles: nil tx")
 	}
 
-	var vidText string
-	if err := tx.QueryRow("SELECT value FROM vvar WHERE name='checkout'").Scan(&vidText); err != nil {
-		return nil, fmt.Errorf("stash.Save: read checkout version: %w", err)
-	}
-	vid, err := strconv.ParseInt(vidText, 10, 64)
+	vid, err := checkoutVersion(tx)
 	if err != nil {
-		return nil, fmt.Errorf("stash.Save: checkout version %q: %w", vidText, err)
+		return nil, fmt.Errorf("stash.Save: %w", err)
 	}
 	// A merge leaves a vmerge record even for files whose rows look like
 	// plain edits (a clean three-way merge); stashing them would leave the
@@ -197,7 +198,7 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 // storeAndRevertFiles records each changed file in the stash, then reverts
 // it to its committed version.
 func storeAndRevertFiles(
-	tx *sql.Tx, repoDB *sql.DB, dir string, stashID int64, files []vfile.Row,
+	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, dir string, stashID int64, files []vfile.Row,
 ) error {
 	if stashID <= 0 {
 		panic("stash.storeAndRevertFiles: stashID must be positive")
@@ -211,7 +212,7 @@ func storeAndRevertFiles(
 
 	for _, f := range files {
 		fullPath := filepath.Join(dir, f.Pathname)
-		baselineHash, deltaBytes, err := stashRecord(repoDB, fullPath, f)
+		baselineHash, deltaBytes, err := stashRecord(repoDB, env.Storage, fullPath, f)
 		if err != nil {
 			return err
 		}
@@ -219,7 +220,7 @@ func storeAndRevertFiles(
 			nullStr(baselineHash), f.Pathname, f.Pathname, deltaBytes); err != nil {
 			return fmt.Errorf("stash.Save: insert stashfile %s: %w", f.Pathname, err)
 		}
-		if err := revertStashedFile(tx, repoDB, fullPath, f); err != nil {
+		if err := revertStashedFile(tx, repoDB, env, fullPath, f); err != nil {
 			return err
 		}
 	}
@@ -230,10 +231,10 @@ func storeAndRevertFiles(
 // with no baseline, a removed file's baseline hash with an empty delta, or a
 // modified file's baseline hash with a delta from baseline to its content.
 func stashRecord(
-	repoDB *sql.DB, fullPath string, f vfile.Row,
+	repoDB *sql.DB, storage simio.Storage, fullPath string, f vfile.Row,
 ) (baselineHash string, deltaBytes []byte, err error) {
 	if f.IsAdded() {
-		data, err := os.ReadFile(fullPath)
+		data, err := storage.ReadFile(fullPath)
 		if err != nil {
 			return "", nil, fmt.Errorf("stash.Save: read added %s: %w", f.Pathname, err)
 		}
@@ -252,7 +253,7 @@ func stashRecord(
 	if err != nil {
 		return "", nil, fmt.Errorf("stash.Save: expand rid=%d: %w", f.RID, err)
 	}
-	working, err := os.ReadFile(fullPath)
+	working, err := storage.ReadFile(fullPath)
 	if err != nil {
 		return "", nil, fmt.Errorf("stash.Save: read %s: %w", f.Pathname, err)
 	}
@@ -265,10 +266,12 @@ func stashRecord(
 
 // revertStashedFile undoes f's change: an added file is removed from disk
 // and vfile; a removed or modified file gets its committed content back and
-// its row is marked unchanged.
-func revertStashedFile(tx *sql.Tx, repoDB *sql.DB, fullPath string, f vfile.Row) error {
+// its row is marked unchanged, with the mtime it was written with.
+func revertStashedFile(
+	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, fullPath string, f vfile.Row,
+) error {
 	if f.IsAdded() {
-		if err := os.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("stash.Save: remove added %s: %w", f.Pathname, err)
 		}
 		if _, err := tx.Exec("DELETE FROM vfile WHERE id=?", f.ID); err != nil {
@@ -281,27 +284,65 @@ func revertStashedFile(tx *sql.Tx, repoDB *sql.DB, fullPath string, f vfile.Row)
 	if err != nil {
 		return fmt.Errorf("stash.Save: expand rid=%d for revert: %w", f.RID, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		return fmt.Errorf("stash.Save: mkdir for %s: %w", f.Pathname, err)
-	}
-	if err := os.WriteFile(fullPath, baseline, 0o644); err != nil {
-		return fmt.Errorf("stash.Save: write %s: %w", f.Pathname, err)
+	mtime, err := writeFile(env, fullPath, baseline, f.IsExe != 0)
+	if err != nil {
+		return fmt.Errorf("stash.Save: %w", err)
 	}
 	if _, err := tx.Exec(
-		"UPDATE vfile SET deleted=0, chnged=0 WHERE id=?", f.ID,
+		"UPDATE vfile SET deleted=0, chnged=0, mtime=? WHERE id=?", mtime, f.ID,
 	); err != nil {
 		return fmt.Errorf("stash.Save: update vfile %s: %w", f.Pathname, err)
 	}
 	return nil
 }
 
+// writeFile writes data to fullPath through env's storage, creating its
+// directory, and returns the vfile.mtime to record for it.
+func writeFile(env *simio.Env, fullPath string, data []byte, isExec bool) (int64, error) {
+	if err := env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		return 0, fmt.Errorf("mkdir for %s: %w", fullPath, err)
+	}
+	perm := os.FileMode(0o644)
+	if isExec {
+		perm = 0o755
+	}
+	if data == nil {
+		data = []byte{} // an empty stored blob scans as nil
+	}
+	if err := env.Storage.WriteFile(fullPath, data, perm); err != nil {
+		return 0, fmt.Errorf("write %s: %w", fullPath, err)
+	}
+	return vfile.WrittenMTime(env, fullPath)
+}
+
+// stashedFile is one stashfile row, as Apply reads it.
+type stashedFile struct {
+	isAdded   bool
+	isRemoved bool
+	isExec    bool
+	hash      sql.NullString
+	name      string
+	delta     []byte
+}
+
 // Apply restores stashed files to the working directory without removing the stash entry.
-func Apply(ckout *sql.DB, repoDB *sql.DB, dir string, stashID int64) error {
+//
+// Files are written through env.Storage. As fossil's stash_apply does, an
+// added file is added again, and a removed file is deleted from disk with its
+// row left as it is, so it shows as missing. A modified file's row records
+// what a scan would find: whether the written content differs from the row's
+// artifact, and the mtime it was written with (vfile.WrittenMTime). A row
+// based on another artifact, or in a merge, gets mtime 0 instead, so the next
+// scan hashes the file.
+func Apply(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID int64) error {
 	if ckout == nil {
 		panic("stash.Apply: ckout must not be nil")
 	}
 	if repoDB == nil {
 		panic("stash.Apply: repoDB must not be nil")
+	}
+	if env == nil {
+		panic("stash.Apply: env must not be nil")
 	}
 	if dir == "" {
 		panic("stash.Apply: dir must not be empty")
@@ -309,78 +350,157 @@ func Apply(ckout *sql.DB, repoDB *sql.DB, dir string, stashID int64) error {
 	if stashID <= 0 {
 		panic("stash.Apply: stashID must be positive")
 	}
-	rows, err := ckout.Query(`SELECT isAdded, isRemoved, hash, newname, delta
+	files, err := loadStashedFiles(ckout, stashID)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("stash.Apply: stash %d not found", stashID)
+	}
+
+	tx, err := ckout.Begin()
+	if err != nil {
+		return fmt.Errorf("stash.Apply: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	vid, err := checkoutVersion(tx)
+	if err != nil {
+		return fmt.Errorf("stash.Apply: %w", err)
+	}
+	for _, f := range files {
+		if err := applyStashedFile(tx, repoDB, env, vid, filepath.Join(dir, f.name), f); err != nil {
+			return fmt.Errorf("stash.Apply: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// loadStashedFiles reads stash stashID's files up front, so no cursor is
+// held open while they are written and their rows updated.
+func loadStashedFiles(ckout *sql.DB, stashID int64) ([]stashedFile, error) {
+	rows, err := ckout.Query(`SELECT isAdded, isRemoved, isExec, hash, newname, delta
 		FROM stashfile WHERE stashid=?`, stashID)
 	if err != nil {
-		return fmt.Errorf("stash.Apply: query stashfile: %w", err)
+		return nil, fmt.Errorf("stash.Apply: query stashfile: %w", err)
 	}
 	defer rows.Close()
 
-	found := false
+	var files []stashedFile
 	for rows.Next() {
-		found = true
-		var isAdded, isRemoved bool
-		var hashStr sql.NullString
-		var newname string
-		var deltaBytes []byte
-
-		if err := rows.Scan(&isAdded, &isRemoved, &hashStr, &newname, &deltaBytes); err != nil {
-			return fmt.Errorf("stash.Apply: scan stashfile: %w", err)
+		var f stashedFile
+		var isExec sql.NullBool
+		if err := rows.Scan(&f.isAdded, &f.isRemoved, &isExec, &f.hash, &f.name, &f.delta); err != nil {
+			return nil, fmt.Errorf("stash.Apply: scan stashfile: %w", err)
 		}
-
-		fullPath := filepath.Join(dir, newname)
-
-		if isAdded {
-			// Write raw content.
-			if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-				return fmt.Errorf("stash.Apply: mkdir for %s: %w", newname, err)
-			}
-			if err := os.WriteFile(fullPath, deltaBytes, 0o644); err != nil {
-				return fmt.Errorf("stash.Apply: write %s: %w", newname, err)
-			}
-		} else if isRemoved {
-			// Delete the file.
-			if err := os.Remove(fullPath); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("stash.Apply: remove %s: %w", newname, err)
-			}
-		} else {
-			// Modified: apply delta against baseline.
-			if !hashStr.Valid {
-				return fmt.Errorf("stash.Apply: missing baseline hash for %s", newname)
-			}
-			rid, ok := content.AvailableByUUID(repoDB, hashStr.String)
-			if !ok {
-				return fmt.Errorf("stash.Apply: baseline blob %s not found", hashStr.String)
-			}
-			baseline, err := content.Expand(repoDB, rid)
-			if err != nil {
-				return fmt.Errorf("stash.Apply: expand baseline %s: %w", hashStr.String, err)
-			}
-			result, err := delta.Apply(baseline, deltaBytes)
-			if err != nil {
-				return fmt.Errorf("stash.Apply: apply delta for %s: %w", newname, err)
-			}
-			if err := os.WriteFile(fullPath, result, 0o644); err != nil {
-				return fmt.Errorf("stash.Apply: write %s: %w", newname, err)
-			}
-		}
+		f.isExec = isExec.Bool
+		files = append(files, f)
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("stash.Apply: rows iteration: %w", err)
+		return nil, fmt.Errorf("stash.Apply: rows iteration: %w", err)
 	}
-	if !found {
-		return fmt.Errorf("stash.Apply: stash %d not found", stashID)
+	return files, nil
+}
+
+// applyStashedFile restores one stashed file in version vid's checkout.
+func applyStashedFile(
+	tx *sql.Tx, repoDB *sql.DB, env *simio.Env, vid int64, fullPath string, f stashedFile,
+) error {
+	switch {
+	case f.isAdded:
+		if _, err := writeFile(env, fullPath, f.delta, f.isExec); err != nil {
+			return err
+		}
+		return readd(tx, vid, f)
+	case f.isRemoved:
+		if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove %s: %w", f.name, err)
+		}
+		return nil
+	}
+
+	if !f.hash.Valid {
+		return fmt.Errorf("missing baseline hash for %s", f.name)
+	}
+	rid, ok := content.AvailableByUUID(repoDB, f.hash.String)
+	if !ok {
+		return fmt.Errorf("baseline blob %s not found", f.hash.String)
+	}
+	baseline, err := content.Expand(repoDB, rid)
+	if err != nil {
+		return fmt.Errorf("expand baseline %s: %w", f.hash.String, err)
+	}
+	result, err := delta.Apply(baseline, f.delta)
+	if err != nil {
+		return fmt.Errorf("apply delta for %s: %w", f.name, err)
+	}
+	mtime, err := writeFile(env, fullPath, result, f.isExec)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`
+		UPDATE vfile
+		   SET chnged = CASE WHEN plain THEN ? ELSE chnged END,
+		       mtime = CASE WHEN plain THEN ? ELSE 0 END
+		  FROM (SELECT chnged IN (0, 1) AND NOT deleted AND mrid = rid AND rid = ? AS plain
+		          FROM vfile WHERE vid = ? AND pathname = ?)
+		 WHERE vid = ? AND pathname = ?`,
+		!bytes.Equal(result, baseline), mtime, int64(rid), vid, f.name, vid, f.name,
+	); err != nil {
+		return fmt.Errorf("update vfile %s: %w", f.name, err)
 	}
 	return nil
 }
 
+// readd adds a stashed added file to version vid again, as fossil's
+// stash_apply does through add_one_file: a removed row is restored, and a
+// missing one is inserted as Manage inserts an added file.
+func readd(tx *sql.Tx, vid int64, f stashedFile) error {
+	var exists bool
+	if err := tx.QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM vfile WHERE vid=? AND pathname=?)", vid, f.name,
+	).Scan(&exists); err != nil {
+		return fmt.Errorf("query vfile %s: %w", f.name, err)
+	}
+	if exists {
+		if _, err := tx.Exec(
+			"UPDATE vfile SET deleted=0 WHERE vid=? AND pathname=? AND deleted", vid, f.name,
+		); err != nil {
+			return fmt.Errorf("restore vfile %s: %w", f.name, err)
+		}
+		return nil
+	}
+	if _, err := tx.Exec(
+		"INSERT INTO vfile(vid, pathname, rid, mrid, isexe, islink, chnged) VALUES(?, ?, 0, 0, ?, 0, 1)",
+		vid, f.name, f.isExec,
+	); err != nil {
+		return fmt.Errorf("add vfile %s: %w", f.name, err)
+	}
+	return nil
+}
+
+// checkoutVersion returns the checked-out version, vvar's checkout.
+func checkoutVersion(tx *sql.Tx) (int64, error) {
+	var text string
+	if err := tx.QueryRow("SELECT value FROM vvar WHERE name='checkout'").Scan(&text); err != nil {
+		return 0, fmt.Errorf("read checkout version: %w", err)
+	}
+	vid, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("checkout version %q: %w", text, err)
+	}
+	return vid, nil
+}
+
 // Pop applies the most recent stash entry and removes it.
-func Pop(ckout *sql.DB, repoDB *sql.DB, dir string) error {
+func Pop(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string) error {
 	if ckout == nil {
 		panic("stash.Pop: ckout must not be nil")
 	}
 	if repoDB == nil {
 		panic("stash.Pop: repoDB must not be nil")
+	}
+	if env == nil {
+		panic("stash.Pop: env must not be nil")
 	}
 	if dir == "" {
 		panic("stash.Pop: dir must not be empty")
@@ -394,7 +514,7 @@ func Pop(ckout *sql.DB, repoDB *sql.DB, dir string) error {
 		return fmt.Errorf("stash.Pop: query top stash: %w", err)
 	}
 
-	if err := Apply(ckout, repoDB, dir, stashID); err != nil {
+	if err := Apply(ckout, repoDB, env, dir, stashID); err != nil {
 		return err
 	}
 	return Drop(ckout, stashID)

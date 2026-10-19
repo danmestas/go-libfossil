@@ -53,6 +53,13 @@ func NewDisk(env *simio.Env, allowSymlinks bool) Disk {
 	return Disk{env: env, links: links, symlinks: allowSymlinks}
 }
 
+// mustBeMade panics on a zero Disk: one is made by NewDisk or OpenDisk.
+func (d Disk) mustBeMade() {
+	if d.env == nil {
+		panic("vfile.Disk: zero Disk; make one with NewDisk or OpenDisk")
+	}
+}
+
 // RowQuerier is what settings are read through: a repository database.
 type RowQuerier interface {
 	QueryRow(query string, args ...any) *sql.Row
@@ -83,6 +90,7 @@ func (d Disk) Symlinks() bool {
 // symlink while allow-symlinks is on. A missing file returns nil info and no
 // error.
 func (d Disk) Stat(fullPath string) (os.FileInfo, error) {
+	d.mustBeMade()
 	var info os.FileInfo
 	var err error
 	if d.symlinks {
@@ -109,6 +117,7 @@ func IsLink(info os.FileInfo) bool {
 // reads it with RepoFILE, given info from Stat: a symlink seen as itself
 // holds the name of its target.
 func (d Disk) Read(fullPath string, info os.FileInfo) ([]byte, error) {
+	d.mustBeMade()
 	if IsLink(info) {
 		if d.links == nil {
 			panic("vfile.Disk.Read: a symlink seen without link support")
@@ -134,6 +143,7 @@ func (d Disk) Read(fullPath string, info os.FileInfo) ([]byte, error) {
 // them; otherwise, as fossil's symlink_create, as a plain file holding the
 // target's name. The file then gets the executable bit exe (SetExe).
 func (d Disk) Write(fullPath string, data []byte, exe, link bool) error {
+	d.mustBeMade()
 	if err := d.env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
 		return fmt.Errorf("mkdir for %s: %w", fullPath, err)
 	}
@@ -180,6 +190,7 @@ type modeSetter interface {
 // read is allowed, or nowhere. A symlink seen as itself, a directory or
 // nothing at all is left alone.
 func (d Disk) SetExe(fullPath string, exe bool) error {
+	d.mustBeMade()
 	setter, ok := d.env.Storage.(modeSetter)
 	if !ok {
 		return nil
@@ -209,6 +220,7 @@ func (d Disk) SetExe(fullPath string, exe bool) error {
 // written, statting it as fossil's vfile_to_disk does (WrittenMTime), a
 // symlink seen as itself.
 func (d Disk) MTime(fullPath string) (int64, error) {
+	d.mustBeMade()
 	now := d.env.Clock.Now().Unix()
 	info, err := d.Stat(fullPath)
 	if err != nil {
@@ -264,6 +276,7 @@ func settingBoolean(value string, dflt bool) bool {
 // Remove deletes the file at fullPath, as fossil's file_delete does: a
 // symlink itself, never what it points to. Nothing there is not an error.
 func (d Disk) Remove(fullPath string) error {
+	d.mustBeMade()
 	err := d.env.Storage.Remove(fullPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove %s: %w", fullPath, err)

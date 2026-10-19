@@ -104,3 +104,32 @@ func TestTreeCheckinSubmanifestsShareTheReceipt(t *testing.T) {
 		t.Fatalf("rcvfrom rows = %d, want 2, one per commit", rows)
 	}
 }
+
+// CheckinOpts.User is fossil's --user-override: a name the user table lacks
+// still commits, under that name, and the rcvfrom row credits the local
+// user, as fossil credits the logged-in user whatever the U card says.
+func TestCheckinUnknownUserCreditsLocalUser(t *testing.T) {
+	r := setupTestRepo(t)
+	rid, _, err := Checkin(r, CheckinOpts{
+		Comment: "ghostly", User: "ghost",
+		Files: []File{{Name: "a.txt", Content: []byte("a\n")}},
+	})
+	if err != nil {
+		t.Fatalf("Checkin by ghost: %v", err)
+	}
+	d, err := GetManifest(r, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.U == nil || *d.U != "ghost" {
+		t.Fatalf("U card = %v, want ghost", d.U)
+	}
+	var login string
+	if err := r.DB().QueryRow("SELECT user.login FROM blob JOIN rcvfrom USING(rcvid)"+
+		" JOIN user ON user.uid=rcvfrom.uid WHERE blob.rid=?", rid).Scan(&login); err != nil {
+		t.Fatalf("receipt of the check-in: %v", err)
+	}
+	if login != "testuser" {
+		t.Fatalf("rcvfrom credits %q, want the local user testuser", login)
+	}
+}

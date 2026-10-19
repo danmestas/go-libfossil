@@ -18,8 +18,13 @@ import (
 )
 
 type CheckinOpts struct {
-	Files        []File
-	Comment      string
+	Files   []File
+	Comment string
+	// User is the name the U card carries: fossil's commit --user-override,
+	// not --user. It is never checked against the user table, so any name
+	// commits. The check-in's rcvfrom row credits User's uid when the table
+	// holds that login and the repository's local (setup) user otherwise,
+	// as fossil credits g.userUid whatever the U card says.
 	User         string
 	Parent       libfossil.FslID
 	MergeParents []libfossil.FslID // additional parents beyond Parent (for merge commits)

@@ -13,8 +13,6 @@ import (
 	"testing"
 
 	libfossil "github.com/danmestas/go-libfossil"
-	"github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
@@ -576,35 +574,83 @@ func TestSnapshotConcurrentProcesses(t *testing.T) {
 	}
 }
 
-// TestLogPathFollowsRename checks that a path's history reports the check-in
-// that renamed it, with the old name.
-func TestLogPathFollowsRename(t *testing.T) {
-	repoPath := newSnapshotRepo(t)
-	snapshot(t, repoPath, "a.md", "one\n")
+// TestLogPathAcrossRenameMatchesFinfo builds a history with the fossil
+// binary (add a.md, edit, rename to b.md, edit) and compares repo log with
+// fossil finfo on the same repository. Like finfo, log of the new name stops
+// at the rename, which it reports with the old name; it does not continue
+// into the old name's history. Unlike finfo, which lists only check-ins that
+// hold a version of the file, log of the old name also lists the rename as
+// the check-in that deleted it.
+func TestLogPathAcrossRenameMatchesFinfo(t *testing.T) {
+	fossilBin := testutil.RequireFossilBin(t)
+	dir := t.TempDir()
+	repoPath := filepath.Join(dir, "r.fossil")
+	ckout := filepath.Join(dir, "ckout")
+	if err := os.Mkdir(ckout, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fossil := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(fossilBin, args...)
+		cmd.Dir = ckout
+		cmd.Env = append(os.Environ(), "USER=tester")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("fossil %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	write := func(name, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(ckout, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fossil("init", "--admin-user", "tester", repoPath)
+	fossil("open", repoPath)
+	write("a.md", "one\n")
+	fossil("add", "a.md")
+	fossil("commit", "-m", "add")
+	write("a.md", "two two\n")
+	fossil("commit", "-m", "edit a")
+	beforeRename := strings.Fields(fossil("timeline", "current", "-n", "1", "-F", "%H"))[0]
+	fossil("mv", "--hard", "a.md", "b.md")
+	fossil("commit", "-m", "rename")
+	write("b.md", "three three three\n")
+	fossil("commit", "-m", "edit b")
 
-	r, err := libfossil.Open(repoPath)
-	if err != nil {
-		t.Fatal(err)
+	// finfo -b prints one check-in per line, its hash prefix first.
+	finfo := func(name string) []string {
+		var ids []string
+		for _, line := range strings.Split(strings.TrimSpace(fossil("finfo", "-b", name)), "\n") {
+			ids = append(ids, strings.Fields(line)[0])
+		}
+		return ids
 	}
-	parent, err := r.ResolveVersion("tip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, renameUUID, err := manifest.Checkin(r.Inner(), manifest.CheckinOpts{
-		Files:   []manifest.File{{Name: "b.md", Content: []byte("one\n"), OldName: "a.md"}},
-		Comment: "rename",
-		User:    "tester",
-		Parent:  fsltype.FslID(parent),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Close(); err != nil {
-		t.Fatal(err)
+	short := func(rows []logRow) []string {
+		var ids []string
+		for _, r := range rows {
+			ids = append(ids, r.UUID[:10])
+		}
+		return ids
 	}
 
 	rows := pathLog(t, repoPath, "--path", "b.md")
-	if len(rows) == 0 || rows[0].UUID != renameUUID || rows[0].Action != "renamed" || rows[0].PrevName != "a.md" {
-		t.Fatalf("log --path b.md = %+v, want the rename from a.md first", rows)
+	if got, want := short(rows), finfo("b.md"); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("log b.md = %v, fossil finfo b.md = %v", got, want)
+	}
+	if len(rows) != 2 || rows[1].Action != "renamed" || rows[1].PrevName != "a.md" || rows[1].Comment != "rename" {
+		t.Fatalf("log b.md = %+v, want the edit, then the rename from a.md, and nothing before it", rows)
+	}
+
+	// finfo needs the file in the checkout, so look at a.md from before the
+	// rename.
+	fossil("update", beforeRename)
+	old := pathLog(t, repoPath, "--path", "a.md")
+	if len(old) == 0 || old[0].Action != "deleted" || old[0].UUID != rows[1].UUID {
+		t.Fatalf("log a.md = %+v, want the rename first, as the deletion of a.md", old)
+	}
+	if got, want := short(old[1:]), finfo("a.md"); strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("log a.md after the deletion = %v, fossil finfo a.md = %v", got, want)
 	}
 }

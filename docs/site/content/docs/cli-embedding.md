@@ -18,6 +18,8 @@ libfossil -R repo.fossil repo diff     [--json] A B [PATH]
 
 **log** lists the check-ins that changed the path, newest first, as `fossil finfo` does. `-n` caps the count; the default is all.
 
+A rename ends a name's history, as it does in `fossil finfo`. After `a.md` is renamed to `b.md`, `log --path b.md` lists the check-ins that changed `b.md`, then the rename itself (`action` `renamed`, `prev_name` `a.md`), and stops: it does not continue into `a.md`'s history. To follow a file across renames, run `log` again with `prev_name`. `log --path a.md` lists the rename first, as the check-in that removed `a.md` (`action` `deleted`), then `a.md`'s own changes. That first row is the one difference from `fossil finfo`, which lists only check-ins that hold a version of the file.
+
 **cat** writes the file's bytes as VERSION holds them, as `fossil cat -r` does. VERSION is anything `repo resolve` accepts: `tip`, `trunk`, a branch, a uuid or a unique prefix of one. Without `--at`, `repo cat` still outputs an artifact by uuid.
 
 **diff** with two versions prints the unified diff between them for PATH, or for every file that differs when PATH is omitted. PATH is matched as `fossil diff --from A --to B PATH` matches it: a file of that name, or every file under a directory of that name, in either version, compared case-sensitively. A PATH that matches nothing in either version is not found (exit 2, as fossil fails with `not found`); a PATH that matches only unchanged files is an empty diff. With one or no version it compares the working directory, as before.

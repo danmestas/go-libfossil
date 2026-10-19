@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	gofossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -439,6 +440,7 @@ func smSettingCases() []smCase {
 			return nil
 		}),
 		smWriterCase("submanifest.7.2.avoid-in-session", "SM-7.2-3", smAvoidInSession),
+		smWriterCase("submanifest.7.2.commit-after-session", "SM-7.2-3", smCommitAfterSession),
 	}
 }
 
@@ -481,6 +483,47 @@ func smAvoidInSession(t *testing.T) error {
 		return err
 	}
 	return want("S cards in the session's commit", len(d.S), 0)
+}
+
+// smCommitAfterSession: the session is one exchange, so a commit made after a
+// session that received avoid-submanifests follows the client's own
+// setting, as every commit through the public API does.
+func smCommitAfterSession(t *testing.T) error {
+	server, err := smWriterRepo(t)
+	if err != nil {
+		return err
+	}
+	pc, err := server.Config("project-code")
+	if err != nil {
+		return err
+	}
+	client, err := smWriterRepo(t, manifest.SettingEnableSubmanifests, "on", manifest.SettingSubmanifestK, "1",
+		"project-code", pc)
+	if err != nil {
+		return err
+	}
+	transport := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		resp, err := sync.HandleSync(context.Background(), server, req)
+		if err != nil {
+			t.Errorf("HandleSync: %v", err)
+		}
+		return resp
+	}}
+	res, err := sync.Sync(context.Background(), client, transport, sync.SyncOpts{Push: true, Pull: true})
+	if err != nil {
+		return err
+	}
+	if !res.AvoidSubmanifests {
+		return fmt.Errorf("the session did not report avoid-submanifests")
+	}
+	_, d, err := smCommit(client, smA1, 0, smTime, false)
+	if err != nil {
+		return err
+	}
+	if len(d.S) == 0 {
+		return fmt.Errorf("a commit after the session is flat although emission is on")
+	}
+	return nil
 }
 
 func smMustParse(name string) *deck.Deck {
@@ -545,6 +588,27 @@ func smEnableCases() []smCase {
 			}
 			return want("settings", settings(r), "on/1")
 		}),
+		smWriterCase("submanifest.8.1.invalid-stored-pin", "SM-8.1-3", func(t *testing.T) error {
+			r, _, four, err := withCheckins(t)
+			if err != nil {
+				return err
+			}
+			if err := r.SetConfig(manifest.SettingSubmanifestK, "13"); err != nil {
+				return err
+			}
+			_, err = manifest.EnableSubmanifests(r, four, 0)
+			if err == nil || !strings.Contains(err.Error(), `"13"`) {
+				return fmt.Errorf("enable over a stored k of 13 without an explicit k: %v", err)
+			}
+			if s := settings(r); s != "/13" {
+				return fmt.Errorf("a refused request left %q", s)
+			}
+			if k, err := manifest.EnableSubmanifests(r, four, 2); err != nil || k != 2 {
+				return fmt.Errorf("enable with k 2 over a stored 13 = %d, %v", k, err)
+			}
+			return want("settings", settings(r), "on/2")
+		}),
+		smWriterCase("submanifest.6.3.current-without-checkout", "SM-6.3-7", smCurrentWithoutCheckout),
 		smWriterCase("submanifest.a.5.no-candidate", "SM-A-4", func(t *testing.T) error {
 			r, one, _, err := withCheckins(t)
 			if err != nil {
@@ -646,4 +710,32 @@ func smZitSelections() error {
 		}
 	}
 	return nil
+}
+
+// smCurrentWithoutCheckout: with no checkout, selection analyzes the newest
+// leaf of the main branch, not the newest check-in: a newer one-file
+// check-in on another branch would leave no candidate.
+func smCurrentWithoutCheckout(t *testing.T) error {
+	r, err := gofossil.Create(filepath.Join(t.TempDir(), "c.fossil"), gofossil.CreateOpts{User: "u"})
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	var files []gofossil.FileToCommit
+	for name, text := range smA1 {
+		files = append(files, gofossil.FileToCommit{Name: name, Content: []byte(text)})
+	}
+	if _, _, err := r.Commit(gofossil.CommitOpts{Comment: "trunk", User: "u", Time: smTime, Files: files}); err != nil {
+		return err
+	}
+	if _, _, err := r.Commit(gofossil.CommitOpts{Comment: "side", User: "u", Time: smTime.Add(time.Hour),
+		Tags:  []gofossil.TagSpec{{Name: "branch", Value: "side"}, {Name: "sym-side"}},
+		Files: []gofossil.FileToCommit{{Name: "only.txt", Content: []byte("x\n")}}}); err != nil {
+		return err
+	}
+	k, _, err := r.EnableSubmanifests(0)
+	if err != nil {
+		return err
+	}
+	return want("k selected over trunk's A.1 set", k, 1)
 }

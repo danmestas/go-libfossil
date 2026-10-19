@@ -932,14 +932,21 @@ func TestHandleEmptyRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
-	// A completed reply carries nothing but the timestamp comment (draft §3).
-	if len(resp.Cards) != 1 {
-		t.Fatalf("empty request: got %d reply cards, want only the timestamp comment",
+	// A completed reply carries nothing but the timestamp comment (draft §3)
+	// and, at its head, the sub-manifest pragmas every reply carries
+	// (draft-fossil-submanifests-00 §7.2), which fossil does not send.
+	if len(resp.Cards) != 3 {
+		t.Fatalf("empty request: got %d reply cards, want the two pragmas and the timestamp comment",
 			len(resp.Cards))
 	}
-	c, ok := resp.Cards[0].(*xfer.CommentCard)
+	for i, name := range []string{"send-submanifests", "avoid-submanifests"} {
+		if p, ok := resp.Cards[i].(*xfer.PragmaCard); !ok || p.Name != name {
+			t.Fatalf("empty request: card %d = %#v, want pragma %s", i, resp.Cards[i], name)
+		}
+	}
+	c, ok := resp.Cards[2].(*xfer.CommentCard)
 	if !ok || !strings.HasPrefix(c.Text, "timestamp ") || !strings.HasSuffix(c.Text, " errors 0") {
-		t.Fatalf("empty request: reply card = %#v, want the timestamp comment", resp.Cards[0])
+		t.Fatalf("empty request: reply card = %#v, want the timestamp comment", resp.Cards[2])
 	}
 }
 

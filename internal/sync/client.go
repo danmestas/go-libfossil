@@ -88,7 +88,7 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 	if s.opts.Private && cycle == 0 {
 		cards = append(cards, sendPrivate)
 	}
-	cards = append(cards, versionPragma("client-version"))
+	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -867,7 +867,11 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
 		s.uvPullOnly = true
-	case c.Name == "avoid-submanifests":
+	case c.Name == sendSubmanifestsPragma:
+		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
+		// for the session: a reply without the pragma does not unsay it.
+		s.peerReadsTrees = true
+	case c.Name == avoidSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: no S cards in commits made in
 		// this session, which the session's caller makes.
 		s.result.AvoidSubmanifests = true
@@ -1527,11 +1531,12 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 }
 
 // submanifestBarred applies the draft-fossil-submanifests-00 §7.2 gate to a
-// gimme: a tree or sub-manifest is withheld from a server too old to read
-// one. The withheld artifact is recorded in the result, so a push that left
-// one behind does not read as complete, and the next request says why.
+// gimme: a tree or sub-manifest is withheld from a server that has sent no
+// send-submanifests in this session. The withheld artifact is recorded in
+// the result, so a push that left one behind does not read as complete, and
+// the next request says why.
 func (s *session) submanifestBarred(uuid string, rid libfossil.FslID) bool {
-	barred, err := s.smGate.barred(s.repo.DB(), s.cache, rid, s.peerVersion)
+	barred, err := s.smGate.barred(s.repo.DB(), s.cache, rid, s.peerReadsTrees)
 	if err != nil {
 		s.result.Errors = append(s.result.Errors, err.Error())
 		return true
@@ -1541,7 +1546,7 @@ func (s *session) submanifestBarred(uuid string, rid libfossil.FslID) bool {
 	}
 	s.smRefusals++
 	s.result.Errors = append(s.result.Errors, fmt.Sprintf(
-		"withheld %s: the server's version %d predates sub-manifest support", uuid, s.peerVersion))
+		"withheld %s: the server does not accept sub-manifests", uuid))
 	return true
 }
 

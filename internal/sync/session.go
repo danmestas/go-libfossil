@@ -125,6 +125,9 @@ type session struct {
 	// carries one refusal card for them, and the result records each.
 	smGate     submanifestGate
 	smRefusals int
+	// peerReadsTrees is set once a reply carries send-submanifests (§7.2);
+	// until then the gate treats the server as one that reads no tree.
+	peerReadsTrees bool
 	// peerDate is the server's check-in date from server-version: 0 before
 	// one arrives, or when it carries no DATE and TIME, which no date gate
 	// passes (§8.6).

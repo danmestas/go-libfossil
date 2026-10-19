@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tree check-in whose sub-manifest has not arrived is deferred, with
   phantoms for its missing references, and linked when they arrive;
   `Verify` reports it as a missing reference, not damage. The new
-  `submanifest` conformance suite covers 71 reader and writer requirements,
+  `submanifest` conformance suite covers 72 reader and writer requirements,
   the Appendix A vectors included, and a test reads trees zit wrote and,
   with zit installed, syncs with zit in both directions.
 - go-libfossil writes sub-manifest trees when a repository opts in. Emission
@@ -49,8 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   k from 1 to 12, or selects one as zit does: the draft's cost rule over the
   main-branch tip, refined by replaying recent history. It refuses, changing
   nothing, when no k partitions the file set. It returns the warning an
-  operator must see: peers below Fossil 2.29 are refused trees, and trees
-  cannot be retired. `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
+  operator must see, worded as zit's: peers that do not announce
+  sub-manifest support are refused trees, trees cannot be retired, and the
+  setting must not be enabled on a repository such a peer serves (§8.1).
+  `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
   pin for later commits, `Repo.DisableSubmanifests()` (`disable`) turns
   emission off again, leaving existing trees in place, and `status` shows
   the settings and whether the repository holds a tree. A commit then stores its leaves and interior
@@ -65,24 +67,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   newlines and renames. Enabling pins the k zit pins on the same history.
   With zit installed, zit verifies and lists go-libfossil's trees, and
   verifies a tree go-libfossil commits on top of one of zit's.
-- Sync follows zit for trees: once a repository holds one, a tree manifest
-  or sub-manifest is withheld from a peer announcing a release below 2.29,
-  with an explicit error card, so no fossil release receives one. An
-  artifact stored as a delta of a withheld tree goes to such a peer as full
-  content. Known gap: fossil has no plans to read trees, yet 2.29 and every
-  later release announce at least 22900, so they would not be refused
-  (SM-7.2-1 is recorded as a deviation until zit and the draft move to a
-  version no fossil announces; tracked in danmestas/zit#239). A ci-lock
-  reply carries `pragma avoid-submanifests`. The three settings
-  `enable-submanifests`, `submanifest-k` and `submanifest-auto-retune` are
-  `/project` members, and a clone asks for them once, in its cleanup round,
-  with zit's `reqconfig /config`, applying all three or none.
+- Sync follows zit for trees: a peer that reads them says so with
+  `pragma send-submanifests`, which go-libfossil sends in every request
+  right after `client-version` and in every reply, clone replies included,
+  right after `server-version`, whatever the sub-manifest settings. Once a
+  repository holds a tree, a tree manifest or sub-manifest is refused to a
+  peer that has not sent the pragma, whatever version it announces, with
+  the error `Peer does not accept sub-manifests.`, so no fossil release
+  receives one. A server decides from the request it answers, a client from
+  the replies of its session. An artifact stored as a delta of a withheld
+  tree goes to such a peer as full content. A server whose
+  `enable-submanifests` is off sends `pragma avoid-submanifests` in the same
+  leading run of every reply; it binds only a commit made inside the
+  session, so commits, made outside any session, follow the repository's
+  own setting, and a server stores a pushed tree whatever its setting. A
+  clone asks once, in its cleanup round, for `enable-submanifests`,
+  `submanifest-k` and `submanifest-auto-retune` with zit's
+  `reqconfig /config`, applying all three or none; a pull asks for none.
+  Enabling emission over a stored `submanifest-k` outside 1 to 12 is
+  refused, naming it, unless an explicit k replaces it. The conformance
+  suite pins the draft's 19 October 2026 revision, which applies the
+  2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
 
 ### Changed
 
-- go-libfossil announces release 22900 in `client-version` and
-  `server-version`, up from 22800, because zit withholds trees from any peer
-  announcing less. No fossil release behaves differently between the two.
 - `S` is no longer rejected as an undefined card letter, and a manifest
   with no `D` card is reclassified as a sub-manifest before its cards are
   checked, so it is rejected for its first illegal card rather than for the

@@ -1,12 +1,10 @@
 package sync
 
 // Transfer and configuration rules of draft-fossil-submanifests-00: the
-// peer-version gate of §7.2, the avoid-submanifests pragma, and the three
-// project-scope settings of §6.3 and §8.1 as configuration exchange carries
-// them. The thresholds and wire spellings are zit's, the one other
-// implementation, so the two interoperate: zit fixes the draft's open
-// "threshold to be fixed at the first release implementing this
-// specification" at 2.29.0.
+// capability gate of §7.2 and its two pragmas, send-submanifests and
+// avoid-submanifests, and the three project-scope settings of §6.3 and §8.1
+// as configuration exchange carries them. The wire spellings are zit's, the
+// one other implementation, so the two interoperate.
 
 import (
 	"database/sql"
@@ -23,37 +21,69 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// submanifestVersion is the first announced release known to read
-// sub-manifests (§7.2): zit's threshold, matched so the two interoperate.
-//
-// KNOWN GAP: no fossil reads trees, and none plans to, yet fossil 2.29
-// (unreleased, already announcing 22900 from its trunk) and every later
-// release clear this threshold, so the gate would hand them trees. A minimum
-// cannot tell zit from a newer fossil; the fix is a version no fossil
-// announces, which zit and the draft must agree on (danmestas/zit#239). The
-// conformance suite records it as a deviation of SM-7.2-1 until then. Today
-// no fossil release announces 22900.
-const submanifestVersion = 22900
+// The §7.2 pragmas. sendSubmanifestsPragma says the sender reads trees: a
+// client sends it in every request and a server in every reply, because this
+// library reads them, whatever the settings. avoidSubmanifestsPragma is a
+// server's, sent while its enable-submanifests setting is off.
+const (
+	sendSubmanifestsPragma  = "send-submanifests"
+	avoidSubmanifestsPragma = "avoid-submanifests"
+)
 
-// announcedVersion is the release this library announces in client-version
-// and server-version. It reads trees, so it announces the sub-manifest
-// threshold rather than the fossil release whose protocol it otherwise
-// speaks (releaseVersion): a peer holding trees refuses them to anything
-// lower, which would leave a clone of a tree repository unable to read it.
-// No fossil release gates any behaviour between the two numbers.
-const announcedVersion = submanifestVersion
+// sendSubmanifests is the pragma a request carries right after
+// client-version: this library reads trees.
+func sendSubmanifests() *xfer.PragmaCard {
+	return &xfer.PragmaCard{Name: sendSubmanifestsPragma}
+}
 
 // submanifestRefusal is the explicit error §7.2 requires in place of an
-// artifact withheld from an older peer, worded as zit words it after the
-// SHA3 refusal it parallels.
+// artifact withheld from a peer that has not sent send-submanifests, worded
+// as zit words it.
 func submanifestRefusal() *xfer.ErrorCard {
-	return &xfer.ErrorCard{Message: "Fossil version 2.29 or later required for sub-manifests."}
+	return &xfer.ErrorCard{Message: "Peer does not accept sub-manifests."}
+}
+
+// sendsSubmanifests reports whether cards carry pragma send-submanifests. A
+// server reads the whole request it is answering (§7.2), so the pragma
+// counts wherever the request puts it.
+func sendsSubmanifests(cards []xfer.Card) bool {
+	for _, c := range cards {
+		if p, ok := c.(*xfer.PragmaCard); ok && p.Name == sendSubmanifestsPragma {
+			return true
+		}
+	}
+	return false
+}
+
+// capabilityPragmas is a reply's §7.2 run: send-submanifests always, then
+// avoid-submanifests while enableSubmanifests is off. The handler emits it
+// once, in place, as it emits server-version: right after server-version, or
+// at the head of a reply to a request with no client-version. A card error
+// that resets the reply discards it with server-version, as zit's and
+// fossil's resets discard their leading pragmas.
+func capabilityPragmas(enableSubmanifests bool) []xfer.Card {
+	run := []xfer.Card{sendSubmanifests()}
+	if !enableSubmanifests {
+		run = append(run, &xfer.PragmaCard{Name: avoidSubmanifestsPragma})
+	}
+	return run
+}
+
+// hasClientVersion reports whether cards carry a client-version the
+// handler answers, one with a VERSION.
+func hasClientVersion(cards []xfer.Card) bool {
+	for _, c := range cards {
+		if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "client-version" && len(p.Values) >= 1 {
+			return true
+		}
+	}
+	return false
 }
 
 // submanifestGate is §7.2's decision for one session: armed once the
 // repository has stored an S-bearing artifact (the §8.1 indicator), and
-// then refusing a peer older than submanifestVersion any sub-manifest or
-// tree manifest. An unarmed gate never reads an artifact, so a repository
+// then refusing any sub-manifest or tree manifest to a peer that has not
+// sent send-submanifests. An unarmed gate never reads an artifact, so a repository
 // that holds no tree sends exactly what it sent before.
 type submanifestGate struct {
 	armed bool
@@ -79,11 +109,12 @@ func newSubmanifestGate(q db.Querier) (submanifestGate, error) {
 	return submanifestGate{armed: unexamined}, nil
 }
 
-// barred reports whether the artifact at rid is withheld from a peer
-// announcing peerVersion: it must be a sub-manifest or a manifest carrying
-// an S card, and the peer older than sub-manifest support.
-func (g submanifestGate) barred(q db.Querier, cache *content.Cache, rid libfossil.FslID, peerVersion int) (bool, error) {
-	if !g.armed || peerVersion >= submanifestVersion {
+// barred reports whether the artifact at rid is withheld from the peer: it
+// must be a sub-manifest or a manifest carrying an S card, and the peer one
+// that has not sent send-submanifests (peerReads false). The announced
+// version plays no part: every fossil release reads no tree.
+func (g submanifestGate) barred(q db.Querier, cache *content.Cache, rid libfossil.FslID, peerReads bool) (bool, error) {
+	if !g.armed || peerReads {
 		return false, nil
 	}
 	data, err := cache.Expand(q, rid)

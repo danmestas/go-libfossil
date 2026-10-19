@@ -34,7 +34,7 @@ func TestEnableSubmanifestsWritesTrees(t *testing.T) {
 		t.Fatal("k 13 accepted")
 	}
 	k, warning, err := r.EnableSubmanifests(0)
-	if err != nil || k != 1 || !strings.Contains(warning, "Fossil 2.29") {
+	if err != nil || k != 1 || !strings.Contains(warning, "do not announce sub-manifest support") {
 		t.Fatalf("EnableSubmanifests = %d, %q, %v", k, warning, err)
 	}
 	if err := r.RetuneSubmanifests(3); err != nil {

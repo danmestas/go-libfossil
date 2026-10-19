@@ -44,8 +44,8 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error {
 		return err
 	}
 	fmt.Printf("enable-submanifests: on (submanifest-k pinned to %d)\n", k)
-	fmt.Println("existing check-ins stay flat; from the next commit, peers below Fossil 2.29 receive\n" +
-		"nothing new from this repository.")
+	fmt.Println("existing check-ins stay flat; from the next commit, peers that do not announce\n" +
+		"sub-manifest support (every fossil) receive nothing new from this repository.")
 	fmt.Printf("\nWARNING: %s\n", warning)
 	return nil
 }

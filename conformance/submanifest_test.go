@@ -874,14 +874,303 @@ func smServerTree(f *smFixture) (tree, leaf, file string, err error) {
 	return tree, refs[0].UUID, mustUUIDOf(f, "a"), err
 }
 
-func smGimme(r *repo.Repo, version, uuid string) (*xfer.Message, error) {
+// smGimme asks r for uuid as a client announcing version, carrying pragma
+// send-submanifests after client-version when reads is set.
+func smGimme(r *repo.Repo, version string, reads bool, uuid string) (*xfer.Message, error) {
 	var pc string
 	r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
-	return sync.HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+	cards := []xfer.Card{
 		&xfer.PragmaCard{Name: "client-version", Values: []string{version, "20260101", "000000"}},
-		&xfer.PullCard{ServerCode: "x", ProjectCode: pc},
-		&xfer.GimmeCard{UUID: uuid},
-	}})
+	}
+	if reads {
+		cards = append(cards, &xfer.PragmaCard{Name: "send-submanifests"})
+	}
+	cards = append(cards, &xfer.PullCard{ServerCode: "x", ProjectCode: pc}, &xfer.GimmeCard{UUID: uuid})
+	return sync.HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+}
+
+// smRefusal is zit's wording of §7.2's explicit error.
+const smRefusal = "Peer does not accept sub-manifests."
+
+// smRefusedOnce checks a reply carries exactly one error, the §7.2 refusal.
+func smRefusedOnce(resp *xfer.Message) error {
+	errs := smCardsOf[*xfer.ErrorCard](resp)
+	if len(errs) != 1 || errs[0].Message != smRefusal {
+		return fmt.Errorf("refusal cards %v, want one %q", errs, smRefusal)
+	}
+	return nil
+}
+
+// smStrip removes every pragma named name from msg, as a peer that does not
+// implement the draft would leave it out.
+func smStrip(msg *xfer.Message, name string) {
+	kept := msg.Cards[:0]
+	for _, c := range msg.Cards {
+		if p, ok := c.(*xfer.PragmaCard); ok && p.Name == name {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	msg.Cards = kept
+}
+
+// smWire is msg as the lines it goes out as.
+func smWire(msg *xfer.Message) ([]string, error) {
+	raw, err := msg.EncodeUncompressed()
+	if err != nil {
+		return nil, err
+	}
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n"), nil
+}
+
+// smLeadingRun checks the leading pragma run of a sync and a clone reply,
+// with and without server-version, under both settings: send-submanifests
+// first, then avoid-submanifests while the setting is off, and neither
+// elsewhere. avoid selects which of the two pragmas the case is about.
+func smLeadingRun(f *smFixture, avoid bool) error {
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	var pc string
+	f.r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
+	dated := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}}
+	bare := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800"}}
+	for _, enable := range []string{"off", "on"} {
+		if _, err := f.r.DB().Exec(`REPLACE INTO config(name,value,mtime) VALUES
+			('enable-submanifests',?,1),('submanifest-k','3',1)`, enable); err != nil {
+			return err
+		}
+		for _, cv := range []*xfer.PragmaCard{dated, bare} {
+			for _, body := range []xfer.Card{
+				&xfer.PullCard{ServerCode: "x", ProjectCode: pc},
+				&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+			} {
+				resp, err := sync.HandleSync(context.Background(), f.r, &xfer.Message{Cards: []xfer.Card{cv, body}})
+				if err != nil {
+					return err
+				}
+				lines, err := smWire(resp)
+				if err != nil {
+					return err
+				}
+				at := 0
+				if cv == dated {
+					if !strings.HasPrefix(lines[0], "pragma server-version ") {
+						return fmt.Errorf("reply begins %q", lines[0])
+					}
+					at = 1
+				}
+				var run []string
+				for _, line := range lines[at:] {
+					if !strings.HasPrefix(line, "pragma ") {
+						break
+					}
+					run = append(run, line)
+				}
+				wantRun := []string{"pragma send-submanifests"}
+				if enable == "off" {
+					wantRun = append(wantRun, "pragma avoid-submanifests")
+				}
+				name := "pragma send-submanifests"
+				if avoid {
+					name = "pragma avoid-submanifests"
+				}
+				if len(run) < len(wantRun) || strings.Join(run[:len(wantRun)], "|") != strings.Join(wantRun, "|") {
+					return fmt.Errorf("enable %s, %T: leading run %q, want %q first", enable, body, run, wantRun)
+				}
+				count := 0
+				for _, line := range lines {
+					if line == name {
+						count++
+					}
+				}
+				wantCount := 1
+				if avoid && enable == "on" {
+					wantCount = 0
+				}
+				if count != wantCount {
+					return fmt.Errorf("enable %s, %T: %q %d times", enable, body, name, count)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// smRecorder is a transport to r that keeps every request's wire lines.
+func smRecorder(r *repo.Repo, requests *[][]string) *sync.MockTransport {
+	return &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		lines, err := smWire(req)
+		if err != nil {
+			return &xfer.Message{}
+		}
+		*requests = append(*requests, lines)
+		resp, err := sync.HandleSync(context.Background(), r, req)
+		if err != nil {
+			return &xfer.Message{}
+		}
+		return resp
+	}}
+}
+
+// smRequestPragma: every request of a sync and of a clone carries
+// send-submanifests right after client-version, emission on or off.
+func smRequestPragma(f *smFixture) error {
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "sm-request")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	var requests [][]string
+	clone, _, err := sync.Clone(context.Background(), filepath.Join(dir, "c.fossil"), smRecorder(f.r, &requests), sync.CloneOpts{})
+	if err != nil {
+		return err
+	}
+	defer clone.Close()
+	for _, enable := range []string{"off", "on"} {
+		if _, err := clone.DB().Exec(`REPLACE INTO config(name,value,mtime) VALUES
+			('enable-submanifests',?,1),('submanifest-k','3',1)`, enable); err != nil {
+			return err
+		}
+		if _, err := sync.Sync(context.Background(), clone, smRecorder(f.r, &requests),
+			sync.SyncOpts{Push: true, Pull: true}); err != nil {
+			return err
+		}
+	}
+	if len(requests) < 3 {
+		return fmt.Errorf("only %d requests", len(requests))
+	}
+	for i, lines := range requests {
+		found := false
+		for j, line := range lines {
+			if strings.HasPrefix(line, "pragma client-version ") {
+				if j+1 >= len(lines) || lines[j+1] != "pragma send-submanifests" {
+					return fmt.Errorf("request %d: client-version not followed by send-submanifests", i)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("request %d has no client-version", i)
+		}
+	}
+	return nil
+}
+
+// smClientRefusesStripped: a client pushing a tree to a server whose
+// replies lost send-submanifests refuses the server's gimmes with the
+// explicit error, and the server never stores the tree; nothing else
+// changes, so the ordinary file still arrives.
+func smClientRefusesStripped(f *smFixture) error {
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "sm-stripped")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	var discard [][]string
+	clone, _, err := sync.Clone(context.Background(), filepath.Join(dir, "c.fossil"), smRecorder(f.r, &discard), sync.CloneOpts{})
+	if err != nil {
+		return err
+	}
+	defer clone.Close()
+	if _, err := clone.DB().Exec(`REPLACE INTO config(name,value,mtime) VALUES
+		('enable-submanifests','on',1),('submanifest-k','1',1)`); err != nil {
+		return err
+	}
+	files := map[string]string{"README.md": "# Example\n", "src/main.c": "int main(void){return 0;}\n",
+		"src/node11.c": "/* node11 */\n", "src/util.c": "/* util */\n"}
+	rid, d, err := smCommit(clone, files, 0, smTime.Add(2*time.Hour), false)
+	if err != nil {
+		return err
+	}
+	if len(d.S) == 0 {
+		return fmt.Errorf("fixture: the commit is not a tree")
+	}
+	entries, err := manifest.ListFiles(clone, rid)
+	if err != nil {
+		return err
+	}
+	var refusals []string
+	transport := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, e := range smCardsOf[*xfer.ErrorCard](req) {
+			refusals = append(refusals, e.Message)
+		}
+		resp, err := sync.HandleSync(context.Background(), f.r, req)
+		if err != nil {
+			return &xfer.Message{}
+		}
+		smStrip(resp, "send-submanifests")
+		return resp
+	}}
+	if _, err := sync.Sync(context.Background(), clone, transport, sync.SyncOpts{Push: true, Pull: true}); err != nil {
+		return err
+	}
+	if len(refusals) == 0 || refusals[0] != smRefusal {
+		return fmt.Errorf("refusals sent %q", refusals)
+	}
+	for _, s := range d.S {
+		if _, ok := content.AvailableByUUID(f.r.DB(), s.UUID); ok {
+			return fmt.Errorf("the server stored leaf %s", s.UUID)
+		}
+	}
+	for _, e := range entries {
+		if _, ok := content.AvailableByUUID(f.r.DB(), e.UUID); !ok {
+			return fmt.Errorf("the ordinary file %s did not arrive", e.Name)
+		}
+	}
+	return nil
+}
+
+// smReqConfigAtClone: a clone asks for the settings once, in its cleanup
+// round, with reqconfig /config; a pull afterwards asks for nothing.
+func smReqConfigAtClone(f *smFixture) error {
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "sm-reqconfig")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	var requests [][]string
+	clone, _, err := sync.Clone(context.Background(), filepath.Join(dir, "c.fossil"), smRecorder(f.r, &requests), sync.CloneOpts{})
+	if err != nil {
+		return err
+	}
+	defer clone.Close()
+	count := func(from int) (n, last int) {
+		for i, lines := range requests[from:] {
+			for _, line := range lines {
+				if strings.HasPrefix(line, "reqconfig ") {
+					if line != "reqconfig /config" {
+						return -1, i
+					}
+					n, last = n+1, from+i
+				}
+			}
+		}
+		return n, last
+	}
+	cloneRounds := len(requests)
+	n, last := count(0)
+	if n != 1 || last != cloneRounds-1 {
+		return fmt.Errorf("clone sent %d reqconfig /config (last in request %d of %d)", n, last+1, cloneRounds)
+	}
+	if _, err := sync.Sync(context.Background(), clone, smRecorder(f.r, &requests),
+		sync.SyncOpts{Pull: true}); err != nil {
+		return err
+	}
+	if n, _ := count(cloneRounds); n != 0 {
+		return fmt.Errorf("a pull sent %d reqconfig cards", n)
+	}
+	return nil
 }
 
 func smCardsOf[T xfer.Card](msg *xfer.Message) []T {
@@ -902,83 +1191,82 @@ func smTransferCases() []smCase {
 				return err
 			}
 			for _, uuid := range []string{tree, leaf} {
-				old, err := smGimme(f.r, "22800", uuid)
+				old, err := smGimme(f.r, "22800", false, uuid)
 				if err != nil {
 					return err
 				}
 				if len(smCardsOf[*xfer.FileCard](old)) != 0 {
-					return fmt.Errorf("a 2.28 peer was sent %s", uuid)
+					return fmt.Errorf("a peer without send-submanifests was sent %s", uuid)
 				}
-				if len(smCardsOf[*xfer.ErrorCard](old)) != 1 {
-					return fmt.Errorf("no explicit refusal for %s", uuid)
+				if err := smRefusedOnce(old); err != nil {
+					return fmt.Errorf("%s: %v", uuid, err)
 				}
-				current, err := smGimme(f.r, "22900", uuid)
+				current, err := smGimme(f.r, "22800", true, uuid)
 				if err != nil {
 					return err
 				}
 				if len(smCardsOf[*xfer.FileCard](current)) != 1 {
-					return fmt.Errorf("a 2.29 peer was refused %s", uuid)
+					return fmt.Errorf("a peer sending send-submanifests was refused %s", uuid)
 				}
 			}
-			plain, err := smGimme(f.r, "22800", file)
+			plain, err := smGimme(f.r, "22800", false, file)
 			if err != nil {
 				return err
 			}
 			return want("file cards for ordinary content", len(smCardsOf[*xfer.FileCard](plain)), 1)
 		}),
-		{Case{ID: "submanifest.7.2.fossil-2.29-not-refused", Req: "SM-7.2-1",
-			Deviation: "the threshold is zit's 22900, which fossil 2.29 and later announce " +
-				"without reading trees; refusing them needs a non-fossil version (danmestas/zit#239)"},
-			func(t *testing.T) error {
-				f, err := newSMFixture(t)
-				if err != nil {
-					return err
-				}
-				tree, _, _, err := smServerTree(f)
-				if err != nil {
-					return err
-				}
-				// The announcement a fossil 2.29 build makes.
-				resp, err := smGimme(f.r, "22900", tree)
+		smRepoCase("submanifest.7.2.fossil-2.29-refused", "SM-7.2-1", func(f *smFixture) error {
+			tree, _, _, err := smServerTree(f)
+			if err != nil {
+				return err
+			}
+			// The announcements fossil 2.29 and a later release make: no
+			// version reads as a tree reader.
+			for _, version := range []string{"22900", "23000"} {
+				resp, err := smGimme(f.r, version, false, tree)
 				if err != nil {
 					return err
 				}
 				if len(smCardsOf[*xfer.FileCard](resp)) != 0 {
-					return fmt.Errorf("a fossil 2.29 peer, which reads no tree, is sent one")
+					return fmt.Errorf("a fossil %s peer, which reads no tree, is sent one", version)
 				}
-				return nil
-			}},
-		smRepoCase("submanifest.7.2.clone-delta-of-withheld-tree", "SM-7.2-1", smCloneDeltaOfTree),
-		smRepoCase("submanifest.7.2.pushed-tree-withheld", "SM-7.2-1", smPushedTreeWithheld),
-		smRepoCase("submanifest.7.2.avoid-pragma", "SM-7.2-2", func(f *smFixture) error {
-			var pc string
-			f.r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
-			resp, err := sync.HandleSync(context.Background(), f.r, &xfer.Message{Cards: []xfer.Card{
-				&xfer.PragmaCard{Name: "client-version", Values: []string{"22900", "20260101", "000000"}},
-				&xfer.PullCard{ServerCode: "x", ProjectCode: pc},
-				&xfer.PragmaCard{Name: "ci-lock", Values: []string{pc, "c1"}},
-			}})
-			if err != nil {
-				return err
-			}
-			var names []string
-			for _, p := range smCardsOf[*xfer.PragmaCard](resp) {
-				names = append(names, p.Name)
-			}
-			joined := strings.Join(names, " ")
-			if !strings.Contains(joined, "avoid-delta-manifests avoid-submanifests") {
-				return fmt.Errorf("reply pragmas %q", joined)
+				if err := smRefusedOnce(resp); err != nil {
+					return err
+				}
 			}
 			return nil
 		}),
+		smRepoCase("submanifest.7.2.client-refuses-stripped", "SM-7.2-1", smClientRefusesStripped),
+		smRepoCase("submanifest.7.2.clone-delta-of-withheld-tree", "SM-7.2-1", smCloneDeltaOfTree),
+		smRepoCase("submanifest.7.2.pushed-tree-withheld", "SM-7.2-1", smPushedTreeWithheld),
+		smRepoCase("submanifest.7.2.avoid-pragma", "SM-7.2-2", func(f *smFixture) error {
+			return smLeadingRun(f, true)
+		}),
+		smRepoCase("submanifest.7.2.send-pragma-reply", "SM-7.2-4", func(f *smFixture) error {
+			return smLeadingRun(f, false)
+		}),
+		smRepoCase("submanifest.7.2.send-pragma-request", "SM-7.2-4", smRequestPragma),
+		smRepoCase("submanifest.7.2.base-version", "SM-7.2-4", func(f *smFixture) error {
+			resp, err := smGimme(f.r, "22800", true, mustUUIDOf(f, "a"))
+			if err != nil {
+				return err
+			}
+			for _, p := range smCardsOf[*xfer.PragmaCard](resp) {
+				if p.Name == "server-version" {
+					return want("announced version", p.Values[0], "22800")
+				}
+			}
+			return fmt.Errorf("no server-version")
+		}),
+		smRepoCase("submanifest.7.2.receipt-not-gated", "SM-7.2-3", smPushedTreeWithheld),
 		smRepoCase("submanifest.7.2.client-commits-flat", "SM-7.2-3", smCommitOnTree),
-		smRepoCase("submanifest.6.3.project-members", "SM-6.3-1", func(f *smFixture) error {
+		smRepoCase("submanifest.6.3.config-members", "SM-6.3-1", func(f *smFixture) error {
 			if _, err := f.r.DB().Exec(`REPLACE INTO config(name,value,mtime) VALUES
 				('enable-submanifests','on',5),('submanifest-k','3',6),('submanifest-auto-retune','off',7)`); err != nil {
 				return err
 			}
 			resp, err := sync.HandleSync(context.Background(), f.r, &xfer.Message{Cards: []xfer.Card{
-				&xfer.ReqConfigCard{Name: "/project"},
+				&xfer.ReqConfigCard{Name: "/config"},
 			}})
 			if err != nil {
 				return err
@@ -990,32 +1278,24 @@ func smTransferCases() []smCase {
 			}
 			for _, name := range []string{"enable-submanifests", "submanifest-k", "submanifest-auto-retune"} {
 				if !strings.Contains(body.String(), "'"+name+"'") {
-					return fmt.Errorf("/project omits %s", name)
+					return fmt.Errorf("/config omits %s", name)
 				}
 			}
 			return nil
 		}),
 		{Case{ID: "submanifest.6.3.staged-atomic", Req: "SM-6.3-2"}, smStagedConfig},
-		{Case{ID: "submanifest.6.3.reqconfig-on-pull", Req: "SM-6.3-3",
-			Deviation: "follows zit: the request is reqconfig /config, the scalar marker zit's " +
-				"server answers (it answers /project with nothing), sent once in the clone's " +
-				"cleanup round and never on pull (draft text: danmestas/zit#240)"}, func(t *testing.T) error {
-			return fmt.Errorf("go-libfossil sends reqconfig /config in the clone cleanup round only")
-		}},
+		smRepoCase("submanifest.6.3.reqconfig-at-clone", "SM-6.3-3", smReqConfigAtClone),
 		{Case{ID: "submanifest.6.3.clone-without-group", Req: "SM-6.3-4"}, func(t *testing.T) error {
 			return smCloneWithoutGroup(t)
 		}},
 	}
 }
 
-// smOldTransport serves r to a client that announces fossil 2.28.
+// smOldTransport serves r to a client that reads no tree, as fossil 2.28:
+// its requests carry no send-submanifests.
 func smOldTransport(r *repo.Repo) *sync.MockTransport {
 	return &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
-		for _, c := range req.Cards {
-			if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "client-version" {
-				p.Values[0] = "22800"
-			}
-		}
+		smStrip(req, "send-submanifests")
 		resp, err := sync.HandleSync(context.Background(), r, req)
 		if err != nil {
 			return &xfer.Message{}
@@ -1097,7 +1377,8 @@ func smPushedTreeWithheld(f *smFixture) error {
 		return err
 	}
 	cards := []xfer.Card{
-		&xfer.PragmaCard{Name: "client-version", Values: []string{"22900", "20260101", "000000"}},
+		&xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}},
+		&xfer.PragmaCard{Name: "send-submanifests"},
 		&xfer.PushCard{ServerCode: "x", ProjectCode: pc},
 	}
 	for _, data := range [][]byte{file, leaf, tree} {
@@ -1109,7 +1390,7 @@ func smPushedTreeWithheld(f *smFixture) error {
 	if _, ok := content.AvailableByUUID(f.r.DB(), hash.AlgSHA3.Hash(tree)); !ok {
 		return fmt.Errorf("fixture: the push stored no tree")
 	}
-	resp, err := smGimme(f.r, "22800", hash.AlgSHA3.Hash(tree))
+	resp, err := smGimme(f.r, "22800", false, hash.AlgSHA3.Hash(tree))
 	if err != nil {
 		return err
 	}

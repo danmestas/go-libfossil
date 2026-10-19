@@ -41,7 +41,8 @@ import (
 // afterwards, pushes one go-libfossil commits, and serves one zit pushes.
 // TestZitStrippedPragma strips send-submanifests from the wire and checks
 // each side refuses the other its trees. Both need zit at 0431958ff4 or
-// later, which gates on that pragma. REQUIRE_ZIT_BIN=1 makes a missing zit a failure rather than a
+// later, which gates on that pragma; every zit test skips an older one.
+// REQUIRE_ZIT_BIN=1 makes a missing or older zit a failure rather than a
 // skip; CI has no zit, so there TestZitTreeBundle reads a recorded copy of
 // what zit wrote instead. ZIT_REGENERATE=1 rewrites that copy.
 
@@ -60,7 +61,43 @@ func zitBinary(t *testing.T) string {
 		}
 		t.Skip("zit not found: the interop run needs it")
 	}
+	reads, err := zitReadsPragma(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reads {
+		msg := fmt.Sprintf("%s (%s) predates pragma send-submanifests: the interop run needs zit at "+
+			"check-in 0431958ff4 or later", bin, zitVersion(bin))
+		if os.Getenv("REQUIRE_ZIT_BIN") == "1" {
+			t.Fatal("REQUIRE_ZIT_BIN=1 but " + msg)
+		}
+		t.Skip(msg)
+	}
 	return bin
+}
+
+// zitReadsPragma reports whether the zit binary at bin gates trees on
+// pragma send-submanifests (§7.2), which zit does from check-in 0431958ff4:
+// such a zit sends the pragma, so its name is in the binary. zit's version
+// number is no test, since 0.5.0 spans the change.
+func zitReadsPragma(bin string) (bool, error) {
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		return false, fmt.Errorf("probing zit: %w", err)
+	}
+	return bytes.Contains(data, []byte("send-submanifests")), nil
+}
+
+// zitVersion is the first line `zit version` prints, for a skip message.
+func zitVersion(bin string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "version").Output()
+	if err != nil {
+		return "version unknown"
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	return line
 }
 
 // zitRun runs zit in dir with a private home and a deadline, and returns
@@ -720,4 +757,30 @@ func readZitListings() (map[string][]string, error) {
 		out[current] = append(out[current], line)
 	}
 	return out, sc.Err()
+}
+
+// zitReadsPragma tells a zit that gates on send-submanifests from an older
+// one by the pragma's name in the binary; a zit that sends it carries it.
+func TestZitReadsPragma(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"current", "\x7fELF...pragma\x00send-submanifests\x00...", true},
+		{"stale", "\x7fELF...pragma\x00avoid-submanifests\x00...", false},
+	} {
+		path := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(path, []byte(tc.body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := zitReadsPragma(path)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: zitReadsPragma = %v, %v; want %v", tc.name, got, err, tc.want)
+		}
+	}
+	if _, err := zitReadsPragma(filepath.Join(dir, "absent")); err == nil {
+		t.Error("zitReadsPragma of a missing file: no error")
+	}
 }

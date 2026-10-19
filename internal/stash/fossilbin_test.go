@@ -12,6 +12,8 @@ import (
 	"time"
 
 	libdb "github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/checkout"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/stash"
 	"github.com/danmestas/go-libfossil/simio"
 	"github.com/danmestas/go-libfossil/testutil"
@@ -46,24 +48,31 @@ func fossilIn(t *testing.T, bin, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// withDBs opens the checkout's and the repository's databases for fn and
+// withDBs opens the checkout, its database and the repository's for fn and
 // closes them before fossil runs again.
-func withDBs(t *testing.T, ck, repoPath string, fn func(ckout, repoDB *sql.DB)) {
+func withDBs(
+	t *testing.T, ck, repoPath string, env *simio.Env,
+	fn func(co *checkout.Checkout, ckout, repoDB *sql.DB),
+) {
 	t.Helper()
+	r, err := repo.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	co, err := checkout.Open(r, ck, checkout.OpenOpts{Env: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
 	// OpenSQL turns foreign keys off, as fossil runs and as checkouts open
-	// these databases: fossil's vfile references a blob table the checkout
-	// database does not have.
+	// this database: fossil's vfile references a blob table it does not have.
 	ckout, err := libdb.OpenSQL(filepath.Join(ck, ".fslckout"), libdb.OpenConfig{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ckout.Close()
-	repoDB, err := libdb.OpenSQL(repoPath, libdb.OpenConfig{}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repoDB.Close()
-	fn(ckout, repoDB)
+	fn(co, ckout, r.DB().SqlDB())
 }
 
 // TestStashVFileReadByFossil: after a stash save and pop made here, fossil's
@@ -101,8 +110,8 @@ func TestStashVFileReadByFossil(t *testing.T) {
 		t.Fatalf("fossil changes before save = %q", got)
 	}
 
-	withDBs(t, ck, repoPath, func(ckout, repoDB *sql.DB) {
-		if err := stash.Save(ckout, repoDB, env, ck, "edit"); err != nil {
+	withDBs(t, ck, repoPath, env, func(co *checkout.Checkout, ckout, repoDB *sql.DB) {
+		if err := stash.Save(co, ckout, repoDB, env, ck, "edit"); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")
@@ -111,7 +120,7 @@ func TestStashVFileReadByFossil(t *testing.T) {
 		t.Fatalf("fossil changes after save = %q", got)
 	}
 
-	withDBs(t, ck, repoPath, func(ckout, repoDB *sql.DB) {
+	withDBs(t, ck, repoPath, env, func(co *checkout.Checkout, ckout, repoDB *sql.DB) {
 		if err := stash.Pop(ckout, repoDB, env, ck); err != nil {
 			t.Fatal(err)
 		}

@@ -103,7 +103,7 @@ func TestUndoVFileReadByFossil(t *testing.T) {
 	}
 
 	withCheckoutDB(t, ck, func(ckout *sql.DB) {
-		if err := undo.Undo(ckout, env, ck); err != nil {
+		if _, err := undo.Undo(ckout, env, ck); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")
@@ -113,7 +113,7 @@ func TestUndoVFileReadByFossil(t *testing.T) {
 	}
 
 	withCheckoutDB(t, ck, func(ckout *sql.DB) {
-		if err := undo.Redo(ckout, env, ck); err != nil {
+		if _, err := undo.Redo(ckout, env, ck); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")

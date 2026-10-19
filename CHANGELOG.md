@@ -164,6 +164,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row's mtime matched the file when it was saved, the case where the row
   vouches for the content; otherwise the row is restored with mtime 0 and
   the next scan hashes the file.
+- Stash save scans the checkout first, as fossil's `stash_create` does, so
+  an edit no scan has recorded yet is stashed too; before, it was left out,
+  or the save failed with nothing to stash. `stash.Save` takes the scanner,
+  a `*checkout.Checkout`, as its first argument.
+- Undo and redo no longer print to standard output. They return the files
+  they changed and how, as `[]undo.Change`, for the caller to report.
 - `verify.Rebuild` and `verify.Verify` check blob integrity in time linear
   in the repository, as fossil's rebuild does. They expanded blob by blob
   through a bounded cache, so on a real repository, whose delta chains run

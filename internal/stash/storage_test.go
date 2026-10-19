@@ -153,7 +153,7 @@ func TestSaveRevertsThroughStorage(t *testing.T) {
 		t.Fatalf("before save: changes = %v", got)
 	}
 
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "hello world\n" {
@@ -175,8 +175,7 @@ func TestSaveRevertsThroughStorage(t *testing.T) {
 func TestPopRestoresThroughStorage(t *testing.T) {
 	s := newSimCheckout(t, later)
 	s.write(t, "a.txt", "HELLO world\n")
-	s.changes(t) // stash save stashes what the last scan found
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
 		t.Fatal(err)
 	}
 	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
@@ -202,8 +201,7 @@ func TestPopRestoresThroughStorage(t *testing.T) {
 func TestSameSizePopInSaveSecondDetected(t *testing.T) {
 	s := newSimCheckout(t, later)
 	s.write(t, "a.txt", "HELLO world\n")
-	s.changes(t) // stash save stashes what the last scan found
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
 		t.Fatal(err)
 	}
 	_, saved, _ := s.row(t, "a.txt")
@@ -222,8 +220,7 @@ func TestSameSizePopInSaveSecondDetected(t *testing.T) {
 func TestSaveInWriteSecondRecordsNothing(t *testing.T) {
 	s := newSimCheckout(t, time.Unix(0, 0))
 	s.write(t, "a.txt", "HELLO world\n")
-	s.changes(t) // stash save stashes what the last scan found
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
 		t.Fatal(err)
 	}
 	if _, mtime, _ := s.row(t, "a.txt"); mtime != 0 {
@@ -246,7 +243,7 @@ func TestApplyReaddsAddedFile(t *testing.T) {
 	if _, err := s.co.Manage(checkout.ManageOpts{Paths: []string{"c.txt"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "add"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "add"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.read(t, "c.txt"); ok {
@@ -285,7 +282,7 @@ func TestSaveRestoresRemovedFile(t *testing.T) {
 	if _, err := s.ckout.Exec("UPDATE vfile SET deleted=1 WHERE pathname='b.txt'"); err != nil {
 		t.Fatal(err)
 	}
-	if err := stash.Save(s.ckout, s.repoDB, s.env, s.dir, "rm"); err != nil {
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "rm"); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "b.txt"); got != "bee\n" {
@@ -302,5 +299,28 @@ func TestSaveRestoresRemovedFile(t *testing.T) {
 	}
 	if got := s.changes(t); got["b.txt"] != checkout.ChangeMissing {
 		t.Fatalf("after pop: changes = %v", got)
+	}
+}
+
+// TestSaveScansFirst: an edit no scan has recorded yet is still stashed,
+// since stash save scans first, as fossil's stash_create does
+// (vfile_check_signature).
+func TestSaveScansFirst(t *testing.T) {
+	s := newSimCheckout(t, later)
+	s.write(t, "a.txt", "HELLO world\n")
+	if chnged, _, _ := s.row(t, "a.txt"); chnged != 0 {
+		t.Fatalf("premise: a.txt row already changed before any scan")
+	}
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "unscanned"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.read(t, "a.txt"); got != "hello world\n" {
+		t.Fatalf("a.txt after save = %q", got)
+	}
+	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
+		t.Fatalf("a.txt after pop = %q", got)
 	}
 }

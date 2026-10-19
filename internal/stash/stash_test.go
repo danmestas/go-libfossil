@@ -13,6 +13,7 @@ import (
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/simio"
@@ -138,6 +139,11 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 	return repoDB, ckout, dir
 }
 
+// noScan is a Scanner for tests that set vfile by hand: it changes nothing.
+type noScan struct{}
+
+func (noScan) ScanChanges(checkout.ScanFlags) error { return nil }
+
 // modifyFile changes a.txt on disk and marks it changed in vfile.
 func modifyFile(t *testing.T, ckout *sql.DB, dir string) {
 	t.Helper()
@@ -165,7 +171,7 @@ func TestSaveAndList(t *testing.T) {
 	modifyFile(t, ckout, dir)
 
 	// Save.
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -209,7 +215,7 @@ func TestPopRestoresChanges(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "pop test"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "pop test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -244,7 +250,7 @@ func TestApplyKeepsStash(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "apply test"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "apply test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -283,12 +289,12 @@ func TestDropAndClear(t *testing.T) {
 
 	// Save twice (need to re-modify between saves).
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "first"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "first"); err != nil {
 		t.Fatalf("Save 1: %v", err)
 	}
 
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "second"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "second"); err != nil {
 		t.Fatalf("Save 2: %v", err)
 	}
 
@@ -341,7 +347,7 @@ func TestSaveRefusesPendingMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, simio.RealEnv(), dir, "merge")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "merge")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save over a pending merge = %v, want a pending-merge refusal", err)
 	}
@@ -360,7 +366,7 @@ func TestSaveRefusesCleanThreeWayMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, simio.RealEnv(), dir, "merged")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "merged")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save during a merge = %v, want a pending-merge refusal", err)
 	}
@@ -379,7 +385,7 @@ func TestSaveRefusesRename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, simio.RealEnv(), dir, "rename")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "rename")
 	if err == nil || !strings.Contains(err.Error(), "rename") {
 		t.Fatalf("Save over a rename = %v, want a rename refusal", err)
 	}
@@ -394,7 +400,7 @@ func TestSaveRefusesEditOnTopOfMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, simio.RealEnv(), dir, "edited merge")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "edited merge")
 	if err == nil || !strings.Contains(err.Error(), "merge") {
 		t.Fatalf("Save over an edited merge = %v, want a pending-merge refusal", err)
 	}
@@ -409,7 +415,7 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, simio.RealEnv(), dir, "mode")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "mode")
 	if err == nil || !strings.Contains(err.Error(), "permission") {
 		t.Fatalf("Save over a mode change = %v, want a permission-change refusal", err)
 	}
@@ -424,7 +430,7 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 func TestStashTimeAsFossil(t *testing.T) {
 	repoDB, ckout, dir := testEnv(t)
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	var typ string

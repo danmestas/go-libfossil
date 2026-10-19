@@ -206,9 +206,39 @@ func unvouch(tx *sql.Tx, name string, disk diskFile) error {
 	return nil
 }
 
-// Undo restores the state saved by the most recent Save call.
+// Action is what Undo or Redo did to a working file.
+type Action int
+
+const (
+	Restored Action = iota + 1 // overwrote the file; fossil prints UNDO or REDO
+	Created                    // wrote a file that was not there; fossil prints NEW
+	Deleted                    // removed the file; fossil prints DELETE
+)
+
+// String names a.
+func (a Action) String() string {
+	switch a {
+	case Restored:
+		return "restored"
+	case Created:
+		return "created"
+	case Deleted:
+		return "deleted"
+	}
+	return fmt.Sprintf("Action(%d)", int(a))
+}
+
+// Change is one working file Undo or Redo changed, for a caller to report
+// as fossil's undo prints it.
+type Change struct {
+	Pathname string
+	Action   Action
+}
+
+// Undo restores the state saved by the most recent Save call, returning the
+// working files it changed in the order it changed them, fossil's order.
 // It requires undo_available == 1.
-func Undo(ckout *sql.DB, env *simio.Env, dir string) error {
+func Undo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
 	if ckout == nil {
 		panic("undo.Undo: ckout must not be nil")
 	}
@@ -221,9 +251,9 @@ func Undo(ckout *sql.DB, env *simio.Env, dir string) error {
 	return swapState(ckout, env, dir, false)
 }
 
-// Redo reverses the most recent Undo.
-// It requires undo_available == 2.
-func Redo(ckout *sql.DB, env *simio.Env, dir string) error {
+// Redo reverses the most recent Undo, returning the working files it changed
+// as Undo does. It requires undo_available == 2.
+func Redo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
 	if ckout == nil {
 		panic("undo.Redo: ckout must not be nil")
 	}
@@ -240,7 +270,7 @@ func Redo(ckout *sql.DB, env *simio.Env, dir string) error {
 // with the saved ones. Files are read and written through env.Storage, and
 // each written file's mtime is recorded on its restored row where that row
 // vouched for the content when it was saved (see Save).
-func swapState(ckout *sql.DB, env *simio.Env, dir string, redo bool) error {
+func swapState(ckout *sql.DB, env *simio.Env, dir string, redo bool) ([]Change, error) {
 	label := "undo"
 	wantAvail := "1"
 	setAvail := "2"
@@ -257,37 +287,43 @@ func swapState(ckout *sql.DB, env *simio.Env, dir string, redo bool) error {
 	err := ckout.QueryRow("SELECT value FROM vvar WHERE name='undo_available'").Scan(&avail)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("undo.%s: nothing to %s", label, label)
+			return nil, fmt.Errorf("undo.%s: nothing to %s", label, label)
 		}
-		return fmt.Errorf("undo.%s: query undo_available: %w", label, err)
+		return nil, fmt.Errorf("undo.%s: query undo_available: %w", label, err)
 	}
 	if avail != wantAvail {
-		return fmt.Errorf("undo.%s: nothing to %s", label, label)
+		return nil, fmt.Errorf("undo.%s: nothing to %s", label, label)
 	}
 
 	tx, err := ckout.Begin()
 	if err != nil {
-		return fmt.Errorf("undo.%s: begin tx: %w", label, err)
+		return nil, fmt.Errorf("undo.%s: begin tx: %w", label, err)
 	}
 	defer tx.Rollback()
 
 	swapped, err := swapDiskFiles(tx, env, dir, label, wantFlag)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := swapTables(tx, label); err != nil {
-		return err
+		return nil, err
 	}
+	var changes []Change
 	for _, f := range swapped {
 		if err := f.record(tx); err != nil {
-			return fmt.Errorf("undo.%s: %w", label, err)
+			return nil, fmt.Errorf("undo.%s: %w", label, err)
+		}
+		if f.action != 0 {
+			changes = append(changes, Change{Pathname: f.pathname, Action: f.action})
 		}
 	}
 	if err := swapCheckout(tx, label, setAvail); err != nil {
-		return err
+		return nil, err
 	}
-
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("undo.%s: commit: %w", label, err)
+	}
+	return changes, nil
 }
 
 // swappedFile is a file swapDiskFiles swapped: what it found on disk, and
@@ -296,7 +332,8 @@ type swappedFile struct {
 	pathname string
 	was      diskFile
 	written  bool
-	mtime    int64 // vfile.mtime to record for the written file
+	mtime    int64  // vfile.mtime to record for the written file
+	action   Action // what was done to the file; 0 if nothing
 }
 
 // record runs after vfile and undo_vfile are swapped. The row now saved
@@ -332,7 +369,7 @@ type undoEntry struct {
 // cursor is held open during file I/O.
 func loadUndoEntries(tx *sql.Tx, label string, wantFlag bool) ([]undoEntry, error) {
 	rows, err := tx.Query(
-		"SELECT rowid, pathname, content, existsflag, coalesce(isExec, 0) FROM undo WHERE redoflag=?",
+		"SELECT rowid, pathname, content, existsflag, coalesce(isExec, 0) FROM undo WHERE redoflag=? ORDER BY rowid",
 		wantFlag)
 	if err != nil {
 		return nil, fmt.Errorf("undo.%s: query undo: %w", label, err)
@@ -362,7 +399,7 @@ func swapDiskFiles(
 	}
 	swapped := make([]swappedFile, 0, len(entries))
 	for _, e := range entries {
-		f, err := swapDiskFile(env, filepath.Join(dir, e.pathname), label, e)
+		f, err := swapDiskFile(env, filepath.Join(dir, e.pathname), e)
 		if err != nil {
 			return nil, fmt.Errorf("undo.%s: %w", label, err)
 		}
@@ -378,7 +415,7 @@ func swapDiskFiles(
 
 // swapDiskFile puts e's saved content at fullPath, or removes the file if
 // it did not exist, returning what was there before.
-func swapDiskFile(env *simio.Env, fullPath, label string, e undoEntry) (swappedFile, error) {
+func swapDiskFile(env *simio.Env, fullPath string, e undoEntry) (swappedFile, error) {
 	cur, err := readDisk(env.Storage, fullPath)
 	if err != nil {
 		return swappedFile{}, err
@@ -389,7 +426,7 @@ func swapDiskFile(env *simio.Env, fullPath, label string, e undoEntry) (swappedF
 			if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return swappedFile{}, fmt.Errorf("remove %s: %w", e.pathname, err)
 			}
-			fmt.Printf("DELETE %s\n", e.pathname)
+			f.action = Deleted
 		}
 		return f, nil
 	}
@@ -412,10 +449,9 @@ func swapDiskFile(env *simio.Env, fullPath, label string, e undoEntry) (swappedF
 		return swappedFile{}, err
 	}
 	f.written = true
+	f.action = Restored
 	if !cur.exists {
-		fmt.Printf("NEW    %s\n", e.pathname)
-	} else {
-		fmt.Printf("%s %s\n", labelUpper(label), e.pathname)
+		f.action = Created
 	}
 	return f, nil
 }
@@ -463,11 +499,4 @@ func swapCheckout(tx *sql.Tx, label, setAvail string) error {
 		return fmt.Errorf("undo.%s: set undo_available: %w", label, err)
 	}
 	return nil
-}
-
-func labelUpper(s string) string {
-	if s == "undo" {
-		return "UNDO  "
-	}
-	return "REDO  "
 }

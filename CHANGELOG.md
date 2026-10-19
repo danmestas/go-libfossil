@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Concurrent snapshots from several processes build one linear trunk.
   Tracked in #451.
 
+### Fixed
+
+- A stored Julian day converts to the millisecond SQLite's own date
+  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
+  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
+  returned were 1ms before the check-in's D card.
+- Opening a repository sets `busy_timeout` before any other pragma. The
+  drivers ran the DSN's pragmas in map order, so an open while another
+  process held a lock could fail at once with "database is locked".
+
 ### Changed
 
 - A file's history (`manifest.FileHistory`) orders check-ins that share a

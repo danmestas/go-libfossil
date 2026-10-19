@@ -8,21 +8,11 @@ import (
 	"os"
 
 	libfossil "github.com/danmestas/go-libfossil"
-	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
-
-// snapshotAttempts bounds the retries when another process commits between
-// reading the trunk tip and writing on it. Each lost round means another
-// writer made progress, so a handful covers any realistic contention.
-const snapshotAttempts = 20
-
-// errTrunkMoved is a snapshot's own commit finding the repository changed
-// since it read the trunk tip.
-var errTrunkMoved = errors.New("trunk moved since its tip was read")
 
 // RepoSnapshotCmd commits the bytes of one file onto trunk without a
 // checkout: the tip's other files carry forward, and bytes equal to the tip's
@@ -64,21 +54,20 @@ func (c *RepoSnapshotCmd) Run(g *Globals) (err error) {
 		}
 	}()
 
-	for range snapshotAttempts {
-		res, err := snapshotOnce(r, c.Path, data, c.Message, user)
-		if errors.Is(err, errTrunkMoved) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if c.JSON {
-			return writeJSON(res)
-		}
-		fmt.Println(res.UUID)
-		return nil
+	var res snapshotResult
+	err = r.Inner().WithBoundTx(func(bound *repo.Repo) error {
+		var err error
+		res, err = snapshotLocked(r, bound, c.Path, data, c.Message, user)
+		return err
+	})
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("snapshot: trunk kept moving after %d attempts", snapshotAttempts)
+	if c.JSON {
+		return writeJSON(res)
+	}
+	fmt.Println(res.UUID)
+	return nil
 }
 
 func (c *RepoSnapshotCmd) readContent() ([]byte, error) {
@@ -88,22 +77,24 @@ func (c *RepoSnapshotCmd) readContent() ([]byte, error) {
 	return os.ReadFile(c.Path)
 }
 
-// snapshotOnce reads the trunk tip and commits name=data on it. The commit
-// re-checks, in its own write transaction, that no check-in arrived since the
-// read; otherwise it returns errTrunkMoved and the caller starts over, so a
-// commit never builds on a stale tip and drops another writer's files.
-func snapshotOnce(r *libfossil.Repo, name string, data []byte, msg, user string) (snapshotResult, error) {
-	h := r.Inner()
-	stamp, err := checkinStamp(r.DB())
-	if err != nil {
+// snapshotLocked reads the trunk tip and commits name=data on it, inside the
+// write transaction bound holds. Holding the write lock from the read on
+// means no other process commits in between: the commit never builds on a
+// stale tip, and a reader never sees an artifact half rewritten, as a
+// concurrent check-in re-deltas the manifest before it. r reads through its
+// own connection, which sees everything committed and, as no one else can
+// commit, nothing newer.
+func snapshotLocked(r *libfossil.Repo, bound *repo.Repo, name string, data []byte, msg, user string) (snapshotResult, error) {
+	var checkins int64
+	if err := bound.DB().QueryRow("SELECT count(*) FROM event WHERE type='ci'").Scan(&checkins); err != nil {
 		return snapshotResult{}, err
 	}
 
 	parent, err := r.CurrentTrunk()
-	if errors.Is(err, libfossil.ErrVersionNotFound) && stamp != 0 {
+	if errors.Is(err, libfossil.ErrVersionNotFound) && checkins != 0 {
 		// Check-ins exist but none on the main branch: a root here would
 		// start a second, unrelated history.
-		branch, berr := repo.MainBranch(h.DB())
+		branch, berr := repo.MainBranch(bound.DB())
 		if berr != nil {
 			return snapshotResult{}, berr
 		}
@@ -118,7 +109,7 @@ func snapshotOnce(r *libfossil.Repo, name string, data []byte, msg, user string)
 
 	perm := ""
 	if parent > 0 {
-		cur, found, err := manifest.LookupFile(h, fsltype.FslID(parent), name)
+		cur, found, err := manifest.LookupFile(bound, fsltype.FslID(parent), name)
 		if err != nil {
 			return snapshotResult{}, err
 		}
@@ -135,39 +126,21 @@ func snapshotOnce(r *libfossil.Repo, name string, data []byte, msg, user string)
 		}
 	}
 
-	files, err := manifest.MergeParentFiles(h, fsltype.FslID(parent),
+	files, err := manifest.MergeParentFiles(bound, fsltype.FslID(parent),
 		[]manifest.File{{Name: name, Content: data, Perm: perm}})
 	if err != nil {
 		return snapshotResult{}, err
 	}
-	_, uuid, err := manifest.Checkin(h, manifest.CheckinOpts{
+	_, uuid, err := manifest.Checkin(bound, manifest.CheckinOpts{
 		Files:   files,
 		Comment: msg,
 		User:    user,
 		Parent:  fsltype.FslID(parent),
-		Precheck: func(q db.Querier) error {
-			now, err := checkinStamp(q)
-			if err != nil {
-				return err
-			}
-			if now != stamp {
-				return errTrunkMoved
-			}
-			return nil
-		},
 	})
 	if err != nil {
 		return snapshotResult{}, err
 	}
 	return snapshotResult{UUID: uuid, Changed: true}, nil
-}
-
-// checkinStamp identifies the repository's check-ins as of now: the newest
-// check-in's rid, which any new check-in raises.
-func checkinStamp(q db.Querier) (int64, error) {
-	var stamp int64
-	err := q.QueryRow("SELECT coalesce(max(objid), 0) FROM event WHERE type='ci'").Scan(&stamp)
-	return stamp, err
 }
 
 func checkinUUID(r *libfossil.Repo, rid int64) (string, error) {

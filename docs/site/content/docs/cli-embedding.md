@@ -64,4 +64,4 @@ These are the statuses of the `libfossil` binary itself. `go run ./cmd/libfossil
 
 ## Concurrency
 
-Processes may snapshot into one repository at the same time. Writers serialize on SQLite's write lock, which waits up to the busy timeout (5 seconds) before failing. A snapshot also checks, inside its write transaction, that no check-in arrived since it read the trunk tip, and starts over if one did, so concurrent snapshots form one linear trunk and none loses another's files. Keep the repository outside any synced folder, and open it from one machine at a time.
+Processes may snapshot into one repository at the same time. A snapshot takes SQLite's write lock before it reads the trunk tip and keeps it until its check-in commits, so concurrent snapshots run one after another, form one linear trunk, and none loses another's files. A snapshot waits for the lock up to the busy timeout (5 seconds) and then fails with exit 1. Keep the repository outside any synced folder, and open it from one machine at a time.

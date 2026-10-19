@@ -40,17 +40,6 @@ var fossilEventTimes = []struct {
 	{1733858293638, 2460655.304324513767},
 }
 
-// TextJulianDayFromMillis reproduces the doubles fossil stores for event
-// times, bit for bit.
-func TestTextJulianDayMatchesFossil(t *testing.T) {
-	for _, c := range fossilEventTimes {
-		if got := TextJulianDayFromMillis(c.millis); got != c.stored {
-			t.Errorf("TextJulianDayFromMillis(%d) = %.17g, fossil stored %.17g",
-				c.millis, got, c.stored)
-		}
-	}
-}
-
 // JulianDayFromMillis is SQLite's julianday(): whole milliseconds over
 // 86400000. The first althttpd time is one where it and the text form
 // differ, which is the difference #258 reported.

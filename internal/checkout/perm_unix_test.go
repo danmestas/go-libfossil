@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -411,6 +412,44 @@ func TestUpdateWritesSymlinkEntry(t *testing.T) {
 	info, err := os.Stat(filepath.Join(co.dir, "run.sh"))
 	if err != nil || !modeIsExecutable(info.Mode()) {
 		t.Fatalf("run.sh lost its executable bit: %v, %v", info, err)
+	}
+	if got := statusOf(t, co); len(got) != 0 {
+		t.Fatalf("status = %v, want nothing", got)
+	}
+}
+
+// A symlink entry entering the cone is written as Extract writes it: with
+// allow-symlinks on, a symlink to its target, leaving the checkout clean.
+func TestSetConeMaterializesSymlink(t *testing.T) {
+	r := permRepo(t)
+	if err := r.SetConfig("allow-symlinks", "on"); err != nil {
+		t.Fatal(err)
+	}
+	narrow, err := cone.New([]string{"plain.txt"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	co, err := Create(r, t.TempDir(), CreateOpts{Cone: narrow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { co.Close() })
+	rid, _, err := co.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Extract(rid, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filepath.Join(co.dir, "link")); !os.IsNotExist(err) {
+		t.Fatalf("link outside the cone is on disk: %v", err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	target, err := os.Readlink(filepath.Join(co.dir, "link"))
+	if err != nil || target != "plain.txt" {
+		t.Fatalf("link: Readlink = %q, %v; want a symlink to plain.txt", target, err)
 	}
 	if got := statusOf(t, co); len(got) != 0 {
 		t.Fatalf("status = %v, want nothing", got)

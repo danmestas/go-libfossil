@@ -317,7 +317,7 @@ func (p conePlan) change() ConeChange {
 // materialize writes r's committed content to disk and records the mtime
 // the write gave it, as Extract does.
 func (c *Checkout) materialize(vid libfossil.FslID, r vfile.Row) error {
-	mtime, err := c.extractSingleFile(r.Pathname, r.RID, r.IsExe, false)
+	mtime, err := c.extractSingleFile(r.Pathname, r.RID, r.IsExe, r.IsLink, false)
 	if err != nil {
 		return err
 	}

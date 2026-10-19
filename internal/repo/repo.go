@@ -15,6 +15,9 @@ import (
 type Repo struct {
 	db   *db.DB
 	path string
+	// receipt is what content stored through this Repo is recorded under;
+	// nil leaves each transaction its own (see WithReceipt).
+	receipt *db.Receipt
 }
 
 // Create creates a new repo at path, seeded with the given user.
@@ -194,7 +197,46 @@ func (r *Repo) DB() *db.DB {
 }
 
 func (r *Repo) WithTx(fn func(tx *db.Tx) error) error {
-	return r.db.WithTx(fn)
+	if r.receipt == nil {
+		return r.db.WithTx(fn)
+	}
+	return r.db.WithTx(func(tx *db.Tx) error {
+		prev := tx.UseReceipt(r.receipt)
+		defer tx.UseReceipt(prev)
+		return fn(tx)
+	})
+}
+
+// WithReceipt returns a Repo on the same database that records the content
+// its transactions store under rc: one receipt for a whole commit, sync,
+// clone or served request, as fossil keeps one g.rcvid for its process. It is
+// valid for as long as r is, and closing it closes r.
+func (r *Repo) WithReceipt(rc *db.Receipt) *Repo {
+	if rc == nil {
+		panic("repo.WithReceipt: rc must not be nil")
+	}
+	return &Repo{db: r.db, path: r.path, receipt: rc}
+}
+
+// Receipt returns the receipt given by WithReceipt, nil when there is none.
+func (r *Repo) Receipt() *db.Receipt {
+	return r.receipt
+}
+
+// LocalUID returns the uid of login in the user table, the user content is
+// credited to. A login the repository lacks falls back to its first setup
+// user, as fossil's clone takes the user holding s when it has no other
+// (src/clone.c); a repository with neither credits uid 0.
+func (r *Repo) LocalUID(login string) (int64, error) {
+	var uid int64
+	err := r.db.QueryRow("SELECT coalesce("+
+		"(SELECT uid FROM user WHERE login=?),"+
+		"(SELECT uid FROM user WHERE cap LIKE '%s%' ORDER BY uid LIMIT 1), 0)",
+		login).Scan(&uid)
+	if err != nil {
+		return 0, fmt.Errorf("repo.LocalUID %q: %w", login, err)
+	}
+	return uid, nil
 }
 
 // WithBoundTx runs fn in one write transaction with a Repo bound to it, as
@@ -207,7 +249,11 @@ func (r *Repo) WithBoundTx(fn func(bound *Repo) error) error {
 		panic("repo.WithBoundTx: fn must not be nil")
 	}
 	return r.db.WithBoundTx(func(b *db.DB) error {
-		return fn(&Repo{db: b, path: r.path})
+		if r.receipt != nil {
+			prev := b.UseReceipt(r.receipt)
+			defer b.UseReceipt(prev)
+		}
+		return fn(&Repo{db: b, path: r.path, receipt: r.receipt})
 	})
 }
 

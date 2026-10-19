@@ -76,7 +76,12 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 
 	var controlRid libfossil.FslID
 
-	err := r.WithTx(func(tx *db.Tx) error {
+	// The control artifact is one receipt, credited to the tagging user.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, fmt.Errorf("tag.AddTag: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		d, err := controlDeck(tx, opts)
 		if err != nil {
 			return err

@@ -115,7 +115,7 @@ func xferHandler(r *repo.Repo, h HandleFunc) http.HandlerFunc {
 			return
 		}
 
-		resp, err := h(req.Context(), r, msg)
+		resp, err := h(WithRemoteAddr(req.Context(), req.RemoteAddr), r, msg)
 		if err != nil {
 			http.Error(w, "handler: "+err.Error(), http.StatusInternalServerError)
 			return

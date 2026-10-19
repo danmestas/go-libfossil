@@ -34,14 +34,14 @@ const (
 )
 
 // SubmanifestEnableWarning is what an operator is told on enabling emission
-// (§8.1, §7.2, §8.2): the consequences that cannot be undone. The wording is
-// zit's, so both writers warn alike.
+// (§8.1, §7.2): the consequences that cannot be undone, and §8.1's rule that
+// follows from them. The wording is zit's, so both writers warn alike.
 const SubmanifestEnableWarning = "enabling sub-manifests makes this repository write tree manifests; " +
 	"from the first one, peers that do not announce sub-manifest support will be refused every S-bearing artifact rather " +
 	"than receive a converted or downgraded one, and disabling the setting later cannot retire " +
-	"the artifacts already written. While this specification is provisional a repository " +
-	"containing an S-bearing artifact must not be synchronized with any repository that is not " +
-	"itself a disposable test fixture."
+	"the artifacts already written. A repository that a peer unable to read sub-manifests " +
+	"serves must not have the setting enabled, because that peer's view of the history " +
+	"stops at the first tree."
 
 // ParseSettingBool reads a boolean setting as zit and fossil write one: on,
 // off, 1 or 0, and fossil's yes, no, true and false.

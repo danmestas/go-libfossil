@@ -404,6 +404,21 @@ func TestReplayK(t *testing.T) {
 	}
 }
 
+// §8.1: the enable warning is zit's (sync.zig submanifest_enable_warning at
+// bbc6794bf0), naming the flag-day rule that replaced the retired
+// provisional phase of §8.2.
+func TestSubmanifestEnableWarningIsZits(t *testing.T) {
+	const zit = "enabling sub-manifests makes this repository write tree manifests; from the first one, " +
+		"peers that do not announce sub-manifest support will be refused every S-bearing artifact rather than " +
+		"receive a converted or downgraded one, and disabling the setting later cannot retire " +
+		"the artifacts already written. A repository that a peer unable to read sub-manifests " +
+		"serves must not have the setting enabled, because that peer's view of the history " +
+		"stops at the first tree."
+	if SubmanifestEnableWarning != zit {
+		t.Fatalf("enable warning:\n got  %q\n want %q", SubmanifestEnableWarning, zit)
+	}
+}
+
 // §8.1: disabling stops trees and keeps the pin; once trees exist it says
 // they cannot be retired.
 func TestDisableSubmanifests(t *testing.T) {

@@ -49,8 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   k from 1 to 12, or selects one as zit does: the draft's cost rule over the
   main-branch tip, refined by replaying recent history. It refuses, changing
   nothing, when no k partitions the file set. It returns the warning an
-  operator must see: peers that do not announce sub-manifest support are
-  refused trees, and trees cannot be retired. `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
+  operator must see, worded as zit's: peers that do not announce
+  sub-manifest support are refused trees, trees cannot be retired, and the
+  setting must not be enabled on a repository such a peer serves (§8.1).
+  `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
   pin for later commits, `Repo.DisableSubmanifests()` (`disable`) turns
   emission off again, leaving existing trees in place, and `status` shows
   the settings and whether the repository holds a tree. A commit then stores its leaves and interior
@@ -84,8 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reqconfig /config`, applying all three or none; a pull asks for none.
   Enabling emission over a stored `submanifest-k` outside 1 to 12 is
   refused, naming it, unless an explicit k replaces it. The conformance
-  suite pins the draft with the 2026-10-19 errata applied, which settle
-  its sub-manifest deviations. Tracked in #452.
+  suite pins the draft's 19 October 2026 revision, which applies the
+  2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
 
 ### Changed
 

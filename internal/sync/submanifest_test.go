@@ -508,9 +508,10 @@ func TestStagedSubmanifestConfig(t *testing.T) {
 	}
 }
 
-// Against fossil 2.28: its server sees the 2.29 announcement and the clone's
-// reqconfig /config without complaint, answers the latter with nothing, and
-// a push from a repository holding a tree never hands it the tree.
+// Against fossil 2.28: its server takes the clone's reqconfig /config
+// without complaint and answers it with nothing, and, since its replies
+// carry no send-submanifests, a push from a repository holding a tree never
+// hands it the tree.
 func TestTreesNeverReachFossil228(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	repoPath := filepath.Join(t.TempDir(), "fossil.fossil")

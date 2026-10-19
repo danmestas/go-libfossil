@@ -161,6 +161,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blob pointed at; an existing repository keeps it, and new receipts follow
   it. `HandleOpts.RemoteAddr` passes the client's address to a server that
   is not `ServeHTTP` or `XferHandler`.
+- The event rows of control, attachment and other non-check-in artifacts
+  match the ones fossil derives. A tag's control artifact ('g') now carries
+  fossil's comment byte for byte: each target introduced by an
+  `Edit [hash|hash]:` link, its changes ordered by target and tag name,
+  `sym-` tags named as tags, a branch move linked to its timeline and the
+  move's own `sym-` changes left out, values HTML-escaped, and no leading
+  space. Attachment comments link the attached artifact and the ticket or
+  tech note as fossil 2.28 does, and a deleted attachment's `src` is NULL,
+  not empty. `Repo.Tag` and closing a branch write the 'g' row fossil's
+  `tag add` writes; they wrote none until the next rebuild or clone. Hash prefixes in these comments, and in ticket comments, follow the
+  `hash-digits` setting up to 64 digits, where they stopped at 40.
+  `Timeline` shows a tag change with the new text, and lists a tag added
+  through this library as soon as it is added, as fossil's timeline does.
+- A check-in with no C card has a NULL event comment, as fossil stores it,
+  not an empty one.
+- Event, plink, attachment and forum post times match fossil 2.28's in
+  every bit. fossil writes these times as 16-digit SQL text and reads them
+  back with its bundled SQLite 3.52.0, whose text-to-double conversion is
+  not correctly rounded. go-libfossil parsed the same text with a correctly
+  rounded conversion, so about one time in 3,000 was one unit in the last
+  place away from fossil's (13 rows of fossil's own repository). It now
+  uses SQLite 3.52.0's conversion.
+- Ticket artifacts link in a repository whose ticket schema lacks the
+  optional columns, as fossil's own repository's does. Crosslinking and
+  `Rebuild` failed there with "table ticketchng has no column named
+  tkt_user". As fossil's `ticket_insert` does, `tkt_ctime`, `tkt_rid` and
+  `tkt_user` are written only where they exist, and a `ticketchng` row is
+  written only when the artifact sets one of its fields or the table records
+  the artifact or its user. A field both tables share that the artifact
+  leaves unset is copied from the ticket row, and an INTEGER
+  `baseline for NAME` column records the artifact that last set NAME.
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

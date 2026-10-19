@@ -1,9 +1,6 @@
 package fsltype
 
-import (
-	"math"
-	"strconv"
-)
+import "math"
 
 // Julian day numbers the way fossil stores them (#258).
 //
@@ -13,7 +10,8 @@ import (
 // stored. Where it formats it into SQL text with its own printf("%.17g") —
 // every event, plink, attachment and forumpost time — the text carries 16
 // significant digits, produced digit by digit in long double arithmetic, and
-// SQLite reads it back. JulianDayFromMillis gives the first,
+// SQLite reads it back with its own, not correctly rounded, conversion
+// (sqliteAtoF). JulianDayFromMillis gives the first,
 // TextJulianDayFromMillis the second.
 //
 // The second depends on the platform fossil was built for: long double is a
@@ -41,12 +39,7 @@ func JulianDayFromMillis(millis int64) float64 {
 // TextJulianDayFromMillis returns the Julian day fossil stores where it writes
 // one as SQL text: event, plink, attachment and forumpost times.
 func TextJulianDayFromMillis(millis int64) float64 {
-	jd := JulianDayFromMillis(millis)
-	v, err := strconv.ParseFloat(fossilPrintf17g(jd), 64)
-	if err != nil {
-		panic("fsltype.TextJulianDayFromMillis: " + err.Error())
-	}
-	return v
+	return sqliteAtoF(fossilPrintf17g(JulianDayFromMillis(millis)))
 }
 
 // fossilPrintf17g is fossil's printf("%.17g", v) (src/printf.c, etGENERIC)

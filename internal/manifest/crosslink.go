@@ -1075,7 +1075,8 @@ func repairTagPropagation(q db.Querier, sched *batchSchedule) error {
 }
 
 // propagateAllLeaves is the repair gate's propagation step. It is a variable
-// so a test can count the parents a gate visits (issue #432).
+// so a test can count the parents a gate visits (issue #432); a test that
+// replaces it must not run in parallel with any other manifest test.
 var propagateAllLeaves = tag.PropagateAllLeaves
 
 // missingBaseline returns the reference whose absence holds a check-in

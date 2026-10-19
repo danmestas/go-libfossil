@@ -192,20 +192,34 @@ func TestRepairConvergesAfterReparent(t *testing.T) {
 	// c1, left without a trunk child, keeps the verdict it had: rewriting
 	// plink schedules no recheck (see TestReparent), so only the tags are the
 	// single-batch result here.
-	gotTags, _ := tagLeafState(t, r)
 	assertLeaves(t, r, "after reparent", []string{"c3"})
+
+	// The rewrite is settled: a later gate neither redoes it nor propagates
+	// from c2 again.
+	*visited = nil
+	storeCheckin(t, r, "c4", "", base.Add(3*time.Minute), c3)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c4: %v", err)
+	}
+	if want := []libfossil.FslID{ridOf(t, r, c3)}; !slices.Equal(*visited, want) {
+		t.Fatalf("later gate propagated from %v, want only c4's parent %v", *visited, want)
+	}
+	assertCheckinTags(t, r, "c4", []string{"branch=alpha/2"})
+	gotTags, _ := tagLeafState(t, r)
 	if wantTags, _ := rebuildFromScratch(t, r); gotTags != wantTags {
 		t.Errorf("tagxref differs from a full rebuild:\n got  %s\n want %s", gotTags, wantTags)
 	}
 }
 
-// A phantom-fill cascade's links converge: the check-ins a cascade links
-// inherit their parents' tags by the time the session's gate has run.
+// A phantom-fill cascade's batch propagates from the parents it linked, and
+// only those, before it commits; the session's gate after it owes nothing.
 func TestRepairConvergesAfterCascade(t *testing.T) {
 	r := setupTestRepo(t)
 	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 
 	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	o1 := storeCheckin(t, r, "o1", "other", base.Add(-time.Hour))
+	storeCheckin(t, r, "o2", "", base.Add(-time.Hour+time.Minute), o1)
 	if _, err := Crosslink(r); err != nil {
 		t.Fatalf("Crosslink c1: %v", err)
 	}
@@ -215,6 +229,10 @@ func TestRepairConvergesAfterCascade(t *testing.T) {
 	if cascaded != 1 {
 		t.Fatalf("cascade linked %d artifacts, want 1", cascaded)
 	}
+	if want := []libfossil.FslID{ridOf(t, r, c1)}; !slices.Equal(*visited, want) {
+		t.Fatalf("cascade propagated from %v, want only c2's parent %v", *visited, want)
+	}
+	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
 	if _, err := CrosslinkAfterCascades(context.Background(), r, cascaded); err != nil {
 		t.Fatalf("CrosslinkAfterCascades: %v", err)
 	}

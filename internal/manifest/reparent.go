@@ -32,8 +32,15 @@ import (
 // manifest_crosslink_end, which the receive path's repair gate runs once per
 // round rather than once per repository.
 //
+// A check-in whose plink rows already name the tag's parents, each of them a
+// linked check-in, is not rewritten again: the rewrite would write the rows
+// that are there. That keeps the pass cheap for the gate each phantom-fill
+// cascade batch runs, not only for the session's (issue #432).
+//
 // The new primary parent of each rewritten check-in is recorded on parents,
 // so the gate's propagation reaches the check-in under its new parent.
+// fossil's manifest_reparent_checkin does not propagate after the rewrite; the
+// whole-repository pass this gate replaced did, and so does the gate.
 func ReparentCheckins(tx *db.Tx, parents *parentSet) error {
 	if tx == nil {
 		panic("manifest.ReparentCheckins: tx must not be nil")
@@ -94,6 +101,13 @@ func reparentCheckin(
 			return nil // malformed value: fossil leaves the plink rows untouched
 		}
 	}
+	settled, err := reparentSettled(tx, rid, hashes)
+	if err != nil {
+		return err
+	}
+	if settled {
+		return nil
+	}
 	data, err := expandManifestBytes(tx, cache, rid)
 	if err != nil {
 		return nil // unreadable check-in: nothing to rewrite
@@ -119,4 +133,45 @@ func reparentCheckin(
 		return fmt.Errorf("manifest.reparentCheckin mlink rid=%d: %w", rid, err)
 	}
 	return nil
+}
+
+// reparentSettled reports whether rid's plink rows name exactly the parents in
+// hashes, the first one primary, and each parent is a linked check-in. A
+// rewrite against a parent that is not linked yet derives mlink without that
+// parent's manifest, so it is redone at every gate until the parent is linked,
+// as it was before any rewrite was skipped.
+func reparentSettled(q db.Querier, rid libfossil.FslID, hashes []string) (bool, error) {
+	if rid <= 0 {
+		panic("manifest.reparentSettled: rid must be positive")
+	}
+	rows, err := q.Query(`SELECT b.uuid, p.isprim,
+	        EXISTS(SELECT 1 FROM event e WHERE e.objid=p.pid AND e.type='ci')
+	   FROM plink p JOIN blob b ON b.rid=p.pid WHERE p.cid=?`, rid)
+	if err != nil {
+		return false, fmt.Errorf("manifest.reparentSettled rid=%d: %w", rid, err)
+	}
+	defer rows.Close()
+	type edge struct{ prim, linked bool }
+	have := make(map[string]edge, len(hashes))
+	for rows.Next() {
+		var uuid string
+		var e edge
+		if err := rows.Scan(&uuid, &e.prim, &e.linked); err != nil {
+			return false, fmt.Errorf("manifest.reparentSettled rid=%d scan: %w", rid, err)
+		}
+		have[uuid] = e
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("manifest.reparentSettled rid=%d rows: %w", rid, err)
+	}
+	if len(have) != len(hashes) {
+		return false, nil
+	}
+	for i, h := range hashes {
+		e, ok := have[h]
+		if !ok || e.prim != (i == 0) || !e.linked {
+			return false, nil
+		}
+	}
+	return true, nil
 }

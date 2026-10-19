@@ -3,6 +3,7 @@
 package stash_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/stash"
 	"github.com/danmestas/go-libfossil/simio"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 // newLinkCheckout commits plain.txt, other.txt and link, a symlink to
@@ -117,5 +119,83 @@ func TestStashRepointedSymlink(t *testing.T) {
 	wantFile(t, s.dir, "other.txt", "other\n")
 	if got := s.changes(t); len(got) != 1 || got["link"] != checkout.ChangeModified {
 		t.Fatalf("changes after pop = %v, want link modified", got)
+	}
+}
+
+// fossilLinkCheckout commits with fossil, allow-symlinks on, plain.txt,
+// elsewhere.txt and link, a symlink to plain.txt, then repoints link to
+// elsewhere.txt (a name of another length, so fossil's scan sees it at
+// once). It returns the repository and the checkout.
+func fossilLinkCheckout(t *testing.T, bin string) (repoPath, ck string) {
+	t.Helper()
+	dir := t.TempDir()
+	repoPath = filepath.Join(dir, "r.fossil")
+	ck = filepath.Join(dir, "ck")
+	if err := os.Mkdir(ck, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fossilIn(t, bin, dir, "init", repoPath)
+	fossilIn(t, bin, ck, "open", repoPath)
+	fossilIn(t, bin, ck, "settings", "allow-symlinks", "on")
+	for name, body := range map[string]string{"plain.txt": "plain\n", "elsewhere.txt": "elsewhere\n"} {
+		if err := os.WriteFile(filepath.Join(ck, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(ck, "link")
+	if err := os.Symlink("plain.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	fossilIn(t, bin, ck, "add", ".")
+	fossilIn(t, bin, ck, "commit", "-m", "v1")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("elsewhere.txt", link); err != nil {
+		t.Fatal(err)
+	}
+	if got := fossilIn(t, bin, ck, "changes"); got != "EDITED     link" {
+		t.Fatalf("fossil changes before save = %q", got)
+	}
+	return repoPath, ck
+}
+
+// A stash of a repointed symlink round-trips between fossil and
+// go-libfossil: fossil pops what go-libfossil saved and go-libfossil what
+// fossil saved, each leaving the link repointed and its targets alone.
+func TestStashSymlinkMatchesFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	env := simio.RealEnv()
+	for _, goSaves := range []bool{true, false} {
+		repoPath, ck := fossilLinkCheckout(t, bin)
+		if goSaves {
+			withDBs(t, ck, repoPath, env, func(co *checkout.Checkout, ckout, repoDB *sql.DB) {
+				if err := stash.Save(co, ckout, repoDB, env, ck, "repoint"); err != nil {
+					t.Fatal(err)
+				}
+			})
+		} else {
+			fossilIn(t, bin, ck, "stash", "save", "-m", "repoint")
+		}
+		wantLink(t, ck, "link", "plain.txt")
+		if got := fossilIn(t, bin, ck, "changes"); got != "" {
+			t.Fatalf("go saves %v: fossil changes after save = %q", goSaves, got)
+		}
+		if goSaves {
+			fossilIn(t, bin, ck, "stash", "pop")
+		} else {
+			withDBs(t, ck, repoPath, env, func(_ *checkout.Checkout, ckout, repoDB *sql.DB) {
+				if err := stash.Pop(ckout, repoDB, env, ck); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+		wantLink(t, ck, "link", "elsewhere.txt")
+		wantFile(t, ck, "plain.txt", "plain\n")
+		wantFile(t, ck, "elsewhere.txt", "elsewhere\n")
+		if got := fossilIn(t, bin, ck, "changes"); got != "EDITED     link" {
+			t.Fatalf("go saves %v: fossil changes after pop = %q", goSaves, got)
+		}
+		fossilIn(t, bin, ck, "close", "--force")
 	}
 }

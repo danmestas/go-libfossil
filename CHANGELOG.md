@@ -52,6 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify.Rebuild` and `verify.Verify` check blob integrity in time linear
+  in the repository, as fossil's rebuild does. They expanded blob by blob
+  through a bounded cache, so on a real repository, whose delta chains run
+  hundreds of revisions deep, every evicted chain was walked again from its
+  root: the blob check on the Fossil SCM repository ran for over 45 minutes.
+  The new `content.ExpandAll` walks each delta tree once from its root,
+  expanding every blob from its parent's content, and reports for each blob
+  what an expansion of it alone reports. On the same repository the blob
+  check takes about 12 seconds and a whole `Verify` about 40; the issues
+  reported are unchanged.
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

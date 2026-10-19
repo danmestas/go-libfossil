@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
-	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -52,8 +51,7 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 	// responsibility the crosslink sweep does not carry: every blob is expanded
 	// and its content hashed against its stored UUID, so a corrupt or
 	// delta-dangling repository is reported before any derived row is rewritten.
-	cache := content.NewCache(verifyCacheBytes)
-	if err := checkBlobs(r, report, cache); err != nil {
+	if err := checkBlobs(r, report); err != nil {
 		return nil, fmt.Errorf("verify.Rebuild: %w", err)
 	}
 

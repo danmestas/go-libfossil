@@ -247,6 +247,11 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
 		}
+		// Every check-in is public, so the content it names is too, even
+		// content first stored privately; fossil's commit does the same.
+		if err := content.MakePublic(tx, int64(rid)); err != nil {
+			return nil, nil, fmt.Errorf("publish file %q: %w", f.Name, err)
+		}
 		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm, OldName: f.OldName}
 		rids = append(rids, rid)
 	}

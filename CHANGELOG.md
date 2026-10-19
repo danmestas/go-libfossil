@@ -114,6 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A public check-in makes every file blob it names public, as fossil's
+  commit does. Content first stored privately, for example by syncing a
+  private branch, stayed private when a public check-in reused it, so a
+  peer without private access never received it and the check-in's file
+  stayed a phantom there. Tracked in #439.
+
 - The checkout scan sets `vfile.chnged` as fossil's `vfile_check_signature`
   does in every case. A file missing from disk is marked changed, with
   mtime -1, and so is a removed file. A change to the executable bit is

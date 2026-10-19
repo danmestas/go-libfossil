@@ -50,7 +50,11 @@ import (
 // directory this process may not change) is refused before anything is
 // written, and the checkout database moves to the target in one
 // transaction. A dry run reports the same result and changes nothing, on
-// disk or in the checkout database. Unlike fossil, no undo state is saved.
+// disk or in the checkout database. As fossil's update does, Update saves
+// undo state (except under js/wasm, which has no undo): Undo puts back the
+// files it changed, the file list and the version. Like fossil, it saves a
+// file merged into a renamed one under the old name only, and neither a
+// NAME-original backup nor a change of executable bit alone.
 //
 // If opts.TargetRID is 0, CalcUpdateVersion is used to find the target.
 // If the target equals the current version, Update returns a zero-value
@@ -101,19 +105,38 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		updateErr = fmt.Errorf("checkout.Update: %w", err)
 		return UpdateResult{}, updateErr
 	}
+	if res, updateErr = c.runUpdate(ctx, target, steps, opts); updateErr != nil {
+		return UpdateResult{}, updateErr
+	}
+	return res, nil
+}
+
+// runUpdate carries out planned steps. Unless it is a dry run, the files the
+// steps change are read first for undo, as fossil's undo_save reads them
+// before its update writes; should a write fail they are put back, as
+// fossil's undo_rollback does, and otherwise the undo state is saved with
+// the move to target, in one transaction.
+func (c *Checkout) runUpdate(
+	ctx context.Context, target libfossil.FslID, steps []updateStep, opts UpdateOpts,
+) (UpdateResult, error) {
 	fresh := map[string]writtenFile{}
-	if res, updateErr = c.applyUpdate(ctx, steps, opts, fresh); updateErr != nil {
-		return UpdateResult{}, updateErr
-	}
 	if opts.DryRun {
-		return res, nil
+		return c.applyUpdate(ctx, steps, opts, fresh)
 	}
-	if updateErr = c.finalizeUpdate(target, steps, fresh); updateErr != nil {
-		return UpdateResult{}, updateErr
+	saved, err := c.readUpdateUndo(steps)
+	if err != nil {
+		return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
+	}
+	res, err := c.applyUpdate(ctx, steps, opts, fresh)
+	if err != nil {
+		return UpdateResult{}, errors.Join(err, c.rollBackUpdate(saved))
+	}
+	if err := c.finalizeUpdate(target, steps, fresh, saved); err != nil {
+		return UpdateResult{}, err
 	}
 	if opts.SetMTime {
-		if updateErr = c.setFileMTimes(target); updateErr != nil {
-			return UpdateResult{}, updateErr
+		if err := c.setFileMTimes(target); err != nil {
+			return UpdateResult{}, err
 		}
 	}
 	return res, nil
@@ -587,15 +610,15 @@ func (c *Checkout) backUpOriginal(name string) error {
 // backupNamesMax bounds the search for a free backup name.
 const backupNamesMax = 1000
 
-// finalizeUpdate moves the checkout database to target in one
-// transaction. A pending add keeps its row, now in the target version, as
+// finalizeUpdate saves the undo state and moves the checkout database to
+// target, in one transaction. A pending add keeps its row, now in the target version, as
 // fossil's update moves it; the target's files are loaded, a file removed
 // locally stays removed, and each file written with the target's content
 // records the mtime of that write (an unchanged file keeps its mtime
 // through loadVFile, as fossil's update transfers it). Last, vvar names the
 // new version.
 func (c *Checkout) finalizeUpdate(
-	target libfossil.FslID, steps []updateStep, fresh map[string]writtenFile,
+	target libfossil.FslID, steps []updateStep, fresh map[string]writtenFile, saved updateUndo,
 ) (err error) {
 	tx, err := c.db.Begin()
 	if err != nil {
@@ -606,6 +629,9 @@ func (c *Checkout) finalizeUpdate(
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
+	if err := saved.save(tx); err != nil {
+		return fmt.Errorf("checkout.Update: save undo state: %w", err)
+	}
 	if err := c.moveUpdateRows(tx, target, steps); err != nil {
 		return err
 	}

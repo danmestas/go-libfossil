@@ -4,7 +4,10 @@ package undo_test
 
 import (
 	"database/sql"
+	"io"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -136,7 +139,7 @@ func TestUndoRedoThroughStorage(t *testing.T) {
 		t.Fatalf("after edit: changes = %v", got)
 	}
 
-	if err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "hello world\n" {
@@ -149,7 +152,7 @@ func TestUndoRedoThroughStorage(t *testing.T) {
 		t.Fatalf("after undo: changes = %v", got)
 	}
 
-	if err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
@@ -175,7 +178,7 @@ func TestUndoOfUnscannedEditRecordsNothing(t *testing.T) {
 	}
 	s.write(t, "a.txt", "hello WORLD\n")
 
-	if err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
@@ -199,13 +202,13 @@ func TestUndoRestoresDeletedFile(t *testing.T) {
 	if err := s.env.Storage.Remove(filepath.Join(s.dir, "b.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "b.txt"); got != "bee\n" {
 		t.Fatalf("b.txt after undo = %q", got)
 	}
-	if err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.read(t, "b.txt"); ok {
@@ -213,5 +216,61 @@ func TestUndoRestoresDeletedFile(t *testing.T) {
 	}
 	if got := s.changes(t); got["b.txt"] != checkout.ChangeMissing {
 		t.Fatalf("after redo: changes = %v", got)
+	}
+}
+
+// captureStdout runs fn and returns what it wrote to os.Stdout.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved := os.Stdout
+	os.Stdout = w
+	defer func() { os.Stdout = saved }()
+	fn()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// TestUndoRedoReturnChanges: undo and redo return what they did to each
+// file, in the order fossil undoes them, and print nothing.
+func TestUndoRedoReturnChanges(t *testing.T) {
+	s := newSimCheckout(t)
+	if err := undo.Save(s.ckout, s.env, s.dir, nil); err != nil {
+		t.Fatal(err)
+	}
+	s.write(t, "a.txt", "HELLO world\n")
+	if err := s.env.Storage.Remove(filepath.Join(s.dir, "b.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	var undone, redone []undo.Change
+	out := captureStdout(t, func() {
+		var err error
+		if undone, err = undo.Undo(s.ckout, s.env, s.dir); err != nil {
+			t.Fatal(err)
+		}
+		if redone, err = undo.Redo(s.ckout, s.env, s.dir); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if out != "" {
+		t.Errorf("undo and redo printed %q", out)
+	}
+	wantUndo := []undo.Change{{Pathname: "a.txt", Action: undo.Restored}, {Pathname: "b.txt", Action: undo.Created}}
+	if !reflect.DeepEqual(undone, wantUndo) {
+		t.Errorf("undo changes = %v, want %v", undone, wantUndo)
+	}
+	wantRedo := []undo.Change{{Pathname: "a.txt", Action: undo.Restored}, {Pathname: "b.txt", Action: undo.Deleted}}
+	if !reflect.DeepEqual(redone, wantRedo) {
+		t.Errorf("redo changes = %v, want %v", redone, wantRedo)
 	}
 }

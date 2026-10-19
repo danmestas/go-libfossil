@@ -11,30 +11,34 @@ import (
 // Undo reverses the last operation that saved undo state (Update, for
 // one), as fossil's undo does: the working files it saved come back, and
 // the file list, the pending merges and the checked-out version are as they
-// were before it.
+// were before it. It returns the working files it changed, in the order it
+// changed them, for the caller to report as fossil's undo prints them.
 //
 // Panics if c is nil (TigerStyle precondition).
-func (c *Checkout) Undo() error {
+func (c *Checkout) Undo() ([]undo.Change, error) {
 	if c == nil {
 		panic("checkout.Undo: nil *Checkout")
 	}
-	if err := undo.Swap(c.db, c.env, c.dir, false, c.versionHash); err != nil {
-		return fmt.Errorf("checkout.Undo: %w", err)
+	changes, err := undo.Swap(c.db, c.env, c.dir, false, c.versionHash)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Undo: %w", err)
 	}
-	return nil
+	return changes, nil
 }
 
-// Redo reverses the last Undo.
+// Redo reverses the last Undo, returning the working files it changed as
+// Undo does.
 //
 // Panics if c is nil (TigerStyle precondition).
-func (c *Checkout) Redo() error {
+func (c *Checkout) Redo() ([]undo.Change, error) {
 	if c == nil {
 		panic("checkout.Redo: nil *Checkout")
 	}
-	if err := undo.Swap(c.db, c.env, c.dir, true, c.versionHash); err != nil {
-		return fmt.Errorf("checkout.Redo: %w", err)
+	changes, err := undo.Swap(c.db, c.env, c.dir, true, c.versionHash)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Redo: %w", err)
 	}
-	return nil
+	return changes, nil
 }
 
 // versionHash returns the hash of check-in rid.

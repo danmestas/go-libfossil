@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -85,8 +86,21 @@ func nextStashID(tx *sql.Tx) (int64, error) {
 	return id, nil
 }
 
+// Scanner brings a checkout's vfile up to date with its working files, as
+// fossil's vfile_check_signature does. A *checkout.Checkout is one.
+type Scanner interface {
+	ScanChanges(flags checkout.ScanFlags) error
+}
+
 // Save stashes all changed files in the checkout, then reverts the working directory.
-func Save(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, comment string) error {
+// It scans the checkout with scanner first, as fossil's stash_create does, so
+// an edit no scan has recorded yet is stashed too.
+func Save(
+	scanner Scanner, ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, comment string,
+) error {
+	if scanner == nil {
+		panic("stash.Save: scanner must not be nil")
+	}
 	if ckout == nil {
 		panic("stash.Save: ckout must not be nil")
 	}
@@ -98,6 +112,9 @@ func Save(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, comment str
 	}
 	if dir == "" {
 		panic("stash.Save: dir must not be empty")
+	}
+	if err := scanner.ScanChanges(0); err != nil {
+		return fmt.Errorf("stash.Save: %w", err)
 	}
 	if err := EnsureTables(ckout); err != nil {
 		return err

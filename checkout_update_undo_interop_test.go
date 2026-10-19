@@ -78,7 +78,7 @@ func TestLibfossilUndoReversesFossilUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	ck := openLibfossilCheckout(t, repoPath, dir)
-	if err := ck.Undo(); err != nil {
+	if _, err := ck.Undo(); err != nil {
 		t.Fatal(err)
 	}
 	if err := ck.Close(); err != nil {

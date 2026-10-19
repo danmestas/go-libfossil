@@ -80,13 +80,13 @@ func TestUndoReversesUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := checkoutState(t, co)
-	if err := co.Undo(); err != nil {
+	if _, err := co.Undo(); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkoutState(t, co); got != before {
 		t.Fatalf("after undo:\n%s\nwant, as before the update:\n%s", got, before)
 	}
-	if err := co.Redo(); err != nil {
+	if _, err := co.Redo(); err != nil {
 		t.Fatal(err)
 	}
 	if got := checkoutState(t, co); got != after {
@@ -98,13 +98,13 @@ func TestUndoReversesUpdate(t *testing.T) {
 func TestUpdateDryRunKeepsUndoState(t *testing.T) {
 	r, a, b := editsRepo(t)
 	co := editsCheckout(t, r, a)
-	if err := co.Undo(); err == nil {
+	if _, err := co.Undo(); err == nil {
 		t.Fatal("undo with nothing saved succeeded")
 	}
 	if _, err := co.Update(UpdateOpts{TargetRID: b, DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := co.Undo(); err == nil {
+	if _, err := co.Undo(); err == nil {
 		t.Fatal("a dry run left something to undo")
 	}
 }

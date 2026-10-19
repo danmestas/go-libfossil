@@ -19,6 +19,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/stash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/internal/undo"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -188,7 +189,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Save undo state.
-	if err := undo.Save(ckout, simio.RealEnv(), dir, nil); err != nil {
+	if err := undo.Save(ckout, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatalf("undo.Save: %v", err)
 	}
 
@@ -199,7 +200,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Undo — should restore original.
-	if _, err := undo.Undo(ckout, simio.RealEnv(), dir); err != nil {
+	if _, err := undo.Undo(ckout, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("undo.Undo: %v", err)
 	}
 
@@ -212,7 +213,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Redo — should restore modification.
-	if _, err := undo.Redo(ckout, simio.RealEnv(), dir); err != nil {
+	if _, err := undo.Redo(ckout, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("undo.Redo: %v", err)
 	}
 

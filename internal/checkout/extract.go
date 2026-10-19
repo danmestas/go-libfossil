@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,7 +15,7 @@ import (
 )
 
 // extractSingleFile expands a blob and writes it to the checkout directory,
-// a symlink entry as fossil writes it (diskView.write), returning the
+// a symlink entry as fossil writes it (vfile.Disk.Write), returning the
 // vfile.mtime to record for it. Skips writing if dryRun is true.
 func (c *Checkout) extractSingleFile(
 	pathname string, blobRid int64, isexe, islink int64, dryRun bool,
@@ -35,19 +34,14 @@ func (c *Checkout) extractSingleFile(
 		return 0, fmt.Errorf("checkout.Extract: path traversal in %s: %w", pathname, err)
 	}
 
-	parentDir := filepath.Dir(fullPath)
-	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
-		return 0, fmt.Errorf("checkout.Extract: mkdir %s: %w", parentDir, err)
-	}
-
 	disk, err := c.newDiskView()
 	if err != nil {
 		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}
-	if err := disk.write(c, fullPath, data, isexe != 0, islink != 0); err != nil {
+	if err := disk.Write(fullPath, data, isexe != 0, islink != 0); err != nil {
 		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}
-	mtime, err := disk.mtime(c, fullPath)
+	mtime, err := disk.MTime(fullPath)
 	if err != nil {
 		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}

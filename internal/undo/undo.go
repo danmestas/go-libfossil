@@ -15,28 +15,24 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/vfile"
-	"github.com/danmestas/go-libfossil/simio"
 )
 
 // Save snapshots the current checkout state so it can be undone later.
 // If pathnames is non-nil and non-empty, only those vfile entries are saved;
-// otherwise all vfile rows are included. Files are read through env.Storage.
+// otherwise all vfile rows are included. Files are read through disk, as
+// fossil's undo_save reads them: a symlink seen as itself is saved as one.
 //
 // A saved vfile row keeps its mtime only while it vouches for the saved
 // content, that is while the file's mtime still matches it, so Undo can
 // record a restored file's new mtime on it; otherwise it is saved with 0.
-func Save(ckout *sql.DB, env *simio.Env, dir string, pathnames []string) error {
+func Save(ckout *sql.DB, disk vfile.Disk, dir string, pathnames []string) error {
 	if ckout == nil {
 		panic("undo.Save: ckout must not be nil")
-	}
-	if env == nil {
-		panic("undo.Save: env must not be nil")
 	}
 	if dir == "" {
 		panic("undo.Save: dir must not be empty")
@@ -47,7 +43,7 @@ func Save(ckout *sql.DB, env *simio.Env, dir string, pathnames []string) error {
 	}
 	files := make([]File, 0, len(names))
 	for _, name := range names {
-		f, err := ReadFile(env.Storage, dir, name)
+		f, err := ReadFile(disk, dir, name)
 		if err != nil {
 			return fmt.Errorf("undo.Save: %w", err)
 		}
@@ -72,16 +68,17 @@ type File struct {
 }
 
 // ReadFile reads the working file pathname, relative to the checkout
-// directory dir, for SaveTx. A missing file is recorded as missing.
-func ReadFile(storage simio.Storage, dir, pathname string) (File, error) {
-	if storage == nil || dir == "" || pathname == "" {
-		panic("undo.ReadFile: storage, dir and pathname must be set")
+// directory dir, through disk for SaveTx. A missing file is recorded as
+// missing.
+func ReadFile(disk vfile.Disk, dir, pathname string) (File, error) {
+	if dir == "" || pathname == "" {
+		panic("undo.ReadFile: dir and pathname must be set")
 	}
-	disk, err := readDisk(storage, filepath.Join(dir, pathname))
+	d, err := readDisk(disk, filepath.Join(dir, pathname))
 	if err != nil {
 		return File{}, err
 	}
-	return File{pathname: pathname, disk: disk}, nil
+	return File{pathname: pathname, disk: d}, nil
 }
 
 // SaveTx replaces the undo state within tx, as fossil's undo_begin and
@@ -111,17 +108,17 @@ func SaveTx(tx *sql.Tx, files []File) error {
 	return nil
 }
 
-// RestoreFiles puts files back on disk as ReadFile found them, as fossil's
-// undo_rollback does for an operation that failed partway.
-func RestoreFiles(env *simio.Env, dir string, files []File) error {
-	if env == nil || dir == "" {
-		panic("undo.RestoreFiles: env and dir must be set")
+// RestoreFiles puts files back through disk as ReadFile found them, as
+// fossil's undo_rollback does for an operation that failed partway.
+func RestoreFiles(disk vfile.Disk, dir string, files []File) error {
+	if dir == "" {
+		panic("undo.RestoreFiles: dir must be set")
 	}
 	var errs []error
 	for _, f := range files {
 		e := undoEntry{pathname: f.pathname, oldContent: f.disk.content,
-			oldExists: f.disk.exists, oldExec: f.disk.exec}
-		if _, err := swapDiskFile(env, filepath.Join(dir, f.pathname), e); err != nil {
+			oldExists: f.disk.exists, oldExec: f.disk.exec, oldLink: f.disk.link}
+		if _, err := swapDiskFile(disk, filepath.Join(dir, f.pathname), e); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -194,23 +191,24 @@ func savedPathnames(q querier, pathnames []string) ([]string, error) {
 }
 
 // saveFile records f in the undo table, as fossil's undo_save does (the
-// executable bit from disk, a pathname saved once), and clears the saved
+// executable and symlink bits from disk, a pathname saved once), and clears the saved
 // vfile row's mtime unless it vouches for that content.
 func saveFile(tx *sql.Tx, f File) error {
 	if _, err := tx.Exec(
 		"INSERT OR IGNORE INTO undo(pathname, redoflag, existsflag, isExe, isLink, content)"+
-			" VALUES(?, 0, ?, ?, 0, ?)",
-		f.pathname, f.disk.exists, f.disk.exec, f.disk.blob(),
+			" VALUES(?, 0, ?, ?, ?, ?)",
+		f.pathname, f.disk.exists, f.disk.exec, f.disk.link, f.disk.blob(),
 	); err != nil {
 		return fmt.Errorf("save %s: %w", f.pathname, err)
 	}
 	return unvouch(tx, f.pathname, f.disk)
 }
 
-// diskFile is a working file as read from storage.
+// diskFile is a working file as read through a vfile.Disk.
 type diskFile struct {
 	exists  bool
 	exec    bool
+	link    bool // a symlink seen as itself; content is its target
 	content []byte
 	mtime   int64 // seconds since 1970
 }
@@ -228,22 +226,21 @@ func (d diskFile) blob() any {
 	return d.content
 }
 
-// readDisk reads the file at fullPath; a missing file is not an error.
-func readDisk(storage simio.Storage, fullPath string) (diskFile, error) {
-	data, err := storage.ReadFile(fullPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return diskFile{}, nil
+// readDisk reads the file at fullPath as fossil's undo_save does with
+// RepoFILE: a symlink seen as itself is read as the name of its target. A
+// missing file is not an error.
+func readDisk(disk vfile.Disk, fullPath string) (diskFile, error) {
+	info, err := disk.Stat(fullPath)
+	if err != nil || info == nil {
+		return diskFile{}, err
 	}
+	data, err := disk.Read(fullPath, info)
 	if err != nil {
-		return diskFile{}, fmt.Errorf("read %s: %w", fullPath, err)
-	}
-	info, err := storage.Stat(fullPath)
-	if err != nil {
-		return diskFile{}, fmt.Errorf("stat %s: %w", fullPath, err)
+		return diskFile{}, err
 	}
 	return diskFile{
-		exists: true, exec: info.Mode().Perm()&0o100 != 0,
-		content: data, mtime: info.ModTime().Unix(),
+		exists: true, exec: info.Mode().IsRegular() && info.Mode().Perm()&0o100 != 0,
+		link: vfile.IsLink(info), content: data, mtime: info.ModTime().Unix(),
 	}, nil
 }
 
@@ -294,55 +291,49 @@ type Change struct {
 // Undo restores the state saved by the most recent Save call, returning the
 // working files it changed in the order it changed them, fossil's order.
 // It requires undo_available == 1.
-func Undo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
+func Undo(ckout *sql.DB, disk vfile.Disk, dir string) ([]Change, error) {
 	if ckout == nil {
 		panic("undo.Undo: ckout must not be nil")
-	}
-	if env == nil {
-		panic("undo.Undo: env must not be nil")
 	}
 	if dir == "" {
 		panic("undo.Undo: dir must not be empty")
 	}
-	return swapState(ckout, env, dir, false, nil)
+	return swapState(ckout, disk, dir, false, nil)
 }
 
 // Redo reverses the most recent Undo, returning the working files it changed
 // as Undo does. It requires undo_available == 2.
-func Redo(ckout *sql.DB, env *simio.Env, dir string) ([]Change, error) {
+func Redo(ckout *sql.DB, disk vfile.Disk, dir string) ([]Change, error) {
 	if ckout == nil {
 		panic("undo.Redo: ckout must not be nil")
-	}
-	if env == nil {
-		panic("undo.Redo: env must not be nil")
 	}
 	if dir == "" {
 		panic("undo.Redo: dir must not be empty")
 	}
-	return swapState(ckout, env, dir, true, nil)
+	return swapState(ckout, disk, dir, true, nil)
 }
 
 // Swap is Undo, or Redo when redo is set, that also keeps vvar's
 // checkout-hash naming the checked-out version, as fossil's db_set_checkout
 // does: hashOf returns the hash of a check-in rid.
 func Swap(
-	ckout *sql.DB, env *simio.Env, dir string, redo bool, hashOf func(int64) (string, error),
+	ckout *sql.DB, disk vfile.Disk, dir string, redo bool, hashOf func(int64) (string, error),
 ) ([]Change, error) {
-	if ckout == nil || env == nil || dir == "" {
-		panic("undo.Swap: ckout, env and dir must be set")
+	if ckout == nil || dir == "" {
+		panic("undo.Swap: ckout and dir must be set")
 	}
 	if hashOf == nil {
 		panic("undo.Swap: hashOf must not be nil")
 	}
-	return swapState(ckout, env, dir, redo, hashOf)
+	return swapState(ckout, disk, dir, redo, hashOf)
 }
 
 // swapState swaps the working files, vfile, vmerge and the checkout version
-// with the saved ones. Files are read and written through env.Storage, and
+// with the saved ones. Files are read and written through disk, and
 // each written file's mtime is recorded on its restored row where that row
 // vouched for the content when it was saved (see Save).
 func swapState(
-	ckout *sql.DB, env *simio.Env, dir string, redo bool, hashOf func(int64) (string, error),
+	ckout *sql.DB, disk vfile.Disk, dir string, redo bool, hashOf func(int64) (string, error),
 ) ([]Change, error) {
 	label := "undo"
 	wantAvail := "1"
@@ -374,7 +365,7 @@ func swapState(
 	}
 	defer tx.Rollback()
 
-	swapped, err := swapDiskFiles(tx, env, dir, label, wantFlag)
+	swapped, err := swapDiskFiles(tx, disk, dir, label, wantFlag)
 	if err != nil {
 		return nil, err
 	}
@@ -436,13 +427,15 @@ type undoEntry struct {
 	oldContent []byte
 	oldExists  bool
 	oldExec    bool
+	oldLink    bool
 }
 
 // loadUndoEntries reads the undo rows on the wantFlag side up front, so no
 // cursor is held open during file I/O.
 func loadUndoEntries(tx *sql.Tx, label string, wantFlag bool) ([]undoEntry, error) {
 	rows, err := tx.Query(
-		"SELECT rowid, pathname, content, existsflag, coalesce(isExe, 0) FROM undo"+
+		"SELECT rowid, pathname, content, existsflag, coalesce(isExe, 0), coalesce(isLink, 0)"+
+			" FROM undo"+
 			" WHERE redoflag=? ORDER BY rowid",
 		wantFlag)
 	if err != nil {
@@ -452,7 +445,7 @@ func loadUndoEntries(tx *sql.Tx, label string, wantFlag bool) ([]undoEntry, erro
 	var entries []undoEntry
 	for rows.Next() {
 		var e undoEntry
-		if err := rows.Scan(&e.rowid, &e.pathname, &e.oldContent, &e.oldExists, &e.oldExec); err != nil {
+		if err := rows.Scan(&e.rowid, &e.pathname, &e.oldContent, &e.oldExists, &e.oldExec, &e.oldLink); err != nil {
 			return nil, fmt.Errorf("undo.%s: scan undo: %w", label, err)
 		}
 		entries = append(entries, e)
@@ -465,7 +458,7 @@ func loadUndoEntries(tx *sql.Tx, label string, wantFlag bool) ([]undoEntry, erro
 
 // swapDiskFiles swaps file contents between disk and the undo table rows.
 func swapDiskFiles(
-	tx *sql.Tx, env *simio.Env, dir, label string, wantFlag bool,
+	tx *sql.Tx, disk vfile.Disk, dir, label string, wantFlag bool,
 ) ([]swappedFile, error) {
 	entries, err := loadUndoEntries(tx, label, wantFlag)
 	if err != nil {
@@ -473,13 +466,15 @@ func swapDiskFiles(
 	}
 	swapped := make([]swappedFile, 0, len(entries))
 	for _, e := range entries {
-		f, err := swapDiskFile(env, filepath.Join(dir, e.pathname), e)
+		f, err := swapDiskFile(disk, filepath.Join(dir, e.pathname), e)
 		if err != nil {
 			return nil, fmt.Errorf("undo.%s: %w", label, err)
 		}
 		// Swap: update undo row with current content and flip redoflag.
-		if _, err := tx.Exec("UPDATE undo SET content=?, existsflag=?, isExe=?, redoflag=? WHERE rowid=?",
-			f.was.blob(), f.was.exists, f.was.exec, !wantFlag, e.rowid); err != nil {
+		if _, err := tx.Exec(
+			"UPDATE undo SET content=?, existsflag=?, isExe=?, isLink=?, redoflag=? WHERE rowid=?",
+			f.was.blob(), f.was.exists, f.was.exec, f.was.link, !wantFlag, e.rowid,
+		); err != nil {
 			return nil, fmt.Errorf("undo.%s: update undo row: %w", label, err)
 		}
 		swapped = append(swapped, f)
@@ -487,39 +482,30 @@ func swapDiskFiles(
 	return swapped, nil
 }
 
-// swapDiskFile puts e's saved content at fullPath, or removes the file if
-// it did not exist, returning what was there before.
-func swapDiskFile(env *simio.Env, fullPath string, e undoEntry) (swappedFile, error) {
-	cur, err := readDisk(env.Storage, fullPath)
+// swapDiskFile puts e's saved content at fullPath through disk, or removes
+// the file if it did not exist, returning what was there before. As fossil's
+// undo_one does, a symlink there is deleted first and a saved symlink is
+// made one again, so nothing is written through a link.
+func swapDiskFile(disk vfile.Disk, fullPath string, e undoEntry) (swappedFile, error) {
+	cur, err := readDisk(disk, fullPath)
 	if err != nil {
 		return swappedFile{}, err
 	}
 	f := swappedFile{pathname: e.pathname, was: cur}
 	if !e.oldExists {
 		if cur.exists {
-			if err := env.Storage.Remove(fullPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return swappedFile{}, fmt.Errorf("remove %s: %w", e.pathname, err)
+			if err := disk.Remove(fullPath); err != nil {
+				return swappedFile{}, err
 			}
 			f.action = Deleted
 		}
 		return f, nil
 	}
 
-	if err := env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		return swappedFile{}, fmt.Errorf("mkdir for %s: %w", e.pathname, err)
+	if err := disk.Write(fullPath, e.oldContent, e.oldExec, e.oldLink); err != nil {
+		return swappedFile{}, err
 	}
-	perm := os.FileMode(0o644)
-	if e.oldExec {
-		perm = 0o755
-	}
-	content := e.oldContent
-	if content == nil {
-		content = []byte{} // an empty stored blob scans as nil
-	}
-	if err := env.Storage.WriteFile(fullPath, content, perm); err != nil {
-		return swappedFile{}, fmt.Errorf("write %s: %w", e.pathname, err)
-	}
-	if f.mtime, err = vfile.WrittenMTime(env, fullPath); err != nil {
+	if f.mtime, err = disk.MTime(fullPath); err != nil {
 		return swappedFile{}, err
 	}
 	f.written = true

@@ -41,6 +41,9 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	}
 
 	if len(opts.Paths) > 0 {
+		if err := c.refuseUncovered("Revert", opts.Paths...); err != nil {
+			return err
+		}
 		if err := c.revertPaths(vid, opts.Paths, opts.Callback); err != nil {
 			return fmt.Errorf("checkout.Revert: %w", err)
 		}
@@ -61,7 +64,7 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 		panic("checkout.revertAll: negative vid")
 	}
 
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return err
 	}
@@ -124,7 +127,7 @@ func (c *Checkout) revertPaths(
 	for _, p := range paths {
 		named[p] = true
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return err
 	}

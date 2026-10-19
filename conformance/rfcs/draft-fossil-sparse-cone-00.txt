@@ -1,0 +1,861 @@
+
+
+
+
+Network Working Group                                          D. Mestas
+Internet-Draft                                            14 August 2026
+Intended status: Experimental                                           
+Expires: 15 February 2027
+
+
+      The Fossil Distributed Version Control System: Sparse Cones
+                      draft-fossil-sparse-cone-00
+
+Abstract
+
+   This document specifies sparse cones for repositories following the
+   Fossil artifact model: a mechanism by which a checkout materializes,
+   and optionally a repository stores, only a declared subset of a
+   check-in's file tree.  It defines two independent capabilities.  The
+   sparse worktree (full store, partial materialization) is available to
+   any conforming repository.  The sparse store (deliberately partial
+   artifact holdings) requires sub-manifest tree structure, because a
+   flat check-in manifest is a single artifact that cannot be partially
+   held, while sub-manifest subtrees are separate artifacts that can be
+   held as deliberate phantoms yet remain referencable by hash at commit
+   time.  The design rests on the observation that sub-manifest
+   partitioning produces leaves that are contiguous ranges of the sorted
+   path list, so a directory cone intersects a number of tree nodes
+   proportional to the cone rather than to the repository.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 15 February 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+Mestas                  Expires 15 February 2027                [Page 1]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Two Problems, Usually Conflated . . . . . . . . . . . . .   3
+     1.2.  Why Flat Manifests Cannot Yield a Sparse Store  . . . . .   3
+     1.3.  The Contiguity Property . . . . . . . . . . . . . . . . .   3
+     1.4.  Requirements Language . . . . . . . . . . . . . . . . . .   4
+   2.  Terminology . . . . . . . . . . . . . . . . . . . . . . . . .   4
+   3.  The Cone Specification  . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Location and Mutability . . . . . . . . . . . . . . . . .   4
+     3.2.  Normalization . . . . . . . . . . . . . . . . . . . . . .   5
+     3.3.  Exclusions  . . . . . . . . . . . . . . . . . . . . . . .   5
+     3.4.  Patterns Are Deliberately Absent  . . . . . . . . . . . .   5
+     3.5.  Amendment . . . . . . . . . . . . . . . . . . . . . . . .   6
+     3.6.  Literal Prefixes Only . . . . . . . . . . . . . . . . . .   6
+   4.  The Sparse Worktree . . . . . . . . . . . . . . . . . . . . .   6
+     4.1.  Materialization and Tracking  . . . . . . . . . . . . . .   7
+     4.2.  Commit Synthesis  . . . . . . . . . . . . . . . . . . . .   7
+     4.3.  The R Card  . . . . . . . . . . . . . . . . . . . . . . .   7
+     4.4.  Operations That Cross the Cone  . . . . . . . . . . . . .   8
+     4.5.  Cost Properties . . . . . . . . . . . . . . . . . . . . .   8
+   5.  The Sparse Store  . . . . . . . . . . . . . . . . . . . . . .   8
+     5.1.  Holdings  . . . . . . . . . . . . . . . . . . . . . . . .   8
+     5.2.  The Third Phantom Class . . . . . . . . . . . . . . . . .   9
+     5.3.  Commit, Synchronization, and Correctness with Elided
+           Subtrees  . . . . . . . . . . . . . . . . . . . . . . . .   9
+     5.4.  Widening and Narrowing  . . . . . . . . . . . . . . . . .  10
+     5.5.  Hybrid Histories  . . . . . . . . . . . . . . . . . . . .  10
+   6.  Sync Protocol Extension . . . . . . . . . . . . . . . . . . .  10
+     6.1.  The Cone Pragma . . . . . . . . . . . . . . . . . . . . .  10
+     6.2.  Server Behavior . . . . . . . . . . . . . . . . . . . . .  11
+     6.3.  Graceful Degradation  . . . . . . . . . . . . . . . . . .  11
+     6.4.  Demand Fetch  . . . . . . . . . . . . . . . . . . . . . .  12
+     6.5.  Not an Authorization Boundary . . . . . . . . . . . . . .  12
+   7.  Interactions  . . . . . . . . . . . . . . . . . . . . . . . .  12
+   8.  Security Considerations . . . . . . . . . . . . . . . . . . .  13
+   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  13
+   10. Normative References  . . . . . . . . . . . . . . . . . . . .  13
+   Appendix A.  Implementation Sequencing  . . . . . . . . . . . . .  14
+
+
+
+Mestas                  Expires 15 February 2027                [Page 2]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  15
+
+1.  Introduction
+
+1.1.  Two Problems, Usually Conflated
+
+   A participant in a large multi-project repository wants two different
+   things.  First, a sparse worktree: do not materialize the subtrees of
+   other projects.  Storage is complete; the working directory and the
+   tracking surface are partial.  Second, a sparse store: do not
+   transfer or hold the artifacts of other projects.  The local artifact
+   set is deliberately incomplete.
+
+   These fail differently, cost differently, and have different
+   structural prerequisites.  This document keeps them separate
+   throughout: the sparse worktree is specified in Section 4 and the
+   sparse store in Section 5.
+
+1.2.  Why Flat Manifests Cannot Yield a Sparse Store
+
+   The unit of storage and synchronization is the artifact, named by the
+   cryptographic hash of its content [FossilArtifact].  A flat check-in
+   manifest is one artifact carrying the entire file list.  An artifact
+   is either held or phantom; it cannot be partially held.  History
+   traversal requires every check-in's manifest, so a store holding flat
+   manifests must hold the complete file-list history of the whole
+   repository regardless of the consumer's interest.
+
+   File-content blobs were never the obstacle.  The phantom state
+   [FossilRepoState] already lets a store know an artifact by name
+   without holding its content, and shunning already exercises permanent
+   holes.  The atom is wrong-sized at exactly one place: the manifest.
+
+   Sub-manifests [FossilSubManifests] correct the atom.  With S-card
+   trees the check-in manifest is a small spine and subtrees are
+   separate artifacts.  Separate artifacts can be phantoms.  That is the
+   entire structural unlock; everything in Section 5 follows from it.
+
+1.3.  The Contiguity Property
+
+   Section 6.2 of [FossilSubManifests] partitions the sorted F-card
+   list, placing group boundaries where a key's hash reaches the
+   height's zero-bit threshold.  Every leaf is therefore a contiguous
+   range of sorted paths.  Sorted paths have directory-prefix locality:
+   all files under a common directory prefix are adjacent.  A directory
+   cone is consequently a contiguous key interval, and the set of tree
+   nodes whose key range intersects it has size proportional to the cone
+   plus the spine.  This is the same property that directory-aligned
+
+
+
+Mestas                  Expires 15 February 2027                [Page 3]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   tree objects give other version control systems, arrived at from a
+   balance-first construction.
+
+   This document introduces no new partitioning; it consumes the
+   existing one.
+
+1.4.  Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+2.  Terminology
+
+   Cone:  A finite set of repository-relative path prefixes, each naming
+      a directory subtree or a single file.  The cone covers a path if
+      any member is a prefix of it under slash-component semantics.  The
+      empty cone covers nothing; the absent cone covers everything
+      (dense operation, the behavior of implementations predating this
+      document).
+
+   In-cone, out-of-cone:  A path, F card, blob, or sub-manifest node
+      classified by cone coverage.  A sub-manifest node is in-cone if
+      its key range intersects any cone member's interval.
+
+   Spine:  The check-in manifest artifact itself plus every interior
+      sub-manifest node on a path from it to an in-cone leaf.
+
+   Elided phantom:  A phantom whose absence is the deliberate result of
+      local cone policy (Section 5.2), as distinct from a transit
+      phantom (content not yet arrived) and a shunned artifact (content
+      forbidden).
+
+   Dense:  The absence of sparseness.  A dense checkout or store behaves
+      exactly as specified by the base documents.
+
+3.  The Cone Specification
+
+3.1.  Location and Mutability
+
+   A worktree cone is checkout-local state, recorded with the checkout's
+   other authoritative local records.  A store cone is store-adjacent
+   local state.  Neither is an artifact; neither synchronizes; neither
+   affects any artifact's bytes or name.  Two clones of one repository
+   MAY hold different cones.  A cone MAY be widened or narrowed at any
+   time (Section 5.4).
+
+   A cone MAY carry members of kinds other than path prefixes, each
+   defined by another document; the horizon member of draft-fossil-
+   horizon is one.  The canonical serialization MUST mark a cone
+   carrying any such member with a version distinct from that of a cone
+   carrying only path members, and an implementation that does not
+   understand the version MUST refuse the cone rather than read it as
+   path members.  Refusal is policy loss (Section 5.2): the store heals
+   toward dense.
+
+Mestas                  Expires 15 February 2027                [Page 4]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+3.2.  Normalization
+
+   Implementations MUST normalize cone members through the same
+   worktree-path validation applied to tracked paths (no dot or dot-dot
+   components, no empty components, no reserved roots) and MUST remove
+   members covered by another member of the same polarity with no
+   opposite-polarity member between them (for a cone with no exclusions
+   this is simply: covered by another member).  The normalized cone is
+   what all classification uses.
+
+   Implementations MUST support at least 64 members and SHOULD support
+   255 -- scattered-file profiles (individual root files beside
+   directory subtrees) are first-class, not an abuse of the mechanism.
+
+3.3.  Exclusions
+
+   A cone MAY carry exclusion members: paths subtracted from the
+   coverage of an inclusion member, expressing "this subtree, except
+   that part of it".  Coverage is decided by the most specific matching
+   member: the longest member, of either polarity, that covers the path.
+   Because members are plain path prefixes, any two members covering one
+   path are nested, so this is exactly the last-match-wins discipline
+   ignore files made familiar, under the natural ordering -- but stated
+   over member length it is order-independent, so the canonical sorted
+   serialization and the digest survive unchanged.  Polarity MAY
+   alternate along a nesting chain: a subtree excluded from an inclusion
+   may itself contain a deeper re-inclusion.
+
+   Normalization extends to polarity: a member whose nearest covering
+   member has the same polarity is redundant and MUST be removed; an
+   exclusion no inclusion covers is a dead rule and MUST be refused --
+   it can only be operator error; one path carried with both polarities
+   is a contradiction and MUST be refused.
+
+   Exclusions narrow the contiguity property rather than break it: a key
+   range wholly inside an inclusion and wholly outside every exclusion
+   classifies as before; a range an exclusion intersects is classified
+   per file.  The cost falls on the boundary, never on correctness.
+
+3.4.  Patterns Are Deliberately Absent
+
+   Glob or pattern members are not part of this document.  Every
+   efficiency claim herein -- sub-manifest range pruning, server-side
+   interval classification -- rests on a member denoting one contiguous
+   key interval under sorted-path order.  A pattern denotes scattered
+   intervals and reduces every classification to a full scan.  An
+   implementation wanting patterns would be defining a different, slower
+   mechanism, and should say so rather than extend this one.
+
+
+
+Mestas                  Expires 15 February 2027                [Page 5]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   Implementations MUST support at least 64 members and SHOULD support
+   255; a member set is operator policy, not data, and a bound generous
+   enough for scattered-file profiles (individual root files beside
+   several directory subtrees) is part of the surface this document
+   promises.  A member names a directory subtree or a single file with
+   equal standing: file members are how a profile picks individual files
+   without adopting their directories.
+
+3.5.  Amendment
+
+   Editing a cone by wholesale replacement and editing it by member
+   addition or removal are equivalent; an implementation SHOULD offer
+   the incremental form, because restating a large member set to change
+   one entry is the kind of friction that pushes operators back to dense
+   clones.  Widening triggers the demand-fetch of Section 6.4 (policy
+   form); narrowing dematerializes and leaves reclamation to explicit
+   compaction (Section 5.4).
+
+3.6.  Literal Prefixes Only
+
+   Members are literal path prefixes.  Pattern members (globs, character
+   classes, suffix matches) are deliberately excluded from this
+   document: every efficiency claim herein -- sub-manifest range pruning
+   (Section 1.3), server-side interval classification (Section 6.2) --
+   rests on a member denoting one contiguous key interval under sorted-
+   path order, and a pattern denotes scattered intervals, degrading
+   every classification to a full scan.  An implementation MUST reject a
+   member containing pattern metacharacters it would otherwise silently
+   treat as literals only if its platform's operators would plausibly
+   expect expansion; otherwise literal treatment is conforming.
+
+   Exclusion members (subtracting a subtree from an enclosing included
+   member, with last-match-wins evaluation) are a candidate extension:
+   they preserve prunability at wholly-included and wholly-excluded
+   ranges and degrade only boundary ranges to per-file classification.
+   They are out of scope for this revision and MUST NOT be improvised
+   incompatibly.
+
+4.  The Sparse Worktree
+
+   The sparse worktree is available to any conforming repository,
+   whether its manifests are flat or tree-structured.  On flat manifests
+   it is purely algorithmic; its costs are stated in Section 4.5.
+
+
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027                [Page 6]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+4.1.  Materialization and Tracking
+
+   A checkout operation given a cone MUST materialize exactly the
+   covered files.  The managed-file record covers only in-cone files.
+   Status, untracked-file listing, and bulk tracking operations operate
+   within the cone; an uncovered on-disk path is neither reported as
+   untracked nor eligible for tracking.  An implementation MUST refuse a
+   request to track a path outside the cone and the refusal MUST name
+   the cone as the reason.  A diagnostic that merely reports a missing
+   file, or alleges damage, does not conform.
+
+   All file-set enumeration flows through the shared enumeration
+   interface required by Section 9.3 of [FossilSubManifests], with the
+   cone applied as a range predicate at that interface.  Implementations
+   MUST NOT filter at individual call sites; the single filter point is
+   what keeps every verb consistent.
+
+4.2.  Commit Synthesis
+
+   A commit from a sparse worktree MUST produce a check-in whose file
+   set is the union of the in-cone files as observed in the worktree and
+   the baseline check-in's out-of-cone entries carried unchanged.
+
+   For flat manifests, the implementation copies the baseline's out-of-
+   cone F cards byte-verbatim into the new manifest, merged in sorted
+   order with the in-cone F cards.
+
+   For tree manifests, the implementation rebuilds only the sub-manifest
+   nodes whose key range intersects the changed paths; every untouched
+   subtree is re-referenced by hash from the parent's spine.  The
+   subtree's content is not required, only its name.  Section 5 turns
+   this property into a sparse store.
+
+   The result is an ordinary check-in.  A reader cannot detect that it
+   was committed sparsely, and this document introduces no new artifact
+   form.
+
+4.3.  The R Card
+
+   The R card is a checksum over the complete file contents of a check-
+   in [FossilArtifact] and is not composable from partial content.  A
+   sparse-worktree commit over a dense store MAY compute the R card by
+   reading out-of-cone content from the store.  A commit over a sparse
+   store (Section 5) MUST omit the R card; omission is already
+   conforming.  Verifiers MUST NOT treat an absent R card as damage.
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027                [Page 7]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   The verification side is the same rule reflected: a checkout-side
+   verifier checking a PRESENT R card during a sparse materialization
+   MUST compute the aggregate over the dense enumeration, reading out-
+   of-cone content from the store -- over a dense store the cone narrows
+   materialization and never weakens R verification.  A verifier over a
+   sparse store cannot compute the aggregate and MUST skip R
+   verification rather than report disagreement; elided content makes
+   the card unverifiable, not wrong.
+
+4.4.  Operations That Cross the Cone
+
+   Merge, update, and revert operations MAY need to apply changes to
+   out-of-cone files.  Over a dense store the implementation MUST apply
+   such changes to the record (manifest synthesis) without materializing
+   the files, and SHOULD report the count of out-of-cone changes
+   applied.  Read operations on an uncovered path over a dense store
+   read the store; the cone governs materialization, not readability.
+
+4.5.  Cost Properties
+
+   This section is informative.  On flat manifests every commit still
+   writes, and every derivation still parses, file lists proportional to
+   repository width.  The sparse worktree saves disk, status time, and
+   materialization time; it does not touch the manifest cost.  On tree
+   manifests the per-operation cost falls to the order of the cone plus
+   the spine.  This asymmetry is a capability argument for sub-manifest
+   adoption independent of any churn-conditional performance argument: a
+   flat-manifest repository cannot be extended to the sparse store of
+   Section 5 at any churn rate.
+
+5.  The Sparse Store
+
+   A sparse store REQUIRES tree manifests for the repository segment
+   being elided.  A repository whose history contains a flat segment MAY
+   elide only that segment's content blobs; its flat manifests MUST be
+   held densely (Section 5.5).
+
+5.1.  Holdings
+
+   A store sparse at cone C holds, for every check-in: the manifest
+   artifact; every in-cone sub-manifest node; and every blob referenced
+   by an in-cone F card.  It holds elided phantoms for out-of-cone sub-
+   manifest nodes and blobs.  It holds all non-manifest structural
+   artifacts (control, wiki, ticket, event, forum, attachment) densely:
+   they are small, and holes in non-file surfaces would surprise every
+   consumer that renders them.
+
+
+
+
+
+Mestas                  Expires 15 February 2027                [Page 8]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+5.2.  The Third Phantom Class
+
+   Implementations MUST distinguish three absence classes:
+
+   1.  Transit phantom: wanted, not yet arrived; synchronization
+       requests it.
+
+   2.  Shunned: forbidden; never requested [FossilRepoState].
+
+   3.  Elided phantom: deliberately absent under local cone policy.
+       Synchronization MUST NOT spontaneously request it, and its
+       absence is healthy.
+
+   Elision is a local classification computed over the cone
+   specification, not a stored mark on the phantom record;
+   reclassification on cone change is recomputation, not migration.  A
+   consequence implementations SHOULD preserve: loss of the store-cone
+   specification reclassifies every elided phantom as a transit phantom,
+   and the store then heals toward dense through ordinary
+   synchronization.  Policy loss is never damage and never data loss; it
+   costs bandwidth.  Storing the cone with the disposable derived-state
+   tier is therefore sound and RECOMMENDED.  A verification operation
+   MUST report a store that is complete within its cone as healthy, MUST
+   report elision counts distinctly from damage, and MUST continue to
+   report transit phantoms and damaged in-cone artifacts exactly as for
+   a dense store.  The failure mode this rule prevents: an operator
+   conditioned to expect thousands of "missing" artifacts stops reading
+   verification output.
+
+5.3.  Commit, Synchronization, and Correctness with Elided Subtrees
+
+   Commit operates per Section 4.2: out-of-cone subtrees are referenced
+   by hash from the parent spine without possession.  Pushing such a
+   check-in is sound: the receiving peer either holds the referenced
+   subtrees (a dense peer, or a peer with an overlapping cone) or
+   creates transit phantoms and requests them from peers that hold them,
+   which is ordinary convergence [FossilSync].  A sparse store can
+   therefore be a first-class committing, pushing, and pulling
+   participant.
+
+
+
+
+
+
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027                [Page 9]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   What a sparse store cannot be is a complete origin.  A dense peer
+   cloning from a sparse store receives elided phantoms it must resolve
+   elsewhere.  A server SHOULD refuse to act as a clone origin for cones
+   it does not cover unless explicitly configured as a partial mirror.
+   The refusal is one error card and no content.  A requesting client
+   MUST treat a clone-round reply that carries an error card and no
+   clone progress as fatal, the error-card tolerance of [FossilSync]
+   notwithstanding: that tolerance exists for cosmetic cards riding an
+   otherwise-progressing reply, and honoring it here would let a refused
+   clone terminate empty and report success.
+
+5.4.  Widening and Narrowing
+
+   Widening the cone reclassifies the newly covered elided phantoms as
+   transit phantoms and fetches them (Section 6.4).  Narrowing
+   reclassifies in the other direction and MUST NOT by itself delete
+   content already held.  Deletion occurs only through explicit
+   compaction, which drops artifacts that are both out-of-cone and
+   unreferenced by any spine, and which rides the existing store-rewrite
+   machinery and its exclusion locks.  Compaction after narrowing is the
+   only deletion in this document.
+
+5.5.  Hybrid Histories
+
+   Disabling or enabling sub-manifest emission cannot rewrite stored
+   artifacts, so a repository that adopted sub-manifests after its
+   creation has a permanently flat prefix ([FossilSubManifests],
+   Section 8.1).  The flat prefix's manifests are unsplittable and MUST
+   be held densely; its content blobs MAY be elided by F-card
+   classification.  A repository converted wholesale to tree manifests
+   (a rebirth that re-mints history under new names) has no flat segment
+   and sparsifies fully.
+
+6.  Sync Protocol Extension
+
+6.1.  The Cone Pragma
+
+   A cone-scoped pull or clone request adds one pragma card per cone
+   member:
+
+   pragma cone <member>
+
+   carried in the request body alongside the operation's existing cards,
+   with each member encoded exactly as an F-card filename.  The pragma
+   mechanism is chosen deliberately: the reference implementation's
+   transfer processor answers an UNRECOGNIZED bare card with a protocol
+   error ("error bad command"), while pragmas are specified as requests
+   only, with unknown pragmas silently ignored.  Riding the pragma is
+
+
+
+Mestas                  Expires 15 February 2027               [Page 10]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   therefore what makes the degradation of Section 6.3 a documented
+   property of the reference implementation rather than an assumption
+   about its tolerance.
+
+   An exclusion member travels as its own pragma:
+
+   pragma cone-not <member>
+
+   A distinct pragma name rather than a prefix character, because every
+   byte that could mark a member as negative is also a legal filename
+   byte.  A server understanding cone but not cone-not would over-send;
+   the requester's local filtering (Section 6.3) absorbs the surplus, so
+   partial understanding degrades exactly as no understanding does.
+
+   The collected members form the request's cone.  Its semantics: for
+   check-in content, send spines, in-cone sub-manifest nodes, and in-
+   cone blobs; do not send, and do not expect the requester to request,
+   the remainder.
+
+6.2.  Server Behavior
+
+   A cone-aware server walks each check-in's tree, descending only nodes
+   whose key range intersects the cone (the single-name lookup of
+   [FossilSubManifests] Section 5.3 generalized to intervals), and emits
+   the spine, the in-cone nodes, and the in-cone blobs.  Deciding key
+   ranges requires plaintext; the send-gate of [FossilSubManifests]
+   Section 7.2 already establishes inflation on the serve path.  A
+   server MUST bound the per-round walk exactly as a dense clone bounds
+   its batches.
+
+   A stored artifact may be held as a delta against a base, and a dense
+   reply serves such a container verbatim because a dense recipient
+   holds the base.  A cone-scoped recipient may not: a kept blob whose
+   base is out-of-cone would arrive as a delta whose source the
+   recipient's own policy elides and never requests (Section 5.2), a
+   blob it holds the bytes of and can never materialize.  A cone-aware
+   server MUST NOT serve a delta whose base is outside the keep set it
+   computed for the request; it serves that artifact in full form.  The
+   test is a keep-set lookup per served delta; reconstruction is paid
+   only for the deltas that cross.  A recipient MUST treat a phantom
+   that a retained delta names as its source as a transit phantom
+   whatever its cone classification, so that a server predating this
+   rule costs bandwidth and never a stuck artifact.
+
+6.3.  Graceful Degradation
+
+   A cone-ignorant server silently ignores the unknown pragma -- the
+   pragma contract of the reference implementation -- and serves
+   densely.  The requester MUST then filter locally: store in-cone
+   artifacts, record elided phantoms for the remainder, and report the
+   counts.  Nothing is discarded silently.  Correctness is therefore
+   preserved against every peer; only bandwidth is lost against a cone-
+   ignorant one.  A cone-aware server SHOULD advertise the capability so
+   clients can report which mode a transfer used.
+
+
+
+
+
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027               [Page 11]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+6.4.  Demand Fetch
+
+   An operation over a sparse store that crosses the cone (a merge
+   needing an out-of-cone blob, an annotation of an uncovered path, a
+   checkout after widening) resolves elided phantoms by either of two
+   conforming forms.  The targeted form issues a request naming the
+   exact artifacts: the existing request machinery scoped to an explicit
+   set.  The policy form -- RECOMMENDED when the crossing expresses a
+   lasting intent, as a widened checkout does -- updates the store cone
+   to the requested coverage and performs an ordinary cone-scoped
+   synchronization: suppression and receive filtering then align with
+   the new policy with no special-case transfer path, and any content
+   the peer lacked remains a transit phantom that later synchronization
+   heals (Section 5.2's loss rule, applied deliberately).  With no
+   configured peer to fetch from, the operation MUST refuse and the
+   diagnostic MUST name the class (the count of artifacts elided by the
+   sparse cone, and the absence of a peer) and MUST NOT describe the
+   condition as missing or corrupt.
+
+6.5.  Not an Authorization Boundary
+
+   The cone is bandwidth and locality policy, not access control.
+   Possession of a spine hash permits requesting the corresponding
+   subtree from any peer that holds it.  Path-level authorization
+   requires server-side access control evaluated on the serve path and
+   is out of scope for this document, whose only obligation is to state
+   plainly that sparseness provides none.
+
+7.  Interactions
+
+   This section is informative.
+
+   Derived caches: a derivation cache and any prefix-anchored checkpoint
+   derive over the log's bytes, and the cone never alters stored bytes
+   -- elision is computed at read time (Section 5.2), never folded into
+   the derived record.  The record is therefore cone-independent BY
+   DESIGN, and cache keys MUST NOT incorporate the cone: doing so
+   converts every cone change into a full re-derivation that corrects
+   nothing.  The one operation that does alter bytes, compaction after
+   narrowing (Section 5.4), rewrites the log and thereby misses every
+   prefix-anchored cache through the existing prefix-identity
+   validation, with no cone term needed.
+
+   Enumeration: the cone predicate lands once, at the shared enumeration
+   interface, and every consumer inherits it.
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027               [Page 12]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   Checkout state: the worktree cone is a new section of the checkout's
+   container record and should ship in the same container revision as
+   other pending additions, so the format is bumped once.
+
+   Adoption analysis: sparse capability is a benefit of sub-manifest
+   adoption that byte-cost replay tables cannot express.  Tooling that
+   advises on adoption should mention it qualitatively when refusing on
+   byte costs alone.
+
+8.  Security Considerations
+
+   The non-guarantee of Section 6.5 is the principal consideration:
+   sparseness is not an authorization mechanism, and deployments
+   requiring path-level secrecy need server-side access control
+   independent of this document.
+
+   The cone card enlarges the request-parse surface.  Member count and
+   member length MUST be bounded with the same limits applied to F-card
+   filenames.
+
+   The server-side tree walk on cone requests MUST carry the same depth
+   and visited-node bounds as single-name lookup ([FossilSubManifests],
+   Section 10); without them a crafted cone converts an unauthenticated
+   request into an amplification primitive.
+
+   Demand fetch discloses to the serving peer exactly which paths a
+   sparse client is interested in.  Hosted deployments should treat cone
+   contents as information about their users.
+
+9.  IANA Considerations
+
+   This document has no IANA actions.
+
+10.  Normative References
+
+   [FossilArtifact]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Artifact Format", Work
+              in Progress, Internet-Draft, draft-fossil-artifact-format-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
+
+   [FossilRepoState]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Repository State",
+              Work in Progress, Internet-Draft, draft-fossil-repo-state-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-repo-state-00>.
+
+
+
+Mestas                  Expires 15 February 2027               [Page 13]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+   [FossilSubManifests]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sub-Manifests and the
+              S Card", Work in Progress, Internet-Draft, draft-fossil-
+              submanifests-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-
+              submanifests-00>.
+
+   [FossilSync]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sync Protocol", Work
+              in Progress, Internet-Draft, draft-fossil-sync-protocol-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+Appendix A.  Implementation Sequencing
+
+   This appendix is informative and binds nothing.  A dependency-ordered
+   implementation:
+
+   1.  The checkout-container section for the cone, coordinated with
+       other pending container additions so the format revision ships
+       once.
+
+   2.  The enumeration-interface range predicate and the sparse worktree
+       (Section 4).  No store or wire changes; independently shippable
+       and useful over dense stores immediately.
+
+   3.  Elided-phantom classification and verification semantics
+       (Section 5.2).
+
+   4.  The cone card, server walk, and local filtering (Sections 6.1
+       through 6.3); demand fetch (Section 6.4), which presupposes a
+       saved synchronization peer.
+
+   5.  Narrow-then-compact (Section 5.4), riding the existing rewrite
+       machinery; last and least urgent.
+
+
+
+
+
+Mestas                  Expires 15 February 2027               [Page 14]
+
+Internet-Draft             Fossil Sparse Cones               August 2026
+
+
+Author's Address
+
+   Dan Mestas
+   Email: dan5446@gmail.com
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Mestas                  Expires 15 February 2027               [Page 15]

@@ -155,6 +155,7 @@ const (
 	updateKeepDuplicate                     // added locally and by the target: keep the local file
 	updateKeepAdd                           // added locally only: it stays a pending add
 	updateKeepRenamed                       // edited locally, renamed but not changed by the target: left as it is
+	updateOutOfCone                         // outside a sparse checkout's cone, changed by the target: record only
 )
 
 // updateTargetFile is a file of the version Update moves to.
@@ -266,7 +267,7 @@ func (c *Checkout) updateTarget(
 // whose content is not all here before anything is written. A dry run keeps
 // the scan's findings to itself.
 func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updateStep, error) {
-	files, rids, err := c.resolveFiles(target)
+	files, rids, err := c.resolveFiles(target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -307,12 +308,24 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 		if err != nil {
 			return nil, err
 		}
+		if !c.covers(step.tname) {
+			if step.tname != step.name {
+				// Local edits would follow the target's rename out of
+				// the cone, where nothing can carry them.
+				return nil, c.outsideCone("Update", []string{step.tname})
+			}
+			step = outOfConeStep(step.name, step.row, step.target)
+		}
 		matched[step.tname] = true
 		steps = append(steps, step)
 	}
 	for _, f := range files {
 		tgt := targets[f.Name]
 		if matched[f.Name] {
+			continue
+		}
+		if !c.covers(f.Name) {
+			steps = append(steps, outOfConeStep(f.Name, nil, tgt))
 			continue
 		}
 		unmanaged, err := c.isUntrackedFile(f.Name)
@@ -325,6 +338,21 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 		})
 	}
 	return steps, nil
+}
+
+// outOfConeStep is the step of a file outside a sparse checkout's cone. It
+// has no local change and is never on disk, so the update only moves its
+// record to the target's copy, which reloading vfile does: it is not
+// checked, written, backed up as NAME-original, chmodded, or read for undo
+// and rolled back, since only steps that write are
+// (draft-fossil-sparse-cone-00 §4.4). A change the target makes to it is
+// counted.
+func outOfConeStep(name string, row *vfile.Row, tgt *updateTargetFile) updateStep {
+	action := updateNothing
+	if (row == nil) != (tgt == nil) || (row != nil && tgt != nil && row.RID != tgt.rid) {
+		action = updateOutOfCone
+	}
+	return updateStep{name: name, tname: name, row: row, target: tgt, action: action}
 }
 
 // planRow decides the file of one current row. A changed file the target
@@ -377,6 +405,10 @@ func (c *Checkout) applyUpdate(
 	}
 	var res UpdateResult
 	for _, s := range steps {
+		if s.action == updateOutOfCone {
+			res.OutOfCone++
+			continue
+		}
 		change, err := c.applyUpdateStep(s, strategy, opts.DryRun, fresh)
 		if err != nil {
 			return UpdateResult{}, fmt.Errorf("checkout.Update: %s: %w", s.name, err)
@@ -478,6 +510,8 @@ func (c *Checkout) applyUpdateStep(
 		return UpdateAddPropagated, nil
 	case updateKeepRenamed:
 		return UpdateConflictRm, nil
+	case updateOutOfCone:
+		panic("checkout.applyUpdateStep: an out-of-cone step reaches the disk: " + s.name)
 	}
 	panic(fmt.Sprintf("checkout.applyUpdateStep: unknown action %d", s.action))
 }
@@ -798,7 +832,7 @@ func (c *Checkout) checkWritable(name string, writes bool) error {
 // executable bit, as fossil's checkout_set_all_exe does after an update.
 func (c *Checkout) setUpdatedModes(steps []updateStep) error {
 	for _, s := range steps {
-		if s.target == nil {
+		if s.target == nil || !c.covers(s.tname) {
 			continue
 		}
 		if err := c.setMergedMode(s.tname, s.target.exe); err != nil {

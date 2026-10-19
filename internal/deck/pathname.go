@@ -60,6 +60,20 @@ func StrictPathname(z string) bool {
 	return true
 }
 
+// WorktreePathname reports whether z may name a file of a checkout: a simple
+// pathname with no backslash, in valid UTF-8, the rule a writer applies to an
+// F-card name. Sparse cones validate members with it
+// (draft-fossil-sparse-cone-00 §3.2).
+func WorktreePathname(z string) bool {
+	return simplePathname(z) && strings.IndexByte(z, '\\') < 0 && utf8.ValidString(z)
+}
+
+// ReservedName reports whether name is one of fossil's reserved checkout
+// filenames (see fileIsReservedName), which no tracked path may be.
+func ReservedName(name string) bool {
+	return fileIsReservedName(name)
+}
+
 // dotElementAt reports whether the path element beginning at index start is
 // exactly "." or "..", i.e. one or two dots terminated by '/' or end of string.
 func dotElementAt(z string, start int) bool {

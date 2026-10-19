@@ -108,11 +108,13 @@ type treeFrame struct {
 	rid    libfossil.FslID // 0 for the manifest itself
 	cards  []deck.SubmanifestCard
 	cursor int
+	limit  string // the exclusive upper bound of the frame's keys; "" for none
 }
 
 // treeWalk is the state of one §5.1 enumeration.
 type treeWalk struct {
 	loader  *subtreeLoader
+	filter  FileFilter // nil for the full enumeration
 	stack   []treeFrame
 	last    string
 	hasLast bool
@@ -124,11 +126,22 @@ type treeWalk struct {
 // of the leaves in enumeration order, or an error -- never a partial set
 // (§5.2). Every tree fault is a SubmanifestError.
 func walkTree(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	return walkTreeFiltered(q, cache, d, nil)
+}
+
+// walkTreeFiltered is walkTree narrowed by filter, when it is not nil: it
+// emits only the files filter covers and never resolves a sub-manifest whose
+// key range filter cannot cover (draft-fossil-sparse-cone-00 §1.3, §4.1).
+// Every node is a contiguous range of the sorted file list, from its S card's
+// name up to the next sibling's (or its parent's bound), so a skipped node
+// holds nothing the filter covers.
+func walkTreeFiltered(q db.Querier, cache *content.Cache, d *deck.Deck, filter FileFilter) ([]deck.FileCard, error) {
 	if !isTree(d) {
 		panic("manifest.walkTree: d must be a tree manifest")
 	}
 	w := &treeWalk{
 		loader: &subtreeLoader{q: q, cache: cache},
+		filter: filter,
 		stack:  []treeFrame{{cards: d.S}},
 	}
 	// Each step either advances a cursor or pops a frame, and every pushed
@@ -139,7 +152,7 @@ func walkTree(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard
 			return nil, err
 		}
 	}
-	if len(w.files) == 0 {
+	if len(w.files) == 0 && filter == nil {
 		panic("manifest.walkTree: a tree enumerated no files")
 	}
 	return w.files, nil
@@ -156,6 +169,13 @@ func (w *treeWalk) step() error {
 	top.cursor++
 	if w.hasLast && deck.Compare(card.Name, w.last) <= 0 {
 		return treeFault(card.UUID, "S-card %q does not follow %q", card.Name, w.last)
+	}
+	limit := top.limit
+	if top.cursor < len(top.cards) {
+		limit = top.cards[top.cursor].Name
+	}
+	if w.filter != nil && !w.filter.MayCover(card.Name, limit) {
+		return nil
 	}
 	// The resolved artifact's depth is the sub-manifests on its path,
 	// itself included: one per frame above the manifest's, plus one.
@@ -177,7 +197,7 @@ func (w *treeWalk) step() error {
 	if sub.S[0].Name != card.Name { // step 5
 		return treeFault(card.UUID, "S-card %q names a subtree starting at %q", card.Name, sub.S[0].Name)
 	}
-	w.stack = append(w.stack, treeFrame{rid: rid, cards: sub.S})
+	w.stack = append(w.stack, treeFrame{rid: rid, cards: sub.S, limit: limit})
 	return nil
 }
 
@@ -191,7 +211,9 @@ func (w *treeWalk) emitLeaf(card deck.SubmanifestCard, leaf *deck.Deck) error {
 		if w.hasLast && deck.Compare(f.Name, w.last) <= 0 {
 			return treeFault(card.UUID, "file %q does not follow %q", f.Name, w.last)
 		}
-		w.files = append(w.files, f)
+		if w.filter == nil || w.filter.Covers(f.Name) {
+			w.files = append(w.files, f)
+		}
 		w.last, w.hasLast = f.Name, true
 	}
 	return nil

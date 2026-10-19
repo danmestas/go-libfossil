@@ -190,15 +190,16 @@ type extractRow struct {
 	islink   int64
 }
 
-// extractRows lists version rid's files with the blob each one's content is
-// in, from its manifest. It refuses a version whose content is missing
-// (resolveFiles), before anything is written.
+// extractRows lists version rid's files the cone covers -- every file of a
+// dense checkout -- with the blob each one's content is in, from its
+// manifest. It refuses a version whose content is missing (resolveFiles),
+// before anything is written.
 func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 	if rid <= 0 {
 		panic("checkout.extractRows: rid must be positive")
 	}
 
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, c.fileFilter())
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Extract: %w", err)
 	}
@@ -269,7 +270,7 @@ func (c *Checkout) checkSafeToExtract(target libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
-	files, err := manifest.ListFiles(c.repo, target)
+	files, err := manifest.ListFilesFiltered(c.repo, target, c.fileFilter())
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
@@ -316,7 +317,7 @@ func (c *Checkout) firstChangeAtRisk(
 	).Scan(&merging); err != nil {
 		return "", fmt.Errorf("query vmerge: %w", err)
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return "", err
 	}

@@ -21,6 +21,10 @@ type Checkout struct {
 type CheckoutCreateOpts struct {
 	Env      *simio.Env       // nil = real env
 	Observer CheckoutObserver // nil = nop
+	// Cone makes the checkout sparse: Extract, Update and Status work only on
+	// the files it covers, and Checkin carries the others from the parent
+	// unchanged. nil is dense. See Cone and Checkout.SetCone.
+	Cone *Cone
 }
 
 // CheckoutOpenOpts configures opening an existing checkout.
@@ -79,6 +83,9 @@ type UpdateResult struct {
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers — not an error; also present in FilesWritten
 	Unmerged     []string // paths left to reconcile without markers — not an error
+	// OutOfCone counts the changes a sparse checkout's update applied to files
+	// outside its cone: recorded for the next checkin, never written to disk.
+	OutOfCone int
 }
 
 // RevertOpts configures reverting file changes.
@@ -154,6 +161,7 @@ func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, e
 	inner, err := checkout.Create(r.inner, dir, checkout.CreateOpts{
 		Env:      opts.Env,
 		Observer: adaptCheckoutObserver(opts.Observer),
+		Cone:     unwrapCone(opts.Cone),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: create checkout: %w", err)
@@ -229,6 +237,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		FilesRemoved: res.FilesRemoved,
 		Conflicted:   res.Conflicted,
 		Unmerged:     res.Unmerged,
+		OutOfCone:    res.OutOfCone,
 	}, nil
 }
 

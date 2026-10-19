@@ -3,6 +3,7 @@ package checkout
 import (
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
@@ -105,6 +106,9 @@ type OpenOpts struct {
 type CreateOpts struct {
 	Env      *simio.Env // nil → RealEnv
 	Observer Observer   // nil → nopObserver
+	// Cone makes the checkout sparse (draft-fossil-sparse-cone-00 §4): only
+	// the files it covers are materialized and managed. nil is dense.
+	Cone *cone.Cone
 }
 
 // ExtractOpts configures file extraction from a checkin.
@@ -154,6 +158,10 @@ type UpdateResult struct {
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers; also present in FilesWritten
 	Unmerged     []string // paths left to reconcile without markers (see above)
+	// OutOfCone counts the changes a sparse checkout's update applied to
+	// files outside its cone: recorded, never written to disk
+	// (draft-fossil-sparse-cone-00 §4.4).
+	OutOfCone int
 }
 
 // ManageOpts configures adding files to tracking.

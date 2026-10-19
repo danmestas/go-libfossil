@@ -126,6 +126,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Checkout.Update` saves undo state as fossil's `update` does, and the new
+  `Checkout.Undo` and `Checkout.Redo` reverse and replay it: the files the
+  update wrote, merged or removed come back, with the file list, pending
+  merges and the checked-out version (`checkout-hash` included). The undo
+  tables now use fossil's schema (`isExe`, a unique `pathname`, replayed in
+  `rowid` order), so `fossil undo` reverses a go-libfossil update and
+  `Checkout.Undo` reverses `fossil update`; the executable bit saved is the
+  file's own, as fossil reads it. Like fossil, the update saves a file
+  merged into a renamed one under its old name only, and saves neither a
+  `NAME-original` backup nor a change of executable bit alone. An update
+  whose writes fail partway puts the files it changed back, as fossil's
+  `undo_rollback` does. Under js/wasm, which has no undo, Update saves none.
+  Tracked in #446.
+
 - A public check-in makes every file blob it names public, as fossil's
   commit does. Content first stored privately, for example by syncing a
   private branch, stayed private when a public check-in reused it, so a
@@ -219,11 +233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     refused before anything is written, the checkout database moves in one transaction, and a dry run
     changes nothing, the database included.
 
-  Update saves no undo state yet, so unlike fossil's update it cannot be
-  undone: a removed file restored from the target, or a working copy merged
-  or replaced, cannot be brought back with undo. Files are matched by name:
-  a file the target renamed is not followed, as fossil follows it. Tracked
-  in #443.
+  Tracked in #443; renames are followed since #445, and undo works since
+  #446 (see their entries).
 
 - Each arrival of content is recorded in `rcvfrom` as fossil records it:
   one row per check-in, tag, sync, clone, served request that stores

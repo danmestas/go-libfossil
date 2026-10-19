@@ -366,8 +366,31 @@ func TestDiffMissingVersionExitsNotFound(t *testing.T) {
 
 func TestDiffJSONNeedsTwoVersions(t *testing.T) {
 	repoPath := newSnapshotRepo(t)
-	if _, _, code := runCLI(t, "-R", repoPath, "repo", "diff", "--json"); code == 0 {
-		t.Error("diff --json with no versions exited 0, want a usage failure")
+	if _, _, code := runCLI(t, "-R", repoPath, "repo", "diff", "--json"); code != 1 {
+		t.Errorf("diff --json with no versions exited %d, want 1 (the parser accepts it; the command refuses it)", code)
+	}
+}
+
+// exitUsage is the status the command-line parser exits with on a usage
+// error, as cli-embedding.md documents.
+const exitUsage = 80
+
+// TestUsageErrorsExit80 pins the documented usage-error status, measured on
+// the binary itself: `go run` reports any non-zero status as 1.
+func TestUsageErrorsExit80(t *testing.T) {
+	repoPath := newSnapshotRepo(t)
+	for _, args := range [][]string{
+		{"repo", "log", "--path", "a.md", "--bogus"}, // unknown flag
+		{"repo", "log"}, // missing required flag
+		{"repo", "snapshot", "--path", "a.md", "--stdin"}, // missing required -m
+		{"repo", "nosuch"}, // unknown subcommand
+		{"repo", "cat"},    // missing argument
+	} {
+		stdout, stderr, code := runCLI(t, append([]string{"-R", repoPath}, args...)...)
+		if code != exitUsage || stdout != "" {
+			t.Errorf("%v: exit %d, stdout %q; want exit %d and no stdout\nstderr: %s",
+				args, code, stdout, exitUsage, stderr)
+		}
 	}
 }
 

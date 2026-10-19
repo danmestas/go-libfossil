@@ -56,7 +56,9 @@ Every JSON document is a single line on stdout. Fields are never renamed or remo
 | 0 | Success, including a `snapshot` that changed nothing and a `diff` with no differences. |
 | 1 | Any other failure: a bad `--path`, an unreadable repository, an ambiguous version prefix, an I/O error. The message is on stderr. |
 | 2 | Not found: the version does not resolve, the file is not in that version (`cat`), or the path has no history (`log`). Nothing is written to stdout. |
-| 80 | Usage error: an unknown command or flag, or a missing required flag or argument. The command-line parser sets this status. |
+| 80 | Usage error: an unknown command or flag, or a missing required flag or argument. The command-line parser sets this status and writes the error and the command's usage to stderr; stdout stays empty. |
+
+These are the statuses of the `libfossil` binary itself. `go run ./cmd/libfossil` reports any non-zero status as 1, so measure them on a built binary. A combination the parser accepts but the command refuses, such as `diff --json` without two versions, exits 1.
 
 ## Concurrency
 

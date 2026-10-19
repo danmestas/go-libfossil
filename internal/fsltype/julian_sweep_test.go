@@ -60,6 +60,8 @@ func TestJulianDayMatchesSQLiteJulianday(t *testing.T) {
 // sweep time in a repository fossil made, has fossil rebuild derive their
 // event rows -- each time written as SQL text by fossil's printf and read
 // back by its SQLite -- and requires TimeToTextJulian's value for every one.
+// fossil's printf works in long double, so this holds for a fossil binary
+// built for the platform the test runs on, as CI's and a developer's are.
 func TestTextJulianDayMatchesFossilBinary(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	path := filepath.Join(t.TempDir(), "t.fossil")

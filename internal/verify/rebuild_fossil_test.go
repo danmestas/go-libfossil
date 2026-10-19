@@ -73,12 +73,14 @@ func fossilHistory(t *testing.T) string {
 	return repoPath
 }
 
-// fossilTextTimesExact reports whether the fossil binary on this machine
-// writes text times the way TimeToTextJulian computes them: its %.17g runs in
-// long double, which is a 64-bit double on macOS arm64 and Windows but wider
-// on Linux and Intel macOS, where the 16th digit can differ.
+// fossilTextTimesExact reports whether the fossil binary on this machine is
+// one whose text times TimeToTextJulian has been checked against bit for
+// bit: fossil's %.17g runs in long double, and fsltype follows the long
+// double of the platform it runs on, compared with fossil 2.28 on macOS
+// arm64 and linux-x64 (see fsltype's julian.go).
 func fossilTextTimesExact() bool {
-	return (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") || runtime.GOOS == "windows"
+	return (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") ||
+		(runtime.GOOS == "linux" && runtime.GOARCH == "amd64") || runtime.GOOS == "windows"
 }
 
 // textTime renders a column fossil writes as SQL text: bit for bit where

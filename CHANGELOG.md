@@ -50,13 +50,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through this library as soon as it is added, as fossil's timeline does.
 - A check-in with no C card has a NULL event comment, as fossil stores it,
   not an empty one.
-- Event, plink, attachment and forum post times match fossil 2.28's in
-  every bit. fossil writes these times as 16-digit SQL text and reads them
-  back with its bundled SQLite 3.52.0, whose text-to-double conversion is
-  not correctly rounded. go-libfossil parsed the same text with a correctly
-  rounded conversion, so about one time in 3,000 was one unit in the last
-  place away from fossil's (13 rows of fossil's own repository). It now
-  uses SQLite 3.52.0's conversion.
+- Event, plink, attachment and forum post times match, in every bit, the
+  ones fossil 2.28 stores when it is built for the same platform. fossil
+  writes these times as 16-digit SQL text and reads them back with its
+  bundled SQLite 3.52.0, whose text-to-double conversion is not correctly
+  rounded. go-libfossil parsed the text with a correctly rounded
+  conversion, so about one time in 3,000 was one unit in the last place
+  away from fossil's (13 rows of fossil's own repository); it now uses
+  SQLite 3.52.0's conversion. fossil's printf also computes the text in C
+  `long double`, which is a 64-bit double on macOS arm64 and Windows but
+  80-bit on x86-64 Linux, so the 16th digit differs between platforms for
+  about one time in five. go-libfossil now computes in the long double of
+  the platform it runs on, and matches fossil 2.28 bit for bit on macOS arm64
+  and linux-x64. Times written on one platform and rebuilt by fossil on
+  another can still differ in the last place, as two fossils do; never by
+  a millisecond.
 - Ticket artifacts link in a repository whose ticket schema lacks the
   optional columns, as fossil's own repository's does. Crosslinking and
   `Rebuild` failed there with "table ticketchng has no column named

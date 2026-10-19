@@ -9,6 +9,8 @@ type RepoCmd struct {
 	Co           RepoCoCmd           `cmd:"" help:"Checkout a version"`
 	Ls           RepoLsCmd           `cmd:"" help:"List files in a version"`
 	Timeline     RepoTimelineCmd     `cmd:"" help:"Show repository history"`
+	Snapshot     RepoSnapshotCmd     `cmd:"" help:"Commit a file's bytes onto trunk, no checkout needed"`
+	Log          RepoLogCmd          `cmd:"" help:"Show the check-ins that changed a path"`
 	Cat          RepoCatCmd          `cmd:"" help:"Output artifact content"`
 	Info         RepoInfoCmd         `cmd:"" help:"Repository statistics"`
 	Hash         RepoHashCmd         `cmd:"" help:"Hash files (SHA1 or SHA3)"`

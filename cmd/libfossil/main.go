@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
+
 	"github.com/alecthomas/kong"
 	"github.com/danmestas/go-libfossil/cli"
 )
@@ -28,5 +32,10 @@ func main() {
 		kong.UsageOnError(),
 	)
 	err := ctx.Run(&c.Globals)
+	var exit *cli.ExitError
+	if errors.As(err, &exit) {
+		fmt.Fprintf(os.Stderr, "libfossil: %v\n", exit)
+		os.Exit(exit.Code)
+	}
 	ctx.FatalIfErrorf(err)
 }

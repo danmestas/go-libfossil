@@ -13,6 +13,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // errMissingContent reports a version whose files' content the repository
@@ -263,7 +264,7 @@ func nextChangedState(
 // scanPolicy is how a scan decides whether a file needs hashing.
 type scanPolicy struct {
 	trustMTime bool     // fossil's useMtime: no ScanHash and mtime-changes on
-	now        int64    // the scan's time; see recordableMTime
+	now        int64    // the scan's time; see vfile.RecordableMTime
 	disk       diskView // how files and their permissions are seen
 	enotfile   bool     // ScanENotFile: refuse something that is not a file
 }
@@ -408,7 +409,7 @@ func (c *Checkout) scanSingleEntry(
 	}
 	mtime := int64(-1)
 	if info != nil {
-		mtime = recordableMTime(info.ModTime(), p.now)
+		mtime = vfile.RecordableMTime(info.ModTime(), p.now)
 	}
 	missing = e.deleted == 0 && !isFileOrLink(info)
 	if next == e.chnged && mtime == e.mtime {

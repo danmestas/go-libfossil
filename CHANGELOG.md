@@ -150,6 +150,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Extract still writes a missing file without asking for `Force`, since
   nothing on disk is lost; it still writes a symlink as a plain file holding
   the target's name.
+- Stash and undo read and write working files through the checkout's
+  storage (`simio.Storage`) instead of the `os` package, so they work on a
+  `MemStorage` checkout and under simulation (tracked in #448). Their
+  functions take a `*simio.Env`. Stash save records each reverted file's
+  mtime on its now unchanged row, as fossil's revert does. Stash apply and
+  pop add a stashed added file again, as fossil's `stash_apply` does, and
+  mark a restored edit's row changed with the mtime it was written with,
+  where fossil leaves the reverted row (unchanged, the revert's mtime) for
+  its next scan to correct; fossil misses an edit of the same size whose
+  write lands in the revert's second. Undo and redo restore vfile as fossil
+  does, and record each written file's mtime on its restored row when that
+  row's mtime matched the file when it was saved, the case where the row
+  vouches for the content; otherwise the row is restored with mtime 0 and
+  the next scan hashes the file.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

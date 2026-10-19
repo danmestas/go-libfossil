@@ -33,6 +33,11 @@ func checkDerived(r *repo.Repo, report *Report) error {
 	return nil
 }
 
+// treeGapCacheBytes bounds the cache checkCheckins gives treeGap. It holds
+// manifests and sub-manifests only, never file content, so it is far smaller
+// than an expansion cache; it has not been measured.
+const treeGapCacheBytes = 32 << 20
+
 // checkCheckins verifies event and plink tables against checkin manifests.
 // It expands every blob once through content.ExpandAll, which visits in
 // delta-tree order; issues are collected apart and sorted by rid, stably, so
@@ -46,12 +51,15 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 	}
 
 	found := &Report{}
+	// ExpandAll hands each blob over once; the cache serves only treeGap's
+	// baseline and sub-manifest reads, which many check-ins share.
+	cache := content.NewCache(treeGapCacheBytes)
 	err := content.ExpandAll(r.DB(), func(rid libfossil.FslID, uuid string, data []byte, err error) error {
 		if err != nil {
 			// Not expandable - skip silently (corrupt, reported by checkBlobs)
 			return nil
 		}
-		return checkOneCheckin(r, found, rid, uuid, data)
+		return checkOneCheckin(r, found, rid, uuid, data, cache)
 	})
 	if err != nil {
 		return fmt.Errorf("checkCheckins: %w", err)
@@ -67,7 +75,10 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
 // data is the blob's expanded content.
-func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, data []byte) error {
+func checkOneCheckin(
+	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, data []byte,
+	cache *content.Cache,
+) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
 	}

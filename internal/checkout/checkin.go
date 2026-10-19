@@ -87,7 +87,7 @@ type vfileCommitEntry struct {
 	origname string // prior pathname if renamed, else empty
 	deleted  bool
 	rid      int64
-	isexe    bool
+	perm     filePerm // the permission vfile records
 }
 
 // collectVFileEntries reads vfile for all entries of the given version and
@@ -111,7 +111,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 			origname: r.RenamedFrom(),
 			deleted:  r.IsRemoved(),
 			rid:      r.RID,
-			isexe:    r.IsExe > 0,
+			perm:     recordedPerm(r.IsExe, r.IsLink),
 		}
 		if r.IsRemoved() {
 			deletedFiles = append(deletedFiles, r.Pathname)
@@ -163,6 +163,11 @@ func (c *Checkout) buildCommitFiles(
 		}
 	}
 
+	disk, err := c.newDiskView()
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+
 	// 2. Update changed files with new content from disk
 	loadedFromDisk := make(map[string]bool, len(changedFiles))
 	for _, name := range changedFiles {
@@ -170,13 +175,9 @@ func (c *Checkout) buildCommitFiles(
 			continue
 		}
 
-		fullPath, err := c.safePath(name)
+		fileData, err := c.readCommitFile(disk, name)
 		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
-		}
-		fileData, err := c.env.Storage.ReadFile(fullPath)
-		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: read %s: %w", name, err)
+			return nil, err
 		}
 
 		perm := ""
@@ -184,10 +185,10 @@ func (c *Checkout) buildCommitFiles(
 			perm = existing.Perm
 		}
 
-		// The executable marker is re-derived from the live on-disk mode by
-		// restatCommitPerms below, for every included non-symlink file (not
-		// only ones change scanning flagged) — so permission is decided
-		// later, from the filesystem, rather than from vfile.isexe here.
+		// The permission is re-derived from the live on-disk mode by
+		// restatCommitPerms below, for every included file (not only ones
+		// change scanning flagged) — so permission is decided later, from
+		// the filesystem, rather than from vfile.isexe here.
 		fileMap[name] = manifest.File{
 			Name:    name,
 			Content: fileData,
@@ -274,7 +275,7 @@ func (c *Checkout) buildCommitFiles(
 
 	// 4. Independently re-stat every included file's on-disk executable bit,
 	// belt-and-braces, regardless of whether change scanning flagged it.
-	if err := c.restatCommitPerms(fileMap, vfEntries, shouldInclude); err != nil {
+	if err := c.restatCommitPerms(disk, fileMap, vfEntries, shouldInclude); err != nil {
 		return nil, err
 	}
 
@@ -354,26 +355,35 @@ func (c *Checkout) applyRenames(
 	}
 }
 
-// restatCommitPerms re-derives each included file's executable permission
-// directly from its live on-disk mode, overriding whatever change scanning
-// captured earlier. This exists because change scanning compares content
-// hashes: a file whose only edit is a chmod has an unchanged hash, so
-// vfile.chnged/isexe can go stale and silently carry forward the wrong
-// permission. Manifest generation must consult the filesystem itself for
-// every file it is about to serialize — mirroring canonical Fossil's
-// belt-and-braces re-stat in src/checkin.c — rather than trust a cached
-// flag a second time.
+// readCommitFile reads name's content for a commit, seen through disk: a
+// symlink seen as itself holds its target's name, as fossil commits it.
+func (c *Checkout) readCommitFile(disk diskView, name string) ([]byte, error) {
+	fullPath, err := c.safePath(name)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+	}
+	info, err := disk.stat(c, fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	data, err := disk.read(c, fullPath, info)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	return data, nil
+}
+
+// restatCommitPerms re-derives each included file's permission (x, l or
+// none) directly from its live on-disk mode, as fossil's create_manifest
+// does with file_perm, overriding whatever change scanning captured
+// earlier: a scan that trusted an mtime may not have looked at the mode.
 //
 // Only files that actually have a vfile row are considered — matching
 // canonical Fossil, whose manifest loop is driven by a query over vfile
 // (JOIN blob) rather than the union of parent-manifest and vfile names.
-// Files carried forward from the parent manifest but no longer present in
-// the local vfile (should not happen once LoadVFile has run, but is not an
-// invariant this function enforces) are left untouched, since there is no
-// live vfile row to justify a re-stat. Symlinks (Perm == "l") and files not
-// selected for this commit are also left untouched. On Windows,
-// os.FileMode never carries an owner-execute bit, so modeIsExecutable
-// always returns false and this is a no-op.
+// Files not selected for this commit are left untouched. Where permissions
+// are not read from disk (a storage without modes, or Windows), each file
+// takes the permission vfile records, as fossil on Windows does.
 //
 // A file that has gone missing from disk (deleted outside of Unmanage, or
 // otherwise untracked-but-not-told) is skipped, carrying its existing Perm
@@ -386,6 +396,7 @@ func (c *Checkout) applyRenames(
 // (permission denied, I/O fault, ...) is a real problem and still fails
 // the commit.
 func (c *Checkout) restatCommitPerms(
+	disk diskView,
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,
 	shouldInclude func(string) bool,
@@ -397,13 +408,10 @@ func (c *Checkout) restatCommitPerms(
 		panic("checkout.restatCommitPerms: shouldInclude must not be nil")
 	}
 
-	for name := range vfEntries {
+	for name, ve := range vfEntries {
 		entry, ok := fileMap[name]
 		if !ok {
 			continue // deleted, or otherwise dropped from this commit
-		}
-		if entry.Perm == "l" {
-			continue
 		}
 		if !shouldInclude(name) {
 			continue
@@ -413,22 +421,16 @@ func (c *Checkout) restatCommitPerms(
 		if err != nil {
 			return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
 		}
-		info, err := c.env.Storage.Stat(fullPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+		var info os.FileInfo
+		if disk.links != nil {
+			if info, err = disk.stat(c, fullPath); err != nil {
+				return fmt.Errorf("checkout.Commit: %w", err)
+			}
+			if info == nil {
 				continue // missing on disk: carry the existing Perm forward unchanged
 			}
-			return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
 		}
-
-		if modeIsExecutable(info.Mode()) {
-			entry.Perm = "x"
-		} else {
-			entry.Perm = ""
-		}
-		if entry.Perm != "" && entry.Perm != "x" {
-			panic("checkout.restatCommitPerms: re-derived perm must be \"\" or \"x\"")
-		}
+		entry.Perm = disk.perm(info, ve.perm).manifestPerm()
 		fileMap[name] = entry
 	}
 
@@ -711,10 +713,17 @@ func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActiv
 	return c.checkNoConflicts(in)
 }
 
-// hasModeDrift reports whether a selected file's executable bit on disk
-// differs from the checkout's record: a chmod the scan does not record,
-// which the commit picks up (see restatCommitPerms).
+// hasModeDrift reports whether a selected file's permission on disk
+// differs from the checkout's record: a mode change the scan has not
+// recorded, which the commit picks up (see restatCommitPerms).
 func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
+	disk, err := c.newDiskView()
+	if err != nil {
+		return false, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	if disk.links == nil {
+		return false, nil
+	}
 	for name, e := range in.entries {
 		if e.deleted || !in.include(name) {
 			continue
@@ -723,14 +732,11 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		info, err := c.env.Storage.Stat(fullPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		info, err := disk.stat(c, fullPath)
 		if err != nil {
-			return false, fmt.Errorf("checkout.Commit: stat %s: %w", fullPath, err)
+			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		if info.Mode().IsRegular() && modeIsExecutable(info.Mode()) != e.isexe {
+		if isFileOrLink(info) && disk.perm(info, e.perm) != e.perm {
 			return true, nil
 		}
 	}

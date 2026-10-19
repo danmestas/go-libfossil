@@ -135,9 +135,14 @@ type CheckoutMergeFile struct {
 }
 
 // CheckoutChange describes a single file change in the checkout.
+//
+// Change is "added", "modified", "deleted", "renamed" or "missing", or one of
+// the mode changes fossil's changes command reports: "executable" (became
+// executable), "symlink" (became a symlink), "unexec" (lost the executable
+// bit) or "unlink" (was a symlink, now is not).
 type CheckoutChange struct {
 	Name   string
-	Change string // "added", "modified", "deleted", "renamed", "missing"
+	Change string
 }
 
 // CreateCheckout creates a new checkout directory linked to this repository.
@@ -439,6 +444,14 @@ func fileChangeString(fc checkout.FileChange) string {
 		return "renamed"
 	case checkout.ChangeModified:
 		return "modified"
+	case checkout.ChangeExecutable:
+		return "executable"
+	case checkout.ChangeSymlink:
+		return "symlink"
+	case checkout.ChangeUnexec:
+		return "unexec"
+	case checkout.ChangeUnlink:
+		return "unlink"
 	default:
 		return "unknown"
 	}

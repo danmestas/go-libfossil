@@ -387,6 +387,58 @@ func TestDiffJSONBetweenVersions(t *testing.T) {
 	}
 }
 
+// TestDiffPathMatchesFossil checks diff A B PATH against fossil diff --from A
+// --to B PATH on the same repository. PATH names a file, or a directory
+// holding files, in either version; one in neither is an error ("not found",
+// exit 2 here), not an empty diff. An unchanged file is an empty diff.
+func TestDiffPathMatchesFossil(t *testing.T) {
+	fossilBin := testutil.RequireFossilBin(t)
+	repoPath := newSnapshotRepo(t)
+	v1 := snapshot(t, repoPath, "notes/a.md", "one\n")
+	snapshot(t, repoPath, "keep.md", "same\n")
+	v2 := snapshot(t, repoPath, "notes/a.md", "two\n")
+
+	for _, tc := range []struct {
+		path    string
+		found   bool
+		changed bool
+	}{
+		{"notes/a.md", true, true},
+		{"notes", true, true},
+		{"keep.md", true, false},
+		{"nosuch.md", false, false},
+		{"note", false, false}, // a name prefix that is not a directory
+	} {
+		fossilOut, ferr := exec.Command(fossilBin, "diff", "-R", repoPath,
+			"--from", v1, "--to", v2, tc.path).CombinedOutput()
+		if (ferr == nil) != tc.found {
+			t.Fatalf("fossil diff %s: err %v, the case expects found=%v\n%s", tc.path, ferr, tc.found, fossilOut)
+		}
+
+		stdout, stderr, code := runCLI(t, "-R", repoPath, "repo", "diff", "--json", v1, v2, tc.path)
+		if !tc.found {
+			if code != exitNotFound || stdout != "" || !strings.Contains(stderr, "not found") {
+				t.Errorf("diff %s: exit %d, stdout %q, stderr %q; fossil fails (%s), want exit %d naming it not found",
+					tc.path, code, stdout, stderr, strings.TrimSpace(string(fossilOut)), exitNotFound)
+			}
+			continue
+		}
+		var entries []struct {
+			Name string `json:"name"`
+		}
+		if code != 0 || json.Unmarshal([]byte(stdout), &entries) != nil {
+			t.Errorf("diff %s: exit %d, stdout %q, stderr %q; fossil succeeds", tc.path, code, stdout, stderr)
+			continue
+		}
+		if got := len(entries) == 1 && entries[0].Name == "notes/a.md"; got != tc.changed {
+			t.Errorf("diff %s = %+v, want changed=%v", tc.path, entries, tc.changed)
+		}
+		if fossilChanged := strings.Contains(string(fossilOut), "+two"); fossilChanged != tc.changed {
+			t.Errorf("fossil diff %s changed=%v, the case expects %v", tc.path, fossilChanged, tc.changed)
+		}
+	}
+}
+
 func TestDiffMissingVersionExitsNotFound(t *testing.T) {
 	repoPath := newSnapshotRepo(t)
 	v1 := snapshot(t, repoPath, "a.md", "one\n")

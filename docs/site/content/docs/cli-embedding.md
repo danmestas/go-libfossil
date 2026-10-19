@@ -20,7 +20,7 @@ libfossil -R repo.fossil repo diff     [--json] A B [PATH]
 
 **cat** writes the file's bytes as VERSION holds them, as `fossil cat -r` does. VERSION is anything `repo resolve` accepts: `tip`, `trunk`, a branch, a uuid or a unique prefix of one. Without `--at`, `repo cat` still outputs an artifact by uuid.
 
-**diff** with two versions prints the unified diff between them for PATH, or for every file that differs when PATH is omitted. With one or no version it compares the working directory, as before.
+**diff** with two versions prints the unified diff between them for PATH, or for every file that differs when PATH is omitted. PATH is matched as `fossil diff --from A --to B PATH` matches it: a file of that name, or every file under a directory of that name, in either version, compared case-sensitively. A PATH that matches nothing in either version is not found (exit 2, as fossil fails with `not found`); a PATH that matches only unchanged files is an empty diff. With one or no version it compares the working directory, as before.
 
 ## Output
 
@@ -55,7 +55,7 @@ Every JSON document is a single line on stdout. Fields are never renamed or remo
 | --- | --- |
 | 0 | Success, including a `snapshot` that changed nothing and a `diff` with no differences. |
 | 1 | Any other failure: a bad `--path`, an unreadable repository, an ambiguous version prefix, an I/O error. The message is on stderr. |
-| 2 | Not found: the version does not resolve, the file is not in that version (`cat`), or the path has no history (`log`). Nothing is written to stdout. |
+| 2 | Not found: the version does not resolve, the file is not in that version (`cat`), the path is in neither version (`diff`), or the path has no history (`log`). Nothing is written to stdout. |
 | 80 | Usage error: an unknown command or flag, or a missing required flag or argument. The command-line parser sets this status and writes the error and the command's usage to stderr; stdout stays empty. |
 
 These are the statuses of the `libfossil` binary itself. `go run ./cmd/libfossil` reports any non-zero status as 1, so measure them on a built binary. A combination the parser accepts but the command refuses, such as `diff --json` without two versions, exits 1.

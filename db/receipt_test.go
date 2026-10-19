@@ -188,3 +188,120 @@ func TestReceiptIDOnBoundDB(t *testing.T) {
 		t.Fatalf("WithBoundTx: %v", err)
 	}
 }
+
+// receiptOwner reports the uid of the rcvfrom row id, which tells whose
+// receipt it is.
+func receiptOwner(t *testing.T, q db.Querier, id int64) int64 {
+	t.Helper()
+	var uid int64
+	if err := q.QueryRow("SELECT uid FROM rcvfrom WHERE rcvid=?", id).Scan(&uid); err != nil {
+		t.Fatalf("rcvfrom %d: %v", id, err)
+	}
+	return uid
+}
+
+// A receipt whose row was rolled back must not take over the row another
+// receipt makes under the same rcvid, even when a frozen clock gives both
+// rows the same mtime.
+func TestReceiptForgetsRolledBackRowUnderFrozenClock(t *testing.T) {
+	d := newSchemaDB(t)
+	clock := simio.NewSimClockAt(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC))
+	lost := &db.Receipt{UID: 1, Clock: clock}
+	errUndo := errors.New("undo")
+	if err := d.WithTx(func(tx *db.Tx) error {
+		if _, err := lost.ID(tx); err != nil {
+			return err
+		}
+		return errUndo
+	}); !errors.Is(err, errUndo) {
+		t.Fatalf("WithTx = %v, want errUndo", err)
+	}
+	other := &db.Receipt{UID: 2, Clock: clock}
+	otherID, err := other.ID(d)
+	if err != nil {
+		t.Fatalf("other.ID: %v", err)
+	}
+	id, err := lost.ID(d)
+	if err != nil {
+		t.Fatalf("lost.ID: %v", err)
+	}
+	if id == otherID {
+		t.Fatalf("the rolled-back receipt took over rcvid %d, another receipt's row", id)
+	}
+	if uid := receiptOwner(t, d, id); uid != 1 {
+		t.Fatalf("receipt row %d credits uid %d, want 1", id, uid)
+	}
+}
+
+// The same holds for a row undone with the savepoint that made it, inside a
+// transaction that goes on and commits; a row a released savepoint made
+// stays the receipt's.
+func TestReceiptForgetsRowOfRolledBackSavepoint(t *testing.T) {
+	d := newSchemaDB(t)
+	clock := simio.NewSimClockAt(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC))
+	lost := &db.Receipt{UID: 1, Clock: clock}
+	kept := &db.Receipt{UID: 3, Clock: clock}
+	other := &db.Receipt{UID: 2, Clock: clock}
+	errUndo := errors.New("undo")
+	var keptID, otherID, lostID int64
+	err := d.WithBoundTx(func(b *db.DB) error {
+		if err := b.WithTx(func(tx *db.Tx) error {
+			var err error
+			keptID, err = kept.ID(tx)
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := b.WithTx(func(tx *db.Tx) error {
+			if _, err := lost.ID(tx); err != nil {
+				return err
+			}
+			return errUndo
+		}); !errors.Is(err, errUndo) {
+			t.Fatalf("savepoint = %v, want errUndo", err)
+		}
+		var err error
+		if otherID, err = other.ID(b); err != nil {
+			return err
+		}
+		if lostID, err = lost.ID(b); err != nil {
+			return err
+		}
+		again, err := kept.ID(b)
+		if err != nil {
+			return err
+		}
+		if again != keptID {
+			t.Errorf("a released savepoint's receipt moved from %d to %d", keptID, again)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WithBoundTx: %v", err)
+	}
+	if lostID == otherID {
+		t.Fatalf("the rolled-back receipt took over rcvid %d, another receipt's row", lostID)
+	}
+	if uid := receiptOwner(t, d, lostID); uid != 1 {
+		t.Fatalf("receipt row %d credits uid %d, want 1", lostID, uid)
+	}
+	if uid := receiptOwner(t, d, keptID); uid != 3 {
+		t.Fatalf("receipt row %d credits uid %d, want 3", keptID, uid)
+	}
+}
+
+// Once made and kept, a receipt's id costs no query: storing many blobs under
+// one receipt does not read rcvfrom for each.
+func TestReceiptIDReusesWithoutQuery(t *testing.T) {
+	d := newSchemaDB(t)
+	rc := &db.Receipt{UID: 1}
+	if _, err := rc.ID(d); err != nil {
+		t.Fatalf("ID: %v", err)
+	}
+	if _, err := d.Exec("DROP TABLE rcvfrom"); err != nil {
+		t.Fatalf("drop rcvfrom: %v", err)
+	}
+	if _, err := rc.ID(d); err != nil {
+		t.Fatalf("a kept receipt's id read rcvfrom: %v", err)
+	}
+}

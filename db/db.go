@@ -367,6 +367,9 @@ type Tx struct {
 	// receipt is what content stored in this transaction is recorded under;
 	// see ReceiptID.
 	receipt *Receipt
+	// made are the receipts whose rows this transaction made and has not
+	// committed; see Receipt.ID.
+	made []madeReceipt
 }
 
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
@@ -424,7 +427,11 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 		return fmt.Errorf("db.WithTx begin: %w", err)
 	}
 	tx := &Tx{tx: sqlTx, stmts: stmtCache{src: sqlTx}}
+	committed := false
 	defer func() {
+		if !committed {
+			tx.forgetFrom(0)
+		}
 		// A statement prepared against this transaction cannot outlive it, so
 		// close the whole cache before the transaction ends. This runs on
 		// every path (commit, error, panic); Close is idempotent, so closing
@@ -437,7 +444,11 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 	if err := fn(tx); err != nil {
 		return err
 	}
-	return sqlTx.Commit()
+	if err := sqlTx.Commit(); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 // WithBoundTx runs fn in one write transaction and hands it a DB bound to that
@@ -489,7 +500,8 @@ func (d *DB) mustBePool(op string) {
 // savepoint and is returned, leaving t open for the writes before it.
 func (t *Tx) withSavepoint(fn func(tx *Tx) error) (err error) {
 	t.savepoints++
-	name := fmt.Sprintf("withtx_%d", t.savepoints)
+	level := t.savepoints
+	name := fmt.Sprintf("withtx_%d", level)
 	defer func() { t.savepoints-- }()
 	if _, err := t.tx.Exec("SAVEPOINT " + name); err != nil {
 		return fmt.Errorf("db.WithTx savepoint: %w", err)
@@ -497,8 +509,10 @@ func (t *Tx) withSavepoint(fn func(tx *Tx) error) (err error) {
 	done := false
 	defer func() {
 		if done {
+			t.keepTo(level)
 			return
 		}
+		t.forgetFrom(level)
 		// fn failed or panicked: undo its writes. A failure here means
 		// SQLite already ended the whole transaction, which its commit
 		// will then report.

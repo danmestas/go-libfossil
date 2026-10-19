@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The three-way merge behind `Merge` and `Update` is a port of fossil
+  2.28's `merge3.c` and the diff it runs on, and writes what fossil writes
+  for the same three files, byte for byte. A conflict's markers carry
+  fossil's `(line N)` numbers and include the suggested resolution fossil
+  computes by merging the conflicting lines token by token; marker lines end
+  in CRLF when both versions' first line does. Content is aligned as
+  fossil's diff aligns it, so clean merges and conflict regions match too.
+  As in fossil, a UTF-8 byte-order mark is dropped and UTF-16 text is
+  merged as UTF-8, and a file fossil cannot diff as text (a NUL byte, or a
+  line over 32767 bytes) is not merged: the local copy is kept and the
+  merge reports a conflict. `HasConflictMarkers` now skips `\r` as well as
+  `\n` between lines, as fossil's `contains_merge_marker` does.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

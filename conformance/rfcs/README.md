@@ -19,7 +19,7 @@ second column.
 | `draft-fossil-repo-state-01.txt` | `draft-fossil-repo-state-00.txt` | `3f86ff4261` | `9980e22265` | `59dd17b9588497c6…` |
 | `draft-fossil-sync-protocol-01.txt` | `draft-fossil-sync-protocol-00.txt` | `3f86ff4261` | `bafc21adc5` | `c738d32f854495e9…` |
 | `draft-fossil-delta-format-00.txt` | `draft-fossil-delta-format-00.txt` | `3f86ff4261` | `d8025d6d75` | `6a28ee7e2e146f80…` |
-| `draft-fossil-submanifests-00.txt` | same | `3f86ff4261` | `eaef2e2e36` | `b6cb37690b9273c9…` |
+| `draft-fossil-submanifests-00.txt` | same | `0431958ff4` | `a71055781a` | `359344760a429d44…` |
 | `draft-fossil-sparse-cone-00.txt` | same | `86d4b67372` (branch `horizon-rfc`) | `cc2c259c19` | `22f7c2d847a31bc8…` |
 | `draft-fossil-horizon-00.txt` | same | `86d4b67372` (branch `horizon-rfc`) | `56bf5c0553` | `e1e92af6fa1c2acf…` |
 | `erratum/artifact-format-01-s4.4-z-card-last-by-ordering.md` | same | `3f86ff4261` | `dc53e482e1` | `3049c7ebc2aadea1…` |
@@ -64,10 +64,20 @@ disagree. The -00 errata are folded into the -01 drafts (zit check-in
 `44685f33b1`) and are no longer pinned. There is no delta-format -01, so the
 delta suite stays on -00; its file is unchanged at `3f86ff4261`.
 
-The sub-manifest draft (`draft-fossil-submanifests-00`) has no -01 and no
-errata; its text is unchanged since zit check-in `307d7287fa` (2026-07-28).
-Its Appendix A vectors are byte vectors: `../testdata/submanifest/` holds
-zit's copies of them, as authored for zit, taken at check-in `3f86ff4261`
+The sub-manifest draft (`draft-fossil-submanifests-00`) has no -01. It is
+taken from zit check-in `0431958ff45983c8676be02fd854baa8cd9bb0465b638526878ac6cfc56f939a`
+(2026-10-19), with the eight errata of 2026-10-19 applied (filed in zit as
+`erratum/submanifests-00-*.md`): §7.2 gates on the `send-submanifests`
+pragma, not the announced version (erratum check-in `6588d1bb3b`); §7.2
+places `avoid-submanifests` in every reply's leading pragma run, and defines
+the sync session it binds (§7.2, §8.1); §6.3 adopts the settings once, at
+clone, through `reqconfig /config`, specifies the history replay, and names
+the newest main-branch leaf as the current check-in without a checkout;
+§8.1 refuses an enable over an out-of-range stored k; and §1.3 records that
+zit and go-libfossil implement it. Like the other -00 errata they are folded
+into the draft and not pinned on their own. Its Appendix A vectors are byte
+vectors: `../testdata/submanifest/` holds zit's copies of them, as authored
+for zit, taken at check-in `3f86ff4261` and unchanged at `0431958ff4`
 (`src/rfc_vectors/`), each with two leading `#` lines that keep it from
 reading as a live artifact on disk; the suite drops those lines.
 

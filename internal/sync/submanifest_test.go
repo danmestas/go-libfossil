@@ -23,9 +23,10 @@ import (
 )
 
 // These tests pin the transfer and configuration rules of
-// draft-fossil-submanifests-00 for a reader: the §7.2 peer-version gate in
-// both directions, the avoid-submanifests pragma, the version this library
-// announces, and the §6.3 configuration exchange as zit's clone performs it.
+// draft-fossil-submanifests-00 for a reader: the §7.2 capability gate in
+// both directions, the send-submanifests and avoid-submanifests pragmas and
+// where they go, the version this library announces, and the §6.3
+// configuration exchange as zit's clone performs it.
 
 // treeArtifacts is a one-leaf tree check-in and its parts.
 type treeArtifacts struct {
@@ -84,66 +85,117 @@ func TestTransferGatedShapes(t *testing.T) {
 	}
 }
 
-func TestAnnouncedVersionIsSubmanifestThreshold(t *testing.T) {
+// The announced version is the fossil release whose protocol this library
+// speaks; reading trees is announced by send-submanifests, not by a version.
+func TestAnnouncesFossilBaseVersion(t *testing.T) {
 	p := versionPragma("client-version")
-	if p.Values[0] != "22900" {
-		t.Fatalf("announced %s, want 22900", p.Values[0])
+	if p.Values[0] != "22800" {
+		t.Fatalf("announced %s, want 22800", p.Values[0])
 	}
 }
 
-// gimmeReply asks r's handler for uuid as a client announcing version.
-func gimmeReply(t *testing.T, r *repo.Repo, version, uuid string) *xfer.Message {
+// gimmeReply asks r's handler for uuid as a client announcing version, with
+// pragma send-submanifests after client-version when reads is set.
+func gimmeReply(t *testing.T, r *repo.Repo, version string, reads bool, uuid string) *xfer.Message {
 	t.Helper()
-	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+	cards := []xfer.Card{
 		&xfer.PragmaCard{Name: "client-version", Values: []string{version, "20260101", "000000"}},
+	}
+	if reads {
+		cards = append(cards, &xfer.PragmaCard{Name: "send-submanifests"})
+	}
+	cards = append(cards,
 		&xfer.PullCard{ServerCode: "x", ProjectCode: testPC},
-		&xfer.GimmeCard{UUID: uuid},
-	}})
+		&xfer.GimmeCard{UUID: uuid})
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
 	if err != nil {
 		t.Fatalf("HandleSync: %v", err)
 	}
 	return resp
 }
 
-// §7.2: a server withholds a tree from a client older than sub-manifest
-// support, with one explicit error, and sends it to one that is not.
-func TestServerWithholdsTreeFromOldClient(t *testing.T) {
+// §7.2: a server withholds a tree from a client that did not send
+// send-submanifests, whatever version it announces, with one explicit
+// error, and sends it to one that did.
+func TestServerWithholdsTreeWithoutPragma(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	a := storeTree(t, r)
 	for _, uuid := range []string{a.uuid, a.leafUUID} {
-		old := gimmeReply(t, r, "22800", uuid)
-		if files := findCards[*xfer.FileCard](old); len(files) != 0 {
-			t.Fatalf("a 2.28 client received %s", uuid)
+		for _, version := range []string{"22800", "22900", "23000"} {
+			old := gimmeReply(t, r, version, false, uuid)
+			if files := findCards[*xfer.FileCard](old); len(files) != 0 {
+				t.Fatalf("a %s client without the pragma received %s", version, uuid)
+			}
+			errs := findCards[*xfer.ErrorCard](old)
+			if len(errs) != 1 || errs[0].Message != "Peer does not accept sub-manifests." {
+				t.Fatalf("refusal cards %v", errs)
+			}
 		}
-		errs := findCards[*xfer.ErrorCard](old)
-		if len(errs) != 1 || !strings.Contains(errs[0].Message, "2.29 or later") {
-			t.Fatalf("refusal cards %v", errs)
-		}
-		current := gimmeReply(t, r, "22900", uuid)
+		current := gimmeReply(t, r, "22800", true, uuid)
 		if files := findCards[*xfer.FileCard](current); len(files) != 1 {
-			t.Fatalf("a 2.29 client did not receive %s", uuid)
+			t.Fatalf("a client sending the pragma did not receive %s", uuid)
+		}
+		if errs := findCards[*xfer.ErrorCard](current); len(errs) != 0 {
+			t.Fatalf("a client sending the pragma was refused: %v", errs)
 		}
 	}
 	// Ordinary content is never gated.
-	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", a.fileUUID)); len(files) != 1 {
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", false, a.fileUUID)); len(files) != 1 {
 		t.Fatal("a file blob was withheld")
 	}
 }
 
-// §7.2, client side: a push answers a 2.28 server's gimme for a tree with a
-// refusal, records what it withheld, and the server never stores it.
-func TestClientWithholdsTreeFromOldServer(t *testing.T) {
+// §7.2: the server reads the whole request, so the pragma counts wherever
+// in it the client put it.
+func TestServerReadsPragmaAnywhereInRequest(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	a := storeTree(t, r)
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}},
+		&xfer.PullCard{ServerCode: "x", ProjectCode: testPC},
+		&xfer.GimmeCard{UUID: a.uuid},
+		&xfer.PragmaCard{Name: "send-submanifests"},
+	}})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if files := findCards[*xfer.FileCard](resp); len(files) != 1 {
+		t.Fatal("the tree was withheld from a request carrying the pragma")
+	}
+}
+
+// stripPragma removes every pragma named name from msg.
+func stripPragma(msg *xfer.Message, name string) {
+	kept := msg.Cards[:0]
+	for _, c := range msg.Cards {
+		if p, ok := c.(*xfer.PragmaCard); ok && p.Name == name {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	msg.Cards = kept
+}
+
+// §7.2, client side: a push answers the gimme of a server that did not send
+// send-submanifests with a refusal, records what it withheld, and the server
+// never stores it -- even a server announcing a version above 22900.
+func TestClientWithholdsTreeFromServerWithoutPragma(t *testing.T) {
 	server, client := setupSyncTestRepo(t), setupSyncTestRepo(t)
 	grantNobodyPush(t, server)
 	a := storeTree(t, client)
+	var refusals []string
 	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, e := range findCards[*xfer.ErrorCard](req) {
+			refusals = append(refusals, e.Message)
+		}
 		resp, err := HandleSync(context.Background(), server, req)
 		if err != nil {
 			t.Fatalf("HandleSync: %v", err)
 		}
-		for _, c := range resp.Cards { // pose as fossil 2.28
+		stripPragma(resp, "send-submanifests")
+		for _, c := range resp.Cards {
 			if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "server-version" {
-				p.Values[0] = "22800"
+				p.Values[0] = "23000"
 			}
 		}
 		return resp
@@ -161,6 +213,29 @@ func TestClientWithholdsTreeFromOldServer(t *testing.T) {
 	if !strings.Contains(strings.Join(res.Errors, "\n"), "withheld") {
 		t.Fatalf("result errors %q do not record the withheld artifacts", res.Errors)
 	}
+	if len(refusals) == 0 || refusals[0] != "Peer does not accept sub-manifests." {
+		t.Fatalf("refusals sent %q", refusals)
+	}
+}
+
+// §7.2: with the pragma in the server's replies the same push delivers the
+// tree whole.
+func TestClientSendsTreeToServerWithPragma(t *testing.T) {
+	server, client := setupSyncTestRepo(t), setupSyncTestRepo(t)
+	grantNobodyPush(t, server)
+	a := storeTree(t, client)
+	res, err := Sync(context.Background(), client, handlerTransport(t, server), SyncOpts{Push: true, Pull: true})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("result errors %q", res.Errors)
+	}
+	for _, uuid := range []string{a.uuid, a.leafUUID, a.fileUUID} {
+		if _, ok := blob.Exists(server.DB(), uuid); !ok || isPhantom(t, server, uuid) {
+			t.Fatalf("the server lacks %s", uuid)
+		}
+	}
 }
 
 func isPhantom(t *testing.T, r *repo.Repo, uuid string) bool {
@@ -172,35 +247,164 @@ func isPhantom(t *testing.T, r *repo.Repo, uuid string) bool {
 	return size < 0
 }
 
-// A server whose enable-submanifests is off answers a ci-lock with
-// avoid-submanifests, where avoid-delta-manifests goes; with it on, not.
-func TestCiLockReplyCarriesAvoidSubmanifests(t *testing.T) {
-	r := setupSyncTestRepo(t)
-	ask := func() bool {
-		resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
-			&xfer.PragmaCard{Name: "client-version", Values: []string{"22900", "20260101", "000000"}},
-			&xfer.PullCard{ServerCode: "x", ProjectCode: testPC},
-			&xfer.PragmaCard{Name: "ci-lock", Values: []string{testPC, "client-1"}},
-		}})
-		if err != nil {
-			t.Fatalf("HandleSync: %v", err)
-		}
-		for _, p := range findCards[*xfer.PragmaCard](resp) {
-			if p.Name == "avoid-submanifests" {
-				return true
-			}
-		}
-		return false
-	}
-	if !ask() {
-		t.Fatal("no avoid-submanifests with the setting off")
-	}
-	if _, err := r.DB().Exec(`REPLACE INTO config(name, value, mtime) VALUES
-		('enable-submanifests', 'on', 1), ('submanifest-k', '3', 1)`); err != nil {
+// wireLines is msg as the lines it goes out as.
+func wireLines(t *testing.T, msg *xfer.Message) []string {
+	t.Helper()
+	raw, err := msg.EncodeUncompressed()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if ask() {
-		t.Fatal("avoid-submanifests with the setting on")
+	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+}
+
+// lineAfter fails unless the line following the first one beginning with
+// prefix is want.
+func lineAfter(t *testing.T, lines []string, prefix, want string) {
+	t.Helper()
+	for i, line := range lines {
+		if strings.HasPrefix(line, prefix) {
+			if i+1 >= len(lines) || lines[i+1] != want {
+				t.Fatalf("after %q: got %q, want %q\n%s", line, lines[i+1:], want, strings.Join(lines, "\n"))
+			}
+			return
+		}
+	}
+	t.Fatalf("no line begins %q:\n%s", prefix, strings.Join(lines, "\n"))
+}
+
+// §7.2: every request a sync or a clone sends carries send-submanifests
+// right after client-version, private sync included, whatever the
+// sub-manifest settings say.
+func TestRequestsCarrySendSubmanifestsAfterClientVersion(t *testing.T) {
+	for _, enable := range []string{"off", "on"} {
+		server, client := newTestRepoPair(t)
+		grantNobodyPush(t, server)
+		if _, err := server.DB().Exec("UPDATE user SET cap=cap||'x' WHERE login='nobody'"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.DB().Exec(`REPLACE INTO config(name, value, mtime) VALUES
+			('enable-submanifests', ?, 1), ('submanifest-k', '3', 1)`, enable); err != nil {
+			t.Fatal(err)
+		}
+		var requests int
+		transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+			requests++
+			lineAfter(t, wireLines(t, req), "pragma client-version ", "pragma send-submanifests")
+			resp, err := HandleSync(context.Background(), server, req)
+			if err != nil {
+				t.Fatalf("HandleSync: %v", err)
+			}
+			return resp
+		}}
+		for _, private := range []bool{false, true} {
+			if _, err := Sync(context.Background(), client, transport,
+				SyncOpts{Push: true, Pull: true, Private: private}); err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+		}
+		clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"),
+			transport, CloneOpts{})
+		if err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		clone.Close()
+		if requests < 3 {
+			t.Fatalf("only %d requests seen", requests)
+		}
+	}
+}
+
+// §7.2: every reply carries send-submanifests in its leading pragma run,
+// right after server-version, then avoid-submanifests while
+// enable-submanifests is off; with no server-version they lead the reply.
+// The clone reply is no different.
+func TestRepliesCarryCapabilityPragmasAfterServerVersion(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	storeTree(t, r)
+	cloneReq := func(cv *xfer.PragmaCard) []xfer.Card {
+		return []xfer.Card{cv, &xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true}}
+	}
+	pullReq := func(cv *xfer.PragmaCard) []xfer.Card {
+		return []xfer.Card{cv, &xfer.PullCard{ServerCode: "x", ProjectCode: testPC}}
+	}
+	dated := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}}
+	bare := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800"}}
+	for _, enable := range []string{"off", "on"} {
+		if _, err := r.DB().Exec(`REPLACE INTO config(name, value, mtime) VALUES
+			('enable-submanifests', ?, 1), ('submanifest-k', '3', 1)`, enable); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"pragma send-submanifests"}
+		if enable == "off" {
+			want = append(want, "pragma avoid-submanifests")
+		}
+		for name, cards := range map[string][]xfer.Card{
+			"pull":       pullReq(dated),
+			"clone":      cloneReq(dated),
+			"pull bare":  pullReq(bare),
+			"clone bare": cloneReq(bare),
+			"no version": {&xfer.PullCard{ServerCode: "x", ProjectCode: testPC}},
+		} {
+			resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+			if err != nil {
+				t.Fatalf("%s: HandleSync: %v", name, err)
+			}
+			lines := wireLines(t, resp)
+			lead := 0
+			if cards[0] == dated {
+				if !strings.HasPrefix(lines[0], "pragma server-version 22800 ") {
+					t.Fatalf("%s/%s: first line %q", enable, name, lines[0])
+				}
+				lead = 1
+			}
+			if len(lines) < lead+len(want)+1 {
+				t.Fatalf("%s/%s: reply %q", enable, name, lines)
+			}
+			got := lines[lead : lead+len(want)]
+			if strings.Join(got, "|") != strings.Join(want, "|") ||
+				lines[lead+len(want)] == "pragma avoid-submanifests" {
+				t.Fatalf("%s/%s: leading run %q, want %q\n%s", enable, name, got, want,
+					strings.Join(lines, "\n"))
+			}
+			for _, line := range lines[lead+len(want):] {
+				if line == "pragma send-submanifests" || line == "pragma avoid-submanifests" {
+					t.Fatalf("%s/%s: %q repeated later in the reply", enable, name, line)
+				}
+			}
+		}
+	}
+}
+
+// §7.2: a card error that resets the reply discards the run with
+// server-version, as zit and fossil reset theirs, and a client-version
+// repeated in the request does not repeat it.
+func TestCapabilityPragmasOncePerReply(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	cv := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}}
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+		cv, &xfer.BadCommandCard{Line: "bogus\n"},
+		&xfer.PullCard{ServerCode: "x", ProjectCode: testPC},
+	}})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	if n := len(findCards[*xfer.PragmaCard](resp)); n != 0 {
+		t.Fatalf("%d pragmas survived the reset", n)
+	}
+	resp, err = HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
+		cv, cv, &xfer.PullCard{ServerCode: "x", ProjectCode: testPC},
+	}})
+	if err != nil {
+		t.Fatalf("HandleSync: %v", err)
+	}
+	sends := 0
+	for _, p := range findCards[*xfer.PragmaCard](resp) {
+		if p.Name == "send-submanifests" {
+			sends++
+		}
+	}
+	if sends != 1 {
+		t.Fatalf("send-submanifests %d times", sends)
 	}
 }
 
@@ -439,14 +643,11 @@ func storeFlatDeltaOfTree(t *testing.T, r *repo.Repo, a treeArtifacts) string {
 	return flatUUID
 }
 
-// asOldClient rewrites a request's client-version to fossil 2.28's.
+// asOldClient poses as a client that does not read trees, fossil's: its
+// requests carry no send-submanifests.
 func asOldClient(server *repo.Repo, t *testing.T) *MockTransport {
 	return &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
-		for _, c := range req.Cards {
-			if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "client-version" {
-				p.Values[0] = "22800"
-			}
-		}
+		stripPragma(req, "send-submanifests")
 		resp, err := HandleSync(context.Background(), server, req)
 		if err != nil {
 			t.Fatalf("HandleSync: %v", err)
@@ -515,8 +716,8 @@ func TestGateArmsWhenTreeIsReceived(t *testing.T) {
 		}
 	}
 	treeUUID := hash.MustNamingFor(r.DB()).New.Hash(tree)
-	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", treeUUID)); len(files) != 0 {
-		t.Fatal("a received, uncrosslinked tree went to a 2.28 peer")
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", false, treeUUID)); len(files) != 0 {
+		t.Fatal("a received, uncrosslinked tree went to a peer that reads no tree")
 	}
 
 	// A second tree received as a delta of the first, on a fresh repository.
@@ -544,8 +745,8 @@ func TestGateArmsWhenTreeIsReceived(t *testing.T) {
 		visibilityPublic, nil); err != nil {
 		t.Fatal(err)
 	}
-	if files := findCards[*xfer.FileCard](gimmeReply(t, r2, "22800", secondUUID)); len(files) != 0 {
-		t.Fatal("a tree received as a delta went to a 2.28 peer")
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r2, "22800", false, secondUUID)); len(files) != 0 {
+		t.Fatal("a tree received as a delta went to a peer that reads no tree")
 	}
 }
 
@@ -563,8 +764,8 @@ func TestGateArmsOnRepositoryAnOlderVersionSwept(t *testing.T) {
 		t.Fatal(err)
 	}
 	treeUUID := hash.MustNamingFor(r.DB()).New.Hash(tree)
-	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", treeUUID)); len(files) != 0 {
-		t.Fatal("a tree in a repository an older version swept went to a 2.28 peer")
+	if files := findCards[*xfer.FileCard](gimmeReply(t, r, "22800", false, treeUUID)); len(files) != 0 {
+		t.Fatal("a tree in a repository an older version swept went to a peer that reads no tree")
 	}
 }
 

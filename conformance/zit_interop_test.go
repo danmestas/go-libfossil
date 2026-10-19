@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -24,7 +26,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/verify"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -33,8 +37,11 @@ import (
 // PATH (or ZIT_BIN), TestZitInterop builds a history in go-libfossil, has zit
 // re-mint it as sub-manifest trees, clones that over HTTP into go-libfossil,
 // compares every check-in's file set with zit's own listing, verifies the
-// clone, serves it back to a zit clone, and pulls a tree check-in zit commits
-// afterwards. REQUIRE_ZIT_BIN=1 makes a missing zit a failure rather than a
+// clone, serves it back to a zit clone, pulls a tree check-in zit commits
+// afterwards, pushes one go-libfossil commits, and serves one zit pushes.
+// TestZitStrippedPragma strips send-submanifests from the wire and checks
+// each side refuses the other its trees. Both need zit at 0431958ff4 or
+// later, which gates on that pragma. REQUIRE_ZIT_BIN=1 makes a missing zit a failure rather than a
 // skip; CI has no zit, so there TestZitTreeBundle reads a recorded copy of
 // what zit wrote instead. ZIT_REGENERATE=1 rewrites that copy.
 
@@ -345,8 +352,63 @@ func TestZitInterop(t *testing.T) {
 	}
 	checkTreeRepo(t, cloned.Inner(), listing)
 
+	// go-libfossil commits a tree check-in of its own and pushes it to zit:
+	// zit's replies carry send-submanifests, so the tree is not refused.
+	if _, _, err := cloned.EnableSubmanifests(1); err != nil && !strings.Contains(err.Error(), "pinned") {
+		t.Fatalf("EnableSubmanifests: %v", err)
+	}
+	newRID, ok := blob.Exists(cloned.Inner().DB(), newTip)
+	if !ok {
+		t.Fatal("the pulled tip is missing")
+	}
+	files, err := manifest.ListFiles(cloned.Inner(), newRID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var commitFiles []libfossil.FileToCommit
+	for _, f := range files {
+		rid, ok := blob.Exists(cloned.Inner().DB(), f.UUID)
+		if !ok {
+			t.Fatalf("missing %s", f.Name)
+		}
+		data, err := content.Expand(cloned.Inner().DB(), rid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if f.Name == "test/f3.c" {
+			data = []byte("go-libfossil edit\n")
+		}
+		commitFiles = append(commitFiles, libfossil.FileToCommit{Name: f.Name, Content: data, Perm: f.Perm})
+	}
+	_, goTip, err := cloned.Commit(libfossil.CommitOpts{Files: commitFiles, Comment: "go tree", User: "u",
+		ParentID: int64(newRID), Time: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	goRID, _ := blob.Exists(cloned.Inner().DB(), goTip)
+	if d, err := manifest.GetManifest(cloned.Inner(), goRID); err != nil || len(d.S) == 0 {
+		t.Fatalf("go-libfossil's commit is not a tree (%v)", err)
+	}
+	res, err := cloned.Sync(context.Background(), libfossil.NewHTTPTransport(zitURL), libfossil.SyncOpts{Push: true, Pull: true})
+	if err != nil {
+		t.Fatalf("Sync to zit: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("Sync to zit reported %q", res.Errors)
+	}
+	gotTree, err := goListing(cloned.Inner(), goRID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := listing(goTip); strings.Join(gotTree, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("zit lists go-libfossil's pushed tree as %q, go-libfossil %q", want, gotTree)
+	}
+	zitRun(t, bin, home, trees, "verify")
+
 	// zit pushes a second tree check-in to go-libfossil's server, which
-	// stores and links it as it arrives.
+	// stores and links it as it arrives. It commits on go-libfossil's tree,
+	// which its checkout first updates to.
+	zitRun(t, bin, home, work, "update")
 	if err := os.WriteFile(filepath.Join(work, "doc", "f1.c"), []byte("pushed edit\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +432,146 @@ func TestZitInterop(t *testing.T) {
 	if err := cloned.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestZitStrippedPragma: with send-submanifests stripped from the wire, each
+// side refuses the other its trees with the explicit §7.2 error, and
+// nothing else changes: a go-libfossil client whose requests lack the pragma
+// is refused zit's trees, and zit pushing to a go-libfossil server whose
+// replies lack it refuses its own.
+func TestZitStrippedPragma(t *testing.T) {
+	bin := zitBinary(t)
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srcPath := filepath.Join(dir, "src.fossil")
+	zitSourceHistory(t, srcPath)
+	src, err := libfossil.Open(srcPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	srcServer := httptest.NewServer(src.XferHandler())
+	defer srcServer.Close()
+	trees := filepath.Join(dir, "trees")
+	zitRun(t, bin, home, dir, "import-fossil", srcServer.URL, trees, "--submanifest", "--k", "1")
+	zitURL := zitServe(t, bin, home, trees)
+	tip := zitTip(t, bin, home, trees)
+
+	// go-libfossil clones zit with send-submanifests stripped from its
+	// requests: zit refuses the trees, and the flat files still arrive.
+	var refusals []string
+	upstream := &sync.HTTPTransport{URL: zitURL}
+	stripping := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		zitStrip(req)
+		resp, err := upstream.Exchange(context.Background(), req)
+		if err != nil {
+			t.Errorf("exchange with zit: %v", err)
+			return &xfer.Message{}
+		}
+		for _, e := range resp.Cards {
+			if c, ok := e.(*xfer.ErrorCard); ok {
+				refusals = append(refusals, c.Message)
+			}
+		}
+		return resp
+	}}
+	stripped, _, err := sync.Clone(context.Background(), filepath.Join(dir, "stripped.fossil"), stripping, sync.CloneOpts{})
+	if stripped != nil {
+		defer stripped.Close()
+		if rid, ok := content.AvailableByUUID(stripped.DB(), tip); ok {
+			t.Fatalf("zit sent its tree tip %s (rid %d) to a client without the pragma", tip, rid)
+		}
+	}
+	if !strings.Contains(strings.Join(refusals, "\n"), "Peer does not accept sub-manifests.") {
+		t.Fatalf("zit's refusals %q (clone err %v)", refusals, err)
+	}
+
+	// A go-libfossil server holding zit's trees, with send-submanifests
+	// stripped from its replies: zit's push of a new tree is refused by zit.
+	cloned, _, err := libfossil.Clone(context.Background(), filepath.Join(dir, "clone.fossil"),
+		libfossil.NewHTTPTransport(zitURL), libfossil.CloneOpts{})
+	if err != nil {
+		t.Fatalf("Clone from zit: %v", err)
+	}
+	defer cloned.Close()
+	if _, err := cloned.Inner().DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(zitStrippingHandler(t, cloned.Inner()))
+	defer server.Close()
+	work := filepath.Join(dir, "work")
+	zitRun(t, bin, home, dir, "clone", zitURL, work)
+	zitRun(t, bin, home, work, "submanifest", "enable", "--k", "1")
+	if err := os.WriteFile(filepath.Join(work, "src", "f2.c"), []byte("refused edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	zitRun(t, bin, home, work, "commit", "-m", "refused tree")
+	newTip := zitTip(t, bin, home, work)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "push", server.URL)
+	cmd.Dir = work
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "FOSSIL_HOME="+home, "USER=u")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("zit's push of a tree to a server without the pragma succeeded:\n%s", out)
+	}
+	if !strings.Contains(strings.ToLower(string(out)), "sub-manifest") {
+		t.Fatalf("zit's push failed for another reason:\n%s", out)
+	}
+	if rid, ok := content.AvailableByUUID(cloned.Inner().DB(), newTip); ok {
+		t.Fatalf("the server received zit's refused tree (rid %d)", rid)
+	}
+}
+
+// zitStrip removes pragma send-submanifests from msg.
+func zitStrip(msg *xfer.Message) {
+	kept := msg.Cards[:0]
+	for _, c := range msg.Cards {
+		if p, ok := c.(*xfer.PragmaCard); ok && p.Name == "send-submanifests" {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	msg.Cards = kept
+}
+
+// zitStrippingHandler serves r over HTTP with send-submanifests stripped
+// from every reply, as a server that does not read trees would answer.
+func zitStrippingHandler(t *testing.T, r *repo.Repo) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, hr *http.Request) {
+		body, err := io.ReadAll(hr.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req, err := xfer.Decode(body, hr.Header.Get("Content-Type"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp, err := sync.HandleSync(hr.Context(), r, req)
+		if err != nil {
+			t.Errorf("HandleSync: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		zitStrip(resp)
+		encode, contentType := resp.Encode, xfer.ContentTypeCompressed
+		if resp.Uncompressed {
+			encode, contentType = resp.EncodeUncompressed, xfer.ContentTypeUncompressed
+		}
+		data, err := encode()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Write(data)
+	})
 }
 
 // zitTip is the name of the newest check-in zit holds in dir: the first

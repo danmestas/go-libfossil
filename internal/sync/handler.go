@@ -213,6 +213,8 @@ type handler struct {
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
 	smGate          submanifestGate           // §7.2 transfer gate, read once per request
+	peerReadsTrees  bool                      // the request carries send-submanifests (§7.2)
+	capabilitySent  bool                      // the reply's §7.2 pragma run is emitted
 	smRefused       bool                      // this reply already carries the §7.2 refusal
 	filesRecvd      int                       // files received from client (for observer)
 	cascaded        int                       // artifacts the phantom-fill cascades linked
@@ -415,6 +417,14 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// clone batch goes out at the clone card and fossil's client sends its
 	// cookie after that card.
 	h.cloneSnapMax = cloneCapFromCards(req.Cards)
+	// §7.2: a server decides from the request it is answering, so the
+	// capability is read ahead of the card loop like the cookie above. A
+	// request with no client-version gets its reply's pragma run here, at
+	// the head; otherwise it follows server-version (handlePragma).
+	h.peerReadsTrees = sendsSubmanifests(req.Cards)
+	if !hasClientVersion(req.Cards) {
+		h.emitCapabilityPragmas()
+	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
 	// runs them after db_begin_write, and so does the closing crosslink.
 	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
@@ -849,6 +859,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		if len(c.Values) >= 3 {
 			h.resp = append(h.resp, versionPragma("server-version"))
 		}
+		h.emitCapabilityPragmas()
 	case c.Name == "uv-hash" && len(c.Values) >= 1:
 		if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -891,6 +902,17 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 	return nil
 }
 
+// emitCapabilityPragmas appends the reply's §7.2 pragma run, once per
+// reply: send-submanifests, then avoid-submanifests while this repository's
+// enable-submanifests is off.
+func (h *handler) emitCapabilityPragmas() {
+	if h.capabilitySent {
+		return
+	}
+	h.capabilitySent = true
+	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
+}
+
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
 // the requester's login, null for nobody as fossil's g.zLogin is, and
 // ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
@@ -927,20 +949,14 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 	if forbidDeltaManifests(h.repo.DB()) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
-	// draft-fossil-submanifests-00 §7.2: a server whose enable-submanifests
-	// setting is off -- the default -- sends avoid-submanifests where it
-	// sends avoid-delta-manifests, telling the committing client to write no
-	// S cards. A peer that does not know the pragma ignores it (§3.5).
-	if !enableSubmanifests(h.repo.DB()) {
-		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-submanifests"})
-	}
 }
 
 // submanifestBarred applies the §7.2 gate to an answer to a gimme: a tree or
-// sub-manifest is withheld from a client too old to read one, and the reply
-// says so once, explicitly, rather than omitting it in silence.
+// sub-manifest is withheld from a client whose request did not carry
+// send-submanifests, and the reply says so once, explicitly, rather than
+// omitting it in silence.
 func (h *handler) submanifestBarred(rid libfossil.FslID) (bool, error) {
-	barred, err := h.smGate.barred(h.repo.DB(), h.cache, rid, h.peerVersion)
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, rid, h.peerReadsTrees)
 	if err != nil || !barred {
 		return false, err
 	}
@@ -1776,7 +1792,7 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		if forwardable {
 			// Checked before sent: a withheld source is never on the wire,
 			// whatever an earlier chain recorded.
-			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerVersion)
+			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerReadsTrees)
 			if err != nil {
 				return nil, err
 			}
@@ -1830,9 +1846,10 @@ func (h *handler) buildCloneArtifact(
 			continue
 		}
 		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client
-		// too old to read one. walkCloneChain never names a withheld tree as
-		// a source, so a dependent stored as a delta of one goes out whole.
-		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerVersion)
+		// that did not send send-submanifests. walkCloneChain never names a
+		// withheld tree as a source, so a dependent stored as a delta of one
+		// goes out whole.
+		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerReadsTrees)
 		if err != nil {
 			return nil, nil, 0, err
 		}

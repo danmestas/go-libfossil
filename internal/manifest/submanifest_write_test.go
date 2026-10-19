@@ -252,10 +252,24 @@ func TestEnableSubmanifests(t *testing.T) {
 	if _, err := EnableSubmanifests(r, four, 3); err == nil || !strings.Contains(err.Error(), "re-tune") {
 		t.Fatalf("enable --k 3 over pin 1: %v", err)
 	}
-	// An out-of-range pin is no valid pin: an explicit value replaces it.
-	setSettings(t, r, SettingEnableSubmanifests, "off", SettingSubmanifestK, "13")
-	if k, err := EnableSubmanifests(r, four, 2); err != nil || k != 2 {
-		t.Fatalf("enable --k 2 over pin 13 = %d, %v", k, err)
+	// An out-of-range stored k is no valid pin, nor absent: a request with
+	// no explicit k is refused naming it, and selection does not run over
+	// it; an explicit value replaces it.
+	for _, stored := range []string{"13", "0", "x"} {
+		setSettings(t, r, SettingEnableSubmanifests, "off", SettingSubmanifestK, stored)
+		_, err := EnableSubmanifests(r, four, 0)
+		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", stored)) {
+			t.Fatalf("enable over stored k %q: %v", stored, err)
+		}
+		if settingValue(t, r, SettingEnableSubmanifests) != "off" || settingValue(t, r, SettingSubmanifestK) != stored {
+			t.Fatalf("a refused enable over stored k %q changed the settings", stored)
+		}
+		if k, err := EnableSubmanifests(r, four, 2); err != nil || k != 2 {
+			t.Fatalf("enable --k 2 over stored k %q = %d, %v", stored, k, err)
+		}
+		if settingValue(t, r, SettingSubmanifestK) != "2" {
+			t.Fatalf("the explicit k did not replace stored k %q", stored)
+		}
 	}
 }
 

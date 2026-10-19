@@ -425,8 +425,8 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 	// A clone sends no pragma send-private (CloneOpts has no private mode).
 	// Were one added, fossil puts it before client-version in cycle 0
 	// (src/xfer.c client_sync), as headerCards does for a sync (#351).
-	// Pragma: client-version (every round)
-	cards = append(cards, versionPragma("client-version"))
+	// Pragma: client-version, then send-submanifests (every round, §7.2)
+	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound

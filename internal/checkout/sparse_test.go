@@ -511,27 +511,74 @@ func TestSetConeProtectsWork(t *testing.T) {
 // represented, so the update is refused, naming the cone, and nothing moves.
 func TestSparseUpdateRefusesRenameOutOfCone(t *testing.T) {
 	f := newSparseRepo(t, false)
+	c2 := f.commitRenames(t, map[string]string{"src/a.c": "tools/a.c"})
+	co := f.open(t, sparseCone(t), f.c1)
+	writeFile(t, co, "src/a.c", "edited\n")
+	_, err := co.Update(UpdateOpts{TargetRID: c2})
+	assertOutsideCone(t, err, "tools/a.c")
+	if v, _, _ := co.Version(); v != f.c1 {
+		t.Fatalf("a refused update moved the checkout to %d", v)
+	}
+}
+
+// commitRenames commits sparseFiles with each old name of renames moved to
+// its new one, recorded as a rename, as a child of c1.
+func (f *sparseFixture) commitRenames(t *testing.T, renames map[string]string) libfossil.FslID {
+	t.Helper()
 	var mf []manifest.File
 	for name, text := range sparseFiles {
 		file := manifest.File{Name: name, Content: []byte(text)}
-		if name == "src/a.c" {
-			file.Name, file.OldName = "tools/a.c", "src/a.c"
+		if to, ok := renames[name]; ok {
+			file.Name, file.OldName = to, name
 		}
 		mf = append(mf, file)
 	}
 	sort.Slice(mf, func(i, j int) bool { return mf[i].Name < mf[j].Name })
 	f.time = f.time.Add(time.Hour)
-	c2, _, err := manifest.Checkin(f.repo, manifest.CheckinOpts{
+	rid, _, err := manifest.Checkin(f.repo, manifest.CheckinOpts{
 		Files: mf, Comment: "rename", User: "test", Parent: f.c1, Time: f.time,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	return rid
+}
+
+// §4.4 with renames: a rename outside the cone is the record's business
+// only; one into the cone materializes the file under its new name; an
+// unedited file renamed out of the cone leaves the disk and stays in the
+// record. None of them blocks the update.
+func TestSparseUpdateFollowsRenamesAcrossTheCone(t *testing.T) {
+	f := newSparseRepo(t, false)
+	c2 := f.commitRenames(t, map[string]string{
+		"tools/t.c":  "tools/t2.c", // outside to outside
+		"docs/d.txt": "src/d.txt",  // into the cone
+		"src/b.c":    "tools/b.c",  // out of the cone, unedited
+	})
 	co := f.open(t, sparseCone(t), f.c1)
-	writeFile(t, co, "src/a.c", "edited\n")
-	_, err = co.Update(UpdateOpts{TargetRID: c2})
-	assertOutsideCone(t, err, "tools/a.c")
-	if v, _, _ := co.Version(); v != f.c1 {
-		t.Fatalf("a refused update moved the checkout to %d", v)
+	res, err := co.Update(UpdateOpts{TargetRID: c2})
+	if err != nil {
+		t.Fatalf("Update across renames: %v", err)
 	}
+	if !slices.Equal(res.FilesWritten, []string{"src/d.txt"}) ||
+		!slices.Equal(res.FilesRemoved, []string{"src/b.c"}) || res.OutOfCone != 4 {
+		t.Fatalf("Update wrote %q, removed %q, recorded %d out of the cone",
+			res.FilesWritten, res.FilesRemoved, res.OutOfCone)
+	}
+	want := []string{"src/a.c", "src/d.txt", "src/vendor/keep/k.c"}
+	if got := onDisk(t, co); !slices.Equal(got, want) {
+		t.Fatalf("on disk %q, want %q", got, want)
+	}
+	if has, err := co.HasChanges(); err != nil || has {
+		t.Fatalf("HasChanges after the update = %v, %v", has, err)
+	}
+	writeFile(t, co, "src/a.c", "a2\n")
+	rid, _, err := co.Commit(CommitOpts{Message: "m", User: "u", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := maps(sparseFiles, map[string]string{
+		"tools/t2.c": "tools\n", "src/d.txt": "docs\n", "tools/b.c": "b\n", "src/a.c": "a2\n",
+	}, "tools/t.c", "docs/d.txt", "src/b.c")
+	assertCheckinContent(t, f.repo, rid, next)
 }

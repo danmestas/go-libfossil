@@ -70,6 +70,8 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 	for _, issue := range found.Issues {
 		report.addIssue(issue)
 	}
+	// found is a staging report: carry its counters over with its issues.
+	report.MissingRefs += found.MissingRefs
 	return nil
 }
 

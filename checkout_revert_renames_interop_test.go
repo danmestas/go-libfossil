@@ -8,6 +8,7 @@ package libfossil_test
 // then puts every committed file back under its committed name.
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,6 +58,15 @@ var revertRenameCases = []struct {
 			fossilRun(t, bin, ckDir, "mv", "--hard", "b.txt", "a.txt")
 		},
 		files: []string{"c.txt"},
+		gone:  []string{"c.txt"},
+	},
+	{
+		name: "chain, by its middle name",
+		setup: func(t *testing.T, bin, ckDir string) {
+			fossilRun(t, bin, ckDir, "mv", "--hard", "a.txt", "c.txt")
+			fossilRun(t, bin, ckDir, "mv", "--hard", "b.txt", "a.txt")
+		},
+		files: []string{"a.txt"},
 		gone:  []string{"c.txt"},
 	},
 	{
@@ -181,4 +191,100 @@ func revertUndoState(t *testing.T, bin, dir string) string {
 	sort.Strings(files)
 	return strings.Join(files, "\n") + "\n" + fossilRun(t, bin, dir, "changes") +
 		fossilRun(t, bin, dir, "ls")
+}
+
+// TestRevertAddAtOldNameMatchesFossil: undoing a rename onto a new add at
+// the old name leaves the files and the checkout as fossil's own revert
+// does, by every name the revert can be given, and Undo after it restores
+// what fossil undo restores after fossil's revert.
+func TestRevertAddAtOldNameMatchesFossil(t *testing.T) {
+	setup := func(t *testing.T, bin, ckDir string) {
+		fossilRun(t, bin, ckDir, "mv", "--hard", "a.txt", "z.txt")
+		writeFile(t, filepath.Join(ckDir, "a.txt"), "brand new\n")
+		fossilRun(t, bin, ckDir, "add", "a.txt")
+	}
+	for _, files := range [][]string{nil, {"a.txt"}, {"z.txt"}} {
+		t.Run(strings.Join(append([]string{"revert"}, files...), " "), func(t *testing.T) {
+			bin, _, fsDir := newFossilCheckout(t)
+			setup(t, bin, fsDir)
+			fossilRun(t, bin, fsDir, append([]string{"revert"}, files...)...)
+			wantReverted := revertUndoState(t, bin, fsDir)
+			fossilRun(t, bin, fsDir, "undo")
+			wantUndone := revertUndoState(t, bin, fsDir)
+
+			_, repoPath, ckDir := newFossilCheckout(t)
+			setup(t, bin, ckDir)
+			ck := openLibfossilCheckout(t, repoPath, ckDir)
+			if err := ck.Revert(libfossil.RevertOpts{Files: files}); err != nil {
+				t.Fatalf("Revert: %v", err)
+			}
+			if got := revertUndoState(t, bin, ckDir); got != wantReverted {
+				t.Fatalf("after Revert:\n%s\nwant, as fossil's revert leaves it:\n%s", got, wantReverted)
+			}
+			if _, err := ck.Undo(); err != nil {
+				t.Fatalf("Undo: %v", err)
+			}
+			if got := revertUndoState(t, bin, ckDir); got != wantUndone {
+				t.Fatalf("after Undo:\n%s\nwant, as fossil undo leaves it:\n%s", got, wantUndone)
+			}
+		})
+	}
+}
+
+// TestRevertUndoesRotation: three files rotated through each other's names
+// all go back to their committed names, by any one of the names, and Undo
+// puts the rotation back.
+func TestRevertUndoesRotation(t *testing.T) {
+	for _, files := range [][]string{nil, {"a.txt"}, {"c.txt"}} {
+		t.Run(strings.Join(append([]string{"revert"}, files...), " "), func(t *testing.T) {
+			bin, repoPath, ckDir := newFossilCheckout(t)
+			writeFile(t, filepath.Join(ckDir, "c.txt"), "three\n")
+			fossilRun(t, bin, ckDir, "add", "c.txt")
+			fossilRun(t, bin, ckDir, "commit", "-m", "third")
+			fossilRun(t, bin, ckDir, "mv", "--hard", "a.txt", "tmp.txt")
+			fossilRun(t, bin, ckDir, "mv", "--hard", "c.txt", "a.txt")
+			fossilRun(t, bin, ckDir, "mv", "--hard", "b.txt", "c.txt")
+			fossilRun(t, bin, ckDir, "mv", "--hard", "tmp.txt", "b.txt")
+			before := revertUndoState(t, bin, ckDir)
+			ck := openLibfossilCheckout(t, repoPath, ckDir)
+
+			if err := ck.Revert(libfossil.RevertOpts{Files: files}); err != nil {
+				t.Fatalf("Revert: %v", err)
+			}
+			if got := strings.TrimSpace(fossilRun(t, bin, ckDir, "changes")); got != "" {
+				t.Fatalf("fossil changes after Revert = %q, want none", got)
+			}
+			want := map[string]string{"a.txt": "one\n", "b.txt": "two\n", "c.txt": "three\n"}
+			if got := treeFiles(t, ckDir); !maps.Equal(got, want) {
+				t.Fatalf("files after Revert = %q, want %q", got, want)
+			}
+			if _, err := ck.Undo(); err != nil {
+				t.Fatalf("Undo: %v", err)
+			}
+			if got := revertUndoState(t, bin, ckDir); got != before {
+				t.Fatalf("after Undo:\n%s\nwant, as before the revert:\n%s", got, before)
+			}
+		})
+	}
+}
+
+// TestRevertChainByFirstNameKeepsTheOtherRename: reverting only the second
+// rename of a chain (b.txt, now at a.txt) puts b.txt back and leaves the
+// first rename (a.txt to c.txt) pending, its file intact.
+func TestRevertChainByFirstNameKeepsTheOtherRename(t *testing.T) {
+	bin, repoPath, ckDir := newFossilCheckout(t)
+	fossilRun(t, bin, ckDir, "mv", "--hard", "a.txt", "c.txt")
+	fossilRun(t, bin, ckDir, "mv", "--hard", "b.txt", "a.txt")
+	ck := openLibfossilCheckout(t, repoPath, ckDir)
+
+	if err := ck.Revert(libfossil.RevertOpts{Files: []string{"b.txt"}}); err != nil {
+		t.Fatalf("Revert: %v", err)
+	}
+	want := map[string]string{"b.txt": "two\n", "c.txt": "one\n"}
+	if got := treeFiles(t, ckDir); !maps.Equal(got, want) {
+		t.Fatalf("files after Revert = %q, want %q", got, want)
+	}
+	if got := strings.Fields(fossilRun(t, bin, ckDir, "changes")); strings.Join(got, " ") != "RENAMED a.txt -> c.txt" {
+		t.Fatalf("fossil changes after Revert = %q, want only a.txt's rename to c.txt", got)
+	}
 }

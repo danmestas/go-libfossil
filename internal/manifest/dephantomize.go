@@ -26,9 +26,8 @@ import (
 //
 // It returns how many artifacts the cascade linked. Each batch the cascade
 // commits runs its own repair gate first: it propagates tags from the parents
-// its plink rows name and applies the leaf rechecks it scheduled (issue #432).
-// The caller still passes the sum to CrosslinkAfterCascades, which closes the
-// session with a gate even when its own sweep links nothing (issue #414).
+// its plink rows name and applies the leaf rechecks it scheduled (issue #432),
+// so the session's closing crosslink owes the cascade no repair (issue #414).
 func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) int {
 	if r == nil {
 		panic("manifest.AfterDephantomize: r must not be nil")
@@ -42,8 +41,7 @@ func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) i
 // AfterDephantomizeBatch runs AfterDephantomize's cascade for every rid in
 // one linker, so a sync round that fills many phantoms commits its crosslinks
 // together rather than in one transaction per artifact. A cancelled ctx stops
-// it as it stops AfterDephantomize. It returns how many artifacts it linked,
-// which the caller owes a repair for, as for AfterDephantomize's count.
+// it as it stops AfterDephantomize. It returns how many artifacts it linked.
 func AfterDephantomizeBatch(ctx context.Context, r *repo.Repo, rids []libfossil.FslID) int {
 	if r == nil {
 		panic("manifest.AfterDephantomizeBatch: r must not be nil")
@@ -239,8 +237,7 @@ func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 }
 
 // repairDue is the link count repairCrosslinkState gates on: nonzero when this
-// linker, or a cascade the caller reported (CrosslinkAfterCascades), linked
-// rows the leaf and tag state has not been repaired for.
+// linker linked rows the leaf and tag state has not been repaired for.
 func (rl *ReceiveLinker) repairDue() int {
 	if rl.needsRepair {
 		return 1

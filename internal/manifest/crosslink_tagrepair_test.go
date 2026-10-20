@@ -242,8 +242,8 @@ func TestRepairConvergesAfterCascade(t *testing.T) {
 		t.Fatalf("cascade propagated from %v, want only c2's parent %v", *visited, want)
 	}
 	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
-	if _, err := CrosslinkAfterCascades(context.Background(), r, cascaded); err != nil {
-		t.Fatalf("CrosslinkAfterCascades: %v", err)
+	if _, err := CrosslinkContext(context.Background(), r); err != nil {
+		t.Fatalf("CrosslinkContext: %v", err)
 	}
 	if want := []libfossil.FslID{ridOf(t, r, c1)}; !slices.Equal(*visited, want) {
 		t.Fatalf("propagated from %v, want only c2's parent %v", *visited, want)

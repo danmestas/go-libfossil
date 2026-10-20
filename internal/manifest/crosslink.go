@@ -301,35 +301,22 @@ func Crosslink(r *repo.Repo) (int, error) {
 // CrosslinkContext is a one-shot ReceiveLinker: callers that do not receive
 // blobs incrementally get the same candidate ordering, cache, and single repair
 // gate as a clone, without retaining a linker beyond this call.
+//
+// The closing gate runs once, when the sweep linked anything, and applies the
+// sweep's leaf rechecks (draft-fossil-repo-state-01 Section 7.3: every
+// scheduled leaf recheck is applied before the leaf table is read). A session's
+// phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) owe it
+// nothing: each cascade batch runs the whole gate, reparents, propagation and
+// leaf rechecks, before it commits, so a session whose cascades linked
+// everything and whose sweep links nothing ends repaired (issue #414).
 func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
-	return CrosslinkAfterCascades(ctx, r, 0)
-}
-
-// CrosslinkAfterCascades is CrosslinkContext closing a session whose
-// phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) linked
-// cascaded artifacts between its rounds. A cascade batch runs its own repair
-// gate before it commits, propagating from the parents it linked and applying
-// the leaf rechecks it scheduled; the closing gate runs here, once, when the
-// sweep or the cascades linked anything, and applies the sweep's rechecks
-// (draft-fossil-repo-state-01 Section 7.3: every scheduled leaf recheck is
-// applied before the leaf table is read). Without the count, a session whose
-// cascades linked everything ended in a sweep that linked nothing and skipped
-// the repair, leaving a pulled check-in with no leaf row (issue #414), when
-// cascades left propagation to this gate. Each cascade batch now runs its own
-// gate, so for cascades the count only keeps the session's reparent pass. It
-// returns what the sweep alone linked.
-func CrosslinkAfterCascades(ctx context.Context, r *repo.Repo, cascaded int) (int, error) {
 	if r == nil {
-		panic("manifest.CrosslinkAfterCascades: r must not be nil")
-	}
-	if cascaded < 0 {
-		panic("manifest.CrosslinkAfterCascades: cascaded must not be negative")
+		panic("manifest.CrosslinkContext: r must not be nil")
 	}
 	linker, err := newReceiveLinker(r, crosslinkCacheBytes)
 	if err != nil {
 		return 0, err
 	}
-	linker.needsRepair = cascaded > 0
 	return linker.Finalize(ctx)
 }
 

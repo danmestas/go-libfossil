@@ -89,9 +89,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parent that keeps its row when an untagged child arrives later is
   accepted, and so is a parent that a reparent took a child from, whether a
   P-card or an earlier, since replaced, parent tag named it. A child moved
-  by a parent tag that was later cancelled is accepted too. Every
-  conformance case comparing the leaf table now also runs Verify on the
-  tables go-libfossil and fossil(1) derive.
+  by a parent tag that was later cancelled is accepted too. A child counts
+  as same-branch for a reported row only under both the draft's reading and
+  fossil 2.28's leaf_check (any branch row, the literal trunk), and as absent
+  for a reported check-in only under both, so the tables fossil writes when
+  main-branch is not trunk or a branch tag was cancelled, and a table written
+  before main-branch changed, are accepted. Every conformance case comparing
+  the leaf table now also runs Verify on the tables go-libfossil and
+  fossil(1) derive, those recording fossil departing from the draft
+  included. Verify no longer reports a P-card parent missing from plink when
+  the check-in carries a parent tag, which replaces those rows in fossil.
   `repostate.7.3.reparent-twice-no-recheck` reparents a check-in twice, and
   `repostate.7.2.verify-leaf-table` checks that Verify reports a dropped and
   a planted row (RS-7.2-1, RS-7.3-1, RS-7.3-3). Tracked in #433.

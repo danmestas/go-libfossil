@@ -58,7 +58,8 @@ func sparseconeCases() []scCase {
 	var all []scCase
 	for _, group := range [][]scCase{
 		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(),
-		scStoreCases(), scCompactCases(), scSyncCases(), scCanonicalCases(),
+		scStoreCases(), scCompactCases(), scSyncCases(), scCanonicalCases(), scProtocolBoundsCases(),
+		scWorktreeCompleteCases(),
 	} {
 		all = append(all, group...)
 	}
@@ -676,9 +677,7 @@ func scCommitCases() []scCase {
 		{Case{ID: "sparsecone.4.3.absent", Req: "SC-4.3-3"}, scAbsentR},
 		{Case{ID: "sparsecone.4.3.dense", Req: "SC-4.3-4"}, scRCard},
 		{Case{ID: "sparsecone.4.4.update", Req: "SC-4.4-1"}, scUpdate},
-		{Case{ID: "sparsecone.4.4.merge", Req: "SC-4.4-1",
-			Deviation: "a merge that would change a file outside the cone is refused, naming the " +
-				"cone, with widening as the remedy; record-level merge is not implemented"}, scMerge},
+		{Case{ID: "sparsecone.4.4.merge", Req: "SC-4.4-1"}, scMerge},
 		{Case{ID: "sparsecone.4.4.count", Req: "SC-4.4-2"}, scUpdate},
 		{Case{ID: "sparsecone.4.4.read", Req: "SC-4.4-3"}, scRead},
 		{Case{ID: "sparsecone.7.derived", Req: "SC-7-1"}, scDerived},
@@ -925,8 +924,8 @@ func scEditedMap(set map[string]string, drop ...string) map[string]string {
 	return out
 }
 
-// §4.4 requires a merge's out-of-cone changes to be applied to the record;
-// go-libfossil refuses such a merge instead.
+// §4.4 applies out-of-cone changes to the record without widening the cone.
+// The record-only cases also verify committed bytes and conflict handling.
 func scMerge(t *testing.T) error {
 	f := newSCRepo(t, false)
 	theirs := f.commit(t, scEditedMap(map[string]string{"tools/t.c": "theirs\n"}), f.c1)

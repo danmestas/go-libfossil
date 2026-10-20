@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
-	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/delta"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
@@ -204,12 +204,19 @@ type scSparse struct {
 
 func newSCSparse(t *testing.T, tree bool) *scSparse {
 	t.Helper()
-	s := &scSparse{origin: newSCRepo(t, tree), gimmes: map[string]bool{}}
-	if _, err := s.origin.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+	return newSCSparseFrom(t, newSCRepo(t, tree))
+}
+
+// newSCSparseFrom serves origin, which nobody may push to, and makes the
+// sparse clone of it.
+func newSCSparseFrom(t *testing.T, origin *scRepo) *scSparse {
+	t.Helper()
+	s := &scSparse{origin: origin, gimmes: map[string]bool{}}
+	if _, err := origin.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
 		t.Fatal(err)
 	}
 	clone, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "sparse.fossil"),
-		s.transport(s.origin.r), sync.CloneOpts{})
+		s.transport(origin.r), sync.CloneOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +272,7 @@ func (s *scSparse) rid(t *testing.T, originRID libfossil.FslID) libfossil.FslID 
 	return rid
 }
 
-// absences classifies r's phantoms, by uuid.
+// scAbsences classifies r's phantoms, by uuid.
 func scAbsences(t *testing.T, r *repo.Repo) map[string]content.Absence {
 	t.Helper()
 	a, err := content.LoadAbsences(r.DB())
@@ -363,7 +370,7 @@ func scStoreLoss(t *testing.T) error {
 
 // --- §4.3: the R card over a sparse store -----------------------------------
 
-// scSparseCommit commits scEdit from a checkout of the sparse clone whose
+// commit commits scEdit from a checkout of the sparse clone whose
 // worktree cone is the store cone.
 func (s *scSparse) commit(t *testing.T) (libfossil.FslID, error) {
 	t.Helper()
@@ -464,18 +471,9 @@ func scHybrid(t *testing.T) error {
 			return err
 		}
 	}
-	if _, err := origin.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
-		return err
-	}
 	c2 := origin.commit(t, scEditedMap(map[string]string{"tools/t.c": "tools2\n", "src/a.c": "a2\n"}), origin.c1)
-	s := &scSparse{origin: origin, gimmes: map[string]bool{}}
-	clone, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "hybrid.fossil"),
-		s.transport(origin.r), sync.CloneOpts{})
-	if err != nil {
-		return err
-	}
-	defer clone.Close()
-	s.clone = clone
+	s := newSCSparseFrom(t, origin)
+	clone, elided := s.clone, s.elided
 	flat, err := manifest.GetManifest(origin.r, origin.c1)
 	if err != nil {
 		return err
@@ -487,7 +485,6 @@ func scHybrid(t *testing.T) error {
 	if len(flat.S) != 0 || len(tree.S) == 0 {
 		return expectf("the fixture is not hybrid: %d and %d S cards", len(flat.S), len(tree.S))
 	}
-	elided := scSparsify(t, clone, scDefault(t))
 	held := []libfossil.FslID{s.rid(t, origin.c1), s.rid(t, c2)}
 	for _, sc := range tree.S {
 		rid, ok := content.AvailableByUUID(clone.DB(), sc.UUID)
@@ -527,12 +524,12 @@ func scHybrid(t *testing.T) error {
 // names and every non-file artifact is held; exactly the blobs F cards name
 // only outside the cone are elided. A missing control artifact is wanted.
 func scHoldings(t *testing.T) error {
-	s := newSCSparseWith(t, func(f *scRepo) {
-		if _, err := tag.AddTag(f.r, tag.TagOpts{TargetRID: f.c1, TagName: "release",
-			TagType: tag.TagSingleton, User: "u", Time: f.when.Add(time.Minute)}); err != nil {
-			t.Fatal(err)
-		}
-	})
+	origin := newSCRepo(t, false)
+	if _, err := tag.AddTag(origin.r, tag.TagOpts{TargetRID: origin.c1, TagName: "release",
+		TagType: tag.TagSingleton, User: "u", Time: origin.when.Add(time.Minute)}); err != nil {
+		return err
+	}
+	s := newSCSparseFrom(t, origin)
 	files, err := manifest.ListFiles(s.origin.r, s.origin.c1)
 	if err != nil {
 		return err
@@ -575,27 +572,6 @@ func scHoldings(t *testing.T) error {
 		return expectf("the pull did not restore the control artifact")
 	}
 	return nil
-}
-
-// newSCSparseWith is newSCSparse over a flat origin that setup extends
-// first.
-func newSCSparseWith(t *testing.T, setup func(*scRepo)) *scSparse {
-	t.Helper()
-	origin := newSCRepo(t, false)
-	setup(origin)
-	s := &scSparse{origin: origin, gimmes: map[string]bool{}}
-	if _, err := origin.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
-		t.Fatal(err)
-	}
-	clone, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "sparse.fossil"),
-		s.transport(origin.r), sync.CloneOpts{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { clone.Close() })
-	s.clone = clone
-	s.elided = scSparsify(t, clone, scDefault(t))
-	return s
 }
 
 // An out-of-cone sub-manifest node the store lacks is a transit phantom,

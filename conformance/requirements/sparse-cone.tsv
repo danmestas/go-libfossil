@@ -76,4 +76,4 @@ SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves eli
 SC-6.4-2	6.4	With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.	internal explicit-peer refusal and cancellation are tested; public operations and saved-peer integration remain pending
 SC-7-1	7	Derived caches are cone-independent: their keys do not incorporate the cone.
 SC-8-1	8	The member count and member length of a cone are bounded with the same limits applied to F-card filenames.
-SC-8-2	8	The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.	depth and visit guards exist internally; direct wire conformance coverage remains pending and whole-store preprocessing is not per-round bounded
+SC-8-2	8	The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.	wire exchanges accept depth 16 and refuse depth 17; visited-node wire coverage remains pending and cold whole-store preprocessing is not per-round bounded

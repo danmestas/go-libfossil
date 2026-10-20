@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
@@ -19,17 +21,25 @@ func TestRequireParentContentElidedSibling(t *testing.T) {
 	if !errors.As(err, &required) {
 		t.Fatalf("required-content refusal: %v", err)
 	}
-	if len(required.Roots) != 1 || len(required.Artifacts) != 1 || required.Artifacts[0] != tree.S[1].UUID || required.Elided < 2 {
+	if len(required.Roots) != 1 || len(required.Artifacts) != 1 {
 		t.Fatalf("incomplete recovery instruction: %+v", required)
 	}
-	if !strings.Contains(err.Error(), "elided") || !strings.Contains(err.Error(), "no configured peer") || strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "corrupt") {
+	if required.Artifacts[0] != tree.S[1].UUID || required.Elided < 2 {
+		t.Fatalf("incorrect recovery instruction: %+v", required)
+	}
+	if !strings.Contains(err.Error(), "elided") || !strings.Contains(err.Error(), "no configured peer") {
 		t.Fatalf("incorrect absence diagnostic: %v", err)
+	}
+	if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("elision described as damage: %v", err)
 	}
 	var before int
 	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = Checkin(r, CheckinOpts{Files: []File{{Name: "new", Content: []byte("new bytes")}}, Parent: rid, User: "test"})
+	_, _, err = Checkin(r, CheckinOpts{
+		Files: []File{{Name: "new", Content: []byte("new bytes")}}, Parent: rid, User: "test",
+	})
 	if !errors.As(err, &required) {
 		t.Fatalf("local-only writer did not refuse structurally incomplete parent: %v", err)
 	}
@@ -39,6 +49,56 @@ func TestRequireParentContentElidedSibling(t *testing.T) {
 	}
 	if after != before {
 		t.Fatalf("refusal leaked new blobs: before=%d after=%d", before, after)
+	}
+}
+
+func TestMergeParentFilesCarriesElidedPayload(t *testing.T) {
+	r := sha3Repo(t)
+	parentRID, parent := commit(t, r, CheckinOpts{Files: []File{
+		{Name: "inside/a", Content: []byte("inside")},
+		{Name: "outside/a", Content: []byte("outside")},
+	}})
+	c, err := cone.New([]string{"inside"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SetStoreCone(r.DB(), c); err != nil {
+		t.Fatal(err)
+	}
+	outsideUUID := parent.F[1].UUID
+	elideWriterNode(t, r, outsideUUID)
+	files, err := MergeParentFiles(r, parentRID, []File{{Name: "inside/a", Content: []byte("edited")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[1].UUID != outsideUUID || files[1].Content != nil {
+		t.Fatalf("unchanged outside entry was not carried verbatim: %+v", files)
+	}
+	_, _, err = Checkin(r, CheckinOpts{Files: files, Parent: parentRID, User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, held := content.AvailableByUUID(r.DB(), outsideUUID); held {
+		t.Fatal("metadata-only carry fetched outside payload")
+	}
+}
+
+// Retaining bytes does not authorize consuming a shunned structural node.
+func TestRequireParentContentHeldShunnedChild(t *testing.T) {
+	files := sparseBoundaryCandidates(t)
+	old := append(files[:1:1], files[2:]...)
+	tree := mustBuildTree(t, old, 1)
+	r, rid, _, _ := sparseBoundaryParent(t, files, old, tree)
+	held := tree.S[0].UUID
+	if _, ok := content.AvailableByUUID(r.DB(), held); !ok {
+		t.Fatal("fixture first subtree is not held")
+	}
+	if _, err := r.DB().Exec("INSERT INTO shun(uuid) VALUES(?)", held); err != nil {
+		t.Fatal(err)
+	}
+	err := RequireParentContent(context.Background(), r.DB(), []libfossil.FslID{rid})
+	if err == nil || !strings.Contains(err.Error(), "shunned") {
+		t.Fatalf("held shunned structural content was not refused: %v", err)
 	}
 }
 

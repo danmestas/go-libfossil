@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"fmt"
 	"sort"
 
@@ -201,8 +202,9 @@ func fCardsToEntries(fCards []deck.FileCard) []FileEntry {
 
 // MergeParentFiles returns supplied with every file tracked at parentRID
 // that is not already in supplied appended. Names in supplied win over the
-// parent's entry; the parent's untouched files have their content expanded
-// from the repo so the resulting slice is a full-tree set ready for Checkin.
+// parent's entry; untouched entries carry their immutable hashes into the
+// full-tree set without reading payloads a sparse store may deliberately elide.
+// Checkin validates each carried artifact against the store's coverage policy.
 //
 // parentRID == 0 returns supplied unchanged.
 func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) ([]File, error) {
@@ -211,6 +213,10 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 	}
 	parentFiles, err := ListFiles(r, parentRID)
 	if err != nil {
+		required := RequireParentContent(context.Background(), r.DB(), []libfossil.FslID{parentRID})
+		if required != nil {
+			err = required
+		}
 		return nil, fmt.Errorf("manifest.MergeParentFiles: %w", err)
 	}
 	suppliedNames := make(map[string]struct{}, len(supplied))
@@ -222,20 +228,10 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 		if _, ok := suppliedNames[pf.Name]; ok {
 			continue
 		}
-		baseRid, ok := content.AvailableByUUID(r.DB(), pf.UUID)
-		if !ok {
-			return nil, fmt.Errorf("manifest.MergeParentFiles: blob %s for %s not found", pf.UUID, pf.Name)
-		}
-		// Bare Expand: each untouched parent file is expanded once to build a
-		// single commit's full-tree file set. Distinct blobs, no overlap.
-		data, err := content.Expand(r.DB(), baseRid)
-		if err != nil {
-			return nil, fmt.Errorf("manifest.MergeParentFiles: expand %s: %w", pf.Name, err)
-		}
 		merged = append(merged, File{
-			Name:    pf.Name,
-			Content: data,
-			Perm:    pf.Perm,
+			Name: pf.Name,
+			UUID: pf.UUID,
+			Perm: pf.Perm,
 		})
 	}
 	return merged, nil

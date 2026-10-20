@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -36,7 +38,9 @@ const (
 // file payloads and inventory never enter the repository. At most MaxRounds
 // exchanges, maxRequiredArtifacts names and maxRequiredBytes staged bytes are
 // permitted. A caller retries its local operation once, revalidating its state.
-func FetchRequiredArtifacts(ctx context.Context, r *repo.Repo, peer Transport, roots []string, opts SyncOpts) (*SyncResult, error) {
+func FetchRequiredArtifacts(
+	ctx context.Context, r *repo.Repo, peer Transport, roots []string, opts SyncOpts,
+) (*SyncResult, error) {
 	if ctx == nil || r == nil {
 		panic("sync.FetchRequiredArtifacts: nil context or repo")
 	}
@@ -61,52 +65,18 @@ func FetchRequiredArtifacts(ctx context.Context, r *repo.Repo, peer Transport, r
 			if err != nil {
 				return nil, err
 			}
-			return nil, fmt.Errorf("sparse required content: %d elided artifact(s); no configured peer to resolve %d required artifact(s)", a.Count(content.Elided), len(wanted))
+			return nil, fmt.Errorf("sparse required content: %d elided artifact(s); "+
+				"no configured peer to resolve %d required artifact(s)",
+				a.Count(content.Elided), len(wanted))
 		}
 		if round >= MaxRounds {
-			return nil, fmt.Errorf("sparse required content: unavailable after %d rounds: %s", MaxRounds, wanted[0])
+			return nil, fmt.Errorf("sparse required content: unavailable after %d rounds: %s",
+				MaxRounds, wanted[0])
 		}
-		s := newSession(r, opts)
-		cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests()}
-		if opts.Private {
-			cards = append(cards, &xfer.PragmaCard{Name: "send-private"})
-		}
-		if s.projectCode == "" {
-			return nil, errNoProjectCode("required content")
-		}
-		// No cone pragmas: the explicit gimme set, not a lasting policy
-		// change, authorizes this request's structural coverage.
-		cards = append(cards, &xfer.PullCard{ProjectCode: s.projectCode, ServerCode: s.serverCode()})
-		requested := make(map[string]bool)
-		for _, uuid := range wanted[:min(len(wanted), MaxGimmeBase)] {
-			cards = append(cards, &xfer.GimmeCard{UUID: uuid})
-			requested[uuid] = true
-		}
-		if opts.User != "" {
-			login, signed, err := s.buildLoginCard(cards, s.projectCode)
-			if err != nil {
-				return nil, err
-			}
-			cards = append([]xfer.Card{login}, signed...)
-		}
-		reply, err := peer.Exchange(ctx, &xfer.Message{Cards: cards})
-		if err != nil {
-			return nil, fmt.Errorf("sparse required content: %w", err)
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if reply == nil {
-			return nil, fmt.Errorf("sparse required content: peer returned no reply")
-		}
-		accepted, err := f.receive(reply, requested, s.projectCode)
-		if err != nil {
+		if err := f.exchange(peer, wanted); err != nil {
 			return nil, err
 		}
 		result.Rounds++
-		if accepted == 0 {
-			return nil, fmt.Errorf("sparse required content: configured peer cannot supply required artifact %s", wanted[0])
-		}
 	}
 }
 
@@ -124,6 +94,55 @@ type requiredFetch struct {
 	opts  SyncOpts
 	data  map[string]*requiredArtifact
 	bytes int
+}
+
+func (f *requiredFetch) exchange(peer Transport, wanted []string) error {
+	if peer == nil {
+		panic("sync.requiredFetch.exchange: nil peer")
+	}
+	if len(wanted) == 0 {
+		panic("sync.requiredFetch.exchange: no required names")
+	}
+	s := newSession(f.repo, f.opts)
+	if s.projectCode == "" {
+		return errNoProjectCode("required content")
+	}
+	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests()}
+	if f.opts.Private {
+		cards = append(cards, &xfer.PragmaCard{Name: "send-private"})
+	}
+	// No cone pragmas: exact gimmes authorize only this request's coverage.
+	cards = append(cards, &xfer.PullCard{ProjectCode: s.projectCode, ServerCode: s.serverCode()})
+	requested := make(map[string]bool)
+	for _, uuid := range wanted[:min(len(wanted), MaxGimmeBase)] {
+		cards = append(cards, &xfer.GimmeCard{UUID: uuid})
+		requested[uuid] = true
+	}
+	if f.opts.User != "" {
+		login, signed, err := s.buildLoginCard(cards, s.projectCode)
+		if err != nil {
+			return err
+		}
+		cards = append([]xfer.Card{login}, signed...)
+	}
+	reply, err := peer.Exchange(f.ctx, &xfer.Message{Cards: cards})
+	if err != nil {
+		return fmt.Errorf("sparse required content: %w", err)
+	}
+	if err := f.ctx.Err(); err != nil {
+		return err
+	}
+	if reply == nil {
+		return fmt.Errorf("sparse required content: peer returned no reply")
+	}
+	accepted, err := f.receive(reply, requested, s.projectCode)
+	if err != nil {
+		return err
+	}
+	if accepted == 0 {
+		return fmt.Errorf("sparse required content: configured peer cannot supply %s", wanted[0])
+	}
+	return nil
 }
 
 func (f *requiredFetch) checkName(uuid string) error {
@@ -151,116 +170,166 @@ func (f *requiredFetch) reserve(n int) error {
 	return nil
 }
 
-// resolve expands transport deltas without storing their bases. Local corruption
-// is an error, not a reason to silently replace bytes from another repository.
-func (f *requiredFetch) resolve(uuid string, wanted map[string]bool, active map[string]bool) ([]byte, error) {
+// load treats local corruption as an error, never as permission to replace
+// bytes from another repository. Unavailable storage-delta targets may be fetched.
+func (f *requiredFetch) load(uuid string, wanted map[string]bool) (*requiredArtifact, error) {
 	if err := f.checkName(uuid); err != nil {
 		return nil, err
 	}
-	if active[uuid] || len(active) >= maxRequiredDeltaDepth {
-		return nil, fmt.Errorf("sparse required content: cyclic or excessive delta chain at %s", uuid)
+	if a := f.data[uuid]; a != nil {
+		return a, nil
 	}
-	a := f.data[uuid]
-	if a == nil {
-		if len(f.data)+len(wanted) >= maxRequiredArtifacts {
-			return nil, fmt.Errorf("sparse required content: artifact limit %d exceeded", maxRequiredArtifacts)
-		}
-		if rid, held := content.AvailableByUUID(f.repo.DB(), uuid); held {
-			if content.IsPrivate(f.repo.DB(), int64(rid)) && !f.opts.Private {
-				return nil, fmt.Errorf("sparse required content: private artifact %s requires private permission", uuid)
-			}
-			data, err := content.Expand(f.repo.DB(), rid)
-			if err != nil {
-				return nil, fmt.Errorf("sparse required content: expand %s: %w", uuid, err)
-			}
-			if !hashMatches(uuid, data) {
-				return nil, fmt.Errorf("sparse required content: %s: %w", uuid, errHashMismatch)
-			}
-			if err := f.reserve(len(data)); err != nil {
-				return nil, err
-			}
-			a = &requiredArtifact{full: data, local: true}
-			f.data[uuid] = a
-		} else {
-			wanted[uuid] = true
-			return nil, nil
-		}
+	if len(f.data)+len(wanted) >= maxRequiredArtifacts {
+		return nil, fmt.Errorf("sparse required content: artifact limit exceeded")
 	}
-	if a.full != nil {
-		return a.full, nil
+	rid, held, err := content.CheckAvailableByUUID(f.repo.DB(), uuid)
+	if err != nil {
+		return nil, err
 	}
-	full := a.payload
-	if a.basis != "" {
-		active[uuid] = true
-		basis, err := f.resolve(a.basis, wanted, active)
-		delete(active, uuid)
-		if err != nil || basis == nil {
-			return nil, err
-		}
-		n, err := delta.OutputSize(a.payload)
-		if err != nil {
-			return nil, fmt.Errorf("sparse required content: delta %s: %w", uuid, err)
-		}
-		if n > uint64(maxRequiredBytes-f.bytes) {
-			return nil, fmt.Errorf("sparse required content: expanded delta exceeds staging budget")
-		}
-		if err := f.reserve(int(n)); err != nil {
-			return nil, err
-		}
-		full, err = delta.Apply(basis, a.payload)
-		if err != nil {
-			return nil, fmt.Errorf("sparse required content: delta %s: %w", uuid, err)
-		}
+	if !held {
+		wanted[uuid] = true
+		return nil, nil
 	}
-	if !hashMatches(uuid, full) {
+	if content.IsPrivate(f.repo.DB(), int64(rid)) && !f.opts.Private {
+		return nil, fmt.Errorf("sparse required content: private artifact %s requires permission", uuid)
+	}
+	data, err := content.Expand(f.repo.DB(), rid)
+	if err != nil {
+		return nil, fmt.Errorf("sparse required content: expand %s: %w", uuid, err)
+	}
+	if !hashMatches(uuid, data) {
 		return nil, fmt.Errorf("sparse required content: %s: %w", uuid, errHashMismatch)
 	}
-	a.full = full
+	if err := f.reserve(len(data)); err != nil {
+		return nil, err
+	}
+	a := &requiredArtifact{full: data, local: true}
+	f.data[uuid] = a
+	return a, nil
+}
+
+// resolve expands a bounded transport-delta chain on an explicit stack; its
+// bases remain staging-only unless the structural walk independently needs them.
+func (f *requiredFetch) resolve(uuid string, wanted map[string]bool) ([]byte, error) {
+	path := make([]string, 0, maxRequiredDeltaDepth)
+	seen := make(map[string]bool)
+	name := uuid
+	var full []byte
+	for steps := 0; steps < maxRequiredDeltaDepth; steps++ {
+		if seen[name] {
+			return nil, fmt.Errorf("sparse required content: cyclic delta chain at %s", name)
+		}
+		seen[name] = true
+		a, err := f.load(name, wanted)
+		if err != nil || a == nil {
+			return nil, err
+		}
+		if a.full != nil {
+			full = a.full
+			break
+		}
+		path = append(path, name)
+		if a.basis == "" {
+			full = a.payload
+			break
+		}
+		name = a.basis
+	}
+	if full == nil {
+		return nil, fmt.Errorf("sparse required content: excessive delta depth at %s", name)
+	}
+	for i := len(path) - 1; i >= 0; i-- {
+		name = path[i]
+		a := f.data[name]
+		if a.basis != "" {
+			var err error
+			full, err = f.applyDelta(name, a.payload, full)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !hashMatches(name, full) {
+			return nil, fmt.Errorf("sparse required content: %s: %w", name, errHashMismatch)
+		}
+		a.full = full
+	}
+	return f.data[uuid].full, nil
+}
+
+func (f *requiredFetch) applyDelta(uuid string, payload, basis []byte) ([]byte, error) {
+	n, err := delta.OutputSize(payload)
+	if err != nil {
+		return nil, fmt.Errorf("sparse required content: delta %s: %w", uuid, err)
+	}
+	if n > uint64(maxRequiredBytes-f.bytes) {
+		return nil, fmt.Errorf("sparse required content: expanded delta exceeds staging budget")
+	}
+	if err := f.reserve(int(n)); err != nil {
+		return nil, err
+	}
+	full, err := delta.Apply(basis, payload)
+	if err != nil {
+		return nil, fmt.Errorf("sparse required content: delta %s: %w", uuid, err)
+	}
 	return full, nil
 }
 
+type requiredFrame struct {
+	uuid     string
+	kind     deck.ArtifactType
+	depth    int
+	baseline bool
+	exit     bool
+}
+
 func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, error) {
-	wanted, structural := make(map[string]bool), make(map[string]bool)
-	active := make(map[string]bool)
-	var visit func(string, deck.ArtifactType, int, bool) error
-	visit = func(uuid string, kind deck.ArtifactType, depth int, baseline bool) error {
-		if active[uuid] || depth > maxRequiredDepth {
-			return fmt.Errorf("sparse required content: cyclic or excessive S/B depth at %s", uuid)
-		}
-		data, err := f.resolve(uuid, wanted, make(map[string]bool))
-		if err != nil || data == nil {
-			return err
-		}
-		d, err := deck.Parse(data)
-		if err != nil {
-			return fmt.Errorf("sparse required content: parse %s: %w", uuid, err)
-		}
-		if (kind >= 0 && d.Type != kind) || (d.Type != deck.Checkin && d.Type != deck.Submanifest) {
-			return fmt.Errorf("sparse required content: %s has the wrong structural artifact type", uuid)
-		}
-		if structural[uuid] {
-			return nil
-		}
-		structural[uuid], active[uuid] = true, true
-		defer delete(active, uuid)
-		for _, s := range d.S {
-			if err := visit(s.UUID, deck.Submanifest, depth+1, false); err != nil {
-				return err
-			}
-		}
-		// A delta's baseline contributes its own file set, never another B
-		// chain (artifact-format-00 8.3). Its tree starts at depth zero.
-		if d.B != "" && !baseline {
-			return visit(d.B, deck.Checkin, 0, true)
-		}
-		return nil
-	}
 	if len(roots) > maxRequiredArtifacts {
 		return nil, nil, fmt.Errorf("sparse required content: too many roots")
 	}
+	wanted, structural := make(map[string]bool), make(map[string]bool)
+	active := make(map[string]bool)
+	visited := make(map[requiredFrame]bool)
+	stack := make([]requiredFrame, 0, len(roots))
 	for _, uuid := range roots {
-		if err := visit(uuid, -1, 0, false); err != nil {
+		stack = append(stack, requiredFrame{uuid: uuid, kind: -1})
+	}
+	const maxVisits = 1 << 20
+	for visits := 0; len(stack) > 0; visits++ {
+		if visits >= maxVisits {
+			return nil, nil, fmt.Errorf("sparse required content: structural visit limit exceeded")
+		}
+		frame := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if frame.exit {
+			delete(active, frame.uuid)
+			continue
+		}
+		if active[frame.uuid] || frame.depth > maxRequiredDepth {
+			return nil, nil, fmt.Errorf("sparse required content: cyclic or excessive S/B depth")
+		}
+		d, err := f.structuralDeck(frame, wanted)
+		if err != nil {
 			return nil, nil, err
+		}
+		key := requiredFrame{uuid: frame.uuid, baseline: frame.baseline}
+		if d == nil || visited[key] {
+			continue
+		}
+		visited[key] = true
+		structural[frame.uuid], active[frame.uuid] = true, true
+		frame.exit = true
+		stack = append(stack, frame)
+		// A baseline contributes its own file set, never another B chain.
+		if d.B != "" && !frame.baseline {
+			stack = append(stack, requiredFrame{uuid: d.B, kind: deck.Checkin, baseline: true})
+		}
+		if len(d.S) > maxVisits-len(stack) {
+			return nil, nil, fmt.Errorf("sparse required content: structural stack limit exceeded")
+		}
+		for i := len(d.S) - 1; i >= 0; i-- {
+			stack = append(stack, requiredFrame{
+				uuid: d.S[i].UUID, kind: deck.Submanifest, depth: frame.depth + 1,
+			})
 		}
 	}
 	names := make([]string, 0, len(wanted))
@@ -271,7 +340,29 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 	return names, structural, nil
 }
 
-func (f *requiredFetch) receive(reply *xfer.Message, requested map[string]bool, project string) (int, error) {
+func (f *requiredFetch) structuralDeck(
+	frame requiredFrame, wanted map[string]bool,
+) (*deck.Deck, error) {
+	data, err := f.resolve(frame.uuid, wanted)
+	if err != nil || data == nil {
+		return nil, err
+	}
+	d, err := deck.Parse(data)
+	if err != nil {
+		return nil, fmt.Errorf("sparse required content: parse %s: %w", frame.uuid, err)
+	}
+	if frame.kind >= 0 && d.Type != frame.kind {
+		return nil, fmt.Errorf("sparse required content: wrong structural type at %s", frame.uuid)
+	}
+	if d.Type != deck.Checkin && d.Type != deck.Submanifest {
+		return nil, fmt.Errorf("sparse required content: not a structural artifact: %s", frame.uuid)
+	}
+	return d, nil
+}
+
+func (f *requiredFetch) receive(
+	reply *xfer.Message, requested map[string]bool, project string,
+) (int, error) {
 	accepted := 0
 	private := false
 	for _, card := range reply.Cards {
@@ -304,7 +395,7 @@ func (f *requiredFetch) receive(reply *xfer.Message, requested map[string]bool, 
 			continue
 		}
 		if isPrivate && !f.opts.Private {
-			return 0, fmt.Errorf("sparse required content: private artifact %s requires private permission", uuid)
+			return 0, fmt.Errorf("sparse required content: private artifact %s requires permission", uuid)
 		}
 		if err := f.checkName(uuid); err != nil {
 			return 0, err
@@ -330,7 +421,127 @@ func (f *requiredFetch) receive(reply *xfer.Message, requested map[string]bool, 
 	return accepted, nil
 }
 
-func (f *requiredFetch) store(roots []string, structural map[string]bool, result *SyncResult) error {
+// A held delta on an absent basis has a real row but no available bytes.
+// Replace that storage representation with the independently verified full
+// target, preserving its rid and rolling back the replacement on any failure.
+func (f *requiredFetch) prepareTarget(tx *db.Tx, uuid string) error {
+	var rid libfossil.FslID
+	var size int64
+	err := tx.QueryRow("SELECT rid,size FROM blob WHERE uuid=?", uuid).Scan(&rid, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if content.IsPrivate(tx, int64(rid)) && !f.opts.Private {
+		return fmt.Errorf("sparse required content: required artifact %s became private", uuid)
+	}
+	_, held, err := content.CheckAvailableByUUID(tx, uuid)
+	if err != nil || held || size < 0 {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE blob SET size=-1,content=NULL WHERE rid=?", rid); err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", rid)
+	return err
+}
+
+func (f *requiredFetch) storeArtifact(
+	bound *repo.Repo, pass *receivePass, uuid string,
+) (libfossil.FslID, error) {
+	if err := f.ctx.Err(); err != nil {
+		return 0, err
+	}
+	barred, err := shun.IsShunned(bound.DB(), uuid)
+	if err != nil {
+		return 0, err
+	}
+	if barred {
+		return 0, fmt.Errorf("sparse required content: required artifact %s became shunned", uuid)
+	}
+	if err := bound.WithTx(func(tx *db.Tx) error { return f.prepareTarget(tx, uuid) }); err != nil {
+		return 0, err
+	}
+	a := f.data[uuid]
+	vis := visibilityPublic
+	if a.private {
+		vis = visibilityPrivate
+	}
+	return storeReceived(f.ctx, bound, pass, uuid, "", a.full, nil, vis, nil)
+}
+
+func (f *requiredFetch) revalidate(bound *repo.Repo, uuid string) error {
+	if err := f.ctx.Err(); err != nil {
+		return err
+	}
+	barred, err := shun.IsShunned(bound.DB(), uuid)
+	if err != nil {
+		return err
+	}
+	if barred {
+		return fmt.Errorf("sparse required content: required artifact %s became shunned", uuid)
+	}
+	rid, held, err := content.CheckAvailableByUUID(bound.DB(), uuid)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return fmt.Errorf("sparse required content: local readiness changed for %s; retry", uuid)
+	}
+	if content.IsPrivate(bound.DB(), int64(rid)) && !f.opts.Private {
+		return fmt.Errorf("sparse required content: required artifact %s became private", uuid)
+	}
+	data, err := content.Expand(bound.DB(), rid)
+	if err != nil {
+		return err
+	}
+	if !hashMatches(uuid, data) {
+		return fmt.Errorf("sparse required content: %s: %w", uuid, errHashMismatch)
+	}
+	return nil
+}
+
+func (f *requiredFetch) finishStore(
+	bound *repo.Repo, roots, names []string, filled []libfossil.FslID,
+) error {
+	return bound.WithTx(func(tx *db.Tx) error {
+		for _, uuid := range names {
+			rid, ok := blob.Exists(tx, uuid)
+			if !ok {
+				return fmt.Errorf("sparse required content: stored artifact unavailable: %s", uuid)
+			}
+			if err := noteReceived(tx, rid, f.data[uuid].full); err != nil {
+				return err
+			}
+		}
+		manifest.AfterDephantomizeBatch(f.ctx, bound, filled)
+		for _, uuid := range roots {
+			d, err := deck.Parse(f.data[uuid].full)
+			if err != nil {
+				return err
+			}
+			if d.Type == deck.Checkin {
+				rid, ok := blob.Exists(tx, uuid)
+				if !ok {
+					return fmt.Errorf("sparse required content: root unavailable: %s", uuid)
+				}
+				if _, err := manifest.ListFiles(bound, rid); err != nil {
+					return err
+				}
+			}
+		}
+		return f.ctx.Err()
+	})
+}
+
+func (f *requiredFetch) store(
+	roots []string, structural map[string]bool, result *SyncResult,
+) error {
 	names := make([]string, 0, len(structural))
 	for uuid := range structural {
 		if !f.data[uuid].local {
@@ -345,22 +556,7 @@ func (f *requiredFetch) store(roots []string, structural map[string]bool, result
 		pass := newReceivePass()
 		var filled []libfossil.FslID
 		for _, uuid := range names {
-			if err := f.ctx.Err(); err != nil {
-				return err
-			}
-			barred, err := shun.IsShunned(bound.DB(), uuid)
-			if err != nil {
-				return err
-			}
-			if barred {
-				return fmt.Errorf("sparse required content: required artifact %s became shunned", uuid)
-			}
-			a := f.data[uuid]
-			vis := visibilityPublic
-			if a.private {
-				vis = visibilityPrivate
-			}
-			rid, err := storeReceived(f.ctx, bound, pass, uuid, "", a.full, nil, vis, nil)
+			rid, err := f.storeArtifact(bound, pass, uuid)
 			if err != nil {
 				return err
 			}
@@ -368,49 +564,14 @@ func (f *requiredFetch) store(roots []string, structural map[string]bool, result
 				filled = append(filled, rid)
 			}
 		}
-		// Recheck all local structural inputs under the publishing transaction;
-		// a concurrent compaction or shun must not turn staged proof stale.
+		// Recheck local inputs under the publishing transaction: compaction or
+		// a concurrent shun must not turn staged proof stale.
 		for uuid := range structural {
-			if err := f.ctx.Err(); err != nil {
-				return err
-			}
-			barred, err := shun.IsShunned(bound.DB(), uuid)
-			if err != nil || barred {
-				if err != nil {
-					return err
-				}
-				return fmt.Errorf("sparse required content: required artifact %s became shunned", uuid)
-			}
-			rid, held := content.AvailableByUUID(bound.DB(), uuid)
-			if !held {
-				return fmt.Errorf("sparse required content: local readiness changed for %s; retry", uuid)
-			}
-			if _, err := content.Expand(bound.DB(), rid); err != nil {
+			if err := f.revalidate(bound, uuid); err != nil {
 				return err
 			}
 		}
-		return bound.WithTx(func(tx *db.Tx) error {
-			for _, uuid := range names {
-				rid, _ := blob.Exists(tx, uuid)
-				if err := noteReceived(tx, rid, f.data[uuid].full); err != nil {
-					return err
-				}
-			}
-			manifest.AfterDephantomizeBatch(f.ctx, bound, filled)
-			for _, uuid := range roots {
-				d, err := deck.Parse(f.data[uuid].full)
-				if err != nil {
-					return err
-				}
-				if d.Type == deck.Checkin {
-					rid, _ := blob.Exists(tx, uuid)
-					if _, err := manifest.ListFiles(bound, rid); err != nil {
-						return err
-					}
-				}
-			}
-			return f.ctx.Err()
-		})
+		return f.finishStore(bound, roots, names, filled)
 	})
 	if err == nil {
 		result.FilesRecvd = len(names)

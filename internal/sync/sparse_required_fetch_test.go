@@ -8,20 +8,23 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
-	"github.com/danmestas/go-libfossil/internal/manifest"
-
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 func requiredLeaf(t *testing.T, name string) ([]byte, string) {
 	t.Helper()
-	data, err := (&deck.Deck{F: []deck.FileCard{{Name: name, UUID: hash.SHA3([]byte(name))}}}).Marshal()
+	data, err := (&deck.Deck{
+		F: []deck.FileCard{{Name: name, UUID: hash.SHA3([]byte(name))}},
+	}).Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +38,14 @@ func TestFetchRequiredArtifactsNoPeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := FetchRequiredArtifacts(context.Background(), r, nil, []string{uuid}, SyncOpts{})
-	if err == nil || !strings.Contains(err.Error(), "elided") || !strings.Contains(err.Error(), "no configured peer") || strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "corrupt") {
+	if err == nil {
+		t.Fatal("no-peer recovery succeeded")
+	}
+	if !strings.Contains(err.Error(), "elided") || !strings.Contains(err.Error(), "no configured peer") {
 		t.Fatalf("no-peer diagnostic: %v", err)
+	}
+	if strings.Contains(err.Error(), "missing") || strings.Contains(err.Error(), "corrupt") {
+		t.Fatalf("elision described as damage: %v", err)
 	}
 }
 
@@ -110,7 +119,12 @@ func TestFetchRequiredArtifactsParentBaselineTree(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	baseline, err := (&deck.Deck{C: "baseline tree", D: time.Unix(1, 0).UTC(), U: deck.User("test"), S: []deck.SubmanifestCard{{Name: "inside/a", UUID: insideUUID}, {Name: "outside/a", UUID: outsideUUID}}}).Marshal()
+	baseline, err := (&deck.Deck{
+		C: "baseline tree", D: time.Unix(1, 0).UTC(), U: deck.User("test"),
+		S: []deck.SubmanifestCard{
+			{Name: "inside/a", UUID: insideUUID}, {Name: "outside/a", UUID: outsideUUID},
+		},
+	}).Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +132,10 @@ func TestFetchRequiredArtifactsParentBaselineTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := (&deck.Deck{C: "delta parent", D: time.Unix(2, 0).UTC(), U: deck.User("test"), B: baseUUID, F: []deck.FileCard{{Name: "inside/a", UUID: hash.SHA3([]byte("edited"))}}}).Marshal()
+	parent, err := (&deck.Deck{
+		C: "delta parent", D: time.Unix(2, 0).UTC(), U: deck.User("test"), B: baseUUID,
+		F: []deck.FileCard{{Name: "inside/a", UUID: hash.SHA3([]byte("edited"))}},
+	}).Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +156,34 @@ func TestFetchRequiredArtifactsParentBaselineTree(t *testing.T) {
 	if err := content.SetStoreCone(target.DB(), c); err != nil {
 		t.Fatal(err)
 	}
-	peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+	peer := requiredUnlockedPeer(t, source, target)
+	result, err := FetchRequiredArtifacts(context.Background(), target, peer,
+		[]string{parentUUID}, SyncOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesRecvd != 2 {
+		t.Fatalf("received %d nodes, want baseline + absent S sibling", result.FilesRecvd)
+	}
+	files, err := manifest.ListFiles(target, parentRID)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("delta-over-tree recovery: %+v, %v", files, err)
+	}
+	if files[0].UUID != hash.SHA3([]byte("edited")) ||
+		files[1].UUID != hash.SHA3([]byte("outside/a")) {
+		t.Fatalf("delta-over-tree files: %+v", files)
+	}
+	if _, held := content.AvailableByUUID(target.DB(), hash.SHA3([]byte("outside/a"))); held {
+		t.Fatal("recovery fetched outside F payload")
+	}
+	if got, _ := content.StoreCone(target.DB()); got == nil || !got.Equal(c) {
+		t.Fatal("recovery changed stored cone")
+	}
+}
+
+func requiredUnlockedPeer(t *testing.T, source, target *repo.Repo) *MockTransport {
+	t.Helper()
+	return &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
 		// Fetch must not hold a publishing transaction during network I/O.
 		if err := target.WithTx(func(tx *db.Tx) error {
 			_, err := tx.Exec("SELECT count(*) FROM blob")
@@ -153,22 +197,85 @@ func TestFetchRequiredArtifactsParentBaselineTree(t *testing.T) {
 		}
 		return reply
 	}}
-	result, err := FetchRequiredArtifacts(context.Background(), target, peer, []string{parentUUID}, SyncOpts{})
+}
+
+func TestFetchRequiredArtifactsLocalDanglingDelta(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	leaf, uuid := requiredLeaf(t, "outside/a")
+	basis := []byte("absent local delta basis")
+	basisUUID := hash.SHA3(basis)
+	basisRID, err := blob.StorePhantom(r.DB(), basisUUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FilesRecvd != 2 {
-		t.Fatalf("received %d nodes, want baseline + absent S sibling", result.FilesRecvd)
+	diff, err := delta.Create(basis, leaf)
+	if err != nil {
+		t.Fatal(err)
 	}
-	files, err := manifest.ListFiles(target, parentRID)
-	if err != nil || len(files) != 2 || files[0].UUID != hash.SHA3([]byte("edited")) || files[1].UUID != hash.SHA3([]byte("outside/a")) {
-		t.Fatalf("delta-over-tree recovery: %+v, %v", files, err)
+	rid, err := blob.StoreDeltaRaw(r.DB(), uuid, diff, basisRID, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, held := content.AvailableByUUID(target.DB(), hash.SHA3([]byte("outside/a"))); held {
-		t.Fatal("recovery fetched outside F payload")
+	peer := &MockTransport{Handler: func(*xfer.Message) *xfer.Message {
+		return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: uuid, Content: leaf}}}
+	}}
+	_, err = FetchRequiredArtifacts(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got, _ := content.StoreCone(target.DB()); got == nil || !got.Equal(c) {
-		t.Fatal("recovery changed stored cone")
+	if gotRID, held := content.AvailableByUUID(r.DB(), uuid); !held || gotRID != rid {
+		t.Fatalf("dangling target identity not restored: %d/%d held=%v", gotRID, rid, held)
+	}
+	if _, held := content.AvailableByUUID(r.DB(), basisUUID); held {
+		t.Fatal("full target recovery fetched irrelevant local basis")
+	}
+}
+
+// A manifest visited as another root's baseline still needs its own B closure
+// when it is independently requested as a full check-in root.
+func TestFetchRequiredArtifactsBaselineAlsoRoot(t *testing.T) {
+	source, target := setupSyncTestRepo(t), setupSyncTestRepo(t)
+	base, err := (&deck.Deck{
+		C: "flat baseline", D: time.Unix(1, 0).UTC(), U: deck.User("test"),
+		F: []deck.FileCard{{Name: "outside/a", UUID: hash.SHA3([]byte("outside"))}},
+	}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, baseUUID, err := blob.Store(source.DB(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := make([]string, 0, 2)
+	baseline := baseUUID
+	for i := 0; i < 2; i++ {
+		data, err := (&deck.Deck{
+			C: "delta root", D: time.Unix(int64(i+2), 0).UTC(),
+			U: deck.User("test"), B: baseline,
+		}).Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, uuid, err := blob.Store(target.DB(), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots = append(roots, uuid)
+		baseline = uuid
+	}
+	peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		reply, err := HandleSync(context.Background(), source, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return reply
+	}}
+	_, err = FetchRequiredArtifacts(context.Background(), target, peer, roots, SyncOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, held := content.AvailableByUUID(target.DB(), baseUUID); !held {
+		t.Fatal("baseline-only visitation suppressed an independently requested root's B closure")
 	}
 }
 
@@ -176,13 +283,77 @@ func TestFetchRequiredArtifactsWrongProject(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	data, uuid := requiredLeaf(t, "outside/a")
 	peer := &MockTransport{Handler: func(*xfer.Message) *xfer.Message {
-		return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: uuid, Content: data}, &xfer.PushCard{ProjectCode: "wrong"}}}
+		return &xfer.Message{Cards: []xfer.Card{
+			&xfer.FileCard{UUID: uuid, Content: data}, &xfer.PushCard{ProjectCode: "wrong"},
+		}}
 	}}
-	if _, err := FetchRequiredArtifacts(context.Background(), r, peer, []string{uuid}, SyncOpts{}); err == nil || !strings.Contains(err.Error(), "wrong project") {
+	_, err := FetchRequiredArtifacts(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+	if err == nil || !strings.Contains(err.Error(), "wrong project") {
 		t.Fatalf("wrong peer accepted: %v", err)
 	}
 	if _, held := blob.Exists(r.DB(), uuid); held {
 		t.Fatal("wrong project leaked content")
+	}
+}
+
+func TestFetchRequiredArtifactsAuthenticatedPrivate(t *testing.T) {
+	for _, password := range []string{"secret", "wrong"} {
+		t.Run(password, func(t *testing.T) {
+			source, target := setupSyncTestRepo(t), setupSyncTestRepo(t)
+			if err := auth.UpdateCaps(source.DB(), "nobody", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := auth.CreateUser(source.DB(), testPC, "required-reader", "secret", "ox"); err != nil {
+				t.Fatal(err)
+			}
+			leaf, _ := requiredLeaf(t, "private/a")
+			rid, uuid, err := blob.Store(source.DB(), leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := content.MakePrivate(source.DB(), int64(rid)); err != nil {
+				t.Fatal(err)
+			}
+			peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+				wire, err := req.Encode()
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, err := xfer.Decode(wire, xfer.ContentTypeCompressed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				reply, err := HandleSync(context.Background(), source, decoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return reply
+			}}
+			_, err = FetchRequiredArtifacts(context.Background(), target, peer, []string{uuid},
+				SyncOpts{User: "required-reader", Password: password, Private: true})
+			if password == "wrong" {
+				if err == nil {
+					t.Fatal("invalid password recovered private content")
+				}
+				if _, held := blob.Exists(target.DB(), uuid); held {
+					t.Fatal("failed authentication leaked private content")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			heldRID, held := content.AvailableByUUID(target.DB(), uuid)
+			if !held || !content.IsPrivate(target.DB(), int64(heldRID)) {
+				t.Fatal("private recovery lost private visibility")
+			}
+			var count int
+			err = target.DB().QueryRow(
+				"SELECT count(*) FROM config WHERE value IN ('secret','wrong')").Scan(&count)
+			if err != nil || count != 0 {
+				t.Fatalf("recovery persisted credentials: count=%d err=%v", count, err)
+			}
+		})
 	}
 }
 

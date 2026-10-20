@@ -343,6 +343,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renamed copy is removed if unedited or kept, untracked, if edited.
   Tracked in #445.
 
+- Ticket artifacts link into a repository whose ticket schema lacks any of
+  the columns fossil treats as optional: the ticket table,
+  `ticket.tkt_ctime`, the ticketchng table, `ticketchng.tkt_rid` and
+  `ticketchng.tkt_user`. Crosslink always wrote `tkt_user` and `tkt_ctime`,
+  so rebuilding fossil's own repository, which has no `tkt_user`, failed.
+  The ticket and ticketchng rows now follow fossil's `ticket_insert`: a
+  change row is written only when it has a field or bookkeeping column to
+  fill, `tkt_user` only when the artifact names a user, a field stored in
+  both tables is copied from the ticket row when the artifact leaves it
+  alone, and a `baseline for <field>` column records the rid that last
+  assigned the field. Without a ticket table nothing is derived for a
+  ticket, including its timeline rows, as in fossil.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target
@@ -459,6 +471,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `julianday()` of the rounded-up time, as fossil does, rather than the text
   form of that time that event rows hold. On a millisecond where the two
   differ, a check-in at the bound itself resolved here but not in fossil.
+
+## [0.13.0] - 2026-10-20
+
+### Fixed
+
+- Ticket crosslinking honors optional tables and columns, shared fields and
+  baseline handling. Repository path matching and initialization follow fossil.
+  Checkout-free snapshot, per-path log, cat and diff interfaces are available.
 
 ## [0.12.0] - 2026-10-13
 

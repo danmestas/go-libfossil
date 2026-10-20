@@ -259,7 +259,7 @@ func (h *handler) initAuth() {
 //
 // Clone implies Read for the capabilities a request starts with, nobody's,
 // as fossil's page_xfer sets it (`if( g.perm.Clone ) g.perm.Read = 1;`,
-// xfer.c:1301) before its card loop and the §7.3 erratum states. A Clone
+// xfer.c:1301) before its card loop and §7.3 states. A Clone
 // that a login card grants does not become Read: check_login only adds the
 // user's capabilities, after that point.
 //
@@ -637,7 +637,7 @@ const privateRefusal = "not authorized to sync private content"
 // countedErrors counts the error cards that §5.3's errors N counts. N is the
 // errors raised, as page_xfer's nErr is, and three of them fossil never adds
 // to nErr: the unknown-operator error, the private-content refusal and the
-// SHA3 version refusal (erratum sync-protocol-01-s5.3-errors-count). The
+// SHA3 version refusal (§5.3). The
 // count is made from card text because those three texts are fixed by the
 // draft and no other error carries them.
 func countedErrors(cards []xfer.Card) int {
@@ -916,7 +916,7 @@ func (h *handler) emitCapabilityPragmas() {
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
 // the requester's login, null for nobody as fossil's g.zLogin is, and
 // ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
-// lock with no login fossil emits an empty LOGIN, which the -01 grammar
+// lock with no login fossil emits an empty LOGIN, which the -00 grammar
 // (1*fossilized) does not allow and which fossil's own client drops as a
 // short card; this server names the holder nobody instead.
 //

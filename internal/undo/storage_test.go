@@ -17,6 +17,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/internal/undo"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -131,7 +132,7 @@ func (s *simCheckout) changes(t *testing.T) map[string]checkout.FileChange {
 // it restores vouched for that content when it was saved.
 func TestUndoRedoThroughStorage(t *testing.T) {
 	s := newSimCheckout(t)
-	if err := undo.Save(s.ckout, s.env, s.dir, nil); err != nil {
+	if err := undo.Save(s.ckout, vfile.NewDisk(s.env, false), s.dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.write(t, "a.txt", "HELLO world\n")
@@ -139,7 +140,7 @@ func TestUndoRedoThroughStorage(t *testing.T) {
 		t.Fatalf("after edit: changes = %v", got)
 	}
 
-	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "hello world\n" {
@@ -152,7 +153,7 @@ func TestUndoRedoThroughStorage(t *testing.T) {
 		t.Fatalf("after undo: changes = %v", got)
 	}
 
-	if _, err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Redo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
@@ -173,12 +174,12 @@ func TestUndoRedoThroughStorage(t *testing.T) {
 func TestUndoOfUnscannedEditRecordsNothing(t *testing.T) {
 	s := newSimCheckout(t)
 	s.write(t, "a.txt", "HELLO world\n")
-	if err := undo.Save(s.ckout, s.env, s.dir, nil); err != nil {
+	if err := undo.Save(s.ckout, vfile.NewDisk(s.env, false), s.dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.write(t, "a.txt", "hello WORLD\n")
 
-	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
@@ -196,19 +197,19 @@ func TestUndoOfUnscannedEditRecordsNothing(t *testing.T) {
 // through storage, and one created after it is removed from storage.
 func TestUndoRestoresDeletedFile(t *testing.T) {
 	s := newSimCheckout(t)
-	if err := undo.Save(s.ckout, s.env, s.dir, []string{"b.txt"}); err != nil {
+	if err := undo.Save(s.ckout, vfile.NewDisk(s.env, false), s.dir, []string{"b.txt"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.env.Storage.Remove(filepath.Join(s.dir, "b.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := undo.Undo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Undo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "b.txt"); got != "bee\n" {
 		t.Fatalf("b.txt after undo = %q", got)
 	}
-	if _, err := undo.Redo(s.ckout, s.env, s.dir); err != nil {
+	if _, err := undo.Redo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.read(t, "b.txt"); ok {
@@ -244,7 +245,7 @@ func captureStdout(t *testing.T, fn func()) string {
 // file, in the order fossil undoes them, and print nothing.
 func TestUndoRedoReturnChanges(t *testing.T) {
 	s := newSimCheckout(t)
-	if err := undo.Save(s.ckout, s.env, s.dir, nil); err != nil {
+	if err := undo.Save(s.ckout, vfile.NewDisk(s.env, false), s.dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	s.write(t, "a.txt", "HELLO world\n")
@@ -255,10 +256,10 @@ func TestUndoRedoReturnChanges(t *testing.T) {
 	var undone, redone []undo.Change
 	out := captureStdout(t, func() {
 		var err error
-		if undone, err = undo.Undo(s.ckout, s.env, s.dir); err != nil {
+		if undone, err = undo.Undo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 			t.Fatal(err)
 		}
-		if redone, err = undo.Redo(s.ckout, s.env, s.dir); err != nil {
+		if redone, err = undo.Redo(s.ckout, vfile.NewDisk(s.env, false), s.dir); err != nil {
 			t.Fatal(err)
 		}
 	})

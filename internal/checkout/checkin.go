@@ -387,16 +387,16 @@ func (c *Checkout) applyRenames(
 
 // readCommitFile reads name's content for a commit, seen through disk: a
 // symlink seen as itself holds its target's name, as fossil commits it.
-func (c *Checkout) readCommitFile(disk diskView, name string) ([]byte, error) {
+func (c *Checkout) readCommitFile(disk vfile.Disk, name string) ([]byte, error) {
 	fullPath, err := c.safePath(name)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
 	}
-	info, err := disk.stat(c, fullPath)
+	info, err := disk.Stat(fullPath)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Commit: %w", err)
 	}
-	data, err := disk.read(c, fullPath, info)
+	data, err := disk.Read(fullPath, info)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Commit: %w", err)
 	}
@@ -426,7 +426,7 @@ func (c *Checkout) readCommitFile(disk diskView, name string) ([]byte, error) {
 // (permission denied, I/O fault, ...) is a real problem and still fails
 // the commit.
 func (c *Checkout) restatCommitPerms(
-	disk diskView,
+	disk vfile.Disk,
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,
 	shouldInclude func(string) bool,
@@ -452,15 +452,15 @@ func (c *Checkout) restatCommitPerms(
 			return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
 		}
 		var info os.FileInfo
-		if disk.links != nil {
-			if info, err = disk.stat(c, fullPath); err != nil {
+		if disk.ReadsPerms() {
+			if info, err = disk.Stat(fullPath); err != nil {
 				return fmt.Errorf("checkout.Commit: %w", err)
 			}
 			if info == nil {
 				continue // missing on disk: carry the existing Perm forward unchanged
 			}
 		}
-		entry.Perm = disk.perm(info, ve.perm).manifestPerm()
+		entry.Perm = diskPerm(disk, info, ve.perm).manifestPerm()
 		fileMap[name] = entry
 	}
 
@@ -754,7 +754,7 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("checkout.Commit: %w", err)
 	}
-	if disk.links == nil {
+	if !disk.ReadsPerms() {
 		return false, nil
 	}
 	for name, e := range in.entries {
@@ -765,11 +765,11 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		info, err := disk.stat(c, fullPath)
+		info, err := disk.Stat(fullPath)
 		if err != nil {
 			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		if isFileOrLink(info) && disk.perm(info, e.perm) != e.perm {
+		if isFileOrLink(info) && diskPerm(disk, info, e.perm) != e.perm {
 			return true, nil
 		}
 	}

@@ -89,12 +89,12 @@ func (s *manifestScanner) nextToken() (token string, ok bool) {
 	return token, true
 }
 
-// cardTokens drains and returns every token of the current card. §4.2 with
-// its empty-trailing-token erratum: a token between two others may not be
-// empty -- two spaces in a row -- but the last token may be, carrying a
-// present-but-empty value (an empty comment, J value, N mimetype or T value).
-// fossil has no such explicit rule; its per-card validators reject an interior
-// empty token at whichever field it lands on, and this is their shared form.
+// cardTokens drains and returns every token of the current card. §4.2: a
+// token between two others may not be empty -- two spaces in a row -- but the
+// last token may be, carrying a present-but-empty value (an empty comment, J
+// value, N mimetype or T value). fossil has no such explicit rule; its
+// per-card validators reject an interior empty token at whichever field it
+// lands on, and this is their shared form.
 func (s *manifestScanner) cardTokens() ([]string, error) {
 	var tokens []string
 	for {
@@ -345,7 +345,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 
 // setStringCard stores a single-token card value. A bare card with no token
 // at all is "missing"; a present-but-empty token -- a card line ending in a
-// space, per the §4.2 erratum -- is kept distinct from that. decode applies
+// space, per §4.2 -- is kept distinct from that. decode applies
 // §4.3 fossil-decoding to the fields §4.3.1 lists as decoded (C, H, L).
 func setStringCard(tokens []string, dst *string, what string, decode bool) error {
 	if len(tokens) == 0 {
@@ -509,7 +509,7 @@ func parseFCard(d *Deck, tokens []string) error {
 	// sort-order check above, as fossil does (src/manifest.c, nFile--). The
 	// dropped card is never stored, so the next card's sort check compares
 	// against the previous retained file.
-	if fileIsReservedName(fc.Name) {
+	if IsReservedName(fc.Name) {
 		return nil
 	}
 	d.F = append(d.F, fc)

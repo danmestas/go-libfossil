@@ -108,9 +108,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, naming it, unless an explicit k replaces it. The conformance
   suite pins the draft's 19 October 2026 revision, which applies the
   2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
+- A checkout-free interface for apps that embed the binary, documented in
+  `docs/site/content/docs/cli-embedding.md` with its stable JSON shapes and
+  exit statuses (0 success, 1 failure, 2 not found). `repo snapshot` commits
+  one file's bytes onto trunk, a no-op that prints the tip when they match;
+  `repo log --path` lists the check-ins that changed a path, as `fossil
+  finfo` does; `repo cat --at VERSION PATH` reads a file as a version holds
+  it, as `fossil cat -r`; `repo diff --json A B [PATH]` diffs two versions.
+  Concurrent snapshots from several processes build one linear trunk.
+  Tracked in #451.
+
+### Fixed
+
+- A stored Julian day converts to the millisecond SQLite's own date
+  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
+  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
+  returned were 1ms before the check-in's D card.
+- Opening a repository sets `busy_timeout` before any other pragma. The
+  drivers ran the DSN's pragmas in map order, so an open while another
+  process held a lock could fail at once with "database is locked".
 
 ### Changed
 
+- The conformance suite no longer reads erratum files. zit applied every
+  erratum in its draft text and retired `docs/rfcs/erratum/` at check-in
+  `62a7d1bb3f`; each draft now records its corrections in its own Changes
+  appendix, and the draft text is the authority. The `# erratum` pins and
+  `conformance/rfcs/erratum/` are gone. The artifact-format, repo-state,
+  sync-protocol and delta-format drafts are unchanged. The sub-manifest
+  draft is re-pinned with only its expiry date and a reflow changed. The
+  sparse-cone draft is re-pinned to its 19 October 2026 revision on zit's
+  `horizon-rfc` branch, where §3.6 is removed and §3.4 states the literal
+  prefix rule once: a metacharacter in a member is a literal character,
+  never expanded, and the member may be refused. `SC-3.6-1` is replaced by
+  `SC-3.4-3`, which the same case covers.
 - `S` is no longer rejected as an undefined card letter, and a manifest
   with no `D` card is reclassified as a sub-manifest before its cards are
   checked, so it is rejected for its first illegal card rather than for the
@@ -130,6 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line over 32767 bytes) is not merged: the local copy is kept and the
   merge reports a conflict. `HasConflictMarkers` now skips `\r` as well as
   `\n` between lines, as fossil's `contains_merge_marker` does.
+- A file's history (`manifest.FileHistory`) orders check-ins that share a
+  millisecond by rid, newest first, and applies its limit after dropping rows
+  that list the file unchanged.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
@@ -139,6 +173,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in fossil. An exact half millisecond rounds up; fossil's result there
   depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
   `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
+- The conformance suite is re-pinned to zit check-in `68a3f76cb7`, where the
+  artifact-format, repo-state and sync-protocol drafts name themselves
+  `-00` instead of `-01` throughout and their Changes appendices are headed
+  "Changes in This Revision". No normative text changed and no section
+  number moved, so the requirement tables and the coverage counts are
+  unchanged; the pinned copies take zit's file names, and the comments and
+  tables that cited the `-01` drafts cite the `-00` ones. The sparse-cone
+  copy is re-pinned to `d497c2432f`, whose text is the same.
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2
@@ -193,6 +235,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose writes fail partway puts the files it changed back, as fossil's
   `undo_rollback` does. Under js/wasm, which has no undo, Update saves none.
   Tracked in #446.
+
+- `Checkout.Revert` undoes a rename whose old name another file now holds:
+  a swap, a chain (`a.txt` to `c.txt`, then `b.txt` to `a.txt`), a new
+  file added under the old name, or an untracked file there. It used to
+  refuse. Like fossil's `revert`, it now saves each file it writes or
+  deletes for undo first, so `Checkout.Undo` or `fossil undo` brings back
+  what it overwrote, and a revert that fails partway puts the files back.
+  Every committed file ends under its committed name with its committed
+  content, and the add at the old name is dropped, as fossil drops it.
+  Fossil's own revert leaves a swap's files renamed and stops tracking the
+  second file of a chain; go-libfossil reverts both. Revert now changes
+  vfile in one transaction. Under js/wasm, which has no undo, it saves
+  none. Tracked in #248.
 
 - A public check-in makes every file blob it names public, as fossil's
   commit does. Content first stored privately, for example by syncing a

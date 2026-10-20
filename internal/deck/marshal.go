@@ -67,7 +67,7 @@ func marshalCardsABCDE(b *strings.Builder, d *Deck) {
 		fmt.Fprintf(b, "B %s\n", d.B)
 	}
 
-	// §4.2 erratum: a present-but-empty comment re-emits as "C " + LF, so the
+	// §4.2: a present-but-empty comment re-emits as "C " + LF, so the
 	// artifact round-trips. A caller that never set a comment leaves C empty
 	// and cPresent false, and no C card is written.
 	if d.C != "" || d.cPresent {

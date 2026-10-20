@@ -11,7 +11,7 @@ Expires: 19 April 2027                                         libfossil
 
 
       The Fossil Distributed Version Control System: Sync Protocol
-                     draft-fossil-sync-protocol-01
+                     draft-fossil-sync-protocol-00
 
 Abstract
 
@@ -153,7 +153,7 @@ Internet-Draft            Fossil Sync Protocol              October 2026
      A.5.  Authentication Example  . . . . . . . . . . . . . . . . .  50
    Appendix B.  ABNF . . . . . . . . . . . . . . . . . . . . . . . .  51
    Appendix C.  Anomalies  . . . . . . . . . . . . . . . . . . . . .  55
-   Appendix D.  Changes from draft-fossil-sync-protocol-00 . . . . .  55
+   Appendix D.  Changes in This Revision . . . . . . . . . . . . . .  55
    Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  57
 
 
@@ -2416,8 +2416,8 @@ Internet-Draft            Fossil Sync Protocol              October 2026
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Artifact Format", Work
               in Progress, Internet-Draft, draft-fossil-artifact-format-
-              01, 2026, <https://datatracker.ietf.org/doc/html/draft-
-              fossil-artifact-format-01>.
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
 
    [FossilDelta]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -2430,9 +2430,9 @@ Internet-Draft            Fossil Sync Protocol              October 2026
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Repository State and
               Check-in Resolution", Work in Progress, Internet-Draft,
-              draft-fossil-repo-state-01, 2026,
+              draft-fossil-repo-state-00, 2026,
               <https://datatracker.ietf.org/doc/html/draft-fossil-repo-
-              state-01>.
+              state-00>.
 
    [RFC1950]  Deutsch, P. and J. Gailly, "ZLIB Compressed Data Format
               Specification version 3.3", RFC 1950,
@@ -3042,10 +3042,11 @@ Appendix C.  Anomalies
    one request is fatal.  One successful login unions capabilities only
    with the request’s baseline.
 
-Appendix D.  Changes from draft-fossil-sync-protocol-00
+Appendix D.  Changes in This Revision
 
-   This revision makes the following corrections and clarifications to
-   draft-fossil-sync-protocol-00.
+   This revision of draft-fossil-sync-protocol-00, dated 16 October
+   2026, makes the following corrections and clarifications to the 6
+   July 2026 text.
 
    *  Section 3.3: A note records that Fossil's client discards the
       peer-lacks hashes it recorded from a reply before building its
@@ -3072,7 +3073,6 @@ Appendix D.  Changes from draft-fossil-sync-protocol-00
       as a fossilized TEXT, error bad\scommand:\sLINE, never four SP-
       separated tokens, and other mentions of the phrase refer to
       Section 5.2.  Normative change.
-
 
 
 

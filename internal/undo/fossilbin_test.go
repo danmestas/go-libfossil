@@ -13,6 +13,7 @@ import (
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/undo"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 	"github.com/danmestas/go-libfossil/testutil"
 )
@@ -91,7 +92,7 @@ func TestUndoVFileReadByFossil(t *testing.T) {
 	}
 
 	withCheckoutDB(t, ck, func(ckout *sql.DB) {
-		if err := undo.Save(ckout, env, ck, nil); err != nil {
+		if err := undo.Save(ckout, vfile.NewDisk(env, false), ck, nil); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -103,7 +104,7 @@ func TestUndoVFileReadByFossil(t *testing.T) {
 	}
 
 	withCheckoutDB(t, ck, func(ckout *sql.DB) {
-		if _, err := undo.Undo(ckout, env, ck); err != nil {
+		if _, err := undo.Undo(ckout, vfile.NewDisk(env, false), ck); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")
@@ -113,7 +114,7 @@ func TestUndoVFileReadByFossil(t *testing.T) {
 	}
 
 	withCheckoutDB(t, ck, func(ckout *sql.DB) {
-		if _, err := undo.Redo(ckout, env, ck); err != nil {
+		if _, err := undo.Redo(ckout, vfile.NewDisk(env, false), ck); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")

@@ -121,3 +121,42 @@ func TestPlatformLongDoubleBits(t *testing.T) {
 		}
 	}
 }
+
+// MillisFromJulianDay converts as SQLite's date.c does,
+// (sqlite3_int64)(r*86400000.0+0.5): fossil's stored event times recover
+// their D-card millisecond, and a value half a millisecond either side of the
+// grid rounds the way SQLite rounds it.
+func TestMillisFromJulianDayMatchesSQLite(t *testing.T) {
+	for _, c := range fossilEventTimes {
+		if got := MillisFromJulianDay(c.stored); got != c.millis {
+			t.Errorf("MillisFromJulianDay(%.17g) = %d, want the D card's %d", c.stored, got, c.millis)
+		}
+		if got := JulianToTime(c.stored).UnixMilli(); got != c.millis {
+			t.Errorf("JulianToTime(%.17g) = %d ms, want the D card's %d", c.stored, got, c.millis)
+		}
+	}
+
+	const iJD = julianEpochMillis + 1791557956502
+	cases := []struct {
+		jd   float64
+		want int64
+	}{
+		{float64(iJD) / millisPerDay, 1791557956502},
+		{(float64(iJD) + 0.4) / millisPerDay, 1791557956502},
+		{(float64(iJD) - 0.4) / millisPerDay, 1791557956502},
+		{(float64(iJD) + 0.6) / millisPerDay, 1791557956503},
+		{(float64(iJD) - 0.6) / millisPerDay, 1791557956501},
+		{julianEpoch, 0},
+		{julianEpoch + 1, 86400000},
+	}
+	for _, c := range cases {
+		jd := c.jd
+		sqlite := int64(jd*86400000.0+0.5) - julianEpochMillis
+		if sqlite != c.want {
+			t.Fatalf("case %.17g: SQLite's own formula gives %d, the case wants %d", jd, sqlite, c.want)
+		}
+		if got := MillisFromJulianDay(jd); got != c.want {
+			t.Errorf("MillisFromJulianDay(%.17g) = %d, want %d", jd, got, c.want)
+		}
+	}
+}

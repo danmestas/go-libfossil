@@ -9,15 +9,13 @@
 # classification of a delta's base, is step 3's classifier and is covered.
 # Skipped, with reasons: 1 (introduction), 4.5 and 7's last two paragraphs
 # (informative), 6.5 (a statement of non-guarantee with no behaviour), 9
-# (IANA). §3.6's second paragraph, which still calls exclusion members out
-# of scope, is stale text (tracked in danmestas/zit#242): the suite follows
-# §3.3 and zit, which implement them. Where the draft is silent the
+# (IANA). Where the draft is silent the
 # reference is zit, the other implementation: its serialized form
 # (src/cone.zig, byte-identical here and checked against zit in
 # testdata/zit-cones), its refusal of an empty inclusion list, and its
 # exact-member removal.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-sparse-cone-00.txt	22f7c2d847a31bc88f190325f3e8b6b05c6aa80880b8610839d4762a709cbccd
+# draft	draft-fossil-sparse-cone-00.txt	2494753225ec3b88169fd422fcf66822cbf65650495542b293bcbaa590456df2
 SC-2-1	2	A member covers a path when it equals the path or is a prefix of it ending at a '/' boundary; the absent cone covers everything (dense operation).	an empty cone cannot be built, as in zit: at least one inclusion is required
 SC-3.1-1	3.1	A worktree cone is checkout-local state recorded with the checkout's other local records; it is not an artifact, does not synchronize, and affects no artifact's bytes or name.
 SC-3.1-2	3.1	A cone may be widened or narrowed at any time.
@@ -34,10 +32,10 @@ SC-3.3-5	3.3	One path carried with both polarities is a contradiction and is ref
 SC-3.3-6	3.3	A key range wholly inside an inclusion and outside every exclusion classifies as before; a range an exclusion intersects is classified per file, at no cost to correctness.
 SC-3.4-1	3.4	Members are literal path prefixes; glob and pattern members are not part of the mechanism.
 SC-3.4-2	3.4	A member names a directory subtree or a single file with equal standing.
+SC-3.4-3	3.4	A metacharacter in a member is a literal character of the path: it is never expanded, and the member may be refused.
 SC-3.5-1	3.5	Amending a cone by wholesale replacement and by member addition or removal are equivalent, and the incremental form should be offered.
 SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of demand fetch).	over a dense store widening materializes from the store; demand fetch over a sparse store is Appendix A step 4
 SC-3.5-3	3.5	Narrowing dematerializes and leaves reclamation to explicit compaction.
-SC-3.6-1	3.6	A member containing pattern metacharacters is rejected only where operators would plausibly expect expansion; otherwise literal treatment conforms.
 SC-4-1	4	The sparse worktree is available to any conforming repository, with flat or tree-structured manifests.
 SC-4.1-1	4.1	A checkout operation given a cone materializes exactly the covered files.
 SC-4.1-2	4.1	The managed-file record covers only in-cone files.

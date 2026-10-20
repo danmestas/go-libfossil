@@ -43,7 +43,7 @@ type ApplyOpts struct {
 	MTime   float64 // Julian day.
 	// Leaves is the batch's leaf-recheck schedule. A branch tag, and the
 	// propagation walk it starts, schedule the check-ins whose branch row
-	// they write (draft-fossil-repo-state-01 Section 7.3); the caller applies
+	// they write (draft-fossil-repo-state-00 Section 7.3); the caller applies
 	// the schedule before its batch ends. ApplyTagWithTx requires it for a
 	// branch tag; ApplyTag supplies its own when it is nil.
 	Leaves *leaf.Pending
@@ -303,7 +303,7 @@ func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 }
 
 // RefreshEventTime sets rid's event.mtime from its date tag, following
-// draft-fossil-repo-state-01 Section 4.2, step 6: the value of a date tag
+// draft-fossil-repo-state-00 Section 4.2, step 6: the value of a date tag
 // applied directly to rid (srcid > 0), when it parses (by SQLite
 // julianday, which already bounds the upper end) to a positive time;
 // otherwise the D-card time kept in event.omtime. An inherited row
@@ -311,7 +311,7 @@ func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 //
 // Both arrival orders call this, tag application after it wins its row and
 // crosslink after it inserts the event row, so the result depends only on
-// tagxref, never on which came first. That is where -01 departs from fossil
+// tagxref, never on which came first. That is where -00 departs from fossil
 // 2.28: its tag_insert writes julianday(value) as is, so a cancel or an
 // unparsable value leaves no time, 0 stores a time of 0, and its
 // manifest_crosslink reads an inherited row too. omtime keeps the D-card

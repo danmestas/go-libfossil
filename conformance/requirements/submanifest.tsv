@@ -13,7 +13,7 @@
 # invalid stored pin (8.1), and the provisional phase retired, its flag-day
 # rule moved to 8.1, which the enable warning states.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-submanifests-00.txt	a7e51f7bb964ebc7e89b20f1d530474c9a9b26ff4ce31e9ab85f5725c849a7e2
+# draft	draft-fossil-submanifests-00.txt	9326a7f95bc3387585a4d6a3d7dc1cdcda4b18ca7684566124dcfc65e85d09aa
 SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.
 SM-3.2-1	3.2	An S card carries exactly a filename and a hash; a third token, or a missing hash, is rejected.
 SM-3.3-1	3.3	The S card filename is escape-decoded; the S card hash is never decoded.

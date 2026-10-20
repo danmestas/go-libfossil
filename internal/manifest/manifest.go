@@ -229,7 +229,7 @@ func linkCheckinTags(
 	}
 
 	// Leaf state last, once every branch tag it reads is in place. Only what
-	// the branch writes above scheduled is checked (draft-fossil-repo-state-01
+	// the branch writes above scheduled is checked (draft-fossil-repo-state-00
 	// Section 7.3): the check-in and its parents when it declares or inherits
 	// a branch row. A check-in whose parent's branch row is a singleton, or
 	// absent, inherits none, so neither is rechecked, as in fossil's commit.
@@ -441,7 +441,7 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck, storeCone *cone.Cone) (libfossil
 	return rid, uuid, nil
 }
 
-// VerifyRCard is the commit-time self-check of artifact-format-01 6.3.4
+// VerifyRCard is the commit-time self-check of artifact-format-00 6.3.4
 // (AF-6.3-5), fossil's checkin.c "manifest checksum self-test": it reads the
 // stored manifest back, recomputes the R digest over the tree the manifest
 // resolves to (a delta manifest's baseline merged with its own cards), and
@@ -640,7 +640,7 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 		return fmt.Errorf("parse baseline: %w", err)
 	}
 
-	// artifact-format-01 4.7.3: a writer MUST NOT emit a B card naming a
+	// artifact-format-00 4.7.3: a writer MUST NOT emit a B card naming a
 	// delta manifest (fossil asserts the same in checkin.c). When the parent's
 	// baseline is itself a delta, leave d a full baseline manifest. The same
 	// goes for a tree baseline: draft-fossil-submanifests-00 §5.4 says a

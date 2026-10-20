@@ -11,7 +11,7 @@ Expires: 19 April 2027                                         libfossil
 
 
      The Fossil Distributed Version Control System: Artifact Format
-                    draft-fossil-artifact-format-01
+                    draft-fossil-artifact-format-00
 
 Abstract
 
@@ -179,7 +179,7 @@ Internet-Draft           Fossil Artifact Format             October 2026
        A.4.4.  R-card Over Reconstructed Set . . . . . . . . . . . .  52
    Appendix B.  ABNF . . . . . . . . . . . . . . . . . . . . . . . .  53
    Appendix C.  Anomalous artifacts and behaviours . . . . . . . . .  55
-   Appendix D.  Changes from draft-fossil-artifact-format-00 . . . .  57
+   Appendix D.  Changes in This Revision . . . . . . . . . . . . . .  57
    Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  58
 
 1.  Introduction
@@ -2491,16 +2491,16 @@ Internet-Draft           Fossil Artifact Format             October 2026
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Repository State and
               Check-in Resolution", Work in Progress, Internet-Draft,
-              draft-fossil-repo-state-01, 2026,
+              draft-fossil-repo-state-00, 2026,
               <https://datatracker.ietf.org/doc/html/draft-fossil-repo-
-              state-01>.
+              state-00>.
 
    [FossilSync]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Sync Protocol", Work
               in Progress, Internet-Draft, draft-fossil-sync-protocol-
-              01, 2026, <https://datatracker.ietf.org/doc/html/draft-
-              fossil-sync-protocol-01>.
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
 
    [RFC1321]  Rivest, R., "The MD5 Message-Digest Algorithm", RFC 1321,
               DOI 10.17487/RFC1321, April 1992,
@@ -3153,10 +3153,10 @@ Internet-Draft           Fossil Artifact Format             October 2026
    derivation (Section 7.2) never produces shun-sha1; for an empty or
    new repository it produces sha3.
 
-Appendix D.  Changes from draft-fossil-artifact-format-00
+Appendix D.  Changes in This Revision
 
-   This revision corrects five passages of draft-fossil-artifact-format-
-   00.
+   This revision of draft-fossil-artifact-format-00, dated 16 October
+   2026, makes the following corrections to the 9 July 2026 text.
 
    *  Section 4.1.2: The sterilization marker is described as appended
       after the final card, and before a trailing signature block,

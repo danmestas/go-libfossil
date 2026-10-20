@@ -314,7 +314,9 @@ func (c *Checkout) Rename(oldName, newName string) error {
 }
 
 // Revert restores files to their checkout version state.
-// If opts.Files is empty, reverts all changed files.
+// If opts.Files is empty, reverts all changed files. A renamed file goes
+// back to its committed name, whatever holds that name now. Each file it
+// writes or deletes is saved for undo first, so Undo brings it back.
 func (c *Checkout) Revert(opts RevertOpts) error {
 	err := c.inner.Revert(checkout.RevertOpts{
 		Paths: opts.Files,
@@ -546,7 +548,7 @@ func convertUpdateChange(c checkout.UpdateChange) UpdateChange {
 }
 
 // ResolveVersion resolves name as Repo.ResolveVersion does and also
-// resolves the names relative to this checkout (repo-state-01 Section 8.3),
+// resolves the names relative to this checkout (repo-state-00 Section 8.3),
 // tried after "tip" and before every other form, as fossil's
 // symbolic_name_to_rid does (src/name.c):
 //
@@ -584,7 +586,7 @@ type WorkingVersion struct {
 // does, except that only check-ins can answer: the request is a check-in
 // request, so a technote or wiki page carrying the tag does not.
 //
-// As repo-state-01 Section 8.3 says, only "ci+" has the keyword, so
+// As repo-state-00 Section 8.3 says, only "ci+" has the keyword, so
 // ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary
 // name. It is a keyword only as the whole name: in "root:ckout" or "ckout."
 // the inner name is resolved as a plain check-in request, as in fossil.

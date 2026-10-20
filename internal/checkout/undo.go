@@ -19,7 +19,7 @@ func (c *Checkout) Undo() ([]undo.Change, error) {
 	if c == nil {
 		panic("checkout.Undo: nil *Checkout")
 	}
-	changes, err := undo.Swap(c.db, c.env, c.dir, false, c.versionHash)
+	changes, err := c.swapUndo(false)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Undo: %w", err)
 	}
@@ -34,11 +34,21 @@ func (c *Checkout) Redo() ([]undo.Change, error) {
 	if c == nil {
 		panic("checkout.Redo: nil *Checkout")
 	}
-	changes, err := undo.Swap(c.db, c.env, c.dir, true, c.versionHash)
+	changes, err := c.swapUndo(true)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Redo: %w", err)
 	}
 	return changes, nil
+}
+
+// swapUndo is undo.Swap on the checkout, its files seen as fossil's RepoFILE
+// sees them.
+func (c *Checkout) swapUndo(redo bool) ([]undo.Change, error) {
+	disk, err := c.newDiskView()
+	if err != nil {
+		return nil, err
+	}
+	return undo.Swap(c.db, disk, c.dir, redo, c.versionHash)
 }
 
 // versionHash returns the hash of check-in rid.

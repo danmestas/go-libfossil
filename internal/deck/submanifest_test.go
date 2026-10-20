@@ -110,7 +110,7 @@ func TestSubmanifestRejectsDeleteMarker(t *testing.T) {
 
 func TestDLessManifestStillRejected(t *testing.T) {
 	// A C-only, D-less artifact was a manifest missing its D card under
-	// artifact-format-01; the reassignment makes it a sub-manifest with an
+	// artifact-format-00; the reassignment makes it a sub-manifest with an
 	// illegal C card. Either way it is rejected.
 	mustReject(t, "C x\nP "+smH3+"\n", "")
 }

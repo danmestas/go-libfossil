@@ -233,7 +233,7 @@ func scSpecCases() []scCase {
 		}},
 		{Case{ID: "sparsecone.3.3.ranges", Req: "SC-3.3-6"}, scRanges},
 		{Case{ID: "sparsecone.3.4.literal", Req: "SC-3.4-1"}, scLiteral},
-		{Case{ID: "sparsecone.3.6.literal", Req: "SC-3.6-1"}, scLiteral},
+		{Case{ID: "sparsecone.3.4.metachar", Req: "SC-3.4-3"}, scLiteral},
 		{Case{ID: "sparsecone.3.4.file", Req: "SC-3.4-2"}, scFileMember},
 		{Case{ID: "sparsecone.3.5.amend", Req: "SC-3.5-1"}, scAmend},
 		{Case{ID: "sparsecone.8.bounds", Req: "SC-8-1"}, scBounds},

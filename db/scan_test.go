@@ -135,3 +135,16 @@ func TestScanTextJulianDayFromDriverTime(t *testing.T) {
 		}
 	}
 }
+
+// TestScanTimeRoundsDriverTime: ncruces hands a DATETIME column back as a
+// time.Time carrying sub-millisecond noise either side of the stored
+// millisecond. ScanTime reports the millisecond SQLite itself would.
+func TestScanTimeRoundsDriverTime(t *testing.T) {
+	want := time.Date(2026, 10, 19, 8, 30, 0, 768_000_000, time.UTC)
+	for _, noise := range []time.Duration{-13 * time.Microsecond, 0, 13 * time.Microsecond} {
+		got, ok := ScanTime(want.Add(noise))
+		if !ok || !got.Equal(want) {
+			t.Errorf("ScanTime(%v %+v) = %v, want %v", want, noise, got, want)
+		}
+	}
+}

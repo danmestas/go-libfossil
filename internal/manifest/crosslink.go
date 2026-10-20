@@ -327,7 +327,7 @@ func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 // rows, and applies the leaf rechecks its own branch rows schedule, before it
 // commits; tag propagation depends on the whole plink graph, so it runs here,
 // once, when the sweep or the cascades linked anything, and the rechecks its
-// branch rows schedule are applied with it (draft-fossil-repo-state-01
+// branch rows schedule are applied with it (draft-fossil-repo-state-00
 // Section 7.3: every scheduled leaf recheck is applied before the leaf table
 // is read). Without the count, a session whose
 // cascades linked everything ended in a sweep that linked nothing and skipped
@@ -453,7 +453,7 @@ func repairCrosslinkState(
 
 // repairOnTx is the repair gate itself: the tag-propagation state that depends
 // on the whole plink graph rather than on any one artifact, then the batch's
-// scheduled leaf rechecks (draft-fossil-repo-state-01 Section 7.3, batch
+// scheduled leaf rechecks (draft-fossil-repo-state-00 Section 7.3, batch
 // application). Only the check-ins a branch write scheduled are checked, so a
 // check-in no branch write reached keeps the verdict an earlier batch gave it
 // (issue #426), and the work is bounded by the batch, not the repository.
@@ -1235,7 +1235,7 @@ func repairTagPropagation(q db.Querier, leaves *leaf.Pending) error {
 //
 // Absent file content and an absent parent never hold a check-in back from a
 // sweep. Each is an unresolved reference, which yields a phantom rather than
-// an error (draft-fossil-repo-state-01 Section 4.2 step 1): fossil's
+// an error (draft-fossil-repo-state-00 Section 4.2 step 1): fossil's
 // add_one_mlink resolves files with uuid_to_rid(..., 1), so the event, plink
 // and mlink rows are all written, against phantoms that the content fills in
 // place when it arrives. A sweep is the last step of every sync, clone and
@@ -1447,7 +1447,7 @@ func crosslinkCheckin(
 
 // crosslinkCheckinTables populates event/plink/mlink/cherrypick on tx. leaf is
 // deliberately not touched here: adding a plink row schedules no recheck
-// (draft-fossil-repo-state-01 Section 7.3); only a branch row does, through
+// (draft-fossil-repo-state-00 Section 7.3); only a branch row does, through
 // applyInlineTags and the repair gate's propagation. tx is the whole
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
@@ -1458,7 +1458,7 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 	// tag.RefreshEventTime, the same rule a tag arriving later applies, so
 	// the time does not depend on arrival order. Unlike manifest_crosslink,
 	// that rule skips an inherited date row (#372) and a cancelled, unparsable
-	// or non-positive value (draft-fossil-repo-state-01 Section 4.2, step 6).
+	// or non-positive value (draft-fossil-repo-state-00 Section 4.2, step 6).
 	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime,

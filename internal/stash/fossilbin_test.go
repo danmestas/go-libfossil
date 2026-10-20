@@ -121,7 +121,7 @@ func TestStashVFileReadByFossil(t *testing.T) {
 	}
 
 	withDBs(t, ck, repoPath, env, func(co *checkout.Checkout, ckout, repoDB *sql.DB) {
-		if err := stash.Pop(ckout, repoDB, env, ck); err != nil {
+		if _, err := stash.Pop(ckout, repoDB, env, ck); err != nil {
 			t.Fatal(err)
 		}
 		recordedMTime(t, ckout, ck, "a.txt")

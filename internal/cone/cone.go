@@ -5,8 +5,8 @@
 //
 // A cone covers a path when the most specific (longest) member covering the
 // path is an inclusion (§3.3). Members are literal path prefixes naming a
-// directory subtree or a single file with equal standing (§3.6); patterns are
-// not supported (§3.4). The absent cone, a nil *Cone, means dense operation
+// directory subtree or a single file with equal standing; patterns are not
+// supported (§3.4). The absent cone, a nil *Cone, means dense operation
 // and never reaches this package.
 //
 // Members are kept sorted and minimal: a member whose nearest covering member
@@ -108,7 +108,7 @@ func validateMember(m string) error {
 	if len(m) > MaxMemberLen || !deck.WorktreePathname(m) {
 		return fmt.Errorf("%w: %q", ErrInvalidMember, m)
 	}
-	if deck.ReservedName(m) {
+	if deck.IsReservedName(m) {
 		return fmt.Errorf("%w: %q", ErrReservedMember, m)
 	}
 	return nil

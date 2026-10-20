@@ -743,20 +743,9 @@ func (c *Checkout) writeMergedFile(name string, data []byte, exe bool) error {
 	return c.setMergedMode(name, exe)
 }
 
-// modeSetter is the optional storage method that changes a file's mode.
-// Storages without file modes (memory, browser) do not have it.
-type modeSetter interface {
-	Chmod(path string, mode os.FileMode) error
-}
-
-// setMergedMode gives name's file the executable bit exe, where the storage
-// has file modes. As fossil's file_setexe, a symlink seen as itself
-// (allow-symlinks on) or a directory is left alone.
+// setMergedMode gives name's file the executable bit exe, as fossil's
+// file_setexe does (vfile.Disk.SetExe).
 func (c *Checkout) setMergedMode(name string, exe bool) error {
-	setter, ok := c.env.Storage.(modeSetter)
-	if !ok {
-		return nil
-	}
 	fullPath, err := c.safePath(name)
 	if err != nil {
 		return err
@@ -765,25 +754,7 @@ func (c *Checkout) setMergedMode(name string, exe bool) error {
 	if err != nil {
 		return err
 	}
-	info, err := disk.stat(c, fullPath)
-	if err != nil {
-		return err
-	}
-	if info == nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return nil
-	}
-	if modeIsExecutable(info.Mode()) == exe {
-		return nil
-	}
-	// Fossil's file_setexe: execute wherever read is allowed, or nowhere.
-	mode := info.Mode().Perm() &^ 0o111
-	if exe {
-		mode |= (info.Mode().Perm() & 0o444) >> 2
-	}
-	if err := setter.Chmod(fullPath, mode); err != nil {
-		return fmt.Errorf("chmod %s: %w", fullPath, err)
-	}
-	return nil
+	return disk.SetExe(fullPath, exe)
 }
 
 // insertVMerge records that merged-in artifact rid reached the checkout: id

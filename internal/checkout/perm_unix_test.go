@@ -524,3 +524,31 @@ func TestUpdateDoesNotMergeRenamedSymlink(t *testing.T) {
 		t.Fatalf("link2 written: Lstat = %v", err)
 	}
 }
+
+// A tracked symlink is removed as itself when links are seen, as fossil's
+// file_delete removes the link, even when it points at a directory; the
+// directory it points at is left alone.
+func TestRemoveRegularFileRemovesLinkToDirectory(t *testing.T) {
+	r := permRepo(t)
+	if err := r.SetConfig("allow-symlinks", "on"); err != nil {
+		t.Fatal(err)
+	}
+	co, _ := createdCheckout(t, r)
+	target := filepath.Join(co.dir, "d")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(co.dir, "link")
+	if err := os.Symlink("d", link); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.removeRegularFile(link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("link to a directory survived: %v", err)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("the directory the link named was touched: %v", err)
+	}
+}

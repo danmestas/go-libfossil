@@ -528,7 +528,7 @@ func (c *Checkout) applyUpdateStep(
 }
 
 // writeUpdateTarget writes the target's content for s, a symlink entry as
-// fossil's vfile_to_disk writes it (diskView.write), and records in fresh
+// fossil's vfile_to_disk writes it (vfile.Disk.Write), and records in fresh
 // the mtime the write gave it.
 func (c *Checkout) writeUpdateTarget(s updateStep, fresh map[string]writtenFile) error {
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(s.target.rid))
@@ -539,21 +539,14 @@ func (c *Checkout) writeUpdateTarget(s updateStep, fresh map[string]writtenFile)
 	if err != nil {
 		return err
 	}
-	if err := c.env.Storage.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
-		return fmt.Errorf("mkdir: %w", err)
-	}
 	disk, err := c.newDiskView()
 	if err != nil {
 		return err
 	}
-	if err := disk.write(c, fullPath, data, s.target.exe, s.target.link); err != nil {
+	if err := disk.Write(fullPath, data, s.target.exe, s.target.link); err != nil {
 		return err
 	}
-	// WriteFile keeps an existing file's mode.
-	if err := c.setMergedMode(s.tname, s.target.exe); err != nil {
-		return err
-	}
-	mtime, err := disk.mtime(c, fullPath)
+	mtime, err := disk.MTime(fullPath)
 	if err != nil {
 		return err
 	}

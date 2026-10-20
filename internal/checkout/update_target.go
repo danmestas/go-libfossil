@@ -18,7 +18,7 @@ import (
 // returned, where fossil stops with "Multiple descendants". Returns 0 when
 // the checkout is already there or nothing descends from it.
 //
-// Departures from fossil 2.28, for repo-state-01: the checkout's branch and
+// Departures from fossil 2.28, for repo-state-00: the checkout's branch and
 // the same-branch tests read only active branch rows (Section 6.4), and a
 // check-in with no active branch row is on the main-branch setting's branch
 // rather than the literal trunk (Section 6.1), for the checkout and for the
@@ -28,7 +28,7 @@ import (
 // Section 10.3 says closed-ness and leaf-ness are not inputs to update's
 // target computation. That is read as covering a named update ("update
 // trunk"); fossil's update with no version named drops closed leaves and is
-// built on the leaf set, and -01 does not define that form. Erratum
+// built on the leaf set, and -00 does not define that form. Erratum
 // candidate.
 //
 // Panics if c is nil (TigerStyle precondition).

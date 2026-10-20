@@ -284,7 +284,7 @@ func (r *Repo) ResolveVersion(name string) (int64, error) {
 	return resolveVersion(r.inner.DB(), name, 0, false)
 }
 
-// CurrentTrunk returns the current trunk (repo-state-01 Section 9): the
+// CurrentTrunk returns the current trunk (repo-state-00 Section 9): the
 // check-in that the main-branch setting's name resolves to by ResolveVersion's
 // procedure, "trunk" when the setting is unset. Only check-ins can answer, as
 // in fossil's check-in request, so a technote tagged with the name does not. The setting is local and not synced, so
@@ -308,7 +308,7 @@ func (r *Repo) CurrentTrunk() (int64, error) {
 
 // ResolveBranchStart resolves name as ResolveVersion does, then returns the
 // first check-in of the branch the result is on: fossil's branch-type ("br")
-// request (repo-state-01 Section 8.3), the start of the branch rather than
+// request (repo-state-00 Section 8.3), the start of the branch rather than
 // the check-in its name most recently points at. As Section 8.3 requires, the
 // request is rewritten to a check-in request first: only check-ins can match,
 // so a technote tagged with the branch name does not shadow the branch.

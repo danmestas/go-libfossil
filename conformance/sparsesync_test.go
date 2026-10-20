@@ -27,6 +27,7 @@ func scSyncCases() []scCase {
 		{Case{ID: "sparsecone.8.wire-bounds", Req: "SC-8-1"}, scSyncBounds},
 		{Case{ID: "sparsecone.5.3.origin-refusal", Req: "SC-5.3-2"}, scSyncOrigin},
 		{Case{ID: "sparsecone.5.3.clone-fatal", Req: "SC-5.3-3"}, scSyncFatal},
+		{Case{ID: "sparsecone.5.3.clone-error-only", Req: "SC-5.3-3"}, scSyncErrorOnly},
 		{Case{ID: "sparsecone.5.3.auth-challenge", Req: "SC-5.3-3"}, scSyncAuth},
 		{Case{ID: "sparsecone.6.2.full-delta", Req: "SC-6.2-2"}, scSyncDelta},
 		{Case{ID: "sparsecone.6.1.aware-clone-pull", Req: "SC-6.1-2"}, scSyncAware},
@@ -167,7 +168,7 @@ func scSyncFatal(t *testing.T) error {
 	if err == nil || !strings.Contains(err.Error(), scSyncOriginRefusal) {
 		return fmt.Errorf("clone refusal lost: %v", err)
 	}
-	if result == nil || result.BlobsRecvd != 0 || result.Rounds > 2 {
+	if result == nil || result.BlobsRecvd != 0 || len(peer.requests) != 1 {
 		return fmt.Errorf("refused clone progressed or kept retrying: %+v", result)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -184,6 +185,44 @@ func scSyncFatal(t *testing.T) error {
 				return fmt.Errorf("refused clone requested content")
 			}
 		}
+	}
+	return nil
+}
+
+// An error-only round zero is not the push-code authentication challenge.
+// Encode the single literal error card and require failure before any retry.
+func scSyncErrorOnly(t *testing.T) error {
+	calls := 0
+	peer := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		calls++
+		for _, card := range req.Cards {
+			if _, ok := card.(*xfer.GimmeCard); ok {
+				t.Fatal("error-only clone requested content")
+			}
+		}
+		resp, err := scSyncWire(&xfer.Message{Cards: []xfer.Card{
+			&xfer.ErrorCard{Message: "sparse origin refuses clone"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}}
+	path := filepath.Join(t.TempDir(), "error-only.fossil")
+	r, result, err := sync.Clone(context.Background(), path, peer, sync.CloneOpts{})
+	if r != nil {
+		r.Close()
+		return fmt.Errorf("error-only clone returned a repository")
+	}
+	if calls != 1 || result == nil || result.BlobsRecvd != 0 {
+		return fmt.Errorf("error-only clone calls=%d result=%+v", calls, result)
+	}
+	want := "sync.Clone: process round 0: sync.Clone: sparse origin refuses clone"
+	if err == nil || err.Error() != want {
+		return fmt.Errorf("error-only clone error=%v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		return fmt.Errorf("error-only clone left database: %v", err)
 	}
 	return nil
 }

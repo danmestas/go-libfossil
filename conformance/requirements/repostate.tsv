@@ -1,16 +1,16 @@
-# Requirements for draft-fossil-repo-state-01, written from the draft text.
+# Requirements for draft-fossil-repo-state-00, written from the draft text.
 # The draft records its corrections in Appendix A. Section 4.2's note on
 # fossil(1) records the behavior RS-4.2-13 and RS-4.2-14 depart from; the
 # corrections to sections 5.3, 6.2, 7.3 and 8.3 make fossil's behavior the
 # draft's.
-# draft	draft-fossil-repo-state-01.txt	59dd17b9588497c6c817e61d27fb7137d450f3aa9ad35b4ec81b887f3ccea55c
+# draft	draft-fossil-repo-state-00.txt	137f0a573498bf27ce1e8543e000cccf0c40c834136441fda0c9e8d4b190477f
 #
 # id	section	requirement	scope
 RS-2-1	2	An operation that tags a check-in with a user-supplied symbolic name stores it as "sym-" + name unless the caller asks for the raw name.
 RS-2-2	2	Tags whose names begin with "wiki-", "tkt-" or "event-" are never created by a user tagging operation.
 RS-3.1-1	3.1	Each parent named on a check-in's P card yields a linkage row (parent, child) carrying the primary-parent flag, the check-in's mtime and the baseline id.
 RS-3.1-2	3.1	A parent named more than once on one P card yields a single linkage row for that (parent, child) pair.
-RS-3.1-3	3.1	A delta manifest whose baseline is absent or is not a manifest is not linked: it gets no event or linkage row, and the gap is recorded against the baseline (artifact-format-01 Section 8.3) so it links when the baseline arrives.
+RS-3.1-3	3.1	A delta manifest whose baseline is absent or is not a manifest is not linked: it gets no event or linkage row, and the gap is recorded against the baseline (artifact-format-00 Section 8.3) so it links when the baseline arrives.
 RS-3.2-1	3.2	The first parent on the P card is the primary parent (flag set); every other parent is a merge parent (flag unset).
 RS-3.2-2	3.2	A repeated parent keeps the primary flag chosen by its first occurrence.
 RS-3.2-3	3.2	Linear-history operations (first-parent traversal, the prev keyword) follow only the primary-parent row.

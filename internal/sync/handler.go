@@ -916,7 +916,7 @@ func (h *handler) emitCapabilityPragmas() {
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
 // the requester's login, null for nobody as fossil's g.zLogin is, and
 // ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
-// lock with no login fossil emits an empty LOGIN, which the -01 grammar
+// lock with no login fossil emits an empty LOGIN, which the -00 grammar
 // (1*fossilized) does not allow and which fossil's own client drops as a
 // short card; this server names the holder nobody instead.
 //

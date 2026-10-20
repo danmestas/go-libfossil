@@ -13,7 +13,7 @@ import (
 const DefaultMainBranch = "trunk"
 
 // MainBranch is the repository's default branch: the main-branch setting, or
-// DefaultMainBranch when that is unset. draft-fossil-repo-state-01 Section 6.1
+// DefaultMainBranch when that is unset. draft-fossil-repo-state-00 Section 6.1
 // attributes a check-in with no active branch tag to this branch and forbids
 // assuming "trunk" when the setting is present. An empty value is read as
 // unset (no branch has an empty name), which departs from the draft and from

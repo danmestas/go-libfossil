@@ -110,7 +110,7 @@ func TestVerify_DetectsHashMismatch(t *testing.T) {
 
 // TestVerify_RenamedBlobIsHashMismatch stores a blob under a name its bytes do
 // not hash to. Its content expands cleanly, so the report must call it a hash
-// mismatch, not a corrupt blob (draft-fossil-repo-state-01 Section 4.4).
+// mismatch, not a corrupt blob (draft-fossil-repo-state-00 Section 4.4).
 func TestVerify_RenamedBlobIsHashMismatch(t *testing.T) {
 	r := newTestRepo(t)
 	_, _, err := manifest.Checkin(r, manifest.CheckinOpts{

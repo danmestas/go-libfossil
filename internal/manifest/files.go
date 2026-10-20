@@ -88,7 +88,7 @@ func ListFilesFiltered(r *repo.Repo, rid libfossil.FslID, filter FileFilter) ([]
 // checkinFileCards is the enumeration seam of draft-fossil-submanifests-00
 // §9.3: the one place a check-in's complete file set is assembled, in
 // comparator order and with no delete markers, whatever form the manifest
-// takes -- flat, delta (artifact-format-01 8.2), tree (§5.1) or a delta over a
+// takes -- flat, delta (artifact-format-00 8.2), tree (§5.1) or a delta over a
 // tree (§5.4). Every reader of a whole file set goes through here, or through
 // ownFileCards for a manifest's own cards; nothing else reads F cards as a
 // file set.
@@ -123,7 +123,7 @@ func ownFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.File
 
 // baselineFileCards returns the cards a manifest with no B card lists as its
 // file set, or, for a delta named as another delta's baseline, that delta's
-// own cards (artifact-format-01 4.7.3: one level, its B card not followed). A
+// own cards (artifact-format-00 4.7.3: one level, its B card not followed). A
 // tree manifest's are its walked enumeration (§5.1), which can fail; any
 // other manifest's are its F cards.
 func baselineFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
@@ -133,7 +133,7 @@ func baselineFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck
 	return d.F, nil
 }
 
-// mergeDeltaCards is the merge walk of artifact-format-01 8.2: the baseline's
+// mergeDeltaCards is the merge walk of artifact-format-00 8.2: the baseline's
 // cards overlaid with the delta's own, a delta's delete marker removing the
 // name. A delete marker on the baseline side -- a named delta's own -- adds no
 // file either (4.7.3), so no card in the result is hashless.
@@ -161,10 +161,10 @@ func mergeDeltaCards(baseCards, own []deck.FileCard) []deck.FileCard {
 
 // loadBaseline resolves the B card of delta manifest d to its baseline deck.
 // The target must be a check-in (4.7.3, 8.3); a control artifact would hand
-// back an empty file set as if it were whole. Per artifact-format-01 4.7.3 and
+// back an empty file set as if it were whole. Per artifact-format-00 4.7.3 and
 // fossil's manifest_get, the target MAY itself be a delta manifest: only its
 // own F cards are used, its own B card is not followed (one level). -00 and
-// #275 refused that case; -01 reverses it. It MAY also be a tree manifest
+// #275 refused that case; -00 reverses it. It MAY also be a tree manifest
 // (draft-fossil-submanifests-00 §5.4), whose file set baselineFileCards walks.
 // Every reader of a B card goes through here, so the rule has one owner.
 func loadBaseline(q db.Querier, cache *content.Cache, d *deck.Deck) (*deck.Deck, error) {
@@ -241,7 +241,7 @@ func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) 
 }
 
 // LookupFile resolves one filename in a check-in's file set, as
-// artifact-format-01 8.4 orders the search: a delta manifest's own F cards
+// artifact-format-00 8.4 orders the search: a delta manifest's own F cards
 // first, and only a name absent from them goes to the baseline. found is false
 // when no file has the name or the delta deletes it; a delete marker answers
 // without reading the baseline, so a missing baseline does not fail it. A name
@@ -278,7 +278,7 @@ func LookupFileCached(
 }
 
 // lookupFileCard is the single-name half of the enumeration seam: a delta's
-// own cards first (artifact-format-01 8.4), a delete marker answering without
+// own cards first (artifact-format-00 8.4), a delete marker answering without
 // the baseline, then the baseline -- by binary search of a flat one's F cards
 // or by the tree lookup of draft-fossil-submanifests-00 §5.3. The card it
 // returns may be a delete marker; fileCardEntry reads that as absent.

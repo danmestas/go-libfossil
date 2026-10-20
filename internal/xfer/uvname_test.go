@@ -6,7 +6,7 @@ import (
 )
 
 // TestUVNameFossilized pins the NAME of uvfile, uvigot and uvgimme as
-// fossilized on the wire (sync-protocol-01 Section 7.3 and Appendix B): a
+// fossilized on the wire (sync-protocol-00 Section 7.3 and Appendix B): a
 // name with a space goes out escaped and comes back whole. fossil(1) 2.28
 // sends the name raw and refuses an escaped one; the draft governs.
 func TestUVNameFossilized(t *testing.T) {

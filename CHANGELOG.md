@@ -153,6 +153,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in fossil. An exact half millisecond rounds up; fossil's result there
   depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
   `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
+- The conformance suite is re-pinned to zit check-in `68a3f76cb7`, where the
+  artifact-format, repo-state and sync-protocol drafts name themselves
+  `-00` instead of `-01` throughout and their Changes appendices are headed
+  "Changes in This Revision". No normative text changed and no section
+  number moved, so the requirement tables and the coverage counts are
+  unchanged; the pinned copies take zit's file names, and the comments and
+  tables that cited the `-01` drafts cite the `-00` ones. The sparse-cone
+  copy is re-pinned to `d497c2432f`, whose text is the same.
 - The conformance suite is re-pinned to the -01 drafts as zit check-in
   `3f86ff4261` holds them, with six more errata applied. The artifact format
   says the Z card is last by the ordering and required-card rules, and §6.2

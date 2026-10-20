@@ -289,7 +289,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		// links must still repair leaves and propagated tags, as fossil's
 		// per-round manifest_crosslink_end does (src/xfer.c): otherwise a
 		// failed pull leaves check-ins with event rows and no leaf rows
-		// (repo-state-01 Section 7.3, RS-7.3-4). The context is detached so a
+		// (repo-state-00 Section 7.3, RS-7.3-4). The context is detached so a
 		// cancelled pull is repaired too.
 		if closed || err == nil || s.cascaded == 0 {
 			return

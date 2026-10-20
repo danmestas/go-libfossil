@@ -1,7 +1,7 @@
 package conformance
 
 // The date tag is fossil(1)'s check-in time override (`fossil amend
-// --date`): draft-fossil-repo-state-01 Section 4.2, step 6, "Event time",
+// --date`): draft-fossil-repo-state-00 Section 4.2, step 6, "Event time",
 // makes its value, not the manifest's D card, the check-in's event.mtime,
 // with the newest date tag winning. Where the step defines a cancel, an
 // unparsable value or a value of 0 differently from fossil(1) 2.28, which

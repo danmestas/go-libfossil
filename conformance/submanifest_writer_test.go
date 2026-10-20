@@ -439,15 +439,16 @@ func smSettingCases() []smCase {
 			}
 			return nil
 		}),
-		smWriterCase("submanifest.7.2.avoid-in-session", "SM-7.2-3", smAvoidInSession),
+		smWriterCase("submanifest.7.2.avoid-receipt-is-local", "SM-7.2-3", smAvoidReceipt),
 		smWriterCase("submanifest.7.2.commit-after-session", "SM-7.2-3", smCommitAfterSession),
 	}
 }
 
-// smAvoidInSession: a sync session whose server has emission off reports
-// avoid-submanifests, and the commit made in it is flat although the
-// client has emission on.
-func smAvoidInSession(t *testing.T) error {
+// Sync creates no pending commit: this client commits first and pushes later,
+// which §7.2 explicitly exempts from the in-session emission conditional.
+// Exercise the real receipt instead: the hint neither changes local settings
+// nor survives into a later exchange whose server no longer sends it.
+func smAvoidReceipt(t *testing.T) error {
 	server, err := smWriterRepo(t)
 	if err != nil {
 		return err
@@ -478,11 +479,43 @@ func smAvoidInSession(t *testing.T) error {
 	if !res.AvoidSubmanifests {
 		return fmt.Errorf("the session did not report avoid-submanifests")
 	}
-	_, d, err := smCommit(client, smA1, 0, smTime, res.AvoidSubmanifests)
+	if err := smAvoidStored(client); err != nil {
+		return err
+	}
+	if err := server.SetConfig(manifest.SettingSubmanifestK, "3"); err != nil {
+		return err
+	}
+	if err := server.SetConfig(manifest.SettingEnableSubmanifests, "on"); err != nil {
+		return err
+	}
+	res, err = sync.Sync(context.Background(), client, transport, sync.SyncOpts{Pull: true})
 	if err != nil {
 		return err
 	}
-	return want("S cards in the session's commit", len(d.S), 0)
+	if res.AvoidSubmanifests {
+		return fmt.Errorf("avoid-submanifests leaked into the next session")
+	}
+	return smAvoidStored(client)
+}
+
+func smAvoidStored(client *repo.Repo) error {
+	for name, expected := range map[string]string{
+		manifest.SettingEnableSubmanifests: "on", manifest.SettingSubmanifestK: "3",
+	} {
+		got, err := client.Config(name)
+		if err != nil {
+			return err
+		}
+		if got != expected {
+			return fmt.Errorf("session changed %s to %q, want %q", name, got, expected)
+		}
+	}
+	var count int
+	const query = "SELECT count(*) FROM config WHERE name LIKE '%avoid%submanifest%'"
+	if err := client.DB().QueryRow(query).Scan(&count); err != nil {
+		return err
+	}
+	return want("persisted avoid-submanifests hints", count, 0)
 }
 
 // smCommitAfterSession: the session is one exchange, so a commit made after a

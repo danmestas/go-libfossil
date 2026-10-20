@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `verify.Verify` audits leaves by repo-state §§7.2–7.3's same-branch
+  rule and branch-tag recheck schedule instead of assuming every check-in
+  without children must be a leaf. Arrival-order retained verdicts are
+  accepted; decidable stale, missing and stray rows are reported. Both the
+  draft's branch reading and Fossil 2.28's literal-trunk reading must agree
+  that a row is wrong, although their same-branch witnesses may differ.
+  Parent tags replace P-card ancestry only when valid and active; retained
+  ancestry after cancellation is checked against recorded parent-tag history.
+  Leaf conformance cases also run Verify on both implementations' tables.
+  Tracked in #433.
+
+## [0.13.0] - 2026-10-20
+
 ### Added
 
 - A checkout-free interface for apps that embed the binary, documented in
@@ -92,31 +107,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `verify.Verify` checks the leaf table by the same-branch rule of
-  repo-state §7.2, through the test `leaf.Check` applies, rather than
-  expecting a leaf for every check-in with no child at all. A merged branch
-  tip and a branch point whose children are all on other branches are no
-  longer reported. §7.3 lets the table depend on arrival order, so Verify
-  reports only what every order agrees on: a row whose same-branch child
-  carries a branch row written once it was linked, and a check-in carrying a
-  branch row with no same-branch child and no row, and a row for a rid no
-  recheck reaches, such as a file artifact or a rid with no artifact. A
-  parent that keeps its row when an untagged child arrives later is
-  accepted, and so is a parent that a reparent took a child from, whether a
-  P-card or an earlier, since replaced, parent tag named it. A child moved
-  by a parent tag that was later cancelled is accepted too. A child counts
-  as same-branch for a reported row only under both the draft's reading and
-  fossil 2.28's leaf_check (any branch row, the literal trunk), and as absent
-  for a reported check-in only under both, so the tables fossil writes when
-  main-branch is not trunk or a branch tag was cancelled, and a table written
-  before main-branch changed, are accepted. Every conformance case comparing
-  the leaf table now also runs Verify on the tables go-libfossil and
-  fossil(1) derive, those recording fossil departing from the draft
-  included. Verify no longer reports a P-card parent missing from plink when
-  the check-in carries a parent tag, which replaces those rows in fossil.
-  `repostate.7.3.reparent-twice-no-recheck` reparents a check-in twice, and
-  `repostate.7.2.verify-leaf-table` checks that Verify reports a dropped and
-  a planted row (RS-7.2-1, RS-7.3-1, RS-7.3-3). Tracked in #433.
+- Ticket artifacts link into a repository whose ticket schema lacks any of
+  the columns fossil treats as optional: the ticket table,
+  `ticket.tkt_ctime`, the ticketchng table, `ticketchng.tkt_rid` and
+  `ticketchng.tkt_user`. Crosslink always wrote `tkt_user` and `tkt_ctime`,
+  so rebuilding fossil's own repository, which has no `tkt_user`, failed.
+  The ticket and ticketchng rows now follow fossil's `ticket_insert`: a
+  change row is written only when it has a field or bookkeeping column to
+  fill, `tkt_user` only when the artifact names a user, a field stored in
+  both tables is copied from the ticket row when the artifact leaves it
+  alone, and a `baseline for <field>` column records the rid that last
+  assigned the field. Without a ticket table nothing is derived for a
+  ticket, including its timeline rows, as in fossil.
 - `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
   It used to compare only committed versions, so it wrote the target's
   content over a locally edited file, deleted an edited file the target

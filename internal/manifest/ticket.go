@@ -3,6 +3,7 @@ package manifest
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -14,7 +15,7 @@ import (
 // ticketRebuildEntry re-derives every row one ticket owns -- its ticket row,
 // its ticketchng rows and one event row per change artifact -- by replaying
 // every artifact carrying the tkt-<uuid> tag in mtime order. It is fossil's
-// ticket_rebuild_entry (src/ticket.c), which fossil defers to the end of a
+// ticket_rebuild_entry (src/tkt.c), which fossil defers to the end of a
 // crosslink run through a pending_tkt table.
 //
 // We run it inline instead, inside the caller's transaction, because the
@@ -62,13 +63,14 @@ func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) erro
 		return fmt.Errorf("ticket tagid: %w", err)
 	}
 
-	tktCols, err := ticketColumns(tx, "ticket")
+	schema, err := readTicketSchema(tx)
 	if err != nil {
 		return err
 	}
-	chngCols, err := ticketColumns(tx, "ticketchng")
-	if err != nil {
-		return err
+	// Without a ticket table fossil derives nothing for a ticket, not even
+	// its timeline rows: ticket_rebuild_entry returns before replaying.
+	if !schema.haveTicket {
+		return nil
 	}
 	human, url := ticketHashDigits(tx)
 
@@ -76,8 +78,10 @@ func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) erro
 	// artifacts that exist now; its ticketchng rows go with it, since they are
 	// keyed by the tkt_id this DELETE drops. The event rows need no delete:
 	// event.objid is the primary key, so each replay REPLACEs its own row.
-	if _, err := tx.Exec("DELETE FROM ticketchng WHERE tkt_id IN (SELECT tkt_id FROM ticket WHERE tkt_uuid=?)", ticketUUID); err != nil {
-		return fmt.Errorf("ticket clear ticketchng: %w", err)
+	if schema.haveChng {
+		if _, err := tx.Exec("DELETE FROM ticketchng WHERE tkt_id IN (SELECT tkt_id FROM ticket WHERE tkt_uuid=?)", ticketUUID); err != nil {
+			return fmt.Errorf("ticket clear ticketchng: %w", err)
+		}
 	}
 	if _, err := tx.Exec("DELETE FROM ticket WHERE tkt_uuid=?", ticketUUID); err != nil {
 		return fmt.Errorf("ticket clear ticket: %w", err)
@@ -116,7 +120,7 @@ func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) erro
 			continue
 		}
 		isNew := tktID == 0
-		tktID, err = ticketInsert(tx, d, rid, tktID, tktCols, chngCols)
+		tktID, err = ticketInsert(tx, d, rid, tktID, schema)
 		if err != nil {
 			return err
 		}
@@ -127,40 +131,106 @@ func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) erro
 	return nil
 }
 
-// ticketColumns returns the columns of one ticket table a J-card may write.
-// Fossil's getAllTicketFields reads them from the live schema and skips the
-// tkt_-prefixed bookkeeping columns it manages itself, because a repository
-// may configure its own ticket fields; we do the same rather than assume the
-// default schema. table must be a literal we control -- PRAGMA takes no
-// parameters.
-func ticketColumns(q db.Querier, table string) (map[string]bool, error) {
+// Which tables a ticket field is stored in, as fossil's USEDBY_ bits.
+const (
+	usedByTicket uint8 = 1 << iota
+	usedByTicketChng
+	usedByBoth = usedByTicket | usedByTicketChng
+)
+
+// ticketField is one column a J-card may write.
+type ticketField struct {
+	usedBy uint8
+	// baseline names the ticket table's "baseline for <field>" INTEGER
+	// column, which records the rid that last assigned the field; "" if none.
+	baseline string
+}
+
+// ticketSchema is the shape of a repository's ticket tables. Fossil lets a
+// repository configure its own ticket fields, and treats the ticket table,
+// ticket.tkt_ctime, the ticketchng table, ticketchng.tkt_rid and
+// ticketchng.tkt_user as optional; fossil's own repository has no tkt_user.
+type ticketSchema struct {
+	haveTicket, haveCTime               bool
+	haveChng, haveChngRid, haveChngUser bool
+	fields                              map[string]ticketField
+}
+
+// readTicketSchema reads the live ticket schema, mirroring fossil's
+// getAllTicketFields (src/tkt.c): tkt_-prefixed columns are bookkeeping, not
+// fields, and a name containing a space is never a field.
+func readTicketSchema(q db.Querier) (ticketSchema, error) {
+	s := ticketSchema{fields: make(map[string]ticketField)}
+	baselines := make(map[string]bool)
+	err := forEachColumn(q, "ticket", func(name, typ string) {
+		s.haveTicket = true
+		switch {
+		case strings.HasPrefix(name, "tkt_"):
+			s.haveCTime = s.haveCTime || name == "tkt_ctime"
+		case strings.HasPrefix(name, "baseline for "):
+			if typ == "INTEGER" {
+				baselines[name] = true
+			}
+		case strings.Contains(name, " "):
+		default:
+			s.fields[name] = ticketField{usedBy: usedByTicket}
+		}
+	})
+	if err != nil {
+		return ticketSchema{}, err
+	}
+	for name, f := range s.fields {
+		if b := "baseline for " + name; baselines[b] {
+			f.baseline = b
+			s.fields[name] = f
+		}
+	}
+	err = forEachColumn(q, "ticketchng", func(name, _ string) {
+		s.haveChng = true
+		switch {
+		case strings.HasPrefix(name, "tkt_"):
+			s.haveChngRid = s.haveChngRid || name == "tkt_rid"
+			s.haveChngUser = s.haveChngUser || name == "tkt_user"
+		case strings.Contains(name, " "):
+		default:
+			f := s.fields[name]
+			f.usedBy |= usedByTicketChng
+			s.fields[name] = f
+		}
+	})
+	if err != nil {
+		return ticketSchema{}, err
+	}
+	return s, nil
+}
+
+// forEachColumn calls fn with the name and declared type of each column of
+// table, and not at all when the table does not exist. table must be a literal
+// we control -- PRAGMA takes no parameters.
+func forEachColumn(q db.Querier, table string, fn func(name, typ string)) error {
 	if table != "ticket" && table != "ticketchng" {
-		panic("ticketColumns: unknown table " + table)
+		panic("forEachColumn: unknown table " + table)
 	}
 	rows, err := q.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
-		return nil, fmt.Errorf("ticket columns %s: %w", table, err)
+		return fmt.Errorf("ticket columns %s: %w", table, err)
 	}
 	defer rows.Close()
-
-	cols := make(map[string]bool)
 	for rows.Next() {
 		var cid int
 		var name string
-		var typ, dfltValue any
+		var typ sql.NullString
+		var dfltValue any
 		var notNull, pk int
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &dfltValue, &pk); err != nil {
-			return nil, fmt.Errorf("ticket columns %s scan: %w", table, err)
+			return fmt.Errorf("ticket columns %s scan: %w", table, err)
 		}
-		if strings.HasPrefix(name, "tkt_") {
-			continue
-		}
-		cols[name] = true
+		fn(name, typ.String)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("ticket columns %s rows: %w", table, err)
+		return fmt.Errorf("ticket columns %s rows: %w", table, err)
 	}
-	return cols, nil
+	return nil
 }
 
 // ticketHashDigits returns the two hyperlink hash lengths fossil's %S and %!S
@@ -186,52 +256,25 @@ func ticketHashDigits(q db.Querier) (human, url int) {
 	return human, url
 }
 
-// ticketAssignment is one J-card resolved against a ticket table's columns.
-type ticketAssignment struct {
-	column string
-	value  string
-	append bool // the card was +name: concatenate onto the stored value
-}
-
-// ticketAssignments resolves a ticket artifact's J-cards against cols, keeping
-// wire order and dropping cards that name no column. A leading '+' selects
-// append semantics and is not part of the column name. A column named twice --
-// which the ascending-J-run rule permits only as `name` plus `+name` -- keeps
-// the first card, so the statement built from this never assigns one column
-// twice.
-func ticketAssignments(d *deck.Deck, cols map[string]bool) []ticketAssignment {
-	var out []ticketAssignment
-	seen := make(map[string]bool, len(d.J))
-	for _, f := range d.J {
-		name, isAppend := strings.CutPrefix(f.Name, "+")
-		if !cols[name] || seen[name] {
-			continue
-		}
-		seen[name] = true
-		out = append(out, ticketAssignment{column: name, value: f.Value, append: isAppend})
-	}
-	return out
-}
-
 // ticketInsert applies one ticket artifact to the ticket and ticketchng
-// tables, mirroring fossil's ticket_insert (src/ticket.c). tktID is 0 when
-// this is the first artifact of its ticket being replayed, in which case the
-// ticket row is created here; the id in force afterwards is returned.
+// tables, mirroring fossil's ticket_insert (src/tkt.c) column for column.
+// tktID is 0 when this is the first artifact of its ticket being replayed, in
+// which case the ticket row is created here; the id in force afterwards is
+// returned.
 func ticketInsert(
 	tx *db.Tx,
 	d *deck.Deck,
 	rid libfossil.FslID,
 	tktID int64,
-	tktCols, chngCols map[string]bool,
+	schema ticketSchema,
 ) (int64, error) {
+	if !schema.haveTicket {
+		panic("ticketInsert: no ticket table")
+	}
 	mtime := libfossil.TimeToJulian(d.D)
 
 	if tktID == 0 {
-		// tkt_ctime is the creating artifact's date and never moves again;
-		// tkt_mtime is set by the UPDATE below, so every replay advances it to
-		// the latest artifact applied.
-		res, err := tx.Exec(
-			"INSERT INTO ticket(tkt_uuid, tkt_mtime, tkt_ctime) VALUES(?, 0, ?)", d.K, mtime)
+		res, err := tx.Exec("INSERT INTO ticket(tkt_uuid, tkt_mtime) VALUES(?, 0)", d.K)
 		if err != nil {
 			return 0, fmt.Errorf("ticket insert: %w", err)
 		}
@@ -241,34 +284,101 @@ func ticketInsert(
 		}
 	}
 
+	// tkt_mtime advances to every artifact applied; tkt_ctime, where the
+	// schema has it, is the first artifact's date and never moves again.
 	set := []string{"tkt_mtime=?"}
 	args := []any{mtime}
-	for _, a := range ticketAssignments(d, tktCols) {
-		if a.append {
-			set = append(set, fmt.Sprintf("%s=coalesce(%s,'') || ?", a.column, a.column))
-		} else {
-			set = append(set, a.column+"=?")
+	if schema.haveCTime {
+		set = append(set, "tkt_ctime=coalesce(tkt_ctime, ?)")
+		args = append(args, mtime)
+	}
+	var chngCols []string
+	var chngVals []any
+	used := make(map[string]bool, len(d.J))
+	for _, j := range d.J {
+		name, isAppend := strings.CutPrefix(j.Name, "+")
+		f, ok := schema.fields[name]
+		if !ok {
+			continue
 		}
-		args = append(args, a.value)
+		// A column named twice -- which the ascending-J-run rule permits only
+		// as `name` plus `+name` -- is assigned twice in the UPDATE, where
+		// SQLite keeps the rightmost assignment as fossil's statement does,
+		// but inserted once, since an INSERT may not name a column twice.
+		first := !used[name]
+		used[name] = true
+		if f.usedBy&usedByTicket != 0 {
+			if isAppend {
+				set = append(set, fmt.Sprintf(`%s=coalesce(%s,'') || ?`, sqlIdent(name), sqlIdent(name)))
+				args = append(args, j.Value)
+			} else {
+				set = append(set, sqlIdent(name)+"=?")
+				args = append(args, j.Value)
+				if f.baseline != "" {
+					set = append(set, sqlIdent(f.baseline)+"=?")
+					args = append(args, rid)
+				}
+			}
+		}
+		if f.usedBy&usedByTicketChng != 0 && first {
+			chngCols = append(chngCols, sqlIdent(name))
+			chngVals = append(chngVals, j.Value)
+		}
 	}
 	args = append(args, tktID)
-	if _, err := tx.Exec("UPDATE ticket SET "+strings.Join(set, ", ")+" WHERE tkt_id=?", args...); err != nil {
+	if _, err := tx.Exec(
+		"UPDATE OR REPLACE ticket SET "+strings.Join(set, ", ")+" WHERE tkt_id=?", args...,
+	); err != nil {
 		return 0, fmt.Errorf("ticket update: %w", err)
 	}
 
-	cols := []string{"tkt_id", "tkt_rid", "tkt_mtime", "tkt_user"}
-	vals := []any{tktID, rid, mtime, d.U}
-	for _, a := range ticketAssignments(d, chngCols) {
-		cols = append(cols, a.column)
-		vals = append(vals, a.value)
+	// Fossil writes a change row only when there is something to put in it
+	// beyond the id and time: a ticketchng field this artifact sets, or one
+	// of the optional bookkeeping columns.
+	if len(chngCols) == 0 && !schema.haveChngRid && !schema.haveChngUser {
+		return tktID, nil
 	}
-	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(cols)), ", ")
-	if _, err := tx.Exec(
-		"INSERT INTO ticketchng("+strings.Join(cols, ", ")+") VALUES("+placeholders+")", vals...,
-	); err != nil {
+	if schema.haveChngRid {
+		chngCols = append(chngCols, "tkt_rid")
+		chngVals = append(chngVals, rid)
+	}
+	if schema.haveChngUser && d.U != nil {
+		chngCols = append(chngCols, "tkt_user")
+		chngVals = append(chngVals, *d.U)
+	}
+	// A field stored in both tables that this artifact leaves alone is copied
+	// into the change row from the ticket row as the UPDATE left it.
+	var fromTkt []string
+	for name, f := range schema.fields {
+		if f.usedBy == usedByBoth && !used[name] {
+			fromTkt = append(fromTkt, sqlIdent(name))
+		}
+	}
+	sort.Strings(fromTkt)
+
+	cols := append([]string{"tkt_id", "tkt_mtime"}, chngCols...)
+	vals := append([]any{tktID, mtime}, chngVals...)
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(vals)), ", ")
+	var err error
+	if len(fromTkt) == 0 {
+		_, err = tx.Exec(
+			"INSERT INTO ticketchng("+strings.Join(cols, ", ")+") VALUES("+placeholders+")", vals...)
+	} else {
+		cols = append(cols, fromTkt...)
+		_, err = tx.Exec(
+			"INSERT INTO ticketchng("+strings.Join(cols, ", ")+") SELECT "+placeholders+", "+
+				strings.Join(fromTkt, ", ")+" FROM ticket WHERE tkt_id=?", append(vals, tktID)...)
+	}
+	if err != nil {
 		return 0, fmt.Errorf("ticketchng insert: %w", err)
 	}
 	return tktID, nil
+}
+
+// sqlIdent quotes a column name read from the schema, as fossil's %w
+// conversion inside double quotes does.
+func sqlIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // ticketEvent writes the timeline row for one ticket artifact, mirroring

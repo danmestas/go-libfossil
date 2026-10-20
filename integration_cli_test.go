@@ -144,7 +144,7 @@ func TestIntegrationStash(t *testing.T) {
 	}
 
 	// Stash pop — should restore modified content.
-	if err := stash.Pop(ckout, r.DB().SqlDB(), simio.RealEnv(), dir); err != nil {
+	if _, err := stash.Pop(ckout, r.DB().SqlDB(), simio.RealEnv(), dir); err != nil {
 		t.Fatalf("stash.Pop: %v", err)
 	}
 

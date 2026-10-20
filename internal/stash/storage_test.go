@@ -178,7 +178,7 @@ func TestPopRestoresThroughStorage(t *testing.T) {
 	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "edit"); err != nil {
 		t.Fatal(err)
 	}
-	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+	if _, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {
@@ -205,7 +205,7 @@ func TestSameSizePopInSaveSecondDetected(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, saved, _ := s.row(t, "a.txt")
-	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+	if _, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	s.setMTime(t, "a.txt", saved)
@@ -257,7 +257,7 @@ func TestApplyReaddsAddedFile(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("stash list = %v, %v", entries, err)
 	}
-	if err := stash.Apply(s.ckout, s.repoDB, s.env, s.dir, entries[0].ID); err != nil {
+	if _, err := stash.Apply(s.ckout, s.repoDB, s.env, s.dir, entries[0].ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "c.txt"); got != "new file\n" {
@@ -291,7 +291,7 @@ func TestSaveRestoresRemovedFile(t *testing.T) {
 	if chnged, mtime, _ := s.row(t, "b.txt"); chnged != 0 || mtime != s.diskMTime(t, "b.txt") {
 		t.Fatalf("b.txt row after save: chnged=%d mtime=%d", chnged, mtime)
 	}
-	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+	if _, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := s.read(t, "b.txt"); ok {
@@ -317,7 +317,7 @@ func TestSaveScansFirst(t *testing.T) {
 	if got, _ := s.read(t, "a.txt"); got != "hello world\n" {
 		t.Fatalf("a.txt after save = %q", got)
 	}
-	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+	if _, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.read(t, "a.txt"); got != "HELLO world\n" {

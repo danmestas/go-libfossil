@@ -227,7 +227,7 @@ func TestPopRestoresChanges(t *testing.T) {
 	}
 
 	// Pop.
-	if err := Pop(ckout, repoDB, simio.RealEnv(), dir); err != nil {
+	if _, err := Pop(ckout, repoDB, simio.RealEnv(), dir); err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestApplyKeepsStash(t *testing.T) {
 	}
 
 	// Apply.
-	if err := Apply(ckout, repoDB, simio.RealEnv(), dir, entries[0].ID); err != nil {
+	if _, err := Apply(ckout, repoDB, simio.RealEnv(), dir, entries[0].ID); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 

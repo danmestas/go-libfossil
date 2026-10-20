@@ -111,7 +111,7 @@ func TestStashRepointedSymlink(t *testing.T) {
 		t.Fatalf("changes after stash = %v, want nothing", got)
 	}
 
-	if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+	if _, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
 		t.Fatal(err)
 	}
 	wantLink(t, s.dir, "link", "other.txt")
@@ -185,7 +185,7 @@ func TestStashSymlinkMatchesFossil(t *testing.T) {
 			fossilIn(t, bin, ck, "stash", "pop")
 		} else {
 			withDBs(t, ck, repoPath, env, func(_ *checkout.Checkout, ckout, repoDB *sql.DB) {
-				if err := stash.Pop(ckout, repoDB, env, ck); err != nil {
+				if _, err := stash.Pop(ckout, repoDB, env, ck); err != nil {
 					t.Fatal(err)
 				}
 			})
@@ -239,8 +239,12 @@ func TestPopDoesNotMergeChangedSymlink(t *testing.T) {
 				t.Fatal(err)
 			}
 			tc.after(t, link)
-			if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+			conflicts, err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if len(conflicts) != 1 || conflicts[0] != "link" {
+				t.Errorf("conflicts = %q, want [link]", conflicts)
 			}
 			tc.check(t, s.dir)
 			wantFile(t, s.dir, "plain.txt", "plain\n")

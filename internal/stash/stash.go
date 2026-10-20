@@ -363,7 +363,13 @@ type stashedFile struct {
 // artifact, and the mtime it was written with (vfile.WrittenMTime). A row
 // based on another artifact, or in a merge, gets mtime 0 instead, so the next
 // scan hashes the file.
-func Apply(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID int64) error {
+//
+// A modified file that cannot be merged because a symlink is involved is
+// left as it is and returned in conflicts, as fossil's stash_apply reports
+// "Cannot merge symlink" and counts a conflict (see applyStashedFile).
+func Apply(
+	ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID int64,
+) (conflicts []string, err error) {
 	if ckout == nil {
 		panic("stash.Apply: ckout must not be nil")
 	}
@@ -381,31 +387,38 @@ func Apply(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID in
 	}
 	files, err := loadStashedFiles(ckout, stashID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(files) == 0 {
-		return fmt.Errorf("stash.Apply: stash %d not found", stashID)
+		return nil, fmt.Errorf("stash.Apply: stash %d not found", stashID)
 	}
 
 	tx, err := ckout.Begin()
 	if err != nil {
-		return fmt.Errorf("stash.Apply: begin tx: %w", err)
+		return nil, fmt.Errorf("stash.Apply: begin tx: %w", err)
 	}
 	defer tx.Rollback()
 	vid, err := checkoutVersion(tx)
 	if err != nil {
-		return fmt.Errorf("stash.Apply: %w", err)
+		return nil, fmt.Errorf("stash.Apply: %w", err)
 	}
 	disk, err := vfile.OpenDisk(env, repoDB)
 	if err != nil {
-		return fmt.Errorf("stash.Apply: %w", err)
+		return nil, fmt.Errorf("stash.Apply: %w", err)
 	}
 	for _, f := range files {
-		if err := applyStashedFile(tx, repoDB, disk, vid, filepath.Join(dir, f.name), f); err != nil {
-			return fmt.Errorf("stash.Apply: %w", err)
+		merged, err := applyStashedFile(tx, repoDB, disk, vid, filepath.Join(dir, f.name), f)
+		if err != nil {
+			return nil, fmt.Errorf("stash.Apply: %w", err)
+		}
+		if !merged {
+			conflicts = append(conflicts, f.name)
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("stash.Apply: commit: %w", err)
+	}
+	return conflicts, nil
 }
 
 // loadStashedFiles reads stash stashID's files up front, so no cursor is
@@ -438,39 +451,49 @@ func loadStashedFiles(ckout *sql.DB, stashID int64) ([]stashedFile, error) {
 }
 
 // applyStashedFile restores one stashed file in version vid's checkout,
-// writing through disk. As fossil's stash_apply does, an added file is
-// written as a plain file, and a modified symlink as a symlink.
+// writing through disk, and reports whether it did. As fossil's stash_apply
+// does, an added file is written as a plain file, and a modified symlink as
+// a symlink. A modified file where a symlink was stashed or is now, unless
+// both are links and the link is still the stash's baseline, is not merged:
+// fossil prints "Cannot merge symlink", counts a conflict and leaves the
+// file and its row as they are, which is reported as not merged.
 func applyStashedFile(
 	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, vid int64, fullPath string, f stashedFile,
-) error {
+) (merged bool, err error) {
 	switch {
 	case f.isAdded:
 		if _, err := writeFile(disk, fullPath, f.delta, f.isExec, false); err != nil {
-			return err
+			return false, err
 		}
-		return readd(tx, vid, f)
+		return true, readd(tx, vid, f)
 	case f.isRemoved:
-		return disk.Remove(fullPath)
+		return true, disk.Remove(fullPath)
 	}
 
 	if !f.hash.Valid {
-		return fmt.Errorf("missing baseline hash for %s", f.name)
+		return false, fmt.Errorf("missing baseline hash for %s", f.name)
 	}
 	rid, ok := content.AvailableByUUID(repoDB, f.hash.String)
 	if !ok {
-		return fmt.Errorf("baseline blob %s not found", f.hash.String)
+		return false, fmt.Errorf("baseline blob %s not found", f.hash.String)
 	}
 	baseline, err := content.Expand(repoDB, rid)
 	if err != nil {
-		return fmt.Errorf("expand baseline %s: %w", f.hash.String, err)
+		return false, fmt.Errorf("expand baseline %s: %w", f.hash.String, err)
 	}
 	result, err := delta.Apply(baseline, f.delta)
 	if err != nil {
-		return fmt.Errorf("apply delta for %s: %w", f.name, err)
+		return false, fmt.Errorf("apply delta for %s: %w", f.name, err)
+	}
+	if f.isLink || disk.Symlinks() {
+		mergeable, err := symlinkUnchanged(disk, fullPath, f.isLink, baseline)
+		if err != nil || !mergeable {
+			return false, err
+		}
 	}
 	mtime, err := writeFile(disk, fullPath, result, f.isExec, f.isLink)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if _, err := tx.Exec(`
 		UPDATE vfile
@@ -481,9 +504,33 @@ func applyStashedFile(
 		 WHERE vid = ? AND pathname = ?`,
 		!bytes.Equal(result, baseline), mtime, int64(rid), vid, f.name, vid, f.name,
 	); err != nil {
-		return fmt.Errorf("update vfile %s: %w", f.name, err)
+		return false, fmt.Errorf("update vfile %s: %w", f.name, err)
 	}
-	return nil
+	return true, nil
+}
+
+// symlinkUnchanged is fossil's stash_apply test for writing a stashed file
+// where a symlink is involved: the file at fullPath must be a symlink just
+// when the stashed one was (isLink), and hold the baseline. Otherwise fossil
+// will not merge it. Where neither is a symlink, fossil merges and this
+// reports true. A missing file reads as empty, as fossil reads it.
+func symlinkUnchanged(disk vfile.Disk, fullPath string, isLink bool, baseline []byte) (bool, error) {
+	info, err := disk.Stat(fullPath)
+	if err != nil {
+		return false, err
+	}
+	isNewLink := vfile.IsLink(info)
+	if !isLink && !isNewLink {
+		return true, nil
+	}
+	if isLink != isNewLink {
+		return false, nil
+	}
+	current, err := disk.Read(fullPath, info)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(current, baseline), nil
 }
 
 // readd adds a stashed added file to version vid again, as fossil's
@@ -526,8 +573,10 @@ func checkoutVersion(tx *sql.Tx) (int64, error) {
 	return vid, nil
 }
 
-// Pop applies the most recent stash entry and removes it.
-func Pop(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string) error {
+// Pop applies the most recent stash entry and removes it, returning the
+// files Apply did not merge. As fossil's stash pop does, the entry is
+// removed even then.
+func Pop(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string) (conflicts []string, err error) {
 	if ckout == nil {
 		panic("stash.Pop: ckout must not be nil")
 	}
@@ -541,18 +590,18 @@ func Pop(ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string) error {
 		panic("stash.Pop: dir must not be empty")
 	}
 	var stashID int64
-	err := ckout.QueryRow("SELECT stashid FROM stash ORDER BY stashid DESC LIMIT 1").Scan(&stashID)
+	err = ckout.QueryRow("SELECT stashid FROM stash ORDER BY stashid DESC LIMIT 1").Scan(&stashID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return fmt.Errorf("stash.Pop: no stash entries")
+			return nil, fmt.Errorf("stash.Pop: no stash entries")
 		}
-		return fmt.Errorf("stash.Pop: query top stash: %w", err)
+		return nil, fmt.Errorf("stash.Pop: query top stash: %w", err)
 	}
 
-	if err := Apply(ckout, repoDB, env, dir, stashID); err != nil {
-		return err
+	if conflicts, err = Apply(ckout, repoDB, env, dir, stashID); err != nil {
+		return nil, err
 	}
-	return Drop(ckout, stashID)
+	return conflicts, Drop(ckout, stashID)
 }
 
 // List returns all stash entries oldest first, ordered by creation time as

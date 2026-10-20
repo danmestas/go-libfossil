@@ -47,11 +47,11 @@ func verifyLeafIssues(path string, labels map[string]string) ([]string, error) {
 
 // verifyFossilLeaves runs verifyLeafIssues on a repository fossil(1) derived,
 // for a case comparing leaf: Verify must accept the tables fossil itself
-// writes. A case whose fossil field is set records fossil departing from the
-// draft, so Verify, which follows the draft, is not held to fossil's table
-// there. It returns one problem naming how fossil derived it, or none.
+// writes, those of a case whose fossil field records fossil departing from
+// the draft included. It returns one problem naming how fossil derived it, or
+// none.
 func verifyFossilLeaves(c rsCase, path, how string, labels map[string]string) ([]string, error) {
-	if !slices.Contains(c.tables, "leaf") || c.fossil != "" {
+	if !slices.Contains(c.tables, "leaf") {
 		return nil, nil
 	}
 	issues, err := verifyLeafIssues(path, labels)

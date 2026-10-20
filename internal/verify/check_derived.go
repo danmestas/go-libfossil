@@ -102,9 +102,17 @@ func checkOneCheckin(
 		return err
 	}
 
-	// Check plink table
+	// Check plink table. A parent tag replaces the rows the P-card gave
+	// (fossil's manifest_reparent_checkin), and cancelling it re-derives
+	// nothing, so a check-in carrying one may lack any of them.
+	var reparented int
+	err = r.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
+	                        WHERE tag.tagname='parent' AND tagxref.rid=?`, rid).Scan(&reparented)
+	if err != nil {
+		return fmt.Errorf("checkOneCheckin parent tag: %w", err)
+	}
 	for _, parentUUID := range d.P {
-		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, detached); err != nil {
+		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, reparented > 0, detached); err != nil {
 			return err
 		}
 	}
@@ -185,10 +193,11 @@ func checkEvent(q db.Querier, report *Report, rid libfossil.FslID, uuid string) 
 }
 
 // checkPlink verifies that a parent relationship has a corresponding plink row,
-// adding a parent that lacks one to detached.
+// adding a parent that lacks one to detached. A missing row is an issue only
+// when the child is not reparented.
 func checkPlink(
 	q db.Querier, report *Report, cid libfossil.FslID, childUUID string, parentUUID string,
-	detached map[libfossil.FslID]struct{},
+	reparented bool, detached map[libfossil.FslID]struct{},
 ) error {
 	if q == nil {
 		panic("verify: checkPlink: nil querier")
@@ -214,6 +223,9 @@ func checkPlink(
 
 	if count == 0 {
 		detached[pid] = struct{}{}
+		if reparented {
+			return nil
+		}
 		report.addIssue(Issue{
 			Kind:    IssuePlinkMissing,
 			RID:     cid,

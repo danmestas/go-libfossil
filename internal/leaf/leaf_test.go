@@ -346,3 +346,53 @@ func TestAuditReportsStray(t *testing.T) {
 		t.Errorf("stray without detached = %v, want %v", got.Stray, want)
 	}
 }
+
+// TestAuditAcceptsFossilReading pins the tables fossil's leaf_check writes
+// where it departs from the draft: it reads an untagged check-in as the
+// literal trunk whatever main-branch says, and reads a branch row of any
+// type, a cancelled one included. A go-built table rechecked under an earlier
+// main-branch setting reads the same way. Audit accepts both readings, so a
+// row is stale only when both read the child as same-branch, and a row is
+// missing only when neither does.
+func TestAuditAcceptsFossilReading(t *testing.T) {
+	g := newGraph(t)
+	g.exec("REPLACE INTO config(name, value, mtime) VALUES('main-branch', 'main', 0)")
+	g.link(1, 2, true) // 1 untagged: main to the draft, trunk to fossil
+	g.branch(2, "main")
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (2)") // fossil's table
+	g.wantAudit("main-branch, fossil's table", nil, nil)
+	g.exec("DELETE FROM leaf WHERE rid=1") // the draft's table
+	g.wantAudit("main-branch, draft's table", nil, nil)
+	// 11 is untagged: main to the draft, trunk to fossil. fossil's table
+	// lacks 10, which the draft reads as a leaf.
+	g.branch(10, "trunk")
+	g.link(10, 11, true)
+	g.exec("INSERT INTO leaf(rid) VALUES(11)")
+	g.wantAudit("main-branch, trunk parent", nil, nil)
+
+	// 3's feat row is cancelled: trunk to the draft, feat to fossil.
+	g.exec("DELETE FROM config WHERE name='main-branch'")
+	g.exec("REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) "+
+		"VALUES(?, 0, 9, 3, 'feat', 2460000.5, 3)", leaf.BranchTagID)
+	g.link(3, 4, true)
+	g.branch(4, "trunk")
+	g.exec("INSERT INTO leaf(rid) VALUES(3), (4)") // fossil's table
+	g.wantAudit("cancelled, fossil's table", nil, nil)
+	g.exec("DELETE FROM leaf WHERE rid=3") // the draft's table
+	g.wantAudit("cancelled, draft's table", nil, nil)
+	g.exec("REPLACE INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid) "+
+		"VALUES(?, 0, 9, 12, 'feat', 2460000.5, 12)", leaf.BranchTagID)
+	g.link(12, 13, true)
+	g.branch(13, "feat")
+	g.exec("INSERT INTO leaf(rid) VALUES(13)") // fossil's table: 12 is no leaf
+	g.wantAudit("cancelled, feat child", nil, nil)
+
+	// Read either way 5 has a same-branch child, and 6 has none.
+	g.branch(5, "trunk")
+	g.link(5, 6, true)
+	g.branch(6, "trunk")
+	g.link(6, 7, true)
+	g.branch(7, "feat")
+	g.exec("INSERT INTO leaf(rid) VALUES(5), (7)")
+	g.wantAudit("both readings agree", []libfossil.FslID{5}, []libfossil.FslID{6})
+}

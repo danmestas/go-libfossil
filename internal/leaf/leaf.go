@@ -21,11 +21,12 @@
 //	                  WHERE tagid=TAG_BRANCH AND rid=plink.cid
 //	                    AND tagtype>0),'trunk')
 //
-// Only an active branch row (tagtype > 0) names a branch. fossil's is_a_leaf
-// and leaf_rebuild filter so, but its leaf_check, which maintains the table,
-// does not: a check-in whose branch tag was cancelled with a value keeps that
-// value there. draft-fossil-repo-state-01 Section 6.4 requires the filter on
-// every path that decides branch membership, so both paths here apply it.
+// Only an active branch row (tagtype > 0) names a branch. fossil 2.28's
+// is_a_leaf, leaf_check and leaf_rebuild do not filter so: a check-in whose
+// branch tag was cancelled with a value keeps that value there.
+// draft-fossil-repo-state-01 Section 6.4 requires the filter on every path
+// that decides branch membership, so both paths here apply it. Audit, which
+// must also accept fossil's tables, reads both ways (fossilSameBranchSQL).
 //
 // Two consequences are easy to get wrong and are what issue #189 was:
 //
@@ -68,6 +69,18 @@ var sameBranchSQL = fmt.Sprintf(`
 	  = coalesce((SELECT value FROM tagxref
 	               WHERE tagid=%[1]d AND rid=plink.cid AND tagtype>0),%[2]s)`,
 	BranchTagID, mainBranchSQL)
+
+// fossilSameBranchSQL is sameBranchSQL as fossil 2.28 reads it (src/leaf.c
+// leaf_check): a branch row of any type names a branch, and a check-in with
+// none reads as the literal trunk. A table fossil wrote follows it, and a
+// table written here while main-branch was unset reads as it does for every
+// check-in with no branch row, once the setting is changed.
+var fossilSameBranchSQL = fmt.Sprintf(`
+	coalesce((SELECT value FROM tagxref
+	           WHERE tagid=%[1]d AND rid=plink.pid),'trunk')
+	  = coalesce((SELECT value FROM tagxref
+	               WHERE tagid=%[1]d AND rid=plink.cid),'trunk')`,
+	BranchTagID)
 
 // Check brings rid's leaf row in line with the rule above, inserting or
 // deleting as needed: Section 7.3's incremental check, fossil's leaf_check().
@@ -203,8 +216,18 @@ type Findings struct {
 //
 // A check-in with no branch row and no same-branch child may lack a row,
 // being a candidate only as the parent of a tagged check-in, and Audit does
-// not report it. Changing the main-branch setting rechecks nothing either, so
-// Audit reads the setting as it is now, as Check does.
+// not report it.
+//
+// "Same-branch" is read two ways, and Audit holds a table to a finding only
+// where both agree: a child is same-branch for a stale row under both, and
+// absent for a missing row under both. One is the draft's, which Check
+// applies: active branch rows only, and the main-branch setting as it is
+// now. The other is fossil 2.28's leaf_check (fossilSameBranchSQL): a branch
+// row of any type, and the literal trunk. fossil writes its tables that way,
+// departing from Sections 6.1 and 6.4 when main-branch is not trunk or a
+// branch tag was cancelled. A table written here while main-branch was
+// unset reads the default branch that way too once the setting is changed,
+// since changing it rechecks nothing.
 func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error) {
 	if q == nil {
 		panic("leaf.Audit: q must not be nil")
@@ -215,14 +238,14 @@ func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error
 		SELECT leaf.rid FROM leaf
 		 WHERE EXISTS(
 		    SELECT 1 FROM plink
-		     WHERE plink.pid = leaf.rid AND %[2]s
+		     WHERE plink.pid = leaf.rid AND %[2]s AND %[3]s
 		       AND EXISTS(SELECT 1 FROM tagxref
 		                   WHERE tagid=%[1]d AND rid=plink.cid
 		                     AND srcid IN (0, plink.cid))
 		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
 		                       WHERE tag.tagname='parent'
 		                         AND tagxref.rid=plink.cid))
-		 ORDER BY leaf.rid`, BranchTagID, sameBranchSQL))
+		 ORDER BY leaf.rid`, BranchTagID, sameBranchSQL, fossilSameBranchSQL))
 	if err != nil {
 		return Findings{}, fmt.Errorf("leaf.Audit stale: %w", err)
 	}
@@ -232,8 +255,8 @@ func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error
 		   AND NOT EXISTS(SELECT 1 FROM leaf WHERE leaf.rid = t.rid)
 		   AND NOT EXISTS(
 		    SELECT 1 FROM plink
-		     WHERE plink.pid = t.rid AND %[2]s)
-		 ORDER BY t.rid`, BranchTagID, sameBranchSQL))
+		     WHERE plink.pid = t.rid AND (%[2]s OR %[3]s))
+		 ORDER BY t.rid`, BranchTagID, sameBranchSQL, fossilSameBranchSQL))
 	if err != nil {
 		return Findings{}, fmt.Errorf("leaf.Audit missing: %w", err)
 	}

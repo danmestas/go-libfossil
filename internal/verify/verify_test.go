@@ -662,6 +662,63 @@ func TestVerify_LeafStrayRow(t *testing.T) {
 	}
 }
 
+// TestVerify_ReparentReplacesPlink pins fossil's reparent: a parent tag
+// replaces the plink rows the check-in's P-card gave it (src/manifest.c
+// manifest_reparent_checkin), so a P-card parent the tag dropped has no row
+// and Verify must not report one missing. Cancelling the tag re-derives
+// nothing, so the same holds then.
+func TestVerify_ReparentReplacesPlink(t *testing.T) {
+	r := newTestRepo(t)
+	root, _, merge := mergedFeature(t, r)
+	uuidOf := func(rid libfossil.FslID) string {
+		t.Helper()
+		var u string
+		if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	control := func(at time.Time, tag deck.TagCard) {
+		t.Helper()
+		d := &deck.Deck{Type: deck.Control, D: at, T: []deck.TagCard{tag}, U: deck.User("test")}
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := blob.Store(r.DB(), data); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manifest.Crosslink(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plinkIssues := func(stage string) {
+		t.Helper()
+		report, err := verify.Verify(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, iss := range report.Issues {
+			if iss.Kind == verify.IssuePlinkMissing || iss.Kind == verify.IssueLeafIncorrect {
+				t.Errorf("%s: %s", stage, iss.Message)
+			}
+		}
+	}
+	// merge's P-card names root and feat; the tag drops feat.
+	base := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	control(base, deck.TagCard{Type: deck.TagSingleton, Name: "parent", UUID: uuidOf(merge), Value: uuidOf(root)})
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM plink WHERE cid=?", merge).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("merge has %d plink rows after the reparent, want 1", n)
+	}
+	plinkIssues("reparented")
+	control(base.Add(time.Hour), deck.TagCard{Type: deck.TagCancel, Name: "parent", UUID: uuidOf(merge)})
+	plinkIssues("cancelled")
+}
+
 func TestRebuild_BuggifyResilience(t *testing.T) {
 	r := newTestRepo(t)
 

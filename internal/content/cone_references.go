@@ -22,6 +22,8 @@ type ConeReferences struct {
 	names                     map[libfossil.FslID]string
 	outside, inside, required map[string]bool
 	tree                      map[string]bool
+	held                      map[string]libfossil.FslID
+	nodes                     map[libfossil.FslID]*deck.Deck
 }
 
 // Outside reports only proven elision candidates. Delta dependency closure is
@@ -50,7 +52,7 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 	if ctx == nil || q == nil {
 		panic("content.LoadConeReferences: nil context or querier")
 	}
-	p := &ConeReferences{names: map[libfossil.FslID]string{}, outside: map[string]bool{}, inside: map[string]bool{}, required: map[string]bool{}, tree: map[string]bool{}}
+	p := &ConeReferences{names: map[libfossil.FslID]string{}, outside: map[string]bool{}, inside: map[string]bool{}, required: map[string]bool{}, tree: map[string]bool{}, held: map[string]libfossil.FslID{}, nodes: map[libfossil.FslID]*deck.Deck{}}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -77,7 +79,7 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 	}
 	nodes := map[string]*deck.Deck{}
 	var roots []*deck.Deck
-	err = ExpandAll(q, func(_ libfossil.FslID, uuid string, data []byte, expandErr error) error {
+	err = ExpandAll(q, func(rid libfossil.FslID, uuid string, data []byte, expandErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -85,6 +87,7 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 			p.required[uuid] = true
 			return nil
 		} // Unreadable bytes may be structural; no outside proof permits deletion.
+		p.held[uuid] = rid
 		d, err := deck.Parse(data)
 		if err != nil {
 			return nil
@@ -94,6 +97,7 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 		}
 		if d.Type == deck.Submanifest {
 			nodes[uuid] = d
+			p.nodes[rid] = d
 		} else {
 			p.required[uuid] = true
 		}
@@ -123,6 +127,39 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 		}
 	}
 	return p, nil
+}
+
+// RetainProvenance removes raw proof dependencies from a proposed drop set.
+// Leaves and nonterminal paths stay held: only an interior whose direct children
+// are held leaves can disappear without severing root-to-phantom range proofs.
+// This conservative rule does not depend on disposable crosslink indexes.
+func (p *ConeReferences) RetainProvenance(ctx context.Context, drop map[libfossil.FslID]bool) error {
+	keep := map[libfossil.FslID]bool{}
+	for rid, node := range p.nodes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if len(node.F) > 0 {
+			keep[rid] = true
+		}
+		if drop[rid] {
+			for _, child := range node.S {
+				childRID := p.held[child.UUID]
+				keep[childRID] = true
+				childNode := p.nodes[childRID]
+				if childNode == nil || len(childNode.F) == 0 {
+					keep[rid] = true
+				}
+			}
+		}
+	}
+	for rid := range keep {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		delete(drop, rid)
+	}
+	return ctx.Err()
 }
 
 func (p *ConeReferences) structural(d *deck.Deck) {

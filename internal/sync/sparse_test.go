@@ -257,10 +257,13 @@ func TestSparseServerTreeClone(t *testing.T) {
 					t.Fatalf("sparse tree clone lost %s", uuid)
 				}
 			}
-			for _, uuid := range []string{out, outsideLeaf} {
-				if _, ok := content.AvailableByUUID(got.DB(), uuid); ok {
-					t.Fatalf("sparse tree clone retained %s", uuid)
-				}
+			if _, ok := content.AvailableByUUID(got.DB(), out); ok {
+				t.Fatalf("sparse tree clone retained %s", out)
+			}
+			// A received F-bearing leaf remains as raw proof after cache rebuild.
+			// An aware peer need not send that leaf in the first place.
+			if _, ok := content.AvailableByUUID(got.DB(), outsideLeaf); ok != ignorant {
+				t.Fatalf("outside leaf held=%v, want %v", ok, ignorant)
 			}
 			if res.Elided == 0 {
 				t.Fatal("sparse tree clone reported no elision")
@@ -280,8 +283,8 @@ func TestSparseServerTreeClone(t *testing.T) {
 					t.Fatalf("sparse pull lost %s", uuid)
 				}
 			}
-			if _, ok := content.AvailableByUUID(got.DB(), outsideLeaf); ok {
-				t.Fatal("sparse pull retained outside node")
+			if _, ok := content.AvailableByUUID(got.DB(), outsideLeaf); ok != ignorant {
+				t.Fatalf("outside leaf after pull held=%v, want %v", ok, ignorant)
 			}
 		})
 	}

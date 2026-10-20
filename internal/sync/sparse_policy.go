@@ -78,6 +78,12 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 			drop[rid] = true
 		}
 	}
+	if err := k.refs.RetainProvenance(ctx, drop); err != nil {
+		return 0, err
+	}
+	if err := retainLocalReceived(ctx, q, drop); err != nil {
+		return 0, err
+	}
 	if err := retainDeltaSources(ctx, q, drop); err != nil {
 		return 0, err
 	}
@@ -87,6 +93,9 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 	}
 	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
 	for _, rid := range rids {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
 		if _, err := q.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
 			return 0, err
 		}
@@ -106,6 +115,25 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 		return 0, err
 	}
 	return a.Count(content.Elided), nil
+}
+
+// Private or unsent artifacts may have no peer that can restore their bytes.
+func retainLocalReceived(ctx context.Context, q db.Querier, drop map[libfossil.FslID]bool) error {
+	rows, err := q.Query("SELECT rid FROM unsent UNION SELECT rid FROM private")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		var rid libfossil.FslID
+		if err := rows.Scan(&rid); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		delete(drop, rid)
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // Remove every retained delta's transitive sources from the drop set. Each

@@ -149,3 +149,23 @@ func TestLogMergesNamesThatDifferInCase(t *testing.T) {
 		t.Errorf("log -n 1 = %+v, want just %s", rows, upper)
 	}
 }
+
+// TestPathsOutsideTheRepositoryAreNotFound pins the documented exit status
+// for ../x and absolute paths: 2, where fossil refuses them with exit 1.
+func TestPathsOutsideTheRepositoryAreNotFound(t *testing.T) {
+	repoPath := newSnapshotRepo(t)
+	v1 := snapshot(t, repoPath, "a.md", "one\n")
+	v2 := snapshot(t, repoPath, "a.md", "two\n")
+	for _, path := range []string{"../a.md", "/a.md", "../../etc/passwd"} {
+		for _, args := range [][]string{
+			{"repo", "cat", "--at", v2, path},
+			{"repo", "log", "--path", path},
+			{"repo", "diff", v1, v2, path},
+		} {
+			stdout, _, code := runCLI(t, append([]string{"-R", repoPath}, args...)...)
+			if code != exitNotFound || stdout != "" {
+				t.Errorf("%v: exit %d, stdout %q; want exit %d and no stdout", args, code, stdout, exitNotFound)
+			}
+		}
+	}
+}

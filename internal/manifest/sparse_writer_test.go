@@ -7,12 +7,13 @@ import (
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
-// MAX cuts depend on the number of preceding entries, not just the next
-// filename. An insertion can change a disjoint subtree's canonical bytes.
-func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
+func sparseBoundaryCandidates(t *testing.T) []deck.FileCard {
+	t.Helper()
 	var candidates []deck.FileCard
 	for i := 0; i < 256 && len(candidates) < 18; i++ {
 		name := fmt.Sprintf("f%04d", i)
@@ -23,17 +24,28 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 	if len(candidates) != 18 {
 		t.Fatal("bounded search found too few non-boundary names")
 	}
-	inserted := candidates[1]
-	t.Logf("insert %s into first old range", inserted.Name)
-	oldFiles := append([]deck.FileCard{candidates[0]}, candidates[2:]...)
-	oldTree := mustBuildTree(t, oldFiles, 1)
-	newTree := mustBuildTree(t, candidates, 1)
-	if len(oldTree.S) != 3 || len(newTree.S) != 3 {
-		t.Fatalf("S counts old=%d new=%d, want three leaves", len(oldTree.S), len(newTree.S))
+	return candidates
+}
+
+func elideWriterNode(t *testing.T, r *repo.Repo, uuid string) {
+	t.Helper()
+	for _, sql := range []string{
+		"UPDATE blob SET size=-1, content=NULL WHERE uuid=?",
+		"INSERT INTO phantom(rid) SELECT rid FROM blob WHERE uuid=?",
+	} {
+		if _, err := r.DB().Exec(sql, uuid); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if deck.Compare(inserted.Name, oldTree.S[1].Name) >= 0 {
-		t.Fatal("insertion is not confined to the first old subtree")
+	if _, ok := content.AvailableByUUID(r.DB(), uuid); ok {
+		t.Fatal("out-of-cone submanifest was not actually removed")
 	}
+}
+
+func sparseBoundaryParent(t *testing.T, candidates, oldFiles []deck.FileCard, oldTree Tree) (
+	*repo.Repo, libfossil.FslID, *deck.Deck, *cone.Cone,
+) {
+	t.Helper()
 	r := sha3Repo(t)
 	setSettings(t, r, SettingEnableSubmanifests, "on", SettingSubmanifestK, "1")
 	var files []File
@@ -61,17 +73,18 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 		if parent.S[i] != oldTree.S[i] {
 			t.Fatalf("stored parent differs from canonical tree at %d", i)
 		}
-		for _, sql := range []string{
-			"UPDATE blob SET size=-1, content=NULL WHERE uuid=?",
-			"INSERT INTO phantom(rid) SELECT rid FROM blob WHERE uuid=?",
-		} {
-			if _, err := r.DB().Exec(sql, parent.S[i].UUID); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, ok := content.AvailableByUUID(r.DB(), parent.S[i].UUID); ok {
-			t.Fatal("out-of-cone submanifest was not actually removed")
-		}
+		elideWriterNode(t, r, parent.S[i].UUID)
+	}
+	_, hi := partitionLimits(1)
+	if len(included) != hi+1 {
+		t.Fatalf("preserving old sibling hashes leaves %d in-cone entries, want MAX+1=%d", len(included), hi+1)
+	}
+	return r, rid, parent, c
+}
+
+func assertBoundaryPropagation(t *testing.T, oldTree, newTree Tree) {
+	t.Helper()
+	for i := 1; i < len(oldTree.S); i++ {
 		for _, next := range newTree.S {
 			if next.UUID == oldTree.S[i].UUID {
 				t.Fatalf("old untouched subtree %s unexpectedly survived the canonical insertion", oldTree.S[i].Name)
@@ -96,6 +109,25 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 			oldTree.S[i].Name, len(oldLeaf.F), oldTree.S[i].UUID,
 			newTree.S[i].Name, len(newLeaf.F), newTree.S[i].UUID)
 	}
+}
+
+// MAX cuts depend on the number of preceding entries, not just the next
+// filename. An insertion can change a disjoint subtree's canonical bytes.
+func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
+	candidates := sparseBoundaryCandidates(t)
+	inserted := candidates[1]
+	t.Logf("insert %s into first old range", inserted.Name)
+	oldFiles := append([]deck.FileCard{candidates[0]}, candidates[2:]...)
+	oldTree := mustBuildTree(t, oldFiles, 1)
+	newTree := mustBuildTree(t, candidates, 1)
+	if len(oldTree.S) != 3 || len(newTree.S) != 3 {
+		t.Fatalf("S counts old=%d new=%d, want three leaves", len(oldTree.S), len(newTree.S))
+	}
+	if deck.Compare(inserted.Name, oldTree.S[1].Name) >= 0 {
+		t.Fatal("insertion is not confined to the first old subtree")
+	}
+	r, rid, parent, c := sparseBoundaryParent(t, candidates, oldFiles, oldTree)
+	assertBoundaryPropagation(t, oldTree, newTree)
 	visible, err := ListFilesFiltered(r, rid, c)
 	if err != nil || len(visible) != 8 {
 		t.Fatalf("in-cone enumeration after eliding S nodes = %d files, %v; want 8, nil", len(visible), err)
@@ -104,9 +136,5 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 		t.Fatal("full enumeration unexpectedly succeeded without out-of-cone S nodes")
 	} else if uuid, ok := MissingSubmanifest(err); !ok || uuid != parent.S[1].UUID {
 		t.Fatalf("full enumeration error = %v; want missing %s", err, parent.S[1].UUID)
-	}
-	_, hi := partitionLimits(1)
-	if len(included) != hi+1 {
-		t.Fatalf("preserving old sibling hashes leaves %d in-cone entries, want MAX+1=%d", len(included), hi+1)
 	}
 }

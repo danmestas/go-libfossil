@@ -305,7 +305,7 @@ func (r *Repo) SetConfig(key, value string) error {
 // SetHashPolicy assigns the hash policy by its value string, as fossil's
 // hash-policy command does: name must be one of sha1, auto, sha3, sha3-only
 // or shun-sha1, matched case-sensitively and exactly, and anything else is
-// an error that leaves the stored policy alone (artifact-format-01 7.1,
+// an error that leaves the stored policy alone (artifact-format-00 7.1,
 // AF-7.1-2). The ordinal is what is stored, the form the reader takes.
 //
 // Asking for auto in a repo that already holds a SHA3 artifact stores sha3

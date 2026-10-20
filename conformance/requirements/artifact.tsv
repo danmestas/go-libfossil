@@ -1,9 +1,9 @@
-# Requirements of draft-fossil-artifact-format-01, one per row, written from
+# Requirements of draft-fossil-artifact-format-00, one per row, written from
 # the draft text. Columns: ID, section, requirement, optional scope note
 # (what the cases leave out). Requirements that cannot be observed in a
 # library (UI, wording, IANA, informative text) are not listed. The draft
 # records its corrections in Appendix D.
-# draft	draft-fossil-artifact-format-01.txt	3217c01c2d5a01a4a05bd2ea71a99f96d9a47dab44ea38f84ff6c8de02764d3d
+# draft	draft-fossil-artifact-format-00.txt	0887d83d3c57c8b1964a870766e1940dfa071a1bdfba33eef50ef1b39e1779eb
 AF-3.1-1	3.1	An artifact's name is the hash of its exact stored bytes, with nothing added, removed or transformed; a signed artifact's name covers its wrapper.
 AF-3.2-1	3.2	A 40-digit name is the SHA-1, and a 64-digit name the SHA3-256 (FIPS 202, not Keccak), of the raw bytes.
 AF-3.2-2	3.2	A candidate name of any length other than 40 or 64 is invalid.

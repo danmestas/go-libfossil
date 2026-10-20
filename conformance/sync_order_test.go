@@ -155,7 +155,7 @@ func serverPhantomGimmeCases() []syncServerCase {
 		want:  all(completed, noErrors, noCard("gimme {U}")),
 	}, {
 		// fossil(1) asks for at most 500 phantoms in one reply. The 500 is
-		// fossil's request_phantoms(&xfer, 500), not an RFC number: -01
+		// fossil's request_phantoms(&xfer, 500), not an RFC number: -00
 		// Section 3.3 only says the scan is over the server's phantoms.
 		Case:  Case{ID: "sync.6.4.push-phantom-bound", Req: "SP-6.4-8"},
 		setup: manyPhantoms,

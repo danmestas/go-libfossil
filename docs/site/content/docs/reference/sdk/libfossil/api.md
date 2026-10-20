@@ -420,7 +420,7 @@ Rename marks a tracked file as renamed and moves it on disk.
 func (c *Checkout) ResolveVersion(name string) (int64, error)
 ```
 
-ResolveVersion resolves name as Repo.ResolveVersion does and also resolves the names relative to this checkout \(repo\-state\-01 Section 8.3\), tried after "tip" and before every other form, as fossil's symbolic\_name\_to\_rid does \(src/name.c\):
+ResolveVersion resolves name as Repo.ResolveVersion does and also resolves the names relative to this checkout \(repo\-state\-00 Section 8.3\), tried after "tip" and before every other form, as fossil's symbolic\_name\_to\_rid does \(src/name.c\):
 
 ```
 "current"            the checkout's version
@@ -439,7 +439,7 @@ func (c *Checkout) ResolveWorking(name string) (WorkingVersion, error)
 
 ResolveWorking is fossil's checkout\-inclusive request \("ci\+", symbolic\_name\_to\_rid in src/name.c\): while the checkout has a version, "ckout" names its working files, reported as Working. Every other name, and "ckout" in a checkout with no version, resolves as ResolveVersion does, except that only check\-ins can answer: the request is a check\-in request, so a technote or wiki page carrying the tag does not.
 
-As repo\-state\-01 Section 8.3 says, only "ci\+" has the keyword, so ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary name. It is a keyword only as the whole name: in "root:ckout" or "ckout." the inner name is resolved as a plain check\-in request, as in fossil.
+As repo\-state\-00 Section 8.3 says, only "ci\+" has the keyword, so ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary name. It is a keyword only as the whole name: in "root:ckout" or "ckout." the inner name is resolved as a plain check\-in request, as in fossil.
 
 <a name="Checkout.Revert"></a>
 ### func \(\*Checkout\) [Revert](<https://github.com/danmestas/go-libfossil/blob/main/checkout.go#L290>)
@@ -1243,7 +1243,7 @@ Annotate attributes each line of a file to the commit that last changed it.
 func (r *Repo) BranchOpenLeaf(name string) (rid int64, open bool, err error)
 ```
 
-BranchOpenLeaf names one open leaf of the named branch \(repo\-state\-01 Section 9\): a check\-in whose active branch tag is name, that is a leaf and that is not closed. When the branch has several, the one with the greatest event.mtime is returned, as the draft requires of any report that names a single open leaf. open is false, with a nil error, when the branch has no open leaf: it is not open. An empty name is an error, as in BranchTip; the main branch is named by CurrentTrunk and MainBranch.
+BranchOpenLeaf names one open leaf of the named branch \(repo\-state\-00 Section 9\): a check\-in whose active branch tag is name, that is a leaf and that is not closed. When the branch has several, the one with the greatest event.mtime is returned, as the draft requires of any report that names a single open leaf. open is false, with a nil error, when the branch has no open leaf: it is not open. An empty name is an error, as in BranchTip; the main branch is named by CurrentTrunk and MainBranch.
 
 Unlike BranchTip, which returns the branch's newest check\-in whether or not it is a leaf or closed, this is fossil's \`branch info\` answer. fossil's query \(branch\_is\_open, src/branch.c\) takes whichever open leaf it meets first; this follows the draft's greatest\-mtime rule.
 
@@ -1317,7 +1317,7 @@ CreateUser creates a new user in the repository.
 func (r *Repo) CurrentTrunk() (int64, error)
 ```
 
-CurrentTrunk returns the current trunk \(repo\-state\-01 Section 9\): the check\-in that the main\-branch setting's name resolves to by ResolveVersion's procedure, "trunk" when the setting is unset. Only check\-ins can answer, as in fossil's check\-in request, so a technote tagged with the name does not. The setting is local and not synced, so two repositories holding the same artifacts can name different trunks. fossil resolves it the same way where it needs one: update outside a checkout \(src/update.c, a "ci" request\) and open with no version \(src/db.c\). A name that resolves to nothing returns ErrVersionNotFound \(wrapped\).
+CurrentTrunk returns the current trunk \(repo\-state\-00 Section 9\): the check\-in that the main\-branch setting's name resolves to by ResolveVersion's procedure, "trunk" when the setting is unset. Only check\-ins can answer, as in fossil's check\-in request, so a technote tagged with the name does not. The setting is local and not synced, so two repositories holding the same artifacts can name different trunks. fossil resolves it the same way where it needs one: update outside a checkout \(src/update.c, a "ci" request\) and open with no version \(src/db.c\). A name that resolves to nothing returns ErrVersionNotFound \(wrapped\).
 
 <a name="Repo.DB"></a>
 ### func \(\*Repo\) [DB](<https://github.com/danmestas/go-libfossil/blob/main/repo.go#L56>)
@@ -1532,7 +1532,7 @@ Redo re\-applies the last undone operation. Requires a checkout database; not ye
 func (r *Repo) ResolveBranchStart(name string) (int64, error)
 ```
 
-ResolveBranchStart resolves name as ResolveVersion does, then returns the first check\-in of the branch the result is on: fossil's branch\-type \("br"\) request \(repo\-state\-01 Section 8.3\), the start of the branch rather than the check\-in its name most recently points at. As Section 8.3 requires, the request is rewritten to a check\-in request first: only check\-ins can match, so a technote tagged with the branch name does not shadow the branch.
+ResolveBranchStart resolves name as ResolveVersion does, then returns the first check\-in of the branch the result is on: fossil's branch\-type \("br"\) request \(repo\-state\-00 Section 8.3\), the start of the branch rather than the check\-in its name most recently points at. As Section 8.3 requires, the request is rewritten to a check\-in request first: only check\-ins can match, so a technote tagged with the branch name does not shadow the branch.
 
 Section 8.3 walks back from the result of every form. fossil\(1\) walks only from a "tag:NAME" or plain\-name result \(symbolic\_name\_to\_rid, src/name.c\), so there a hash, "tip" or a date names the check\-in itself; this follows the draft.
 

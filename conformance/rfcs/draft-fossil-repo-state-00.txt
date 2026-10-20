@@ -12,7 +12,7 @@ Expires: 17 April 2027                                         libfossil
 
   The Fossil Distributed Version Control System: Repository State and
                           Check-in Resolution
-                       draft-fossil-repo-state-01
+                       draft-fossil-repo-state-00
 
 Abstract
 
@@ -130,7 +130,7 @@ Internet-Draft           Fossil Repository State            October 2026
    11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  31
    12. Security Considerations . . . . . . . . . . . . . . . . . . .  31
    13. Normative References  . . . . . . . . . . . . . . . . . . . .  32
-   Appendix A.  Changes from draft-fossil-repo-state-00  . . . . . .  33
+   Appendix A.  Changes in This Revision . . . . . . . . . . . . . .  33
    Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  34
 
 1.  Introduction
@@ -1757,8 +1757,8 @@ Internet-Draft           Fossil Repository State            October 2026
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Artifact Format", Work
               in Progress, Internet-Draft, draft-fossil-artifact-format-
-              01, 2026, <https://datatracker.ietf.org/doc/html/draft-
-              fossil-artifact-format-01>.
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
 
    [FossilDelta]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -1771,8 +1771,8 @@ Internet-Draft           Fossil Repository State            October 2026
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Sync Protocol", Work
               in Progress, Internet-Draft, draft-fossil-sync-protocol-
-              01, 2026, <https://datatracker.ietf.org/doc/html/draft-
-              fossil-sync-protocol-01>.
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
 
    [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
               Requirement Levels", BCP 14, RFC 2119,
@@ -1794,10 +1794,10 @@ Hipp, et al.              Expires 17 April 2027                [Page 32]
 Internet-Draft           Fossil Repository State            October 2026
 
 
-Appendix A.  Changes from draft-fossil-repo-state-00
+Appendix A.  Changes in This Revision
 
-   This revision makes the following changes to draft-fossil-repo-state-
-   00.
+   This revision of draft-fossil-repo-state-00, dated 14 October 2026,
+   makes the following changes to the 6 July 2026 text.
 
    *  Sections 1 and 4.2: a new step 6 says a check-in's stored event
       time is its D-card timestamp unless a date tag overrides it, in

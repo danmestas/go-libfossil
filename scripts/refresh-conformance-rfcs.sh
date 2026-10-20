@@ -7,20 +7,16 @@
 # requirements table that pins it has been checked against the new text and
 # its pin moved. That is the point: a draft change must be read, not absorbed.
 #
-# zit names each draft -00; artifact-format, sync-protocol and repo-state hold
-# the -01 text and keep their -01 names here. The sparse-cone and horizon
-# drafts follow zit's horizon-rfc branch; pass that checkout's docs/rfcs as
-# the second argument to refresh them too (see conformance/rfcs/README.md).
+# The sparse-cone and horizon drafts follow zit's horizon-rfc branch; pass
+# that checkout's docs/rfcs as the second argument to refresh them too (see
+# conformance/rfcs/README.md).
 #
 # Usage: scripts/refresh-conformance-rfcs.sh [path-to-zit-rfcs [path-to-horizon-rfc-rfcs]]
 set -eu
 src=${1:-"$HOME/zit/docs/rfcs"}
 branch=${2:-}
 dst=$(dirname "$0")/../conformance/rfcs
-for draft in artifact-format sync-protocol repo-state; do
-	cp "$src/draft-fossil-$draft-00.txt" "$dst/draft-fossil-$draft-01.txt"
-done
-for draft in delta-format submanifests; do
+for draft in artifact-format sync-protocol repo-state delta-format submanifests; do
 	cp "$src/draft-fossil-$draft-00.txt" "$dst/"
 done
 if [ -n "$branch" ]; then

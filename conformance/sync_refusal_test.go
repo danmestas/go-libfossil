@@ -1,6 +1,6 @@
 package conformance
 
-// Cases for what draft-fossil-sync-protocol-01 adds on refusals and their
+// Cases for what draft-fossil-sync-protocol-00 adds on refusals and their
 // bookkeeping: a payload cut short (Section 5.1), the error count of the
 // closing comment (5.3), the end of a request after a failed login (6.4), a
 // refused push (6.6) and a gimme for private content outside a private sync

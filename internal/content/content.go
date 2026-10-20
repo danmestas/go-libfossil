@@ -15,7 +15,7 @@ import (
 // ErrHashMismatch marks an Expand that produced bytes not hashing to the name
 // the blob is stored under. The content itself expanded; it is the binding to
 // the name that failed, which a caller may need to report apart from content
-// that cannot be read at all (draft-fossil-repo-state-01 Section 4.4).
+// that cannot be read at all (draft-fossil-repo-state-00 Section 4.4).
 var ErrHashMismatch = errors.New("hash mismatch")
 
 // HashMismatchError is the error behind ErrHashMismatch. RID names the blob

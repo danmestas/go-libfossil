@@ -296,7 +296,7 @@ func ContentHash(d *db.DB) (string, error) {
 	}
 	defer rows.Close()
 
-	// sync-protocol-01 §8.5.1 hashes "stored fossilized name bytes" sorted
+	// sync-protocol-00 §8.5.1 hashes "stored fossilized name bytes" sorted
 	// bytewise. This server stores the decoded name, so it encodes here: a
 	// name with a space then hashes as fossil(1) hashes it, from the raw
 	// wire bytes it never decodes. The sort must follow the encoded bytes,

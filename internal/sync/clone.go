@@ -37,7 +37,7 @@ const cloneAvailableDeltaSourceLimit = 4096
 // phantom blobs — content referenced but never received — were still
 // outstanding. It is returned only when CloneOpts.PullPhantoms is set and
 // phantoms remain after the follow-up pull; a default Clone ends at
-// clone_seqno 0 (sync-protocol-01 Section 8.2) and does not look for them.
+// clone_seqno 0 (sync-protocol-00 Section 8.2) and does not look for them.
 // Count is programmatically reachable so a caller can act on it without
 // parsing the message.
 type PhantomStallError struct {

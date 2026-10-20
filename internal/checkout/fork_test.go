@@ -35,7 +35,7 @@ func TestBranchLeaves_Empty(t *testing.T) {
 }
 
 // TestBranchLeaves_EmptyNameIsMainBranch checks that "" names the default
-// branch, which the main-branch setting overrides (repo-state-01 Section 6.1).
+// branch, which the main-branch setting overrides (repo-state-00 Section 6.1).
 func TestBranchLeaves_EmptyNameIsMainBranch(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()

@@ -867,7 +867,7 @@ func TestEncode_WireFormat_FileNoTrailingNewline(t *testing.T) {
 	}
 }
 
-// TestDecode_TruncatedPayload checks Section 5.1 of sync-protocol-01: a body
+// TestDecode_TruncatedPayload checks Section 5.1 of sync-protocol-00: a body
 // that ends inside a payload makes the card its handler's malformed-line
 // failure, not a decode error, so the receiver keeps the cards before it.
 func TestDecode_TruncatedPayload(t *testing.T) {

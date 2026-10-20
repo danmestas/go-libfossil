@@ -119,6 +119,8 @@ type treeWalk struct {
 	last    string
 	hasLast bool
 	files   []deck.FileCard
+	// Only readiness inspection may skip proven outside gaps; enumeration never does.
+	skipMissing func(string) bool
 }
 
 // walkTree enumerates tree manifest d as §5.1 specifies: depth first, in
@@ -184,6 +186,9 @@ func (w *treeWalk) step() error {
 	}
 	sub, rid, err := w.loader.load(card.UUID)
 	if err != nil {
+		if uuid, missing := MissingSubmanifest(err); missing && w.skipMissing != nil && w.skipMissing(uuid) {
+			return nil
+		}
 		return err
 	}
 	for _, frame := range w.stack {

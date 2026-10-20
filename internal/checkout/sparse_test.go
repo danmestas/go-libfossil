@@ -130,9 +130,12 @@ func onDisk(t *testing.T, co *Checkout) []string {
 		if err != nil {
 			return err
 		}
-		if !strings.HasPrefix(rel, PreferredDBName()) {
-			names = append(names, filepath.ToSlash(rel))
+		for _, name := range DBNames() {
+			if strings.HasPrefix(rel, name) {
+				return nil
+			}
 		}
+		names = append(names, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {

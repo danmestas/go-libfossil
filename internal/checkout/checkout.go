@@ -12,6 +12,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -94,8 +95,9 @@ func initLocalRecords(ckdb *sql.DB, r *repo.Repo, sparse *cone.Cone) error {
 	return writeCone(ckdb, sparse)
 }
 
-// Create creates a new checkout database at dir/.fslckout (or dir/_FOSSIL_ on Windows),
-// finds the tip checkin from the repo, and sets vvar checkout/checkout-hash.
+// Create creates a checkout database, finds the tip checkin from the repo,
+// and sets vvar checkout/checkout-hash. Dense checkouts use the native name;
+// sparse checkouts use .libfossil-checkout, which native Fossil does not open.
 //
 // Panics if r or dir is nil/empty (TigerStyle precondition).
 func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
@@ -115,8 +117,18 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Create: no SQLite driver registered")
 	}
 
-	// Determine DB path
-	dbPath := filepath.Join(dir, PreferredDBName())
+	marker, err := checkoutMarker(env.Storage, dir)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Create: %w", err)
+	}
+	if marker != "" {
+		return nil, fmt.Errorf("checkout.Create: checkout marker already exists: %s", marker)
+	}
+	name := PreferredDBName()
+	if opts.Cone != nil {
+		name = sparseDBName
+	}
+	dbPath := filepath.Join(dir, name)
 
 	// Create parent directory if needed
 	if err := env.Storage.MkdirAll(dir, 0o755); err != nil {
@@ -397,12 +409,12 @@ func FindCheckoutDB(storage simio.Storage, dir string, searchParents bool) (stri
 
 	currentDir := dir
 	for depth := 0; depth <= maxParentSearchDepth; depth++ {
-		// Try each DB name
-		for _, name := range DBNames() {
-			dbPath := filepath.Join(currentDir, name)
-			if _, err := storage.Stat(dbPath); err == nil {
-				return dbPath, nil
-			}
+		marker, err := checkoutMarker(storage, currentDir)
+		if err != nil {
+			return "", fmt.Errorf("checkout.FindCheckoutDB: %w", err)
+		}
+		if marker != "" {
+			return marker, nil
 		}
 
 		if !searchParents {
@@ -430,10 +442,31 @@ func PreferredDBName() string {
 	return ".fslckout"
 }
 
-// DBNames returns all possible checkout DB names, with the preferred name first.
+const sparseDBName = ".libfossil-checkout"
+
+func checkoutMarker(storage simio.Storage, dir string) (string, error) {
+	var found string
+	for _, name := range DBNames() {
+		candidate := filepath.Join(dir, name)
+		_, err := storage.Stat(candidate)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect checkout marker %s: %w", candidate, err)
+		}
+		if found != "" {
+			return "", fmt.Errorf("multiple checkout markers in %s: %s and %s", dir, found, candidate)
+		}
+		found = candidate
+	}
+	return found, nil
+}
+
+// DBNames returns all possible checkout DB names, with the preferred native name first.
 func DBNames() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"_FOSSIL_", ".fslckout"}
+		return []string{"_FOSSIL_", ".fslckout", sparseDBName}
 	}
-	return []string{".fslckout", "_FOSSIL_"}
+	return []string{".fslckout", "_FOSSIL_", sparseDBName}
 }

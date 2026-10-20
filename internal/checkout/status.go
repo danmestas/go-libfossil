@@ -96,13 +96,13 @@ func (c *Checkout) VisitChanges(vid libfossil.FslID, scan bool, fn ChangeVisitor
 // that is not a regular file, a symlink followed to what it points to,
 // counts. A removed row is never missing; it is meant to be gone.
 func (c *Checkout) isMissing(r vfile.Row) (bool, error) {
-	return c.isMissingOn(diskView{}, r)
+	return c.isMissingOn(vfile.NewDisk(c.env, false), r)
 }
 
 // isMissingOn is isMissing seen through disk, the way fossil's changes
 // command decides MISSING: with allow-symlinks on, a symlink is not missing
 // whatever it points to.
-func (c *Checkout) isMissingOn(disk diskView, r vfile.Row) (bool, error) {
+func (c *Checkout) isMissingOn(disk vfile.Disk, r vfile.Row) (bool, error) {
 	if r.Pathname == "" {
 		panic("checkout.isMissingOn: empty pathname")
 	}
@@ -116,7 +116,7 @@ func (c *Checkout) isMissingOn(disk diskView, r vfile.Row) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("path traversal in %s: %w", r.Pathname, err)
 	}
-	info, err := disk.stat(c, fullPath)
+	info, err := disk.Stat(fullPath)
 	if err != nil {
 		return false, err
 	}

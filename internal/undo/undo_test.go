@@ -10,6 +10,7 @@ import (
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -94,7 +95,7 @@ func TestSaveAndUndo(t *testing.T) {
 	db := setupCheckoutDB(t, dir)
 
 	// Save current state.
-	if err := Save(db, simio.RealEnv(), dir, nil); err != nil {
+	if err := Save(db, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -110,7 +111,7 @@ func TestSaveAndUndo(t *testing.T) {
 	}
 
 	// Undo.
-	if _, err := Undo(db, simio.RealEnv(), dir); err != nil {
+	if _, err := Undo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("Undo: %v", err)
 	}
 
@@ -140,7 +141,7 @@ func TestRedo(t *testing.T) {
 	db := setupCheckoutDB(t, dir)
 
 	// Save, modify, undo.
-	if err := Save(db, simio.RealEnv(), dir, nil); err != nil {
+	if err := Save(db, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("MODIFIED"), 0o644); err != nil {
@@ -152,12 +153,12 @@ func TestRedo(t *testing.T) {
 	if _, err := db.Exec("REPLACE INTO vvar(name,value) VALUES('checkout','20')"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Undo(db, simio.RealEnv(), dir); err != nil {
+	if _, err := Undo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatal(err)
 	}
 
 	// Redo.
-	if _, err := Redo(db, simio.RealEnv(), dir); err != nil {
+	if _, err := Redo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("Redo: %v", err)
 	}
 
@@ -187,12 +188,12 @@ func TestUndoNotAvailable(t *testing.T) {
 	db := setupCheckoutDB(t, dir)
 
 	// Undo without prior save should fail.
-	if _, err := Undo(db, simio.RealEnv(), dir); err == nil {
+	if _, err := Undo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err == nil {
 		t.Fatal("expected error from Undo without Save, got nil")
 	}
 
 	// Redo without prior undo should also fail.
-	if _, err := Redo(db, simio.RealEnv(), dir); err == nil {
+	if _, err := Redo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err == nil {
 		t.Fatal("expected error from Redo without Undo, got nil")
 	}
 }
@@ -202,7 +203,7 @@ func TestSaveReplacesOldUndo(t *testing.T) {
 	db := setupCheckoutDB(t, dir)
 
 	// First save (captures "alpha"/"bravo").
-	if err := Save(db, simio.RealEnv(), dir, nil); err != nil {
+	if err := Save(db, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -218,7 +219,7 @@ func TestSaveReplacesOldUndo(t *testing.T) {
 	}
 
 	// Second save (captures "second" state).
-	if err := Save(db, simio.RealEnv(), dir, nil); err != nil {
+	if err := Save(db, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -234,7 +235,7 @@ func TestSaveReplacesOldUndo(t *testing.T) {
 	}
 
 	// Undo should restore the second save (not the first).
-	if _, err := Undo(db, simio.RealEnv(), dir); err != nil {
+	if _, err := Undo(db, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("Undo: %v", err)
 	}
 

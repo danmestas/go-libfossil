@@ -2,7 +2,6 @@ package checkout
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -264,10 +263,10 @@ func nextChangedState(
 
 // scanPolicy is how a scan decides whether a file needs hashing.
 type scanPolicy struct {
-	trustMTime bool     // fossil's useMtime: no ScanHash and mtime-changes on
-	now        int64    // the scan's time; see vfile.RecordableMTime
-	disk       diskView // how files and their permissions are seen
-	enotfile   bool     // ScanENotFile: refuse something that is not a file
+	trustMTime bool       // fossil's useMtime: no ScanHash and mtime-changes on
+	now        int64      // the scan's time; see vfile.RecordableMTime
+	disk       vfile.Disk // how files and their permissions are seen
+	enotfile   bool       // ScanENotFile: refuse something that is not a file
 }
 
 // newScanPolicy reads the policy for flags: a hash scan (fossil's --hash)
@@ -291,56 +290,22 @@ func (c *Checkout) newScanPolicy(flags ScanFlags) (scanPolicy, error) {
 	return p, nil
 }
 
-// boolSetting reads a boolean fossil setting, dflt when unset, as
-// db_get_boolean reads it from the repository's config table. Fossil's
-// db_get falls back to global_config in ~/.fossil (`fossil settings
-// mtime-changes off --global`); go-libfossil reads no global fossil settings,
-// so a global value is not seen here.
+// boolSetting reads a boolean fossil setting from the repository, dflt when
+// unset (vfile.BoolSetting).
 func (c *Checkout) boolSetting(name string, dflt bool) (bool, error) {
-	var value sql.NullString
-	err := c.repo.DB().QueryRow(
-		"SELECT value FROM config WHERE name = ?", name,
-	).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !value.Valid) {
-		return dflt, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read %s: %w", name, err)
-	}
-	return settingBoolean(value.String, dflt), nil
-}
-
-// settingBoolean is fossil's db_get_boolean on a stored value: is_truth
-// ("on", "yes", "true" in any case, or a nonzero C atoi) gives true, is_false
-// ("off", "no", "false", "0" in any case) gives false, anything else dflt.
-func settingBoolean(value string, dflt bool) bool {
-	switch strings.ToLower(value) {
-	case "on", "yes", "true":
-		return true
-	case "off", "no", "false", "0":
-		return false
-	}
-	digits := strings.TrimLeft(value, " \t\n\v\f\r")
-	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
-		digits = digits[1:]
-	}
-	digits = strings.TrimLeft(digits, "0")
-	if digits != "" && digits[0] >= '1' && digits[0] <= '9' {
-		return true // a nonzero atoi
-	}
-	return dflt
+	return vfile.BoolSetting(c.repo.DB(), name, dflt)
 }
 
 // fileDiffers reports whether the file at fullPath, seen through v with
 // info from v.stat, hashes to other than uuid. Something that is not a file
 // or symlink, or nothing at all, has no content that could match.
 func (c *Checkout) fileDiffers(
-	v diskView, fullPath string, info os.FileInfo, uuid string,
+	v vfile.Disk, fullPath string, info os.FileInfo, uuid string,
 ) (bool, error) {
 	if !isFileOrLink(info) {
 		return true, nil
 	}
-	data, err := v.read(c, fullPath, info)
+	data, err := v.Read(fullPath, info)
 	if err != nil {
 		return false, err
 	}
@@ -397,7 +362,7 @@ func (c *Checkout) scanSingleEntry(
 			e.pathname, err,
 		)
 	}
-	info, err := p.disk.stat(c, fullPath)
+	info, err := p.disk.Stat(fullPath)
 	if err != nil {
 		return false, false, fmt.Errorf("checkout.ScanChanges: %w", err)
 	}
@@ -449,11 +414,11 @@ func (c *Checkout) scanVerdict(
 	next, err := nextChangedState(e.chnged, f, func() (bool, error) {
 		return c.fileDiffers(p.disk, fullPath, info, uuid)
 	})
-	if err != nil || p.disk.links == nil {
+	if err != nil || !p.disk.ReadsPerms() {
 		return next, err
 	}
 	orig := recordedPerm(e.isexe, e.islink)
-	return nextPermState(next, orig, p.disk.perm(info, orig)), nil
+	return nextPermState(next, orig, diskPerm(p.disk, info, orig)), nil
 }
 
 // loadScanEntries reads every vfile row of version rid the cone covers. The rows are

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -371,7 +370,9 @@ func (c *Checkout) removeMergeAdded(r vfile.Row, fullPath string) error {
 }
 
 // restoreCommitted writes the committed content of blob rid back to fullPath,
-// with the row's executable bit, and marks row id unchanged and unmerged.
+// with the row's executable and symlink bits, as fossil's revert does
+// (vfile.Disk.Write: a symlink is made a symlink again, and nothing is
+// written through one), and marks row id unchanged and unmerged.
 func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int64) error {
 	if rid <= 0 {
 		panic("checkout.restoreCommitted: rid must be positive")
@@ -384,23 +385,21 @@ func (c *Checkout) restoreCommitted(id int64, pathname, fullPath string, rid int
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: expand blob for %s: %w", pathname, err)
 	}
-	var isexe int64
-	err = c.db.QueryRow("SELECT CAST(isexe AS INTEGER) FROM vfile WHERE id = ?", id).Scan(&isexe)
+	var isexe, islink int64
+	err = c.db.QueryRow(
+		"SELECT CAST(isexe AS INTEGER), CAST(coalesce(islink, 0) AS INTEGER) FROM vfile WHERE id = ?", id,
+	).Scan(&isexe, &islink)
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: query vfile metadata for %s: %w", pathname, err)
 	}
-	parentDir := filepath.Dir(fullPath)
-	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
-		return fmt.Errorf("checkout.Revert: mkdir %s: %w", parentDir, err)
+	disk, err := c.newDiskView()
+	if err != nil {
+		return fmt.Errorf("checkout.Revert: %w", err)
 	}
-	perm := os.FileMode(0o644)
-	if isexe != 0 {
-		perm = 0o755
+	if err := disk.Write(fullPath, data, isexe != 0, islink != 0); err != nil {
+		return fmt.Errorf("checkout.Revert: %w", err)
 	}
-	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
-		return fmt.Errorf("checkout.Revert: write %s: %w", fullPath, err)
-	}
-	mtime, err := c.writtenMTime(fullPath)
+	mtime, err := disk.MTime(fullPath)
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: %w", err)
 	}

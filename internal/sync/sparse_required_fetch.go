@@ -41,10 +41,27 @@ const (
 func FetchRequiredArtifacts(
 	ctx context.Context, r *repo.Repo, peer Transport, roots []string, opts SyncOpts,
 ) (*SyncResult, error) {
+	return fetchRequired(ctx, r, peer, roots, opts, false)
+}
+
+// FetchRequiredFiles recovers only explicitly named file payloads. The caller
+// derives these names from a fresh operation-specific covered file set; this
+// does not authorize widening the store cone or ordinary inventory sync.
+func FetchRequiredFiles(
+	ctx context.Context, r *repo.Repo, peer Transport, names []string, opts SyncOpts,
+) (*SyncResult, error) {
+	return fetchRequired(ctx, r, peer, names, opts, true)
+}
+
+func fetchRequired(
+	ctx context.Context, r *repo.Repo, peer Transport, roots []string, opts SyncOpts, files bool,
+) (*SyncResult, error) {
 	if ctx == nil || r == nil {
 		panic("sync.FetchRequiredArtifacts: nil context or repo")
 	}
-	f := requiredFetch{ctx: ctx, repo: r, opts: opts, data: make(map[string]*requiredArtifact)}
+	f := requiredFetch{
+		ctx: ctx, repo: r, opts: opts, data: make(map[string]*requiredArtifact), files: files,
+	}
 	var result SyncResult
 	for round := 0; ; round++ {
 		if err := ctx.Err(); err != nil {
@@ -55,7 +72,11 @@ func FetchRequiredArtifacts(
 			return nil, err
 		}
 		if len(wanted) == 0 {
-			if err := f.store(roots, structural, &result); err != nil {
+			checkins := roots
+			if files {
+				checkins = nil
+			}
+			if err := f.store(checkins, structural, &result); err != nil {
 				return nil, err
 			}
 			return &result, nil
@@ -94,6 +115,7 @@ type requiredFetch struct {
 	opts  SyncOpts
 	data  map[string]*requiredArtifact
 	bytes int
+	files bool
 }
 
 func (f *requiredFetch) exchange(peer Transport, wanted []string) error {
@@ -283,6 +305,9 @@ type requiredFrame struct {
 }
 
 func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, error) {
+	if f.files {
+		return f.payloads(roots)
+	}
 	if len(roots) > maxRequiredArtifacts {
 		return nil, nil, fmt.Errorf("sparse required content: too many roots")
 	}
@@ -340,6 +365,28 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 	return names, structural, nil
 }
 
+func (f *requiredFetch) payloads(roots []string) ([]string, map[string]bool, error) {
+	if len(roots) > maxRequiredArtifacts {
+		return nil, nil, fmt.Errorf("sparse required content: too many payload roots")
+	}
+	wanted, required := make(map[string]bool), make(map[string]bool)
+	for _, uuid := range roots {
+		data, err := f.resolve(uuid, wanted)
+		if err != nil {
+			return nil, nil, err
+		}
+		if data != nil {
+			required[uuid] = true
+		}
+	}
+	names := make([]string, 0, len(wanted))
+	for uuid := range wanted {
+		names = append(names, uuid)
+	}
+	sort.Strings(names)
+	return names, required, nil
+}
+
 func (f *requiredFetch) structuralDeck(
 	frame requiredFrame, wanted map[string]bool,
 ) (*deck.Deck, error) {
@@ -377,6 +424,8 @@ func (f *requiredFetch) receive(
 			continue
 		case *xfer.ErrorCard:
 			return 0, fmt.Errorf("sparse required content: peer refused: %s", c.Message)
+		case *xfer.UnknownCard, *xfer.BadCommandCard, *xfer.BadFileCard:
+			return 0, fmt.Errorf("sparse required content: malformed peer reply")
 		case *xfer.PushCard:
 			if c.ProjectCode != project {
 				return 0, fmt.Errorf("sparse required content: wrong project from peer")

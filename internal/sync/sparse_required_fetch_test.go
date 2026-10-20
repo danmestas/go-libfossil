@@ -31,6 +31,60 @@ func requiredLeaf(t *testing.T, name string) ([]byte, string) {
 	return data, hash.SHA3(data)
 }
 
+// Exact file recovery is separate from structural closure traversal: arbitrary
+// payload bytes need no deck type, and unsolicited inventory is still ignored.
+func TestFetchRequiredFiles(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	data := []byte("newly covered payload")
+	uuid := hash.SHA3(data)
+	peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: uuid, Content: data}}}
+	}}
+	result, err := FetchRequiredFiles(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesRecvd != 1 {
+		t.Fatalf("received %d files, want 1", result.FilesRecvd)
+	}
+	rid, held := content.AvailableByUUID(r.DB(), uuid)
+	if !held {
+		t.Fatal("required payload not held")
+	}
+	got, err := content.Expand(r.DB(), rid)
+	if err != nil || string(got) != string(data) {
+		t.Fatalf("payload recovery: %q, %v", got, err)
+	}
+}
+
+// A malformed suffix must invalidate even a valid requested prefix; nothing
+// staged from that response may be published as recovered content.
+func TestFetchRequiredFilesMalformedReply(t *testing.T) {
+	for name, malformed := range map[string]xfer.Card{
+		"unknown": &xfer.UnknownCard{Command: "unexpected"},
+		"command": &xfer.BadCommandCard{Line: "gimme too many arguments"},
+		"file":    &xfer.BadFileCard{Message: "malformed file line"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := setupSyncTestRepo(t)
+			data := []byte("requested valid prefix")
+			uuid := hash.SHA3(data)
+			peer := &MockTransport{Handler: func(*xfer.Message) *xfer.Message {
+				return &xfer.Message{Cards: []xfer.Card{
+					&xfer.FileCard{UUID: uuid, Content: data}, malformed,
+				}}
+			}}
+			_, err := FetchRequiredFiles(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+			if err == nil {
+				t.Fatal("accepted malformed reply after valid artifact")
+			}
+			if _, held := content.AvailableByUUID(r.DB(), uuid); held {
+				t.Fatal("malformed reply published valid prefix")
+			}
+		})
+	}
+}
+
 func TestFetchRequiredArtifactsNoPeer(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	_, uuid := requiredLeaf(t, "outside/a")

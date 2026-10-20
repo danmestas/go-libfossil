@@ -184,9 +184,18 @@ func TestSparseServerExpandsExcludedDeltaBase(t *testing.T) {
 func TestSparseCloneRefusalFatal(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	cs := &cloneSession{repo: r, seqno: 1}
-	err := cs.processResponse(context.Background(), 0, &xfer.Message{Cards: []xfer.Card{&xfer.ErrorCard{Message: "Sparse cone refuses clone"}}})
+	refusal := &xfer.Message{Cards: []xfer.Card{
+		&xfer.ErrorCard{Message: "Sparse cone refuses clone"},
+	}}
+	if err := cs.processResponse(context.Background(), 0, refusal); err != nil {
+		t.Fatalf("first-round cleanup was bypassed: %v", err)
+	}
+	if !cs.refused || cs.serverErr != "Sparse cone refuses clone" {
+		t.Fatal("no-progress refusal was not retained")
+	}
+	err := cs.processResponse(context.Background(), 1, &xfer.Message{})
 	if err == nil || !strings.Contains(err.Error(), "Sparse cone refuses clone") {
-		t.Fatalf("refused clone returned %v", err)
+		t.Fatalf("refused clone returned %v after cleanup", err)
 	}
 }
 

@@ -168,21 +168,25 @@ func scSyncFatal(t *testing.T) error {
 	if err == nil || !strings.Contains(err.Error(), scSyncOriginRefusal) {
 		return fmt.Errorf("clone refusal lost: %v", err)
 	}
-	if result == nil || result.BlobsRecvd != 0 || len(peer.requests) != 1 {
-		return fmt.Errorf("refused clone progressed or kept retrying: %+v", result)
+	if result == nil || result.BlobsRecvd != 0 || len(peer.requests) != 2 {
+		return fmt.Errorf("refused clone did not finish with one cleanup: %+v", result)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		return fmt.Errorf("failed clone left database: %v", err)
 	}
-	for _, resp := range peer.replies {
-		if err := scSyncRefused(resp, scSyncOriginRefusal); err != nil {
-			return err
-		}
+	if err := scSyncRefused(peer.replies[0], scSyncOriginRefusal); err != nil {
+		return err
 	}
-	for _, req := range peer.requests {
+	for round, req := range peer.requests {
 		for _, card := range req.Cards {
 			if _, ok := card.(*xfer.GimmeCard); ok {
 				return fmt.Errorf("refused clone requested content")
+			}
+			if round > 0 {
+				switch card.(type) {
+				case *xfer.CloneCard, *xfer.PullCard, *xfer.PushCard:
+					return fmt.Errorf("refusal cleanup sent an operation: %T", card)
+				}
 			}
 		}
 	}
@@ -190,7 +194,7 @@ func scSyncFatal(t *testing.T) error {
 }
 
 // An error-only round zero is not the push-code authentication challenge.
-// Encode the single literal error card and require failure before any retry.
+// It owes one operation-less cleanup, but cannot retry cloning or succeed.
 func scSyncErrorOnly(t *testing.T) error {
 	calls := 0
 	peer := &sync.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
@@ -198,6 +202,12 @@ func scSyncErrorOnly(t *testing.T) error {
 		for _, card := range req.Cards {
 			if _, ok := card.(*xfer.GimmeCard); ok {
 				t.Fatal("error-only clone requested content")
+			}
+			if calls > 1 {
+				switch card.(type) {
+				case *xfer.CloneCard, *xfer.PullCard, *xfer.PushCard:
+					t.Fatalf("error-only cleanup sent an operation: %T", card)
+				}
 			}
 		}
 		resp, err := scSyncWire(&xfer.Message{Cards: []xfer.Card{
@@ -214,10 +224,10 @@ func scSyncErrorOnly(t *testing.T) error {
 		r.Close()
 		return fmt.Errorf("error-only clone returned a repository")
 	}
-	if calls != 1 || result == nil || result.BlobsRecvd != 0 {
+	if calls != 2 || result == nil || result.BlobsRecvd != 0 {
 		return fmt.Errorf("error-only clone calls=%d result=%+v", calls, result)
 	}
-	want := "sync.Clone: process round 0: sync.Clone: sparse origin refuses clone"
+	want := "sync.Clone: process round 1: sync.Clone: sparse origin refuses clone"
 	if err == nil || err.Error() != want {
 		return fmt.Errorf("error-only clone error=%v", err)
 	}

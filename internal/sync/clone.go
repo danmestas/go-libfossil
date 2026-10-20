@@ -88,7 +88,8 @@ type cloneSession struct {
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
 	cleanup   bool   // the next request is an operation-less cleanup
-	serverErr string // an error after round 0, or an unreadable card: fails the clone
+	refused   bool   // a no-progress refusal permits only the required cleanup
+	serverErr string // a refusal, error after round 0, or unreadable card fails the clone
 	cookie    string // server-issued snapshot bound; echoed every round so the
 	// server can scope its blob query to the rid range that existed when the
 	// clone session opened. See cloneCapPrefix in handler.go.
@@ -546,6 +547,11 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 	}
 	filesRecvd := 0
 	defer func() { cs.roundRecvd = filesRecvd }()
+	if cs.refused {
+		// The mandatory cleanup exchange cannot accept more clone content.
+		cs.result.Rounds = cycle + 1
+		return fmt.Errorf("sync.Clone: %s", cs.serverErr)
+	}
 	cardErr, err := runPass(cs.repo, func(bound *repo.Repo) (error, error) {
 		defer cs.bindRepo(bound)()
 		filesRecvd = 0
@@ -576,7 +582,13 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			}
 		}
 		if refusal != "" && !progress {
-			return fmt.Errorf("sync.Clone: %s", refusal)
+			cs.serverErr = refusal
+			cs.refused = true
+			if cycle > 0 {
+				return fmt.Errorf("sync.Clone: %s", refusal)
+			}
+			// Round zero still owes Fossil's operation-less cleanup (§8.3).
+			// Retain the refusal so that exchange can never make cloning succeed.
 		}
 	}
 	return cardErr

@@ -24,6 +24,7 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 		t.Fatal("bounded search found too few non-boundary names")
 	}
 	inserted := candidates[1]
+	t.Logf("insert %s into first old range", inserted.Name)
 	oldFiles := append([]deck.FileCard{candidates[0]}, candidates[2:]...)
 	oldTree := mustBuildTree(t, oldFiles, 1)
 	newTree := mustBuildTree(t, candidates, 1)
@@ -83,6 +84,13 @@ func TestSparseWriterCanonicalBoundaryPropagation(t *testing.T) {
 		newLeaf, err := deck.Parse(newTree.Subs[i])
 		if err != nil {
 			t.Fatal(err)
+		}
+		oldSize, newSize := 8, 8
+		if i == 2 {
+			oldSize, newSize = 1, 2
+		}
+		if len(oldLeaf.F) != oldSize || len(newLeaf.F) != newSize {
+			t.Fatalf("leaf %d sizes old=%d new=%d, want %d/%d", i, len(oldLeaf.F), len(newLeaf.F), oldSize, newSize)
 		}
 		t.Logf("untouched old range %s: %d entries, hash %s; canonical replacement starts %s: %d entries, hash %s",
 			oldTree.S[i].Name, len(oldLeaf.F), oldTree.S[i].UUID,

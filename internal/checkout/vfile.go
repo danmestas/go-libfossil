@@ -13,6 +13,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // errMissingContent reports a version whose files' content the repository
@@ -282,28 +283,7 @@ func (c *Checkout) mtimeChanges() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("read mtime-changes: %w", err)
 	}
-	return settingBoolean(value.String, true), nil
-}
-
-// settingBoolean is fossil's db_get_boolean on a stored value: is_truth
-// ("on", "yes", "true" in any case, or a nonzero C atoi) gives true, is_false
-// ("off", "no", "false", "0" in any case) gives false, anything else dflt.
-func settingBoolean(value string, dflt bool) bool {
-	switch strings.ToLower(value) {
-	case "on", "yes", "true":
-		return true
-	case "off", "no", "false", "0":
-		return false
-	}
-	digits := strings.TrimLeft(value, " \t\n\v\f\r")
-	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
-		digits = digits[1:]
-	}
-	digits = strings.TrimLeft(digits, "0")
-	if digits != "" && digits[0] >= '1' && digits[0] <= '9' {
-		return true // a nonzero atoi
-	}
-	return dflt
+	return repo.SettingBoolean(value.String, true), nil
 }
 
 // fileDiffers reports whether the file at fullPath hashes to other than

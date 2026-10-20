@@ -1,7 +1,10 @@
 package manifest
 
 import (
+	"cmp"
+	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -54,6 +57,10 @@ type FileHistoryOpts struct {
 	Path string
 	// Limit caps the number of results (0 = unlimited).
 	Limit int
+	// FoldCase matches Path to file names with ASCII letters case-folded, as
+	// fossil finfo does when its case-sensitive setting is off. The history
+	// of every name that matches is merged, newest first.
+	FoldCase bool
 }
 
 // FileHistory returns the change history of a file across checkins,
@@ -70,22 +77,57 @@ func FileHistory(r *repo.Repo, opts FileHistoryOpts) ([]FileVersion, error) {
 		return nil, fmt.Errorf("manifest.FileHistory: Path is required")
 	}
 
-	// Look up fnid for the given filename.
-	var fnid int64
-	err := r.DB().QueryRow("SELECT fnid FROM filename WHERE name=?", opts.Path).Scan(&fnid)
+	collation := ""
+	if opts.FoldCase {
+		collation = " COLLATE nocase" // SQLite's nocase folds ASCII only, as fossil's does
+	}
+	rows, err := r.DB().Query("SELECT fnid FROM filename WHERE name=?"+collation, opts.Path)
 	if err != nil {
-		return nil, fmt.Errorf("manifest.FileHistory: file %q not found in filename table: %w", opts.Path, err)
+		return nil, fmt.Errorf("manifest.FileHistory: file %q: %w", opts.Path, err)
+	}
+	var fnids []int64
+	for rows.Next() {
+		var fnid int64
+		if err := rows.Scan(&fnid); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("manifest.FileHistory: file %q: %w", opts.Path, err)
+		}
+		fnids = append(fnids, fnid)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, fmt.Errorf("manifest.FileHistory: file %q: %w", opts.Path, err)
+	}
+	if len(fnids) == 0 {
+		return nil, fmt.Errorf("manifest.FileHistory: file %q not found in filename table: %w", opts.Path, sql.ErrNoRows)
 	}
 
-	return fileHistoryByFnid(r, fnid, opts)
+	var all []FileVersion
+	for _, fnid := range fnids {
+		versions, err := fileHistoryByFnid(r, fnid, opts)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, versions...)
+	}
+	if len(fnids) > 1 {
+		// Several names differ only in case: merge their histories as one
+		// query over them would, newest first, then apply the limit.
+		slices.SortStableFunc(all, func(a, b FileVersion) int {
+			if c := b.Date.Compare(a.Date); c != 0 {
+				return c
+			}
+			return cmp.Compare(b.CheckinRID, a.CheckinRID)
+		})
+		if opts.Limit > 0 && len(all) > opts.Limit {
+			all = all[:opts.Limit]
+		}
+	}
+	return all, nil
 }
 
 func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVersion, error) {
-	limitClause := ""
-	if opts.Limit > 0 {
-		limitClause = fmt.Sprintf(" LIMIT %d", opts.Limit)
-	}
-
 	query := `
 		SELECT
 			m.mid,
@@ -102,7 +144,7 @@ func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVe
 		JOIN event e ON e.objid = m.mid
 		LEFT JOIN blob fb ON fb.rid = m.fid
 		WHERE m.fnid = ? AND NOT m.isaux
-		ORDER BY e.mtime DESC` + limitClause
+		ORDER BY e.mtime DESC, m.mid DESC`
 
 	rows, err := r.DB().Query(query, fnid)
 	if err != nil {
@@ -139,6 +181,11 @@ func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVe
 		}
 
 		versions = append(versions, v)
+		// The limit counts real changes, so it is applied here and not in
+		// SQL, where rows that merely list the file unchanged would use it up.
+		if opts.Limit > 0 && len(versions) == opts.Limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("manifest.FileHistory: rows: %w", err)

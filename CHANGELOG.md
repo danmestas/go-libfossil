@@ -7,8 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A checkout-free interface for apps that embed the binary, documented in
+  `docs/site/content/docs/cli-embedding.md` with its stable JSON shapes and
+  exit statuses (0 success, 1 failure, 2 not found). `repo snapshot` commits
+  one file's bytes onto trunk, a no-op that prints the tip when they match;
+  `repo log --path` lists the check-ins that changed a path, as `fossil
+  finfo` does; `repo cat --at VERSION PATH` reads a file as a version holds
+  it, as `fossil cat -r`; `repo diff --json A B [PATH]` diffs two versions.
+  Concurrent snapshots from several processes build one linear trunk.
+  Tracked in #451.
+
+### Fixed
+
+- `repo new` accepts the repository path as `-R`, as the other embedding
+  commands do (it had required the argument and exited 80), and a path whose
+  parent directory does not exist is refused with exit 1 and a message naming
+  the directory, where it had failed with a SQLite "out of memory" error. The
+  behaviour is documented in `cli-embedding.md`. Tracked in #451.
+- `repo log --path`, `repo cat --at` and `repo diff` match a PATH as fossil
+  does: they drop a leading `./`, a trailing `/` and doubled or `/./`
+  separators, and compare names with the repository's `case-sensitive`
+  setting (fossil's default when unset: off on macOS and Windows, on
+  elsewhere), so `notes/a.md` finds `Notes/A.md` when it is off. They had
+  rejected both with exit 2 and compared case-sensitively. Not found stays
+  exit 2, where fossil exits 1. Tracked in #451.
+- Opening a repository runs every pragma in a fixed order (`busy_timeout`,
+  `journal_mode`, `locking_mode`, `synchronous`, `foreign_keys`, then the
+  rest by name), not only `busy_timeout` first. Tracked in #451.
+- A stored Julian day converts to the millisecond SQLite's own date
+  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
+  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
+  returned were 1ms before the check-in's D card.
+- Opening a repository sets `busy_timeout` before any other pragma. The
+  drivers ran the DSN's pragmas in map order, so an open while another
+  process held a lock could fail at once with "database is locked".
+
 ### Changed
 
+- A file's history (`manifest.FileHistory`) orders check-ins that share a
+  millisecond by rid, newest first, and applies its limit after dropping rows
+  that list the file unchanged.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

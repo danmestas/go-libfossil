@@ -2,6 +2,7 @@ package checkout
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"

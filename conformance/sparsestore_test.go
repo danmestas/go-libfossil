@@ -43,12 +43,7 @@ func scStoreCases() []scCase {
 		{Case{ID: "sparsecone.4.3.sparse-skips", Req: "SC-4.3-5"}, scSparseSkipsR},
 		{Case{ID: "sparsecone.5.flat-dense", Req: "SC-5-1"}, scHybrid},
 		{Case{ID: "sparsecone.5.1.holdings", Req: "SC-5.1-1"}, scHoldings},
-		{Case{ID: "sparsecone.5.1.nodes", Req: "SC-5.1-1",
-			Deviation: "out-of-cone sub-manifest nodes are held, not elided, as zit holds them: " +
-				"a check-in whose tree cannot be enumerated is never linked " +
-				"(draft-fossil-submanifests-00 §5.2, §9.4), so an elided node would cost the " +
-				"check-in its event, plink and mlink rows; a node phantom is a transit phantom"},
-			scNodes},
+		{Case{ID: "sparsecone.5.1.nodes", Req: "SC-5.1-1"}, scNodes},
 		{Case{ID: "sparsecone.5.2.classes", Req: "SC-5.2-1"}, scClasses},
 		{Case{ID: "sparsecone.5.2.server", Req: "SC-5.2-1"}, scServerClasses},
 		{Case{ID: "sparsecone.5.2.recompute", Req: "SC-5.2-2"}, scRecompute},
@@ -574,8 +569,8 @@ func scHoldings(t *testing.T) error {
 	return nil
 }
 
-// An out-of-cone sub-manifest node the store lacks is a transit phantom,
-// asked for by the next pull.
+// An absent sub-manifest node is elided when its spine proves the node's
+// whole key range outside the cone, without requiring the node's bytes.
 func scNodes(t *testing.T) error {
 	s := newSCSparse(t, true)
 	d, err := manifest.GetManifest(s.origin.r, s.origin.c1)

@@ -61,6 +61,13 @@ func TestCompactStoreSharedHistoryAndControls(t *testing.T) {
 }
 
 func TestCompactStoreDeltaClosure(t *testing.T) {
+	for _, retainedBy := range []string{"in-cone", "private", "unsent"} {
+		t.Run(retainedBy, func(t *testing.T) { compactDeltaClosure(t, retainedBy) })
+	}
+}
+
+func compactDeltaClosure(t *testing.T, retainedBy string) {
+	t.Helper()
 	d := setupTestDB(t)
 	baseData := bytes.Repeat([]byte("file content line\n"), 100)
 	base, baseName, err := blob.Store(d, baseData)
@@ -81,7 +88,14 @@ func TestCompactStoreDeltaClosure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	compactDeck(t, d, &deck.Deck{Type: deck.Checkin, D: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), F: []deck.FileCard{{Name: "docs/base", UUID: baseName}, {Name: "docs/drop", UUID: dropName}, {Name: "docs/middle", UUID: middleName}, {Name: "src/target", UUID: targetName}}})
+	targetPath := "src/target"
+	if retainedBy != "in-cone" {
+		targetPath = "docs/target"
+		if _, err := d.Exec("INSERT INTO "+retainedBy+"(rid) VALUES(?)", target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	compactDeck(t, d, &deck.Deck{Type: deck.Checkin, D: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), F: []deck.FileCard{{Name: "docs/base", UUID: baseName}, {Name: "docs/drop", UUID: dropName}, {Name: "docs/middle", UUID: middleName}, {Name: targetPath, UUID: targetName}}})
 	if err := SetStoreCone(d, mustCone(t, []string{"src"}, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +189,52 @@ func TestCompactStoreRetainsUnpublishedContent(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+// A reader holds its old WAL snapshot while compaction commits. It sees the
+// demotion only after ending that snapshot, never half a blob/phantom rewrite.
+func TestCompactStoreReaderSnapshot(t *testing.T) {
+	d, out, _, _ := compactFixture(t)
+	pool, err := db.OpenSQL(d.Path(), db.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	conn, err := pool.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), "BEGIN"); err != nil {
+		t.Fatal(err)
+	}
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	read := func() (int, int) {
+		t.Helper()
+		var size, phantoms int
+		err := conn.QueryRowContext(context.Background(), `SELECT size,
+   (SELECT count(*) FROM phantom WHERE rid=?) FROM blob WHERE rid=?`, out, out).Scan(&size, &phantoms)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return size, phantoms
+	}
+	before, phantoms := read()
+	if before < 0 || phantoms != 0 {
+		t.Fatal("fixture is not held")
+	}
+	if n, err := CompactStore(context.Background(), d); err != nil || n != 1 {
+		t.Fatalf("compact = %d, %v", n, err)
+	}
+	if size, phantoms := read(); size != before || phantoms != 0 {
+		t.Fatalf("snapshot changed: %d, %d", size, phantoms)
+	}
+	if _, err := conn.ExecContext(context.Background(), "COMMIT"); err != nil {
+		t.Fatal(err)
+	}
+	if size, phantoms := read(); size != -1 || phantoms != 1 {
+		t.Fatalf("committed demotion = %d, %d", size, phantoms)
 	}
 }
 

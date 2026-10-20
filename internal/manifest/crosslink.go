@@ -625,6 +625,11 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 // batch completes, so a rolled-back batch (cancelled or errored) contributes
 // nothing to the count st reports.
 func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState) error {
+	// ReceiveLinker reuses its guard across receipt transactions and Finalize
+	// calls. Raw aliases can change between them, so share proof only within
+	// this transaction's unchanged batch, never across ingestion boundaries.
+	st.guard.coneReferences = nil
+	defer func() { st.guard.coneReferences = nil }()
 	batchLinked := 0
 	var batchNonArtifact []libfossil.FslID
 	for i, c := range batch {
@@ -913,7 +918,7 @@ type checkinDeferralGuard struct {
 	// cache expands the sub-manifests a tree's walk reads; it is the owning
 	// sweep's or cascade's content cache, or nil, which expands directly.
 	cache *content.Cache
-	// Raw bytes do not change during a sweep. Unknown names remain conservative.
+	// Scoped to one linkBatch transaction; incoming raw aliases invalidate proof.
 	coneReferences *content.ConeReferences
 	// checkinBaselines memoizes baselines verified to be check-in manifests,
 	// each mapped to whether it is a tree manifest, so a sweep over many

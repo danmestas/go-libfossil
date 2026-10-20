@@ -139,6 +139,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = clearInheritedConfig(r); err != nil {
 		return
 	}
+	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
+		return
+	}
 
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
@@ -427,6 +430,11 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 	// (src/xfer.c client_sync), as headerCards does for a sync (#351).
 	// Pragma: client-version, then send-submanifests (every round, §7.2)
 	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
+	sparse, err := localConePragmas(cs.repo.DB())
+	if err != nil {
+		return nil, err
+	}
+	cards = append(cards, sparse...)
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound
@@ -530,6 +538,24 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		return err // the round rolled back
 	}
 	cs.result.BlobsRecvd += filesRecvd
+	// An authentication challenge includes push codes, and a cosmetic error
+	// may accompany content or a clone cursor. An error alone is a refusal,
+	// not a successful empty clone (sparse-cone §5.3).
+	if filesRecvd == 0 && !cs.roundPush {
+		progress := false
+		var refusal string
+		for _, card := range msg.Cards {
+			switch c := card.(type) {
+			case *xfer.CloneSeqNoCard:
+				progress = true
+			case *xfer.ErrorCard:
+				refusal = c.Message
+			}
+		}
+		if refusal != "" && !progress {
+			return fmt.Errorf("sync.Clone: %s", refusal)
+		}
+	}
 	return cardErr
 }
 

@@ -89,6 +89,13 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, sendPrivate)
 	}
 	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
+	if s.opts.Pull {
+		sparse, err := localConePragmas(s.repo.DB())
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, sparse...)
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}

@@ -1,7 +1,12 @@
 package sync
 
 import (
+	"context"
 	"reflect"
+	"time"
+
+	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"strings"
 	"testing"
 
@@ -30,6 +35,56 @@ func TestConePragmasEscaping(t *testing.T) {
 	}
 	if !reflect.DeepEqual(round.Serialize(), c.Serialize()) {
 		t.Fatal("cone changed across pragmas")
+	}
+}
+
+func TestSparseCloneRefusalFatal(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	cs := &cloneSession{repo: r, seqno: 1}
+	err := cs.processResponse(context.Background(), 0, &xfer.Message{Cards: []xfer.Card{&xfer.ErrorCard{Message: "Sparse cone refuses clone"}}})
+	if err == nil || !strings.Contains(err.Error(), "Sparse cone refuses clone") {
+		t.Fatalf("refused clone returned %v", err)
+	}
+}
+
+func TestSparseServerFlatClone(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	kept := storeAndLink(t, r, []byte("keep me"))
+	out := storeAndLink(t, r, []byte("elide me"))
+	data, err := (&deck.Deck{C: "flat sparse", D: time.Now().UTC(), U: deck.User("u"), F: []deck.FileCard{{Name: "out/a", UUID: out}, {Name: "src/a", UUID: kept}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	spine := storeAndLink(t, r, data)
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
+	cards = append(cards, conePragmas(c)...)
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, card := range findCards[*xfer.CFileCard](resp) {
+		seen[card.UUID] = true
+	}
+	if seen[out] {
+		t.Fatal("server sent out-of-cone file")
+	}
+	if !seen[kept] || !seen[spine] {
+		t.Fatalf("server omitted kept artifacts: %v", seen)
+	}
+	if err := content.SetStoreCone(r.DB(), c); err != nil {
+		t.Fatal(err)
+	}
+	dense, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards[:3]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dense.Cards) != 1 || len(findCards[*xfer.ErrorCard](dense)) != 1 {
+		t.Fatalf("sparse origin did not refuse dense clone: %v", dense.Cards)
 	}
 }
 

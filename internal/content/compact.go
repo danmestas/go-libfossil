@@ -8,7 +8,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
-	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
@@ -83,7 +82,6 @@ func compactCandidates(ctx context.Context, tx *db.Tx, c *cone.Cone) (map[libfos
 		return nil, err
 	}
 	held := map[string]libfossil.FslID{}
-	nodes := map[libfossil.FslID]*deck.Deck{}
 	drop := map[libfossil.FslID]bool{}
 	// Classification tolerates unavailable bytes. Destructive compaction must
 	// separately verify every held payload before changing any holdings.
@@ -97,13 +95,6 @@ func compactCandidates(ctx context.Context, tx *db.Tx, c *cone.Cone) (map[libfos
 		held[uuid] = rid
 		if refs.Outside(rid) {
 			drop[rid] = true
-		}
-		if len(data) == 0 {
-			return nil
-		}
-		artifact, err := deck.Parse(data)
-		if err == nil && artifact.Type == deck.Submanifest {
-			nodes[rid] = artifact
 		}
 		return nil
 	})
@@ -122,38 +113,10 @@ func compactCandidates(ctx context.Context, tx *db.Tx, c *cone.Cone) (map[libfos
 			}
 		}
 	}
-	compactRetainProvenance(nodes, held, drop)
+	if err := refs.RetainProvenance(ctx, drop); err != nil {
+		return nil, err
+	}
 	return drop, nil
-}
-
-// Without raw F/S provenance, a phantom would become unknown on the next
-// classification. Retain leaves and all nonterminal paths: only an interior
-// whose direct children are held leaves can disappear without severing the
-// root-to-phantom range proof. Derived indexes need never have existed.
-func compactRetainProvenance(nodes map[libfossil.FslID]*deck.Deck,
-	held map[string]libfossil.FslID, drop map[libfossil.FslID]bool,
-) {
-	keep := map[libfossil.FslID]bool{}
-	for rid, node := range nodes {
-		if len(node.F) > 0 {
-			keep[rid] = true
-		}
-		if drop[rid] {
-			for _, child := range node.S {
-				childRID := held[child.UUID]
-				keep[childRID] = true
-				childNode := nodes[childRID]
-				if childNode == nil {
-					keep[rid] = true
-				} else if len(childNode.F) == 0 {
-					keep[rid] = true
-				}
-			}
-		}
-	}
-	for rid := range keep {
-		delete(drop, rid)
-	}
 }
 
 // Unsent or private bytes may have no peer that can ever restore them.

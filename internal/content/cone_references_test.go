@@ -59,6 +59,39 @@ func TestConeReferencesRawPartialTree(t *testing.T) {
 	}
 }
 
+func TestConeReferencesRetainProvenancePreservesPolicy(t *testing.T) {
+	d := setupTestDB(t)
+	leaf, err := (&deck.Deck{F: []deck.FileCard{{Name: "zzz/a", UUID: strings.Repeat("a", 40)}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, uuid, err := blob.Store(d, leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := (&deck.Deck{C: "outside leaf", D: time.Now().UTC(), U: deck.User("u"), S: []deck.SubmanifestCard{{Name: "zzz/a", UUID: uuid}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := blob.Store(d, root); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := LoadConeReferences(context.Background(), d, mustCone(t, []string{"src"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refs.Outside(rid) || refs.Required(rid) {
+		t.Fatal("outside leaf policy misclassified before retention")
+	}
+	drop := map[libfossil.FslID]bool{rid: true}
+	if err := refs.RetainProvenance(context.Background(), drop); err != nil {
+		t.Fatal(err)
+	}
+	if drop[rid] || !refs.Outside(rid) || refs.Required(rid) {
+		t.Fatal("retaining raw proof changed policy instead of only the drop set")
+	}
+}
+
 func TestConeReferenceWalkBounds(t *testing.T) {
 	for _, tc := range []struct {
 		name           string

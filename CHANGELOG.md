@@ -216,6 +216,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `undo_rollback` does. Under js/wasm, which has no undo, Update saves none.
   Tracked in #446.
 
+- `Checkout.Revert` undoes a rename whose old name another file now holds:
+  a swap, a chain (`a.txt` to `c.txt`, then `b.txt` to `a.txt`), a new
+  file added under the old name, or an untracked file there. It used to
+  refuse. Like fossil's `revert`, it now saves each file it writes or
+  deletes for undo first, so `Checkout.Undo` or `fossil undo` brings back
+  what it overwrote, and a revert that fails partway puts the files back.
+  Every committed file ends under its committed name with its committed
+  content, and the add at the old name is dropped, as fossil drops it.
+  Fossil's own revert leaves a swap's files renamed and stops tracking the
+  second file of a chain; go-libfossil reverts both. Revert now changes
+  vfile in one transaction. Under js/wasm, which has no undo, it saves
+  none. Tracked in #248.
+
 - A public check-in makes every file blob it names public, as fossil's
   commit does. Content first stored privately, for example by syncing a
   private branch, stayed private when a public check-in reused it, so a

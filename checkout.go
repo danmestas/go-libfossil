@@ -314,7 +314,9 @@ func (c *Checkout) Rename(oldName, newName string) error {
 }
 
 // Revert restores files to their checkout version state.
-// If opts.Files is empty, reverts all changed files.
+// If opts.Files is empty, reverts all changed files. A renamed file goes
+// back to its committed name, whatever holds that name now. Each file it
+// writes or deletes is saved for undo first, so Undo brings it back.
 func (c *Checkout) Revert(opts RevertOpts) error {
 	err := c.inner.Revert(checkout.RevertOpts{
 		Paths: opts.Files,

@@ -154,6 +154,20 @@ func scDefault(t *testing.T) *cone.Cone {
 
 var scDefaultCovered = []string{"src/a.c", "src/b.c", "src/vendor/keep/k.c"}
 
+// The fixture must count user files, not private checkout state or sidecars.
+func TestSparseConeDiskNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		".libfossil-checkout", ".libfossil-checkout-wal",
+		".libfossil-checkout-shm", ".libfossil-checkout-journal", "src/a.c",
+	} {
+		scWrite(t, dir, name, "fixture\n")
+	}
+	if err := scSameList("user files", scOnDisk(t, dir), []string{"src/a.c"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // scOnDisk lists the files under dir, the checkout database and its
 // journals excluded, and anything zit keeps there.
 func scOnDisk(t *testing.T, dir string) []string {
@@ -167,7 +181,9 @@ func scOnDisk(t *testing.T, dir string) []string {
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(rel, ".fslckout") || strings.HasPrefix(rel, "_FOSSIL_") || strings.HasPrefix(rel, ".zit") {
+		if strings.HasPrefix(rel, ".libfossil-checkout") ||
+			strings.HasPrefix(rel, ".fslckout") || strings.HasPrefix(rel, "_FOSSIL_") ||
+			strings.HasPrefix(rel, ".zit") {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -547,7 +563,11 @@ func scTrees(t *testing.T) error {
 func scRecord(t *testing.T) error {
 	f := newSCRepo(t, false)
 	co := f.open(t, scDefault(t), f.c1)
-	vfdb, err := db.OpenSQL(filepath.Join(co.Dir(), checkout.PreferredDBName()), db.OpenConfig{}, nil)
+	path, err := checkout.FindCheckoutDB(simio.OSStorage{}, co.Dir(), false)
+	if err != nil {
+		return err
+	}
+	vfdb, err := db.OpenSQL(path, db.OpenConfig{}, nil)
 	if err != nil {
 		return err
 	}

@@ -57,7 +57,7 @@ type rsCase struct {
 	rebuildWrites string
 	// fossil is set only when fossil(1) derives other rows than want: the
 	// case follows the draft text, and fossil says why and names the
-	// erratum proposed. The case fails once fossil agrees with want.
+	// draft change proposed. The case fails once fossil agrees with want.
 	fossil string
 }
 

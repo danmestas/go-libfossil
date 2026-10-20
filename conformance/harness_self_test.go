@@ -50,14 +50,14 @@ func TestJudgeRefusesDoubleMark(t *testing.T) {
 }
 
 func TestParseTable(t *testing.T) {
-	data := "# a comment\n# draft\td.txt\tabc\n# erratum\te.md\tdef\n\n" +
+	data := "# a comment\n# draft\td.txt\tabc\n\n" +
 		"R-1\t3.1\tNames are hashes.\n" +
 		"R-2\t3.2\tLengths are fixed.\tonly SHA1 checked\n"
 	tbl, err := parseTable([]byte(data))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tbl.sources) != 2 || tbl.sources[1].Path != "erratum/e.md" {
+	if len(tbl.sources) != 1 || tbl.sources[0].Path != "d.txt" || tbl.sources[0].SHA256 != "abc" {
 		t.Fatalf("sources = %+v", tbl.sources)
 	}
 	if len(tbl.requirements) != 2 || tbl.requirements[1].Scope != "only SHA1 checked" {

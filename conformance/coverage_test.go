@@ -55,8 +55,7 @@ type table struct {
 }
 
 // Table format: tab-separated. Lines starting with "#" are comments, except
-// "# draft\t<file>\t<sha256>" and "# erratum\t<file>\t<sha256>", which pin
-// the sources. Every other line is "<id>\t<section>\t<requirement>[\t<scope>]".
+// "# draft\t<file>\t<sha256>", which pins the draft. Every other line is "<id>\t<section>\t<requirement>[\t<scope>]".
 func parseTable(data []byte) (table, error) {
 	var parsed table
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -68,17 +67,13 @@ func parseTable(data []byte) (table, error) {
 		fields := strings.Split(line, "\t")
 		if strings.HasPrefix(line, "#") {
 			kind := strings.TrimSpace(strings.TrimPrefix(fields[0], "#"))
-			if kind != "draft" && kind != "erratum" {
+			if kind != "draft" {
 				continue
 			}
 			if len(fields) != 3 {
-				return table{}, fmt.Errorf("line %d: %s pin needs a file and a SHA-256", lineNumber, kind)
+				return table{}, fmt.Errorf("line %d: draft pin needs a file and a SHA-256", lineNumber)
 			}
-			path := fields[1]
-			if kind == "erratum" {
-				path = "erratum/" + path
-			}
-			parsed.sources = append(parsed.sources, source{Path: path, SHA256: fields[2]})
+			parsed.sources = append(parsed.sources, source{Path: fields[1], SHA256: fields[2]})
 			continue
 		}
 		if len(fields) != 3 && len(fields) != 4 {

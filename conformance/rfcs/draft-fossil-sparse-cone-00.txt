@@ -3,9 +3,9 @@
 
 
 Network Working Group                                          D. Mestas
-Internet-Draft                                            14 August 2026
+Internet-Draft                                           19 October 2026
 Intended status: Experimental                                           
-Expires: 15 February 2027
+Expires: 22 April 2027
 
 
       The Fossil Distributed Version Control System: Sparse Cones
@@ -43,7 +43,7 @@ Status of This Memo
    time.  It is inappropriate to use Internet-Drafts as reference
    material or to cite them other than as "work in progress."
 
-   This Internet-Draft will expire on 15 February 2027.
+   This Internet-Draft will expire on 22 April 2027.
 
 Copyright Notice
 
@@ -53,9 +53,9 @@ Copyright Notice
 
 
 
-Mestas                  Expires 15 February 2027                [Page 1]
+Mestas                    Expires 22 April 2027                 [Page 1]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -79,18 +79,17 @@ Table of Contents
      3.1.  Location and Mutability . . . . . . . . . . . . . . . . .   4
      3.2.  Normalization . . . . . . . . . . . . . . . . . . . . . .   5
      3.3.  Exclusions  . . . . . . . . . . . . . . . . . . . . . . .   5
-     3.4.  Patterns Are Deliberately Absent  . . . . . . . . . . . .   5
+     3.4.  Literal Prefixes Only . . . . . . . . . . . . . . . . . .   6
      3.5.  Amendment . . . . . . . . . . . . . . . . . . . . . . . .   6
-     3.6.  Literal Prefixes Only . . . . . . . . . . . . . . . . . .   6
    4.  The Sparse Worktree . . . . . . . . . . . . . . . . . . . . .   6
-     4.1.  Materialization and Tracking  . . . . . . . . . . . . . .   7
+     4.1.  Materialization and Tracking  . . . . . . . . . . . . . .   6
      4.2.  Commit Synthesis  . . . . . . . . . . . . . . . . . . . .   7
      4.3.  The R Card  . . . . . . . . . . . . . . . . . . . . . . .   7
      4.4.  Operations That Cross the Cone  . . . . . . . . . . . . .   8
      4.5.  Cost Properties . . . . . . . . . . . . . . . . . . . . .   8
    5.  The Sparse Store  . . . . . . . . . . . . . . . . . . . . . .   8
      5.1.  Holdings  . . . . . . . . . . . . . . . . . . . . . . . .   8
-     5.2.  The Third Phantom Class . . . . . . . . . . . . . . . . .   9
+     5.2.  The Third Phantom Class . . . . . . . . . . . . . . . . .   8
      5.3.  Commit, Synchronization, and Correctness with Elided
            Subtrees  . . . . . . . . . . . . . . . . . . . . . . . .   9
      5.4.  Widening and Narrowing  . . . . . . . . . . . . . . . . .  10
@@ -106,12 +105,13 @@ Table of Contents
    9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  13
    10. Normative References  . . . . . . . . . . . . . . . . . . . .  13
    Appendix A.  Implementation Sequencing  . . . . . . . . . . . . .  14
+   Appendix B.  Changes in This Revision . . . . . . . . . . . . . .  15
 
 
 
-Mestas                  Expires 15 February 2027                [Page 2]
+Mestas                    Expires 22 April 2027                 [Page 2]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
    Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  15
@@ -165,9 +165,9 @@ Internet-Draft             Fossil Sparse Cones               August 2026
 
 
 
-Mestas                  Expires 15 February 2027                [Page 3]
+Mestas                    Expires 22 April 2027                 [Page 3]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
    tree objects give other version control systems, arrived at from a
@@ -219,6 +219,13 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    MAY hold different cones.  A cone MAY be widened or narrowed at any
    time (Section 5.4).
 
+
+
+Mestas                    Expires 22 April 2027                 [Page 4]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
+
    A cone MAY carry members of kinds other than path prefixes, each
    defined by another document; the horizon member of draft-fossil-
    horizon is one.  The canonical serialization MUST mark a cone
@@ -227,11 +234,6 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    understand the version MUST refuse the cone rather than read it as
    path members.  Refusal is policy loss (Section 5.2): the store heals
    toward dense.
-
-Mestas                  Expires 15 February 2027                [Page 4]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
 
 3.2.  Normalization
 
@@ -272,29 +274,30 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    classifies as before; a range an exclusion intersects is classified
    per file.  The cost falls on the boundary, never on correctness.
 
-3.4.  Patterns Are Deliberately Absent
-
-   Glob or pattern members are not part of this document.  Every
-   efficiency claim herein -- sub-manifest range pruning, server-side
-   interval classification -- rests on a member denoting one contiguous
-   key interval under sorted-path order.  A pattern denotes scattered
-   intervals and reduces every classification to a full scan.  An
-   implementation wanting patterns would be defining a different, slower
-   mechanism, and should say so rather than extend this one.
 
 
 
-Mestas                  Expires 15 February 2027                [Page 5]
+Mestas                    Expires 22 April 2027                 [Page 5]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
-   Implementations MUST support at least 64 members and SHOULD support
-   255; a member set is operator policy, not data, and a bound generous
-   enough for scattered-file profiles (individual root files beside
-   several directory subtrees) is part of the surface this document
-   promises.  A member names a directory subtree or a single file with
-   equal standing: file members are how a profile picks individual files
+3.4.  Literal Prefixes Only
+
+   Members are literal path prefixes.  Pattern members (globs, character
+   classes, suffix matches) are not part of this document: every
+   efficiency claim herein -- sub-manifest range pruning (Section 1.3),
+   server-side interval classification (Section 6.2) -- rests on a
+   member denoting one contiguous key interval under sorted-path order,
+   and a pattern denotes scattered intervals, degrading every
+   classification to a full scan.  An implementation wanting patterns
+   would be defining a different, slower mechanism, and should say so
+   rather than extend this one.  A metacharacter in a member is a
+   literal character of the path: an implementation MUST NOT expand it,
+   and MAY refuse the member.
+
+   A member names a directory subtree or a single file with equal
+   standing: file members are how a profile picks individual files
    without adopting their directories.
 
 3.5.  Amendment
@@ -307,43 +310,11 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    form); narrowing dematerializes and leaves reclamation to explicit
    compaction (Section 5.4).
 
-3.6.  Literal Prefixes Only
-
-   Members are literal path prefixes.  Pattern members (globs, character
-   classes, suffix matches) are deliberately excluded from this
-   document: every efficiency claim herein -- sub-manifest range pruning
-   (Section 1.3), server-side interval classification (Section 6.2) --
-   rests on a member denoting one contiguous key interval under sorted-
-   path order, and a pattern denotes scattered intervals, degrading
-   every classification to a full scan.  An implementation MUST reject a
-   member containing pattern metacharacters it would otherwise silently
-   treat as literals only if its platform's operators would plausibly
-   expect expansion; otherwise literal treatment is conforming.
-
-   Exclusion members (subtracting a subtree from an enclosing included
-   member, with last-match-wins evaluation) are a candidate extension:
-   they preserve prunability at wholly-included and wholly-excluded
-   ranges and degrade only boundary ranges to per-file classification.
-   They are out of scope for this revision and MUST NOT be improvised
-   incompatibly.
-
 4.  The Sparse Worktree
 
    The sparse worktree is available to any conforming repository,
    whether its manifests are flat or tree-structured.  On flat manifests
    it is purely algorithmic; its costs are stated in Section 4.5.
-
-
-
-
-
-
-
-
-Mestas                  Expires 15 February 2027                [Page 6]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
 
 4.1.  Materialization and Tracking
 
@@ -355,6 +326,17 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    request to track a path outside the cone and the refusal MUST name
    the cone as the reason.  A diagnostic that merely reports a missing
    file, or alleges damage, does not conform.
+
+
+
+
+
+
+
+Mestas                    Expires 22 April 2027                 [Page 6]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
 
    All file-set enumeration flows through the shared enumeration
    interface required by Section 9.3 of [FossilSubManifests], with the
@@ -391,16 +373,6 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    store (Section 5) MUST omit the R card; omission is already
    conforming.  Verifiers MUST NOT treat an absent R card as damage.
 
-
-
-
-
-
-Mestas                  Expires 15 February 2027                [Page 7]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
-
    The verification side is the same rule reflected: a checkout-side
    verifier checking a PRESENT R card during a sparse materialization
    MUST compute the aggregate over the dense enumeration, reading out-
@@ -409,6 +381,18 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    sparse store cannot compute the aggregate and MUST skip R
    verification rather than report disagreement; elided content makes
    the card unverifiable, not wrong.
+
+
+
+
+
+
+
+
+Mestas                    Expires 22 April 2027                 [Page 7]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
 
 4.4.  Operations That Cross the Cone
 
@@ -448,15 +432,6 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    they are small, and holes in non-file surfaces would surprise every
    consumer that renders them.
 
-
-
-
-
-Mestas                  Expires 15 February 2027                [Page 8]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
-
 5.2.  The Third Phantom Class
 
    Implementations MUST distinguish three absence classes:
@@ -465,6 +440,15 @@ Internet-Draft             Fossil Sparse Cones               August 2026
        requests it.
 
    2.  Shunned: forbidden; never requested [FossilRepoState].
+
+
+
+
+
+Mestas                    Expires 22 April 2027                 [Page 8]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
 
    3.  Elided phantom: deliberately absent under local cone policy.
        Synchronization MUST NOT spontaneously request it, and its
@@ -497,22 +481,6 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    therefore be a first-class committing, pushing, and pulling
    participant.
 
-
-
-
-
-
-
-
-
-
-
-
-Mestas                  Expires 15 February 2027                [Page 9]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
-
    What a sparse store cannot be is a complete origin.  A dense peer
    cloning from a sparse store receives elided phantoms it must resolve
    elsewhere.  A server SHOULD refuse to act as a clone origin for cones
@@ -523,6 +491,20 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    notwithstanding: that tolerance exists for cosmetic cards riding an
    otherwise-progressing reply, and honoring it here would let a refused
    clone terminate empty and report success.
+
+
+
+
+
+
+
+
+
+
+Mestas                    Expires 22 April 2027                 [Page 9]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
 
 5.4.  Widening and Narrowing
 
@@ -561,14 +543,6 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    transfer processor answers an UNRECOGNIZED bare card with a protocol
    error ("error bad command"), while pragmas are specified as requests
    only, with unknown pragmas silently ignored.  Riding the pragma is
-
-
-
-Mestas                  Expires 15 February 2027               [Page 10]
-
-Internet-Draft             Fossil Sparse Cones               August 2026
-
-
    therefore what makes the degradation of Section 6.3 a documented
    property of the reference implementation rather than an assumption
    about its tolerance.
@@ -576,6 +550,17 @@ Internet-Draft             Fossil Sparse Cones               August 2026
    An exclusion member travels as its own pragma:
 
    pragma cone-not <member>
+
+
+
+
+
+
+
+Mestas                    Expires 22 April 2027                [Page 10]
+
+Internet-Draft             Fossil Sparse Cones              October 2026
+
 
    A distinct pragma name rather than a prefix character, because every
    byte that could mark a member as negative is also a legal filename
@@ -628,15 +613,9 @@ Internet-Draft             Fossil Sparse Cones               August 2026
 
 
 
-
-
-
-
-
-
-Mestas                  Expires 15 February 2027               [Page 11]
+Mestas                    Expires 22 April 2027                [Page 11]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
 6.4.  Demand Fetch
@@ -690,9 +669,9 @@ Internet-Draft             Fossil Sparse Cones               August 2026
 
 
 
-Mestas                  Expires 15 February 2027               [Page 12]
+Mestas                    Expires 22 April 2027                [Page 12]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
    Checkout state: the worktree cone is a new section of the checkout's
@@ -746,9 +725,9 @@ Internet-Draft             Fossil Sparse Cones               August 2026
 
 
 
-Mestas                  Expires 15 February 2027               [Page 13]
+Mestas                    Expires 22 April 2027                [Page 13]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
 
    [FossilSubManifests]
@@ -802,10 +781,32 @@ Appendix A.  Implementation Sequencing
 
 
 
-Mestas                  Expires 15 February 2027               [Page 14]
+Mestas                    Expires 22 April 2027                [Page 14]
 
-Internet-Draft             Fossil Sparse Cones               August 2026
+Internet-Draft             Fossil Sparse Cones              October 2026
 
+
+Appendix B.  Changes in This Revision
+
+   This revision of draft-fossil-sparse-cone-00, dated 19 October 2026,
+   applies the following errata to the 14 August 2026 text.
+
+   *  Section 3.1: a cone MAY carry members of kinds other than path
+      prefixes; a cone carrying one is serialized under a distinct
+      version, and an implementation that does not understand the
+      version refuses the cone, which is policy loss (Section 5.2).
+      Normative change.
+
+   *  Section 3.2, Section 3.4, Section 3.6: Section 3.6 is removed and
+      Section 3.4 is the one statement of literal prefixes, with an
+      unconditional rule for metacharacters; the member-count
+      requirement appears once, in Section 3.2; Section 3.3 alone
+      governs exclusions.  Normative change.
+
+   *  Section 6.2: a cone-aware server serves in full form any artifact
+      whose delta base lies outside the keep set it computed for the
+      request, and a recipient treats a phantom that a retained delta
+      names as its source as a transit phantom.  Normative change.
 
 Author's Address
 
@@ -836,26 +837,4 @@ Author's Address
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-Mestas                  Expires 15 February 2027               [Page 15]
+Mestas                    Expires 22 April 2027                [Page 15]

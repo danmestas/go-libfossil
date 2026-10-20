@@ -42,8 +42,9 @@ func (c *RepoLogCmd) Run(g *Globals) (err error) {
 		}
 	}()
 
+	paths := newRepoPaths(r)
 	versions, err := manifest.FileHistory(r.Inner(), manifest.FileHistoryOpts{
-		Path: c.Path, Limit: c.Limit,
+		Path: paths.clean(c.Path), Limit: c.Limit, FoldCase: paths.foldCase,
 	})
 	if errors.Is(err, sql.ErrNoRows) || err == nil && len(versions) == 0 {
 		return notFound(fmt.Errorf("no history for %q", c.Path))

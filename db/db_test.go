@@ -350,3 +350,59 @@ func TestDSNSetsBusyTimeoutFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestDSNPragmaOrderIsFixed: the whole pragma order, not only busy_timeout's
+// place, is the same on every open. The drivers run the DSN's pragmas in
+// order and the caller's pragmas arrive as a map, so the order varied by
+// open. The fixed order is busy_timeout, journal_mode, locking_mode,
+// synchronous, foreign_keys, then any other pragma by name.
+func TestDSNPragmaOrderIsFixed(t *testing.T) {
+	cfg := db.OpenConfig{Pragmas: map[string]string{
+		"cache_size":   "-2000",
+		"synchronous":  "NORMAL",
+		"temp_store":   "MEMORY",
+		"busy_timeout": "7000",
+	}}
+	want := []string{"busy_timeout", "journal_mode", "synchronous", "foreign_keys", "cache_size", "temp_store"}
+	for i := 0; i < 50; i++ {
+		_, dsn := db.SQLDriverAndDSN("/tmp/x.fossil", cfg, nil)
+		var got []string
+		for _, p := range strings.Split(dsn[strings.IndexByte(dsn, '?')+1:], "&") {
+			if name, ok := strings.CutPrefix(p, "_pragma="); ok {
+				got = append(got, name[:strings.IndexByte(name, '(')])
+			}
+		}
+		if strings.Join(got, " ") != strings.Join(want, " ") {
+			t.Fatalf("open %d: pragmas run in order %v, want %v\nDSN %s", i, got, want, dsn)
+		}
+	}
+}
+
+// TestOpenAppliesEveryPragma opens a real database with the driver the test
+// binary is built with (modernc, or ncruces under -tags test_ncruces) and
+// reads each pragma back from the connection.
+func TestOpenAppliesEveryPragma(t *testing.T) {
+	d, err := db.OpenWith(filepath.Join(t.TempDir(), "p.db"), db.OpenConfig{
+		Pragmas: map[string]string{"cache_size": "-2000", "synchronous": "NORMAL", "busy_timeout": "7000"},
+	})
+	if err != nil {
+		t.Fatalf("OpenWith: %v", err)
+	}
+	defer d.Close()
+
+	for _, tc := range []struct{ pragma, want string }{
+		{"busy_timeout", "7000"},
+		{"journal_mode", "wal"},
+		{"foreign_keys", "0"},
+		{"synchronous", "1"}, // NORMAL
+		{"cache_size", "-2000"},
+	} {
+		var got string
+		if err := d.QueryRow("PRAGMA " + tc.pragma).Scan(&got); err != nil {
+			t.Fatalf("PRAGMA %s: %v", tc.pragma, err)
+		}
+		if got != tc.want {
+			t.Errorf("driver %s: PRAGMA %s = %q, want %q", d.Driver(), tc.pragma, got, tc.want)
+		}
+	}
+}

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -119,6 +120,10 @@ func checkinTx(tx *db.Tx, opts CheckinOpts) (libfossil.FslID, string, checkinTre
 		if err := opts.Precheck(tx); err != nil {
 			return 0, "", checkinTree{}, err
 		}
+	}
+	parents := append([]libfossil.FslID{opts.Parent}, opts.MergeParents...)
+	if err := RequireParentContent(context.Background(), tx, parents); err != nil {
+		return 0, "", checkinTree{}, err
 	}
 	// A sparse store (draft-fossil-sparse-cone-00 §5) lacks the content of
 	// files its cone leaves out. The check-in names them by hash, as the

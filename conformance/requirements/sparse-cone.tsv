@@ -1,7 +1,7 @@
 # Requirements of draft-fossil-sparse-cone-00, written from the draft text.
 # Cases cover cone specification, sparse worktrees, store classification,
 # internal synchronization and explicit compaction. Scope notes preserve
-# incomplete behavior: absent-subtree writing, partial crosslinking, bounded
+# incomplete behavior: absent-subtree writing, incomplete file history, bounded
 # request preprocessing, conservative provenance retention and public wiring.
 # Store cases include deliberately elided fixtures; sync cases exercise real
 # loopback wire exchanges, and compaction cases exercise rebuild and healing.
@@ -54,7 +54,7 @@ SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-o
 SC-4.4-2	4.4	The count of out-of-cone changes applied should be reported.
 SC-4.4-3	4.4	Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.
 SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.
-SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, elided phantoms for out-of-cone nodes and blobs, and every non-manifest structural artifact densely.	outside S-node classification is tested; compaction retains provenance-bearing leaves and partial-tree crosslinking remains incomplete
+SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, elided phantoms for out-of-cone nodes and blobs, and every non-manifest structural artifact densely.	outside S-node classification and partial-tree metadata, checkout and rebuild are tested; compaction still retains provenance-bearing leaves and nonterminal paths
 SC-5.2-1	5.2	Transit phantoms, shunned artifacts and elided phantoms are distinguished; synchronization does not spontaneously request an elided phantom, whose absence is healthy.
 SC-5.2-2	5.2	Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.
 SC-5.2-3	5.2	Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.

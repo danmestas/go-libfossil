@@ -116,7 +116,8 @@ CREATE TABLE ticketchng(
 
 // buildTicketCorpus creates a repository under the default ticket schema and
 // fills it with ticket artifacts made by the fossil binary: creations, status
-// and non-status changes, a ticketchng-only change and an append.
+// and non-status changes, a ticketchng-only change, appends to a field never
+// set, to a field with a baseline and to a field stored in both tables.
 func buildTicketCorpus(t *testing.T, bin string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -145,6 +146,13 @@ func buildTicketCorpus(t *testing.T, bin string) string {
 	runIn("ticket", "change", tkt1, "priority", "High", "--user", "bob")
 	runIn("ticket", "change", tkt1, "icomment", "a follow-up note", "--user", "alice")
 	runIn("ticket", "change", tkt1, "title", "First bug, renamed", "--user", "alice")
+	// An append to a field no artifact has set must start from an empty
+	// string, not NULL; an append to a field with a baseline leaves the
+	// baseline at the rid that last assigned it; status lives in both tables
+	// in one of the schemas.
+	runIn("ticket", "change", tkt1, "+subsystem", "kernel", "--user", "bob")
+	runIn("ticket", "change", tkt1, "+title", " (appended)", "--user", "alice")
+	runIn("ticket", "change", tkt1, "+status", "-ish", "--user", "bob")
 
 	tkt2 := lastField(t, runIn("ticket", "add", "title", "Second bug", "status", "Open",
 		"comment", "initial note", "--user", "bob"))

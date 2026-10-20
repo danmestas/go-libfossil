@@ -199,3 +199,56 @@ func TestStashSymlinkMatchesFossil(t *testing.T) {
 		fossilIn(t, bin, ck, "close", "--force")
 	}
 }
+
+// Pop over a symlink that changed since the stash was saved does not merge
+// it: fossil's stash_apply prints "Cannot merge symlink", counts a
+// conflict and writes nothing, and pop still drops the stash.
+func TestPopDoesNotMergeChangedSymlink(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		after func(t *testing.T, p string) // what replaces link before Pop
+		check func(t *testing.T, dir string)
+	}{
+		{"repointed again", func(t *testing.T, p string) {
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("third.txt", p); err != nil {
+				t.Fatal(err)
+			}
+		}, func(t *testing.T, dir string) { wantLink(t, dir, "link", "third.txt") }},
+		{"now a plain file", func(t *testing.T, p string) {
+			if err := os.Remove(p); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte("plain.txt"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, func(t *testing.T, dir string) { wantFile(t, dir, "link", "plain.txt") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newLinkCheckout(t)
+			link := filepath.Join(s.dir, "link")
+			if err := os.Remove(link); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("other.txt", link); err != nil {
+				t.Fatal(err)
+			}
+			if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "repoint"); err != nil {
+				t.Fatal(err)
+			}
+			tc.after(t, link)
+			if err := stash.Pop(s.ckout, s.repoDB, s.env, s.dir); err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, s.dir)
+			wantFile(t, s.dir, "plain.txt", "plain\n")
+			wantFile(t, s.dir, "other.txt", "other\n")
+			entries, err := stash.List(s.ckout)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("stash after pop = %v, %v; want it dropped", entries, err)
+			}
+		})
+	}
+}

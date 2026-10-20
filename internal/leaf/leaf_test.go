@@ -1,6 +1,7 @@
 package leaf_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -345,6 +346,40 @@ func TestAuditReportsStray(t *testing.T) {
 	if want := []libfossil.FslID{7, 424242}; !slices.Equal(got.Stray, want) {
 		t.Errorf("stray without detached = %v, want %v", got.Stray, want)
 	}
+}
+
+func TestAuditDistinctReadingWitnesses(t *testing.T) {
+	g := newGraph(t)
+	g.exec("REPLACE INTO config(name, value, mtime) VALUES('main-branch', 'main', 0)")
+	g.link(1, 2, true)
+	g.branch(2, "main")
+	g.link(1, 3, false)
+	g.branch(3, "trunk")
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (2), (3)")
+	g.wantAudit("distinct witnesses", []libfossil.FslID{1}, nil)
+}
+
+func TestAuditReadingGuards(t *testing.T) {
+	for _, branch := range []string{"main", "trunk"} {
+		for _, srcid := range []int64{0, 2} {
+			t.Run(fmt.Sprintf("%s/srcid%d", branch, srcid), func(t *testing.T) {
+				g := newGraph(t)
+				g.exec("REPLACE INTO config(name, value, mtime) VALUES('main-branch', 'main', 0)")
+				g.link(1, 2, true)
+				g.branch(2, branch)
+				g.exec("UPDATE tagxref SET srcid=? WHERE rid=2", srcid)
+				g.exec("INSERT INTO leaf(rid) VALUES(1), (2)")
+				g.wantAudit("only one reading same", nil, nil)
+			})
+		}
+	}
+	g := newGraph(t)
+	g.branch(1, "trunk")
+	g.branch(2, "trunk")
+	g.exec("UPDATE tagxref SET srcid=0 WHERE rid=2")
+	g.link(1, 2, true)
+	g.exec("INSERT INTO leaf(rid) VALUES(1), (2)")
+	g.wantAudit("srcid zero is direct", []libfossil.FslID{1}, nil)
 }
 
 // TestAuditAcceptsFossilReading pins the tables fossil's leaf_check writes

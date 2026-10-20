@@ -219,8 +219,8 @@ type Findings struct {
 // not report it.
 //
 // "Same-branch" is read two ways, and Audit holds a table to a finding only
-// where both agree: a child is same-branch for a stale row under both, and
-// absent for a missing row under both. One is the draft's, which Check
+// where both agree: each has a same-branch child witnessing a stale row
+// (not necessarily the same child), and neither has one for a missing row. One is the draft's, which Check
 // applies: active branch rows only, and the main-branch setting as it is
 // now. The other is fossil 2.28's leaf_check (fossilSameBranchSQL): a branch
 // row of any type, and the literal trunk. fossil writes its tables that way,
@@ -238,7 +238,16 @@ func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error
 		SELECT leaf.rid FROM leaf
 		 WHERE EXISTS(
 		    SELECT 1 FROM plink
-		     WHERE plink.pid = leaf.rid AND %[2]s AND %[3]s
+		     WHERE plink.pid = leaf.rid AND %[2]s
+		       AND EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%[1]d AND rid=plink.cid
+		                     AND srcid IN (0, plink.cid))
+		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
+		                       WHERE tag.tagname='parent'
+		                         AND tagxref.rid=plink.cid))
+		   AND EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = leaf.rid AND %[3]s
 		       AND EXISTS(SELECT 1 FROM tagxref
 		                   WHERE tagid=%[1]d AND rid=plink.cid
 		                     AND srcid IN (0, plink.cid))

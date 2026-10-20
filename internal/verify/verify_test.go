@@ -623,6 +623,43 @@ func TestVerify_LeafKeptVerdict(t *testing.T) {
 	}
 }
 
+func TestVerify_TaglessRootAndChild(t *testing.T) {
+	r := newTestRepo(t)
+	var parent string
+	for i := 0; i < 2; i++ {
+		d := &deck.Deck{Type: deck.Checkin, C: fmt.Sprintf("tagless %d", i),
+			D: time.Date(2024, 1, 1, i, 0, 0, 0, time.UTC), U: deck.User("test")}
+		if parent != "" {
+			d.P = []string{parent}
+		}
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, parent, err = blob.Store(r.DB(), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manifest.Crosslink(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var leaves int
+	if err := r.DB().QueryRow("SELECT count(*) FROM leaf").Scan(&leaves); err != nil {
+		t.Fatal(err)
+	}
+	if leaves != 0 {
+		t.Fatalf("tagless graph has %d leaves, want 0: no branch write scheduled a recheck", leaves)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK() {
+		t.Fatalf("tagless root and child: %v", report.Issues)
+	}
+}
+
 // TestVerify_LeafDecidable pins what Verify must report: a row whose
 // same-branch child carries a branch row, and a tagged check-in with no
 // same-branch child that has no row.
@@ -717,6 +754,85 @@ func TestVerify_ReparentReplacesPlink(t *testing.T) {
 	plinkIssues("reparented")
 	control(base.Add(time.Hour), deck.TagCard{Type: deck.TagCancel, Name: "parent", UUID: uuidOf(merge)})
 	plinkIssues("cancelled")
+	// Cancellation retains the replacement ancestry, not permission to lose it.
+	if _, err := r.DB().Exec("DELETE FROM plink WHERE cid=?", merge); err != nil {
+		t.Fatal(err)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range report.Issues {
+		found = found || issue.Kind == verify.IssuePlinkMissing
+	}
+	if !found {
+		t.Fatal("missing replacement parents went undetected")
+	}
+}
+
+func TestVerify_ParentTagDoesNotHideMissingLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kind  deck.TagType
+		valid bool
+	}{
+		{"active replacement", deck.TagSingleton, true},
+		{"malformed singleton", deck.TagSingleton, false},
+		{"never active cancel", deck.TagCancel, false},
+		{"propagating is not reparent", deck.TagPropagating, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRepo(t)
+			root, _, merge := mergedFeature(t, r)
+			var rootUUID, mergeUUID string
+			if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", root).Scan(&rootUUID); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", merge).Scan(&mergeUUID); err != nil {
+				t.Fatal(err)
+			}
+			value := "not-a-hash"
+			if tc.valid {
+				value = rootUUID
+			}
+			d := &deck.Deck{Type: deck.Control, D: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+				T: []deck.TagCard{{Type: tc.kind, Name: "parent", UUID: mergeUUID, Value: value}}, U: deck.User("test")}
+			data, err := d.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := blob.Store(r.DB(), data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manifest.Crosslink(r); err != nil {
+				t.Fatal(err)
+			}
+			before, err := verify.Verify(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, issue := range before.Issues {
+				if issue.Kind == verify.IssuePlinkMissing {
+					t.Fatalf("undamaged parents: %s", issue.Message)
+				}
+			}
+			if _, err := r.DB().Exec("DELETE FROM plink WHERE cid=?", merge); err != nil {
+				t.Fatal(err)
+			}
+			after, err := verify.Verify(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, issue := range after.Issues {
+				found = found || issue.Kind == verify.IssuePlinkMissing
+			}
+			if !found {
+				t.Fatal("parent tag hid missing parent links")
+			}
+		})
+	}
 }
 
 func TestRebuild_BuggifyResilience(t *testing.T) {

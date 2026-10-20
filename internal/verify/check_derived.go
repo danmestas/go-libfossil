@@ -1,8 +1,9 @@
 package verify
 
 import (
+	"database/sql"
 	"fmt"
-	"strings"
+	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -45,6 +46,10 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache, detached 
 		panic("verify: checkCheckins: nil report")
 	}
 
+	history, err := parentHistory(r.DB(), cache)
+	if err != nil {
+		return err
+	}
 	rows, err := r.DB().Query("SELECT rid, uuid FROM blob WHERE size >= 0")
 	if err != nil {
 		return fmt.Errorf("checkCheckins query blobs: %w", err)
@@ -58,7 +63,7 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache, detached 
 			return fmt.Errorf("checkCheckins scan: %w", err)
 		}
 
-		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache, detached); err != nil {
+		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache, detached, history); err != nil {
 			return err
 		}
 	}
@@ -69,7 +74,7 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache, detached 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
 func checkOneCheckin(
 	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache,
-	detached map[libfossil.FslID]struct{},
+	detached map[libfossil.FslID]struct{}, history map[string][][]string,
 ) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
@@ -102,22 +107,136 @@ func checkOneCheckin(
 		return err
 	}
 
-	// Check plink table. A parent tag replaces the rows the P-card gave
-	// (fossil's manifest_reparent_checkin), and cancelling it re-derives
-	// nothing, so a check-in carrying one may lack any of them.
-	var reparented int
-	err = r.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
-	                        WHERE tag.tagname='parent' AND tagxref.rid=?`, rid).Scan(&reparented)
+	parents, err := checkinParents(r.DB(), rid, uuid, d.P, history)
 	if err != nil {
-		return fmt.Errorf("checkOneCheckin parent tag: %w", err)
+		return err
 	}
-	for _, parentUUID := range d.P {
-		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, reparented > 0, detached); err != nil {
+	if !slices.Equal(parents, d.P) {
+		for _, parentUUID := range d.P {
+			if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, true, detached); err != nil {
+				return err
+			}
+		}
+	}
+	for _, parentUUID := range parents {
+		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, false, detached); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// parentHashes follows manifest_reparent_checkin's reparent_abort: a nonempty
+// list of full hashes, with exactly one separator between hashes. Malformed
+// values leave the previous ancestry untouched.
+func parentHashes(value string) []string {
+	var parents []string
+	for len(value) > 0 {
+		i := 0
+		for i < len(value) && value[i] > ' ' {
+			i++
+		}
+		hash := value[:i]
+		if len(hash) != 40 && len(hash) != 64 {
+			return nil
+		}
+		for _, c := range hash {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				return nil
+			}
+		}
+		parents = append(parents, hash)
+		if i == len(value) {
+			break
+		}
+		value = value[i+1:]
+	}
+	return parents
+}
+
+// parentHistory retains the possible earlier singleton overrides. A cancelled
+// or malformed parent tag cannot tell us which earlier override had reached a
+// crosslink-end pass, but the artifacts bound the possible retained ancestry.
+func parentHistory(q db.Querier, cache *content.Cache) (map[string][][]string, error) {
+	var count int
+	if err := q.QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
+	 WHERE tagname='parent'`).Scan(&count); err != nil {
+		return nil, fmt.Errorf("parentHistory tags: %w", err)
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	rows, err := q.Query("SELECT rid, uuid FROM blob WHERE size >= 0")
+	if err != nil {
+		return nil, fmt.Errorf("parentHistory blobs: %w", err)
+	}
+	defer rows.Close()
+	history := make(map[string][][]string)
+	for rows.Next() {
+		var rid libfossil.FslID
+		var uuid string
+		if err := rows.Scan(&rid, &uuid); err != nil {
+			return nil, fmt.Errorf("parentHistory scan: %w", err)
+		}
+		data, err := cache.Expand(q, rid)
+		if err != nil {
+			continue
+		}
+		d, err := deck.Parse(data)
+		if err != nil {
+			continue
+		}
+		for _, tag := range d.T {
+			if tag.Name != "parent" || tag.Type != deck.TagSingleton {
+				continue
+			}
+			parents := parentHashes(tag.Value)
+			if len(parents) == 0 {
+				continue
+			}
+			target := tag.UUID
+			if target == "*" {
+				target = uuid
+			}
+			history[target] = append(history[target], parents)
+		}
+	}
+	return history, rows.Err()
+}
+
+func checkinParents(q db.Querier, rid libfossil.FslID, uuid string, original []string, history map[string][][]string) ([]string, error) {
+	var tagtype int
+	var value sql.NullString
+	err := q.QueryRow(`SELECT tagtype, value FROM tagxref JOIN tag USING(tagid)
+	 WHERE tagname='parent' AND rid=?`, rid).Scan(&tagtype, &value)
+	if err == sql.ErrNoRows {
+		return original, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("checkinParents tag: %w", err)
+	}
+	if parents := parentHashes(value.String); tagtype == 1 && len(parents) > 0 {
+		return parents, nil
+	}
+	// A cancel, propagating tag, or malformed singleton does not rewrite
+	// ancestry. Accept a retained override only if every parent link survives.
+	for _, parents := range history[uuid] {
+		complete := true
+		for _, parent := range parents {
+			var count int
+			err := q.QueryRow(`SELECT count(*) FROM plink JOIN blob ON blob.rid=plink.pid
+			 WHERE cid=? AND uuid=?`, rid, parent).Scan(&count)
+			if err != nil {
+				return nil, fmt.Errorf("checkinParents retained link: %w", err)
+			}
+			complete = complete && count > 0
+		}
+		if complete {
+			return parents, nil
+		}
+	}
+	return original, nil
 }
 
 // collectReparents adds to detached each parent that a parent tag in d names
@@ -146,7 +265,7 @@ func collectReparents(q db.Querier, d *deck.Deck, uuid string, detached map[libf
 		if !ok {
 			continue
 		}
-		for _, parent := range strings.Fields(t.Value) {
+		for _, parent := range parentHashes(t.Value) {
 			pid, ok := blob.Exists(q, parent)
 			if !ok {
 				continue

@@ -1,12 +1,14 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -50,16 +52,36 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 		panic("verify: checkCheckins: nil report")
 	}
 
+	return r.WithBoundTx(func(bound *repo.Repo) error {
+		return checkCheckinsSnapshot(bound, report)
+	})
+}
+
+type checkinVerification struct {
+	cache *content.Cache
+	cone  *cone.Cone
+	refs  *content.ConeReferences
+}
+
+func checkCheckinsSnapshot(r *repo.Repo, report *Report) error {
+	c, err := content.StoreCone(r.DB())
+	if err != nil {
+		return err
+	}
+	refs, err := content.LoadConeReferences(context.Background(), r.DB(), c)
+	if err != nil {
+		return err
+	}
 	found := &Report{}
 	// ExpandAll hands each blob over once; the cache serves only treeGap's
 	// baseline and sub-manifest reads, which many check-ins share.
-	cache := content.NewCache(treeGapCacheBytes)
-	err := content.ExpandAll(r.DB(), func(rid libfossil.FslID, uuid string, data []byte, err error) error {
+	state := &checkinVerification{cache: content.NewCache(treeGapCacheBytes), cone: c, refs: refs}
+	err = content.ExpandAll(r.DB(), func(rid libfossil.FslID, uuid string, data []byte, err error) error {
 		if err != nil {
 			// Not expandable - skip silently (corrupt, reported by checkBlobs)
 			return nil
 		}
-		return checkOneCheckin(r, found, rid, uuid, data, cache)
+		return checkOneCheckin(r, found, rid, uuid, data, state)
 	})
 	if err != nil {
 		return fmt.Errorf("checkCheckins: %w", err)
@@ -79,7 +101,7 @@ func checkCheckins(r *repo.Repo, report *Report) error {
 // data is the blob's expanded content.
 func checkOneCheckin(
 	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, data []byte,
-	cache *content.Cache,
+	state *checkinVerification,
 ) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
@@ -98,21 +120,22 @@ func checkOneCheckin(
 		return nil
 	}
 
-	// A check-in whose tree cannot yet be walked is deferred, not damaged: it
-	// has no derived rows by design until the sub-manifest it waits on
-	// arrives (draft-fossil-submanifests-00 §5.2, §7.3). Report the gap as
-	// what it is.
-	if missing, gap := treeGap(r, d, rid, cache); gap {
-		report.MissingRefs++
-		report.addIssue(Issue{
-			Kind:  IssueMissingReference,
-			RID:   rid,
-			UUID:  uuid,
-			Table: "blob",
-			Message: fmt.Sprintf("checkin rid=%d uuid=%s waits on sub-manifest %s",
-				rid, uuid, missing),
-		})
-		return nil
+	// Elided nodes can leave file derivation incomplete without damaging a
+	// cone-complete store. Validate raw references and the covered effective
+	// view, then still verify its spine metadata below.
+	if missing, gap := treeGap(r, d, rid, state.cache); gap {
+		ready, err := manifest.SparseCheckinReady(context.Background(), r.DB(), state.cache, d, state.cone, state.refs)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			report.MissingRefs++
+			report.addIssue(Issue{
+				Kind: IssueMissingReference, RID: rid, UUID: uuid, Table: "blob",
+				Message: fmt.Sprintf("checkin rid=%d uuid=%s waits on sub-manifest %s", rid, uuid, missing),
+			})
+			return nil
+		}
 	}
 
 	// Check event table

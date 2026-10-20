@@ -1,12 +1,11 @@
 # Requirements of draft-fossil-sparse-cone-00, written from the draft text.
-# Implemented: the cone specification (§3) and the sparse worktree (§4),
-# Appendix A steps 1 and 2, and the sparse store's elided-phantom
-# classification and verification semantics (§5), step 3. The sync extension
-# (§6) and narrow-then-compact are later phases; their rows carry a scope
-# note naming the Appendix A step that covers them, and no case yet. Step 3's
-# cases make a store sparse the way a cone-scoped clone would leave it, since
-# nothing before step 4 fills one. §6.2's last sentence, a recipient's
-# classification of a delta's base, is step 3's classifier and is covered.
+# Cases cover cone specification, sparse worktrees, store classification,
+# internal synchronization and explicit compaction. Scope notes preserve
+# incomplete behavior: absent-subtree writing, partial crosslinking, bounded
+# request preprocessing, conservative provenance retention and public wiring.
+# Store cases include deliberately elided fixtures; sync cases exercise real
+# loopback wire exchanges, and compaction cases exercise rebuild and healing.
+# A passing internal case does not remove an explicitly recorded scope gap.
 # Skipped, with reasons: 1 (introduction), 4.5 and 7's last two paragraphs
 # (informative), 6.5 (a statement of non-guarantee with no behaviour), 9
 # (IANA). Where the draft is silent the
@@ -60,20 +59,20 @@ SC-5.2-1	5.2	Transit phantoms, shunned artifacts and elided phantoms are disting
 SC-5.2-2	5.2	Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.
 SC-5.2-3	5.2	Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.
 SC-5.3-1	5.3	A commit over elided subtrees references them by hash without possession, and pushing such a check-in is sound.	commit and push with absent F payloads are tested; unavailable S subtrees still prevent commits, with canonical reconstruction blocked by the draft conflict tracked in danmestas/zit#253
-SC-5.3-2	5.3	A server should refuse to be a clone origin for cones it does not cover, unless configured as a partial mirror, with one error card and no content.	not yet implemented: the sync extension, Appendix A step 4
-SC-5.3-3	5.3	A client treats a clone-round reply that carries an error card and no clone progress as fatal.	not yet implemented: the sync extension, Appendix A step 4
+SC-5.3-2	5.3	A server should refuse to be a clone origin for cones it does not cover, unless configured as a partial mirror, with one error card and no content.	internal handler refusal and override are tested; public partial-mirror configuration remains pending
+SC-5.3-3	5.3	A client treats a clone-round reply that carries an error card and no clone progress as fatal.
 SC-5.4-1	5.4	Widening reclassifies the newly covered elided phantoms as transit phantoms and fetches them.
 SC-5.4-2	5.4	Narrowing does not by itself delete held content; only explicit compaction deletes, dropping artifacts both out-of-cone and unreferenced by any spine, through the store-rewrite machinery and its locks.	internal file and limited interior-node compaction are tested; provenance-bearing leaves and nonterminal paths remain held, and the public entry point is pending
 SC-5.5-1	5.5	The flat prefix of a hybrid history holds its manifests densely; its content blobs may be elided by F-card classification.
-SC-6.1-1	6.1	A cone-scoped pull or clone adds one pragma cone card per inclusion member, encoded exactly as an F-card filename, and one pragma cone-not card per exclusion.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.1-2	6.1	For check-in content a cone-scoped request asks for spines, in-cone sub-manifest nodes and in-cone blobs, and neither expects nor requests the remainder.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.2-1	6.2	A cone-aware server walks each check-in's tree descending only nodes whose key range intersects the cone, emits the spine, the in-cone nodes and blobs, and bounds the per-round walk as a dense clone bounds its batches.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.2-2	6.2	A cone-aware server does not serve a delta whose base is outside the keep set it computed for the request; it serves that artifact in full form.	not yet implemented: the sync extension, Appendix A step 4
+SC-6.1-1	6.1	A cone-scoped pull or clone adds one pragma cone card per inclusion member, encoded exactly as an F-card filename, and one pragma cone-not card per exclusion.
+SC-6.1-2	6.1	For check-in content a cone-scoped request asks for spines, in-cone sub-manifest nodes and in-cone blobs, and neither expects nor requests the remainder.	aware clone and pull are tested; provenance-bearing outside nodes are conservatively retained rather than fully elided
+SC-6.2-1	6.2	A cone-aware server walks each check-in's tree descending only nodes whose key range intersects the cone, emits the spine, the in-cone nodes and blobs, and bounds the per-round walk as a dense clone bounds its batches.	current raw provenance discovery scans the whole held store per request; bounded selective preprocessing is unresolved
+SC-6.2-2	6.2	A cone-aware server does not serve a delta whose base is outside the keep set it computed for the request; it serves that artifact in full form.
 SC-6.2-3	6.2	A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.
-SC-6.3-1	6.3	Against a cone-ignorant server the requester filters locally: it stores in-cone artifacts, records elided phantoms for the remainder and reports the counts.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.3-2	6.3	A cone-aware server should advertise the capability.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.	not yet implemented: demand fetch, Appendix A step 4
-SC-6.4-2	6.4	With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.	not yet implemented: demand fetch, Appendix A step 4
+SC-6.3-1	6.3	Against a cone-ignorant server the requester filters locally: it stores in-cone artifacts, records elided phantoms for the remainder and reports the counts.	ignored-pragma clone and pull filtering and counts are tested; provenance-bearing outside nodes remain held
+SC-6.3-2	6.3	A cone-aware server should advertise the capability.	capability advertisement is not implemented
+SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.	internal explicit-peer policy fetch is tested; public operations and saved-peer integration remain pending
+SC-6.4-2	6.4	With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.	internal explicit-peer refusal and cancellation are tested; public operations and saved-peer integration remain pending
 SC-7-1	7	Derived caches are cone-independent: their keys do not incorporate the cone.
-SC-8-1	8	The member count and member length of a cone are bounded with the same limits applied to F-card filenames.	the cone's members are bounded (255 members, 4096 bytes each, zit's bounds); the cone card itself is Appendix A step 4
-SC-8-2	8	The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.	not yet implemented: the sync extension, Appendix A step 4
+SC-8-1	8	The member count and member length of a cone are bounded with the same limits applied to F-card filenames.
+SC-8-2	8	The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.	depth and visit guards exist internally; direct wire conformance coverage remains pending and whole-store preprocessing is not per-round bounded

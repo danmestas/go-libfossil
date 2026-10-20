@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -40,6 +42,9 @@ func TestSparseTreeMetadataCompletesAfterAllNodesArrive(t *testing.T) {
 				t.Fatal(err)
 			}
 			assertSparseRows(t, f, int64(rid), 1, 0, 1)
+			if _, err := FileHistory(f.r, FileHistoryOpts{Path: "src/a"}); err == nil || errors.Is(err, sql.ErrNoRows) {
+				t.Fatalf("partial file history = %v; want incomplete derivation, not absence", err)
+			}
 			if err := f.r.WithTx(func(tx *db.Tx) error {
 				replayed, err := parsedArtifactReplayed(tx, rid, root)
 				if replayed {
@@ -66,6 +71,9 @@ func TestSparseTreeMetadataCompletesAfterAllNodesArrive(t *testing.T) {
 				}
 			}
 			assertSparseRows(t, f, int64(rid), 1, 3, 0)
+			if history, err := FileHistory(f.r, FileHistoryOpts{Path: "src/a"}); err != nil || len(history) != 1 {
+				t.Fatalf("completed file history = %+v, %v", history, err)
+			}
 			if _, err := Crosslink(f.r); err != nil {
 				t.Fatal(err)
 			}

@@ -27,13 +27,19 @@ func TestCompleteChildWaitsForPartialTreeParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	rid, _ := content.AvailableByUUID(f.r.DB(), child)
-	for _, query := range []string{"SELECT count(*) FROM event WHERE objid=?", "SELECT count(*) FROM mlink WHERE mid=?"} {
+	for _, check := range []struct {
+		query string
+		want  int
+	}{
+		{"SELECT count(*) FROM event WHERE objid=?", 1},
+		{"SELECT count(*) FROM mlink WHERE mid=?", 0},
+	} {
 		var got int
-		if err := f.r.DB().QueryRow(query, rid).Scan(&got); err != nil {
+		if err := f.r.DB().QueryRow(check.query, rid).Scan(&got); err != nil {
 			t.Fatal(err)
 		}
-		if got != 0 {
-			t.Fatalf("child with incomplete parent: %s = %d, want 0", query, got)
+		if got != check.want {
+			t.Fatalf("child with incomplete parent: %s = %d, want %d", check.query, got, check.want)
 		}
 	}
 	var waiting int

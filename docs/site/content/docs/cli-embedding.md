@@ -3,16 +3,21 @@ title: Embedding the CLI
 weight: 65
 ---
 
-An application that keeps version history in a Fossil repository can run the `libfossil` binary as a child process: no checkout, no shadow working tree. Four commands make up the interface; their output and exit statuses are stable.
+An application that keeps version history in a Fossil repository can run the `libfossil` binary as a child process: no checkout, no shadow working tree. `repo new` and four more commands make up the interface; their output and exit statuses are stable.
 
 ## Commands
 
 ```
+libfossil -R repo.fossil repo new      [--user U]
 libfossil -R repo.fossil repo snapshot -m MSG [--user U] --path notes/x.md [--stdin] [--json]
 libfossil -R repo.fossil repo log      --path notes/x.md [--json] [-n N]
 libfossil -R repo.fossil repo cat      --at VERSION notes/x.md
 libfossil -R repo.fossil repo diff     [--json] A B [PATH]
 ```
+
+**new** creates the repository file, empty and with no check-ins. The path is the `-R` path, or PATH as an argument (`repo new PATH`); when both are given PATH is the file created. With neither it exits 1. `--user U` names the admin user, which gets the setup capability; the default is the process's login name, as `fossil new` uses. The hash policy is `sha3`, fossil's default for a new repository, and the project code is generated. There is no flag for either. On success it prints `created repository: PATH` and a newline to stdout, exits 0, and leaves no file but the repository. Stock fossil 2.28 opens the result, and `fossil info`, `fossil sql` and `fossil hash-policy` read it.
+
+`new` never overwrites. A file, an empty file or a directory already at PATH is refused with exit 1 and `repository already exists: PATH` on stderr, and what was there is untouched; `fossil new` also refuses an existing file, with exit 1. A PATH whose parent directory does not exist is refused with exit 1 and `parent directory does not exist: DIR` on stderr, and nothing is created; `fossil new` fails there with exit 1 as well, with a SQLite error. Create the parent first.
 
 **snapshot** commits one file's bytes onto trunk and carries every other file forward. The bytes come from stdin with `--stdin`, otherwise from `--path` read on disk relative to the working directory. `--path` must be a name fossil accepts for a new file: a clean relative path (`notes/x.md`; not `/x`, `../x`, `./x`, `a//b`, `a/`, `a\b`) in valid UTF-8, with no control character (a byte below 0x20), and not one of the names fossil reserves for its own files (`_FOSSIL_` or `.fslckout`, in any case, with or without a `-wal`, `-shm` or `-journal` suffix, at the top or as the last element of the path). A rejected path exits 1 and says why. When the bytes equal the file at the trunk tip, nothing is committed and the existing tip is reported. The first snapshot into an empty repository becomes the root check-in. A repository that has check-ins but none on its main branch (`trunk`, or the branch the `main-branch` setting names) is refused with exit 1, rather than given a second, unrelated root. The check-in time is the current time.
 

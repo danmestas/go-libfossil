@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo new` accepts the repository path as `-R`, as the other embedding
+  commands do (it had required the argument and exited 80), and a path whose
+  parent directory does not exist is refused with exit 1 and a message naming
+  the directory, where it had failed with a SQLite "out of memory" error. The
+  behaviour is documented in `cli-embedding.md`. Tracked in #451.
 - `repo log --path`, `repo cat --at` and `repo diff` match a PATH as fossil
   does: they drop a leading `./`, a trailing `/` and doubled or `/./`
   separators, and compare names with the repository's `case-sensitive`

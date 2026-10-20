@@ -29,7 +29,12 @@ func clientCloneCases() []syncClientCase {
 			if err != nil {
 				return err
 			}
-			got := lines(req.cards)
+			// pragma send-submanifests, which go-libfossil sends after
+			// client-version in every request, is an extension of
+			// draft-fossil-submanifests-00 §7.2, not of this section.
+			got := slices.DeleteFunc(lines(req.cards), func(l string) bool {
+				return l == "pragma send-submanifests"
+			})
 			if len(got) != 3 || !slices.Contains(got, "clone 3 1") ||
 				index(req.cards, "pragma client-version ") != 0 ||
 				!nonceComment.MatchString(got[2]) {

@@ -33,7 +33,10 @@ import (
 //   - a file the target adds over an untracked file is written after the
 //     untracked one is copied to NAME-original;
 //   - a binary file edited locally and changed by the target is not merged:
-//     the working copy is saved as NAME-original and the target written.
+//     the working copy is saved as NAME-original and the target written;
+//   - a symlink, on either side, edited locally and changed by the target is
+//     not merged either: nothing is written and it is listed in
+//     UpdateResult.Unmerged.
 //
 // Renames between the two versions are followed as fossil follows them
 // (path.NameChanges): a file with local changes that the target renamed is
@@ -304,17 +307,23 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 	steps := make([]updateStep, 0, len(rows)+len(files))
 	matched := make(map[string]bool, len(rows))
 	for i := range rows {
+		// A file outside the cone is decided before renames are followed:
+		// never on disk, it would read as missing, so changed, and follow
+		// the target's rename. It is matched by name, so a rename moves it
+		// in the record, or onto disk when the new name is in the cone.
+		if row := &rows[i]; !c.covers(row.Pathname) {
+			matched[row.Pathname] = true
+			steps = append(steps, outOfConeStep(row.Pathname, row, targets[row.Pathname]))
+			continue
+		}
 		step, err := c.planRow(&rows[i], targets, renames)
 		if err != nil {
 			return nil, err
 		}
 		if !c.covers(step.tname) {
-			if step.tname != step.name {
-				// Local edits would follow the target's rename out of
-				// the cone, where nothing can carry them.
-				return nil, c.outsideCone("Update", []string{step.tname})
-			}
-			step = outOfConeStep(step.name, step.row, step.target)
+			// Local edits would follow the target's rename out of the
+			// cone, where nothing can carry them.
+			return nil, c.outsideCone("Update", []string{step.tname})
 		}
 		matched[step.tname] = true
 		steps = append(steps, step)
@@ -453,6 +462,8 @@ func recordUpdateChange(res *UpdateResult, s updateStep, change UpdateChange) st
 	case UpdateConflictBinary:
 		res.FilesWritten = append(res.FilesWritten, s.tname)
 		res.Unmerged = append(res.Unmerged, s.tname)
+	case UpdateConflictSymlink:
+		res.Unmerged = append(res.Unmerged, s.tname)
 	case UpdateConflictRm, UpdateConflictAdded:
 		res.Unmerged = append(res.Unmerged, s.name)
 		return s.name
@@ -561,6 +572,16 @@ func (c *Checkout) mergeUpdate(
 ) (UpdateChange, error) {
 	if s.row == nil || s.row.RID <= 0 || s.target == nil {
 		panic("checkout.mergeUpdate: merge needs both versions")
+	}
+	// A symlink on either side is not merged: as fossil's update ("Cannot
+	// merge symlink"), it is a conflict and nothing is written -- reading
+	// and writing the working file would go through the link -- though a
+	// rename still drops the old name.
+	if s.row.IsLink > 0 || s.target.link {
+		if dryRun {
+			return UpdateConflictSymlink, nil
+		}
+		return UpdateConflictSymlink, c.removeRenamedFrom(s)
 	}
 	base, err := content.Expand(c.repo.DB(), libfossil.FslID(s.row.RID))
 	if err != nil {

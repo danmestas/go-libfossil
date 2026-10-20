@@ -96,3 +96,82 @@ func TestSparseCheckoutUnderFossil(t *testing.T) {
 		t.Fatalf("the sparse commit lists %d files, want 4", len(files))
 	}
 }
+
+// Renames across a sparse checkout's cone, with fossil's dense update as the
+// oracle: after go-libfossil updates a sparse checkout, the files its cone
+// covers are the ones fossil's update leaves, and none other is on disk.
+// fossil's mv records each rename: one outside the cone, one into it, and an
+// unedited one out of it.
+func TestSparseUpdateFollowsRenamesLikeFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	_, repoPath, ck := newFossilCheckout(t)
+	for name, body := range map[string]string{
+		"src/s.txt": "s\n", "src/out.txt": "out\n", "tools/t.txt": "t\n", "docs/d.txt": "d\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(ck, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(ck, name), body)
+	}
+	fossilRun(t, bin, ck, "add", "src", "tools", "docs")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "A")
+	fossilRun(t, bin, ck, "mv", "--hard", "tools/t.txt", "tools/t2.txt")
+	fossilRun(t, bin, ck, "mv", "--hard", "docs/d.txt", "src/d.txt")
+	fossilRun(t, bin, ck, "mv", "--hard", "src/out.txt", "tools/out.txt")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "B")
+	fossilRun(t, bin, ck, "close")
+	hashOf := func(comment string) string {
+		out := fossilRun(t, bin, ck, "sql", "-R", repoPath,
+			"SELECT uuid FROM blob JOIN event ON objid=rid WHERE comment='"+comment+"'")
+		return strings.Trim(strings.TrimSpace(out), "'")
+	}
+	a, b := hashOf("A"), hashOf("B")
+
+	fossilDir := t.TempDir()
+	fossilRun(t, bin, fossilDir, "open", repoPath, a)
+	fossilRun(t, bin, fossilDir, "update", b)
+
+	r, err := libfossil.Open(repoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	ridOf := func(uuid string) int64 {
+		rid, err := r.ResolveVersion(uuid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rid
+	}
+	cone, err := libfossil.NewCone([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goDir := filepath.Join(t.TempDir(), "sparse")
+	co, err := r.CreateCheckout(goDir, libfossil.CheckoutCreateOpts{Cone: cone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	if err := co.Extract(ridOf(a), libfossil.ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Update(libfossil.UpdateOpts{TargetRID: ridOf(b)}); err != nil {
+		t.Fatalf("Update across renames: %v", err)
+	}
+	want := map[string]string{}
+	for name, body := range treeFiles(t, fossilDir) {
+		if cone.Covers(filepath.ToSlash(name)) {
+			want[name] = body
+		}
+	}
+	got := treeFiles(t, goDir)
+	if len(got) != len(want) {
+		t.Fatalf("sparse checkout holds %v, fossil's covered files are %v", got, want)
+	}
+	for name, body := range want {
+		if got[name] != body {
+			t.Errorf("%s = %q, fossil %q", name, got[name], body)
+		}
+	}
+}

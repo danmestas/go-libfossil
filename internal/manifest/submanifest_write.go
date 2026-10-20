@@ -34,14 +34,14 @@ const (
 )
 
 // SubmanifestEnableWarning is what an operator is told on enabling emission
-// (§8.1, §7.2, §8.2): the consequences that cannot be undone. The wording is
-// zit's, so both writers warn alike.
+// (§8.1, §7.2): the consequences that cannot be undone, and §8.1's rule that
+// follows from them. The wording is zit's, so both writers warn alike.
 const SubmanifestEnableWarning = "enabling sub-manifests makes this repository write tree manifests; " +
-	"from the first one, peers below Fossil 2.29 will be refused every S-bearing artifact rather " +
+	"from the first one, peers that do not announce sub-manifest support will be refused every S-bearing artifact rather " +
 	"than receive a converted or downgraded one, and disabling the setting later cannot retire " +
-	"the artifacts already written. While this specification is provisional a repository " +
-	"containing an S-bearing artifact must not be synchronized with any repository that is not " +
-	"itself a disposable test fixture."
+	"the artifacts already written. A repository that a peer unable to read sub-manifests " +
+	"serves must not have the setting enabled, because that peer's view of the history " +
+	"stops at the first tree."
 
 // ParseSettingBool reads a boolean setting as zit and fossil write one: on,
 // off, 1 or 0, and fossil's yes, no, true and false.
@@ -139,7 +139,9 @@ var errNoSelection = errors.New("no partition parameter can be selected")
 
 // EnableSubmanifests is §8.1's local request to turn emission on. A valid
 // pin takes precedence: an explicit k that differs from it is refused, since
-// changing it is a re-tune. With no valid pin, an explicit k (1 to 12) is
+// changing it is a re-tune. A stored k outside 1 to 12 is no valid pin and
+// not absent either: an explicit k replaces it, and a request without one is
+// refused. With no stored k, an explicit k (1 to 12) is
 // pinned, and k = 0 asks for automatic selection over current, the
 // check-in the next commit will descend from (0 for none). Selection is
 // zit's: the §6.3 snapshot over current, refined by a replay of recent
@@ -171,7 +173,7 @@ func enableWith(r *repo.Repo, k int, selection func() (int, error)) (pinned int,
 			return err
 		}
 		pinned = proposed
-		if now.k != before.k {
+		if now.rawK != before.rawK {
 			pinned, err = enableDecision(now, k, func() (int, error) {
 				return 0, errors.New("the pin changed while selecting; retry")
 			})
@@ -203,6 +205,9 @@ func enableDecision(s submanifestSettings, k int, selection func() (int, error))
 		return 0, fmt.Errorf("submanifest-k is pinned to %d; changing it is a re-tune", s.k)
 	case s.k != 0:
 		return s.k, nil
+	case k == 0 && s.rawK != "":
+		return 0, fmt.Errorf("submanifest-k is stored as %q, outside %d..%d; enable with an explicit k",
+			s.rawK, MinPartitionK, MaxPartitionK)
 	case k != 0:
 		if !validPartitionK(k) {
 			return 0, fmt.Errorf("submanifest-k %d is outside %d..%d", k, MinPartitionK, MaxPartitionK)
@@ -281,8 +286,8 @@ func loadCheckinDeck(q db.Querier, rid libfossil.FslID) (*deck.Deck, error) {
 // SubmanifestDisableNote is zit's note on disabling emission in a
 // repository that already holds trees.
 const SubmanifestDisableNote = "note: this repository already holds S-bearing artifacts. Disabling stops new\n" +
-	"tree manifests; it cannot retire the existing ones, and peers below Fossil\n" +
-	"2.29 are still refused every one of them."
+	"tree manifests; it cannot retire the existing ones, and peers that do not\n" +
+	"announce sub-manifest support are still refused every one of them."
 
 // DisableSubmanifests turns emission off (§8.1): later commits are flat, and
 // the pin stays, so re-enabling is not a re-tune. Existing trees cannot be

@@ -5,6 +5,7 @@ package checkout
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -453,5 +454,73 @@ func TestSetConeMaterializesSymlink(t *testing.T) {
 	}
 	if got := statusOf(t, co); len(got) != 0 {
 		t.Fatalf("status = %v, want nothing", got)
+	}
+}
+
+// A symlink repointed locally that the target renames and repoints is not
+// merged: as fossil's update ("Cannot merge symlink"), it is listed in
+// Unmerged, nothing is written through it, and the rename still deletes the
+// old name. A dry run touches nothing.
+func TestUpdateDoesNotMergeRenamedSymlink(t *testing.T) {
+	r := permRepo(t)
+	if err := r.SetConfig("allow-symlinks", "on"); err != nil {
+		t.Fatal(err)
+	}
+	files := func(link manifest.File) []manifest.File {
+		return []manifest.File{
+			{Name: "p.txt", Content: []byte("p\n")},
+			{Name: "other.txt", Content: []byte("other\n")},
+			link,
+		}
+	}
+	v1, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files:   files(manifest.File{Name: "link", Content: []byte("p.txt"), Perm: "l"}),
+		Comment: "A", User: "test", Time: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v2, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: files(manifest.File{
+			Name: "link2", OldName: "link", Content: []byte("other.txt"), Perm: "l",
+		}),
+		Comment: "B", User: "test", Parent: v1,
+		Time: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	co, _ := createdCheckout(t, r)
+	if err := co.Extract(v1, ExtractOpts{Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(co.dir, "link")
+	if err := os.Remove(linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other.txt", linkPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dryRun := range []bool{true, false} {
+		res, err := co.Update(UpdateOpts{TargetRID: v2, DryRun: dryRun})
+		if err != nil {
+			t.Fatalf("dry run %v: %v", dryRun, err)
+		}
+		if !slices.Equal(res.Unmerged, []string{"link2"}) || len(res.Conflicted) != 0 ||
+			slices.Contains(res.FilesWritten, "link2") {
+			t.Fatalf("dry run %v: Unmerged = %v, Conflicted = %v, FilesWritten = %v; want link2 unmerged only",
+				dryRun, res.Unmerged, res.Conflicted, res.FilesWritten)
+		}
+		_, lerr := os.Lstat(linkPath)
+		if dryRun != (lerr == nil) {
+			t.Fatalf("dry run %v: old name link: Lstat = %v", dryRun, lerr)
+		}
+	}
+	if body, err := os.ReadFile(filepath.Join(co.dir, "other.txt")); err != nil || string(body) != "other\n" {
+		t.Fatalf("other.txt = %q, %v; written through the link", body, err)
+	}
+	if _, err := os.Lstat(filepath.Join(co.dir, "link2")); !os.IsNotExist(err) {
+		t.Fatalf("link2 written: Lstat = %v", err)
 	}
 }

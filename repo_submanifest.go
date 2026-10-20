@@ -12,8 +12,10 @@ import (
 // (draft-fossil-submanifests-00 §8.1): from the next commit, check-ins carry
 // their file sets as sub-manifest trees. k is the partition parameter, 1 to
 // 12, or 0 to select one. A valid pinned k is kept, and an explicit k that
-// differs from it is refused: changing it is RetuneSubmanifests. With no
-// valid pin, an explicit k is pinned, or one is selected as zit selects it:
+// differs from it is refused: changing it is RetuneSubmanifests. A stored k
+// outside 1..12 is no valid pin: an explicit k replaces it, and k = 0 is
+// refused, naming the stored value. With no stored k, an explicit k is
+// pinned, or one is selected as zit selects it:
 // the §6.3 cost over one check-in's file set, refined by replaying recent
 // history. The check-in analyzed is the current trunk (CurrentTrunk, the
 // main-branch tip, which the next commit most plausibly descends from);
@@ -21,8 +23,9 @@ import (
 // time, the highest rid breaking a tie. A request that cannot be met -- k
 // outside 1..12, no check-in at all to select from, or a file set no k
 // partitions -- changes neither setting. It returns the pinned k and the
-// warning the operator must be shown: peers older than Fossil 2.29 are
-// refused trees, and trees cannot be retired.
+// warning the operator must be shown: peers that do not announce
+// sub-manifest support, every fossil among them, are refused trees, and
+// trees cannot be retired.
 func (r *Repo) EnableSubmanifests(k int) (pinned int, warning string, err error) {
 	current, err := r.CurrentTrunk()
 	if errors.Is(err, ErrVersionNotFound) {
@@ -54,8 +57,8 @@ func (r *Repo) RetuneSubmanifests(k int) error {
 // DisableSubmanifests turns tree manifest emission off: later commits are
 // flat, and the pinned k is kept for a later EnableSubmanifests. Existing
 // trees remain -- artifact names are immutable, so they cannot be retired --
-// and keep being served, though peers older than Fossil 2.29 are still
-// refused them. Unlike the CLI's disable, it returns no note saying so; an
+// and keep being served, though peers that do not announce sub-manifest
+// support are still refused them. Unlike the CLI's disable, it returns no note saying so; an
 // embedder that wants to tell its operator must do it itself.
 func (r *Repo) DisableSubmanifests() error {
 	if _, err := manifest.DisableSubmanifests(r.inner); err != nil {

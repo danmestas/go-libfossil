@@ -7,8 +7,9 @@ import (
 )
 
 // The fossil release whose protocol this library speaks (§9.1), and that
-// release's check-in date and time. The version it announces is
-// announcedVersion (submanifest.go), which the date and time accompany.
+// release's check-in date and time, which client-version and server-version
+// announce. Reading sub-manifest trees is announced by pragma
+// send-submanifests, never by the version (submanifests §7.2).
 const (
 	releaseVersion = 22800
 	releaseDate    = "20260315"
@@ -27,7 +28,7 @@ const sha1NameLen = 40
 func versionPragma(name string) *xfer.PragmaCard {
 	return &xfer.PragmaCard{
 		Name:   name,
-		Values: []string{strconv.Itoa(announcedVersion), releaseDate, releaseTime},
+		Values: []string{strconv.Itoa(releaseVersion), releaseDate, releaseTime},
 	}
 }
 

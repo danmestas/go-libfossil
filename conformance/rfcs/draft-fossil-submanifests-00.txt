@@ -5,9 +5,9 @@
 Network Working Group                                    D. R. Hipp, Ed.
 Internet-Draft                                                    Fossil
 Intended status: Experimental                                    S. Beal
-Expires: 28 January 2027                                       libfossil
+Expires: 22 April 2027                                         libfossil
                                                               D. Shearer
-                                                            27 July 2026
+                                                         19 October 2026
 
 
  The Fossil Distributed Version Control System: Sub-Manifests and the S
@@ -26,8 +26,9 @@ Abstract
    the interaction with delta manifests and the aggregate checksum,
    synchronization behavior, and deployment gates.  This document
    updates draft-fossil-artifact-format-00.  It derives from a 2010
-   design note; it does not describe deployed behavior, and no
-   implementation exists.
+   design note.  Two implementations, zit and go-libfossil, write and
+   read the format and interoperate; Fossil itself does not implement
+   it.
 
 Status of This Memo
 
@@ -53,9 +54,9 @@ Copyright Notice
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 1]
+Hipp, et al.               Expires 22 April 2027                [Page 1]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    This document is subject to BCP 78 and the IETF Trust's Legal
@@ -103,20 +104,19 @@ Table of Contents
      6.5.  Consequences of the Partition . . . . . . . . . . . . . .  17
    7.  Synchronization and Repository State  . . . . . . . . . . . .  17
      7.1.  Phantom Sub-Manifests . . . . . . . . . . . . . . . . . .  17
-     7.2.  Peer-Version Gate . . . . . . . . . . . . . . . . . . . .  18
+     7.2.  Peer Capability Gate . . . . . . . . . . . . . . . . . .  18
      7.3.  Crosslink and Deferred Processing . . . . . . . . . . . .  18
      7.4.  Enumeration Memoization . . . . . . . . . . . . . . . . .  18
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 2]
+Hipp, et al.               Expires 22 April 2027                [Page 2]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    8.  Deployment  . . . . . . . . . . . . . . . . . . . . . . . . .  19
      8.1.  Emission Gate . . . . . . . . . . . . . . . . . . . . . .  19
-     8.2.  Provisional-Phase Rules . . . . . . . . . . . . . . . . .  20
    9.  Implementation Requirements . . . . . . . . . . . . . . . . .  20
      9.1.  Type Determination Without a Positive Signal  . . . . . .  20
      9.2.  Sweep Termination . . . . . . . . . . . . . . . . . . . .  20
@@ -134,6 +134,7 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
      A.4.  The Interior-Height Merge . . . . . . . . . . . . . . . .  27
      A.5.  Required Vector Set . . . . . . . . . . . . . . . . . . .  29
    Appendix B.  Collected ABNF . . . . . . . . . . . . . . . . . . .  32
+   Appendix C.  Changes in This Revision . . . . . . . . . . . . .  32
    Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  32
 
 1.  Introduction
@@ -165,9 +166,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 3]
+Hipp, et al.               Expires 22 April 2027                [Page 3]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    setting until a permitted re-tune (Section 6.3, Section 6.4); minimum
@@ -180,18 +181,20 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 1.3.  Status of This Specification
 
-   Nothing implements this specification; every S-bearing artifact in
-   existence is a test fixture.  Publication precedes implementation
-   deliberately: the closed card alphabet ([FossilArtifact],
-   Section 4.2.2) makes deployment a flag day -- every reader must
-   understand sub-manifests before any writer may emit one -- so the
-   format must be fixed and covered by conformance vectors before the
-   first writer exists.  Conformance of one implementation establishes
-   nothing about the wider ecosystem (Section 9).  This document folds
-   into a -01 revision of [FossilArtifact] only after implementation
-   experience; until then [FossilArtifact] remains authoritative for
-   deployed behavior, and the provisional-phase rules of Section 8.2
-   apply to every repository containing an S-bearing artifact.
+   Two implementations exist: zit writes and reads sub-manifests and
+   serves them, and go-libfossil writes and reads them.  The two
+   interoperate, and the errata of this document record where each
+   departed from the text and which side changed.  Fossil does not
+   implement this specification.  The closed card alphabet
+   ([FossilArtifact], Section 4.2.2) still makes deployment a flag day
+   -- every reader of a repository must understand sub-manifests before
+   any writer emits one into it -- so the gates of Section 7.2 and
+   Section 8 keep S-bearing artifacts away from readers that do not.
+   Conformance of two implementations establishes nothing about the
+   wider ecosystem (Section 9).  This document is authoritative for
+   sub-manifests and the S card; [FossilArtifact] remains authoritative
+   for everything this document does not amend.  The two fold into one
+   text when [FossilArtifact] is next revised.
 
 1.4.  Relationship to the Fossil Specification Suite
 
@@ -221,9 +224,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 4]
+Hipp, et al.               Expires 22 April 2027                [Page 4]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
       (Section 4.1) carrying a contiguous slice of a check-in's file set
@@ -277,9 +280,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 5]
+Hipp, et al.               Expires 22 April 2027                [Page 5]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    Exactly 22 card letters are defined: A, B, C, D, E, F, G, H, I, J, K,
@@ -333,9 +336,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 6]
+Hipp, et al.               Expires 22 April 2027                [Page 6]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    A sub-manifest reference.  Repeatable; intra-run ordering per
@@ -389,9 +392,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 7]
+Hipp, et al.               Expires 22 April 2027                [Page 7]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 4.3.  Type Determination
@@ -445,9 +448,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 8]
+Hipp, et al.               Expires 22 April 2027                [Page 8]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 5.  Tree Reconstruction
@@ -501,9 +504,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027                [Page 9]
+Hipp, et al.               Expires 22 April 2027                [Page 9]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    5.  If the resolved sub-manifest is interior, its first S card's
@@ -557,9 +560,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 10]
+Hipp, et al.               Expires 22 April 2027               [Page 10]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 5.4.  Composition with Delta Manifests
@@ -613,9 +616,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 11]
+Hipp, et al.               Expires 22 April 2027               [Page 11]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    tooling; a tree needs neither.  This POSIX shell function, run in a
@@ -669,9 +672,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 12]
+Hipp, et al.               Expires 22 April 2027               [Page 12]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 6.2.  Construction
@@ -725,9 +728,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 13]
+Hipp, et al.               Expires 22 April 2027               [Page 13]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
        one S card per member node, in key order, and a Z card, and the
@@ -781,35 +784,30 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 14]
+Hipp, et al.               Expires 22 April 2027               [Page 14]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
-   For configuration exchange under [FossilSync], Section 9.3,
-   submanifest-k, enable-submanifests, and submanifest-auto-retune are
-   members of the scalar /project request group.  During pull, and after
-   clone authorization succeeds in the first request permitted by that
-   section's clone deferral, a client supporting this specification and
-   authenticated with Read permission MUST request reqconfig /project.
-   A client MUST NOT treat project configuration as complete unless Read
-   permission was granted and the group was processed; a newly cloned
-   repository that could not retrieve the group MUST leave enable-
-   submanifests false until an authorized exchange retrieves it.  A
-   supporting server MUST recognize the three names as members of
-   /project.  Pushing any of the three entries is subject to that
-   section's Admin authorization.
+   The three settings travel by configuration exchange under
+   [FossilSync], Section 9.3, as scalar entries: a client requests them
+   with reqconfig /config, the scalar marker of that section, not a
+   named group.  Retrieval is clone-time adoption.  A client supporting
+   this specification requests them in the clone's cleanup round, after
+   clone authorization succeeds, and applies the returned values to the
+   new repository, which has no values of its own.  A pull does not
+   request them; an explicit configuration pull MAY.  A newly cloned
+   repository that could not retrieve the settings MUST leave enable-
+   submanifests false until an authorized exchange retrieves them.  A
+   supporting server answers the request with the three entries when
+   the requester holds Read permission; pushing any of the three is
+   subject to that section's Admin authorization.
 
-   Every receiver of configuration exchange -- a client processing
-   returned entries or a server processing an authorized push -- MUST
-   stage every config /config entry for these three settings through the
-   end of the containing reply or request, validate the resulting three-
-   setting state, and commit the entries atomically; card order MUST NOT
-   affect the result.  An invalid received value, or a resulting state
-   in which enable-submanifests is true without a submanifest-k value
-   from 1 to 12 inclusive, MUST reject all three entries and leave their
-   pre-message values unchanged.  This transaction does not prevent
-   other valid /project entries from being applied.
+   A receiver validates the adopted state: enable-submanifests true
+   requires a submanifest-k from 1 to 12 inclusive, and an adoption that
+   yields any other state, or carries an invalid value, applies none of
+   the three and leaves the repository's values unchanged.  Card order
+   does not affect the result.
 
    Project scope is REQUIRED so writers given the same file entries use
    the same pinned value and maximize content-addressed sharing.
@@ -818,16 +816,19 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
    MUST take k from a successfully stored pinned setting, MUST NOT
    derive a value per commit, and MUST support every value from 1 to 12
    inclusive.  An out-of-range value received through configuration
-   exchange is rejected by the atomic transaction above and does not
-   trigger writer fallback.  If an out-of-range value is nevertheless
+   exchange is rejected at adoption as above and does not trigger
+   writer fallback.  If an out-of-range value is nevertheless
    present in local stored state, a writer MUST fall back to emitting
    flat manifests rather than substitute a parameter of its own, and
    SHOULD report the fallback to the operator.
 
    To select k automatically, the implementation analyzes the canonical
-   file-entry list of the repository's current check-in -- the parent of
-   the next commit -- resolved once at the start of the analysis.  If no
-   current check-in exists, automatic selection has no result.  For
+   file-entry list of the repository's current check-in, resolved once
+   at the start of the analysis.  In a checkout, the current check-in is
+   the one the checkout is on, the parent of the next commit.  With no
+   checkout, it is the newest leaf of the main branch, by the leaf rule
+   of [FossilRepoState].  If the repository has no check-in, automatic
+   selection has no result.  For
    analysis only, it performs the full construction under the sha3 hash
    policy for every k from 1 through 12.  A value is a candidate if and
    only if its height-0 scan of Section 6.2 yields at least two groups.
@@ -837,9 +838,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 15]
+Hipp, et al.               Expires 22 April 2027               [Page 15]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    For each candidate, let L_i be the complete serialized byte length of
@@ -853,6 +854,23 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
    result and an implementation MUST NOT silently substitute a value.
    An operator MAY explicitly supply any value from 1 to 12 inclusive;
    any pinned value yields conforming artifacts.
+
+   The snapshot cost is theory over one file set.  An implementation
+   with history to replay SHOULD refine the snapshot choice against it
+   as follows, so that writers given the same repository pin the same
+   value.  Let k_s be the snapshot choice.  The candidates are k_s - 1,
+   k_s and k_s + 1, those within 1 to 12.  For each candidate, replay
+   the last 200 check-ins of the repository in the order they were
+   persisted, constructing each check-in's tree under the candidate and
+   charging every sub-manifest and root manifest whose bytes differ
+   from the previous check-in's: an unchanged node costs nothing, and a
+   changed node costs the smaller of its full form and its delta against
+   the same-position node of the previous check-in.  The pinned value
+   is the candidate with the lowest total, the lowest k on a tie.  A
+   candidate under which every replayed check-in is flat is not chosen.
+   If fewer than two check-ins can be replayed, the snapshot choice
+   stands.  An implementation MAY replay more history for the
+   operator's information; the pin follows the rule above.
 
    The selection is advisory rather than canonical, and the analyzed
    optimum tracks roughly half the base-2 logarithm of the file count
@@ -893,9 +911,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 16]
+Hipp, et al.               Expires 22 April 2027               [Page 16]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    is distinct and C_candidate < (1 - m) * C_current, where m is a
@@ -949,28 +967,57 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 17]
+Hipp, et al.               Expires 22 April 2027               [Page 17]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    manifest MUST retry the deferred processing of every recorded
    dependent (Section 7.3, Section 9.4).
 
-7.2.  Peer-Version Gate
+7.2.  Peer Capability Gate
 
-   When the remote peer's announced version predates sub-manifest
-   support (a threshold to be fixed at the first release implementing
-   this specification) and a local artifact is of type SUBMANIFEST, or
-   is a manifest carrying an S card, the sender MUST refuse to transmit
-   that artifact, with an explicit error -- never by converting,
-   downgrading, or silently omitting it.  The rule parallels the
-   SHA3-256 peer-version gate of [FossilSync], Section 7.6.
+   A peer that reads sub-manifests (Section 5) announces it with the
+   flag pragma send-submanifests.  A client sends it in every request,
+   in the leading pragma run after client-version; a server sends it in
+   every reply, in the leading pragma run after server-version, on a
+   clone reply as on any other.  The pragma states what the peer can
+   read; it is independent of the enable-submanifests setting
+   (Section 8.1) and of the avoid-submanifests pragma below.  A peer
+   that does not implement this specification never sends it and
+   ignores it when received ([FossilSync], Section 3.5).  The gate does
+   not read the announced version: Fossil does not implement sub-
+   manifests, so every version integer a Fossil release announces
+   denotes a peer that does not read them.
+
+   When the remote peer has not sent send-submanifests and a local
+   artifact is of type SUBMANIFEST, or is a manifest carrying an S card,
+   the sender MUST refuse to transmit that artifact, with an explicit
+   error -- never by converting, downgrading, or silently omitting it.
+   A server decides from the request it is answering; a client decides
+   from the replies it has received in the session, and a client
+   uploads only in answer to a gimme, which arrives in a reply, so the
+   server's announcement precedes the first artifact the client could
+   send.  A peer that has not sent the pragma is treated as one that
+   does not read sub-manifests.  The rule parallels the SHA3-256 peer-
+   version gate of [FossilSync], Section 7.6, in its refusal; it differs
+   in what it reads.
 
    A server whose enable-submanifests setting (Section 8.1) is false
-   sends the pragma avoid-submanifests, in the same reply positions as
-   avoid-delta-manifests; a client receiving it MUST NOT emit S cards in
-   commits created during the session.
+   sends the flag pragma avoid-submanifests in every reply, in the
+   leading pragma run, after server-version when that is emitted, on a
+   clone reply as on any other.  A sync session is one exchange between
+   a client and a server, from its first request to its last reply.  A
+   client that receives the pragma MUST NOT emit S cards in a commit it
+   creates during that session.  A commit created outside a session is
+   governed by the client's own enable-submanifests setting alone
+   (Section 8.1); an implementation that commits first and pushes
+   afterwards therefore never creates a commit the pragma binds, and the
+   pragma informs it that the server's operator has not enabled emission
+   there.  The pragma does not gate receipt: a server stores an S-
+   bearing artifact pushed to it whatever its setting, as Section 8.1
+   says of existing artifacts.  A peer that does not implement this
+   specification ignores the pragma ([FossilSync], Section 3.5).
 
 7.3.  Crosslink and Deferred Processing
 
@@ -1005,9 +1052,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 18]
+Hipp, et al.               Expires 22 April 2027               [Page 18]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 8.  Deployment
@@ -1016,25 +1063,28 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
    manifest is unreadable -- rejected as structural, held as opaque
    content -- by every reader conforming to [FossilArtifact] as
    published; such a reader's check-in graph is visibly truncated, never
-   silently divergent.  Deployment is therefore gated at three layers:
-   emission (Section 8.1), transfer (Section 7.2), and, during the
-   provisional phase, an outright prohibition on synchronization
-   (Section 8.2).
+   silently divergent.  Deployment is therefore gated at two layers:
+   emission (Section 8.1) and transfer (Section 7.2).
 
 8.1.  Emission Gate
 
    A writer MUST NOT emit an S card unless the repository's enable-
    submanifests setting -- a project-scope boolean, default false -- is
-   true, and MUST NOT emit one in a commit against a server from which
-   it has received the avoid-submanifests pragma in the current sync
-   session (Section 7.2).
+   true, and MUST NOT emit one in a commit created during a sync
+   session in which it has received the avoid-submanifests pragma
+   (Section 7.2).
 
    This paragraph governs a local operator request to enable the setting
    while it is false; settings received through configuration exchange
-   are governed only by the atomic transaction of Section 6.3.  For a
+   are governed only by the adoption rule of Section 6.3.  For a
    local request, an existing pinned k from 1 to 12 inclusive takes
-   precedence.  If the request supplies a different explicit k, the
-   writer MUST reject the request atomically and direct the operator to
+   precedence.  A stored submanifest-k outside that range is not a valid
+   pin and is not treated as absent either: a request that supplies no
+   explicit k MUST be refused with the stored value named, and automatic
+   selection MUST NOT run over it.  A request that supplies an explicit
+   k from 1 to 12 inclusive replaces the stored value.  If the request
+   supplies a different explicit k over a valid pin, the writer MUST
+   reject the request atomically and direct the operator to
    the re-tune operation of Section 6.4; otherwise it MUST retain and
    use the existing value.  If no valid pin exists and the request
    supplies an explicit k outside 1..12, the writer MUST reject the
@@ -1053,7 +1103,16 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
    [FossilArtifact], Section 7.6).  When the first S-bearing artifact is
    stored, an implementation SHOULD record a local seen-submanifest
    indicator so operational surfaces can warn before the setting is
-   enabled or a pre-S client is granted access.
+   enabled or a client that does not read sub-manifests is granted
+   access.
+
+   The setting MUST NOT be enabled on a repository that any
+   implementation not announcing sub-manifest support (Section 7.2)
+   serves.  The card alphabet is closed, so such a reader rejects the
+   first tree manifest as structural and its view of the history stops
+   there, visibly; the gates of Section 7.2 refuse it the artifact but
+   cannot give it the check-in.  Enabling is therefore a decision for
+   every reader of a repository at once, not for one writer.
 
 
 
@@ -1061,29 +1120,11 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 19]
+Hipp, et al.               Expires 22 April 2027               [Page 19]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
-8.2.  Provisional-Phase Rules
-
-   Until this specification folds into a -01 revision of
-   [FossilArtifact] and conforming readers ship in released versions of
-   the implementations that serve a repository's users, every repository
-   containing an S-bearing artifact is a disposable test fixture.
-   During this provisional phase:
-
-   *  A repository containing an S-bearing artifact MUST NOT be
-      synchronized with, cloned to, or otherwise propagated into any
-      repository that is not itself a disposable test fixture.
-
-   *  The enable-submanifests setting MUST NOT be enabled on any
-      repository that any pre-S implementation serves.
-
-   *  Implementers MUST assume that any element of this specification
-      may still change, and that a change invalidates every existing
-      S-bearing artifact without migration.
 
 9.  Implementation Requirements
 
@@ -1117,9 +1158,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 20]
+Hipp, et al.               Expires 22 April 2027               [Page 20]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
 9.3.  The Enumeration Seam
@@ -1173,9 +1214,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 21]
+Hipp, et al.               Expires 22 April 2027               [Page 21]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    qualifying names partition into MAX-member groups once the file count
@@ -1191,9 +1232,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
    size; repositories accepting commits from marginally trusted users
    SHOULD monitor artifact-count growth.
 
-   The gates of Section 8 keep pre-S readers from encountering S-bearing
-   artifacts in normal operation; during the provisional phase the
-   prohibition of Section 8.2 removes the exposure entirely.
+   The gates of Section 7.2 and Section 8 keep readers that do not
+   announce sub-manifest support from encountering S-bearing artifacts
+   in normal operation.
 
 11.  IANA Considerations
 
@@ -1229,9 +1270,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 22]
+Hipp, et al.               Expires 22 April 2027               [Page 22]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    [FossilSync]
@@ -1285,9 +1326,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 23]
+Hipp, et al.               Expires 22 April 2027               [Page 23]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    [RFC8792]  Watsen, K., Auerswald, E., Farrel, A., and Q. Wu,
@@ -1341,9 +1382,9 @@ A.1.  The Example Tree
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 24]
+Hipp, et al.               Expires 22 April 2027               [Page 24]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    (Here \n represents a literal newline byte.)  The pinned partition
@@ -1397,9 +1438,9 @@ A.2.  Leaf Sub-Manifests
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 25]
+Hipp, et al.               Expires 22 April 2027               [Page 25]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    The second leaf sub-manifest is the following 193-byte artifact:
@@ -1453,9 +1494,9 @@ A.3.  The Tree Manifest
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 26]
+Hipp, et al.               Expires 22 April 2027               [Page 26]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    (Here \n represents a literal newline byte; the above is shown as
@@ -1509,9 +1550,9 @@ A.4.  The Interior-Height Merge
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 27]
+Hipp, et al.               Expires 22 April 2027               [Page 27]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    preceding group exists, and 1 + 2 = 3 <= MAX, so the merge fires at
@@ -1565,9 +1606,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 28]
+Hipp, et al.               Expires 22 April 2027               [Page 28]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    NOTE: '\' line wrapping per RFC 8792
@@ -1621,9 +1662,9 @@ A.5.  Required Vector Set
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 29]
+Hipp, et al.               Expires 22 April 2027               [Page 29]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    *  Acceptance: the Appendix A.2 and A.3 pair -- parse, type-
@@ -1677,9 +1718,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 30]
+Hipp, et al.               Expires 22 April 2027               [Page 30]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
    *  Behavior (to author): a /project reply carrying submanifest-k,
@@ -1733,9 +1774,9 @@ Internet-Draft            Fossil Sub-Manifests                 July 2026
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 31]
+Hipp, et al.               Expires 22 April 2027               [Page 31]
 
-Internet-Draft            Fossil Sub-Manifests                 July 2026
+Internet-Draft             Fossil Sub-Manifests             October 2026
 
 
       referenced sub-manifest with genuinely computed artifact names,
@@ -1750,6 +1791,49 @@ Appendix B.  Collected ABNF
    filename, hash, SP, and LF are imported from there unchanged.
 
    s-card = %x53 SP filename SP hash LF                   ; "S"
+
+Appendix C.  Changes in This Revision
+
+   This revision of draft-fossil-submanifests-00, dated 19 October 2026,
+   applies the following errata to the 27 July 2026 text.  Each is
+   recorded in full in the erratum files kept beside the drafts.
+
+   *  Abstract, Section 1.3: zit and go-libfossil implement the
+      specification and interoperate; Fossil does not implement it.
+      Editorial.
+
+   *  Section 1.3, Section 8, Section 8.1, Section 8.2, Section 10: the
+      provisional phase retires.  Section 8.2 is removed; its flag-day
+      rule, that the setting MUST NOT be enabled on a repository served
+      by an implementation that does not announce sub-manifest support,
+      moves to Section 8.1.  Normative change.
+
+   *  Section 6.3: the three settings travel as scalar entries adopted
+      once at clone through reqconfig /config; no per-pull request and
+      no staged transaction.  Normative change.
+
+   *  Section 6.3: automatic selection refines the snapshot choice by
+      replaying the last 200 check-ins at the neighbouring values of k.
+      Normative change.
+
+   *  Section 6.3: the current check-in is the checkout's, or the newest
+      leaf of the main branch when there is no checkout.  Normative
+      change.
+
+   *  Section 7.2: the gate reads the send-submanifests pragma, not the
+      announced version; every Fossil release reads as a peer that does
+      not read sub-manifests.  Normative change.
+
+   *  Section 7.2: avoid-submanifests is sent on every reply, in the
+      leading pragma run after server-version.  Normative change.
+
+   *  Section 7.2, Section 8.1: a sync session is one exchange; the
+      pragma binds commits created inside one and does not gate receipt.
+      Normative change.
+
+   *  Section 8.1: a stored k outside 1 to 12 refuses an enable request
+      without an explicit k and is replaced by an explicit one.
+      Normative change.
 
 Authors' Addresses
 
@@ -1789,4 +1873,4 @@ Authors' Addresses
 
 
 
-Hipp, et al.             Expires 28 January 2027               [Page 32]
+Hipp, et al.               Expires 22 April 2027               [Page 32]

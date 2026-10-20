@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/danmestas/go-libfossil/internal/repo"
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
@@ -33,6 +34,9 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("libfossil: repository already exists: %s", path)
 	}
+	if dir := filepath.Dir(path); !isDir(dir) {
+		return nil, fmt.Errorf("libfossil: create %s: parent directory does not exist: %s", path, dir)
+	}
 	user := opts.User
 	if user == "" {
 		user = os.Getenv("USER")
@@ -46,6 +50,11 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 		return nil, fmt.Errorf("libfossil: create: %w", err)
 	}
 	return &Repo{inner: inner, path: path}, nil
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func isProjectCode40HexLower(s string) bool {

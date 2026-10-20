@@ -63,6 +63,37 @@ func TestFetchConeExplicitPeer(t *testing.T) {
 	if calls != before {
 		t.Fatal("cancelled demand used peer")
 	}
+	t.Run("failed-fetch-preserves-policy-intent", func(t *testing.T) {
+		var beforeRID int64
+		if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", outside).Scan(&beforeRID); err != nil {
+			t.Fatal(err)
+		}
+		failure := errors.New("configured peer unavailable")
+		failed := &countingTransport{failures: 1, fail: failure}
+		if _, err := FetchCone(context.Background(), r, failed, nil, SyncOpts{}); !errors.Is(err, failure) {
+			t.Fatalf("failed policy fetch: %v", err)
+		}
+		if failed.attempts != 1 {
+			t.Fatalf("permanent failure attempts=%d, want 1", failed.attempts)
+		}
+		if got, err := content.StoreCone(r.DB()); err != nil || got != nil {
+			t.Fatalf("failed fetch discarded widened intent: cone=%v, err=%v", got, err)
+		}
+		var afterRID, size, phantomCount int64
+		if err := r.DB().QueryRow("SELECT rid,size FROM blob WHERE uuid=?", outside).Scan(&afterRID, &size); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.DB().QueryRow("SELECT count(*) FROM phantom WHERE rid=?", afterRID).Scan(&phantomCount); err != nil {
+			t.Fatal(err)
+		}
+		if afterRID != beforeRID || size != -1 || phantomCount != 1 {
+			t.Fatalf("failed fetch changed recoverable identity: rid=%d/%d size=%d phantoms=%d", beforeRID, afterRID, size, phantomCount)
+		}
+		a, err := content.LoadAbsencesContext(context.Background(), r.DB())
+		if err != nil || a.Count(content.Transit) != 1 || a.Count(content.Elided) != 0 {
+			t.Fatalf("failed widened fetch did not retain a transit phantom: absences=%v, err=%v", a, err)
+		}
+	})
 	res, err := FetchCone(context.Background(), r, peer, nil, SyncOpts{})
 	if err != nil {
 		t.Fatal(err)

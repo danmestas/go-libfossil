@@ -51,11 +51,16 @@ func TestSparseReceiveRetainsProtectedHoldings(t *testing.T) {
 			received[uuid] = true
 		}
 	}
+	elided := 0
 	if err := r.WithTx(func(tx *db.Tx) error {
-		_, err := filterSparseReceived(context.Background(), tx, received, nil)
+		var err error
+		elided, err = filterSparseReceived(context.Background(), tx, received, nil)
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if elided != 1 {
+		t.Fatalf("final elision count=%d, want only the one demoted payload", elided)
 	}
 	for name, uuid := range uuids {
 		_, held := content.AvailableByUUID(r.DB(), uuid)

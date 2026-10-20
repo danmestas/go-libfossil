@@ -89,6 +89,13 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, sendPrivate)
 	}
 	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
+	if s.opts.Pull {
+		sparse, err := localConePragmas(s.repo.DB())
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, sparse...)
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -1575,7 +1582,7 @@ func (s *session) loadDBPhantoms() error {
 	if !s.opts.Pull {
 		return nil
 	}
-	elided, err := elidedPhantoms(s.repo.DB())
+	elided, err := elidedPhantoms(s.ctx, s.repo.DB())
 	if err != nil {
 		return err
 	}
@@ -1594,6 +1601,8 @@ func (s *session) loadDBPhantoms() error {
 			return err
 		}
 		if elided != nil && elided.Class(rid) == content.Elided {
+			delete(s.phantoms, uuid)
+			delete(s.phantomAge, uuid)
 			continue
 		}
 		if !s.remoteHas[uuid] {
@@ -1605,12 +1614,15 @@ func (s *session) loadDBPhantoms() error {
 
 // elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
 // store, which has nothing elided and so pays for no classification.
-func elidedPhantoms(q db.Querier) (*content.Absences, error) {
+func elidedPhantoms(ctx context.Context, q db.Querier) (*content.Absences, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	storeCone, err := content.StoreCone(q)
 	if err != nil || storeCone == nil {
 		return nil, err
 	}
-	return content.LoadAbsences(q)
+	return content.LoadAbsencesContext(ctx, q)
 }
 
 // handleFileCard stores a received file (or delta-file) into the repo.
@@ -1639,6 +1651,9 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// server-push receive paths.
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
+	}
+	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
+		return false, err
 	}
 	rid, err := storeReceived(ctx, s.repo, s.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)

@@ -18,6 +18,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+// These flat-manifest protocol cases exercise real clone/pull exchanges and
+// explicit internal demand fetch. They do not cover per-round tree budgets,
+// capability advertisement, rebuild-safe filtering, or public peer discovery.
 func scSyncCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.6.1.wire-members", Req: "SC-6.1-1"}, scSyncMembers},
@@ -94,9 +97,9 @@ func scSyncBounds(t *testing.T) error {
 	}{
 		{"max-count", members(255), true},
 		{"over-count", members(256), false},
-		{"max-length", []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{strings.Repeat("a", 4096)}}}, true},
-		{"over-length", []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{strings.Repeat("a", 4097)}}}, false},
-		{"encoded-bound", []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{strings.Repeat("a", 8193)}}}, false},
+		{"max-length", scSyncMember(strings.Repeat("a", 4096)), true},
+		{"over-length", scSyncMember(strings.Repeat("a", 4097)), false},
+		{"encoded-bound", scSyncMember(strings.Repeat("a", 8193)), false},
 		{"arity", []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{"src", "extra"}}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -115,7 +118,8 @@ func scSyncBounds(t *testing.T) error {
 					}
 				}
 			}
-			if tc.valid && n != 0 || !tc.valid && (n != 1 || len(scSyncPayloads(resp)) != 0) {
+			if tc.valid && n != 0 ||
+				!tc.valid && (n != 1 || len(scSyncPayloads(resp)) != 0) {
 				t.Fatalf("valid=%v errors=%d payloads=%v", tc.valid, n, scSyncPayloads(resp))
 			}
 		})
@@ -123,7 +127,8 @@ func scSyncBounds(t *testing.T) error {
 	return nil
 }
 
-const scSyncOriginRefusal = "Sparse cone does not cover requested clone; configure a partial mirror to allow it."
+const scSyncOriginRefusal = "Sparse cone does not cover requested clone; " +
+	"configure a partial mirror to allow it."
 
 func scSyncOrigin(t *testing.T) error {
 	origin := newSCSyncRepo(t, scSyncFiles())
@@ -239,7 +244,8 @@ func scSyncDelta(t *testing.T) error {
 		return err
 	}
 	var source int64
-	if err := origin.r.DB().QueryRow("SELECT srcid FROM delta WHERE rid=?", childRID).Scan(&source); err != nil {
+	err := origin.r.DB().QueryRow("SELECT srcid FROM delta WHERE rid=?", childRID).Scan(&source)
+	if err != nil {
 		return err
 	}
 	if source != int64(baseRID) {
@@ -298,8 +304,8 @@ func scSyncClonePull(t *testing.T, ignore bool) error {
 	if err != nil {
 		return err
 	}
-	if pulled.Elided != 2 {
-		return fmt.Errorf("pull elided=%d, want 2", pulled.Elided)
+	if pulled.Elided != 2 || len(pulled.Errors) != 0 {
+		return fmt.Errorf("pull elided=%d errors=%q, want 2 and none", pulled.Elided, pulled.Errors)
 	}
 	for text, held := range map[string]bool{"new shared\n": true, "new outside\n": false} {
 		if err := scSyncHolding(r, text, held); err != nil {
@@ -339,7 +345,8 @@ func scSyncClonePull(t *testing.T, ignore bool) error {
 		return err
 	}
 	if a.Count(content.Elided) != 2 || a.Count(content.Transit) != 0 {
-		return fmt.Errorf("actual absences: elided=%d transit=%d", a.Count(content.Elided), a.Count(content.Transit))
+		return fmt.Errorf("actual absences: elided=%d transit=%d",
+			a.Count(content.Elided), a.Count(content.Transit))
 	}
 	return nil
 }
@@ -374,13 +381,15 @@ func scSyncNoPeer(t *testing.T) error {
 	r, _ := scSyncClone(t, peer, sync.CloneOpts{StoreCone: c, PullPhantoms: true})
 	before := len(peer.requests)
 	_, err := sync.FetchCone(context.Background(), r, nil, nil, sync.SyncOpts{})
-	want := "sparse cone: 1 elided artifact(s); no configured peer to fetch 1 newly covered artifact(s)"
+	want := "sparse cone: 1 elided artifact(s); " +
+		"no configured peer to fetch 1 newly covered artifact(s)"
 	if err == nil || err.Error() != want {
 		return fmt.Errorf("no-peer error=%v, want %q", err, want)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := sync.FetchCone(ctx, r, peer, nil, sync.SyncOpts{}); !errors.Is(err, context.Canceled) {
+	_, err = sync.FetchCone(ctx, r, peer, nil, sync.SyncOpts{})
+	if !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("cancelled fetch=%v", err)
 	}
 	if len(peer.requests) != before {

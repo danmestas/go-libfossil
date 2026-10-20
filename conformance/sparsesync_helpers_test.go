@@ -86,7 +86,13 @@ func scSyncFiles() map[string]string {
 	}
 }
 
-func scSyncClone(t *testing.T, peer *scSyncPeer, opts sync.CloneOpts) (*repo.Repo, *sync.CloneResult) {
+func scSyncMember(value string) []xfer.Card {
+	return []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{value}}}
+}
+
+func scSyncClone(
+	t *testing.T, peer *scSyncPeer, opts sync.CloneOpts,
+) (*repo.Repo, *sync.CloneResult) {
 	t.Helper()
 	r, result, err := sync.Clone(context.Background(),
 		filepath.Join(t.TempDir(), "clone.fossil"), peer, opts)

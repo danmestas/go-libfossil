@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/merge"
@@ -81,9 +83,8 @@ type MergeResult struct {
 // itself a vmerge row with id 0.
 //
 // Merge refuses, changing nothing, when the repository is missing content
-// it needs, when an added file would overwrite an untracked file, or, in a
-// sparse checkout, when the merge would change a file outside the cone
-// (ErrOutsideCone). Where
+// it needs or when an added file would overwrite an untracked file. In a
+// sparse checkout, uncovered changes are recorded without touching disk. Where
 // fossil relies on its undo copy, Merge keeps the checkout's file instead:
 // a file edited here but deleted in the merged-in version is kept and
 // reported, not deleted. Renames are not followed: a file renamed on one
@@ -129,9 +130,6 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if err := c.planMerge(&plan, opts.Strategy); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
-	if err := c.checkMergeInCone(plan.steps); err != nil {
-		return MergeResult{}, err
-	}
 	if err := c.checkMergeTargets(plan.steps); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
@@ -143,24 +141,6 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	return plan.result(), nil
 }
 
-// checkMergeInCone refuses a merge that would change a file outside a sparse
-// checkout's cone. Applying such a change to the record alone, as
-// draft-fossil-sparse-cone-00 §4.4 requires, is not implemented: the merge
-// would otherwise write the file or lose the change, so it is refused by
-// naming the cone, before anything changes.
-func (c *Checkout) checkMergeInCone(steps []mergeStep) error {
-	var outside []string
-	for _, s := range steps {
-		if !c.covers(s.file.Name) {
-			outside = append(outside, s.file.Name)
-		}
-	}
-	if len(outside) == 0 {
-		return nil
-	}
-	return c.outsideCone("Merge", outside)
-}
-
 // mergePlan is a merge worked out in full before anything is changed.
 type mergePlan struct {
 	vid, pivot, mid libfossil.FslID
@@ -169,12 +149,13 @@ type mergePlan struct {
 
 // mergeStep is one file's part of a merge.
 type mergeStep struct {
-	file    MergeFile
-	row     vfile.Row // the checkout's row; zero for an added file
-	merged  mergeSide // the merged-in version of the file
-	content []byte    // what to write; nil when the file is not written
-	exe     bool      // the checkout file's executable bit after the merge
-	fork    forkSides // which versions have the file, for a fork record
+	file       MergeFile
+	row        vfile.Row // the checkout's row; zero for an added file
+	merged     mergeSide // the merged-in version of the file
+	content    []byte    // what to write; nil when the file is not written
+	exe        bool      // the checkout file's executable bit after the merge
+	fork       forkSides // which versions have the file, for a fork record
+	recordOnly bool      // the shared cone decision; no filesystem access for this step
 }
 
 // forkSides says which of the three versions a conflict-fork record names.
@@ -396,7 +377,7 @@ func (c *Checkout) planStep(
 	if kind == mergeSkip {
 		panic("checkout.planStep: nothing to plan for " + name)
 	}
-	step := mergeStep{file: MergeFile{Name: name}, merged: m}
+	step := mergeStep{file: MergeFile{Name: name}, merged: m, recordOnly: !c.covers(name)}
 	if row != nil {
 		step.exe = mergedExe(*row, p, m)
 	}
@@ -520,6 +501,13 @@ func (c *Checkout) planThreeWay(
 // readWorkingFile reads row's file from disk. present is false when it is
 // missing or is not a regular file.
 func (c *Checkout) readWorkingFile(row vfile.Row) (data []byte, present bool, err error) {
+	if !c.covers(row.Pathname) {
+		if row.IsRemoved() || row.MRID <= 0 {
+			return nil, false, nil
+		}
+		data, err := content.Expand(c.repo.DB(), libfossil.FslID(row.MRID))
+		return data, err == nil, err
+	}
 	missing, err := c.isMissing(row)
 	if err != nil {
 		return nil, false, err
@@ -575,6 +563,9 @@ func (c *Checkout) checkMergeTargets(steps []mergeStep) error {
 // changesDisk reports whether applying the step writes, deletes or changes
 // the mode of its file.
 func (s mergeStep) changesDisk() bool {
+	if s.recordOnly {
+		return false
+	}
 	switch s.file.Action {
 	case MergeUpdated, MergeMerged, MergeConflict, MergeAdded, MergeDeleted, MergeMode:
 		return true
@@ -626,17 +617,47 @@ func (c *Checkout) applyMerge(plan mergePlan) error {
 	if plan.mid <= 0 {
 		panic("checkout.applyMerge: no merged-in version")
 	}
+	var names []string
+	for _, s := range plan.steps {
+		if s.changesDisk() {
+			names = append(names, s.file.Name)
+		}
+	}
+	saved, err := c.readFilesUndo(names)
+	if err != nil {
+		return err
+	}
 	tx, err := c.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
-	if err := c.applyMergeTx(tx, plan); err != nil {
+	if err := saved.save(tx); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
+	if err := c.applyMergeTx(tx, plan); err != nil {
+		return errors.Join(err, tx.Rollback(), c.rollBackUpdate(saved))
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
+		return errors.Join(fmt.Errorf("commit: %w", err), c.rollBackUpdate(saved))
 	}
 	return c.recordForks(plan)
+}
+
+// storeMergePayload keeps new uncommitted bytes out of public sync inventory.
+// Existing public content retains its visibility; undo retains private payloads.
+func (c *Checkout) storeMergePayload(data []byte) (rid libfossil.FslID, uuid string, err error) {
+	err = c.repo.DB().WithTx(func(tx *db.Tx) error {
+		var outcome blob.Outcome
+		rid, uuid, outcome, err = blob.StoreUnderPolicy(tx, data)
+		if err != nil {
+			return err
+		}
+		if outcome != blob.Found {
+			return content.MakePrivate(tx, int64(rid))
+		}
+		return nil
+	})
+	return rid, uuid, err
 }
 
 func (c *Checkout) applyMergeTx(tx *sql.Tx, plan mergePlan) error {
@@ -659,47 +680,45 @@ func alwaysDiffers() (bool, error) { return true, nil }
 // applyMergeStep writes one file and records it the way fossil's merge
 // does.
 func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) error {
-	switch s.file.Action {
-	case MergeUpdated:
-		if err := c.writeMergedFile(s.file.Name, s.content, s.merged.exe); err != nil {
+	if s.changesDisk() {
+		if err := c.applyMergeDiskStep(s); err != nil {
 			return err
 		}
+	}
+	switch s.file.Action {
+	case MergeUpdated:
 		_, err := tx.Exec(`UPDATE vfile SET mtime=0, chnged=2, mrid=?, mhash=?, isexe=?
 			WHERE id=?`, int64(s.merged.rid), s.merged.uuid, s.merged.exe, s.row.ID)
 		return err
 	case MergeAdded:
-		if err := c.writeMergedFile(s.file.Name, s.content, s.merged.exe); err != nil {
-			return err
-		}
 		_, err := tx.Exec(`INSERT INTO vfile(vid, chnged, deleted, rid, mrid, isexe, islink,
 			pathname) VALUES(?, 3, 0, ?, ?, ?, 0, ?)`,
 			int64(vid), int64(s.merged.rid), int64(s.merged.rid), s.merged.exe, s.file.Name)
 		return err
 	case MergeDeleted:
-		fullPath, err := c.safePath(s.file.Name)
-		if err != nil {
-			return err
-		}
-		if err := c.removeRegularFile(fullPath); err != nil {
-			return err
-		}
-		_, err = tx.Exec("UPDATE vfile SET deleted=1 WHERE id=?", s.row.ID)
+		_, err := tx.Exec("UPDATE vfile SET deleted=1 WHERE id=?", s.row.ID)
 		return err
 	case MergeMode:
-		if err := c.setMergedMode(s.file.Name, s.exe); err != nil {
-			return err
-		}
 		_, err := tx.Exec("UPDATE vfile SET isexe=? WHERE id=?", s.exe, s.row.ID)
 		return err
 	case MergeMerged, MergeConflict:
-		if err := c.writeMergedFile(s.file.Name, s.content, s.exe); err != nil {
-			return err
+		if s.recordOnly {
+			rid, uuid, err := c.storeMergePayload(s.content)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec("UPDATE vfile SET mrid=?, mhash=? WHERE id=?", int64(rid), uuid, s.row.ID); err != nil {
+				return err
+			}
 		}
 		// What a scan would make of content that now differs from the
 		// baseline; a scan corrects it should the merge have changed nothing.
 		next, err := nextChangedState(s.row.Chnged, scanFacts{hasBaseline: true}, alwaysDiffers)
 		if err != nil {
 			return err
+		}
+		if s.recordOnly {
+			next = 2 // mrid owns the synthesized bytes, even after materialization
 		}
 		if _, err := tx.Exec("UPDATE vfile SET mtime=0, chnged=?, isexe=? WHERE id=?",
 			next, s.exe, s.row.ID); err != nil {
@@ -716,6 +735,26 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 		return insertVMerge(tx, s.row.ID, s.merged.rid, s.merged.uuid)
 	default:
 		panic(fmt.Sprintf("checkout.applyMergeStep: unknown action %d", s.file.Action))
+	}
+}
+
+// applyMergeDiskStep is the filesystem half of a materialized merge step.
+func (c *Checkout) applyMergeDiskStep(s mergeStep) error {
+	switch s.file.Action {
+	case MergeUpdated, MergeAdded:
+		return c.writeMergedFile(s.file.Name, s.content, s.merged.exe)
+	case MergeMerged, MergeConflict:
+		return c.writeMergedFile(s.file.Name, s.content, s.exe)
+	case MergeDeleted:
+		full, err := c.safePath(s.file.Name)
+		if err != nil {
+			return err
+		}
+		return c.removeRegularFile(full)
+	case MergeMode:
+		return c.setMergedMode(s.file.Name, s.exe)
+	default:
+		panic("checkout.applyMergeDiskStep: step does not change disk")
 	}
 }
 
@@ -830,7 +869,7 @@ func (c *Checkout) Conflicts() ([]string, error) {
 	if err := c.ScanChanges(0); err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
-	rows, err := c.managedRows(vid)
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}

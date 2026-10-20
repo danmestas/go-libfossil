@@ -44,9 +44,6 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 	}
 
 	if len(opts.Paths) > 0 {
-		if err := c.refuseUncovered("Revert", opts.Paths...); err != nil {
-			return err
-		}
 		if err := c.revertPaths(vid, opts.Paths, opts.Callback); err != nil {
 			return fmt.Errorf("checkout.Revert: %w", err)
 		}
@@ -67,7 +64,7 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 		panic("checkout.revertAll: negative vid")
 	}
 
-	rows, err := c.managedRows(vid)
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return err
 	}
@@ -123,7 +120,7 @@ func (c *Checkout) revertPaths(
 	for _, p := range paths {
 		named[p] = true
 	}
-	rows, err := c.managedRows(vid)
+	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return err
 	}
@@ -186,8 +183,9 @@ func planRevert(r vfile.Row, inVersion map[string]bool) revertAction {
 
 // revertStep is one row's part in a revert.
 type revertStep struct {
-	row    vfile.Row
-	action revertAction
+	row        vfile.Row
+	action     revertAction
+	recordOnly bool
 }
 
 // planRevertSteps plans the revert of targets, chosen from rows (every row
@@ -248,6 +246,9 @@ func (c *Checkout) revertRows(
 	callback func(string, RevertChange) error,
 ) (err error) {
 	steps := planRevertSteps(rows, targets, inVersion)
+	for i := range steps {
+		steps[i].recordOnly = !c.covers(steps[i].row.Pathname)
+	}
 	saved, err := c.readRevertUndo(steps)
 	if err != nil {
 		return err
@@ -293,6 +294,9 @@ func revertNames(steps []revertStep) []string {
 		}
 	}
 	for _, s := range steps {
+		if s.recordOnly {
+			continue
+		}
 		switch s.action {
 		case revertUnmanage, revertDisplace:
 		case revertUndoRename:
@@ -316,6 +320,9 @@ func (c *Checkout) applyRevert(
 ) error {
 	paths := make([]string, len(steps))
 	for i, s := range steps {
+		if s.recordOnly {
+			continue
+		}
 		name := s.row.Pathname
 		if s.action == revertUndoRename {
 			name = s.row.RenamedFrom()
@@ -382,8 +389,10 @@ func (c *Checkout) vacateRevertRow(tx *sql.Tx, s revertStep) error {
 		if s.row.RID <= 0 {
 			panic("checkout.vacateRevertRow: a pending add has no committed name")
 		}
-		if err := c.removeTrackedFile(s.row.Pathname); err != nil {
-			return err
+		if !s.recordOnly {
+			if err := c.removeTrackedFile(s.row.Pathname); err != nil {
+				return err
+			}
 		}
 		// A leading slash is never a checkout path, so the placeholder
 		// cannot collide with a row.
@@ -396,8 +405,10 @@ func (c *Checkout) vacateRevertRow(tx *sql.Tx, s revertStep) error {
 		if s.row.RID <= 0 {
 			panic("checkout.vacateRevertRow: pending add has no merged-in content")
 		}
-		if err := c.removeTrackedFile(s.row.Pathname); err != nil {
-			return err
+		if !s.recordOnly {
+			if err := c.removeTrackedFile(s.row.Pathname); err != nil {
+				return err
+			}
 		}
 	case revertUnmanage, revertDisplace:
 	default:
@@ -468,7 +479,20 @@ func (c *Checkout) restoreCommitted(tx *sql.Tx, id int64, pathname, fullPath str
 		panic("checkout.restoreCommitted: rid must be positive")
 	}
 	if fullPath == "" {
-		panic("checkout.restoreCommitted: empty fullPath")
+		var vid int64
+		if err := tx.QueryRow("SELECT vid FROM vfile WHERE id=?", id).Scan(&vid); err != nil {
+			return err
+		}
+		file, present, err := manifest.LookupFile(c.repo, libfossil.FslID(vid), pathname)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return fmt.Errorf("checkout.Revert: no baseline entry for %s", pathname)
+		}
+		_, err = tx.Exec(`UPDATE vfile SET chnged=0, deleted=0, mrid=rid,
+			mhash=NULL, mtime=0, isexe=?, islink=? WHERE id=?`, file.Perm == "x", file.Perm == "l", id)
+		return err
 	}
 
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(rid))

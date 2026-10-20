@@ -239,7 +239,9 @@ func TestSparseRefusesTrackingOutsideCone(t *testing.T) {
 	assertOutsideCone(t, co.Unmanage(UnmanageOpts{Paths: []string{"tools/t.c"}}), "tools/t.c")
 	assertOutsideCone(t, co.Rename(RenameOpts{From: "src/a.c", To: "tools/a.c", DoFsMove: true}), "tools/a.c")
 	assertOutsideCone(t, co.Rename(RenameOpts{From: "tools/t.c", To: "src/t.c"}), "tools/t.c")
-	assertOutsideCone(t, co.Revert(RevertOpts{Paths: []string{"tools/t.c"}}), "tools/t.c")
+	if err := co.Revert(RevertOpts{Paths: []string{"tools/t.c"}}); err != nil {
+		t.Fatalf("record-only revert: %v", err)
+	}
 	if err := co.Enqueue(EnqueueOpts{Paths: []string{"tools"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -408,18 +410,22 @@ func assertCheckinContent(t *testing.T, r *repo.Repo, rid libfossil.FslID, want 
 	}
 }
 
-// §4.4: a merge that would change an out-of-cone file is refused, naming
-// the cone, and changes nothing; one that stays in the cone runs.
-func TestSparseMergeAcrossConeRefused(t *testing.T) {
+// §4.4: an uncovered merge changes the record, never the working tree.
+func TestSparseMergeAcrossConeRecordsChanges(t *testing.T) {
 	f := newSparseRepo(t, false)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "theirs\n"}), f.c1)
 	ours := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "ours\n"}), f.c1)
 	co := f.open(t, sparseCone(t), ours)
 	_, err := co.Merge(MergeOpts{Version: theirs})
-	assertOutsideCone(t, err, "tools/t.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := onDisk(t, co); !slices.Equal(got, sparseCovered) {
+		t.Fatalf("record-only merge touched disk: %q", got)
+	}
 	var n int
-	if err := co.db.QueryRow("SELECT count(*) FROM vmerge").Scan(&n); err != nil || n != 0 {
-		t.Fatalf("a refused merge left %d vmerge rows (%v)", n, err)
+	if err := co.db.QueryRow("SELECT count(*) FROM vmerge WHERE id=0").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("record-only merge left %d merge parents (%v)", n, err)
 	}
 
 	inCone := f.commit(t, maps(sparseFiles, map[string]string{"src/b.c": "theirs\n"}), f.c1)

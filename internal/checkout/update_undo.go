@@ -19,18 +19,26 @@ type updateUndo struct {
 // readUpdateUndo reads the file of every step that writes or removes one,
 // under its name in the checkout, as fossil's update calls undo_save.
 func (c *Checkout) readUpdateUndo(steps []updateStep) (updateUndo, error) {
-	disk, err := c.newDiskView()
-	if err != nil {
-		return updateUndo{}, err
-	}
-	u := updateUndo{disk: disk}
+	var names []string
 	for _, s := range steps {
 		switch s.action {
 		case updateWrite, updateAddOver, updateMerge, updateRemove:
 		default:
 			continue
 		}
-		f, err := undo.ReadFile(u.disk, c.dir, s.name)
+		names = append(names, s.name)
+	}
+	return c.readFilesUndo(names)
+}
+
+func (c *Checkout) readFilesUndo(names []string) (updateUndo, error) {
+	disk, err := c.newDiskView()
+	if err != nil {
+		return updateUndo{}, err
+	}
+	u := updateUndo{disk: disk}
+	for _, name := range names {
+		f, err := undo.ReadFile(u.disk, c.dir, name)
 		if err != nil {
 			return updateUndo{}, err
 		}

@@ -105,17 +105,70 @@ func (c *Checkout) fileFilter() manifest.FileFilter {
 // them here, so the cone is applied in one place for the record (§4.1), as
 // manifest.ListFilesFiltered applies it for check-ins.
 func (c *Checkout) managedRows(vid libfossil.FslID) ([]vfile.Row, error) {
+	return c.coneRows(vid, true)
+}
+
+// coneRows is the single range predicate for checkout records. Managed rows
+// describe disk; the complementary rows carry the uncovered baseline and
+// pending record-only operations.
+func (c *Checkout) coneRows(vid libfossil.FslID, managed bool) ([]vfile.Row, error) {
 	rows, err := vfile.Load(c.db, int64(vid))
-	if err != nil || c.cone == nil {
-		return rows, err
+	if err != nil {
+		return nil, err
 	}
 	kept := rows[:0]
 	for _, r := range rows {
-		if c.cone.Covers(r.Pathname) {
+		if c.covers(r.Pathname) == managed {
 			kept = append(kept, r)
 		}
 	}
 	return kept, nil
+}
+
+// commitBaseline carries the baseline's uncovered entries, including pending
+// record-only merge changes. The managed file set is synthesized separately
+// from disk; uncovered pending content is addressed by mrid, never a path.
+func (c *Checkout) commitBaseline(vid libfossil.FslID) ([]manifest.FileEntry, error) {
+	files, err := manifest.ListFiles(c.repo, vid)
+	if err != nil || c.cone == nil {
+		return files, err
+	}
+	rows, err := c.coneRows(vid, false)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]manifest.FileEntry, len(files))
+	for _, f := range files {
+		byName[f.Name] = f
+	}
+	for _, r := range rows {
+		if r.IsRemoved() {
+			delete(byName, r.Pathname)
+			continue
+		}
+		f := byName[r.Pathname]
+		if r.ContentChanged() || r.PendingMerge() || f.Name == "" {
+			uuid, err := blobUUID(c.repo.DB(), libfossil.FslID(r.MRID))
+			if err != nil {
+				return nil, err
+			}
+			f.Name, f.UUID = r.Pathname, uuid
+		}
+		f.Perm = ""
+		if r.IsExe != 0 {
+			f.Perm = "x"
+		}
+		if r.IsLink != 0 {
+			f.Perm = "l"
+		}
+		byName[r.Pathname] = f
+	}
+	files = files[:0]
+	for _, f := range byName {
+		files = append(files, f)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	return files, nil
 }
 
 // outsideCone is the refusal of operation op on paths the cone does not
@@ -257,6 +310,9 @@ func (c *Checkout) planConeChange(vid libfossil.FslID, next *cone.Cone) (conePla
 			}
 			plan.leaving = append(plan.leaving, r)
 		case !was && now:
+			if r.IsRemoved() {
+				continue
+			}
 			if err := c.checkEntering(r); err != nil {
 				return conePlan{}, err
 			}
@@ -281,13 +337,13 @@ func (c *Checkout) rowChanged(r vfile.Row) (bool, error) {
 }
 
 // checkEntering refuses to materialize r over an untracked file of
-// different content. This checkout never changes an uncovered row, so its
-// content is its committed artifact; a row another tool changed is refused.
+// different content. Pending record-only merge bytes belong to mrid and are
+// materialized as pending work, including conflicts that need resolution.
 func (c *Checkout) checkEntering(r vfile.Row) error {
-	if r.RID <= 0 || r.PendingMerge() || r.IsRemoved() || r.RenamedFrom() != "" {
-		return fmt.Errorf("file %s outside the cone has changes recorded; revert it first", r.Pathname)
+	if r.MRID <= 0 {
+		return fmt.Errorf("file %s outside the cone has no recorded content", r.Pathname)
 	}
-	uuid, err := blobUUID(c.repo.DB(), libfossil.FslID(r.RID))
+	uuid, err := blobUUID(c.repo.DB(), libfossil.FslID(r.MRID))
 	if err != nil {
 		return err
 	}
@@ -317,7 +373,7 @@ func (p conePlan) change() ConeChange {
 // materialize writes r's committed content to disk and records the mtime
 // the write gave it, as Extract does.
 func (c *Checkout) materialize(vid libfossil.FslID, r vfile.Row) error {
-	mtime, err := c.extractSingleFile(r.Pathname, r.RID, r.IsExe, r.IsLink, false)
+	mtime, err := c.extractSingleFile(r.Pathname, r.MRID, r.IsExe, r.IsLink, false)
 	if err != nil {
 		return err
 	}

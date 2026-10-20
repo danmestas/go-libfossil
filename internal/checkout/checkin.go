@@ -135,7 +135,7 @@ func (c *Checkout) buildCommitFiles(
 	var parentFiles []manifest.FileEntry
 	if parentRID != 0 {
 		var err error
-		parentFiles, err = manifest.ListFiles(c.repo, parentRID)
+		parentFiles, err = c.commitBaseline(parentRID)
 		if err != nil {
 			return nil, fmt.Errorf("checkout.Commit: list parent files: %w", err)
 		}
@@ -816,6 +816,22 @@ func (c *Checkout) checkNoConflicts(in commitInputs) error {
 		}
 		if present && merge.HasConflictMarkers(data) {
 			conflicted = append(conflicted, name)
+		}
+	}
+	rows, err := c.coneRows(in.parent, false)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.IsRemoved() || !row.ContentChanged() {
+			continue
+		}
+		data, present, err := c.readWorkingFile(row)
+		if err != nil {
+			return err
+		}
+		if present && merge.HasConflictMarkers(data) {
+			conflicted = append(conflicted, row.Pathname)
 		}
 	}
 	if len(conflicted) > 0 {

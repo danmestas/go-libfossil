@@ -109,7 +109,7 @@ func (c *Checkout) isMissingOn(disk vfile.Disk, r vfile.Row) (bool, error) {
 	if c.env == nil {
 		panic("checkout.isMissingOn: nil env")
 	}
-	if r.Deleted > 0 {
+	if r.Deleted > 0 || !c.covers(r.Pathname) {
 		return false, nil
 	}
 	fullPath, err := c.safePath(r.Pathname)

@@ -1,8 +1,9 @@
 # Requirements of draft-fossil-sparse-cone-00, written from the draft text.
 # Cases cover cone specification, sparse worktrees, store classification,
 # internal synchronization and explicit compaction. Scope notes preserve
-# incomplete behavior: absent-subtree writing, incomplete file history, bounded
-# request preprocessing, conservative provenance retention and public wiring.
+# incomplete behavior: incomplete file history, bounded request preprocessing
+# and public wiring. The e03d91943e57 sparse canonical-writing correction is
+# exercised by the Appendix A.6 MAX, final-merge and parent-basis vectors.
 # Store cases include deliberately elided fixtures; sync cases exercise real
 # loopback wire exchanges, and compaction cases exercise rebuild and healing.
 # A passing internal case does not remove an explicitly recorded scope gap.
@@ -14,7 +15,7 @@
 # testdata/zit-cones), its refusal of an empty inclusion list, and its
 # exact-member removal.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-sparse-cone-00.txt	2494753225ec3b88169fd422fcf66822cbf65650495542b293bcbaa590456df2
+# draft	draft-fossil-sparse-cone-00.txt	41e70bcc6a6c2b6ccb6476aa65975f3c97849b7d6a0e0ed8af58aa0fbc15f13a
 SC-2-1	2	A member covers a path when it equals the path or is a prefix of it ending at a '/' boundary; the absent cone covers everything (dense operation).	an empty cone cannot be built, as in zit: at least one inclusion is required
 SC-3.1-1	3.1	A worktree cone is checkout-local state recorded with the checkout's other local records; it is not an artifact, does not synchronize, and affects no artifact's bytes or name.
 SC-3.1-2	3.1	A cone may be widened or narrowed at any time.
@@ -43,7 +44,7 @@ SC-4.1-4	4.1	A request to track a path outside the cone is refused, and the refu
 SC-4.1-5	4.1	All file-set enumeration flows through the shared enumeration interface with the cone applied there as a range predicate, never filtered at individual call sites.
 SC-4.2-1	4.2	A commit from a sparse worktree produces a check-in whose file set is the in-cone files as observed in the worktree and the baseline's out-of-cone entries carried unchanged.
 SC-4.2-2	4.2	For flat manifests the baseline's out-of-cone F cards are copied byte-verbatim, merged in sorted order with the in-cone F cards.
-SC-4.2-3	4.2	For tree manifests only the sub-manifest nodes whose key range intersects the changed paths are rebuilt, and every untouched subtree is re-referenced by hash, its content not required.	the writer rebuilds the canonical tree, which re-derives every untouched node byte-identically and stores none of them anew, but it reads every file's content, as the R card over a dense store does
+SC-4.2-3	4.2	Tree commits produce full canonical construction under the requested k; opaque reuse requires compatible partition evidence bound to the immutable parent, rules and k or verification from needed descriptors and entries. The structural affected range includes MAX-cut shifts, final-small-group merges and propagation at every height; necessary absent nodes are fetched or cause explicit refusal without a partial check-in.
 SC-4.2-4	4.2	The result is an ordinary check-in: a reader cannot detect that it was committed sparsely, and no new artifact form is introduced.
 SC-4.3-1	4.3	A sparse-worktree commit over a dense store may compute the R card by reading out-of-cone content from the store.
 SC-4.3-2	4.3	A commit over a sparse store omits the R card.
@@ -54,11 +55,11 @@ SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-o
 SC-4.4-2	4.4	The count of out-of-cone changes applied should be reported.
 SC-4.4-3	4.4	Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.
 SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.
-SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, elided phantoms for out-of-cone nodes and blobs, and every non-manifest structural artifact densely.	outside S-node classification and partial-tree metadata, checkout and rebuild are tested; compaction still retains provenance-bearing leaves and nonterminal paths
+SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, and every non-manifest structural artifact densely. Out-of-cone nodes and blobs MAY be absent as elided phantoms; already-held or demand-fetched payloads need not be discarded.
 SC-5.2-1	5.2	Transit phantoms, shunned artifacts and elided phantoms are distinguished; synchronization does not spontaneously request an elided phantom, whose absence is healthy.
 SC-5.2-2	5.2	Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.
 SC-5.2-3	5.2	Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.
-SC-5.3-1	5.3	A commit over elided subtrees references them by hash without possession, and pushing such a check-in is sound.	commit and push with absent F payloads are tested; unavailable S subtrees still prevent commits, with canonical reconstruction blocked by the draft conflict tracked in danmestas/zit#253
+SC-5.3-1	5.3	A commit may reference elided subtrees proved identical to canonical construction by hash without possession; nodes required for boundary propagation or partition validation are fetched or cause explicit refusal. Pushing a canonically valid check-in is sound.
 SC-5.3-2	5.3	A server should refuse to be a clone origin for cones it does not cover, unless configured as a partial mirror, with one error card and no content.	internal handler refusal and override are tested; public partial-mirror configuration remains pending
 SC-5.3-3	5.3	A client treats a clone-round reply that carries an error card and no clone progress as fatal.
 SC-5.4-1	5.4	Widening reclassifies the newly covered elided phantoms as transit phantoms and fetches them.

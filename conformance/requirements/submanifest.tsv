@@ -12,8 +12,10 @@
 # history replay and the current check-in without a checkout (6.3), an
 # invalid stored pin (8.1), and the provisional phase retired, its flag-day
 # rule moved to 8.1, which the enable warning states.
+# The e03d91943e57 revision adds sparse canonical-writing obligations in
+# 6.2 and 6.4 and required MAX, final-merge and parent-basis vectors in A.6.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-submanifests-00.txt	9326a7f95bc3387585a4d6a3d7dc1cdcda4b18ca7684566124dcfc65e85d09aa
+# draft	draft-fossil-submanifests-00.txt	99ea094690fe13866a92edb07885a4a87b7ce2d04a26a93eb43ac2a94ac6daee
 SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.
 SM-3.2-1	3.2	An S card carries exactly a filename and a hash; a third token, or a missing hash, is rejected.
 SM-3.3-1	3.3	The S card filename is escape-decoded; the S card hash is never decoded.
@@ -56,6 +58,8 @@ SM-6.2-4	6.2	A final group shorter than MIN merges into its predecessor when the
 SM-6.2-5	6.2	A scan yielding one group, or as many groups as nodes, ends the construction with the manifest carrying that height's nodes; otherwise interior sub-manifests form the next height, never a node of height 16.
 SM-6.2-6	6.2	S card filenames and a leaf's filename and old-name tokens take the canonical encoding: exactly space, newline and backslash escaped, every other byte raw.
 SM-6.2-7	6.2	Sub-manifests are stored before the manifest that references them, and an unchanged subtree is shared by content addressing.
+SM-6.2-8	6.2	Sparse writers produce the full canonical construction, including MAX-cut shifts, MIN and final-small-group merges, renames and propagation at every height; necessary absent nodes are fetched or cause explicit refusal without a partial check-in.
+SM-6.2-9	6.2	Opaque reuse requires partition verification under the requested k or trusted local derivation tied to the immutable parent identity, construction rules and k; a different or unknown parent k requires validation or reconstruction even when filenames are unchanged.
 SM-6.3-1	6.3	A supporting server answers reqconfig /config, the scalar marker, with submanifest-k, enable-submanifests and submanifest-auto-retune when the requester holds Read permission.
 SM-6.3-2	6.3	A receiver validates the adopted state and applies all three settings or none: an invalid value, or enable-submanifests on without a submanifest-k from 1 to 12, leaves the repository's values unchanged, and card order does not affect the result.
 SM-6.3-3	6.3	A client supporting this specification requests the three settings with reqconfig /config in the clone's cleanup round, after clone authorization succeeds, and a pull does not request them.
@@ -86,3 +90,4 @@ SM-A-1	A.2, A.3	The Appendix A.2 and A.3 artifacts parse, determine their types,
 SM-A-2	A.4	The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.
 SM-A-3	A.5	The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.
 SM-A-4	A.5	The writer vectors of A.5: the A.4 set reproduced at k = 3, the height-0 merge and three-level vectors reproduced, flat output for N = 1 and a MIN-suppressed boundary, no selection over one name with a first enable failing atomically, and an injected persistence failure leaving no setting applied.
+SM-A-5	A.6	The SHA3 MAX-propagation, final-small-group-merge and different/unknown-parent-basis vectors compare successful results and every transitive node byte with full construction; absent S payloads require fetching or atomic explicit refusal, and dense runs require canonical success.

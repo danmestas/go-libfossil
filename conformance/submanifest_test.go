@@ -60,7 +60,7 @@ func submanifestCases() []smCase {
 	var all []smCase
 	for _, group := range [][]smCase{
 		smCardCases(), smTypeCases(), smWalkCases(), smStateCases(),
-		smTransferCases(), smVectorCases(), smWriterCases(),
+		smTransferCases(), smVectorCases(), smWriterCases(), smSparseCanonicalCases(),
 	} {
 		all = append(all, group...)
 	}

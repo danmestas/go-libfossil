@@ -1,8 +1,12 @@
 # Requirements of draft-fossil-sparse-cone-00, written from the draft text.
-# This phase implements the cone specification (§3) and the sparse worktree
-# (§4), Appendix A steps 1 and 2. The sparse store (§5), the sync extension
+# Implemented: the cone specification (§3) and the sparse worktree (§4),
+# Appendix A steps 1 and 2, and the sparse store's elided-phantom
+# classification and verification semantics (§5), step 3. The sync extension
 # (§6) and narrow-then-compact are later phases; their rows carry a scope
-# note naming the Appendix A step that covers them, and no case yet.
+# note naming the Appendix A step that covers them, and no case yet. Step 3's
+# cases make a store sparse the way a cone-scoped clone would leave it, since
+# nothing before step 4 fills one. §6.2's last sentence, a recipient's
+# classification of a delta's base, is step 3's classifier and is covered.
 # Skipped, with reasons: 1 (introduction), 4.5 and 7's last two paragraphs
 # (informative), 6.5 (a statement of non-guarantee with no behaviour), 9
 # (IANA). §3.6's second paragraph, which still calls exclusion members out
@@ -18,7 +22,7 @@ SC-2-1	2	A member covers a path when it equals the path or is a prefix of it end
 SC-3.1-1	3.1	A worktree cone is checkout-local state recorded with the checkout's other local records; it is not an artifact, does not synchronize, and affects no artifact's bytes or name.
 SC-3.1-2	3.1	A cone may be widened or narrowed at any time.
 SC-3.1-3	3.1	The canonical serialization marks a cone carrying members of other kinds with a distinct version, and an implementation that does not understand a version refuses the cone rather than reading it as path members.
-SC-3.1-4	3.1	Refusal of a store cone is policy loss: the store heals toward dense.	not yet implemented: the store cone is the sparse store, Appendix A step 3; a worktree cone that does not parse fails the checkout closed, as zit does
+SC-3.1-4	3.1	Refusal of a store cone is policy loss: the store heals toward dense.
 SC-3.2-1	3.2	Members are normalized through the worktree-path validation applied to tracked paths: no dot or dot-dot components, no empty components, no reserved roots.
 SC-3.2-2	3.2	A member covered by another member of the same polarity with no opposite-polarity member between them is removed, and the normalized cone is what classification uses.
 SC-3.2-3	3.2	At least 64 members are supported, and 255 should be.
@@ -45,29 +49,29 @@ SC-4.2-2	4.2	For flat manifests the baseline's out-of-cone F cards are copied by
 SC-4.2-3	4.2	For tree manifests only the sub-manifest nodes whose key range intersects the changed paths are rebuilt, and every untouched subtree is re-referenced by hash, its content not required.	the writer rebuilds the canonical tree, which re-derives every untouched node byte-identically and stores none of them anew, but it reads every file's content, as the R card over a dense store does
 SC-4.2-4	4.2	The result is an ordinary check-in: a reader cannot detect that it was committed sparsely, and no new artifact form is introduced.
 SC-4.3-1	4.3	A sparse-worktree commit over a dense store may compute the R card by reading out-of-cone content from the store.
-SC-4.3-2	4.3	A commit over a sparse store omits the R card.	not yet implemented: the sparse store, Appendix A step 3
+SC-4.3-2	4.3	A commit over a sparse store omits the R card.
 SC-4.3-3	4.3	Verifiers do not treat an absent R card as damage.
 SC-4.3-4	4.3	A verifier checking a present R card during a sparse materialization computes the aggregate over the dense enumeration, reading out-of-cone content from the store.	materialization verifies no R card; manifest.VerifyRCard, which every commit runs, always aggregates the dense enumeration
-SC-4.3-5	4.3	A verifier over a sparse store skips R verification rather than report disagreement.	not yet implemented: the sparse store, Appendix A step 3
+SC-4.3-5	4.3	A verifier over a sparse store skips R verification rather than report disagreement.
 SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.
 SC-4.4-2	4.4	The count of out-of-cone changes applied should be reported.
 SC-4.4-3	4.4	Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.
-SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.	not yet implemented: the sparse store, Appendix A step 3
-SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, elided phantoms for out-of-cone nodes and blobs, and every non-manifest structural artifact densely.	not yet implemented: the sparse store, Appendix A step 3
-SC-5.2-1	5.2	Transit phantoms, shunned artifacts and elided phantoms are distinguished; synchronization does not spontaneously request an elided phantom, whose absence is healthy.	not yet implemented: the sparse store, Appendix A step 3
-SC-5.2-2	5.2	Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.	not yet implemented: the sparse store, Appendix A step 3
-SC-5.2-3	5.2	Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.	not yet implemented: the sparse store, Appendix A step 3
-SC-5.3-1	5.3	A commit over elided subtrees references them by hash without possession, and pushing such a check-in is sound.	not yet implemented: the sparse store, Appendix A step 3
+SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.
+SC-5.1-1	5.1	A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, elided phantoms for out-of-cone nodes and blobs, and every non-manifest structural artifact densely.
+SC-5.2-1	5.2	Transit phantoms, shunned artifacts and elided phantoms are distinguished; synchronization does not spontaneously request an elided phantom, whose absence is healthy.
+SC-5.2-2	5.2	Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.
+SC-5.2-3	5.2	Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.
+SC-5.3-1	5.3	A commit over elided subtrees references them by hash without possession, and pushing such a check-in is sound.
 SC-5.3-2	5.3	A server should refuse to be a clone origin for cones it does not cover, unless configured as a partial mirror, with one error card and no content.	not yet implemented: the sync extension, Appendix A step 4
 SC-5.3-3	5.3	A client treats a clone-round reply that carries an error card and no clone progress as fatal.	not yet implemented: the sync extension, Appendix A step 4
-SC-5.4-1	5.4	Widening reclassifies the newly covered elided phantoms as transit phantoms and fetches them.	not yet implemented: the sparse store, Appendix A steps 3 and 4
+SC-5.4-1	5.4	Widening reclassifies the newly covered elided phantoms as transit phantoms and fetches them.
 SC-5.4-2	5.4	Narrowing does not by itself delete held content; only explicit compaction deletes, dropping artifacts both out-of-cone and unreferenced by any spine, through the store-rewrite machinery and its locks.	not yet implemented: narrow-then-compact, Appendix A step 5
-SC-5.5-1	5.5	The flat prefix of a hybrid history holds its manifests densely; its content blobs may be elided by F-card classification.	not yet implemented: the sparse store, Appendix A step 3
+SC-5.5-1	5.5	The flat prefix of a hybrid history holds its manifests densely; its content blobs may be elided by F-card classification.
 SC-6.1-1	6.1	A cone-scoped pull or clone adds one pragma cone card per inclusion member, encoded exactly as an F-card filename, and one pragma cone-not card per exclusion.	not yet implemented: the sync extension, Appendix A step 4
 SC-6.1-2	6.1	For check-in content a cone-scoped request asks for spines, in-cone sub-manifest nodes and in-cone blobs, and neither expects nor requests the remainder.	not yet implemented: the sync extension, Appendix A step 4
 SC-6.2-1	6.2	A cone-aware server walks each check-in's tree descending only nodes whose key range intersects the cone, emits the spine, the in-cone nodes and blobs, and bounds the per-round walk as a dense clone bounds its batches.	not yet implemented: the sync extension, Appendix A step 4
 SC-6.2-2	6.2	A cone-aware server does not serve a delta whose base is outside the keep set it computed for the request; it serves that artifact in full form.	not yet implemented: the sync extension, Appendix A step 4
-SC-6.2-3	6.2	A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.	not yet implemented: the sync extension, Appendix A step 4
+SC-6.2-3	6.2	A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.
 SC-6.3-1	6.3	Against a cone-ignorant server the requester filters locally: it stores in-cone artifacts, records elided phantoms for the remainder and reports the counts.	not yet implemented: the sync extension, Appendix A step 4
 SC-6.3-2	6.3	A cone-aware server should advertise the capability.	not yet implemented: the sync extension, Appendix A step 4
 SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.	not yet implemented: demand fetch, Appendix A step 4

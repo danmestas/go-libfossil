@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -107,6 +108,10 @@ func (c *Checkout) resolveFiles(
 	if err != nil {
 		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}
+	storeCone, err := content.StoreCone(c.repo.DB())
+	if err != nil {
+		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
+	}
 	blobRIDs := make([]libfossil.FslID, len(files))
 	var missing []string
 	for i, file := range files {
@@ -117,6 +122,12 @@ func (c *Checkout) resolveFiles(
 			return nil, nil, fmt.Errorf("checkout.resolveFiles: %s: %w", file.Name, err)
 		}
 		if !available {
+			blobRID, err = c.elidedRID(storeCone, file)
+			if err != nil {
+				return nil, nil, fmt.Errorf("checkout.resolveFiles: %s: %w", file.Name, err)
+			}
+		}
+		if blobRID <= 0 {
 			missing = append(missing, file.Name)
 			continue
 		}
@@ -129,6 +140,27 @@ func (c *Checkout) resolveFiles(
 		panic("checkout.resolveFiles: blobRIDs out of step with files")
 	}
 	return files, blobRIDs, nil
+}
+
+// elidedRID is the phantom that stands for file's content when a sparse
+// store lacks it by design (draft-fossil-sparse-cone-00 §5.2) and this
+// checkout never materializes it: neither the store cone nor the worktree
+// cone covers the file. The record names the phantom, as it would name the
+// blob, and a commit carries it forward by hash. It is 0 when the content is
+// simply missing.
+func (c *Checkout) elidedRID(storeCone *cone.Cone, file manifest.FileEntry) (libfossil.FslID, error) {
+	if storeCone == nil || storeCone.Covers(file.Name) || c.cone == nil || c.cone.Covers(file.Name) {
+		return 0, nil
+	}
+	var rid int64
+	err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", file.UUID).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return libfossil.FslID(rid), nil
 }
 
 // missingContentError names up to missingNamesMax of the missing files.

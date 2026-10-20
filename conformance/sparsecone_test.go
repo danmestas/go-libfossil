@@ -57,7 +57,7 @@ func TestSparseCone(t *testing.T) {
 func sparseconeCases() []scCase {
 	var all []scCase
 	for _, group := range [][]scCase{
-		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(),
+		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(), scStoreCases(),
 	} {
 		all = append(all, group...)
 	}

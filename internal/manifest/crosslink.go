@@ -1231,7 +1231,33 @@ func crosslinkCheckin(
 	if _, err := tx.Exec("DELETE FROM orphan WHERE rid=?", rid); err != nil {
 		return fmt.Errorf("orphan: %w", err)
 	}
+	if err := recheckTaggedBeforeLinking(tx, rid, sched.leaves); err != nil {
+		return err
+	}
 	return applyInlineTags(tx, rid, d, sched.leaves)
+}
+
+// recheckTaggedBeforeLinking schedules rid, and with it the parents its plink
+// rows now name, when rid already carries a branch row: one a control
+// artifact or a propagation wrote before rid was linked. That write scheduled
+// rid while it had no parents, so a parent on the same branch kept a leaf row
+// it no longer earns. Fossil schedules nothing here (adding a plink row is
+// not a branch write) and shares the gap across rounds, but applies its
+// rechecks once per round, where an out-of-order clone rarely hits it; each
+// link transaction here applies its own (linkTx), and a receive links one
+// artifact per transaction, so the gap would be common. A check-in with no
+// branch row is left alone, as fossil leaves it (issue #426).
+func recheckTaggedBeforeLinking(tx *db.Tx, rid libfossil.FslID, leaves *leaf.Pending) error {
+	var tagged int
+	err := tx.QueryRow("SELECT count(*) FROM tagxref WHERE rid=? AND tagid=?",
+		rid, leaf.BranchTagID).Scan(&tagged)
+	if err != nil {
+		return fmt.Errorf("branch row rid=%d: %w", rid, err)
+	}
+	if tagged == 0 {
+		return nil
+	}
+	return leaves.Schedule(tx, rid)
 }
 
 // crosslinkCheckinTables populates event/plink/mlink/cherrypick on tx,

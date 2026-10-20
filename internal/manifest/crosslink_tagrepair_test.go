@@ -574,3 +574,51 @@ func TestSweepBatchRollsBackLinksWhenLeafCheckFails(t *testing.T) {
 	assertLeavesComplete(t, r, "after the re-run")
 	assertMatchesFullRebuild(t, r)
 }
+
+// A check-in whose branch row a control artifact wrote before the check-in
+// itself was linked gets its plink rows only later, in another transaction.
+// The control's branch write scheduled the check-in when it had no parents,
+// so linking it must recheck the parents it now names: here p, a merge parent
+// on the same branch, is no longer a leaf. A clone delivers artifacts out of
+// order and links each in its own transaction, so this is common there.
+func TestLinkRechecksParentsOfCheckinTaggedBeforeLinking(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	q := storeCheckin(t, r, "q", "trunk", base)
+	p := storeCheckin(t, r, "p", "feature", base.Add(time.Minute), q)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink q, p: %v", err)
+	}
+	assertLeaves(t, r, "before c", []string{"p", "q"})
+
+	// c's control artifact arrives, and is linked, before c does.
+	body, c := buildCheckin(t, r, "c", base.Add(2*time.Minute), nil, q, p)
+	ctl := &deck.Deck{
+		Type: deck.Control,
+		D:    base.Add(time.Hour),
+		T: []deck.TagCard{
+			{Type: deck.TagPropagating, Name: "branch", UUID: c, Value: "feature"},
+			{Type: deck.TagSingleton, Name: "sym-feature", UUID: c},
+		},
+		U: deck.User("testuser"),
+	}
+	data, err := ctl.Marshal()
+	if err != nil {
+		t.Fatalf("marshal control: %v", err)
+	}
+	if _, _, err := blob.Store(r.DB(), data); err != nil {
+		t.Fatalf("store control: %v", err)
+	}
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink control: %v", err)
+	}
+
+	if _, _, err := blob.Store(r.DB(), body); err != nil {
+		t.Fatalf("store c: %v", err)
+	}
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c: %v", err)
+	}
+	assertLeaves(t, r, "after c", []string{"c", "q"})
+	assertMatchesFullRebuild(t, r)
+}

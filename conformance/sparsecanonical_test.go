@@ -33,7 +33,8 @@ func smSparseCanonicalCases() []smCase {
 			if absent {
 				mode = "absent-node"
 			}
-			cases = append(cases, smWriterCase("submanifest.a6."+vector+"."+mode, "SM-A-5", func(t *testing.T) error {
+			id := "submanifest.a6." + vector + "." + mode
+			cases = append(cases, smWriterCase(id, "SM-A-5", func(t *testing.T) error {
 				return smSparseCanonical(t, vector, absent)
 			}))
 		}
@@ -52,13 +53,18 @@ func smSparseCanonicalCases() []smCase {
 func scCanonicalCases() []scCase {
 	var cases []scCase
 	for _, c := range smSparseCanonicalCases() {
-		cases = append(cases, scCase{Case{ID: "sparsecone.4.2." + c.ID[len("submanifest."):], Req: "SC-4.2-3"}, c.run})
+		id := "sparsecone.4.2." + c.ID[len("submanifest."):]
+		cases = append(cases, scCase{Case{ID: id, Req: "SC-4.2-3"}, c.run})
 	}
 	cases = append(cases,
-		scCase{Case{ID: "sparsecone.5.3.canonical-absent-node", Req: "SC-5.3-1"}, func(t *testing.T) error {
-			return smSparseCanonical(t, "max", true)
-		}},
-		scCase{Case{ID: "sparsecone.5.1.retained-outside-payloads", Req: "SC-5.1-1"}, scRetainedOutsidePayloads},
+		scCase{
+			Case{ID: "sparsecone.5.3.canonical-absent-node", Req: "SC-5.3-1"},
+			func(t *testing.T) error { return smSparseCanonical(t, "max", true) },
+		},
+		scCase{
+			Case{ID: "sparsecone.5.1.retained-outside-payloads", Req: "SC-5.1-1"},
+			scRetainedOutsidePayloads,
+		},
 	)
 	return cases
 }
@@ -98,61 +104,131 @@ var smMaxNames = []string{
 	"f0015", "f0016", "f0017", "f0018", "f0019", "f0021", "f0022", "f0023", "f0024",
 }
 
+type smCanonicalFixture struct {
+	r          *repo.Repo
+	parent     libfossil.FslID
+	deck       *deck.Deck
+	co         *checkout.Checkout
+	files      map[string]string
+	requestedK int
+}
+
 func smSparseCanonical(t *testing.T, vector string, absent bool) error {
+	f, err := smCanonicalParent(t, vector)
+	if err != nil {
+		return err
+	}
+	if err := f.open(t, vector, absent); err != nil {
+		return err
+	}
+	if err := f.edit(t, vector); err != nil {
+		return err
+	}
+	before, err := smCanonicalState(f.r, f.co)
+	if err != nil {
+		return err
+	}
+	rid, uuid, err := f.co.Commit(checkout.CommitOpts{
+		Message: "A.6", User: "u", Time: smTime.Add(time.Hour),
+	})
+	if err == nil {
+		return smCanonicalClosure(f.r, rid, f.files, f.requestedK)
+	}
+	if !absent {
+		return fmt.Errorf("dense A.6 %s refused: %w", vector, err)
+	}
+	if _, missing := manifest.MissingSubmanifest(err); !missing {
+		return fmt.Errorf("absent-node refusal does not identify its missing sub-manifest: %w", err)
+	}
+	after, stateErr := smCanonicalState(f.r, f.co)
+	if stateErr != nil {
+		return stateErr
+	}
+	if rid != 0 {
+		return fmt.Errorf("refusal returned published RID %d", rid)
+	}
+	if uuid != "" {
+		return fmt.Errorf("refusal returned published UUID %q", uuid)
+	}
+	if before != after {
+		return fmt.Errorf("refusal published state: before=%s after=%s", before, after)
+	}
+	return nil
+}
+
+func smCanonicalParent(t *testing.T, vector string) (*smCanonicalFixture, error) {
 	old := map[string]string{}
 	for _, name := range smMaxNames {
 		if smZbits(name) != 0 {
-			return fmt.Errorf("A.6 name %s has zbits %d, want zero", name, smZbits(name))
+			return nil, fmt.Errorf("A.6 name %s has zbits %d, want zero", name, smZbits(name))
 		}
 		if name != "f0001" {
 			old[name] = name
 		}
 	}
 	parentK, requestedK := 1, 1
-	if vector == "final-merge" {
-		old = map[string]string{"g0000": "g0000", "g0001": "g0001", "g0005": "g0005", "g0006": "g0006"}
+	wantSizes := []int{8, 8, 1}
+	switch vector {
+	case "max", "unknown-k1":
+	case "final-merge":
+		old = map[string]string{
+			"g0000": "g0000", "g0001": "g0001", "g0005": "g0005", "g0006": "g0006",
+		}
 		parentK, requestedK = 3, 3
-	}
-	if vector == "different-k" || vector == "unknown-k2" {
+		wantSizes = []int{2, 2}
+	case "different-k", "unknown-k2":
 		requestedK = 2
+	default:
+		panic("unknown A.6 vector")
 	}
-	r, err := smWriterRepo(t, manifest.SettingEnableSubmanifests, "on", manifest.SettingSubmanifestK, strconv.Itoa(parentK))
+	r, err := smWriterRepo(t, manifest.SettingEnableSubmanifests, "on",
+		manifest.SettingSubmanifestK, strconv.Itoa(parentK))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	parent, d, err := smCommit(r, old, 0, smTime, false)
 	if err != nil {
-		return err
-	}
-	wantSizes := []int{8, 8, 1}
-	if vector == "final-merge" {
-		wantSizes = []int{2, 2}
+		return nil, err
 	}
 	if err := smCanonicalLeafSizes(r, d.S, wantSizes); err != nil {
-		return err
+		return nil, err
 	}
 	if vector == "unknown-k1" || vector == "unknown-k2" {
-		// Reauthor the immutable root outside the writer: its S closure is
-		// valid, but local derivation evidence for the old identity cannot
-		// establish the construction basis of this imported identity.
-		d.C = "externally authored parent"
-		data, err := d.Marshal()
+		parent, err = smCanonicalImport(r, d)
 		if err != nil {
-			return err
-		}
-		if err := r.WithTx(func(tx *db.Tx) error {
-			parent, _, err = blob.Store(tx, data)
-			return err
-		}); err != nil {
-			return err
-		}
-		if _, err := manifest.Crosslink(r); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err := r.SetConfig(manifest.SettingSubmanifestK, strconv.Itoa(requestedK)); err != nil {
-		return err
+		return nil, err
 	}
+	return &smCanonicalFixture{
+		r: r, parent: parent, deck: d, files: old, requestedK: requestedK,
+	}, nil
+}
+
+func smCanonicalImport(r *repo.Repo, d *deck.Deck) (libfossil.FslID, error) {
+	// The externally authored immutable root has no local writer evidence;
+	// evidence tied to the original identity cannot establish its basis.
+	d.C = "externally authored parent"
+	data, err := d.Marshal()
+	if err != nil {
+		return 0, err
+	}
+	var parent libfossil.FslID
+	if err := r.WithTx(func(tx *db.Tx) error {
+		parent, _, err = blob.Store(tx, data)
+		return err
+	}); err != nil {
+		return 0, err
+	}
+	if _, err := manifest.Crosslink(r); err != nil {
+		return 0, err
+	}
+	return parent, nil
+}
+
+func (f *smCanonicalFixture) open(t *testing.T, vector string, absent bool) error {
 	var c *cone.Cone
 	if absent {
 		include := []string{"f0000"}
@@ -162,68 +238,48 @@ func smSparseCanonical(t *testing.T, vector string, absent bool) error {
 			include = []string{"g0005", "g0006"}
 		}
 		c = scCone(t, include, nil)
-		if err := content.SetStoreCone(r.DB(), c); err != nil {
+		if err := content.SetStoreCone(f.r.DB(), c); err != nil {
 			return err
 		}
 	}
-	f := &scRepo{r: r, c1: parent, when: smTime}
-	co := f.open(t, c, parent)
-	if absent {
-		cards := d.S[1:]
-		if vector == "final-merge" {
-			cards = d.S[:1]
-		}
-		for _, card := range cards {
-			if err := smElideCanonicalNode(r, card.UUID); err != nil {
-				return err
-			}
-		}
-	}
-	next := map[string]string{}
-	for name, text := range old {
-		next[name] = text
-	}
-	switch vector {
-	case "max":
-		scWrite(t, co.Dir(), "f0001", "f0001")
-		if _, err := co.Manage(checkout.ManageOpts{Paths: []string{"f0001"}}); err != nil {
-			return err
-		}
-		next["f0001"] = "f0001"
-	case "final-merge":
-		if err := co.Unmanage(checkout.UnmanageOpts{Paths: []string{"g0006"}}); err != nil {
-			return err
-		}
-		if err := os.Remove(filepath.Join(co.Dir(), "g0006")); err != nil {
-			return err
-		}
-		delete(next, "g0006")
-	default:
-		scWrite(t, co.Dir(), "f0000", "replacement")
-		next["f0000"] = "replacement"
-	}
-	before, err := smCanonicalState(r, co)
-	if err != nil {
-		return err
-	}
-	rid, uuid, err := co.Commit(checkout.CommitOpts{Message: "A.6", User: "u", Time: smTime.Add(time.Hour)})
-	if err != nil {
-		if !absent {
-			return fmt.Errorf("dense A.6 %s refused: %w", vector, err)
-		}
-		if _, missing := manifest.MissingSubmanifest(err); !missing {
-			return fmt.Errorf("absent-node refusal does not identify its missing sub-manifest: %w", err)
-		}
-		after, stateErr := smCanonicalState(r, co)
-		if stateErr != nil {
-			return stateErr
-		}
-		if rid != 0 || uuid != "" || before != after {
-			return fmt.Errorf("refusal published state: rid=%d uuid=%q before=%s after=%s", rid, uuid, before, after)
-		}
+	sc := &scRepo{r: f.r, c1: f.parent, when: smTime}
+	f.co = sc.open(t, c, f.parent)
+	if !absent {
 		return nil
 	}
-	return smCanonicalClosure(r, rid, next, requestedK)
+	cards := f.deck.S[1:]
+	if vector == "final-merge" {
+		cards = f.deck.S[:1]
+	}
+	for _, card := range cards {
+		if err := smElideCanonicalNode(f.r, card.UUID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (f *smCanonicalFixture) edit(t *testing.T, vector string) error {
+	switch vector {
+	case "max":
+		scWrite(t, f.co.Dir(), "f0001", "f0001")
+		if _, err := f.co.Manage(checkout.ManageOpts{Paths: []string{"f0001"}}); err != nil {
+			return err
+		}
+		f.files["f0001"] = "f0001"
+	case "final-merge":
+		if err := f.co.Unmanage(checkout.UnmanageOpts{Paths: []string{"g0006"}}); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(f.co.Dir(), "g0006")); err != nil {
+			return err
+		}
+		delete(f.files, "g0006")
+	default:
+		scWrite(t, f.co.Dir(), "f0000", "replacement")
+		f.files["f0000"] = "replacement"
+	}
+	return nil
 }
 
 func smElideCanonicalNode(r *repo.Repo, uuid string) error {
@@ -249,8 +305,9 @@ func smElideCanonicalNode(r *repo.Repo, uuid string) error {
 
 func smCanonicalState(r *repo.Repo, co *checkout.Checkout) (string, error) {
 	var blobs, events, links int
-	if err := r.DB().QueryRow(`SELECT (SELECT count(*) FROM blob),
-		(SELECT count(*) FROM event), (SELECT count(*) FROM plink)`).Scan(&blobs, &events, &links); err != nil {
+	const query = `SELECT (SELECT count(*) FROM blob),
+		(SELECT count(*) FROM event), (SELECT count(*) FROM plink)`
+	if err := r.DB().QueryRow(query).Scan(&blobs, &events, &links); err != nil {
 		return "", err
 	}
 	rid, uuid, err := co.Version()

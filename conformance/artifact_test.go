@@ -24,7 +24,7 @@ type artifactCase struct {
 	// check, when set, inspects an accepted parse.
 	check func(*deck.Deck) error
 	// fossil is set only when fossil(1) gives the opposite verdict; it
-	// cites the erratum or the reason the case does not follow fossil.
+	// cites the draft's note or the reason the case does not follow fossil.
 	fossil string
 	// nonCanonical marks an accepted input Marshal need not reproduce byte
 	// for byte, such as a bare U card that reads back as "U anonymous".

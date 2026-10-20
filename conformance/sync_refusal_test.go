@@ -4,7 +4,7 @@ package conformance
 // bookkeeping: a payload cut short (Section 5.1), the error count of the
 // closing comment (5.3), the end of a request after a failed login (6.4), a
 // refused push (6.6) and a gimme for private content outside a private sync
-// (8.6). The reference behavior is fossil(1) 2.28 and the -01 errata.
+// (8.6). The reference behavior is fossil(1) 2.28 as the draft's notes record it.
 
 // readOnly gives nobody Read alone, so a pull is accepted and a push is not.
 var readOnly = []string{"UPDATE user SET cap='o' WHERE login='nobody'"}
@@ -28,8 +28,7 @@ func serverRefusalCases() []syncServerCase {
 		body: []string{"{CV}", pushCard, "file {N1} 100000", "{N1.data}"},
 		want: all(completed, onlyError("malformed+file+line", "malformed file line"),
 			held("N1", 0)),
-		fossil: "fossil(1) 2.28 stores the bytes present, which hash to N1 (erratum " +
-			"sync-protocol-01-s5.1-truncated-payload-receiver)",
+		fossil: "fossil(1) 2.28 stores the bytes present, which hash to N1 (5.1, note)",
 	}, {
 		// The login failure ends card parsing, but the pull before it
 		// still gets its igot inventory and the reply its closing comment.
@@ -111,10 +110,9 @@ func clientRefusalCases() []syncClientCase {
 		op:   opPull,
 		replies: [][]string{{"{SV}", "file {N1} {N1.size}", "{N1.data}",
 			"file {N3} 100000", "{N3.data}"}},
-		want: every(stored("N1"), notStored("N3")),
-		fc:   true,
-		fossil: "fossil(1) 2.28 stores the bytes present, which hash to N3 (erratum " +
-			"sync-protocol-01-s5.1-truncated-payload-receiver)",
+		want:   every(stored("N1"), notStored("N3")),
+		fc:     true,
+		fossil: "fossil(1) 2.28 stores the bytes present, which hash to N3 (5.1, note)",
 	}, {
 		Case: Case{ID: "sync.5.3.errors-not-acted-on", Req: "SP-5.3-5"},
 		op:   opPull,

@@ -71,9 +71,8 @@ func readPayload(r *bufio.Reader, size int) ([]byte, error) {
 }
 
 // cutShort reports whether a payload read failed because the body ended
-// before the payload's declared count. Section 5.1 of sync-protocol-01 (erratum
-// s5.1-truncated-payload-receiver) makes such a card a handler failure that
-// names the card's malformed-line error, so the decoder yields a BadFileCard
+// before the payload's declared count. Section 5.1 of sync-protocol-01 makes
+// such a card a handler failure that names the card's malformed-line error, so the decoder yields a BadFileCard
 // and stops, leaving the cards before it in effect. fossil(1) instead keeps
 // the bytes present (blob_extract clamps the count); -01 is followed here.
 func cutShort(err error) bool {

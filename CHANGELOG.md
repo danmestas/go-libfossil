@@ -91,6 +91,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The conformance suite no longer reads erratum files. zit applied every
+  erratum in its draft text and retired `docs/rfcs/erratum/` at check-in
+  `62a7d1bb3f`; each draft now records its corrections in its own Changes
+  appendix, and the draft text is the authority. The `# erratum` pins and
+  `conformance/rfcs/erratum/` are gone. The artifact-format, repo-state,
+  sync-protocol and delta-format drafts are unchanged. The sub-manifest
+  draft is re-pinned with only its expiry date and a reflow changed. The
+  sparse-cone draft is re-pinned to its 19 October 2026 revision on zit's
+  `horizon-rfc` branch, where §3.6 is removed and §3.4 states the literal
+  prefix rule once: a metacharacter in a member is a literal character,
+  never expanded, and the member may be refused. `SC-3.6-1` is replaced by
+  `SC-3.4-3`, which the same case covers.
 - `S` is no longer rejected as an undefined card letter, and a manifest
   with no `D` card is reclassified as a sub-manifest before its cards are
   checked, so it is rejected for its first illegal card rather than for the

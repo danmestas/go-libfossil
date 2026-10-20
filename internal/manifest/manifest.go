@@ -261,24 +261,29 @@ func storeFileBlobs(tx *db.Tx, files []File, storeCone *cone.Cone) ([]deck.FileC
 		if err := checkWriterName(f.OldName); err != nil {
 			return nil, nil, err
 		}
-		if f.UUID != "" {
-			if err := checkCarried(tx, f, storeCone); err != nil {
-				return nil, nil, err
-			}
-			fCards[i] = deck.FileCard{Name: f.Name, UUID: f.UUID, Perm: f.Perm, OldName: f.OldName}
-			continue
+		var rid libfossil.FslID
+		uuid := f.UUID
+		held := true
+		var err error
+		if uuid != "" {
+			rid, held, err = checkCarried(tx, f, storeCone)
+		} else {
+			rid, uuid, err = blob.Store(tx, f.Content)
 		}
-		rid, uuid, err := blob.Store(tx, f.Content)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
 		}
-		// Every check-in is public, so the content it names is too, even
-		// content first stored privately; fossil's commit does the same.
-		if err := content.MakePublic(tx, int64(rid)); err != nil {
-			return nil, nil, fmt.Errorf("publish file %q: %w", f.Name, err)
+		// Every check-in is public, including carried content and known
+		// phantoms. Only held content can be offered in the unsent queue.
+		if rid > 0 {
+			if err := content.MakePublic(tx, int64(rid)); err != nil {
+				return nil, nil, fmt.Errorf("publish file %q: %w", f.Name, err)
+			}
 		}
 		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm, OldName: f.OldName}
-		rids = append(rids, rid)
+		if held {
+			rids = append(rids, rid)
+		}
 	}
 	return fCards, rids, nil
 }
@@ -288,14 +293,24 @@ func storeFileBlobs(tx *db.Tx, files []File, storeCone *cone.Cone) ([]deck.FileC
 // be committed blind. The exception is a file the store cone leaves out,
 // whose content a sparse store deliberately lacks: §5.3 references it by
 // hash without possession, and the check-in carries no R card.
-func checkCarried(tx *db.Tx, f File, storeCone *cone.Cone) error {
+func checkCarried(tx *db.Tx, f File, storeCone *cone.Cone) (libfossil.FslID, bool, error) {
 	if f.Content != nil {
 		panic("manifest.checkCarried: a carried file has content: " + f.Name)
 	}
-	if _, ok := content.AvailableByUUID(tx, f.UUID); ok || elidable(storeCone, f.Name) {
-		return nil
+	rid, held, err := content.CheckAvailableByUUID(tx, f.UUID)
+	if err != nil {
+		return 0, false, err
 	}
-	return fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	if held {
+		return rid, true, nil
+	}
+	if !elidable(storeCone, f.Name) {
+		return 0, false, fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	}
+	// Availability deliberately returns no RID for missing content. Recover
+	// an existing phantom's identity so publication clears its private flag.
+	err = tx.QueryRow("SELECT coalesce((SELECT rid FROM blob WHERE uuid=?), 0)", f.UUID).Scan(&rid)
+	return rid, false, err
 }
 
 // elidable reports whether a sparse store may lack the content of the file

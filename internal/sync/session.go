@@ -75,6 +75,7 @@ type SyncResult struct {
 
 // session holds the mutable state of a running sync.
 type session struct {
+	ctx               context.Context
 	sparseReceived    map[string]bool
 	repo              *repo.Repo
 	env               *simio.Env
@@ -289,6 +290,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return nil, fmt.Errorf("sync: %w", err)
 	}
 	s := newSession(r, opts)
+	s.ctx = ctx
 	closed := false
 	defer func() {
 		// A round that fails after earlier rounds' cascades committed their

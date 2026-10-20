@@ -1582,7 +1582,7 @@ func (s *session) loadDBPhantoms() error {
 	if !s.opts.Pull {
 		return nil
 	}
-	elided, err := elidedPhantoms(s.repo.DB())
+	elided, err := elidedPhantoms(s.ctx, s.repo.DB())
 	if err != nil {
 		return err
 	}
@@ -1614,12 +1614,15 @@ func (s *session) loadDBPhantoms() error {
 
 // elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
 // store, which has nothing elided and so pays for no classification.
-func elidedPhantoms(q db.Querier) (*content.Absences, error) {
+func elidedPhantoms(ctx context.Context, q db.Querier) (*content.Absences, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	storeCone, err := content.StoreCone(q)
 	if err != nil || storeCone == nil {
 		return nil, err
 	}
-	return content.LoadAbsences(q)
+	return content.LoadAbsencesContext(ctx, q)
 }
 
 // handleFileCard stores a received file (or delta-file) into the repo.

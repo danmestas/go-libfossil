@@ -122,8 +122,16 @@ type Absences struct {
 // supplement raw provenance for historical names, including prior rename paths.
 // A partial tree need not be crosslinked to classify its outside S children.
 func LoadAbsences(q db.Querier) (*Absences, error) {
-	if q == nil {
-		panic("content.LoadAbsences: q must not be nil")
+	return LoadAbsencesContext(context.Background(), q)
+}
+
+// LoadAbsencesContext carries cancellation through raw provenance discovery.
+func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
+	if ctx == nil || q == nil {
+		panic("content.LoadAbsencesContext: nil context or querier")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	c, err := StoreCone(q)
 	if err != nil {
@@ -161,7 +169,7 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
-		refs, err := LoadConeReferences(context.Background(), q, c)
+		refs, err := LoadConeReferences(ctx, q, c)
 		if err != nil {
 			return nil, err
 		}

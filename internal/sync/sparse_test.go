@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/testutil"
 	"strings"
 	"testing"
 
@@ -133,6 +136,51 @@ func TestSparseReceiveFiltersDeltaPair(t *testing.T) {
 	}
 }
 
+func TestSparseServerExpandsExcludedDeltaBase(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	base := storeAndLink(t, r, []byte(strings.Repeat("base content\n", 1000)))
+	child := storeAndLink(t, r, []byte(strings.Repeat("base content\n", 999)+"changed\n"))
+	baseRID, _ := content.AvailableByUUID(r.DB(), base)
+	childRID, _ := content.AvailableByUUID(r.DB(), child)
+	if err := r.WithTx(func(tx *db.Tx) error { _, err := content.Deltify(tx, childRID, baseRID); return err }); err != nil {
+		t.Fatal(err)
+	}
+	var source int64
+	if err := r.DB().QueryRow("SELECT srcid FROM delta WHERE rid=?", childRID).Scan(&source); err != nil || source != int64(baseRID) {
+		t.Fatalf("delta fixture: source=%d err=%v", source, err)
+	}
+	data, err := (&deck.Deck{C: "delta boundary", D: time.Now().UTC(), U: deck.User("u"), F: []deck.FileCard{{Name: "src/a", UUID: child}, {Name: "zzz/a", UUID: base}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeAndLink(t, r, data)
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
+	cards = append(cards, conePragmas(c)...)
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := false
+	for _, card := range findCards[*xfer.CFileCard](resp) {
+		if card.UUID == base {
+			t.Fatal("sent excluded delta base")
+		}
+		if card.UUID == child {
+			seen = true
+			if card.DeltaSrc != "" {
+				t.Fatalf("cross-cone delta source %s", card.DeltaSrc)
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("omitted retained delta child")
+	}
+}
+
 func TestSparseCloneRefusalFatal(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	cs := &cloneSession{repo: r, seqno: 1}
@@ -176,25 +224,66 @@ func TestSparseServerTreeClone(t *testing.T) {
 	if !seen[kept] || !seen[insideLeaf] || !seen[spine] {
 		t.Fatalf("omitted tree keep set: %v", seen)
 	}
-	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
-		resp, err := HandleSync(context.Background(), r, req)
-		if err != nil {
-			t.Fatal(err)
+	for _, ignorant := range []bool{false, true} {
+		name := "aware"
+		if ignorant {
+			name = "ignorant"
 		}
-		return resp
-	}}
-	got, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "tree.fossil"), transport, CloneOpts{StoreCone: c, PullPhantoms: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer got.Close()
-	for _, uuid := range []string{kept, insideLeaf, spine} {
-		if _, ok := content.AvailableByUUID(got.DB(), uuid); !ok {
-			t.Fatalf("sparse tree clone lost %s", uuid)
-		}
-	}
-	if res.Elided == 0 {
-		t.Fatal("sparse tree clone reported no elision")
+		t.Run(name, func(t *testing.T) {
+			transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+				if ignorant {
+					var cards []xfer.Card
+					for _, card := range req.Cards {
+						if p, ok := card.(*xfer.PragmaCard); ok && (p.Name == "cone" || p.Name == "cone-not") {
+							continue
+						}
+						cards = append(cards, card)
+					}
+					req = &xfer.Message{Cards: cards}
+				}
+				resp, err := HandleSync(context.Background(), r, req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return resp
+			}}
+			got, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "tree.fossil"), transport, CloneOpts{StoreCone: c, PullPhantoms: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer got.Close()
+			for _, uuid := range []string{kept, insideLeaf, spine} {
+				if _, ok := content.AvailableByUUID(got.DB(), uuid); !ok {
+					t.Fatalf("sparse tree clone lost %s", uuid)
+				}
+			}
+			for _, uuid := range []string{out, outsideLeaf} {
+				if _, ok := content.AvailableByUUID(got.DB(), uuid); ok {
+					t.Fatalf("sparse tree clone retained %s", uuid)
+				}
+			}
+			if res.Elided == 0 {
+				t.Fatal("sparse tree clone reported no elision")
+			}
+			nextFile := storeAndLink(t, r, []byte("tree pull "+name))
+			nextLeaf := marshal(&deck.Deck{F: []deck.FileCard{{Name: "src/a", UUID: nextFile}}})
+			nextSpine := marshal(&deck.Deck{C: "tree pull " + name, D: time.Now().UTC(), U: deck.User("u"), P: []string{spine}, S: []deck.SubmanifestCard{{Name: "src/a", UUID: nextLeaf}, {Name: "zzz/a", UUID: outsideLeaf}}})
+			pulled, err := Sync(context.Background(), got, transport, SyncOpts{Pull: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(pulled.Errors) > 0 {
+				t.Fatalf("sparse pull errors: %v", pulled.Errors)
+			}
+			for _, uuid := range []string{nextFile, nextLeaf, nextSpine} {
+				if _, ok := content.AvailableByUUID(got.DB(), uuid); !ok {
+					t.Fatalf("sparse pull lost %s", uuid)
+				}
+			}
+			if _, ok := content.AvailableByUUID(got.DB(), outsideLeaf); ok {
+				t.Fatal("sparse pull retained outside node")
+			}
+		})
 	}
 }
 
@@ -227,6 +316,15 @@ func TestSparseServerFlatClone(t *testing.T) {
 	if !seen[kept] || !seen[spine] {
 		t.Fatalf("server omitted kept artifacts: %v", seen)
 	}
+	h := &handler{repo: r, cone: c, ctx: context.Background()}
+	if err := h.emitIGots(); err != nil {
+		t.Fatal(err)
+	}
+	for _, card := range findCards[*xfer.IGotCard](&xfer.Message{Cards: h.resp}) {
+		if card.UUID == out {
+			t.Fatal("ordinary pull advertised out-of-cone content")
+		}
+	}
 	if err := content.SetStoreCone(r.DB(), c); err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +334,50 @@ func TestSparseServerFlatClone(t *testing.T) {
 	}
 	if len(dense.Cards) != 1 || len(findCards[*xfer.ErrorCard](dense)) != 1 {
 		t.Fatalf("sparse origin did not refuse dense clone: %v", dense.Cards)
+	}
+}
+
+func TestSparseCloneFromRealFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	path := filepath.Join(t.TempDir(), "dense.fossil")
+	if out, err := exec.Command(bin, "new", path).CombinedOutput(); err != nil {
+		t.Fatalf("fossil new: %v\n%s", err, out)
+	}
+	source, err := repo.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if _, err := source.DB().Exec("UPDATE user SET cap='s' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	inside := storeAndLink(t, source, []byte("inside fossil source"))
+	outside := storeAndLink(t, source, []byte("outside fossil source"))
+	data, err := (&deck.Deck{C: "fossil sparse", D: time.Now().UTC(), U: deck.User("u"), F: []deck.FileCard{{Name: "src/a", UUID: inside}, {Name: "zzz/a", UUID: outside}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeAndLink(t, source, data)
+	url := startFossilServer(t, path)
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	r, res, err := Clone(ctx, filepath.Join(t.TempDir(), "sparse.fossil"), &HTTPTransport{URL: url}, CloneOpts{StoreCone: c, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	if _, ok := content.AvailableByUUID(r.DB(), inside); !ok {
+		t.Fatal("real fossil clone lost inside file")
+	}
+	if _, ok := content.AvailableByUUID(r.DB(), outside); ok {
+		t.Fatal("real fossil clone retained outside file")
+	}
+	if res.Elided != 1 {
+		t.Fatalf("real fossil clone elided %d, want 1", res.Elided)
 	}
 }
 

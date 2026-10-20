@@ -1181,7 +1181,7 @@ func (h *handler) requestPhantoms() error {
 		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
 	}
 	// draft-fossil-sparse-cone-00 §5.2: an elided phantom is never asked for.
-	elided, err := elidedPhantoms(h.repo.DB())
+	elided, err := elidedPhantoms(h.ctx, h.repo.DB())
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
@@ -1422,11 +1422,13 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 }
 
 func (h *handler) emitIGots() error {
-	// Emit igot for all non-phantom blobs so the client can discover
-	// everything the server has. Cluster generation is a client-side
-	// optimization for push; the server always advertises all blobs.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	// Sparse inventories advertise only the request's keep-set; announcing an
+	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
-		SELECT uuid FROM blob WHERE size >= 0
+		SELECT rid,uuid FROM blob WHERE size >= 0
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)
 		AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)`,
 	)
@@ -1437,9 +1439,13 @@ func (h *handler) emitIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
 		// Skip if the client already has this blob as public (non-private).
@@ -1480,8 +1486,11 @@ func (h *handler) emitIGots() error {
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
 func (h *handler) emitPrivateIGots() error {
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
 	rows, err := h.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return fmt.Errorf("handler: listing private blobs: %w", err)
@@ -1490,9 +1499,13 @@ func (h *handler) emitPrivateIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// Skip if the client already has this blob as private.
 		// If the client has it as public, we still emit the private igot so

@@ -95,6 +95,34 @@ func TestConeReferencesCancelled(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation: %v", err)
 	}
+	if _, err := LoadAbsencesContext(ctx, d); !errors.Is(err, context.Canceled) {
+		t.Fatalf("absence cancellation: %v", err)
+	}
+}
+
+func TestConeReferencesKeepsUnexpandable(t *testing.T) {
+	d := setupTestDB(t)
+	rid, uuid, err := blob.Store(d, []byte("damaged payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec("UPDATE blob SET content=? WHERE rid=?", []byte("broken compression"), rid); err != nil {
+		t.Fatal(err)
+	}
+	data, err := (&deck.Deck{C: "outside damaged", D: time.Now().UTC(), U: deck.User("u"), F: []deck.FileCard{{Name: "zzz/a", UUID: uuid}}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := blob.Store(d, data); err != nil {
+		t.Fatal(err)
+	}
+	refs, err := LoadConeReferences(context.Background(), d, mustCone(t, []string{"src"}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refs.Outside(rid) {
+		t.Fatal("unexpandable potential structural artifact classified for deletion")
+	}
 }
 
 func TestConeReferencesRawStructuralAlias(t *testing.T) {

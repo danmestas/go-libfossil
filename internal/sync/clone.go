@@ -262,7 +262,7 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 	if !cs.opts.PullPhantoms {
 		return nil
 	}
-	missing, err := phantomUUIDs(cs.repo)
+	missing, err := phantomUUIDs(ctx, cs.repo)
 	if err != nil {
 		return err
 	}
@@ -286,7 +286,7 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 	if err != nil {
 		return fmt.Errorf("sync.Clone: pull missing artifacts: %w", err)
 	}
-	if missing, err = phantomUUIDs(cs.repo); err != nil {
+	if missing, err = phantomUUIDs(ctx, cs.repo); err != nil {
 		return err
 	}
 	if len(missing) > 0 {
@@ -296,8 +296,8 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 }
 
 // phantomUUIDs returns the artifacts the repository knows of but lacks.
-func phantomUUIDs(r *repo.Repo) (map[string]bool, error) {
-	a, err := elidedPhantoms(r.DB())
+func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
+	a, err := elidedPhantoms(ctx, r.DB())
 	if err != nil {
 		return nil, err
 	}

@@ -101,7 +101,7 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 		}
 		cache.Invalidate(rid)
 	}
-	a, err := content.LoadAbsences(q)
+	a, err := content.LoadAbsencesContext(ctx, q)
 	if err != nil {
 		return 0, err
 	}

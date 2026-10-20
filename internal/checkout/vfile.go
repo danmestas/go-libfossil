@@ -104,11 +104,14 @@ func (c *Checkout) resolveFiles(
 		panic("checkout.resolveFiles: nil repo")
 	}
 
-	files, err := manifest.ListFilesFiltered(c.repo, rid, filter)
+	storeCone, err := content.StoreCone(c.repo.DB())
 	if err != nil {
 		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}
-	storeCone, err := content.StoreCone(c.repo.DB())
+	if filter == nil && storeCone != nil {
+		filter = c.fileFilter()
+	}
+	files, err := manifest.ListFilesFiltered(c.repo, rid, filter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}

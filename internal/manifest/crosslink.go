@@ -504,11 +504,12 @@ func repairPlinkAndTags(tx *db.Tx, leaves *leaf.Pending) error {
 const candidateQuerySQL = `
 	SELECT b.rid, b.uuid FROM blob b
 	WHERE b.size >= 0
-	  AND b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
+	  AND (b.rid IN (SELECT o.rid FROM orphan o JOIN blob dep ON dep.rid=o.baseline WHERE dep.size>=0)
+	    OR (b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT srcid FROM tagxref WHERE srcid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT fpid FROM forumpost WHERE fpid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT attachid FROM attachment WHERE attachid IS NOT NULL)
-	  AND b.rid NOT IN (SELECT rid FROM ` + nonArtifactTable + `)
+	  AND b.rid NOT IN (SELECT rid FROM ` + nonArtifactTable + `)))
 	ORDER BY b.rid
 `
 
@@ -624,6 +625,11 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 // batch completes, so a rolled-back batch (cancelled or errored) contributes
 // nothing to the count st reports.
 func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState) error {
+	// ReceiveLinker reuses its guard across receipt transactions and Finalize
+	// calls. Raw aliases can change between them, so share proof only within
+	// this transaction's unchanged batch, never across ingestion boundaries.
+	st.guard.coneReferences = nil
+	defer func() { st.guard.coneReferences = nil }()
 	batchLinked := 0
 	var batchNonArtifact []libfossil.FslID
 	for i, c := range batch {
@@ -664,6 +670,13 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 				return err
 			}
 			if deferred {
+				linked, err := crosslinkPartialCheckin(ctx, tx, c.rid, d, st.guard, st.leaves)
+				if err != nil {
+					return err
+				}
+				if linked {
+					batchLinked++
+				}
 				continue
 			}
 		}
@@ -897,19 +910,16 @@ func linkArtifact(
 // it tests, exact deferred-reference counts for the end-of-run rollup, and
 // bounded deterministic samples of deferred rids and missing blob UUIDs.
 //
-// Both the whole-repository sweep (linkState.guard) and the phantom-fill
-// cascade (cascadeLinker.guard) embed one. Sharing the type -- rather than
-// each path growing its own copy of this bookkeeping -- is what keeps a
-// cascade-deferred checkin falling through to the sweep's own recovery path:
-// collectCrosslinkCandidates reselects a rid only when it has NO event row,
-// and the cascade has no candidate query or round boundary of its own to
-// fall back on. It depends entirely on writing no event row for a deferred
-// rid, so a later sweep still sees it as undiscovered. See shouldDefer.
+// Both the sweep and the phantom-fill cascade embed one. A deferred check-in
+// remains discoverable through absent event rows, or through its orphan row
+// when sparse spine metadata is published before complete file derivation.
 type checkinDeferralGuard struct {
 	avail *content.AvailabilityCache
 	// cache expands the sub-manifests a tree's walk reads; it is the owning
 	// sweep's or cascade's content cache, or nil, which expands directly.
 	cache *content.Cache
+	// Scoped to one linkBatch transaction; incoming raw aliases invalidate proof.
+	coneReferences *content.ConeReferences
 	// checkinBaselines memoizes baselines verified to be check-in manifests,
 	// each mapped to whether it is a tree manifest, so a sweep over many
 	// deltas parses each baseline once and walks only a tree's.
@@ -941,11 +951,10 @@ func newCheckinDeferralGuard() *checkinDeferralGuard {
 // recording the gap and the guard's diagnostics when so. source labels the
 // caller in the debug log ("Crosslink" or "AfterDephantomize").
 //
-// The manifest blob remains durable in 'blob'. Beyond the gap record --
-// the baseline's phantom and an orphan row -- the caller MUST write nothing
-// for rid when this returns true: no event/leaf/plink/mlink/tagxref rows. The
-// missing event row is what lets a later sweep rediscover and complete rid
-// once the baseline arrives; see the type doc.
+// The manifest blob remains durable in 'blob'. The orphan row records incomplete
+// file derivation and keeps the check-in eligible for retry after its dependency
+// arrives, even if metadata exists. Callers must not derive mlinks on deferral;
+// only crosslinkPartialCheckin may publish independently validated spine metadata.
 func (g *checkinDeferralGuard) shouldDefer(
 	tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck,
 ) (bool, error) {
@@ -1001,6 +1010,9 @@ func (g *checkinDeferralGuard) gapOf(tx *db.Tx, d *deck.Deck, missing []string) 
 		return d.B
 	}
 	if gap := g.treeGap(tx, d); gap != "" && gap == missing[0] {
+		return gap
+	}
+	if gap := g.parentTreeGap(tx, d); gap != "" && gap == missing[0] {
 		return gap
 	}
 	return ""
@@ -1277,6 +1289,9 @@ func missingFileSet(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 	if gap := g.treeGap(tx, d); gap != "" {
 		return []string{gap}
 	}
+	if gap := g.parentTreeGap(tx, d); gap != "" {
+		return []string{gap}
+	}
 	return nil
 }
 
@@ -1411,7 +1426,7 @@ func recordBaselineGap(tx *db.Tx, rid libfossil.FslID, baseline string) error {
 		return fmt.Errorf("baseline %s: %w", baseline, err)
 	}
 	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO orphan(rid, baseline) VALUES(?, ?)", rid, baseRid,
+		"INSERT INTO orphan(rid, baseline) VALUES(?, ?) ON CONFLICT(rid) DO UPDATE SET baseline=excluded.baseline", rid, baseRid,
 	); err != nil {
 		return fmt.Errorf("orphan rid=%d: %w", rid, err)
 	}
@@ -1452,6 +1467,13 @@ func crosslinkCheckin(
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache) error {
+	if err := crosslinkCheckinMetadata(tx, rid, d); err != nil {
+		return err
+	}
+	return insertCheckinMlinks(tx, cache, rid, d)
+}
+
+func crosslinkCheckinMetadata(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	// event, at the D-card time; omtime always keeps it. A date tag already
 	// recorded for the check-in (one that reached it while it was a phantom,
 	// or a rebuild that linked the tag first) then moves mtime through
@@ -1479,9 +1501,6 @@ func crosslinkCheckinTables(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache 
 	}
 
 	if err := insertCheckinPlinks(tx, rid, d, checkinBaseid(tx, d)); err != nil {
-		return err
-	}
-	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
 		return err
 	}
 	return insertCherrypicks(tx, rid, d)

@@ -423,6 +423,15 @@ func (rl *ReceiveLinker) settle(rid libfossil.FslID) {
 // artifacts use their tagxref source rows as replay evidence; every other
 // handled artifact type uses its event row.
 func parsedArtifactReplayed(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
+	if d.Type == deck.Checkin {
+		var incomplete int
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM orphan WHERE rid=?)", rid).Scan(&incomplete); err != nil {
+			return false, err
+		}
+		if incomplete != 0 {
+			return false, nil
+		}
+	}
 	table, column := "event", "objid"
 	if d.Type == deck.Event || d.Type == deck.Cluster {
 		table, column = "tagxref", "srcid"

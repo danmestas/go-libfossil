@@ -372,6 +372,14 @@ func TestAuditReadingGuards(t *testing.T) {
 				g.wantAudit("only one reading same", nil, nil)
 			})
 		}
+		t.Run(branch+"/missing", func(t *testing.T) {
+			g := newGraph(t)
+			g.exec("REPLACE INTO config(name, value, mtime) VALUES('main-branch', 'main', 0)")
+			g.branch(1, branch)
+			g.link(1, 2, true)
+			g.exec("INSERT INTO leaf(rid) VALUES(2)")
+			g.wantAudit("one reading still has a same-branch child", nil, nil)
+		})
 	}
 	g := newGraph(t)
 	g.branch(1, "trunk")

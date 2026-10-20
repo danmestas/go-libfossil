@@ -253,14 +253,14 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		if err := checkWriterName(f.OldName); err != nil {
 			return nil, nil, err
 		}
-		if f.UUID != "" {
-			if err := checkCarried(tx, f); err != nil {
-				return nil, nil, err
-			}
-			fCards[i] = deck.FileCard{Name: f.Name, UUID: f.UUID, Perm: f.Perm, OldName: f.OldName}
-			continue
+		var rid libfossil.FslID
+		uuid := f.UUID
+		var err error
+		if uuid != "" {
+			rid, err = checkCarried(tx, f)
+		} else {
+			rid, uuid, err = blob.Store(tx, f.Content)
 		}
-		rid, uuid, err := blob.Store(tx, f.Content)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
 		}
@@ -278,14 +278,15 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 // checkCarried requires a carried file's artifact to be held: the R card
 // reads its content, and a check-in naming content its writer lacks would
 // be committed blind.
-func checkCarried(tx *db.Tx, f File) error {
+func checkCarried(tx *db.Tx, f File) (libfossil.FslID, error) {
 	if f.Content != nil {
 		panic("manifest.checkCarried: a carried file has content: " + f.Name)
 	}
-	if _, ok := content.AvailableByUUID(tx, f.UUID); !ok {
-		return fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	rid, ok := content.AvailableByUUID(tx, f.UUID)
+	if !ok {
+		return 0, fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
 	}
-	return nil
+	return rid, nil
 }
 
 // checkinDeck builds a check-in's manifest. With sub-manifest emission

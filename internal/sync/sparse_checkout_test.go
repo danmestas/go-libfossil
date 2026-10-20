@@ -23,7 +23,7 @@ type sparseCheckoutClone struct {
 	root, tip, inside, outside string
 }
 
-func newSparseCheckoutClone(t *testing.T) sparseCheckoutClone {
+func newSparseCheckoutClone(t *testing.T, tagged bool) sparseCheckoutClone {
 	t.Helper()
 	r := setupSyncTestRepo(t)
 	put := func(d *deck.Deck) string {
@@ -37,8 +37,12 @@ func newSparseCheckoutClone(t *testing.T) sparseCheckoutClone {
 	outside := storeAndLink(t, r, []byte("outside\n"))
 	left := put(&deck.Deck{F: []deck.FileCard{{Name: "src/a", UUID: inside}}})
 	right := put(&deck.Deck{F: []deck.FileCard{{Name: "vendor/a", UUID: outside}}})
+	var tags []deck.TagCard
+	if tagged {
+		tags = []deck.TagCard{{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}}
+	}
 	spine := put(&deck.Deck{C: "sparse root", D: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), U: deck.User("u"),
-		T: []deck.TagCard{{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "trunk"}},
+		T: tags,
 		S: []deck.SubmanifestCard{{Name: "src/a", UUID: left}, {Name: "vendor/a", UUID: right}}})
 	tip := put(&deck.Deck{C: "sparse child", D: time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC), U: deck.User("u"), P: []string{spine},
 		S: []deck.SubmanifestCard{{Name: "src/a", UUID: left}, {Name: "vendor/a", UUID: right}}})
@@ -62,7 +66,13 @@ func newSparseCheckoutClone(t *testing.T) sparseCheckoutClone {
 }
 
 func TestSparseTreeCloneMetadataAndCheckout(t *testing.T) {
-	f := newSparseCheckoutClone(t)
+	t.Run("tagged", func(t *testing.T) { testSparseTreeCloneMetadataAndCheckout(t, true) })
+	t.Run("tagless", func(t *testing.T) { testSparseTreeCloneMetadataAndCheckout(t, false) })
+}
+
+// Both legal leaf-arrival states must survive sparse clone, rebuild and healing.
+func testSparseTreeCloneMetadataAndCheckout(t *testing.T, tagged bool) {
+	f := newSparseCheckoutClone(t, tagged)
 	got := f.clone
 	if _, ok := content.AvailableByUUID(got.DB(), f.outside); ok {
 		t.Fatal("outside S was not actually elided")
@@ -150,7 +160,7 @@ func (f sparseCheckoutClone) elide(t *testing.T, uuid string) {
 func TestSparseCloneVerifyRejectsRequiredGaps(t *testing.T) {
 	for _, kind := range []string{"covered", "covered-payload", "unknown", "structural-alias"} {
 		t.Run(kind, func(t *testing.T) {
-			f := newSparseCheckoutClone(t)
+			f := newSparseCheckoutClone(t, true)
 			if kind == "covered" {
 				f.elide(t, f.inside)
 			} else if kind == "covered-payload" {

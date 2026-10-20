@@ -70,8 +70,8 @@ RS-6.2-4	6.2	A branch root carrying both a propagating and a cancel card for its
 RS-6.3-1	6.3	The branch list has one entry per distinct active branch-tag value, with that value's greatest event.mtime and check-in count.
 RS-6.3-2	6.3	A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.
 RS-6.4-1	6.4	The current branch of a checkout is read with the same tagtype > 0 rule as any branch membership.
-RS-7.2-1	7.2	A check-in is a leaf exactly when no plink child of it, primary or merge, is on the same branch.
-RS-7.3-1	7.3	A full leaf rebuild gives the table crosslinking every check-in in one batch gives: the candidates are the check-ins a branch tag is applied or propagated to, and their parents; a candidate with no same-branch child is a member, and a check-in that is not a candidate is not, even with no same-branch child.
+RS-7.2-1	7.2	The leaf test passes a check-in exactly when no plink child of it, primary or merge, is on the same branch; the leaf table holds the Section 7.3 candidates that passed it when last rechecked.
+RS-7.3-1	7.3	A full leaf rebuild gives the table crosslinking every check-in in one batch gives: the candidates are the check-ins a branch tag is applied or propagated to, and their parents; a candidate with no same-branch child is a member, and a check-in that is not a candidate is not, even with no same-branch child. A check-in keeps its verdict when a child carrying no branch row is linked to it in a later batch, so the table is not a function of the repository alone.
 RS-7.3-2	7.3	An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.
 RS-7.3-3	7.3	A branch tag applied to a check-in, or a propagation walk updating or deleting its branch entry, rechecks the check-in and each of its parents, merge parents included; crosslinking a check-in or creating a plink edge schedules no recheck by itself.
 RS-7.3-4	7.3	Scheduled leaf rechecks have all been applied before the leaf table is read.

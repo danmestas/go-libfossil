@@ -545,6 +545,300 @@ func TestVerify_DetectsIncorrectLeaf(t *testing.T) {
 	}
 }
 
+// mergedFeature commits root on trunk, feat branching from it, and a trunk
+// child of root that merges feat back. feat's tip and root each have a child,
+// but none on their own branch, so Section 7.2 keeps both leaves.
+func mergedFeature(t *testing.T, r *repo.Repo) (root, feat, merge libfossil.FslID) {
+	t.Helper()
+	commit := func(content string, parent libfossil.FslID, merged []libfossil.FslID, tags ...deck.TagCard) libfossil.FslID {
+		t.Helper()
+		rid, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+			Files:        []manifest.File{{Name: "a.txt", Content: []byte(content)}},
+			Comment:      content,
+			User:         "test",
+			Parent:       parent,
+			MergeParents: merged,
+			Tags:         tags,
+		})
+		if err != nil {
+			t.Fatalf("checkin %s: %v", content, err)
+		}
+		return rid
+	}
+	root = commit("root", 0, nil)
+	feat = commit("feat", root, nil,
+		deck.TagCard{Type: deck.TagPropagating, Name: "branch", UUID: "*", Value: "feat"},
+		deck.TagCard{Type: deck.TagPropagating, Name: "sym-feat", UUID: "*"},
+		deck.TagCard{Type: deck.TagCancel, Name: "sym-trunk", UUID: "*"})
+	merge = commit("merge", root, []libfossil.FslID{feat})
+	return root, feat, merge
+}
+
+// leafIssues returns the RIDs of the leaf issues Verify reports.
+func leafIssues(t *testing.T, r *repo.Repo) []libfossil.FslID {
+	t.Helper()
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rids []libfossil.FslID
+	for _, iss := range report.Issues {
+		if iss.Kind == verify.IssueLeafIncorrect {
+			rids = append(rids, iss.RID)
+		}
+	}
+	return rids
+}
+
+// TestVerify_LeafSameBranchRule pins Section 7.2 in Verify: a merged branch
+// tip, and a branch point whose only same-branch child came later, are leaves
+// although each has a child.
+func TestVerify_LeafSameBranchRule(t *testing.T) {
+	r := newTestRepo(t)
+	_, feat, merge := mergedFeature(t, r)
+	if got := leafIssues(t, r); len(got) != 0 {
+		t.Fatalf("leaf issues on a merged branch: %v", got)
+	}
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM leaf WHERE rid IN (?, ?)", feat, merge).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("leaf holds %d of feat and merge, want 2", n)
+	}
+}
+
+// TestVerify_LeafKeptVerdict pins Section 7.3's arrival-order states: a child
+// that carries no branch row, linked in a later batch, rechecks nothing, so
+// its parent may keep its row and the child may have none.
+func TestVerify_LeafKeptVerdict(t *testing.T) {
+	r := newTestRepo(t)
+	_, _, merge := mergedFeature(t, r)
+	// An untagged trunk child of merge, as a later batch links it.
+	if _, err := r.DB().Exec("INSERT INTO plink(pid, cid, isprim, mtime) VALUES(?, 999, 1, 2460000.5)", merge); err != nil {
+		t.Fatal(err)
+	}
+	if got := leafIssues(t, r); len(got) != 0 {
+		t.Fatalf("leaf issues for a kept verdict: %v", got)
+	}
+}
+
+func TestVerify_TaglessRootAndChild(t *testing.T) {
+	r := newTestRepo(t)
+	var parent string
+	for i := 0; i < 2; i++ {
+		d := &deck.Deck{Type: deck.Checkin, C: fmt.Sprintf("tagless %d", i),
+			D: time.Date(2024, 1, 1, i, 0, 0, 0, time.UTC), U: deck.User("test")}
+		if parent != "" {
+			d.P = []string{parent}
+		}
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, parent, err = blob.Store(r.DB(), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manifest.Crosslink(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var leaves int
+	if err := r.DB().QueryRow("SELECT count(*) FROM leaf").Scan(&leaves); err != nil {
+		t.Fatal(err)
+	}
+	if leaves != 0 {
+		t.Fatalf("tagless graph has %d leaves, want 0: no branch write scheduled a recheck", leaves)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.OK() {
+		t.Fatalf("tagless root and child: %v", report.Issues)
+	}
+}
+
+// TestVerify_LeafDecidable pins what Verify must report: a row whose
+// same-branch child carries a branch row, and a tagged check-in with no
+// same-branch child that has no row.
+func TestVerify_LeafDecidable(t *testing.T) {
+	r := newTestRepo(t)
+	root, feat, _ := mergedFeature(t, r)
+	if _, err := r.DB().Exec("DELETE FROM leaf WHERE rid=?", feat); err != nil {
+		t.Fatal(err)
+	}
+	// root's trunk child merge inherited its branch row along the link.
+	if _, err := r.DB().Exec("INSERT INTO leaf(rid) VALUES(?)", root); err != nil {
+		t.Fatal(err)
+	}
+	got := leafIssues(t, r)
+	want := []libfossil.FslID{root, feat}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("leaf issues = %v, want %v", got, want)
+	}
+}
+
+// TestVerify_LeafStrayRow pins the rows no recheck writes: a file artifact and
+// a rid with no artifact are no check-in, so neither belongs in leaf.
+func TestVerify_LeafStrayRow(t *testing.T) {
+	r := newTestRepo(t)
+	mergedFeature(t, r)
+	var file libfossil.FslID
+	if err := r.DB().QueryRow("SELECT min(fid) FROM mlink WHERE fid > 0").Scan(&file); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("INSERT INTO leaf(rid) VALUES(?), (424242)", file); err != nil {
+		t.Fatal(err)
+	}
+	got := leafIssues(t, r)
+	want := []libfossil.FslID{file, 424242}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("leaf issues = %v, want %v", got, want)
+	}
+}
+
+// TestVerify_ReparentReplacesPlink pins fossil's reparent: a parent tag
+// replaces the plink rows the check-in's P-card gave it (src/manifest.c
+// manifest_reparent_checkin), so a P-card parent the tag dropped has no row
+// and Verify must not report one missing. Cancelling the tag re-derives
+// nothing, so the same holds then.
+func TestVerify_ReparentReplacesPlink(t *testing.T) {
+	r := newTestRepo(t)
+	root, _, merge := mergedFeature(t, r)
+	uuidOf := func(rid libfossil.FslID) string {
+		t.Helper()
+		var u string
+		if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&u); err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
+	control := func(at time.Time, tag deck.TagCard) {
+		t.Helper()
+		d := &deck.Deck{Type: deck.Control, D: at, T: []deck.TagCard{tag}, U: deck.User("test")}
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := blob.Store(r.DB(), data); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manifest.Crosslink(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plinkIssues := func(stage string) {
+		t.Helper()
+		report, err := verify.Verify(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, iss := range report.Issues {
+			if iss.Kind == verify.IssuePlinkMissing || iss.Kind == verify.IssueLeafIncorrect {
+				t.Errorf("%s: %s", stage, iss.Message)
+			}
+		}
+	}
+	// merge's P-card names root and feat; the tag drops feat.
+	base := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	control(base, deck.TagCard{Type: deck.TagSingleton, Name: "parent", UUID: uuidOf(merge), Value: uuidOf(root)})
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM plink WHERE cid=?", merge).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("merge has %d plink rows after the reparent, want 1", n)
+	}
+	plinkIssues("reparented")
+	control(base.Add(time.Hour), deck.TagCard{Type: deck.TagCancel, Name: "parent", UUID: uuidOf(merge)})
+	plinkIssues("cancelled")
+	// Cancellation retains the replacement ancestry, not permission to lose it.
+	if _, err := r.DB().Exec("DELETE FROM plink WHERE cid=?", merge); err != nil {
+		t.Fatal(err)
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, issue := range report.Issues {
+		found = found || issue.Kind == verify.IssuePlinkMissing
+	}
+	if !found {
+		t.Fatal("missing replacement parents went undetected")
+	}
+}
+
+func TestVerify_ParentTagDoesNotHideMissingLinks(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		kind  deck.TagType
+		valid bool
+	}{
+		{"active replacement", deck.TagSingleton, true},
+		{"malformed singleton", deck.TagSingleton, false},
+		{"leading space", deck.TagSingleton, false},
+		{"never active cancel", deck.TagCancel, false},
+		{"propagating is not reparent", deck.TagPropagating, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRepo(t)
+			root, _, merge := mergedFeature(t, r)
+			var rootUUID, mergeUUID string
+			if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", root).Scan(&rootUUID); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", merge).Scan(&mergeUUID); err != nil {
+				t.Fatal(err)
+			}
+			value := "not-a-hash"
+			if tc.name == "leading space" {
+				value = " " + rootUUID
+			}
+			if tc.valid {
+				value = rootUUID
+			}
+			d := &deck.Deck{Type: deck.Control, D: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+				T: []deck.TagCard{{Type: tc.kind, Name: "parent", UUID: mergeUUID, Value: value}}, U: deck.User("test")}
+			data, err := d.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := blob.Store(r.DB(), data); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := manifest.Crosslink(r); err != nil {
+				t.Fatal(err)
+			}
+			before, err := verify.Verify(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, issue := range before.Issues {
+				if issue.Kind == verify.IssuePlinkMissing {
+					t.Fatalf("undamaged parents: %s", issue.Message)
+				}
+			}
+			if _, err := r.DB().Exec("DELETE FROM plink WHERE cid=?", merge); err != nil {
+				t.Fatal(err)
+			}
+			after, err := verify.Verify(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, issue := range after.Issues {
+				found = found || issue.Kind == verify.IssuePlinkMissing
+			}
+			if !found {
+				t.Fatal("parent tag hid missing parent links")
+			}
+		})
+	}
+}
+
 func TestRebuild_BuggifyResilience(t *testing.T) {
 	r := newTestRepo(t)
 

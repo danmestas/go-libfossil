@@ -169,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify.Verify` audits leaves by repo-state §§7.2–7.3's same-branch
+  rule and branch-tag recheck schedule instead of assuming every check-in
+  without children must be a leaf. Arrival-order retained verdicts are
+  accepted; decidable stale, missing and stray rows are reported. Both the
+  draft's branch reading and Fossil 2.28's literal-trunk reading must agree
+  that a row is wrong, although their same-branch witnesses may differ.
+  Parent tags replace P-card ancestry only when valid and active; retained
+  ancestry after cancellation is checked against recorded parent-tag history.
+  Parent-tag tokenization now follows Fossil's single-byte separators rather
+  than collapsing whitespace; malformed lists retain their previous ancestry.
+  Uppercase hashes and NUL-terminated values follow Fossil too. Leaf and
+  parent-parser conformance cases run Verify on both implementations' tables.
+  Tracked in #433.
+
 - `Checkout.Update` no longer merges a symlink: one edited locally and
   changed by the target is left as it is and listed in
   `UpdateResult.Unmerged`, as fossil's update reports "Cannot merge

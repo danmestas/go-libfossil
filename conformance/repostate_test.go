@@ -169,6 +169,16 @@ func (c rsCase) goConforms(t *testing.T, script rsScript, v rsVariant) error {
 		if d := diffState(c.expected(), got, "want", load.String()); d != "" {
 			problems = append(problems, d)
 		}
+		if slices.Contains(c.tables, "leaf") {
+			issues, err := verifyLeafIssues(path, script.labels)
+			if err != nil {
+				return err
+			}
+			if len(issues) > 0 {
+				problems = append(problems, fmt.Sprintf("%s: verify.Verify reports leaf issues on %v",
+					load, issues))
+			}
+		}
 	}
 	if len(problems) > 0 {
 		return expectf("%s", strings.Join(problems, " | "))
@@ -183,6 +193,9 @@ type rsFossil struct {
 	incremental rsState
 	rebuilt     rsState
 	wrote       bool
+	// verified lists the leaf issues verify.Verify reports on fossil's
+	// repositories, for a case comparing leaf; empty when it accepts both.
+	verified []string
 }
 
 // fossilAgrees checks want against fossil(1): its per-artifact crosslink
@@ -212,6 +225,9 @@ func (c rsCase) fossilAgrees(
 		if !f.wrote {
 			reference, name = f.rebuilt, "fossil rebuild"
 		}
+	}
+	if len(f.verified) > 0 {
+		return expectf("verify.Verify rejects fossil's leaf table: %s", strings.Join(f.verified, " | "))
 	}
 	d := diffState(c.expected(), reference, "want", name)
 	switch {
@@ -248,7 +264,15 @@ func (c rsCase) fossilLoad(
 			return nil, err
 		}
 		f.wrote = wrote
+		if f.verified, err = verifyFossilLeaves(c, path, "fossil rebuild", script.labels); err != nil {
+			return nil, err
+		}
 	}
+	incremental, err := verifyFossilLeaves(c, repo.path, "fossil per-artifact", script.labels)
+	if err != nil {
+		return nil, err
+	}
+	f.verified = append(incremental, f.verified...)
 	loaded[c.ID] = f
 	return f, nil
 }

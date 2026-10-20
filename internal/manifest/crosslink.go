@@ -322,7 +322,7 @@ func Crosslink(r *repo.Repo) (int, error) {
 // Each sweep batch runs the repair gate before it commits (linkTx), as each
 // phantom-fill cascade batch does (AfterDephantomize, AfterDephantomizeBatch),
 // so every scheduled leaf recheck is applied before a later reader sees the
-// leaf table (draft-fossil-repo-state-01 Section 7.3) and nothing is left
+// leaf table (draft-fossil-repo-state-00 Section 7.3) and nothing is left
 // for the end of the sweep, nor for a sync whose cascades linked everything
 // (issue #414).
 func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {

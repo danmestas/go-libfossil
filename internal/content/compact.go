@@ -12,11 +12,9 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// CompactStore turns held file content named only outside the store cone into
-// recoverable phantoms. Dense stores (including lost policy) are unchanged.
-// Structural artifacts, unknown content and retained delta dependencies stay
-// held. Out-of-cone tree nodes stay held, as required by this store's crosslink
-// invariant: a check-in is linked only when its whole tree can be enumerated.
+// CompactStore turns proved outside content into recoverable phantoms. Dense
+// stores (including lost policy) are unchanged. Structural artifacts, unknown
+// content, classification provenance and retained delta dependencies stay held.
 // The existing write transaction excludes competing writers and rolls back
 // every content change together on cancellation, corruption or SQL failure.
 func CompactStore(ctx context.Context, d *db.DB) (int, error) {
@@ -79,90 +77,83 @@ func CompactStore(ctx context.Context, d *db.DB) (int, error) {
 	return count, nil
 }
 
-type compactPlan struct {
-	held                            map[string]libfossil.FslID
-	outside, inside, keep, required map[string]bool
-}
-
 func compactCandidates(ctx context.Context, tx *db.Tx, c *cone.Cone) (map[libfossil.FslID]bool, error) {
-	p := compactPlan{
-		held: map[string]libfossil.FslID{}, outside: map[string]bool{}, inside: map[string]bool{},
-		keep: map[string]bool{}, required: map[string]bool{},
+	refs, err := LoadConeReferences(ctx, tx, c)
+	if err != nil {
+		return nil, err
 	}
-	err := ExpandAll(tx, func(rid libfossil.FslID, uuid string, data []byte, expandErr error) error {
+	held := map[string]libfossil.FslID{}
+	nodes := map[libfossil.FslID]*deck.Deck{}
+	drop := map[libfossil.FslID]bool{}
+	// Classification tolerates unavailable bytes. Destructive compaction must
+	// separately verify every held payload before changing any holdings.
+	err = ExpandAll(tx, func(rid libfossil.FslID, uuid string, data []byte, expandErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if expandErr != nil {
 			return expandErr
 		}
-		p.held[uuid] = rid
+		held[uuid] = rid
+		if refs.Outside(rid) {
+			drop[rid] = true
+		}
 		if len(data) == 0 {
 			return nil
 		}
 		artifact, err := deck.Parse(data)
-		if err != nil {
-			return nil
-		} // Ordinary file content is not an artifact deck.
-		p.keep[uuid] = true
-		p.references(c, artifact)
+		if err == nil && artifact.Type == deck.Submanifest {
+			nodes[rid] = artifact
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	for uuid := range p.required {
-		if _, ok := p.held[uuid]; !ok {
+	for uuid := range refs.required {
+		if _, ok := held[uuid]; !ok {
 			return nil, fmt.Errorf("incomplete spine: artifact %s is not held", uuid)
 		}
-		p.keep[uuid] = true
 	}
-	drop := map[libfossil.FslID]bool{}
-	for uuid, rid := range p.held {
-		if p.outside[uuid] && !p.inside[uuid] && !p.keep[uuid] {
-			drop[rid] = true
+	for rid, uuid := range refs.names {
+		if refs.Required(rid) {
+			if _, ok := held[uuid]; !ok {
+				return nil, fmt.Errorf("incomplete spine: artifact %s is not held", uuid)
+			}
 		}
 	}
+	compactRetainProvenance(nodes, held, drop)
 	return drop, nil
 }
 
-// Read actual cards rather than trust disposable crosslink tables. Historical
-// names and shared aliases therefore protect content even before a rebuild.
-func (p *compactPlan) references(c *cone.Cone, artifact *deck.Deck) {
-	for _, f := range artifact.F {
-		if c.Covers(f.Name) {
-			p.inside[f.UUID] = true
-		} else {
-			p.outside[f.UUID] = true
+// Without raw F/S provenance, a phantom would become unknown on the next
+// classification. Retain leaves and all nonterminal paths: only an interior
+// whose direct children are held leaves can disappear without severing the
+// root-to-phantom range proof. Derived indexes need never have existed.
+func compactRetainProvenance(nodes map[libfossil.FslID]*deck.Deck,
+	held map[string]libfossil.FslID, drop map[libfossil.FslID]bool,
+) {
+	keep := map[libfossil.FslID]bool{}
+	for rid, node := range nodes {
+		if len(node.F) > 0 {
+			keep[rid] = true
+		}
+		if drop[rid] {
+			for _, child := range node.S {
+				childRID := held[child.UUID]
+				keep[childRID] = true
+				childNode := nodes[childRID]
+				if childNode == nil {
+					keep[rid] = true
+				} else if len(childNode.F) == 0 {
+					keep[rid] = true
+				}
+			}
 		}
 	}
-	if artifact.B != "" {
-		p.required[artifact.B] = true
+	for rid := range keep {
+		delete(drop, rid)
 	}
-	for _, s := range artifact.S {
-		p.required[s.UUID] = true
-	}
-	for _, parent := range artifact.P {
-		p.required[parent] = true
-	}
-	for _, q := range artifact.Q {
-		p.required[q.Target] = true
-		if q.Baseline != "" {
-			p.required[q.Baseline] = true
-		}
-	}
-	for _, tag := range artifact.T {
-		if tag.UUID != "*" && tag.UUID != "" {
-			p.keep[tag.UUID] = true
-		}
-	}
-	if artifact.A != nil {
-		if artifact.A.Source != "" {
-			p.keep[artifact.A.Source] = true
-		}
-	}
-	// Cluster M cards are inventories, not dependencies: retaining their targets
-	// would make every clustered file immune to explicit compaction.
 }
 
 // Unsent or private bytes may have no peer that can ever restore them.

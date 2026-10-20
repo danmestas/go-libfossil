@@ -1,6 +1,7 @@
 package content
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -115,15 +116,11 @@ type Absences struct {
 	counts [Elided + 1]int
 }
 
-// LoadAbsences classifies the store's phantoms. A phantom is shunned when its
-// name is in the shun table. Otherwise it is elided when the store has a
-// cone, some F card names it under a path the cone does not cover, no F card
-// names it under a covered path, and no held artifact is a delta over it;
-// anything else is in transit. These are zit's rules (src/sparse.zig): only a
-// file name proves an artifact out of cone, so a manifest, a sub-manifest
-// node or a control artifact is never elided, and the store holds them
-// densely (§5.1). F-card references are read from mlink, which records every
-// (name, content) pair a check-in introduces, a rename's prior name included.
+// LoadAbsences classifies the store's phantoms. Shunned names win; raw F/S
+// provenance proves elision only outside every covered alias and structural
+// reference. Retained delta ancestors remain transit. Crosslink references
+// supplement raw provenance for historical names, including prior rename paths.
+// A partial tree need not be crosslinked to classify its outside S children.
 func LoadAbsences(q db.Querier) (*Absences, error) {
 	if q == nil {
 		panic("content.LoadAbsences: q must not be nil")
@@ -164,11 +161,22 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
-		if err := keepRequiredPhantoms(q, candidates); err != nil {
+		refs, err := LoadConeReferences(context.Background(), q, c)
+		if err != nil {
+			return nil, err
+		}
+		if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
 			return nil, err
 		}
 		if err := a.elide(q, candidates); err != nil {
 			return nil, err
+		}
+		for rid := range candidates {
+			if refs.Outside(rid) {
+				a.class[rid] = Elided
+			} else if refs.Required(rid) {
+				a.class[rid] = Transit
+			}
 		}
 	}
 	for _, k := range a.class {
@@ -179,7 +187,7 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 
 // An artifact may be both a file's content and a structural reference or
 // delta ancestor. Its out-of-cone filename does not permit either hole.
-func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) error {
+func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool, refs *ConeReferences) error {
 	var haveForum bool
 	if err := q.QueryRow(`SELECT EXISTS(
 		SELECT 1 FROM sqlite_master WHERE name='forumpost' AND type='table')`).
@@ -198,7 +206,6 @@ func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) err
 		UNION SELECT cid FROM plink
 		UNION SELECT baseid FROM plink
 		UNION SELECT rid FROM orphan
-		UNION SELECT baseline FROM orphan
 		UNION SELECT srcid FROM tagxref
 		UNION SELECT origid FROM tagxref
 		UNION SELECT rid FROM tagxref
@@ -228,7 +235,22 @@ func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) err
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return fmt.Errorf("content.LoadAbsences: structural references: %w", err)
 	}
-	return nil
+	// orphan.baseline also records deferred S children, not just B baselines.
+	// Only raw tree provenance can distinguish a healthy outside subtree.
+	rows, err = q.Query("SELECT baseline FROM orphan")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var rid libfossil.FslID
+		if err := rows.Scan(&rid); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if !refs.tree[refs.names[rid]] || !refs.Outside(rid) {
+			delete(candidates, rid)
+		}
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // elide marks the candidates F cards name only outside the cone.

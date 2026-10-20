@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -63,7 +64,9 @@ func TestSparseTreeMetadataCompletesAfterAllNodesArrive(t *testing.T) {
 					j = 1 - i
 				}
 				f.storeBytes(payloads[j])
-				if _, err := Crosslink(f.r); err != nil {
+				arrived, _ := content.AvailableByUUID(f.r.DB(), refs[j+1].UUID)
+				linked := AfterDephantomize(context.Background(), f.r, arrived)
+				if _, err := CrosslinkAfterCascades(context.Background(), f.r, linked); err != nil {
 					t.Fatal(err)
 				}
 				if i == 0 {

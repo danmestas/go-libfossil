@@ -946,11 +946,10 @@ func newCheckinDeferralGuard() *checkinDeferralGuard {
 // recording the gap and the guard's diagnostics when so. source labels the
 // caller in the debug log ("Crosslink" or "AfterDephantomize").
 //
-// The manifest blob remains durable in 'blob'. Beyond the gap record --
-// the baseline's phantom and an orphan row -- the caller MUST write nothing
-// for rid when this returns true: no event/leaf/plink/mlink/tagxref rows. The
-// missing event row is what lets a later sweep rediscover and complete rid
-// once the baseline arrives; see the type doc.
+// The manifest blob remains durable in 'blob'. The orphan row records incomplete
+// file derivation and keeps the check-in eligible for retry after its dependency
+// arrives, even if metadata exists. Callers must not derive mlinks on deferral;
+// only crosslinkPartialCheckin may publish independently validated spine metadata.
 func (g *checkinDeferralGuard) shouldDefer(
 	tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck,
 ) (bool, error) {

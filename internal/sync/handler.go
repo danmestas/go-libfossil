@@ -1142,16 +1142,22 @@ const maxPhantomGimme = 500
 
 // requestPhantoms asks a pushing client for the server's phantoms, as
 // page_xfer's request_phantoms does after the card loop: every phantom but
-// those the client asked for this round (it lacks them), shunned names, and
-// private ones outside a private sync (§3.3), at most maxPhantomGimme.
+// those the client asked for this round (it lacks them), shunned names,
+// private ones outside a private sync (§3.3), and a sparse store's elided
+// ones, at most maxPhantomGimme.
 func (h *handler) requestPhantoms() error {
 	if !h.pushOK {
 		panic("handler.requestPhantoms: push not accepted")
 	}
-	query := "SELECT uuid FROM phantom CROSS JOIN blob USING(rid)" +
+	query := "SELECT rid, uuid FROM phantom CROSS JOIN blob USING(rid)" +
 		" WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
 	if !h.syncPrivate {
 		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
+	}
+	// draft-fossil-sparse-cone-00 §5.2: an elided phantom is never asked for.
+	elided, err := elidedPhantoms(h.repo.DB())
+	if err != nil {
+		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
@@ -1160,11 +1166,12 @@ func (h *handler) requestPhantoms() error {
 	defer rows.Close()
 	sent := 0
 	for sent < maxPhantomGimme && rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return fmt.Errorf("handler: listing phantoms: %w", err)
 		}
-		if h.remoteLacks[uuid] {
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})

@@ -1568,13 +1568,19 @@ const phantomEvictRounds = 3
 
 // loadDBPhantoms promotes phantom-table entries into the session's phantom
 // map. This is needed after crosslinking cluster artifacts which create
-// phantom rows for blobs referenced in the cluster.
+// phantom rows for blobs referenced in the cluster. A sparse store's elided
+// phantoms are left out: synchronization never requests one spontaneously
+// (draft-fossil-sparse-cone-00 §5.2).
 func (s *session) loadDBPhantoms() error {
 	if !s.opts.Pull {
 		return nil
 	}
+	elided, err := elidedPhantoms(s.repo.DB())
+	if err != nil {
+		return err
+	}
 	rows, err := s.repo.DB().Query(
-		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
+		"SELECT b.rid, b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
 			" AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)",
 	)
 	if err != nil {
@@ -1582,15 +1588,29 @@ func (s *session) loadDBPhantoms() error {
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if elided != nil && elided.Class(rid) == content.Elided {
+			continue
 		}
 		if !s.remoteHas[uuid] {
 			s.phantoms[uuid] = true
 		}
 	}
 	return rows.Err()
+}
+
+// elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
+// store, which has nothing elided and so pays for no classification.
+func elidedPhantoms(q db.Querier) (*content.Absences, error) {
+	storeCone, err := content.StoreCone(q)
+	if err != nil || storeCone == nil {
+		return nil, err
+	}
+	return content.LoadAbsences(q)
 }
 
 // handleFileCard stores a received file (or delta-file) into the repo.

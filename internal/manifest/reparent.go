@@ -79,14 +79,27 @@ func ReparentCheckins(tx *db.Tx) error {
 func reparentCheckin(
 	tx *db.Tx, cache *content.Cache, rid libfossil.FslID, value string,
 ) error {
-	parents := strings.Fields(value)
-	if len(parents) == 0 {
-		return nil
-	}
-	for _, p := range parents {
-		if !isHash(p) {
+	// Fossil consumes exactly one byte <= space between hashes, accepts
+	// one trailing separator, and treats NUL as the end of the value.
+	value, _, _ = strings.Cut(value, "\x00")
+	var parents []string
+	for len(value) > 0 {
+		i := 0
+		for i < len(value) && value[i] > ' ' {
+			i++
+		}
+		parent := strings.ToLower(value[:i])
+		if !isHash(parent) {
 			return nil // malformed value: fossil leaves the plink rows untouched
 		}
+		parents = append(parents, parent)
+		if i == len(value) {
+			break
+		}
+		value = value[i+1:]
+	}
+	if len(parents) == 0 {
+		return nil
 	}
 	data, err := expandManifestBytes(tx, cache, rid)
 	if err != nil {

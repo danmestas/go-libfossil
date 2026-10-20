@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -131,13 +132,14 @@ func checkOneCheckin(
 // list of full hashes, with exactly one separator between hashes. Malformed
 // values leave the previous ancestry untouched.
 func parentHashes(value string) []string {
+	value, _, _ = strings.Cut(value, "\x00")
 	var parents []string
 	for len(value) > 0 {
 		i := 0
 		for i < len(value) && value[i] > ' ' {
 			i++
 		}
-		hash := value[:i]
+		hash := strings.ToLower(value[:i])
 		if len(hash) != 40 && len(hash) != 64 {
 			return nil
 		}

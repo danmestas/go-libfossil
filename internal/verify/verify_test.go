@@ -779,6 +779,7 @@ func TestVerify_ParentTagDoesNotHideMissingLinks(t *testing.T) {
 	}{
 		{"active replacement", deck.TagSingleton, true},
 		{"malformed singleton", deck.TagSingleton, false},
+		{"leading space", deck.TagSingleton, false},
 		{"never active cancel", deck.TagCancel, false},
 		{"propagating is not reparent", deck.TagPropagating, true},
 	} {
@@ -793,6 +794,9 @@ func TestVerify_ParentTagDoesNotHideMissingLinks(t *testing.T) {
 				t.Fatal(err)
 			}
 			value := "not-a-hash"
+			if tc.name == "leading space" {
+				value = " " + rootUUID
+			}
 			if tc.valid {
 				value = rootUUID
 			}

@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that a row is wrong, although their same-branch witnesses may differ.
   Parent tags replace P-card ancestry only when valid and active; retained
   ancestry after cancellation is checked against recorded parent-tag history.
-  Leaf conformance cases also run Verify on both implementations' tables.
+  Parent-tag tokenization now follows Fossil's single-byte separators rather
+  than collapsing whitespace; malformed lists retain their previous ancestry.
+  Uppercase hashes and NUL-terminated values follow Fossil too. Leaf and
+  parent-parser conformance cases run Verify on both implementations' tables.
   Tracked in #433.
 
 ## [0.13.0] - 2026-10-20

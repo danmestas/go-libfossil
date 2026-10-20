@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,5 +255,44 @@ func TestPopDoesNotMergeChangedSymlink(t *testing.T) {
 				t.Fatalf("stash after pop = %v, %v; want it dropped", entries, err)
 			}
 		})
+	}
+}
+
+// Fossil and go-libfossil both refuse to merge a stashed symlink over one
+// repointed since: fossil's pop says "Cannot merge symlink" and leaves the
+// link, and so does go-libfossil's, on a stash fossil saved.
+func TestPopChangedSymlinkMatchesFossil(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+	env := simio.RealEnv()
+	for _, goPops := range []bool{false, true} {
+		repoPath, ck := fossilLinkCheckout(t, bin)
+		fossilIn(t, bin, ck, "stash", "save", "-m", "repoint")
+		link := filepath.Join(ck, "link")
+		if err := os.Remove(link); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("third.txt", link); err != nil {
+			t.Fatal(err)
+		}
+		if goPops {
+			withDBs(t, ck, repoPath, env, func(_ *checkout.Checkout, ckout, repoDB *sql.DB) {
+				conflicts, err := stash.Pop(ckout, repoDB, env, ck)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(conflicts) != 1 || conflicts[0] != "link" {
+					t.Errorf("go pop: conflicts = %q, want [link]", conflicts)
+				}
+			})
+		} else if out := fossilIn(t, bin, ck, "stash", "pop"); !strings.Contains(out, "Cannot merge symlink link") {
+			t.Fatalf("fossil stash pop said %q; the test's premise is wrong", out)
+		}
+		wantLink(t, ck, "link", "third.txt")
+		wantFile(t, ck, "plain.txt", "plain\n")
+		wantFile(t, ck, "elsewhere.txt", "elsewhere\n")
+		if got := fossilIn(t, bin, ck, "stash", "list"); !strings.Contains(got, "empty") {
+			t.Errorf("go pops %v: stash list after pop = %q, want it empty", goPops, got)
+		}
+		fossilIn(t, bin, ck, "close", "--force")
 	}
 }

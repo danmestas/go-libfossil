@@ -38,7 +38,7 @@ SM-5.1-1	5.1	The walk enumerates a tree depth first and in order, emitting each 
 SM-5.1-2	5.1	Each S card's decoded filename, and each emitted filename, compares strictly greater than the last filename emitted; an enumeration that does not ascend across sibling slices fails.
 SM-5.1-3	5.1	The enumeration fails when a referenced sub-manifest is absent.
 SM-5.1-4	5.1	The enumeration fails when a referenced artifact is not of type SUBMANIFEST.
-SM-5.1-5	5.1	The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.	a cycle cannot be built from content-addressed artifacts: the case shows the depth bound ending a path, and internal/manifest's TestTreeWalkRefusesRepeatedArtifact the check itself
+SM-5.1-5	5.1	The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.
 SM-5.1-6	5.1	The enumeration fails when a sub-manifest lies deeper than 16 sub-manifests, counting the leaf; a depth of 16 is accepted.
 SM-5.1-7	5.1	A leaf's first emitted filename is byte-identical to the filename of the S card that reached it.
 SM-5.1-8	5.1	An interior sub-manifest's first S card filename is byte-identical to the filename of the S card that reached it.
@@ -85,7 +85,7 @@ SM-9.1-1	9.1	SUBMANIFEST is determined by the post-pass reassignment, not while 
 SM-9.2-1	9.2	A sweep that discovers crosslink work by the absence of derived rows excludes SUBMANIFEST artifacts or records a completion marker for them, so it never reselects them.
 SM-9.3-1	9.3	Every consumer of a check-in's file set (checkout, diff, crosslink, rebuild, annotate, commit) obtains it through one shared enumeration interface.
 SM-9.4-1	9.4	When a tree manifest's processing is deferred, enough is recorded to rediscover it when the missing sub-manifest arrives, and the dephantomization path traverses that record.
-SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.	the visit bound (2^20) is asserted by construction, not by a case that reaches it
+SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.
 SM-A-1	A.2, A.3	The Appendix A.2 and A.3 artifacts parse, determine their types, recompute their names, walk to the four-file enumeration, and the R card verifies over it.
 SM-A-2	A.4	The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.
 SM-A-3	A.5	The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.

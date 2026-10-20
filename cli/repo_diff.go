@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -131,15 +130,16 @@ func (c *RepoDiffCmd) runBetween(r *libfossil.Repo) error {
 // diffPath is the diff between versions a and b restricted as fossil diff
 // --from --to restricts it to a PATH argument (diffcmd.c file_dir_match): to
 // the file named name, or to the files under the directory named name, in
-// either version. A name matching nothing in either version is ExitNotFound,
-// as fossil fails with "not found". An empty name is every file.
+// either version, with name normalized and compared as repoPaths does. A
+// name matching nothing in either version is ExitNotFound (fossil exits 1
+// with "not found"). An empty name is every file.
 func diffPath(r *libfossil.Repo, a, b int64, name string) ([]libfossil.DiffEntry, error) {
 	if name == "" {
 		return r.Diff(a, b, "")
 	}
-	matches := func(file string) bool {
-		return file == name || strings.HasPrefix(file, name+"/")
-	}
+	paths := newRepoPaths(r)
+	name = paths.clean(name)
+	matches := func(file string) bool { return paths.within(file, name) }
 	found := false
 	for _, rid := range []int64{a, b} {
 		files, err := r.ListFiles(rid)

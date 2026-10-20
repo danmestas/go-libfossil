@@ -109,6 +109,15 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if vid <= 0 {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: nothing is checked out")
 	}
+	if c.cone != nil {
+		var pending bool
+		if err := c.db.QueryRow("SELECT EXISTS(SELECT 1 FROM vmerge WHERE id<=0)").Scan(&pending); err != nil {
+			return MergeResult{}, fmt.Errorf("checkout.Merge: pending merge: %w", err)
+		}
+		if pending {
+			return MergeResult{}, fmt.Errorf("checkout.Merge: a merge is already pending; resolve and commit it, or undo it")
+		}
+	}
 	if opts.Version == vid {
 		return MergeResult{}, nil
 	}
@@ -391,6 +400,10 @@ func (c *Checkout) planStep(
 		step.row = *row
 	}
 	if step.recordOnly {
+		if row != nil && !row.IsRemoved() && libfossil.FslID(row.MRID) == m.rid && (row.IsExe > 0) == m.exe && (row.IsLink > 0) == m.link {
+			step.file.Action = MergeKept
+			return step, nil
+		}
 		switch kind {
 		case mergeTake:
 			step.file.Action = MergeUpdated
@@ -553,6 +566,15 @@ func (c *Checkout) readWorkingFile(row vfile.Row) (data []byte, present bool, er
 // stands, or under a parent that is not a directory. Failing on those
 // midway would leave files merged on disk with no record of the merge.
 func (c *Checkout) checkMergeTargets(steps []mergeStep) error {
+	var unresolved []string
+	for _, s := range steps {
+		if s.recordOnly && s.file.Action == MergeConflict {
+			unresolved = append(unresolved, s.file.Name)
+		}
+	}
+	if len(unresolved) > 0 {
+		return fmt.Errorf("unresolved both-changed paths require widening and re-running the merge: %w", c.outsideCone("Merge", unresolved))
+	}
 	for _, s := range steps {
 		if !s.changesDisk() {
 			continue

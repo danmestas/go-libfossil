@@ -432,7 +432,8 @@ func TestSparseMergeAcrossConeRecordsChanges(t *testing.T) {
 	}
 
 	inCone := f.commit(t, maps(sparseFiles, map[string]string{"src/b.c": "theirs\n"}), f.c1)
-	res, err := co.Merge(MergeOpts{Version: inCone})
+	fresh := f.open(t, sparseCone(t), ours)
+	res, err := fresh.Merge(MergeOpts{Version: inCone})
 	if err != nil || len(res.Files) != 1 || res.Files[0].Name != "src/b.c" {
 		t.Fatalf("in-cone merge = %+v, %v", res, err)
 	}

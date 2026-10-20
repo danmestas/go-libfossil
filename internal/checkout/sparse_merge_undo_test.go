@@ -23,11 +23,11 @@ func TestSparseMergeConflictReported(t *testing.T) {
 	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\n"}), f.c1)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "theirs\n"}), f.c1)
 	co := f.open(t, sparseCone(t), ours)
-	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
-		t.Fatal(err)
+	if _, err := co.Merge(MergeOpts{Version: theirs}); !errors.Is(err, ErrOutsideCone) {
+		t.Fatalf("outside both-changed merge = %v, want explicit widening refusal", err)
 	}
 	conflicts, err := co.Conflicts()
-	if err != nil || len(conflicts) != 1 || conflicts[0] != "tools/t.c" {
+	if err != nil || len(conflicts) != 0 {
 		t.Fatalf("outside conflicts = %q: %v", conflicts, err)
 	}
 }
@@ -42,8 +42,8 @@ func TestSparseBothChangedRequiresWideningWithoutSynthesis(t *testing.T) {
 	if err := f.repo.DB().QueryRow("SELECT count(*) FROM blob").Scan(&before); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
-		t.Fatal(err)
+	if _, err := co.Merge(MergeOpts{Version: theirs}); !errors.Is(err, ErrOutsideCone) {
+		t.Fatalf("expected widening refusal: %v", err)
 	}
 	var after, outside int
 	if err := f.repo.DB().QueryRow("SELECT count(*) FROM blob").Scan(&after); err != nil {
@@ -55,11 +55,16 @@ func TestSparseBothChangedRequiresWideningWithoutSynthesis(t *testing.T) {
 	if err := co.db.QueryRow("SELECT count(*) FROM vfile WHERE pathname='tools/t.c'").Scan(&outside); err != nil || outside != 0 {
 		t.Fatalf("outside managed rows = %d: %v", outside, err)
 	}
-	_, _, err := co.Commit(CommitOpts{Message: "must widen", User: "test", AllowConflict: true})
-	if !errors.Is(err, ErrUnresolvedConflicts) {
-		t.Fatalf("allow-conflict bypassed outside unresolved state: %v", err)
+	for _, table := range []string{"vmerge", "sparse_pending"} {
+		var count int
+		if err := co.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("refused merge left %s rows: %d, %v", table, count, err)
+		}
 	}
 	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(co.Dir(), "tools/t.c"))
@@ -73,9 +78,8 @@ func TestSparseBothChangedRequiresWideningWithoutSynthesis(t *testing.T) {
 
 func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 	f := newSparseRepo(t, false)
-	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\n"}), f.c1)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "theirs\n"}), f.c1)
-	co := f.open(t, sparseCone(t), ours)
+	co := f.open(t, sparseCone(t), f.c1)
 	if _, _, err := co.storeMergePayload([]byte("retained legacy uncommitted payload\n")); err != nil {
 		t.Fatal(err)
 	}
@@ -134,9 +138,8 @@ func TestSparseMergePayloadRetainsPublicVisibility(t *testing.T) {
 func TestSparseMergeSynthesizedPayloadPrivate(t *testing.T) {
 	f := newSparseRepo(t, false)
 	base := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"}), f.c1)
-	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\ntwo\nthree\nfour\nfive\nsix\nseven\n"}), base)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\ntheirs\n"}), base)
-	co := f.open(t, sparseCone(t), ours)
+	co := f.open(t, sparseCone(t), base)
 	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
 		t.Fatal(err)
 	}

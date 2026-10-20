@@ -697,6 +697,14 @@ func (c *Checkout) finalizeUpdate(
 	if err := saved.save(tx); err != nil {
 		return fmt.Errorf("checkout.Update: save undo state: %w", err)
 	}
+	if c.cone != nil {
+		if _, err := tx.Exec("DELETE FROM sparse_pending"); err != nil {
+			return fmt.Errorf("checkout.Update: clear pending outcomes: %w", err)
+		}
+		if _, err := tx.Exec("DELETE FROM vmerge"); err != nil {
+			return fmt.Errorf("checkout.Update: clear pending merge: %w", err)
+		}
+	}
 	if err := c.moveUpdateRows(tx, target, steps); err != nil {
 		return err
 	}

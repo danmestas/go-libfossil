@@ -289,8 +289,8 @@ func (h *ridHeap) Pop() any {
 // is a pure function of its own artifact; tag-propagation state, which
 // depends on the plink graph rather than any one artifact, is deferred to
 // the end of each batch's transaction, where repairTagPropagation starts from
-// the parents the batch linked (linkTx). The leaf rechecks the sweep's branch
-// rows schedule wait for the closing gate (batchSchedule, run by repairOnTx).
+// the parents the batch linked and the leaf rechecks its branch rows scheduled
+// are applied (linkTx, batchSchedule, repairOnTx).
 // Crosslink runs the sweep with no cancellation, supplying its own background
 // context. It is the historical entry point; callers that can be interrupted
 // (a clone bounded by a deadline) should use CrosslinkContext instead.
@@ -302,13 +302,12 @@ func Crosslink(r *repo.Repo) (int, error) {
 // blobs incrementally get the same candidate ordering, cache, and single repair
 // gate as a clone, without retaining a linker beyond this call.
 //
-// The closing gate runs once, when the sweep linked anything, and applies the
-// sweep's leaf rechecks (draft-fossil-repo-state-01 Section 7.3: every
-// scheduled leaf recheck is applied before the leaf table is read). A session's
-// phantom-fill cascades (AfterDephantomize, AfterDephantomizeBatch) owe it
-// nothing: each cascade batch runs the whole gate, reparents, propagation and
-// leaf rechecks, before it commits, so a session whose cascades linked
-// everything and whose sweep links nothing ends repaired (issue #414).
+// Each sweep batch runs the repair gate before it commits (linkTx), as each
+// phantom-fill cascade batch does (AfterDephantomize, AfterDephantomizeBatch),
+// so every scheduled leaf recheck is applied before a later reader sees the
+// leaf table (draft-fossil-repo-state-01 Section 7.3) and nothing is left
+// for the end of the sweep, nor for a sync whose cascades linked everything
+// (issue #414).
 func CrosslinkContext(ctx context.Context, r *repo.Repo) (int, error) {
 	if r == nil {
 		panic("manifest.CrosslinkContext: r must not be nil")
@@ -358,9 +357,9 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	return st.linked, nil
 }
 
-// crosslinkSweepWithState performs only the candidate pass. The caller owns the
-// one combined leaf/tag repair gate so receive-time links and sweep links repair
-// together, not once each.
+// crosslinkSweepWithState performs only the candidate pass, sharing st's cache
+// and schedule with the caller's receive-time links. Each batch runs its own
+// repair gate (linkTx).
 func crosslinkSweepWithState(ctx context.Context, r *repo.Repo, st *linkState) (int, error) {
 	if r == nil {
 		panic("manifest.crosslinkSweepWithState: r must not be nil")
@@ -391,45 +390,35 @@ func prepareCrosslinkTables(q db.Querier) error {
 	return nil
 }
 
-// repairCrosslinkState runs the single order-sensitive repair gate after every
-// derivation that the caller owns has committed. Each link transaction has
-// already propagated from the parents it linked (linkTx), so what the gate
-// still owes is the leaf rechecks the whole batch scheduled, applied once
-// (Section 7.3), and the reparents a parent tag calls for that no link
-// transaction ran because it linked no parent; it also propagates from any
-// parent a link outside linkTx left on sched. sched is the batch's schedule:
-// cleared once the gate commits, and returned to its extent before the gate
-// when the gate rolls back, so a retry neither loses a recheck or a parent nor
-// keeps one only the rolled-back gate scheduled.
-func repairCrosslinkState(
-	r *repo.Repo, sched *batchSchedule, linked int, sweepErr error,
-) (int, error) {
+// repairCrosslinkState runs the repair gate for links that committed without
+// one, and returns cause joined with any repair failure. Every link this
+// package makes runs its gate in its own transaction (linkTx), so sched is
+// owed only when a caller ran ReceiveLinker.LinkStored in a transaction it
+// opened itself rather than through ReceiveLinker.WithTx; otherwise this does
+// nothing. sched is cleared once the gate commits, and returned to its extent
+// before the gate when the gate rolls back, so a retry neither loses a
+// recheck or a parent nor keeps one only the rolled-back gate scheduled.
+func repairCrosslinkState(r *repo.Repo, sched *batchSchedule, cause error) error {
 	if sched == nil {
 		panic("manifest.repairCrosslinkState: sched must not be nil")
 	}
-	if linked == 0 {
-		return linked, sweepErr
+	if !sched.owed {
+		return cause
 	}
 	mark := sched.mark()
 	err := r.WithTx(func(tx *db.Tx) error { return repairOnTx(tx, sched) })
-	if err == nil {
-		sched.reset()
-	} else {
-		sched.rollback(mark)
-	}
 	if err != nil {
-		if sweepErr != nil {
-			return linked, errors.Join(sweepErr, fmt.Errorf("manifest.Crosslink: %w", err))
-		}
-		return linked, fmt.Errorf("manifest.Crosslink: %w", err)
+		sched.rollback(mark)
+		return errors.Join(cause, fmt.Errorf("manifest.Crosslink: %w", err))
 	}
-	return linked, sweepErr
+	sched.reset()
+	return cause
 }
 
 // repairOnTx is the repair gate itself: the tag-propagation state that depends
 // on the plink graph rather than on any one artifact, then the batch's
-// scheduled leaf rechecks (draft-fossil-repo-state-01 Section 7.3, batch
-// application). Only the check-ins a branch write scheduled are checked, so a
+// scheduled leaf rechecks (draft-fossil-repo-state-01 Section 7.3, applied
+// once per batch, before it commits). Only the check-ins a branch write scheduled are checked, so a
 // check-in no branch write reached keeps the verdict an earlier batch gave it
 // (issue #426). Propagation, likewise, starts only from the parents the batch
 // gave a child (issue #432), so the work is bounded by the batch, not the
@@ -539,9 +528,9 @@ type linkState struct {
 	cache  *content.Cache
 	guard  *checkinDeferralGuard
 	linked int
-	// sched is the batch's leaf rechecks and the parents its tags propagate
-	// from, both run by the repair gate. A ReceiveLinker's batch is everything
-	// it links until Finalize.
+	// sched is the current link transaction's leaf rechecks and the parents
+	// its tags propagate from, both run by the repair gate before it commits
+	// (linkTx).
 	sched *batchSchedule
 }
 
@@ -734,13 +723,25 @@ func technoteTagsSelf(d *deck.Deck) bool {
 // is false for artifact types the sweep does not link (so the caller does not
 // count them), matching the old switch's `default: continue`. sched receives
 // the leaf rechecks the artifact's branch tags schedule and the primary parents
-// its plink rows name; the caller's repair gate runs both.
+// its plink rows name, and is marked owed for a handled artifact; the caller's
+// repair gate runs all of it.
 func linkArtifact(
 	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache, sched *batchSchedule,
 ) (handled bool, err error) {
 	if sched == nil {
 		panic("manifest.linkArtifact: sched must not be nil")
 	}
+	handled, err = linkArtifactRows(tx, rid, d, cache, sched)
+	if handled && err == nil {
+		sched.owed = true
+	}
+	return handled, err
+}
+
+// linkArtifactRows is linkArtifact's dispatch on the artifact's type.
+func linkArtifactRows(
+	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache, sched *batchSchedule,
+) (handled bool, err error) {
 	switch d.Type {
 	case deck.Checkin:
 		return true, crosslinkCheckin(tx, rid, d, cache, sched)
@@ -1012,8 +1013,7 @@ func sampledList(items []string, total int) string {
 
 // repairTagPropagation re-runs tag propagation from every primary parent the
 // batch wrote a plink row for (sched.parents), once those plink edges are in
-// place: at the end of the transaction that wrote them (linkTx), and at the
-// repair gate for any left over.
+// place, at the end of the transaction that wrote them (linkTx).
 //
 // Canonical fossil seeds propagation the same way: having inserted a new
 // check-in's plink edges it calls tag_propagate_all on the *primary parent*

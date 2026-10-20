@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -455,5 +456,118 @@ func TestReceiveLinkerWithTxCommitsPropagated(t *testing.T) {
 	if _, err := linker.Finalize(context.Background()); err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
+	assertMatchesFullRebuild(t, r)
+}
+
+// assertLeavesComplete fails if the committed leaf table differs from the one
+// the leaf rule derives from the committed plink and branch rows: a linked
+// check-in missing its leaf row, or a row the rule no longer admits. The probe
+// runs in a transaction it rolls back.
+func assertLeavesComplete(t *testing.T, r *repo.Repo, where string) {
+	t.Helper()
+	_, before := tagLeafState(t, r)
+	var after string
+	err := r.WithTx(func(tx *db.Tx) error {
+		if err := leaf.Rebuild(tx); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT coalesce(group_concat(rid, '|'), '') FROM
+		    (SELECT rid FROM leaf ORDER BY rid)`).Scan(&after); err != nil {
+			return err
+		}
+		return errRolledBack
+	})
+	if !errors.Is(err, errRolledBack) {
+		t.Fatalf("%s: leaf probe: %v", where, err)
+	}
+	if before != after {
+		t.Fatalf("%s: committed leaf rows %q, the leaf rule derives %q", where, before, after)
+	}
+}
+
+// failLeafInserts makes every insert into leaf fail, so a batch's leaf
+// rechecks fail after its link writes and its propagation, before it commits,
+// until the returned func is called.
+func failLeafInserts(t *testing.T, r *repo.Repo) (restore func()) {
+	t.Helper()
+	if _, err := r.DB().Exec(`CREATE TRIGGER fail_leaf_insert BEFORE INSERT ON leaf
+	    BEGIN SELECT RAISE(ABORT, 'injected leaf failure'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	dropped := false
+	restore = func() {
+		if dropped {
+			return
+		}
+		dropped = true
+		if _, err := r.DB().Exec("DROP TRIGGER fail_leaf_insert"); err != nil {
+			t.Fatalf("drop trigger: %v", err)
+		}
+	}
+	t.Cleanup(restore)
+	return restore
+}
+
+// A link batch applies its leaf rechecks before it commits, as fossil's
+// manifest_crosslink_end runs leaf_do_pending_checks inside the transaction
+// that linked the check-ins: a process that stops after a sweep's batches
+// commit leaves no linked check-in without its leaf row.
+func TestSweepBatchCommitsLeafRows(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c1: %v", err)
+	}
+	c2 := storeCheckin(t, r, "c2", "", base.Add(time.Minute), c1)
+
+	// The sweep's batches, with nothing after them.
+	st := newLinkState(crosslinkCacheBytes)
+	linked, err := crosslinkSweepWithState(context.Background(), r, st)
+	if err != nil || linked != 1 {
+		t.Fatalf("sweep: linked=%d err=%v", linked, err)
+	}
+	if st.sched.owed || st.sched.leaves.Len() != 0 || len(st.sched.parents.order) != 0 {
+		t.Fatalf("sweep left work for a later gate: owed=%v leaves=%d parents=%v",
+			st.sched.owed, st.sched.leaves.Len(), st.sched.parents.order)
+	}
+	assertLeavesComplete(t, r, "after the batch commits")
+	_, leaves := tagLeafState(t, r)
+	if want := fmt.Sprint(ridOf(t, r, c2)); leaves != want {
+		t.Fatalf("leaf rows = %q, want only c2 (%s)", leaves, want)
+	}
+}
+
+// A batch whose leaf rechecks fail rolls its links back with them, so no
+// committed check-in is left without its leaf row, and a later run converges
+// on what a rebuild derives.
+func TestSweepBatchRollsBackLinksWhenLeafCheckFails(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c1: %v", err)
+	}
+	c2 := storeCheckin(t, r, "c2", "", base.Add(time.Minute), c1)
+	storeCheckin(t, r, "c3", "", base.Add(2*time.Minute), c2)
+
+	restore := failLeafInserts(t, r)
+	_, err := Crosslink(r)
+	restore()
+	if err == nil {
+		t.Fatal("Crosslink with failing leaf rechecks succeeded")
+	}
+	assertLeavesComplete(t, r, "after the failed batch")
+	assertFullyPropagated(t, r, "after the failed batch")
+	var events int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?",
+		ridOf(t, r, c2)).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("c2 event rows after the failed batch = %d, %v; want 0", events, err)
+	}
+
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink re-run: %v", err)
+	}
+	assertLeavesComplete(t, r, "after the re-run")
 	assertMatchesFullRebuild(t, r)
 }

@@ -11,26 +11,29 @@ import (
 
 // batchSchedule is the work a crosslink batch defers to its repair gate: the
 // leaf rechecks its branch writes schedule (leaf.Pending,
-// draft-fossil-repo-state-01 Section 7.3) and the primary parents whose tags
-// must be propagated again because the batch gave each of them a child. Both
-// describe writes in the batch's transactions, so they are marked, rolled back
-// and reset together.
+// draft-fossil-repo-state-01 Section 7.3), the primary parents whose tags
+// must be propagated again because the batch gave each of them a child, and
+// whether it linked anything since its last gate, which owes the reparent pass
+// even when it scheduled nothing else. All three describe writes in the
+// batch's transactions, so they are marked, rolled back and reset together.
 //
 // It is not safe for concurrent use; one batch owns one.
 type batchSchedule struct {
 	leaves  *leaf.Pending
 	parents parentSet
+	owed    bool
 }
 
-// linkTx runs link in one transaction on r and, before that transaction
-// commits, reparents and propagates tags from the parents sched holds, as
-// fossil's manifest_crosslink propagates from a check-in's parent in the
-// transaction that links it. A link and the propagation it owes therefore
-// commit or roll back together: no committed plink row waits on a later gate
-// for its parent's tags (issue #432). On commit the parents this transaction
-// added are dropped, propagated; on rollback everything it scheduled is. The
-// leaf rechecks stay on sched for the closing gate, which applies the whole
-// batch's at once (draft-fossil-repo-state-01 Section 7.3).
+// linkTx runs link in one transaction on r and, when link linked anything,
+// runs the whole repair gate (repairOnTx) before that transaction commits:
+// the reparent pass, tag propagation from the parents sched holds, and the
+// leaf rechecks sched holds. Fossil's manifest_crosslink_end does the same
+// inside the transaction that linked the check-ins (src/manifest.c; its
+// leaf_do_pending_checks runs before db_end_transaction). A link and the
+// repair it owes therefore commit or roll back together: no committed
+// check-in waits on a later gate for its parent's tags (issue #432) or its
+// leaf row (draft-fossil-repo-state-01 Section 7.3). On commit sched is
+// spent; on rollback everything this transaction scheduled is dropped.
 func linkTx(r *repo.Repo, sched *batchSchedule, link func(tx *db.Tx) error) error {
 	if r == nil {
 		panic("manifest.linkTx: r must not be nil")
@@ -43,16 +46,16 @@ func linkTx(r *repo.Repo, sched *batchSchedule, link func(tx *db.Tx) error) erro
 		if err := link(tx); err != nil {
 			return err
 		}
-		if len(sched.parents.order) == mark.parents {
-			return nil // linked no parent: nothing owes propagation
+		if !sched.owed {
+			return nil // linked nothing: no gate is owed
 		}
-		return repairPlinkAndTags(tx, sched)
+		return repairOnTx(tx, sched)
 	})
 	if err != nil {
 		sched.rollback(mark)
 		return err
 	}
-	sched.parents.truncate(mark.parents)
+	sched.reset()
 	return nil
 }
 
@@ -60,6 +63,7 @@ func linkTx(r *repo.Repo, sched *batchSchedule, link func(tx *db.Tx) error) erro
 type scheduleMark struct {
 	leaves  leaf.Mark
 	parents int
+	owed    bool
 }
 
 func newBatchSchedule() *batchSchedule {
@@ -72,19 +76,21 @@ func newBatchSchedule() *batchSchedule {
 // mark records the schedule's current extent, for a caller whose transaction
 // or savepoint may roll back.
 func (s *batchSchedule) mark() scheduleMark {
-	return scheduleMark{leaves: s.leaves.Mark(), parents: len(s.parents.order)}
+	return scheduleMark{leaves: s.leaves.Mark(), parents: len(s.parents.order), owed: s.owed}
 }
 
 // rollback forgets everything scheduled since m.
 func (s *batchSchedule) rollback(m scheduleMark) {
 	s.leaves.Rollback(m.leaves)
 	s.parents.truncate(m.parents)
+	s.owed = m.owed
 }
 
 // reset empties the schedule once the gate that ran it has committed.
 func (s *batchSchedule) reset() {
 	s.leaves.Reset()
 	s.parents.truncate(0)
+	s.owed = false
 }
 
 // parentSet holds the primary parents a batch wrote plink rows for, in the

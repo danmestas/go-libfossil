@@ -29,13 +29,13 @@ import (
 // Each repair round scans tagxref for parent tags and rewrites only the tagged
 // check-ins, so the pass is O(reparented), not O(repository); a round with no
 // parent tag does one indexed query and returns. This matches fossil's
-// manifest_crosslink_end, which the receive path's repair gate runs once per
-// round rather than once per repository.
+// manifest_crosslink_end, which runs it in every transaction that links
+// artifacts; here the repair gate every link transaction runs does (linkTx).
 //
 // A check-in whose plink rows already name the tag's parents, each of them a
 // linked check-in, is not rewritten again: the rewrite would write the rows
-// that are there. That keeps the pass cheap for the gate each phantom-fill
-// cascade batch runs, not only for the session's (issue #432).
+// that are there. That keeps the pass cheap for the gate each link
+// transaction runs (issue #432).
 //
 // The new primary parent of each rewritten check-in is recorded on parents,
 // so the gate's propagation reaches the check-in under its new parent.

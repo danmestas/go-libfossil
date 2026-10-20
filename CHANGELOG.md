@@ -17,12 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crosslink propagates from a check-in's parent as it links it, so a link and
   its propagation commit or roll back together; a failed gate or an
   interrupted process can no longer leave a linked check-in without its
-  parents' tags. The leaf rechecks still wait for the closing gate. A
-  phantom-fill cascade's batch also applies its leaf rechecks before it
-  commits, so the check-ins it links get their leaf rows then, and a sync
-  no longer runs a closing gate, or a repair after a failed round, on the
-  cascades' account. A rebuild links every check-in, so it propagates from
-  every parent as before. Tracked in #432.
+  parents' tags. The same transaction runs the reparent pass and applies the
+  leaf rechecks it scheduled, as fossil's manifest_crosslink_end does, so a
+  linked check-in is never committed without its leaf row either, and
+  neither a sweep nor a sync runs a gate at its end, or a repair after a
+  failed round. A rebuild links every check-in, so it propagates from every
+  parent as before. Tracked in #432.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

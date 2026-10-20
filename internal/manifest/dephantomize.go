@@ -99,7 +99,8 @@ const (
 // ReceiveLinker incrementally derives manifest state while a clone receives
 // blobs. It owns one bounded expanded-content cache, one bounded reverse waiter
 // index, and one fixed-cap settled RID set through Finalize, when it runs the
-// residual candidate sweep and the single combined leaf/tag repair gate.
+// residual candidate sweep. Each of its link transactions runs the leaf/tag
+// repair gate before it commits (linkTx).
 type ReceiveLinker struct {
 	r     *repo.Repo
 	state *linkState
@@ -107,12 +108,11 @@ type ReceiveLinker struct {
 	// waiters maps a newly available UUID to the deferred checkins that need it.
 	// waitingOn is the reverse index needed to replace a checkin's wait set when
 	// another retry discovers a different missing reference.
-	waiters     map[string]map[libfossil.FslID]struct{}
-	waitingOn   map[libfossil.FslID]map[string]struct{}
-	waiterSize  int
-	waiterFull  bool
-	needsRepair bool
-	inFlight    map[libfossil.FslID]struct{}
+	waiters    map[string]map[libfossil.FslID]struct{}
+	waitingOn  map[libfossil.FslID]map[string]struct{}
+	waiterSize int
+	waiterFull bool
+	inFlight   map[libfossil.FslID]struct{}
 
 	// settled keeps terminal receive-session verdicts without consulting
 	// derived tables on every delta child. Its fixed cap is a performance
@@ -204,45 +204,25 @@ func (rl *ReceiveLinker) WithTx(r *repo.Repo, fn func(tx *db.Tx) error) error {
 	return linkTx(r, rl.state.sched, fn)
 }
 
-// Finalize retries the bounded deferred set, sweeps only residual candidates
-// with the same content cache, and repairs leaf/tag state exactly once. Its
-// return count is only the final-sweep work, not receive-time links.
+// Finalize retries the bounded deferred set and sweeps only residual
+// candidates with the same content cache, each in a transaction that runs its
+// own repair gate. Its return count is only the final-sweep work, not
+// receive-time links.
 func (rl *ReceiveLinker) Finalize(ctx context.Context) (int, error) {
 	if rl == nil {
 		panic("manifest.ReceiveLinker.Finalize: linker must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, rl.repairDue(), err)
-		return 0, repairErr
+		return 0, repairCrosslinkState(rl.r, rl.state.sched, err)
 	}
 	if err := rl.retryAllWaiters(ctx); err != nil {
-		// A cancellation or savepoint-control failure stops new derivation, but
-		// receive-time batches may already have committed plink/tagxref rows.
-		// They still get the same single repair gate before the cause returns.
-		_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, rl.repairDue(), err)
-		return 0, repairErr
+		// A cancellation or savepoint-control failure stops new derivation.
+		// What already committed was repaired in its own transaction, unless a
+		// caller linked outside WithTx; repairCrosslinkState covers that.
+		return 0, repairCrosslinkState(rl.r, rl.state.sched, err)
 	}
 	linked, sweepErr := crosslinkSweepWithState(ctx, rl.r, rl.state)
-	if linked > 0 {
-		rl.needsRepair = true
-	}
-	if !rl.needsRepair {
-		return linked, sweepErr
-	}
-	_, repairErr := repairCrosslinkState(rl.r, rl.state.sched, 1, sweepErr)
-	if repairErr == nil {
-		rl.needsRepair = false
-	}
-	return linked, repairErr
-}
-
-// repairDue is the link count repairCrosslinkState gates on: nonzero when this
-// linker linked rows the leaf and tag state has not been repaired for.
-func (rl *ReceiveLinker) repairDue() int {
-	if rl.needsRepair {
-		return 1
-	}
-	return 0
+	return linked, repairCrosslinkState(rl.r, rl.state.sched, sweepErr)
 }
 
 // Stats returns a snapshot of receive-time linking and bounded-cache work.
@@ -341,7 +321,6 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	}
 	if handled {
 		rl.state.linked++
-		rl.needsRepair = true
 		rl.settle(rid)
 	}
 	return nil

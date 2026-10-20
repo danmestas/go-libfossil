@@ -168,12 +168,18 @@ func TestAbsencesRetainedDeltaChainStaysTransit(t *testing.T) {
 
 func TestAbsencesStructuralReferencesStayTransit(t *testing.T) {
 	for name, stmt := range map[string]string{
-		"event":      "INSERT INTO event(objid, type) VALUES(?, 'w')",
-		"manifest":   "INSERT INTO mlink(mid) VALUES(?)",
-		"parent":     "INSERT INTO plink(pid, cid) VALUES(?, 999)",
-		"baseline":   "INSERT INTO orphan(rid, baseline) VALUES(999, ?)",
-		"tag source": "INSERT INTO tagxref(tagid, srcid, rid) VALUES(1, ?, 999)",
-		"attachment": "INSERT INTO attachment(attachid, src) SELECT 999, uuid FROM blob WHERE rid=?",
+		"event":         "INSERT INTO event(objid, type) VALUES(?, 'w')",
+		"manifest":      "INSERT INTO mlink(mid) VALUES(?)",
+		"parent":        "INSERT INTO plink(pid, cid) VALUES(?, 999)",
+		"baseline":      "INSERT INTO orphan(rid, baseline) VALUES(999, ?)",
+		"tag source":    "INSERT INTO tagxref(tagid, srcid, rid) VALUES(1, ?, 999)",
+		"attachment":    "INSERT INTO attachment(attachid, src) SELECT 999, uuid FROM blob WHERE rid=?",
+		"forum post":    "INSERT INTO forumpost(fpid) VALUES(?)",
+		"forum root":    "INSERT INTO forumpost(fpid, froot) VALUES(999, ?)",
+		"forum prior":   "INSERT INTO forumpost(fpid, fprev) VALUES(999, ?)",
+		"forum reply":   "INSERT INTO forumpost(fpid, firt) VALUES(999, ?)",
+		"cherry parent": "INSERT INTO cherrypick(parentid, childid) VALUES(?, 999)",
+		"cherry child":  "INSERT INTO cherrypick(parentid, childid) VALUES(999, ?)",
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newAbsenceFixture(t)

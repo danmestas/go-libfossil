@@ -198,6 +198,12 @@ func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) err
 		UNION SELECT rid FROM tagxref
 		UNION SELECT attachid FROM attachment
 		UNION SELECT b.rid FROM attachment a JOIN blob b ON b.uuid=a.src
+		UNION SELECT parentid FROM cherrypick
+		UNION SELECT childid FROM cherrypick
+		UNION SELECT fpid FROM forumpost
+		UNION SELECT froot FROM forumpost
+		UNION SELECT fprev FROM forumpost
+		UNION SELECT firt FROM forumpost
 		INTERSECT SELECT rid FROM phantom`)
 	if err != nil {
 		return fmt.Errorf("content.LoadAbsences: structural references: %w", err)

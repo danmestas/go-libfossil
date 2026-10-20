@@ -9,6 +9,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -119,19 +120,26 @@ func checkinTx(tx *db.Tx, opts CheckinOpts) (libfossil.FslID, string, checkinTre
 			return 0, "", checkinTree{}, err
 		}
 	}
-	fCards, fileRids, err := storeFileBlobs(tx, opts.Files)
+	// A sparse store (draft-fossil-sparse-cone-00 §5) lacks the content of
+	// files its cone leaves out. The check-in names them by hash, as the
+	// parent did, and carries no R card.
+	storeCone, err := content.StoreCone(tx)
 	if err != nil {
 		return 0, "", checkinTree{}, err
 	}
-	d, tree, err := checkinDeck(tx, opts, fCards)
+	fCards, fileRids, err := storeFileBlobs(tx, opts.Files, storeCone)
+	if err != nil {
+		return 0, "", checkinTree{}, err
+	}
+	d, tree, err := checkinDeck(tx, opts, fCards, storeCone)
 	if err != nil {
 		return 0, "", tree, err
 	}
 	cache := content.NewCache(crosslinkCacheBytes)
-	if err := preflightCheckinMlinks(tx, cache, d); err != nil {
+	if err := preflightCheckinMlinks(tx, cache, d, storeCone); err != nil {
 		return 0, "", tree, fmt.Errorf("preflight checkin mlinks: %w", err)
 	}
-	rid, uuid, err := insertCheckinBlob(tx, d)
+	rid, uuid, err := insertCheckinBlob(tx, d, storeCone)
 	if err != nil {
 		return 0, "", tree, err
 	}
@@ -243,7 +251,7 @@ func checkWriterName(name string) error {
 	return nil
 }
 
-func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID, error) {
+func storeFileBlobs(tx *db.Tx, files []File, storeCone *cone.Cone) ([]deck.FileCard, []libfossil.FslID, error) {
 	fCards := make([]deck.FileCard, len(files))
 	var rids []libfossil.FslID
 	for i, f := range files {
@@ -254,7 +262,7 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 			return nil, nil, err
 		}
 		if f.UUID != "" {
-			if err := checkCarried(tx, f); err != nil {
+			if err := checkCarried(tx, f, storeCone); err != nil {
 				return nil, nil, err
 			}
 			fCards[i] = deck.FileCard{Name: f.Name, UUID: f.UUID, Perm: f.Perm, OldName: f.OldName}
@@ -277,22 +285,33 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 
 // checkCarried requires a carried file's artifact to be held: the R card
 // reads its content, and a check-in naming content its writer lacks would
-// be committed blind.
-func checkCarried(tx *db.Tx, f File) error {
+// be committed blind. The exception is a file the store cone leaves out,
+// whose content a sparse store deliberately lacks: §5.3 references it by
+// hash without possession, and the check-in carries no R card.
+func checkCarried(tx *db.Tx, f File, storeCone *cone.Cone) error {
 	if f.Content != nil {
 		panic("manifest.checkCarried: a carried file has content: " + f.Name)
 	}
-	if _, ok := content.AvailableByUUID(tx, f.UUID); !ok {
-		return fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	if _, ok := content.AvailableByUUID(tx, f.UUID); ok || elidable(storeCone, f.Name) {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+}
+
+// elidable reports whether a sparse store may lack the content of the file
+// at name: its store cone does not cover the name. A dense store, with no
+// cone, may lack nothing.
+func elidable(storeCone *cone.Cone, name string) bool {
+	return storeCone != nil && !storeCone.Covers(name)
 }
 
 // checkinDeck builds a check-in's manifest. With sub-manifest emission
 // enabled the file set goes to a tree, stored first
 // (draft-fossil-submanifests-00 §6.2), and a tree carries no B card (§4.4),
 // so a tree check-in is never a delta.
-func checkinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Deck, checkinTree, error) {
+func checkinDeck(
+	tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard, storeCone *cone.Cone,
+) (*deck.Deck, checkinTree, error) {
 	tree, err := storeTreeFor(tx, opts, fCards)
 	if err != nil {
 		return nil, tree, err
@@ -300,7 +319,7 @@ func checkinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Dec
 	if len(tree.s) > 0 {
 		opts.Delta = false
 	}
-	d, err := buildCheckinDeck(tx, opts, fCards)
+	d, err := buildCheckinDeck(tx, opts, fCards, storeCone)
 	if err != nil {
 		return nil, tree, err
 	}
@@ -310,7 +329,9 @@ func checkinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Dec
 	return d, tree, nil
 }
 
-func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Deck, error) {
+func buildCheckinDeck(
+	tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard, storeCone *cone.Cone,
+) (*deck.Deck, error) {
 	d := &deck.Deck{
 		Type: deck.Checkin,
 		C:    opts.Comment,
@@ -364,6 +385,12 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 
 	sort.Slice(d.F, func(i, j int) bool { return deck.Compare(d.F[i].Name, d.F[j].Name) < 0 })
 
+	// The R card is an aggregate over every file's content, which a sparse
+	// store does not hold; a commit over one omits it, which is conforming
+	// (draft-fossil-sparse-cone-00 §4.3).
+	if storeCone != nil {
+		return d, nil
+	}
 	rHash, err := checkinRCard(tx, fCards)
 	if err != nil {
 		return nil, err
@@ -392,10 +419,15 @@ func checkinRCard(tx *db.Tx, fCards []deck.FileCard) (string, error) {
 	return rHash, nil
 }
 
-func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error) {
+func insertCheckinBlob(tx *db.Tx, d *deck.Deck, storeCone *cone.Cone) (libfossil.FslID, string, error) {
 	// Writer postcondition (AF-6.3-4): ComputeR yields lowercase hex, so this
-	// can only trip on a programmer error upstream.
-	if len(d.R) != 32 || strings.ToLower(d.R) != d.R {
+	// can only trip on a programmer error upstream. Over a sparse store there
+	// is no R card at all.
+	if storeCone != nil {
+		if d.R != "" {
+			panic("manifest.insertCheckinBlob: an R card over a sparse store")
+		}
+	} else if len(d.R) != 32 || strings.ToLower(d.R) != d.R {
 		panic("manifest.insertCheckinBlob: R card must be 32 lowercase hex digits")
 	}
 	manifestBytes, err := d.Marshal()
@@ -421,13 +453,28 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 // stored-state corruption, which is not a programmer error. It is exported
 // (inside internal/) so the conformance suite can drive it with a stored
 // manifest that carries a bad R card.
+//
+// An absent R card is not damage, and there is nothing to check (§4.3 of
+// draft-fossil-sparse-cone-00). Nor is there over a sparse store, which
+// lacks the content outside its cone: the aggregate is uncomputable, so the
+// check is skipped rather than reported as a disagreement.
 func VerifyRCard(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
 	if rid <= 0 {
 		panic("manifest.VerifyRCard: rid must be positive")
 	}
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return fmt.Errorf("R-card check: %w", err)
+	}
+	if storeCone != nil {
+		return nil
+	}
 	d, mf, err := loadCheckinManifest(tx, cache, rid)
 	if err != nil {
 		return fmt.Errorf("R-card check: %w", err)
+	}
+	if d.R == "" {
+		return nil
 	}
 	tree := &deck.Deck{}
 	for _, name := range mf.treeNames() {

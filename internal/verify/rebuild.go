@@ -62,6 +62,11 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 		return nil, fmt.Errorf("verify.Rebuild: %w", err)
 	}
 
+	// The rebuilt mlink is what elision is read from. The store cone is not a
+	// derived table and survives the rebuild, so elided phantoms stay elided.
+	if err := countAbsences(r, report); err != nil {
+		return nil, fmt.Errorf("verify.Rebuild: %w", err)
+	}
 	report.TablesRebuilt = rebuildTableList
 	report.Duration = time.Since(start)
 

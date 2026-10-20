@@ -27,6 +27,7 @@ import (
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -487,8 +488,10 @@ func validateCheckinMlinkBounds(d *deck.Deck) error {
 }
 
 // preflightCheckinMlinks verifies that direct Checkin can derive every
-// parent-to-child mlink transition before it stores the child manifest.
-func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck) error {
+// parent-to-child mlink transition before it stores the child manifest. A
+// file a sparse store's cone leaves out may be absent: mlink derivation
+// needs its name, never its content.
+func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck, storeCone *cone.Cone) error {
 	if tx == nil {
 		panic("manifest.preflightCheckinMlinks: tx must not be nil")
 	}
@@ -521,7 +524,7 @@ func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck) error
 		}
 		for _, name := range files.treeNames() {
 			file, _ := files.seek(name)
-			if _, ok := content.AvailableByUUID(tx, file.UUID); !ok {
+			if _, ok := content.AvailableByUUID(tx, file.UUID); !ok && !elidable(storeCone, name) {
 				return fmt.Errorf("%s %s: effective file %q (%s): not available", kind, uuid, name, file.UUID)
 			}
 		}

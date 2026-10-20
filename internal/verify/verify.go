@@ -2,8 +2,10 @@
 package verify
 
 import (
+	"fmt"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -37,12 +39,22 @@ type Issue struct {
 
 // Report contains the results of a repository verification pass.
 type Report struct {
-	Issues        []Issue
-	BlobsChecked  int
-	BlobsOK       int
-	BlobsFailed   int
-	BlobsSkipped  int
-	MissingRefs   int
+	Issues       []Issue
+	BlobsChecked int
+	BlobsOK      int
+	BlobsFailed  int
+	BlobsSkipped int
+	MissingRefs  int
+	// Phantoms counts the artifacts the store names but lacks and still
+	// wants: transit phantoms, which synchronization requests. Shunned and
+	// elided artifacts are not among them.
+	Phantoms int
+	// Elided counts the artifacts deliberately absent under the store cone
+	// (draft-fossil-sparse-cone-00 §5.2). Elision is healthy: it is never an
+	// Issue, so a store complete within its cone verifies OK, and it is
+	// counted apart from damage and from Phantoms so that neither hides the
+	// other. It is zero for a dense store.
+	Elided        int
 	TablesRebuilt []string
 	Duration      time.Duration
 }
@@ -58,7 +70,8 @@ func (r *Report) addIssue(issue Issue) {
 }
 
 // Verify performs comprehensive repository verification.
-// It checks blob integrity, delta chains, phantom records, and derived tables.
+// It checks blob integrity, delta chains, phantom records, and derived tables,
+// and counts what the store lacks by absence class.
 // Returns a report of all issues found. Never stops early - reports all problems.
 func Verify(r *repo.Repo) (*Report, error) {
 	if r == nil {
@@ -86,6 +99,30 @@ func Verify(r *repo.Repo) (*Report, error) {
 		return nil, err
 	}
 
+	// Phase 4: what the store lacks, by absence class.
+	if err := countAbsences(r, report); err != nil {
+		return nil, err
+	}
+
 	report.Duration = time.Since(start)
 	return report, nil
+}
+
+// countAbsences fills Phantoms and Elided from the store's phantoms,
+// classified against its store cone. It runs after the derived-table checks
+// because elision is read from mlink, a derived table.
+func countAbsences(r *repo.Repo, report *Report) error {
+	if r == nil {
+		panic("verify.countAbsences: nil *repo.Repo")
+	}
+	if report == nil {
+		panic("verify.countAbsences: nil *Report")
+	}
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		return fmt.Errorf("verify: %w", err)
+	}
+	report.Phantoms = a.Count(content.Transit)
+	report.Elided = a.Count(content.Elided)
+	return nil
 }

@@ -193,8 +193,12 @@ func TestReparent(t *testing.T) {
 		}
 	}
 	assertAfter("after reparent", false, u3)
+	// The relink keeps the branch rows propagation wrote (srcid 0), so
+	// relinking c2 finds it already tagged and rechecks it with the plink rows
+	// it has now (recheckTaggedBeforeLinking): c2 gets the verdict a rebuild
+	// gives it. plink and mlink are unchanged, which is what #286 pins.
 	relinkDerived(t, path)
-	assertAfter("after relink (idempotent)", false, u3)
+	assertAfter("after relink (idempotent)", false, u2, u3)
 	assertAfter("after leaf.Rebuild", true, u2, u3)
 }
 

@@ -2,7 +2,6 @@ package sync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/danmestas/go-libfossil/db"
 
@@ -142,9 +141,6 @@ type session struct {
 	// dephantomized buffers the phantoms this reply filled, whose
 	// after-dephantomize cascade runs once at the end of the reply.
 	dephantomized []libfossil.FslID
-	// cascaded counts what those cascades linked, across the session: the
-	// closing crosslink owes it the leaf and tag repair (issue #414).
-	cascaded int
 	// pass is the current reply's verification pass (§7.7).
 	pass             *receivePass
 	roundStats       RoundStats
@@ -291,22 +287,6 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}
 	s := newSession(r, opts)
 	s.ctx = ctx
-	closed := false
-	defer func() {
-		// A round that fails after earlier rounds' cascades committed their
-		// links must still repair leaves and propagated tags, as fossil's
-		// per-round manifest_crosslink_end does (src/xfer.c): otherwise a
-		// failed pull leaves check-ins with event rows and no leaf rows
-		// (repo-state-00 Section 7.3, RS-7.3-4). The context is detached so a
-		// cancelled pull is repaired too.
-		if closed || err == nil || s.cascaded == 0 {
-			return
-		}
-		_, rerr := manifest.CrosslinkAfterCascades(context.WithoutCancel(ctx), s.repo, s.cascaded)
-		if rerr != nil {
-			err = errors.Join(err, fmt.Errorf("sync: repair after failed session: %w", rerr))
-		}
-	}()
 	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
 	}
@@ -381,11 +361,14 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// clone's sweep is (#120): this runs after the round loop, so it has no
 	// round boundary of its own at which a cancelled context could be noticed.
 	// fossil runs manifest_crosslink_end inside each round's transaction
-	// (xfer.c); here the repair runs once, after the rounds, in its own
-	// transaction, so that a cancelled sweep cannot roll back a committed
-	// reply. A rolled-back reply restores s.cascaded, so none is owed for it.
-	closed = true
-	linked, xlinkErr := manifest.CrosslinkAfterCascades(ctx, s.repo, s.cascaded)
+	// (xfer.c); here each sweep batch repairs in its own transaction, so a
+	// cancelled sweep cannot roll back a committed reply. The phantom-fill
+	// cascades need no repair here: each cascade batch
+	// repairs leaves and propagated tags before it commits, as fossil's
+	// per-round manifest_crosslink_end does (src/xfer.c), so a round that fails
+	// after earlier rounds' cascades committed leaves no check-in with an event
+	// row and no leaf row (repo-state-01 Section 7.3, RS-7.3-4).
+	linked, xlinkErr := manifest.CrosslinkContext(ctx, s.repo)
 	if xlinkErr != nil {
 		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), xlinkErr)
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)

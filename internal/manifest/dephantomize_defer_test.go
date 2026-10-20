@@ -131,7 +131,9 @@ func TestAfterDephantomizeLinksOrphanWhenBaselineArrives(t *testing.T) {
 		t.Fatalf("blob.Store(baseline): %v", err)
 	}
 	AfterDephantomize(context.Background(), r, libfossil.FslID(baseRID))
-	assertCounts(t, r, deltaRID, 1, 0, 0, "linked once the baseline arrived")
+	// The cascade's own gate propagates the baseline's branch to the delta and
+	// applies the recheck that schedules, so the delta is already a leaf.
+	assertCounts(t, r, deltaRID, 1, 1, 0, "linked once the baseline arrived")
 	var orphans int
 	if err := r.DB().QueryRow("SELECT count(*) FROM orphan").Scan(&orphans); err != nil ||
 		orphans != 0 {

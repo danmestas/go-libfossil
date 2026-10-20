@@ -416,8 +416,8 @@ func storeTreeFor(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (checkinT
 func (ct checkinTree) afterCommit(r *repo.Repo) {
 	if len(ct.filled) > 0 {
 		ctx := context.Background()
-		linked := AfterDephantomizeBatch(ctx, r, ct.filled)
-		if _, err := CrosslinkAfterCascades(ctx, r, linked); err != nil {
+		AfterDephantomizeBatch(ctx, r, ct.filled)
+		if _, err := CrosslinkContext(ctx, r); err != nil {
 			slog.Warn("manifest.Checkin: linking check-ins that waited on a sub-manifest", "err", err)
 		}
 	}

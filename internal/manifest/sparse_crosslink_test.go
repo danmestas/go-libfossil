@@ -65,8 +65,8 @@ func TestSparseTreeMetadataCompletesAfterAllNodesArrive(t *testing.T) {
 				}
 				f.storeBytes(payloads[j])
 				arrived, _ := content.AvailableByUUID(f.r.DB(), refs[j+1].UUID)
-				linked := AfterDephantomize(context.Background(), f.r, arrived)
-				if _, err := CrosslinkAfterCascades(context.Background(), f.r, linked); err != nil {
+				AfterDephantomize(context.Background(), f.r, arrived)
+				if _, err := CrosslinkContext(context.Background(), f.r); err != nil {
 					t.Fatal(err)
 				}
 				if i == 0 {

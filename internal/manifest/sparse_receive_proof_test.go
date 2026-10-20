@@ -97,7 +97,7 @@ func TestSparseProofReusedWithinUnchangedTransaction(t *testing.T) {
 	}
 	st := newLinkState(receiveCacheBytes)
 	if err := f.r.WithTx(func(tx *db.Tx) error {
-		ready, err := crosslinkPartialCheckin(context.Background(), tx, rid, d, st.guard, st.leaves)
+		ready, err := crosslinkPartialCheckin(context.Background(), tx, rid, d, st.guard, st.sched)
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func TestSparseProofReusedWithinUnchangedTransaction(t *testing.T) {
 			t.Fatal("partial check-in did not load transaction proof")
 		}
 		proof := st.guard.coneReferences
-		ready, err = crosslinkPartialCheckin(context.Background(), tx, rid, d, st.guard, st.leaves)
+		ready, err = crosslinkPartialCheckin(context.Background(), tx, rid, d, st.guard, st.sched)
 		if !ready || st.guard.coneReferences != proof {
 			t.Error("unchanged transaction did not reuse its proof")
 		}

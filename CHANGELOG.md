@@ -110,6 +110,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
 ### Changed
 
+- Tag propagation after a crosslink now starts only from the primary
+  parents the batch wrote plink rows for, and from the new parents of a
+  reparent, rather than from every primary parent in the repository.
+  It runs in the transaction that wrote those rows, as fossil's crosslink
+  propagates from a check-in's parent as it links it, so a link and its
+  propagation commit or roll back together. The same transaction runs the
+  reparent pass and applies the leaf rechecks it scheduled, as fossil's
+  manifest_crosslink_end does: no committed link leaves scheduled rechecks
+  pending. Neither a sweep nor a sync runs a redundant gate at its end,
+  or a repair after a failed round. A rebuild links every check-in, so it
+  propagates from every parent as before. Tracked in #432.
+- A sync that fails after earlier rounds' phantom fills linked artifacts no
+  longer runs a crosslink sweep before it returns. The artifacts earlier
+  rounds committed outside a phantom fill stay unlinked until the next
+  crosslink (the next sync, clone or `rebuild`), which links them. No tag or
+  leaf state is lost: everything linked was repaired in its own transaction.
+
 - The conformance suite no longer reads erratum files. zit applied every
   erratum in its draft text and retired `docs/rfcs/erratum/` at check-in
   `62a7d1bb3f`; each draft now records its corrections in its own Changes

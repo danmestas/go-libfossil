@@ -8,7 +8,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/leaf"
 )
 
 func checkinSources(d *deck.Deck) []string {
@@ -57,7 +56,10 @@ func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 
 // Partial derivation publishes only spine metadata. The orphan row remains the
 // completion marker; no mlink transition is represented by a partial row set.
-func crosslinkPartialCheckin(ctx context.Context, tx *db.Tx, rid libfossil.FslID, d *deck.Deck, g *checkinDeferralGuard, leaves *leaf.Pending) (bool, error) {
+func crosslinkPartialCheckin(
+	ctx context.Context, tx *db.Tx, rid libfossil.FslID, d *deck.Deck,
+	g *checkinDeferralGuard, sched *batchSchedule,
+) (bool, error) {
 	c, err := content.StoreCone(tx)
 	if err != nil || c == nil {
 		return false, err
@@ -72,12 +74,16 @@ func crosslinkPartialCheckin(ctx context.Context, tx *db.Tx, rid libfossil.FslID
 	if err != nil || !ready {
 		return false, err
 	}
-	if err := crosslinkCheckinMetadata(tx, rid, d); err != nil {
+	if err := crosslinkCheckinMetadata(tx, rid, d, &sched.parents); err != nil {
 		return false, err
 	}
-	if err := applyInlineTags(tx, rid, d, leaves); err != nil {
+	if err := applyInlineTags(tx, rid, d, sched.leaves); err != nil {
 		return false, err
 	}
+	if err := recheckTaggedBeforeLinking(tx, rid, sched.leaves); err != nil {
+		return false, err
+	}
+	sched.owed = true
 	return true, nil
 }
 

@@ -605,7 +605,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 		panic("sync.processResponse: msg must not be nil")
 	}
 	var done bool
-	cascaded, recvd := s.cascaded, s.result.FilesRecvd
+	recvd := s.result.FilesRecvd
 	cardErr, err := runPass(s.repo, func(bound *repo.Repo) (cardErr, err error) {
 		defer s.bindRepo(bound)()
 		done, cardErr, err = s.processReply(ctx, msg)
@@ -613,9 +613,8 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	})
 	s.dephantomized = s.dephantomized[:0]
 	if err != nil {
-		// The reply rolled back: what it counted is not stored, and the
-		// cascades it ran owe no repair.
-		s.cascaded, s.result.FilesRecvd = cascaded, recvd
+		// The reply rolled back: what it counted is not stored.
+		s.result.FilesRecvd = recvd
 		return false, err
 	}
 	if cardErr != nil {
@@ -690,7 +689,7 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	}
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
-	s.cascaded += manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {
@@ -1066,11 +1065,6 @@ func (s *session) tablesPending() bool {
 // Callers with no such bytes on hand (payload built locally, or a bare
 // "file" card that never carried a compressed wire frame) pass nil, and
 // storage falls back to compressing payload itself.
-//
-// A caller passing a nil linker discards the cascade's link count, so it must
-// not be used where the session owes the closing repair
-// manifest.CrosslinkAfterCascades that count (issue #414); the sync client
-// and handler use storeReceived for that.
 //
 // pass is the verification pass the card belongs to (see receivePass). A
 // late hash mismatch, found in a delta this pass stored earlier, aborts the

@@ -29,11 +29,36 @@ import (
 // Each repair round scans tagxref for parent tags and rewrites only the tagged
 // check-ins, so the pass is O(reparented), not O(repository); a round with no
 // parent tag does one indexed query and returns. This matches fossil's
-// manifest_crosslink_end, which the receive path's repair gate runs once per
-// round rather than once per repository.
-func ReparentCheckins(tx *db.Tx) error {
+// manifest_crosslink_end, which runs it in every transaction that links
+// artifacts; here the repair gate every link transaction runs does (linkTx).
+//
+// A check-in whose plink rows already name the tag's parents, each of them a
+// linked check-in, is not rewritten again: the rewrite would write the rows
+// that are there. That keeps the pass cheap for the gate each link
+// transaction runs (issue #432).
+//
+// The new primary parent of each rewritten check-in is recorded on parents,
+// so the gate's propagation reaches the check-in under its new parent. This
+// goes beyond fossil: manifest_reparent_checkin rewrites plink and mlink and
+// propagates nothing, so in fossil a reparented check-in inherits its new
+// parent's tags only when a later tag change or crosslink propagates from
+// that parent. The whole-repository pass this gate replaced propagated from
+// every parent, so it did the same as this does.
+//
+// Known divergence: a reparent never removes the tags the check-in and its
+// descendants inherited from the old parent. Propagation from the new parent
+// replaces a tag both parents carry (the branch tag) when the new parent's is
+// the newer, but a propagating tag only the old parent carried stays. Fossil's manifest_reparent_checkin
+// removes none either, and fossil's own rebuild is order-dependent here: the
+// tags a reparented check-in ends with depend on whether the old parent's tag
+// reached it before the rewrite. So an incremental crosslink that reparents
+// can differ from a rebuild in such inherited tags, as fossil's can.
+func ReparentCheckins(tx *db.Tx, parents *parentSet) error {
 	if tx == nil {
 		panic("manifest.ReparentCheckins: tx must not be nil")
+	}
+	if parents == nil {
+		panic("manifest.ReparentCheckins: parents must not be nil")
 	}
 	type reparent struct {
 		rid   libfossil.FslID
@@ -65,7 +90,7 @@ func ReparentCheckins(tx *db.Tx) error {
 	}
 	cache := content.NewCache(crosslinkCacheBytes)
 	for _, r := range todo {
-		if err := reparentCheckin(tx, cache, r.rid, r.value); err != nil {
+		if err := reparentCheckin(tx, cache, r.rid, r.value, parents); err != nil {
 			return err
 		}
 	}
@@ -77,12 +102,12 @@ func ReparentCheckins(tx *db.Tx) error {
 // the same builders a normal crosslink uses, over a deck whose P-card is the
 // override: fossil reuses manifest_add_checkin_linkages the same way.
 func reparentCheckin(
-	tx *db.Tx, cache *content.Cache, rid libfossil.FslID, value string,
+	tx *db.Tx, cache *content.Cache, rid libfossil.FslID, value string, parents *parentSet,
 ) error {
 	// Fossil consumes exactly one byte <= space between hashes, accepts
 	// one trailing separator, and treats NUL as the end of the value.
 	value, _, _ = strings.Cut(value, "\x00")
-	var parents []string
+	var hashes []string
 	for len(value) > 0 {
 		i := 0
 		for i < len(value) && value[i] > ' ' {
@@ -92,13 +117,20 @@ func reparentCheckin(
 		if !isHash(parent) {
 			return nil // malformed value: fossil leaves the plink rows untouched
 		}
-		parents = append(parents, parent)
+		hashes = append(hashes, parent)
 		if i == len(value) {
 			break
 		}
 		value = value[i+1:]
 	}
-	if len(parents) == 0 {
+	if len(hashes) == 0 {
+		return nil
+	}
+	settled, err := reparentSettled(tx, rid, hashes)
+	if err != nil {
+		return err
+	}
+	if settled {
 		return nil
 	}
 	data, err := expandManifestBytes(tx, cache, rid)
@@ -111,7 +143,7 @@ func reparentCheckin(
 	}
 
 	reparented := *d
-	reparented.P = parents
+	reparented.P = hashes
 
 	if _, err := tx.Exec("DELETE FROM plink WHERE cid=?", rid); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin plink delete rid=%d: %w", rid, err)
@@ -119,11 +151,52 @@ func reparentCheckin(
 	if _, err := tx.Exec("DELETE FROM mlink WHERE mid=?", rid); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin mlink delete rid=%d: %w", rid, err)
 	}
-	if err := insertCheckinPlinks(tx, rid, &reparented, checkinBaseid(tx, d)); err != nil {
+	if err := insertCheckinPlinks(tx, rid, &reparented, checkinBaseid(tx, d), parents); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin plink rid=%d: %w", rid, err)
 	}
 	if err := insertCheckinMlinks(tx, cache, rid, &reparented); err != nil {
 		return fmt.Errorf("manifest.reparentCheckin mlink rid=%d: %w", rid, err)
 	}
 	return nil
+}
+
+// reparentSettled reports whether rid's plink rows name exactly the parents in
+// hashes, the first one primary, and each parent is a linked check-in. A
+// rewrite against a parent that is not linked yet derives mlink without that
+// parent's manifest, so it is redone at every gate until the parent is linked,
+// as it was before any rewrite was skipped.
+func reparentSettled(q db.Querier, rid libfossil.FslID, hashes []string) (bool, error) {
+	if rid <= 0 {
+		panic("manifest.reparentSettled: rid must be positive")
+	}
+	rows, err := q.Query(`SELECT b.uuid, p.isprim,
+	        EXISTS(SELECT 1 FROM event e WHERE e.objid=p.pid AND e.type='ci')
+	   FROM plink p JOIN blob b ON b.rid=p.pid WHERE p.cid=?`, rid)
+	if err != nil {
+		return false, fmt.Errorf("manifest.reparentSettled rid=%d: %w", rid, err)
+	}
+	defer rows.Close()
+	type edge struct{ prim, linked bool }
+	have := make(map[string]edge, len(hashes))
+	for rows.Next() {
+		var uuid string
+		var e edge
+		if err := rows.Scan(&uuid, &e.prim, &e.linked); err != nil {
+			return false, fmt.Errorf("manifest.reparentSettled rid=%d scan: %w", rid, err)
+		}
+		have[uuid] = e
+	}
+	if err := rows.Err(); err != nil {
+		return false, fmt.Errorf("manifest.reparentSettled rid=%d rows: %w", rid, err)
+	}
+	if len(have) != len(hashes) {
+		return false, nil
+	}
+	for i, h := range hashes {
+		e, ok := have[h]
+		if !ok || e.prim != (i == 0) || !e.linked {
+			return false, nil
+		}
+	}
+	return true, nil
 }

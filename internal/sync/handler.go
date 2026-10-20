@@ -224,7 +224,6 @@ type handler struct {
 	capabilitySent  bool                      // the reply's §7.2 pragma run is emitted
 	smRefused       bool                      // this reply already carries the §7.2 refusal
 	filesRecvd      int                       // files received from client (for observer)
-	cascaded        int                       // artifacts the phantom-fill cascades linked
 	syncPrivate     bool                      // true if pragma send-private was accepted
 	nextIsPrivate   bool                      // true if a private card precedes the next file/cfile
 	syncedTables    map[string]*SyncedTable   // cached table definitions
@@ -573,7 +572,7 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 	if h.filesRecvd == 0 {
 		return nil
 	}
-	if _, err := manifest.CrosslinkAfterCascades(ctx, h.repo, h.cascaded); err != nil {
+	if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
 		return fmt.Errorf("HandleSync: crosslink: %w", err)
 	}
 	return nil
@@ -1350,14 +1349,8 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	// storeReceivedFile's cascade, inline, to keep its count: the cascade
-	// leaves the leaf and tag repair to crosslinkReceived (issue #414), and
-	// both run in the request transaction.
-	rid, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
+	err := storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
-	if rid > 0 {
-		h.cascaded += manifest.AfterDephantomize(ctx, h.repo, rid)
-	}
 	// A late mismatch names the delta at fault, which this request stored
 	// earlier, not the card that made its bytes available.
 	var mismatch *hashMismatchError

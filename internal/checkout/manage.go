@@ -25,17 +25,15 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		return nil, fmt.Errorf("checkout.Manage: %w", err)
 	}
 
+	if err := c.refuseUncovered("Manage", opts.Paths...); err != nil {
+		return counts, err
+	}
 	for _, path := range opts.Paths {
-		// Check if already tracked
-		var existingID int64
-		err := c.db.QueryRow(
-			"SELECT id FROM vfile WHERE vid=? AND pathname=?",
-			int64(vid), path,
-		).Scan(&existingID)
-		if err != nil && err != sql.ErrNoRows {
-			return counts, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+		tracked, err := c.isTracked(vid, path)
+		if err != nil {
+			return counts, err
 		}
-		if err == nil {
+		if tracked {
 			// Already tracked
 			counts.Skipped++
 			if opts.Callback != nil {
@@ -85,6 +83,21 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 	return counts, nil
 }
 
+// isTracked reports whether version vid's record has a row for path.
+func (c *Checkout) isTracked(vid libfossil.FslID, path string) (bool, error) {
+	var id int64
+	err := c.db.QueryRow(
+		"SELECT id FROM vfile WHERE vid=? AND pathname=?", int64(vid), path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+	}
+	return true, nil
+}
+
 // Unmanage removes files from tracking. For each path:
 // - If rid=0 (newly added, never committed): DELETE from vfile
 // - If rid>0 (existing tracked file): UPDATE vfile SET deleted=1
@@ -115,6 +128,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 			if err != nil {
 				return fmt.Errorf("checkout.Unmanage: query vfile id=%d: %w", vfileID, err)
 			}
+			if err := c.refuseUncovered("Unmanage", pathname); err != nil {
+				return err
+			}
 
 			if err := c.unmanageFile(vfileID, rid, pathname, opts.Callback); err != nil {
 				return fmt.Errorf("checkout.Unmanage: %w", err)
@@ -124,6 +140,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 	}
 
 	// Handle Paths
+	if err := c.refuseUncovered("Unmanage", opts.Paths...); err != nil {
+		return err
+	}
 	for _, path := range opts.Paths {
 		var vfileID libfossil.FslID
 		var rid int64

@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -115,10 +116,16 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 
 // HandleOpts configures optional behavior for HandleSync.
 type HandleOpts struct {
-	Buggify      BuggifyChecker // nil in production.
-	Observer     Observer       // nil defaults to no-op.
-	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
-	Clock        simio.Clock    // time for the reply's timestamp comment; nil = real time
+	// PartialMirror permits clone requests beyond this store's cone.
+	PartialMirror bool
+	Buggify       BuggifyChecker // nil in production.
+	Observer      Observer       // nil defaults to no-op.
+	ContentCache  *content.Cache // nil = no caching; rid-keyed, so not across a rollback
+	Clock         simio.Clock    // time for the reply's timestamp comment and receipt; nil = real time
+	// RemoteAddr is the address the request came from, recorded with what it
+	// pushes (fossil's REMOTE_ADDR). "" takes the one WithRemoteAddr put in
+	// the context, if any.
+	RemoteAddr string
 }
 
 // HandleSync processes an incoming xfer request and produces a response.
@@ -142,10 +149,20 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
+	gate, err := newSubmanifestGate(r.DB())
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.smGate = gate
+	rc, err := serverReceipt(ctx, r, opts)
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.repo, h.receipt = r.WithReceipt(rc), rc
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
@@ -177,6 +194,10 @@ type remoteHasEntry struct {
 
 // handler holds per-request state while processing cards.
 type handler struct {
+	ctx             context.Context
+	cone            *cone.Cone
+	keep            *sparseKeep
+	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -198,6 +219,10 @@ type handler struct {
 	uvCatalogSent   bool                      // true after sending UV catalog
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
+	smGate          submanifestGate           // §7.2 transfer gate, read once per request
+	peerReadsTrees  bool                      // the request carries send-submanifests (§7.2)
+	capabilitySent  bool                      // the reply's §7.2 pragma run is emitted
+	smRefused       bool                      // this reply already carries the §7.2 refusal
 	filesRecvd      int                       // files received from client (for observer)
 	syncPrivate     bool                      // true if pragma send-private was accepted
 	nextIsPrivate   bool                      // true if a private card precedes the next file/cfile
@@ -210,6 +235,7 @@ type handler struct {
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
+	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -239,7 +265,7 @@ func (h *handler) initAuth() {
 //
 // Clone implies Read for the capabilities a request starts with, nobody's,
 // as fossil's page_xfer sets it (`if( g.perm.Clone ) g.perm.Read = 1;`,
-// xfer.c:1301) before its card loop and the §7.3 erratum states. A Clone
+// xfer.c:1301) before its card loop and §7.3 states. A Clone
 // that a login card grants does not become Read: check_login only adds the
 // user's capabilities, after that point.
 //
@@ -270,6 +296,12 @@ func (h *handler) handleLoginCard(c *xfer.LoginCard) string {
 	h.user = u.Login
 	h.caps += u.Cap
 	h.authed = true
+	// check_login credits what the request stores to the user and records
+	// the card's nonce; a nobody or anonymous login changes neither.
+	if u.UID != 0 {
+		h.receipt.UID = int64(u.UID)
+		h.receipt.Nonce = c.Nonce
+	}
 	return ""
 }
 
@@ -391,6 +423,20 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// clone batch goes out at the clone card and fossil's client sends its
 	// cookie after that card.
 	h.cloneSnapMax = cloneCapFromCards(req.Cards)
+	// §7.2: a server decides from the request it is answering, so the
+	// capability is read ahead of the card loop like the cookie above. A
+	// request with no client-version gets its reply's pragma run here, at
+	// the head; otherwise it follows server-version (handlePragma).
+	h.peerReadsTrees = sendsSubmanifests(req.Cards)
+	var coneErr error
+	h.cone, coneErr = requestCone(req.Cards)
+	if coneErr != nil {
+		h.fail(coneErr.Error())
+		return h.reply(), nil
+	}
+	if !hasClientVersion(req.Cards) {
+		h.emitCapabilityPragmas()
+	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
 	// runs them after db_begin_write, and so does the closing crosslink.
 	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
@@ -603,7 +649,7 @@ const privateRefusal = "not authorized to sync private content"
 // countedErrors counts the error cards that §5.3's errors N counts. N is the
 // errors raised, as page_xfer's nErr is, and three of them fossil never adds
 // to nErr: the unknown-operator error, the private-content refusal and the
-// SHA3 version refusal (erratum sync-protocol-01-s5.3-errors-count). The
+// SHA3 version refusal (§5.3). The
 // count is made from card text because those three texts are fixed by the
 // draft and no other error carries them.
 func countedErrors(cards []xfer.Card) int {
@@ -658,6 +704,19 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 	h.handleCloneCard(c)
 	if !h.cloneMode || h.fatal {
 		return nil
+	}
+	if !h.partialMirror {
+		have, err := content.StoreCone(h.repo.DB())
+		if err != nil {
+			return err
+		}
+		if !coneContains(have, h.cone) {
+			h.fail("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
+			return nil
+		}
+	}
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
 	}
 	if err := h.sendCloneUVCatalog(); err != nil {
 		return err
@@ -825,6 +884,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		if len(c.Values) >= 3 {
 			h.resp = append(h.resp, versionPragma("server-version"))
 		}
+		h.emitCapabilityPragmas()
 	case c.Name == "uv-hash" && len(c.Values) >= 1:
 		if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -867,10 +927,21 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 	return nil
 }
 
+// emitCapabilityPragmas appends the reply's §7.2 pragma run, once per
+// reply: send-submanifests, then avoid-submanifests while this repository's
+// enable-submanifests is off.
+func (h *handler) emitCapabilityPragmas() {
+	if h.capabilitySent {
+		return
+	}
+	h.capabilitySent = true
+	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
+}
+
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
 // the requester's login, null for nobody as fossil's g.zLogin is, and
 // ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
-// lock with no login fossil emits an empty LOGIN, which the -01 grammar
+// lock with no login fossil emits an empty LOGIN, which the -00 grammar
 // (1*fossilized) does not allow and which fossil's own client drops as a
 // short card; this server names the holder nobody instead.
 //
@@ -903,6 +974,22 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 	if forbidDeltaManifests(h.repo.DB()) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
+}
+
+// submanifestBarred applies the §7.2 gate to an answer to a gimme: a tree or
+// sub-manifest is withheld from a client whose request did not carry
+// send-submanifests, and the reply says so once, explicitly, rather than
+// omitting it in silence.
+func (h *handler) submanifestBarred(rid libfossil.FslID) (bool, error) {
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, rid, h.peerReadsTrees)
+	if err != nil || !barred {
+		return false, err
+	}
+	if !h.smRefused {
+		h.resp = append(h.resp, submanifestRefusal())
+		h.smRefused = true
+	}
+	return true, nil
 }
 
 func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
@@ -1080,16 +1167,22 @@ const maxPhantomGimme = 500
 
 // requestPhantoms asks a pushing client for the server's phantoms, as
 // page_xfer's request_phantoms does after the card loop: every phantom but
-// those the client asked for this round (it lacks them), shunned names, and
-// private ones outside a private sync (§3.3), at most maxPhantomGimme.
+// those the client asked for this round (it lacks them), shunned names,
+// private ones outside a private sync (§3.3), and a sparse store's elided
+// ones, at most maxPhantomGimme.
 func (h *handler) requestPhantoms() error {
 	if !h.pushOK {
 		panic("handler.requestPhantoms: push not accepted")
 	}
-	query := "SELECT uuid FROM phantom CROSS JOIN blob USING(rid)" +
+	query := "SELECT rid, uuid FROM phantom CROSS JOIN blob USING(rid)" +
 		" WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
 	if !h.syncPrivate {
 		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
+	}
+	// draft-fossil-sparse-cone-00 §5.2: an elided phantom is never asked for.
+	elided, err := elidedPhantoms(h.ctx, h.repo.DB())
+	if err != nil {
+		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
@@ -1098,11 +1191,12 @@ func (h *handler) requestPhantoms() error {
 	defer rows.Close()
 	sent := 0
 	for sent < maxPhantomGimme && rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return fmt.Errorf("handler: listing phantoms: %w", err)
 		}
-		if h.remoteLacks[uuid] {
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1141,6 +1235,12 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if !ok {
 		return nil // blob not found — not fatal, skip.
 	}
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	if !h.keep.keeps(rid) {
+		return nil
+	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1157,6 +1257,9 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if sha3Barred(c.UUID, h.peerVersion) {
 		h.resp = append(h.resp, sha3Refusal())
 		return nil
+	}
+	if barred, err := h.submanifestBarred(rid); err != nil || barred {
+		return err
 	}
 	data, err := h.cache.Expand(h.repo.DB(), rid)
 	if err != nil {
@@ -1289,6 +1392,16 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 	if c == nil {
 		panic("handler.handleReqConfig: c must not be nil")
 	}
+	if c.Name == configScalarMarker && h.canRead() {
+		// zit's request for the sub-manifest settings (§6.3), which fossil
+		// matches to no group and answers with nothing.
+		cards, err := submanifestConfigCards(h.repo.DB())
+		if err != nil {
+			return fmt.Errorf("handler: reqconfig %q: %w", c.Name, err)
+		}
+		h.resp = append(h.resp, cards...)
+		return nil
+	}
 	mask := configRequestMask(c.Name, h.caps, h.canRead(), h.authed)
 	if mask == 0 {
 		return nil
@@ -1302,11 +1415,13 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 }
 
 func (h *handler) emitIGots() error {
-	// Emit igot for all non-phantom blobs so the client can discover
-	// everything the server has. Cluster generation is a client-side
-	// optimization for push; the server always advertises all blobs.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	// Sparse inventories advertise only the request's keep-set; announcing an
+	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
-		SELECT uuid FROM blob WHERE size >= 0
+		SELECT rid,uuid FROM blob WHERE size >= 0
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)
 		AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)`,
 	)
@@ -1317,9 +1432,13 @@ func (h *handler) emitIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
 		// Skip if the client already has this blob as public (non-private).
@@ -1360,8 +1479,11 @@ func (h *handler) emitIGots() error {
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
 func (h *handler) emitPrivateIGots() error {
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
 	rows, err := h.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return fmt.Errorf("handler: listing private blobs: %w", err)
@@ -1370,9 +1492,13 @@ func (h *handler) emitPrivateIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// Skip if the client already has this blob as private.
 		// If the client has it as public, we still emit the private igot so
@@ -1537,6 +1663,9 @@ func (h *handler) emitCloneBatch() error {
 			continue
 		}
 
+		if !h.keep.keeps(libfossil.FslID(rid)) {
+			continue
+		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 		if isPriv && !h.syncPrivate {
 			continue // skip private blob, don't count toward batch
@@ -1685,9 +1814,10 @@ func (h *handler) storedContent(rid int) ([]byte, error) {
 // returns the artifacts to emit, ordered DEPENDENT-FIRST (rid itself first).
 // The walk stops at the first source that is already available to the receiver
 // (emitted earlier this round) or that cannot be forwarded this clone —
-// outside the snapshot bound, a phantom, or a private source under a public
-// clone — and tags the artifact below such a source for full-content emission
-// so it never depends on a card that will not arrive.
+// outside the snapshot bound, a phantom, a private source under a public
+// clone, or a tree the §7.2 gate withholds from this client — and tags the
+// artifact below such a source for full-content emission so it never depends
+// on a card that will not arrive.
 func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]bool) ([]cloneArtifact, error) {
 	chain := make([]cloneArtifact, 0, 8)
 	curRID, curUUID, curUSize := rid, uuid, usize
@@ -1706,7 +1836,16 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 			return nil, err
 		}
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			(!info.priv || h.syncPrivate)
+			h.keep.keeps(src) && (!info.priv || h.syncPrivate)
+		if forwardable {
+			// Checked before sent: a withheld source is never on the wire,
+			// whatever an earlier chain recorded.
+			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerReadsTrees)
+			if err != nil {
+				return nil, err
+			}
+			forwardable = !barred
+		}
 		if !forwardable {
 			m.expanded = true
 			return append(chain, m), nil // source unsendable: emit curRID full
@@ -1752,6 +1891,24 @@ func (h *handler) buildCloneArtifact(
 		// §7.6, Appendix A.2: the refusal takes a SHA3 artifact's place.
 		if sha3Barred(m.uuid, h.peerVersion) {
 			cards = append(cards, sha3Refusal())
+			continue
+		}
+		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client
+		// that did not send send-submanifests. walkCloneChain never names a
+		// withheld tree as a source, so a dependent stored as a delta of one
+		// goes out whole.
+		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerReadsTrees)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if barred {
+			if !h.smRefused {
+				cards = append(cards, submanifestRefusal())
+				h.smRefused = true
+			}
+			// Not sent, so not recorded as sent: a later chain must never
+			// take it as a source already on the wire.
+			rids = rids[:len(rids)-1]
 			continue
 		}
 		var data []byte

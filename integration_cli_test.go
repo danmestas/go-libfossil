@@ -12,12 +12,14 @@ import (
 	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/annotate"
 	"github.com/danmestas/go-libfossil/internal/bisect"
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/path"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/stash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/internal/undo"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -63,6 +65,12 @@ func setupCheckoutDB(t *testing.T, dir string, rid libfossil.FslID, hash string)
 func intStr(id libfossil.FslID) string {
 	return fmt.Sprintf("%d", id)
 }
+
+// handSetVFile is a stash.Scanner for a checkout database whose vfile the
+// test sets by hand: it changes nothing.
+type handSetVFile struct{}
+
+func (handSetVFile) ScanChanges(checkout.ScanFlags) error { return nil }
 
 // TestIntegrationStash verifies the stash save/pop round-trip with a real repo.
 func TestIntegrationStash(t *testing.T) {
@@ -123,7 +131,7 @@ func TestIntegrationStash(t *testing.T) {
 	}
 
 	// Stash save — should revert file to original.
-	if err := stash.Save(ckout, r.DB().SqlDB(), dir, "test stash"); err != nil {
+	if err := stash.Save(handSetVFile{}, ckout, r.DB().SqlDB(), simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("stash.Save: %v", err)
 	}
 
@@ -136,7 +144,7 @@ func TestIntegrationStash(t *testing.T) {
 	}
 
 	// Stash pop — should restore modified content.
-	if err := stash.Pop(ckout, r.DB().SqlDB(), dir); err != nil {
+	if _, err := stash.Pop(ckout, r.DB().SqlDB(), simio.RealEnv(), dir); err != nil {
 		t.Fatalf("stash.Pop: %v", err)
 	}
 
@@ -181,7 +189,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Save undo state.
-	if err := undo.Save(ckout, dir, nil); err != nil {
+	if err := undo.Save(ckout, vfile.NewDisk(simio.RealEnv(), false), dir, nil); err != nil {
 		t.Fatalf("undo.Save: %v", err)
 	}
 
@@ -192,7 +200,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Undo — should restore original.
-	if err := undo.Undo(ckout, dir); err != nil {
+	if _, err := undo.Undo(ckout, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("undo.Undo: %v", err)
 	}
 
@@ -205,7 +213,7 @@ func TestIntegrationUndo(t *testing.T) {
 	}
 
 	// Redo — should restore modification.
-	if err := undo.Redo(ckout, dir); err != nil {
+	if _, err := undo.Redo(ckout, vfile.NewDisk(simio.RealEnv(), false), dir); err != nil {
 		t.Fatalf("undo.Redo: %v", err)
 	}
 

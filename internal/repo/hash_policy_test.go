@@ -29,7 +29,7 @@ func storedPolicy(t *testing.T, r *repo.Repo) string {
 	return got
 }
 
-// artifact-format-01 7.3: requesting auto once a SHA3 artifact exists stores
+// artifact-format-00 7.3: requesting auto once a SHA3 artifact exists stores
 // sha3, as fossil's hash-policy command does; without one, auto is stored.
 func TestSetHashPolicyCoercesAuto(t *testing.T) {
 	for _, tt := range []struct {

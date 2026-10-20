@@ -124,7 +124,7 @@ func relinkDerived(t *testing.T, path string) {
 //
 // c2, left without a child, keeps the verdict it had: the parent tag is no
 // branch tag and rewriting plink schedules no leaf recheck
-// (draft-fossil-repo-state-01 Section 7.3), as in fossil's own crosslink of a
+// (draft-fossil-repo-state-00 Section 7.3), as in fossil's own crosslink of a
 // parent tag. An explicit full rebuild, which is the single-batch result,
 // makes it a leaf.
 func TestReparent(t *testing.T) {

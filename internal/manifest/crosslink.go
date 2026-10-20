@@ -29,14 +29,6 @@ import (
 // candidates' worth of work.
 const crosslinkCancelCheckStride = 256
 
-// attachTargetTypeName maps attachment target type codes to human-readable names.
-// Used by crosslinkAttachment and updateAttachmentComments.
-var attachTargetTypeName = map[byte]string{
-	'w': "wiki page",
-	't': "ticket",
-	'e': "tech note",
-}
-
 // crosslinkCacheBytes bounds the expanded content one crosslink run keeps live
 // -- a whole-repository sweep, or one phantom-fill cascade (see
 // cascadeLinker). A miss costs throughput, not correctness: the walk simply
@@ -99,7 +91,16 @@ func ensureForumPostTable(q db.Querier) error {
 // nonArtifactTable records blobs a sweep has already expanded and found to
 // hold no Fossil artifact at all -- ordinary file content, which is most of
 // any repository. See ensureNonArtifactTable.
-const nonArtifactTable = "crosslink_nonartifact"
+//
+// The name carries a version because the table's verdicts are only as good as
+// the parser that reached them. Revision 2 is the parser that reads S cards
+// and sub-manifests (draft-fossil-submanifests-00): a repository whose
+// earlier sweeps filed a tree manifest or sub-manifest here as unparseable
+// must examine it again, so revision 1's table is dropped rather than read.
+const nonArtifactTable = "crosslink_nonartifact_v2"
+
+// supersededNonArtifactTables are the earlier revisions of nonArtifactTable.
+var supersededNonArtifactTables = []string{"crosslink_nonartifact"}
 
 // ensureNonArtifactTable creates the sweep's already-examined set.
 //
@@ -128,6 +129,22 @@ const nonArtifactTable = "crosslink_nonartifact"
 func ensureNonArtifactTable(q db.Querier) error {
 	if q == nil {
 		panic("manifest.ensureNonArtifactTable: q must not be nil")
+	}
+	for _, old := range supersededNonArtifactTables {
+		// Read before writing: this runs before every sweep, and the drop
+		// is owed once per repository.
+		var present int
+		err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+			old).Scan(&present)
+		if err != nil {
+			return fmt.Errorf("find %s table: %w", old, err)
+		}
+		if present == 0 {
+			continue
+		}
+		if _, err := q.Exec("DROP TABLE " + old); err != nil {
+			return fmt.Errorf("drop %s table: %w", old, err)
+		}
 	}
 	if _, err := q.Exec(
 		"CREATE TABLE IF NOT EXISTS " + nonArtifactTable + "(rid INTEGER PRIMARY KEY)",
@@ -417,8 +434,9 @@ func repairCrosslinkState(r *repo.Repo, sched *batchSchedule, cause error) error
 
 // repairOnTx is the repair gate itself: the tag-propagation state that depends
 // on the plink graph rather than on any one artifact, then the batch's
-// scheduled leaf rechecks (draft-fossil-repo-state-01 Section 7.3, applied
-// once per batch, before it commits). Only the check-ins a branch write scheduled are checked, so a
+// scheduled leaf rechecks (draft-fossil-repo-state-00 Section 7.3, applied
+// once per batch, before it commits). Only the check-ins a branch write
+// scheduled are checked, so a
 // check-in no branch write reached keeps the verdict an earlier batch gave it
 // (issue #426). Propagation, likewise, starts only from the parents the batch
 // gave a child (issue #432), so the work is bounded by the batch, not the
@@ -471,11 +489,12 @@ func repairPlinkAndTags(tx *db.Tx, sched *batchSchedule) error {
 const candidateQuerySQL = `
 	SELECT b.rid, b.uuid FROM blob b
 	WHERE b.size >= 0
-	  AND b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
+	  AND (b.rid IN (SELECT o.rid FROM orphan o JOIN blob dep ON dep.rid=o.baseline WHERE dep.size>=0)
+	    OR (b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT srcid FROM tagxref WHERE srcid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT fpid FROM forumpost WHERE fpid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT attachid FROM attachment WHERE attachid IS NOT NULL)
-	  AND b.rid NOT IN (SELECT rid FROM ` + nonArtifactTable + `)
+	  AND b.rid NOT IN (SELECT rid FROM ` + nonArtifactTable + `)))
 	ORDER BY b.rid
 `
 
@@ -538,11 +557,13 @@ func newLinkState(cacheBytes int64) *linkState {
 	if cacheBytes <= 0 {
 		panic("manifest.newLinkState: cacheBytes must be > 0")
 	}
-	return &linkState{
+	st := &linkState{
 		cache: content.NewCache(cacheBytes),
 		guard: newCheckinDeferralGuard(),
 		sched: newBatchSchedule(),
 	}
+	st.guard.cache = st.cache
+	return st
 }
 
 // linkCandidatesInOrder expands and crosslinks every candidate in delta-chain
@@ -588,6 +609,11 @@ func linkCandidatesInOrder(ctx context.Context, r *repo.Repo, candidates []candi
 // batch completes, so a rolled-back batch (cancelled or errored) contributes
 // nothing to the count st reports.
 func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState) error {
+	// ReceiveLinker reuses its guard across receipt transactions and Finalize
+	// calls. Raw aliases can change between them, so share proof only within
+	// this transaction's unchanged batch, never across ingestion boundaries.
+	st.guard.coneReferences = nil
+	defer func() { st.guard.coneReferences = nil }()
 	batchLinked := 0
 	var batchNonArtifact []libfossil.FslID
 	for i, c := range batch {
@@ -610,6 +636,9 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			batchNonArtifact = append(batchNonArtifact, c.rid)
 			continue
 		}
+		if err := noteTreeReferences(tx, c.rid, d); err != nil {
+			return err
+		}
 		if !isArtifact(d) {
 			// The card grammar was satisfied but the artifact grammar was not.
 			// Like a parse failure that is a verdict on immutable bytes, so it
@@ -625,6 +654,13 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 				return err
 			}
 			if deferred {
+				linked, err := crosslinkPartialCheckin(ctx, tx, c.rid, d, st.guard, st.sched)
+				if err != nil {
+					return err
+				}
+				if linked {
+					batchLinked++
+				}
 				continue
 			}
 		}
@@ -691,9 +727,110 @@ func isArtifact(d *deck.Deck) bool {
 		return !d.D.IsZero() && d.E != nil && d.W != nil && technoteTagsSelf(d)
 	case deck.ForumPost:
 		return !d.D.IsZero() && d.U != nil && d.W != nil
+	case deck.Submanifest:
+		// A sub-manifest is an artifact with no crosslink effect of its own
+		// (draft-fossil-submanifests-00 §7.3): it feeds repository state only
+		// through the trees that contain it. Answering false files it with the
+		// examined blobs, the explicit completion marker §9.2 requires, so a
+		// sweep that finds work by the absence of derived rows never selects
+		// it again. noteTreeReferences has already done what its arrival owes.
+		return false
 	default:
 		return !d.D.IsZero()
 	}
+}
+
+// noteTreeReferences does what storing an S-bearing artifact owes the
+// repository, whatever path parsed it (sweep, receive linker or cascade): it
+// sets the seen-submanifest indicator of draft-fossil-submanifests-00 §8.1,
+// which arms the transfer gate of §7.2, and reserves a phantom for every S
+// reference that has not arrived, with the referring artifact's privacy
+// (§7.1), so the next sync round asks for it and a tree of depth d converges
+// in d+1 rounds.
+func noteTreeReferences(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+	if tx == nil {
+		panic("manifest.noteTreeReferences: tx must not be nil")
+	}
+	if len(d.S) == 0 && d.Type != deck.Submanifest {
+		return nil
+	}
+	if err := MarkSeenSubmanifest(tx); err != nil {
+		return err
+	}
+	private := content.IsPrivate(tx, int64(rid))
+	for _, sc := range d.S {
+		if _, ok := blob.Exists(tx, sc.UUID); ok {
+			continue
+		}
+		phantom, err := blob.StorePhantom(tx, sc.UUID)
+		if err != nil {
+			return fmt.Errorf("phantom for S reference %s: %w", sc.UUID, err)
+		}
+		if !private {
+			continue
+		}
+		if err := content.MakePrivate(tx, int64(phantom)); err != nil {
+			return fmt.Errorf("private phantom for S reference %s: %w", sc.UUID, err)
+		}
+	}
+	return nil
+}
+
+// NoteStoredArtifact is noteTreeReferences for a path that stores an
+// artifact without crosslinking it at once -- a sync's receive, whose sweep
+// runs only at the end of the session -- so the indicator, and with it the
+// §7.2 transfer gate, is armed from the moment a tree is stored.
+func NoteStoredArtifact(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
+	return noteTreeReferences(tx, rid, d)
+}
+
+// UnexaminedByThisParser reports whether an earlier version's sweep record
+// survives, so the repository may hold trees that version filed as
+// unparseable and nothing has examined since: until the next sweep drops
+// that record, a caller must assume trees are present.
+func UnexaminedByThisParser(q db.Querier) (bool, error) {
+	for _, old := range supersededNonArtifactTables {
+		var present int
+		if err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
+			old).Scan(&present); err != nil {
+			return false, fmt.Errorf("find %s table: %w", old, err)
+		}
+		if present > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// SeenSubmanifestSetting is the local indicator of
+// draft-fossil-submanifests-00 §8.1: set once the repository has stored an
+// S-bearing artifact, and never cleared, since such an artifact cannot be
+// retired. It is not a /project setting and never syncs.
+const SeenSubmanifestSetting = "seen-submanifest"
+
+// MarkSeenSubmanifest sets the seen-submanifest indicator.
+func MarkSeenSubmanifest(q db.Querier) error {
+	if _, err := q.Exec(
+		"INSERT OR IGNORE INTO config(name, value, mtime) VALUES(?, '1', strftime('%s','now'))",
+		SeenSubmanifestSetting,
+	); err != nil {
+		return fmt.Errorf("seen-submanifest: %w", err)
+	}
+	return nil
+}
+
+// SeenSubmanifest reports whether the repository has stored an S-bearing
+// artifact (MarkSeenSubmanifest).
+func SeenSubmanifest(q db.Querier) (bool, error) {
+	var one int
+	err := q.QueryRow("SELECT 1 FROM config WHERE name=?", SeenSubmanifestSetting).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("seen-submanifest: %w", err)
+	}
+	return true, nil
 }
 
 // hasSelfTag reports whether any T-card names the artifact carrying it.
@@ -769,17 +906,19 @@ func linkArtifactRows(
 // it tests, exact deferred-reference counts for the end-of-run rollup, and
 // bounded deterministic samples of deferred rids and missing blob UUIDs.
 //
-// Both the whole-repository sweep (linkState.guard) and the phantom-fill
-// cascade (cascadeLinker.guard) embed one. Sharing the type -- rather than
-// each path growing its own copy of this bookkeeping -- is what keeps a
-// cascade-deferred checkin falling through to the sweep's own recovery path:
-// collectCrosslinkCandidates reselects a rid only when it has NO event row,
-// and the cascade has no candidate query or round boundary of its own to
-// fall back on. It depends entirely on writing no event row for a deferred
-// rid, so a later sweep still sees it as undiscovered. See shouldDefer.
+// Both the sweep and the phantom-fill cascade embed one. A deferred check-in
+// remains discoverable through absent event rows, or through its orphan row
+// when sparse spine metadata is published before complete file derivation.
 type checkinDeferralGuard struct {
 	avail *content.AvailabilityCache
-	// checkinBaselines memoizes baselines verified to be check-in manifests.
+	// cache expands the sub-manifests a tree's walk reads; it is the owning
+	// sweep's or cascade's content cache, or nil, which expands directly.
+	cache *content.Cache
+	// Scoped to one linkBatch transaction; incoming raw aliases invalidate proof.
+	coneReferences *content.ConeReferences
+	// checkinBaselines memoizes baselines verified to be check-in manifests,
+	// each mapped to whether it is a tree manifest, so a sweep over many
+	// deltas parses each baseline once and walks only a tree's.
 	checkinBaselines map[string]bool
 	// awaitFiles makes the guard also wait on a check-in's files
 	// (missingCheckinRefs), not only its baseline (missingBaseline). Only the
@@ -808,11 +947,10 @@ func newCheckinDeferralGuard() *checkinDeferralGuard {
 // recording the gap and the guard's diagnostics when so. source labels the
 // caller in the debug log ("Crosslink" or "AfterDephantomize").
 //
-// The manifest blob remains durable in 'blob'. Beyond the gap record --
-// the baseline's phantom and an orphan row -- the caller MUST write nothing
-// for rid when this returns true: no event/leaf/plink/mlink/tagxref rows. The
-// missing event row is what lets a later sweep rediscover and complete rid
-// once the baseline arrives; see the type doc.
+// The manifest blob remains durable in 'blob'. The orphan row records incomplete
+// file derivation and keeps the check-in eligible for retry after its dependency
+// arrives, even if metadata exists. Callers must not derive mlinks on deferral;
+// only crosslinkPartialCheckin may publish independently validated spine metadata.
 func (g *checkinDeferralGuard) shouldDefer(
 	tx *db.Tx, source string, rid libfossil.FslID, d *deck.Deck,
 ) (bool, error) {
@@ -820,7 +958,7 @@ func (g *checkinDeferralGuard) shouldDefer(
 	if g.awaitFiles {
 		missing = missingCheckinRefs(tx, d, g)
 	} else {
-		missing = missingBaseline(tx, d, g)
+		missing = missingFileSet(tx, d, g)
 	}
 	if len(missing) == 0 {
 		return false, nil
@@ -838,8 +976,8 @@ func (g *checkinDeferralGuard) recordDeferred(
 	if len(missing) == 0 {
 		panic("manifest.recordDeferred: missing must not be empty")
 	}
-	if d.B != "" && missing[0] == d.B {
-		if err := recordBaselineGap(tx, rid, d.B); err != nil {
+	if gap := g.gapOf(tx, d, missing); gap != "" {
+		if err := recordBaselineGap(tx, rid, gap); err != nil {
 			return fmt.Errorf("manifest.%s defer rid=%d: %w", source, rid, err)
 		}
 	}
@@ -857,6 +995,23 @@ func (g *checkinDeferralGuard) recordDeferred(
 		"missing_count", len(missing),
 		"first_missing", missing[0])
 	return nil
+}
+
+// gapOf returns the reference among missing that gets a gap record: the
+// baseline, or the sub-manifest that blocks the check-in's tree. Either one,
+// when absent, is missing[0] (missingFileSet runs first). A waited-on file
+// gets none: it is not a gap in the artifact, only content not yet arrived.
+func (g *checkinDeferralGuard) gapOf(tx *db.Tx, d *deck.Deck, missing []string) string {
+	if d.B != "" && missing[0] == d.B {
+		return d.B
+	}
+	if gap := g.treeGap(tx, d); gap != "" && gap == missing[0] {
+		return gap
+	}
+	if gap := g.parentTreeGap(tx, d); gap != "" && gap == missing[0] {
+		return gap
+	}
+	return ""
 }
 
 // recordMissingBlobSample retains only the lexicographically smallest distinct
@@ -1086,7 +1241,7 @@ var propagateAllLeaves = tag.PropagateAllLeaves
 //
 // Absent file content and an absent parent never hold a check-in back from a
 // sweep. Each is an unresolved reference, which yields a phantom rather than
-// an error (draft-fossil-repo-state-01 Section 4.2 step 1): fossil's
+// an error (draft-fossil-repo-state-00 Section 4.2 step 1): fossil's
 // add_one_mlink resolves files with uuid_to_rid(..., 1), so the event, plink
 // and mlink rows are all written, against phantoms that the content fills in
 // place when it arrives. A sweep is the last step of every sync, clone and
@@ -1116,6 +1271,58 @@ func missingBaseline(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string 
 	return nil
 }
 
+// missingFileSet is missingBaseline widened to the third deferred-edge kind of
+// draft-fossil-submanifests-00 §9.4: a check-in whose tree -- its own, or its
+// baseline's for a delta over a tree -- cannot be enumerated waits on the
+// sub-manifest that blocks the walk, exactly as a delta waits on its baseline.
+// §5.2 forbids presenting a partial file set, so a sweep defers on it too.
+func missingFileSet(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
+	if missing := missingBaseline(tx, d, g); len(missing) > 0 {
+		return missing
+	}
+	if gap := g.treeGap(tx, d); gap != "" {
+		return []string{gap}
+	}
+	if gap := g.parentTreeGap(tx, d); gap != "" {
+		return []string{gap}
+	}
+	return nil
+}
+
+// treeGap returns the sub-manifest reference that stops check-in d's tree
+// from enumerating, or "" when it enumerates or d has no tree. A missing
+// sub-manifest is the usual answer; a reference that breaks a rule of §5.1 is
+// returned too, as a baseline that is no check-in is by missingBaseline: the
+// check-in waits on bytes that will never make it valid, and is never linked
+// with a partial file set. Its baseline, when it has one, must be available.
+func (g *checkinDeferralGuard) treeGap(tx *db.Tx, d *deck.Deck) string {
+	tree := d
+	if d.B != "" {
+		// missingBaseline, which runs first, recorded whether the baseline
+		// is a tree; a flat one leaves nothing to walk.
+		if baseIsTree, known := g.checkinBaselines[d.B]; known && !baseIsTree {
+			return ""
+		}
+		baseDeck, err := loadBaseline(tx, g.cache, d)
+		if err != nil {
+			return d.B
+		}
+		tree = baseDeck
+	}
+	if !isTree(tree) {
+		return ""
+	}
+	_, err := walkTree(tx, g.cache, tree)
+	if err == nil {
+		return ""
+	}
+	var treeErr *SubmanifestError
+	if errors.As(err, &treeErr) {
+		return treeErr.UUID
+	}
+	return tree.S[0].UUID
+}
+
 // baselineIsCheckin reports whether the available artifact uuid parses as a
 // check-in manifest. fossil's fetch_baseline asks manifest_get(rid,
 // CFTYPE_MANIFEST), which fails for a stored artifact of another type just as
@@ -1124,7 +1331,7 @@ func missingBaseline(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string 
 // the verdict for a given blob never changes, but a sweep reaches many deltas
 // over few baselines, so one expansion per baseline is enough.
 func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
-	if g.checkinBaselines[uuid] {
+	if _, ok := g.checkinBaselines[uuid]; ok {
 		return true
 	}
 	rid, ok := g.avail.ByUUID(tx, uuid)
@@ -1139,7 +1346,7 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 	if err != nil || bd.Type != deck.Checkin {
 		return false
 	}
-	g.checkinBaselines[uuid] = true
+	g.checkinBaselines[uuid] = isTree(bd)
 	return true
 }
 
@@ -1157,14 +1364,27 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
 func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
-	missing := missingBaseline(tx, d, g)
+	missing := missingFileSet(tx, d, g)
 	if len(d.P) > 0 {
 		if _, ok := g.avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
 		}
 	}
-	seen := make(map[string]struct{}, len(d.F))
-	for _, f := range d.F {
+	files := d.F
+	if isTree(d) {
+		// A tree's files are known only once it enumerates; until then the
+		// sub-manifest it waits on is all there is to wait for.
+		if len(missing) > 0 {
+			return missing
+		}
+		walked, err := walkTree(tx, g.cache, d)
+		if err != nil {
+			return missing
+		}
+		files = walked
+	}
+	seen := make(map[string]struct{}, len(files))
+	for _, f := range files {
 		if f.UUID == "" { // a deleted file in a delta manifest
 			continue
 		}
@@ -1200,7 +1420,7 @@ func recordBaselineGap(tx *db.Tx, rid libfossil.FslID, baseline string) error {
 		return fmt.Errorf("baseline %s: %w", baseline, err)
 	}
 	if _, err := tx.Exec(
-		"INSERT OR IGNORE INTO orphan(rid, baseline) VALUES(?, ?)", rid, baseRid,
+		"INSERT INTO orphan(rid, baseline) VALUES(?, ?) ON CONFLICT(rid) DO UPDATE SET baseline=excluded.baseline", rid, baseRid,
 	); err != nil {
 		return fmt.Errorf("orphan rid=%d: %w", rid, err)
 	}
@@ -1264,12 +1484,21 @@ func recheckTaggedBeforeLinking(tx *db.Tx, rid libfossil.FslID, leaves *leaf.Pen
 // recording the primary parent on parents for the repair gate to propagate
 // from. leaf is
 // deliberately not touched here: adding a plink row schedules no recheck
-// (draft-fossil-repo-state-01 Section 7.3); only a branch row does, through
+// (draft-fossil-repo-state-00 Section 7.3); only a branch row does, through
 // applyInlineTags and the repair gate's propagation. tx is the whole
 // sweep's single transaction (see CrosslinkContext), so these writes commit
 // atomically with every other candidate's, not one transaction per checkin.
 func crosslinkCheckinTables(
 	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, cache *content.Cache, parents *parentSet,
+) error {
+	if err := crosslinkCheckinMetadata(tx, rid, d, parents); err != nil {
+		return err
+	}
+	return insertCheckinMlinks(tx, cache, rid, d)
+}
+
+func crosslinkCheckinMetadata(
+	tx *db.Tx, rid libfossil.FslID, d *deck.Deck, parents *parentSet,
 ) error {
 	// event, at the D-card time; omtime always keeps it. A date tag already
 	// recorded for the check-in (one that reached it while it was a phantom,
@@ -1277,7 +1506,7 @@ func crosslinkCheckinTables(
 	// tag.RefreshEventTime, the same rule a tag arriving later applies, so
 	// the time does not depend on arrival order. Unlike manifest_crosslink,
 	// that rule skips an inherited date row (#372) and a cancelled, unparsable
-	// or non-positive value (draft-fossil-repo-state-01 Section 4.2, step 6).
+	// or non-positive value (draft-fossil-repo-state-00 Section 4.2, step 6).
 	mtime := libfossil.TimeToTextJulian(d.D)
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO event(type, mtime, objid, user, comment, omtime,
@@ -1289,7 +1518,7 @@ func crosslinkCheckinTables(
 		     AND tagid=(SELECT tagid FROM tag WHERE tagname='user')),
 		   (SELECT value FROM tagxref WHERE rid=?2
 		     AND tagid=(SELECT tagid FROM tag WHERE tagname='comment')))`,
-		mtime, rid, d.U, d.C,
+		mtime, rid, d.U, sql.NullString{String: d.C, Valid: d.HasC()},
 	); err != nil {
 		return fmt.Errorf("event: %w", err)
 	}
@@ -1298,9 +1527,6 @@ func crosslinkCheckinTables(
 	}
 
 	if err := insertCheckinPlinks(tx, rid, d, checkinBaseid(tx, d), parents); err != nil {
-		return err
-	}
-	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
 		return err
 	}
 	return insertCherrypicks(tx, rid, d)
@@ -1558,56 +1784,11 @@ func crosslinkControl(tx *db.Tx, srcRID libfossil.FslID, d *deck.Deck, leaves *l
 		}
 	}
 
-	// Generate event row with type='g' and descriptive comment.
-	comment := buildControlComment(d)
-	if _, err := tx.Exec(
-		"REPLACE INTO event(type, mtime, objid, user, comment) VALUES('g', ?, ?, ?, ?)",
-		libfossil.TimeToTextJulian(d.D), srcRID, d.U, comment,
-	); err != nil {
+	if err := tag.InsertControlEvent(tx, srcRID, d); err != nil {
 		return fmt.Errorf("control event: %w", err)
 	}
 
 	return nil
-}
-
-// buildControlComment generates a human-readable comment from a control artifact's T-cards.
-func buildControlComment(d *deck.Deck) string {
-	var comment string
-	for _, tc := range d.T {
-		if tc.UUID == "*" {
-			continue
-		}
-		prefix := string(tc.Type)
-		name := tc.Name
-		val := tc.Value
-		switch {
-		case prefix == "*" && name == "branch":
-			comment += fmt.Sprintf(" Move to branch %s.", val)
-		case prefix == "*" && name == "bgcolor":
-			comment += fmt.Sprintf(" Change branch background color to %q.", val)
-		case prefix == "+" && name == "bgcolor":
-			comment += fmt.Sprintf(" Change background color to %q.", val)
-		case prefix == "-" && name == "bgcolor":
-			comment += " Cancel background color."
-		case prefix == "+" && name == "comment":
-			comment += " Edit check-in comment."
-		case prefix == "+" && name == "user":
-			comment += fmt.Sprintf(" Change user to %q.", val)
-		default:
-			switch prefix {
-			case "-":
-				comment += fmt.Sprintf(" Cancel %q.", name)
-			case "+":
-				comment += fmt.Sprintf(" Add %q.", name)
-			case "*":
-				comment += fmt.Sprintf(" Add propagating %q.", name)
-			}
-		}
-	}
-	if comment == "" {
-		comment = " "
-	}
-	return comment
 }
 
 // addFWTPlink inserts plink rows for wiki/forum/technote/ticket P-cards.
@@ -1900,7 +2081,7 @@ func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 
 	if _, err := tx.Exec(
 		"INSERT INTO attachment(attachid, mtime, src, target, filename, comment, user) VALUES(?, ?, ?, ?, ?, ?, ?)",
-		rid, mtime, src, target, filename, d.C, d.U,
+		rid, mtime, sql.NullString{String: src, Valid: src != ""}, target, filename, d.C, d.U,
 	); err != nil {
 		return fmt.Errorf("attachment insert: %w", err)
 	}
@@ -1923,13 +2104,8 @@ func crosslinkAttachment(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		}
 	}
 
-	typeName := attachTargetTypeName[attachToType]
-	var evComment string
-	if src != "" {
-		evComment = fmt.Sprintf("Add attachment %s to %s %s", filename, typeName, target)
-	} else {
-		evComment = fmt.Sprintf("Delete attachment %q from %s %s", filename, typeName, target)
-	}
+	human, url := libfossil.HashDigits(tx)
+	evComment := attachmentComment(attachToType, src, filename, target, false, human, url)
 	if _, err := tx.Exec("REPLACE INTO event(type, mtime, objid, user, comment) VALUES(?, ?, ?, ?, ?)",
 		string(attachToType), mtime, rid, d.U, evComment); err != nil {
 		return fmt.Errorf("attachment event: %w", err)
@@ -1962,9 +2138,9 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	// running the UPDATEs below would use that connection for two statements at
 	// once. Materializing first keeps read and writes strictly sequential.
 	type attachRow struct {
-		attachid    int64
-		src, target string
-		filename    string
+		attachid         int64
+		src              sql.NullString
+		target, filename string
 	}
 	rows, err := tx.Query("SELECT attachid, src, target, filename FROM attachment WHERE target=?", targetID)
 	if err != nil {
@@ -1973,8 +2149,9 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	var attachments []attachRow
 	for rows.Next() {
 		var a attachRow
-		if rows.Scan(&a.attachid, &a.src, &a.target, &a.filename) != nil {
-			continue
+		if err := rows.Scan(&a.attachid, &a.src, &a.target, &a.filename); err != nil {
+			rows.Close()
+			return fmt.Errorf("updateAttachmentComments scan: %w", err)
 		}
 		attachments = append(attachments, a)
 	}
@@ -1984,19 +2161,47 @@ func updateAttachmentComments(tx *db.Tx, targetID string, targetType byte) error
 	}
 	rows.Close()
 
-	typeName := attachTargetTypeName[targetType]
+	human, url := libfossil.HashDigits(tx)
 	for _, a := range attachments {
-		var comment string
-		if a.src != "" {
-			comment = fmt.Sprintf("Add attachment %s to %s %s", a.filename, typeName, a.target)
-		} else {
-			comment = fmt.Sprintf("Delete attachment %q from %s %s", a.filename, typeName, a.target)
-		}
+		comment := attachmentComment(targetType, a.src.String, a.filename, a.target, true, human, url)
 		if _, err := tx.Exec("UPDATE event SET comment=?, type=? WHERE objid=?", comment, string(targetType), a.attachid); err != nil {
 			return fmt.Errorf("updateAttachmentComments event update: %w", err)
 		}
 	}
 	return nil
+}
+
+// attachmentComment builds the comment of an attachment's event row as
+// fossil 2.28 does, for an attachment to a wiki page ('w'), a ticket ('t')
+// or a tech note ('e'); an empty src deletes. refresh selects the text
+// written when the ticket or tech note is crosslinked after the attachment,
+// which differs for a tech note deletion: crosslinking the attachment links
+// the file name as though it were an artifact hash, refreshing does not.
+func attachmentComment(kind byte, src, file, target string, refresh bool, human, url int) string {
+	if kind != 'w' && kind != 't' && kind != 'e' {
+		panic(fmt.Sprintf("manifest.attachmentComment: unknown target kind %q", kind))
+	}
+	name := libfossil.HTMLize(file)
+	switch {
+	case kind == 'w' && src != "":
+		return fmt.Sprintf("Add attachment [/artifact/%s|%s] to wiki page [%s]",
+			libfossil.HashPrefix(src, url), name, libfossil.HTMLize(target))
+	case kind == 'w':
+		return fmt.Sprintf("Delete attachment \"%s\" from wiki page [%s]", name, libfossil.HTMLize(target))
+	}
+	noun, link := "ticket", fmt.Sprintf("[%s|%s]", libfossil.HashPrefix(target, url), libfossil.HashPrefix(target, human))
+	if kind == 'e' {
+		noun, link = "tech note", "[/technote/"+link[1:]
+	}
+	switch {
+	case src != "":
+		return fmt.Sprintf("Add attachment [/artifact/%s|%s] to %s %s", libfossil.HashPrefix(src, url), name, noun, link)
+	case kind == 'e' && !refresh:
+		return fmt.Sprintf("Delete attachment \"/artifact/%s|%s\" from %s %s",
+			libfossil.HashPrefix(file, url), name, noun, link)
+	default:
+		return fmt.Sprintf("Delete attachment \"%s\" from %s %s", name, noun, link)
+	}
 }
 
 func crosslinkForum(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, parents *parentSet) error {

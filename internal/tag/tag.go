@@ -43,7 +43,7 @@ type ApplyOpts struct {
 	MTime   float64 // Julian day.
 	// Leaves is the batch's leaf-recheck schedule. A branch tag, and the
 	// propagation walk it starts, schedule the check-ins whose branch row
-	// they write (draft-fossil-repo-state-01 Section 7.3); the caller applies
+	// they write (draft-fossil-repo-state-00 Section 7.3); the caller applies
 	// the schedule before its batch ends. ApplyTagWithTx requires it for a
 	// branch tag; ApplyTag supplies its own when it is nil.
 	Leaves *leaf.Pending
@@ -51,7 +51,8 @@ type ApplyOpts struct {
 
 // AddTag creates a control artifact that adds or cancels a tag on a target checkin.
 // It stores the artifact as a blob, ensures the tag name exists in the tag table,
-// and inserts/replaces a row in the tagxref table.
+// inserts/replaces a row in the tagxref table, and writes the artifact's 'g'
+// event row, as crosslinking it would.
 func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 	if r == nil {
 		panic("tag.AddTag: r must not be nil")
@@ -76,7 +77,12 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 
 	var controlRid libfossil.FslID
 
-	err := r.WithTx(func(tx *db.Tx) error {
+	// The control artifact is one receipt, credited to the tagging user.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, fmt.Errorf("tag.AddTag: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		d, err := controlDeck(tx, opts)
 		if err != nil {
 			return err
@@ -111,6 +117,9 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 			return err
 		}
 		if err := leaves.Apply(tx); err != nil {
+			return err
+		}
+		if err := InsertControlEvent(tx, controlRid, d); err != nil {
 			return err
 		}
 
@@ -294,7 +303,7 @@ func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 }
 
 // RefreshEventTime sets rid's event.mtime from its date tag, following
-// draft-fossil-repo-state-01 Section 4.2, step 6: the value of a date tag
+// draft-fossil-repo-state-00 Section 4.2, step 6: the value of a date tag
 // applied directly to rid (srcid > 0), when it parses (by SQLite
 // julianday, which already bounds the upper end) to a positive time;
 // otherwise the D-card time kept in event.omtime. An inherited row
@@ -302,7 +311,7 @@ func applyDateOverride(q db.Querier, opts ApplyOpts) error {
 //
 // Both arrival orders call this, tag application after it wins its row and
 // crosslink after it inserts the event row, so the result depends only on
-// tagxref, never on which came first. That is where -01 departs from fossil
+// tagxref, never on which came first. That is where -00 departs from fossil
 // 2.28: its tag_insert writes julianday(value) as is, so a cancel or an
 // unparsable value leaves no time, 0 stores a time of 0, and its
 // manifest_crosslink reads an inherited row too. omtime keeps the D-card

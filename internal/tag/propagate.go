@@ -213,7 +213,7 @@ func (pq *mtimeQueue) Pop() any {
 // fossil's tag_propagate_all does (tag.c:118-135); singleton tags walk as
 // cancels. It schedules on leaves a recheck of every check-in whose branch row
 // the walk writes or deletes, as fossil does through tag_propagate
-// (draft-fossil-repo-state-01 Section 7.3).
+// (draft-fossil-repo-state-00 Section 7.3).
 func PropagateAllLeaves(q db.Querier, rid libfossil.FslID, leaves *leaf.Pending) error {
 	if q == nil {
 		panic("tag.PropagateAllLeaves: q must not be nil")

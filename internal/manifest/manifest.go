@@ -9,6 +9,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -18,8 +19,13 @@ import (
 )
 
 type CheckinOpts struct {
-	Files        []File
-	Comment      string
+	Files   []File
+	Comment string
+	// User is the name the U card carries: fossil's commit --user-override,
+	// not --user. It is never checked against the user table, so any name
+	// commits. The check-in's rcvfrom row credits User's uid when the table
+	// holds that login and the repository's local (setup) user otherwise,
+	// as fossil credits g.userUid whatever the U card says.
 	User         string
 	Parent       libfossil.FslID
 	MergeParents []libfossil.FslID // additional parents beyond Parent (for merge commits)
@@ -33,6 +39,11 @@ type CheckinOpts struct {
 	// cannot both commit. It must only read: a write would land in the
 	// check-in's transaction.
 	Precheck func(q db.Querier) error
+	// AvoidSubmanifests suppresses tree emission for this commit, as
+	// draft-fossil-submanifests-00 §7.2 requires of a commit made in a
+	// sync session whose server sent pragma avoid-submanifests (the
+	// session's SyncResult.AvoidSubmanifests).
+	AvoidSubmanifests bool
 }
 
 type File struct {
@@ -40,6 +51,11 @@ type File struct {
 	Content []byte
 	Perm    string
 	OldName string // prior pathname when this file card records a rename
+	// UUID, when set, carries an artifact the repository already holds into
+	// the check-in by its name, with Content nil: the F card names it
+	// verbatim and nothing is stored. A sparse checkout's commit carries its
+	// out-of-cone files this way (draft-fossil-sparse-cone-00 §4.2).
+	UUID string
 }
 
 func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manifestUUID string, err error) {
@@ -78,70 +94,84 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 		opts.Time = libfossil.CardTime(opts.Time)
 	}
 
-	err = r.WithTx(func(tx *db.Tx) error {
-		if opts.Precheck != nil {
-			if txErr := opts.Precheck(tx); txErr != nil {
-				return txErr
-			}
-		}
-		fCards, fileRids, txErr := storeFileBlobs(tx, opts.Files)
-		if txErr != nil {
-			return txErr
-		}
-
-		d, txErr := buildCheckinDeck(tx, opts, fCards)
-		if txErr != nil {
-			return txErr
-		}
-
-		cache := content.NewCache(crosslinkCacheBytes)
-		if txErr := preflightCheckinMlinks(tx, cache, d); txErr != nil {
-			return fmt.Errorf("preflight checkin mlinks: %w", txErr)
-		}
-
-		manifestRid, manifestUUID, txErr = insertCheckinBlob(tx, d)
-		if txErr != nil {
-			return txErr
-		}
-
-		if txErr := VerifyRCard(tx, cache, manifestRid); txErr != nil {
-			return txErr
-		}
-
-		if txErr := insertCheckinMlinks(tx, cache, manifestRid, d); txErr != nil {
-			return txErr
-		}
-
-		// Store the parent check-in manifest as a delta against this one,
-		// the same backwards direction used for file content. Canonical does
-		// this at the end of commit (src/checkin.c:3234,
-		// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
-		// insertCheckinMlinks above; this covers the manifests themselves.
-		if opts.Parent > 0 {
-			if _, txErr := content.Deltify(tx, opts.Parent, manifestRid); txErr != nil {
-				return fmt.Errorf("deltify parent manifest: %w", txErr)
-			}
-		}
-
-		if txErr := markPlinkAndEvent(tx, opts, manifestRid); txErr != nil {
-			return txErr
-		}
-
-		// Mark file blobs as unsent so sync pushes them.
-		// (unclustered is handled by blob.Store automatically.)
-		for _, frid := range fileRids {
-			if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
-				return fmt.Errorf("unsent file: %w", err)
-			}
-		}
-
-		return linkCheckinTags(tx, opts, manifestRid, d.T)
+	var tree checkinTree
+	// A check-in is one receipt, credited to its user, as a fossil commit
+	// records one rcvfrom row for everything it stores.
+	uid, err := r.LocalUID(opts.User)
+	if err != nil {
+		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
+	}
+	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
+		var txErr error
+		manifestRid, manifestUUID, tree, txErr = checkinTx(tx, opts)
+		return txErr
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
 	}
-
+	tree.afterCommit(r)
 	return manifestRid, manifestUUID, nil
+}
+
+// checkinTx stores a check-in and derives its rows, all in tx.
+func checkinTx(tx *db.Tx, opts CheckinOpts) (libfossil.FslID, string, checkinTree, error) {
+	if opts.Precheck != nil {
+		if err := opts.Precheck(tx); err != nil {
+			return 0, "", checkinTree{}, err
+		}
+	}
+	// A sparse store (draft-fossil-sparse-cone-00 §5) lacks the content of
+	// files its cone leaves out. The check-in names them by hash, as the
+	// parent did, and carries no R card.
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return 0, "", checkinTree{}, err
+	}
+	fCards, fileRids, err := storeFileBlobs(tx, opts.Files, storeCone)
+	if err != nil {
+		return 0, "", checkinTree{}, err
+	}
+	d, tree, err := checkinDeck(tx, opts, fCards, storeCone)
+	if err != nil {
+		return 0, "", tree, err
+	}
+	cache := content.NewCache(crosslinkCacheBytes)
+	if err := preflightCheckinMlinks(tx, cache, d, storeCone); err != nil {
+		return 0, "", tree, fmt.Errorf("preflight checkin mlinks: %w", err)
+	}
+	rid, uuid, err := insertCheckinBlob(tx, d, storeCone)
+	if err != nil {
+		return 0, "", tree, err
+	}
+	if err := VerifyRCard(tx, cache, rid); err != nil {
+		return 0, "", tree, err
+	}
+	if err := insertCheckinMlinks(tx, cache, rid, d); err != nil {
+		return 0, "", tree, err
+	}
+
+	// Store the parent check-in manifest as a delta against this one,
+	// the same backwards direction used for file content. Canonical does
+	// this at the end of commit (src/checkin.c:3234,
+	// `content_deltify(vid, &nvid, 1, 0)`). File content is handled by
+	// insertCheckinMlinks above; this covers the manifests themselves.
+	if opts.Parent > 0 {
+		if _, err := content.Deltify(tx, opts.Parent, rid); err != nil {
+			return 0, "", tree, fmt.Errorf("deltify parent manifest: %w", err)
+		}
+	}
+	if err := markPlinkAndEvent(tx, opts, rid); err != nil {
+		return 0, "", tree, err
+	}
+
+	// Mark file blobs as unsent so sync pushes them.
+	// (unclustered is handled by blob.Store automatically.)
+	for _, frid := range fileRids {
+		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
+			return 0, "", tree, fmt.Errorf("unsent file: %w", err)
+		}
+	}
+	return rid, uuid, tree, linkCheckinTags(tx, opts, rid, d.T)
 }
 
 // linkCheckinTags derives a new check-in's tag and leaf state on the check-in's
@@ -199,7 +229,7 @@ func linkCheckinTags(
 	}
 
 	// Leaf state last, once every branch tag it reads is in place. Only what
-	// the branch writes above scheduled is checked (draft-fossil-repo-state-01
+	// the branch writes above scheduled is checked (draft-fossil-repo-state-00
 	// Section 7.3): the check-in and its parents when it declares or inherits
 	// a branch row. A check-in whose parent's branch row is a singleton, or
 	// absent, inherits none, so neither is rechecked, as in fossil's commit.
@@ -221,7 +251,7 @@ func checkWriterName(name string) error {
 	return nil
 }
 
-func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID, error) {
+func storeFileBlobs(tx *db.Tx, files []File, storeCone *cone.Cone) ([]deck.FileCard, []libfossil.FslID, error) {
 	fCards := make([]deck.FileCard, len(files))
 	var rids []libfossil.FslID
 	for i, f := range files {
@@ -231,17 +261,92 @@ func storeFileBlobs(tx *db.Tx, files []File) ([]deck.FileCard, []libfossil.FslID
 		if err := checkWriterName(f.OldName); err != nil {
 			return nil, nil, err
 		}
-		rid, uuid, err := blob.Store(tx, f.Content)
+		var rid libfossil.FslID
+		uuid := f.UUID
+		held := true
+		var err error
+		if uuid != "" {
+			rid, held, err = checkCarried(tx, f, storeCone)
+		} else {
+			rid, uuid, err = blob.Store(tx, f.Content)
+		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("storing file %q: %w", f.Name, err)
 		}
+		// Every check-in is public, including carried content and known
+		// phantoms. Only held content can be offered in the unsent queue.
+		if rid > 0 {
+			if err := content.MakePublic(tx, int64(rid)); err != nil {
+				return nil, nil, fmt.Errorf("publish file %q: %w", f.Name, err)
+			}
+		}
 		fCards[i] = deck.FileCard{Name: f.Name, UUID: uuid, Perm: f.Perm, OldName: f.OldName}
-		rids = append(rids, rid)
+		if held {
+			rids = append(rids, rid)
+		}
 	}
 	return fCards, rids, nil
 }
 
-func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*deck.Deck, error) {
+// checkCarried requires a carried file's artifact to be held: the R card
+// reads its content, and a check-in naming content its writer lacks would
+// be committed blind. The exception is a file the store cone leaves out,
+// whose content a sparse store deliberately lacks: §5.3 references it by
+// hash without possession, and the check-in carries no R card.
+func checkCarried(tx *db.Tx, f File, storeCone *cone.Cone) (libfossil.FslID, bool, error) {
+	if f.Content != nil {
+		panic("manifest.checkCarried: a carried file has content: " + f.Name)
+	}
+	rid, held, err := content.CheckAvailableByUUID(tx, f.UUID)
+	if err != nil {
+		return 0, false, err
+	}
+	if held {
+		return rid, true, nil
+	}
+	if !elidable(storeCone, f.Name) {
+		return 0, false, fmt.Errorf("carried file %q: artifact %s is not available", f.Name, f.UUID)
+	}
+	// Availability deliberately returns no RID for missing content. Recover
+	// an existing phantom's identity so publication clears its private flag.
+	err = tx.QueryRow("SELECT coalesce((SELECT rid FROM blob WHERE uuid=?), 0)", f.UUID).Scan(&rid)
+	return rid, false, err
+}
+
+// elidable reports whether a sparse store may lack the content of the file
+// at name: its store cone does not cover the name. A dense store, with no
+// cone, may lack nothing.
+func elidable(storeCone *cone.Cone, name string) bool {
+	return storeCone != nil && !storeCone.Covers(name)
+}
+
+// checkinDeck builds a check-in's manifest. With sub-manifest emission
+// enabled the file set goes to a tree, stored first
+// (draft-fossil-submanifests-00 §6.2), and a tree carries no B card (§4.4),
+// so a tree check-in is never a delta.
+func checkinDeck(
+	tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard, storeCone *cone.Cone,
+) (*deck.Deck, checkinTree, error) {
+	tree, err := storeTreeFor(tx, opts, fCards)
+	if err != nil {
+		return nil, tree, err
+	}
+	if len(tree.s) > 0 {
+		opts.Delta = false
+	}
+	d, err := buildCheckinDeck(tx, opts, fCards, storeCone)
+	if err != nil {
+		return nil, tree, err
+	}
+	if len(tree.s) > 0 {
+		d.F, d.S = nil, tree.s
+	}
+	return d, tree, nil
+}
+
+func buildCheckinDeck(
+	tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard, storeCone *cone.Cone,
+) (*deck.Deck, error) {
 	d := &deck.Deck{
 		Type: deck.Checkin,
 		C:    opts.Comment,
@@ -295,7 +400,23 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 
 	sort.Slice(d.F, func(i, j int) bool { return deck.Compare(d.F[i].Name, d.F[j].Name) < 0 })
 
-	// R-card (always over full file set)
+	// The R card is an aggregate over every file's content, which a sparse
+	// store does not hold; a commit over one omits it, which is conforming
+	// (draft-fossil-sparse-cone-00 §4.3).
+	if storeCone != nil {
+		return d, nil
+	}
+	rHash, err := checkinRCard(tx, fCards)
+	if err != nil {
+		return nil, err
+	}
+	d.R = rHash
+	return d, nil
+}
+
+// checkinRCard is the R card over a check-in's full file set, whatever form
+// its manifest takes.
+func checkinRCard(tx *db.Tx, fCards []deck.FileCard) (string, error) {
 	rDeck := &deck.Deck{F: fCards}
 	// Bare Expand: computing one checkin's R-card expands each file in the
 	// tree exactly once. Distinct blobs, single pass, no overlap to amortize.
@@ -308,17 +429,20 @@ func buildCheckinDeck(tx *db.Tx, opts CheckinOpts, fCards []deck.FileCard) (*dec
 	}
 	rHash, err := rDeck.ComputeR(getContent)
 	if err != nil {
-		return nil, fmt.Errorf("R-card: %w", err)
+		return "", fmt.Errorf("R-card: %w", err)
 	}
-	d.R = rHash
-
-	return d, nil
+	return rHash, nil
 }
 
-func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error) {
+func insertCheckinBlob(tx *db.Tx, d *deck.Deck, storeCone *cone.Cone) (libfossil.FslID, string, error) {
 	// Writer postcondition (AF-6.3-4): ComputeR yields lowercase hex, so this
-	// can only trip on a programmer error upstream.
-	if len(d.R) != 32 || strings.ToLower(d.R) != d.R {
+	// can only trip on a programmer error upstream. Over a sparse store there
+	// is no R card at all.
+	if storeCone != nil {
+		if d.R != "" {
+			panic("manifest.insertCheckinBlob: an R card over a sparse store")
+		}
+	} else if len(d.R) != 32 || strings.ToLower(d.R) != d.R {
 		panic("manifest.insertCheckinBlob: R card must be 32 lowercase hex digits")
 	}
 	manifestBytes, err := d.Marshal()
@@ -332,7 +456,7 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 	return rid, uuid, nil
 }
 
-// VerifyRCard is the commit-time self-check of artifact-format-01 6.3.4
+// VerifyRCard is the commit-time self-check of artifact-format-00 6.3.4
 // (AF-6.3-5), fossil's checkin.c "manifest checksum self-test": it reads the
 // stored manifest back, recomputes the R digest over the tree the manifest
 // resolves to (a delta manifest's baseline merged with its own cards), and
@@ -344,13 +468,28 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck) (libfossil.FslID, string, error)
 // stored-state corruption, which is not a programmer error. It is exported
 // (inside internal/) so the conformance suite can drive it with a stored
 // manifest that carries a bad R card.
+//
+// An absent R card is not damage, and there is nothing to check (§4.3 of
+// draft-fossil-sparse-cone-00). Nor is there over a sparse store, which
+// lacks the content outside its cone: the aggregate is uncomputable, so the
+// check is skipped rather than reported as a disagreement.
 func VerifyRCard(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
 	if rid <= 0 {
 		panic("manifest.VerifyRCard: rid must be positive")
 	}
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return fmt.Errorf("R-card check: %w", err)
+	}
+	if storeCone != nil {
+		return nil
+	}
 	d, mf, err := loadCheckinManifest(tx, cache, rid)
 	if err != nil {
 		return fmt.Errorf("R-card check: %w", err)
+	}
+	if d.R == "" {
+		return nil
 	}
 	tree := &deck.Deck{}
 	for _, name := range mf.treeNames() {
@@ -516,14 +655,21 @@ func applyDelta(tx *db.Tx, d *deck.Deck, fullFCards []deck.FileCard, parentRid l
 		return fmt.Errorf("parse baseline: %w", err)
 	}
 
-	// artifact-format-01 4.7.3: a writer MUST NOT emit a B card naming a
+	// artifact-format-00 4.7.3: a writer MUST NOT emit a B card naming a
 	// delta manifest (fossil asserts the same in checkin.c). When the parent's
-	// baseline is itself a delta, leave d a full baseline manifest.
-	if baseDeck.B != "" {
+	// baseline is itself a delta, leave d a full baseline manifest. The same
+	// goes for a tree baseline: draft-fossil-submanifests-00 §5.4 says a
+	// writer with emission off SHOULD NOT create a delta against one, and with
+	// emission on this writer keeps zit's rule of none either.
+	if baseDeck.B != "" || isTree(baseDeck) {
 		return nil
 	}
-	baseFiles := make(map[string]string)
-	for _, f := range baseDeck.F {
+	baseCards, err := baselineFileCards(tx, nil, baseDeck)
+	if err != nil {
+		return fmt.Errorf("baseline files: %w", err)
+	}
+	baseFiles := make(map[string]string, len(baseCards))
+	for _, f := range baseCards {
 		baseFiles[f.Name] = f.UUID
 	}
 

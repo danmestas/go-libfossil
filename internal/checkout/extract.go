@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -16,10 +15,10 @@ import (
 )
 
 // extractSingleFile expands a blob and writes it to the checkout directory,
-// returning the vfile.mtime to record for it (writtenMTime).
-// Skips writing if dryRun is true.
+// a symlink entry as fossil writes it (vfile.Disk.Write), returning the
+// vfile.mtime to record for it. Skips writing if dryRun is true.
 func (c *Checkout) extractSingleFile(
-	pathname string, blobRid int64, isexe int64, dryRun bool,
+	pathname string, blobRid int64, isexe, islink int64, dryRun bool,
 ) (int64, error) {
 	if dryRun {
 		return 0, nil
@@ -35,20 +34,14 @@ func (c *Checkout) extractSingleFile(
 		return 0, fmt.Errorf("checkout.Extract: path traversal in %s: %w", pathname, err)
 	}
 
-	parentDir := filepath.Dir(fullPath)
-	if err := c.env.Storage.MkdirAll(parentDir, 0o755); err != nil {
-		return 0, fmt.Errorf("checkout.Extract: mkdir %s: %w", parentDir, err)
+	disk, err := c.newDiskView()
+	if err != nil {
+		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}
-
-	perm := os.FileMode(0o644)
-	if isexe != 0 {
-		perm = 0o755
+	if err := disk.Write(fullPath, data, isexe != 0, islink != 0); err != nil {
+		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}
-
-	if err := c.env.Storage.WriteFile(fullPath, data, perm); err != nil {
-		return 0, fmt.Errorf("checkout.Extract: write %s: %w", fullPath, err)
-	}
-	mtime, err := c.writtenMTime(fullPath)
+	mtime, err := disk.MTime(fullPath)
 	if err != nil {
 		return 0, fmt.Errorf("checkout.Extract: %w", err)
 	}
@@ -188,27 +181,32 @@ type extractRow struct {
 	pathname string
 	blobRid  int64
 	isexe    int64
+	islink   int64
 }
 
-// extractRows lists version rid's files with the blob each one's content is
-// in, from its manifest. It refuses a version whose content is missing
-// (resolveFiles), before anything is written.
+// extractRows lists version rid's files the cone covers -- every file of a
+// dense checkout -- with the blob each one's content is in, from its
+// manifest. It refuses a version whose content is missing (resolveFiles),
+// before anything is written.
 func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 	if rid <= 0 {
 		panic("checkout.extractRows: rid must be positive")
 	}
 
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, c.fileFilter())
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Extract: %w", err)
 	}
 	out := make([]extractRow, len(files))
 	for i, f := range files {
-		isexe := int64(0)
+		row := extractRow{pathname: f.Name, blobRid: int64(blobRIDs[i])}
 		if strings.Contains(f.Perm, "x") {
-			isexe = 1
+			row.isexe = 1
 		}
-		out[i] = extractRow{pathname: f.Name, blobRid: int64(blobRIDs[i]), isexe: isexe}
+		if strings.Contains(f.Perm, "l") {
+			row.islink = 1
+		}
+		out[i] = row
 	}
 	return out, nil
 }
@@ -218,13 +216,21 @@ func (c *Checkout) extractRows(rid libfossil.FslID) ([]extractRow, error) {
 func (c *Checkout) extractRow(
 	ctx context.Context, vid libfossil.FslID, row extractRow, opts ExtractOpts,
 ) error {
-	mtime, err := c.extractSingleFile(row.pathname, row.blobRid, row.isexe, opts.DryRun)
+	mtime, err := c.extractSingleFile(row.pathname, row.blobRid, row.isexe, row.islink, opts.DryRun)
 	if err != nil {
 		return err
 	}
 	if !opts.DryRun {
 		if err := c.recordMTime(c.db, vid, row.pathname, row.blobRid, mtime); err != nil {
 			return fmt.Errorf("checkout.Extract: %w", err)
+		}
+		// The file now holds the content its row names, so an edit or
+		// missing file the row recorded is gone.
+		if _, err := c.db.Exec(
+			"UPDATE vfile SET chnged = 0 WHERE vid = ? AND pathname = ? AND mrid = ? AND chnged = 1",
+			int64(vid), row.pathname, row.blobRid,
+		); err != nil {
+			return fmt.Errorf("checkout.Extract: reset %s: %w", row.pathname, err)
 		}
 	}
 
@@ -258,7 +264,7 @@ func (c *Checkout) checkSafeToExtract(target libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
-	files, err := manifest.ListFiles(c.repo, target)
+	files, err := manifest.ListFilesFiltered(c.repo, target, c.fileFilter())
 	if err != nil {
 		return fmt.Errorf("checkout.Extract: %w", err)
 	}
@@ -305,13 +311,24 @@ func (c *Checkout) firstChangeAtRisk(
 	).Scan(&merging); err != nil {
 		return "", fmt.Errorf("query vmerge: %w", err)
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return "", err
 	}
 	for _, r := range rows {
 		change := vfile.Classify(r, false)
 		if change == ChangeNone {
+			continue
+		}
+		// The scan marks a missing file changed, and a missing symlink
+		// entry unlinked, as fossil's does, but nothing on disk is lost by
+		// writing it; Create leaves every file missing until the first
+		// Extract, which plays fossil's open.
+		missing, err := c.isMissing(r)
+		if err != nil {
+			return "", err
+		}
+		if missing && isEditOrMode(change) && !r.PendingMerge() {
 			continue
 		}
 		// Only a plain edit (no merge pending, not a merge state) of a file
@@ -330,6 +347,16 @@ func (c *Checkout) firstChangeAtRisk(
 		return r.Pathname, nil
 	}
 	return "", nil
+}
+
+// isEditOrMode reports a change to a file's content or mode alone: not an
+// add, removal or rename.
+func isEditOrMode(change FileChange) bool {
+	switch change {
+	case ChangeModified, ChangeExecutable, ChangeSymlink, ChangeUnexec, ChangeUnlink:
+		return true
+	}
+	return false
 }
 
 // wouldClobber reports whether writing the artifact uuid to pathname would

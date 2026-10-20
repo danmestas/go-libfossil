@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// The repository-state suite checks draft-fossil-repo-state-01. Most of its
+// The repository-state suite checks draft-fossil-repo-state-00. Most of its
 // cases are a scripted sequence of artifacts and the derived rows the draft
 // says loading it produces. Every case is also loaded into fossil(1), whose
 // rows must equal the expectation, so an expectation cannot drift from
@@ -57,7 +57,7 @@ type rsCase struct {
 	rebuildWrites string
 	// fossil is set only when fossil(1) derives other rows than want: the
 	// case follows the draft text, and fossil says why and names the
-	// erratum proposed. The case fails once fossil agrees with want.
+	// draft change proposed. The case fails once fossil agrees with want.
 	fossil string
 }
 

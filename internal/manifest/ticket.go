@@ -72,7 +72,7 @@ func ticketRebuildEntry(tx *db.Tx, cache *content.Cache, ticketUUID string) erro
 	if !schema.haveTicket {
 		return nil
 	}
-	human, url := ticketHashDigits(tx)
+	human, url := libfossil.HashDigits(tx)
 
 	// The ticket row is rebuilt from scratch so a replay reflects only the
 	// artifacts that exist now; its ticketchng rows go with it, since they are
@@ -233,29 +233,6 @@ func forEachColumn(q db.Querier, table string, fn func(name, typ string)) error 
 	return nil
 }
 
-// ticketHashDigits returns the two hyperlink hash lengths fossil's %S and %!S
-// conversions use in a ticket event comment: the human length (the hash-digits
-// setting, default 10, clamped to 6..40) and the url length (human+6, floored
-// at 16). Mirrors fossil's hashDigits().
-func ticketHashDigits(q db.Querier) (human, url int) {
-	human = 10
-	var v int
-	if q.QueryRow("SELECT value FROM config WHERE name='hash-digits'").Scan(&v) == nil && v != 0 {
-		human = v
-	}
-	if human < 6 {
-		human = 6
-	}
-	if human > 40 {
-		human = 40
-	}
-	url = human + 6
-	if url < 16 {
-		url = 16
-	}
-	return human, url
-}
-
 // ticketInsert applies one ticket artifact to the ticket and ticketchng
 // tables, mirroring fossil's ticket_insert (src/tkt.c) column for column.
 // tktID is 0 when this is the first artifact of its ticket being replayed, in
@@ -404,9 +381,9 @@ func ticketEvent(
 	).Scan(&titleCol, &statusCol); err != nil && err != sql.ErrNoRows {
 		return fmt.Errorf("ticket event state: %w", err)
 	}
-	title := ticketHTML.Replace(titleCol.String)
-	status := ticketHTML.Replace(statusCol.String)
-	long, short := ticketShorten(d.K, url), ticketShorten(d.K, human)
+	title := libfossil.HTMLize(titleCol.String)
+	status := libfossil.HTMLize(statusCol.String)
+	long, short := libfossil.HashPrefix(d.K, url), libfossil.HashPrefix(d.K, human)
 
 	// A ticket artifact's status card names the new status; every other card
 	// is counted but not named. The name is compared verbatim, as fossil's is:
@@ -415,7 +392,7 @@ func ticketEvent(
 	changes := 0
 	for _, f := range d.J {
 		if f.Name == "status" {
-			newStatus = ticketHTML.Replace(f.Value)
+			newStatus = libfossil.HTMLize(f.Value)
 			continue
 		}
 		changes++
@@ -445,26 +422,6 @@ func ticketEvent(
 		return fmt.Errorf("ticket event: %w", err)
 	}
 	return nil
-}
-
-// ticketHTML escapes exactly what fossil's %h conversion escapes, in the same
-// forms. Go's html.EscapeString agrees on every character except the double
-// quote, which it writes as &#34; where fossil writes &quot;.
-var ticketHTML = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	`"`, "&quot;",
-	"'", "&#39;",
-)
-
-// ticketShorten truncates a hash for display, matching fossil's %S and %!S
-// conversions: shorter values pass through unchanged.
-func ticketShorten(hash string, n int) string {
-	if len(hash) > n {
-		return hash[:n]
-	}
-	return hash
 }
 
 func ticketPlural(n int) string {

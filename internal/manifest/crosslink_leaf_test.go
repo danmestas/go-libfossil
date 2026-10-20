@@ -232,7 +232,7 @@ func TestRepairLeafTableKeepsParentlessCheckin(t *testing.T) {
 	}
 }
 
-// TestCheckinOntoSingletonBranchKeepsVerdicts pins draft-fossil-repo-state-01
+// TestCheckinOntoSingletonBranchKeepsVerdicts pins draft-fossil-repo-state-00
 // Section 7.3 on the local commit path: a commit is rechecked, with its
 // parents, only when a branch row lands on it. c1's branch row is a
 // singleton, so c2 inherits none and nothing is scheduled: c1 keeps its leaf

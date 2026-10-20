@@ -193,7 +193,7 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string, cache *conte
 		panic("annotate.loadFileAt: filePath must not be empty")
 	}
 	// One name, so ask for one name: LookupFileCached searches the delta's
-	// own F cards first (artifact-format-01 8.4).
+	// own F cards first (artifact-format-00 8.4).
 	f, found, err := manifest.LookupFileCached(r, rid, filePath, cache)
 	if err != nil {
 		return nil, err

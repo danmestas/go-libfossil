@@ -195,8 +195,8 @@ func (c *PrivateCard) Type() CardType { return CardPrivate }
 
 // UV file flag constants.
 const (
-	UVFlagDeletion       = 0x0001 // File is a deletion tombstone.
-	UVFlagContentOmitted = 0x0004 // Content not included in this card.
+	UVFlagDeletion       = 0x0001                                // File is a deletion tombstone.
+	UVFlagContentOmitted = 0x0004                                // Content not included in this card.
 	UVFlagNoPayload      = UVFlagDeletion | UVFlagContentOmitted // Mask: no payload expected.
 )
 
@@ -279,7 +279,7 @@ func (c *BadCommandCard) Type() CardType { return CardBadCommand }
 
 // BadFileCard is a file, cfile or uvfile line whose metadata the decoder
 // cannot frame a payload from — a bad arity, hash, size or flags — or whose
-// payload the body ends inside (sync-protocol-01 Section 5.1). Either way no
+// payload the body ends inside (sync-protocol-00 Section 5.1). Either way no
 // later card can be located, so the decoder yields this card and stops.
 //
 // src/xfer.c xfer_accept_file / _compressed_file / _unversioned_file: the

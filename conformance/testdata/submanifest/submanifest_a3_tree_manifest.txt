@@ -1,0 +1,9 @@
+# rfc-vector: inert on disk. Leading "#" lines are stripped at load.
+# Without them Fossil crosslinks this blob as a live artifact into every clone.
+C Tree\smanifest\sexample
+D 2026-07-26T00:00:00
+R 152bc688378069a3c22a1a4c55bc8b1a
+S README.md aa9d404c14fe4dadd2ab398961fb0dfe650a877c061f650d8233a5888e920acf
+S src/node11.c a50a722b465ed67b42ee0fbe61e4a19d6b1d22940ba5740e99e450921e3f52ea
+U drh
+Z 90e5857974adae6f63af727ace2635ac

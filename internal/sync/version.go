@@ -6,9 +6,10 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// The release this library announces in pragma client-version and
-// server-version (§9.1): the fossil release whose protocol it speaks, and
-// that release's check-in date and time.
+// The fossil release whose protocol this library speaks (§9.1), and that
+// release's check-in date and time, which client-version and server-version
+// announce. Reading sub-manifest trees is announced by pragma
+// send-submanifests, never by the version (submanifests §7.2).
 const (
 	releaseVersion = 22800
 	releaseDate    = "20260315"

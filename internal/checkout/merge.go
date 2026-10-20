@@ -81,7 +81,9 @@ type MergeResult struct {
 // itself a vmerge row with id 0.
 //
 // Merge refuses, changing nothing, when the repository is missing content
-// it needs or when an added file would overwrite an untracked file. Where
+// it needs, when an added file would overwrite an untracked file, or, in a
+// sparse checkout, when the merge would change a file outside the cone
+// (ErrOutsideCone). Where
 // fossil relies on its undo copy, Merge keeps the checkout's file instead:
 // a file edited here but deleted in the merged-in version is kept and
 // reported, not deleted. Renames are not followed: a file renamed on one
@@ -118,13 +120,17 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	}
 
 	// Which files are edited decides between taking the merged-in version
-	// and merging, so chnged must be current.
-	if err := c.ScanChanges(0); err != nil {
+	// and merging, so chnged must be current. As fossil's merge, refuse
+	// something other than a file where a tracked file belongs.
+	if err := c.ScanChanges(ScanENotFile); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
 	plan := mergePlan{vid: vid, pivot: pivot, mid: opts.Version}
 	if err := c.planMerge(&plan, opts.Strategy); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
+	}
+	if err := c.checkMergeInCone(plan.steps); err != nil {
+		return MergeResult{}, err
 	}
 	if err := c.checkMergeTargets(plan.steps); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
@@ -135,6 +141,24 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 		}
 	}
 	return plan.result(), nil
+}
+
+// checkMergeInCone refuses a merge that would change a file outside a sparse
+// checkout's cone. Applying such a change to the record alone, as
+// draft-fossil-sparse-cone-00 §4.4 requires, is not implemented: the merge
+// would otherwise write the file or lose the change, so it is refused by
+// naming the cone, before anything changes.
+func (c *Checkout) checkMergeInCone(steps []mergeStep) error {
+	var outside []string
+	for _, s := range steps {
+		if !c.covers(s.file.Name) {
+			outside = append(outside, s.file.Name)
+		}
+	}
+	if len(outside) == 0 {
+		return nil
+	}
+	return c.outsideCone("Merge", outside)
 }
 
 // mergePlan is a merge worked out in full before anything is changed.
@@ -324,7 +348,7 @@ func mergeNames(rows map[string]*vfile.Row, p, m map[string]mergeSide) []string 
 // mergeSides lists checkin rid's files by name. It refuses a checkin whose
 // content the repository does not fully hold, as fossil's merge does.
 func (c *Checkout) mergeSides(rid libfossil.FslID) (map[string]mergeSide, error) {
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -673,7 +697,7 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 		}
 		// What a scan would make of content that now differs from the
 		// baseline; a scan corrects it should the merge have changed nothing.
-		next, err := nextChangedState(s.row.Chnged, true, false, false, alwaysDiffers)
+		next, err := nextChangedState(s.row.Chnged, scanFacts{hasBaseline: true}, alwaysDiffers)
 		if err != nil {
 			return err
 		}
@@ -719,42 +743,18 @@ func (c *Checkout) writeMergedFile(name string, data []byte, exe bool) error {
 	return c.setMergedMode(name, exe)
 }
 
-// modeSetter is the optional storage method that changes a file's mode.
-// Storages without file modes (memory, browser) do not have it.
-type modeSetter interface {
-	Chmod(path string, mode os.FileMode) error
-}
-
-// setMergedMode gives name's file the executable bit exe, where the storage
-// has file modes.
+// setMergedMode gives name's file the executable bit exe, as fossil's
+// file_setexe does (vfile.Disk.SetExe).
 func (c *Checkout) setMergedMode(name string, exe bool) error {
-	setter, ok := c.env.Storage.(modeSetter)
-	if !ok {
-		return nil
-	}
 	fullPath, err := c.safePath(name)
 	if err != nil {
 		return err
 	}
-	info, err := c.env.Storage.Stat(fullPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
+	disk, err := c.newDiskView()
 	if err != nil {
-		return fmt.Errorf("stat %s: %w", fullPath, err)
+		return err
 	}
-	if modeIsExecutable(info.Mode()) == exe {
-		return nil
-	}
-	// Fossil's file_setexe: execute wherever read is allowed, or nowhere.
-	mode := info.Mode().Perm() &^ 0o111
-	if exe {
-		mode |= (info.Mode().Perm() & 0o444) >> 2
-	}
-	if err := setter.Chmod(fullPath, mode); err != nil {
-		return fmt.Errorf("chmod %s: %w", fullPath, err)
-	}
-	return nil
+	return disk.SetExe(fullPath, exe)
 }
 
 // insertVMerge records that merged-in artifact rid reached the checkout: id
@@ -830,7 +830,7 @@ func (c *Checkout) Conflicts() ([]string, error) {
 	if err := c.ScanChanges(0); err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}

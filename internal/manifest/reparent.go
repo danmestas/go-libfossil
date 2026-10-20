@@ -20,7 +20,7 @@ import (
 // It runs after the candidate sweep and before tag propagation, as fossil
 // does, so the propagation walk and the batch's leaf rechecks see the
 // rewritten plink. Like fossil's, the rewrite schedules no leaf recheck of its
-// own (draft-fossil-repo-state-01 Section 7.3): an old parent left without a
+// own (draft-fossil-repo-state-00 Section 7.3): an old parent left without a
 // child is rechecked only when a branch write in the batch reaches it, and an
 // explicit rebuild (leaf.Rebuild) always reaches it. A parent tag whose value
 // is not a well-formed list of artifact hashes is ignored, matching fossil's

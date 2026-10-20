@@ -55,6 +55,10 @@ type HandleOpts struct {
 	// the cookie through, or those rounds arrive as nobody. XferHandler and
 	// ServeHTTP read it themselves.
 	LoginCookie string
+	// RemoteAddr is the address the request came from, recorded in the
+	// rcvfrom row of whatever it pushes, as fossil records REMOTE_ADDR.
+	// XferHandler and ServeHTTP fill it themselves.
+	RemoteAddr string
 }
 
 // CloneOpts configures a clone operation.
@@ -76,6 +80,15 @@ type CloneOpts struct {
 // xfer.Message-based sync.Transport.
 type transportAdapter struct {
 	pub Transport
+}
+
+// PeerAddr reports the address of the peer the wrapped transport last
+// reached, when it knows one, for the receipt of what a sync receives.
+func (a *transportAdapter) PeerAddr() string {
+	if p, ok := a.pub.(interface{ PeerAddr() string }); ok {
+		return p.PeerAddr()
+	}
+	return ""
 }
 
 func (a *transportAdapter) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -259,7 +272,8 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 		return nil, fmt.Errorf("libfossil: decode xfer: %w", err)
 	}
 	iOpts := internalsync.HandleOpts{
-		Observer: adaptObserver(opts.Observer),
+		Observer:   adaptObserver(opts.Observer),
+		RemoteAddr: opts.RemoteAddr,
 	}
 	if opts.Buggify != nil {
 		iOpts.Buggify = opts.Buggify

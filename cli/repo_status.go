@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	libfossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/internal/content"
 )
 
@@ -35,10 +36,20 @@ func (c *RepoStatusCmd) Run(g *Globals) error {
 		return err
 	}
 
+	cone, err := checkoutCone(r, c.Dir)
+	if err != nil {
+		return err
+	}
+	// A sparse checkout reports within its cone: an uncovered file is
+	// neither missing nor extra.
+	covered := func(name string) bool { return cone == nil || cone.Covers(name) }
+
 	// Build map of manifest files: name -> UUID.
 	expected := make(map[string]string)
 	for _, f := range manifestFiles {
-		expected[f.Name] = f.UUID
+		if covered(f.Name) {
+			expected[f.Name] = f.UUID
+		}
 	}
 
 	db := r.Inner().DB()
@@ -61,7 +72,7 @@ func (c *RepoStatusCmd) Run(g *Globals) error {
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(filepath.Base(relPath), ".") {
+		if strings.HasPrefix(filepath.Base(relPath), ".") || !covered(filepath.ToSlash(relPath)) {
 			return nil
 		}
 
@@ -108,4 +119,21 @@ func (c *RepoStatusCmd) Run(g *Globals) error {
 	}
 
 	return nil
+}
+
+// checkoutCone is the cone of the checkout in dir, nil when dir holds no
+// checkout or a dense one.
+func checkoutCone(r *libfossil.Repo, dir string) (*libfossil.Cone, error) {
+	if _, err := checkoutDBPath(dir); err != nil {
+		return nil, nil
+	}
+	co, err := r.OpenCheckout(dir, libfossil.CheckoutOpenOpts{})
+	if err != nil {
+		return nil, err
+	}
+	cone := co.Cone()
+	if err := co.Close(); err != nil {
+		return nil, err
+	}
+	return cone, nil
 }

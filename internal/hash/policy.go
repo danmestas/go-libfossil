@@ -66,7 +66,7 @@ const sha1Len = 40
 // and a genuinely broken database fails on the caller's very next query.
 //
 // A stored value that is not one of the five policy ordinals is an error, not
-// a reason to fall back: artifact-format-01 7.1 (AF-7.1-2) makes an
+// a reason to fall back: artifact-format-00 7.1 (AF-7.1-2) makes an
 // unrecognized policy value fatal. Guessing a default would name new content
 // with an algorithm the repo's owner never chose.
 func NamingFor(q db.Querier) (Naming, error) {
@@ -128,7 +128,7 @@ func policyFor(q db.Querier) (policy int, fromRow bool, err error) {
 	return db.HashPolicyAuto, false, nil
 }
 
-// policyNames are the policy value strings of artifact-format-01 Table 7,
+// policyNames are the policy value strings of artifact-format-00 Table 7,
 // indexed by ordinal, as fossil's azPolicy (hname.c) lists them.
 var policyNames = [...]string{
 	db.HashPolicySHA1:     "sha1",
@@ -139,7 +139,7 @@ var policyNames = [...]string{
 }
 
 // PolicyByName returns the ordinal of the policy named name. The match is
-// case-sensitive and exact (artifact-format-01 7.1, AF-7.1-2), as fossil's
+// case-sensitive and exact (artifact-format-00 7.1, AF-7.1-2), as fossil's
 // hash-policy command compares with fossil_strcmp: "SHA3", " sha3" and
 // "2" are all unrecognized, and an unrecognized name is an error.
 func PolicyByName(name string) (int, error) {

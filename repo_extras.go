@@ -5,9 +5,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/uv"
 )
@@ -142,7 +144,17 @@ func (r *Repo) UVWrite(name string, content []byte, mtime time.Time) error {
 	if mtime.IsZero() {
 		mtimeUnix = time.Now().Unix()
 	}
-	return uv.Write(r.inner.DB(), name, content, mtimeUnix)
+	// The write is a receipt of its own, recorded as `fossil uv add` records
+	// one: credited to the local user, its source named in place of an
+	// address (src/unversioned.c).
+	uid, err := r.inner.LocalUID("")
+	if err != nil {
+		return fmt.Errorf("libfossil: uv write: %w", err)
+	}
+	rc := &db.Receipt{UID: uid, IPAddr: "#!fossil unversioned add"}
+	return r.inner.WithReceipt(rc).WithBoundTx(func(b *repo.Repo) error {
+		return uv.Write(b.DB(), name, content, mtimeUnix)
+	})
 }
 
 // UVDelete marks an unversioned file as deleted (tombstone).

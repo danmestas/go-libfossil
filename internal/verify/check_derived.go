@@ -1,19 +1,23 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // checkDerived verifies consistency of derived tables: event, mlink, plink, tagxref, filename, leaf.
-func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
+func checkDerived(r *repo.Repo, report *Report) error {
 	if r == nil {
 		panic("verify: checkDerived: nil repo")
 	}
@@ -21,7 +25,7 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("verify: checkDerived: nil report")
 	}
 
-	if err := checkCheckins(r, report, cache); err != nil {
+	if err := checkCheckins(r, report); err != nil {
 		return err
 	}
 	if err := checkLeaves(r, report); err != nil {
@@ -31,8 +35,16 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 	return nil
 }
 
+// treeGapCacheBytes bounds the cache checkCheckins gives treeGap. It holds
+// manifests and sub-manifests only, never file content, so it is far smaller
+// than an expansion cache; it has not been measured.
+const treeGapCacheBytes = 32 << 20
+
 // checkCheckins verifies event and plink tables against checkin manifests.
-func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
+// It expands every blob once through content.ExpandAll, which visits in
+// delta-tree order; issues are collected apart and sorted by rid, stably, so
+// they keep the rid order and per-check-in order of a blob-by-blob sweep.
+func checkCheckins(r *repo.Repo, report *Report) error {
 	if r == nil {
 		panic("verify: checkCheckins: nil repo")
 	}
@@ -40,40 +52,62 @@ func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("verify: checkCheckins: nil report")
 	}
 
-	rows, err := r.DB().Query("SELECT rid, uuid FROM blob WHERE size >= 0")
+	return r.WithBoundTx(func(bound *repo.Repo) error {
+		return checkCheckinsSnapshot(bound, report)
+	})
+}
+
+type checkinVerification struct {
+	cache *content.Cache
+	cone  *cone.Cone
+	refs  *content.ConeReferences
+}
+
+func checkCheckinsSnapshot(r *repo.Repo, report *Report) error {
+	c, err := content.StoreCone(r.DB())
 	if err != nil {
-		return fmt.Errorf("checkCheckins query blobs: %w", err)
+		return err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rid int64
-		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
-			return fmt.Errorf("checkCheckins scan: %w", err)
-		}
-
-		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache); err != nil {
-			return err
-		}
+	refs, err := content.LoadConeReferences(context.Background(), r.DB(), c)
+	if err != nil {
+		return err
 	}
-
-	return rows.Err()
+	found := &Report{}
+	// ExpandAll hands each blob over once; the cache serves only treeGap's
+	// baseline and sub-manifest reads, which many check-ins share.
+	state := &checkinVerification{cache: content.NewCache(treeGapCacheBytes), cone: c, refs: refs}
+	err = content.ExpandAll(r.DB(), func(rid libfossil.FslID, uuid string, data []byte, err error) error {
+		if err != nil {
+			// Not expandable - skip silently (corrupt, reported by checkBlobs)
+			return nil
+		}
+		return checkOneCheckin(r, found, rid, uuid, data, state)
+	})
+	if err != nil {
+		return fmt.Errorf("checkCheckins: %w", err)
+	}
+	sort.SliceStable(found.Issues, func(i, j int) bool {
+		return found.Issues[i].RID < found.Issues[j].RID
+	})
+	for _, issue := range found.Issues {
+		report.addIssue(issue)
+	}
+	// found is a staging report: carry its counters over with its issues.
+	report.MissingRefs += found.MissingRefs
+	return nil
 }
 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
-func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache) error {
+// data is the blob's expanded content.
+func checkOneCheckin(
+	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, data []byte,
+	state *checkinVerification,
+) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
 	}
 	if report == nil {
 		panic("verify: checkOneCheckin: nil report")
-	}
-
-	data, err := cache.Expand(r.DB(), rid)
-	if err != nil {
-		// Not expandable - skip silently (might be corrupt, already reported)
-		return nil
 	}
 
 	d, err := deck.Parse(data)
@@ -84,6 +118,24 @@ func checkOneCheckin(r *repo.Repo, report *Report, rid libfossil.FslID, uuid str
 
 	if d.Type != deck.Checkin {
 		return nil
+	}
+
+	// Elided nodes can leave file derivation incomplete without damaging a
+	// cone-complete store. Validate raw references and the covered effective
+	// view, then still verify its spine metadata below.
+	if missing, gap := treeGap(r, d, rid, state.cache); gap {
+		ready, err := manifest.SparseCheckinReady(context.Background(), r.DB(), state.cache, d, state.cone, state.refs)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			report.MissingRefs++
+			report.addIssue(Issue{
+				Kind: IssueMissingReference, RID: rid, UUID: uuid, Table: "blob",
+				Message: fmt.Sprintf("checkin rid=%d uuid=%s waits on sub-manifest %s", rid, uuid, missing),
+			})
+			return nil
+		}
 	}
 
 	// Check event table
@@ -261,4 +313,16 @@ func leafSetsEqual(a, b map[libfossil.FslID]bool) bool {
 		}
 	}
 	return true
+}
+
+// treeGap reports the sub-manifest a check-in's tree -- its own, or its
+// baseline's -- is waiting on, when that is why its file set cannot be
+// listed. Only a tree can be waiting on one, so a flat manifest is answered
+// without listing it.
+func treeGap(r *repo.Repo, d *deck.Deck, rid libfossil.FslID, cache *content.Cache) (string, bool) {
+	if len(d.S) == 0 && d.B == "" {
+		return "", false
+	}
+	_, err := manifest.ListFilesCached(r, rid, cache)
+	return manifest.MissingSubmanifest(err)
 }

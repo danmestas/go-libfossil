@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 
@@ -11,6 +12,8 @@ import (
 // every change, or only the named files. A pending merge is committed with
 // the merged-in checkin as a merge parent.
 type RepoCiCmd struct {
+	RecoveryFlags
+	NoSync        bool     `help:"Suppress optional autosync, not required-content recovery"`
 	Message       string   `short:"m" required:"" help:"Checkin comment"`
 	Files         []string `arg:"" optional:"" help:"Files to commit (default: all changes)"`
 	User          string   `help:"Checkin user (default: OS username)"`
@@ -21,7 +24,7 @@ type RepoCiCmd struct {
 }
 
 func (c *RepoCiCmd) Run(g *Globals) (err error) {
-	_, co, done, err := openWorkingCheckout(g, c.Dir)
+	r, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
@@ -44,14 +47,20 @@ func (c *RepoCiCmd) Run(g *Globals) (err error) {
 	if user == "" {
 		user = currentUser()
 	}
-	rid, uuid, err := co.Checkin(libfossil.CheckoutCommitOpts{
+	required, err := c.RecoveryFlags.requiredContent(r)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cloneContext(context.Background(), c.Timeout)
+	defer cancel()
+	rid, uuid, err := co.CheckinContext(ctx, libfossil.CheckoutCommitOpts{
 		Message:       c.Message,
 		User:          user,
 		Branch:        c.Branch,
 		Files:         files,
 		AllowConflict: c.AllowConflict,
 		AllowEmpty:    c.AllowEmpty,
-	})
+	}, required)
 	if err != nil {
 		return err
 	}

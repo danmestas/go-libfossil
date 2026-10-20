@@ -59,7 +59,20 @@ type File struct {
 	UUID string
 }
 
-func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manifestUUID string, err error) {
+func Checkin(r *repo.Repo, opts CheckinOpts) (libfossil.FslID, string, error) {
+	return CheckinContext(context.Background(), r, opts)
+}
+
+// CheckinContext checks cancellation again before publishing its transaction.
+func CheckinContext(
+	ctx context.Context, r *repo.Repo, opts CheckinOpts,
+) (manifestRid libfossil.FslID, manifestUUID string, err error) {
+	if ctx == nil {
+		panic("manifest.CheckinContext: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, "", err
+	}
 	if r == nil {
 		panic("manifest.Checkin: r must not be nil")
 	}
@@ -104,8 +117,11 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 	}
 	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		var txErr error
-		manifestRid, manifestUUID, tree, txErr = checkinTx(tx, opts)
-		return txErr
+		manifestRid, manifestUUID, tree, txErr = checkinTx(ctx, tx, opts)
+		if txErr != nil {
+			return txErr
+		}
+		return ctx.Err()
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.Checkin: %w", err)
@@ -115,14 +131,16 @@ func Checkin(r *repo.Repo, opts CheckinOpts) (manifestRid libfossil.FslID, manif
 }
 
 // checkinTx stores a check-in and derives its rows, all in tx.
-func checkinTx(tx *db.Tx, opts CheckinOpts) (libfossil.FslID, string, checkinTree, error) {
+func checkinTx(
+	ctx context.Context, tx *db.Tx, opts CheckinOpts,
+) (libfossil.FslID, string, checkinTree, error) {
 	if opts.Precheck != nil {
 		if err := opts.Precheck(tx); err != nil {
 			return 0, "", checkinTree{}, err
 		}
 	}
 	parents := append([]libfossil.FslID{opts.Parent}, opts.MergeParents...)
-	if err := RequireParentContent(context.Background(), tx, parents); err != nil {
+	if err := RequireParentContent(ctx, tx, parents); err != nil {
 		return 0, "", checkinTree{}, err
 	}
 	// A sparse store (draft-fossil-sparse-cone-00 §5) lacks the content of

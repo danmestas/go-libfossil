@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -71,6 +72,10 @@ type StatusEntry struct {
 // carried forward into the new manifest (full-tree semantics — see the
 // CommitOpts.Files doc).
 func (r *Repo) Commit(opts CommitOpts) (int64, string, error) {
+	return r.commit(context.Background(), opts)
+}
+
+func (r *Repo) commit(ctx context.Context, opts CommitOpts) (int64, string, error) {
 	files := make([]manifest.File, len(opts.Files))
 	for i, f := range opts.Files {
 		files[i] = manifest.File{
@@ -112,7 +117,7 @@ func (r *Repo) Commit(opts CommitOpts) (int64, string, error) {
 		Time:         opts.Time,
 		Tags:         tagCards,
 	}
-	rid, uuid, err := manifest.Checkin(r.inner, copts)
+	rid, uuid, err := manifest.CheckinContext(ctx, r.inner, copts)
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: commit: %w", err)
 	}

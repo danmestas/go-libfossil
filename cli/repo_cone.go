@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -52,13 +53,14 @@ func (c *RepoConeShowCmd) Run(g *Globals) (err error) {
 
 // RepoConeAddCmd adds members to the cone.
 type RepoConeAddCmd struct {
+	RecoveryFlags
 	Paths []string `arg:"" help:"Paths to add"`
 	Not   bool     `help:"Add the paths as exclusions"`
 	Dir   string   `short:"d" help:"Checkout directory" default:"."`
 }
 
 func (c *RepoConeAddCmd) Run(g *Globals) error {
-	return amendCone(g, c.Dir, func(cone *libfossil.Cone) (*libfossil.Cone, error) {
+	return amendCone(g, c.Dir, c.RecoveryFlags, func(cone *libfossil.Cone) (*libfossil.Cone, error) {
 		if cone == nil {
 			if c.Not {
 				return nil, fmt.Errorf("this checkout is dense; there is nothing to exclude from")
@@ -74,12 +76,13 @@ func (c *RepoConeAddCmd) Run(g *Globals) error {
 
 // RepoConeRemoveCmd removes members from the cone.
 type RepoConeRemoveCmd struct {
+	RecoveryFlags
 	Paths []string `arg:"" help:"Members to remove"`
 	Dir   string   `short:"d" help:"Checkout directory" default:"."`
 }
 
 func (c *RepoConeRemoveCmd) Run(g *Globals) error {
-	return amendCone(g, c.Dir, func(cone *libfossil.Cone) (*libfossil.Cone, error) {
+	return amendCone(g, c.Dir, c.RecoveryFlags, func(cone *libfossil.Cone) (*libfossil.Cone, error) {
 		if cone == nil {
 			return nil, fmt.Errorf("this checkout is dense; there is no cone to remove from")
 		}
@@ -89,31 +92,36 @@ func (c *RepoConeRemoveCmd) Run(g *Globals) error {
 
 // RepoConeSetCmd replaces the cone.
 type RepoConeSetCmd struct {
+	RecoveryFlags
 	Paths []string `arg:"" help:"Inclusion members"`
 	Not   []string `help:"Exclusion members (repeatable)"`
 	Dir   string   `short:"d" help:"Checkout directory" default:"."`
 }
 
 func (c *RepoConeSetCmd) Run(g *Globals) error {
-	return amendCone(g, c.Dir, func(*libfossil.Cone) (*libfossil.Cone, error) {
+	return amendCone(g, c.Dir, c.RecoveryFlags, func(*libfossil.Cone) (*libfossil.Cone, error) {
 		return libfossil.NewCone(c.Paths, c.Not)
 	})
 }
 
 // RepoConeDenseCmd drops the cone.
 type RepoConeDenseCmd struct {
+	RecoveryFlags
 	Dir string `short:"d" help:"Checkout directory" default:"."`
 }
 
 func (c *RepoConeDenseCmd) Run(g *Globals) error {
-	return amendCone(g, c.Dir, func(*libfossil.Cone) (*libfossil.Cone, error) {
+	return amendCone(g, c.Dir, c.RecoveryFlags, func(*libfossil.Cone) (*libfossil.Cone, error) {
 		return nil, nil
 	})
 }
 
 // amendCone applies edit to the checkout's cone and reports what moved.
-func amendCone(g *Globals, dir string, edit func(*libfossil.Cone) (*libfossil.Cone, error)) (err error) {
-	_, co, done, err := openWorkingCheckout(g, dir)
+func amendCone(
+	g *Globals, dir string, flags RecoveryFlags,
+	edit func(*libfossil.Cone) (*libfossil.Cone, error),
+) (err error) {
+	r, co, done, err := openWorkingCheckout(g, dir)
 	if err != nil {
 		return err
 	}
@@ -123,7 +131,13 @@ func amendCone(g *Globals, dir string, edit func(*libfossil.Cone) (*libfossil.Co
 	if err != nil {
 		return err
 	}
-	change, err := co.SetCone(next)
+	required, err := flags.requiredContent(r)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cloneContext(context.Background(), flags.Timeout)
+	defer cancel()
+	change, err := co.SetConeContext(ctx, next, required)
 	if err != nil {
 		return err
 	}

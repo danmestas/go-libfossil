@@ -108,26 +108,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused, naming it, unless an explicit k replaces it. The conformance
   suite pins the draft's 19 October 2026 revision, which applies the
   2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
-- A checkout-free interface for apps that embed the binary, documented in
-  `docs/site/content/docs/cli-embedding.md` with its stable JSON shapes and
-  exit statuses (0 success, 1 failure, 2 not found). `repo snapshot` commits
-  one file's bytes onto trunk, a no-op that prints the tip when they match;
-  `repo log --path` lists the check-ins that changed a path, as `fossil
-  finfo` does; `repo cat --at VERSION PATH` reads a file as a version holds
-  it, as `fossil cat -r`; `repo diff --json A B [PATH]` diffs two versions.
-  Concurrent snapshots from several processes build one linear trunk.
-  Tracked in #451.
-
-### Fixed
-
-- A stored Julian day converts to the millisecond SQLite's own date
-  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
-  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
-  returned were 1ms before the check-in's D card.
-- Opening a repository sets `busy_timeout` before any other pragma. The
-  drivers ran the DSN's pragmas in map order, so an open while another
-  process held a lock could fail at once with "database is locked".
-
 ### Changed
 
 - The conformance suite no longer reads erratum files. zit applied every
@@ -161,18 +141,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line over 32767 bytes) is not merged: the local copy is kept and the
   merge reports a conflict. `HasConflictMarkers` now skips `\r` as well as
   `\n` between lines, as fossil's `contains_merge_marker` does.
-- A file's history (`manifest.FileHistory`) orders check-ins that share a
-  millisecond by rid, newest first, and applies its limit after dropping rows
-  that list the file unchanged.
-- Check-ins, tags and branches record their time to the millisecond, as
-  fossil and zit write it. The default clock time, which carried nanoseconds
-  that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
-  clock. A caller time with finer precision is rounded to the nearest
-  millisecond, as fossil rounds a `--date-override`, except that a fraction
-  past `.999` stays at `.999` rather than carrying into the next second, as
-  in fossil. An exact half millisecond rounds up; fossil's result there
-  depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
-  `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
 - The conformance suite is re-pinned to zit check-in `68a3f76cb7`, where the
   artifact-format, repo-state and sync-protocol drafts name themselves
   `-00` instead of `-01` throughout and their Changes appendices are headed
@@ -181,37 +149,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged; the pinned copies take zit's file names, and the comments and
   tables that cited the `-01` drafts cite the `-00` ones. The sparse-cone
   copy is re-pinned to `d497c2432f`, whose text is the same.
-- The conformance suite is re-pinned to the -01 drafts as zit check-in
-  `3f86ff4261` holds them, with six more errata applied. The artifact format
-  says the Z card is last by the ordering and required-card rules, and §6.2
-  decides the Z verification state from the bytes at n-35 and n-34 (AF-6.2-7).
-  §4.7.3 filters the named delta's delete markers out of a delta-of-delta's
-  file set (AF-4.7.3-2), and §4.7.8 reads an absent and a present empty `J`
-  value alike (AF-4.7.8-1). In repo-state §5.3, a cancel keeps its card's
-  value on the row it writes, while the event table and propagation treat
-  it as null (RS-5.3-3, RS-5.3-6). An artifact's tag cards apply in card
-  order (RS-5.3-7), so a branch root carrying `*sym-NAME` and `-sym-NAME`
-  keeps the tag (§6.2, RS-6.2-4). In sync-protocol §6.6, a client recognizes
-  a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
-  way; six requirements are new, two are reworded, and each has a case
-  checked against fossil 2.28.
-- Checkouts record each file's mtime in `vfile.mtime` and scan the way
-  fossil's `vfile_check_signature` does: a file whose size matches its
-  artifact and whose mtime matches the recorded one is taken as unchanged
-  without being read, unless `ScanHash` is given or the repository's
-  `mtime-changes` setting is off. A global `mtime-changes` in `~/.fossil`,
-  which fossil falls back to, is not read: go-libfossil reads no global
-  settings. Status, commit, merge, revert and extract use this scan, as fossil's commands do; before, every scan hashed every
-  file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
-  checkout on every command too. Extract, update, revert, commit and
-  `SetMTime` record mtimes where fossil does. One deliberate difference:
-  fossil would miss an edit that keeps a file's size within the same second
-  its mtime was recorded, in status and in commit; go-libfossil records such
-  an mtime as 0 and rehashes the file instead, and fossil reading those rows
-  rehashes it too. On the sqlite
-  repository's 2,220-file checkout, status takes about 30 ms instead of
-  about 250 ms. `simio.MemStorage` now gives each write a new mtime, as a
-  filesystem does.
 
 ### Fixed
 
@@ -328,39 +265,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renamed copy is removed if unedited or kept, untracked, if edited.
   Tracked in #445.
 
-- `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
-  It used to compare only committed versions, so it wrote the target's
-  content over a locally edited file, deleted an edited file the target
-  removed, and merged the current and target check-ins with their common
-  ancestor while ignoring the working file. Visible changes:
-  - Local edits are preserved. A locally edited file is merged three ways,
-    with the checkout's version as the base, the working file as the local
-    side and the target as the other; conflicts are written as markers and
-    listed in `Conflicted`.
-  - An update to another branch now takes the target's content for every
-    file without local changes, as fossil does; it used to merge the two
-    branches' committed changes, which could write conflict markers.
-  - An edited file the target deletes is kept, untracked; pending adds and
-    removals stay pending; a missing file is restored; a file the target
-    adds over an untracked one, read-only or not, is written after the
-    untracked one is copied to `NAME-original`.
-  - A binary file (a NUL byte, or a line over 32,767 bytes) is never
-    line-merged. Update saves the working copy as `NAME-original` and
-    writes the target's content; Merge keeps the checkout's copy, whatever
-    the file's strategy. Before,
-    both spliced the versions line by line and reported a clean merge.
-  - The new `UpdateResult.Unmerged` lists files left to reconcile without
-    markers: kept edited-but-deleted files, files added both locally and
-    by the target, and binary conflicts.
-  - Every file takes the target's executable bit, including a change to the
-    bit alone. An update that could not finish (a directory where a file
-    must be written, or a file or directory the process may not change) is
-    refused before anything is written, the checkout database moves in one transaction, and a dry run
-    changes nothing, the database included.
-
-  Tracked in #443; renames are followed since #445, and undo works since
-  #446 (see their entries).
-
 - Each arrival of content is recorded in `rcvfrom` as fossil records it:
   one row per check-in, tag, sync, clone, served request that stores
   something, and unversioned write, made when the first content arrives, with
@@ -402,15 +306,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and linux-x64. Times written on one platform and rebuilt by fossil on
   another can still differ in the last place, as two fossils do; never by
   a millisecond.
-- Ticket artifacts link in a repository whose ticket schema lacks the
-  optional columns, as fossil's own repository's does. Crosslinking and
-  `Rebuild` failed there with "table ticketchng has no column named
-  tkt_user". As fossil's `ticket_insert` does, `tkt_ctime`, `tkt_rid` and
-  `tkt_user` are written only where they exist, and a `ticketchng` row is
-  written only when the artifact sets one of its fields or the table records
-  the artifact or its user. A field both tables share that the artifact
-  leaves unset is copied from the ticket row, and an INTEGER
-  `baseline for NAME` column records the artifact that last set NAME.
+
+## [0.13.0] - 2026-10-20
+
+### Added
+
+- A checkout-free interface for apps that embed the binary, documented in
+  `docs/site/content/docs/cli-embedding.md` with its stable JSON shapes and
+  exit statuses (0 success, 1 failure, 2 not found). `repo snapshot` commits
+  one file's bytes onto trunk, a no-op that prints the tip when they match;
+  `repo log --path` lists the check-ins that changed a path, as `fossil
+  finfo` does; `repo cat --at VERSION PATH` reads a file as a version holds
+  it, as `fossil cat -r`; `repo diff --json A B [PATH]` diffs two versions.
+  Concurrent snapshots from several processes build one linear trunk.
+  Tracked in #451.
+
+### Fixed
+
+- `repo new` accepts the repository path as `-R`, as the other embedding
+  commands do (it had required the argument and exited 80), and a path whose
+  parent directory does not exist is refused with exit 1 and a message naming
+  the directory, where it had failed with a SQLite "out of memory" error. The
+  behaviour is documented in `cli-embedding.md`. Tracked in #451.
+- `repo log --path`, `repo cat --at` and `repo diff` match a PATH as fossil
+  does: they drop a leading `./`, a trailing `/` and doubled or `/./`
+  separators, and compare names with the repository's `case-sensitive`
+  setting (fossil's default when unset: off on macOS and Windows, on
+  elsewhere), so `notes/a.md` finds `Notes/A.md` when it is off. They had
+  rejected both with exit 2 and compared case-sensitively. Not found stays
+  exit 2, where fossil exits 1. Tracked in #451.
+- Opening a repository runs every pragma in a fixed order (`busy_timeout`,
+  `journal_mode`, `locking_mode`, `synchronous`, `foreign_keys`, then the
+  rest by name), not only `busy_timeout` first. Tracked in #451.
+- A stored Julian day converts to the millisecond SQLite's own date
+  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
+  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
+  returned were 1ms before the check-in's D card.
+- Opening a repository sets `busy_timeout` before any other pragma. The
+  drivers ran the DSN's pragmas in map order, so an open while another
+  process held a lock could fail at once with "database is locked".
+
+### Changed
+
+- A file's history (`manifest.FileHistory`) orders check-ins that share a
+  millisecond by rid, newest first, and applies its limit after dropping rows
+  that list the file unchanged.
+- Check-ins, tags and branches record their time to the millisecond, as
+  fossil and zit write it. The default clock time, which carried nanoseconds
+  that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its
+  clock. A caller time with finer precision is rounded to the nearest
+  millisecond, as fossil rounds a `--date-override`, except that a fraction
+  past `.999` stays at `.999` rather than carrying into the next second, as
+  in fossil. An exact half millisecond rounds up; fossil's result there
+  depends on how its bundled SQLite prints the seconds (fossil 2.28 writes
+  `.124` for `.1245` but `.020` for `.0195`), so it is not followed.
+- The conformance suite is re-pinned to the -01 drafts as zit check-in
+  `3f86ff4261` holds them, with six more errata applied. The artifact format
+  says the Z card is last by the ordering and required-card rules, and §6.2
+  decides the Z verification state from the bytes at n-35 and n-34 (AF-6.2-7).
+  §4.7.3 filters the named delta's delete markers out of a delta-of-delta's
+  file set (AF-4.7.3-2), and §4.7.8 reads an absent and a present empty `J`
+  value alike (AF-4.7.8-1). In repo-state §5.3, a cancel keeps its card's
+  value on the row it writes, while the event table and propagation treat
+  it as null (RS-5.3-3, RS-5.3-6). An artifact's tag cards apply in card
+  order (RS-5.3-7), so a branch root carrying `*sym-NAME` and `-sym-NAME`
+  keeps the tag (§6.2, RS-6.2-4). In sync-protocol §6.6, a client recognizes
+  a refusal by its leading text (SP-6.6-4). go-libfossil already behaved this
+  way; six requirements are new, two are reworded, and each has a case
+  checked against fossil 2.28.
+- Checkouts record each file's mtime in `vfile.mtime` and scan the way
+  fossil's `vfile_check_signature` does: a file whose size matches its
+  artifact and whose mtime matches the recorded one is taken as unchanged
+  without being read, unless `ScanHash` is given or the repository's
+  `mtime-changes` setting is off. A global `mtime-changes` in `~/.fossil`,
+  which fossil falls back to, is not read: go-libfossil reads no global
+  settings. Status, commit, merge, revert and extract use this scan, as fossil's commands do; before, every scan hashed every
+  file and `vfile.mtime` was always 0, so fossil rehashed a go-libfossil
+  checkout on every command too. Extract, update, revert, commit and
+  `SetMTime` record mtimes where fossil does. One deliberate difference:
+  fossil would miss an edit that keeps a file's size within the same second
+  its mtime was recorded, in status and in commit; go-libfossil records such
+  an mtime as 0 and rehashes the file instead, and fossil reading those rows
+  rehashes it too. On the sqlite
+  repository's 2,220-file checkout, status takes about 30 ms instead of
+  about 250 ms. `simio.MemStorage` now gives each write a new mtime, as a
+  filesystem does.
+
+### Fixed
+
+- Ticket artifacts link into a repository whose ticket schema lacks any of
+  the columns fossil treats as optional: the ticket table,
+  `ticket.tkt_ctime`, the ticketchng table, `ticketchng.tkt_rid` and
+  `ticketchng.tkt_user`. Crosslink always wrote `tkt_user` and `tkt_ctime`,
+  so rebuilding fossil's own repository, which has no `tkt_user`, failed.
+  The ticket and ticketchng rows now follow fossil's `ticket_insert`: a
+  change row is written only when it has a field or bookkeeping column to
+  fill, `tkt_user` only when the artifact names a user, a field stored in
+  both tables is copied from the ticket row when the artifact leaves it
+  alone, and a `baseline for <field>` column records the rid that last
+  assigned the field. Without a ticket table nothing is derived for a
+  ticket, including its timeline rows, as in fossil.
+- `Checkout.Update` keeps uncommitted changes, as fossil's `update` does.
+  It used to compare only committed versions, so it wrote the target's
+  content over a locally edited file, deleted an edited file the target
+  removed, and merged the current and target check-ins with their common
+  ancestor while ignoring the working file. Visible changes:
+  - Local edits are preserved. A locally edited file is merged three ways,
+    with the checkout's version as the base, the working file as the local
+    side and the target as the other; conflicts are written as markers and
+    listed in `Conflicted`.
+  - An update to another branch now takes the target's content for every
+    file without local changes, as fossil does; it used to merge the two
+    branches' committed changes, which could write conflict markers.
+  - An edited file the target deletes is kept, untracked; pending adds and
+    removals stay pending; a missing file is restored; a file the target
+    adds over an untracked one, read-only or not, is written after the
+    untracked one is copied to `NAME-original`.
+  - A binary file (a NUL byte, or a line over 32,767 bytes) is never
+    line-merged. Update saves the working copy as `NAME-original` and
+    writes the target's content; Merge keeps the checkout's copy, whatever
+    the file's strategy. Before,
+    both spliced the versions line by line and reported a clean merge.
+  - The new `UpdateResult.Unmerged` lists files left to reconcile without
+    markers: kept edited-but-deleted files, files added both locally and
+    by the target, and binary conflicts.
+  - Every file takes the target's executable bit, including a change to the
+    bit alone. An update that could not finish (a directory where a file
+    must be written, or a file or directory the process may not change) is
+    refused before anything is written, the checkout database moves in one transaction, and a dry run
+    changes nothing, the database included.
+
+  Update saves no undo state yet, so unlike fossil's update it cannot be
+  undone: a removed file restored from the target, or a working copy merged
+  or replaced, cannot be brought back with undo. Files are matched by name:
+  a file the target renamed is not followed, as fossil follows it. Tracked
+  in #443.
+
 - `config.mtime` and `user.mtime` hold seconds since 1970, as fossil's
   `now()` writes them. `SetConfig`, `SetHashPolicy` and `CreateUser` wrote a
   Julian day there, which fossil, comparing those times when it merges

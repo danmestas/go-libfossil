@@ -30,10 +30,10 @@ import (
 // worktree against draft-fossil-sparse-cone-00 §3 and §4. Cases build a
 // repository, open a checkout with a cone through internal/checkout -- the
 // layer every public entry point goes through -- and look at the disk, the
-// checkout database and the check-ins it writes. The sparse store and the
-// sync extension are later phases, recorded as such in the table. zit, the
-// other implementation, is the oracle for the serialized form and for what
-// a cone materializes: sparsecone_zit_test.go replays its recorded answers.
+// checkout database and the check-ins it writes. Store classification and
+// explicit compaction have additional cases; remaining subtree and sync gaps
+// are recorded in the table. zit is the oracle for the serialized form and
+// what a cone materializes: sparsecone_zit_test.go replays its recorded answers.
 
 type scCase struct {
 	Case
@@ -57,7 +57,8 @@ func TestSparseCone(t *testing.T) {
 func sparseconeCases() []scCase {
 	var all []scCase
 	for _, group := range [][]scCase{
-		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(), scStoreCases(),
+		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(),
+		scStoreCases(), scCompactCases(),
 	} {
 		all = append(all, group...)
 	}

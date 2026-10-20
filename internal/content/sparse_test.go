@@ -144,6 +144,62 @@ func newAbsenceFixture(t *testing.T) *absenceFixture {
 	return f
 }
 
+func TestAbsencesRetainedDeltaChainStaysTransit(t *testing.T) {
+	f := newAbsenceFixture(t)
+	if err := SetStoreCone(f.d, mustCone(t, []string{"src"}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.Exec("UPDATE delta SET srcid=? WHERE rid=?", f.out, f.held); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", f.out, f.source); err != nil {
+		t.Fatal(err)
+	}
+	a, err := LoadAbsences(f.d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rid := range []libfossil.FslID{f.out, f.source} {
+		if got := a.Class(rid); got != Transit {
+			t.Errorf("retained delta ancestor %d = %v, want transit", rid, got)
+		}
+	}
+}
+
+func TestAbsencesStructuralReferencesStayTransit(t *testing.T) {
+	for name, stmt := range map[string]string{
+		"event":         "INSERT INTO event(objid, type) VALUES(?, 'w')",
+		"manifest":      "INSERT INTO mlink(mid) VALUES(?)",
+		"parent":        "INSERT INTO plink(pid, cid) VALUES(?, 999)",
+		"baseline":      "INSERT INTO orphan(rid, baseline) VALUES(999, ?)",
+		"tag source":    "INSERT INTO tagxref(tagid, srcid, rid) VALUES(1, ?, 999)",
+		"attachment":    "INSERT INTO attachment(attachid, src) SELECT 999, uuid FROM blob WHERE rid=?",
+		"forum post":    "INSERT INTO forumpost(fpid) VALUES(?)",
+		"forum root":    "INSERT INTO forumpost(fpid, froot) VALUES(999, ?)",
+		"forum prior":   "INSERT INTO forumpost(fpid, fprev) VALUES(999, ?)",
+		"forum reply":   "INSERT INTO forumpost(fpid, firt) VALUES(999, ?)",
+		"cherry parent": "INSERT INTO cherrypick(parentid, childid) VALUES(?, 999)",
+		"cherry child":  "INSERT INTO cherrypick(parentid, childid) VALUES(999, ?)",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAbsenceFixture(t)
+			if err := SetStoreCone(f.d, mustCone(t, []string{"src"}, nil)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.d.Exec(stmt, f.out); err != nil {
+				t.Fatal(err)
+			}
+			a, err := LoadAbsences(f.d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := a.Class(f.out); got != Transit {
+				t.Fatalf("structural artifact also named outside cone = %v, want transit", got)
+			}
+		})
+	}
+}
+
 func TestAbsencesDense(t *testing.T) {
 	f := newAbsenceFixture(t)
 	a, err := LoadAbsences(f.d)

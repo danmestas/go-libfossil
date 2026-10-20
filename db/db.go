@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -114,27 +115,55 @@ func buildSQLDSN(path string, pragmas map[string]string) string {
 		}
 		return path
 	}
-	return appendURIParamString(busyTimeoutFirst(registered.BuildDSN(path, pragmas)), wasmDSNSuffix())
+	return appendURIParamString(orderPragmas(registered.BuildDSN(path, pragmas)), wasmDSNSuffix())
 }
 
-// busyTimeoutFirst moves the DSN's busy_timeout pragma ahead of its other
-// _pragma parameters. The drivers run those in DSN order, and build it from a
-// map, so the order varied by open; a pragma run before busy_timeout fails at
-// once with "database is locked" while another process holds a lock, instead
-// of waiting.
-func busyTimeoutFirst(dsn string) string {
+// pragmaOrder is the order a DSN's pragmas run in, ahead of any other pragma,
+// which follow by name. busy_timeout is first: a pragma run before it fails
+// at once with "database is locked" while another process holds a lock,
+// instead of waiting. journal_mode is next because it needs the write lock,
+// and the rest are connection settings that touch no file.
+var pragmaOrder = []string{"busy_timeout", "journal_mode", "locking_mode", "synchronous", "foreign_keys"}
+
+// pragmaRank is name's place in pragmaOrder, or len(pragmaOrder) for a
+// pragma that is not in it.
+func pragmaRank(name string) int {
+	if i := slices.Index(pragmaOrder, name); i >= 0 {
+		return i
+	}
+	return len(pragmaOrder)
+}
+
+// orderPragmas puts the DSN's _pragma parameters in pragmaOrder, then by
+// name, leaving every other parameter where it was. The drivers run the
+// pragmas in DSN order and build the DSN from a map, so without this the
+// order varied by open.
+func orderPragmas(dsn string) string {
 	base, query, ok := strings.Cut(dsn, "?")
 	if !ok {
 		return dsn
 	}
 	params := strings.Split(query, "&")
+	var slots []int
+	var pragmas []string
 	for i, p := range params {
-		if strings.HasPrefix(p, "_pragma=busy_timeout(") {
-			first := slices.IndexFunc(params, func(q string) bool { return strings.HasPrefix(q, "_pragma=") })
-			copy(params[first+1:i+1], params[first:i])
-			params[first] = p
-			break
+		if strings.HasPrefix(p, "_pragma=") {
+			slots = append(slots, i)
+			pragmas = append(pragmas, p)
 		}
+	}
+	name := func(p string) string {
+		n, _, _ := strings.Cut(strings.TrimPrefix(p, "_pragma="), "(")
+		return n
+	}
+	slices.SortFunc(pragmas, func(a, b string) int {
+		if c := cmp.Compare(pragmaRank(name(a)), pragmaRank(name(b))); c != 0 {
+			return c
+		}
+		return cmp.Compare(a, b)
+	})
+	for i, slot := range slots {
+		params[slot] = pragmas[i]
 	}
 	return base + "?" + strings.Join(params, "&")
 }
@@ -189,14 +218,12 @@ func applyWASMPragmas(conn *sql.DB, pragmas map[string]string) error {
 	if !wasmClearPragmas {
 		return nil
 	}
-	// Apply safe pragmas via SQL. Skip journal_mode (WAL not supported on WASI).
-	// Only apply known-safe pragmas to prevent SQL injection.
-	safePragmas := map[string]bool{
-		"busy_timeout": true,
-		"foreign_keys": true,
-	}
-	for k, v := range pragmas {
-		if !safePragmas[k] {
+	// Apply safe pragmas via SQL, in pragmaOrder. Skip journal_mode (WAL not
+	// supported on WASI). Only apply known-safe pragmas to prevent SQL
+	// injection.
+	for _, k := range []string{"busy_timeout", "foreign_keys"} {
+		v, ok := pragmas[k]
+		if !ok {
 			continue
 		}
 		if _, err := conn.Exec(fmt.Sprintf("PRAGMA %s = %s", k, v)); err != nil {

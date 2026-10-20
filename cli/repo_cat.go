@@ -57,7 +57,14 @@ func (c *RepoCatCmd) runAt(r *libfossil.Repo) error {
 	if err != nil {
 		return err
 	}
-	data, err := r.ReadFile(rid, c.Artifact)
+	name, err := newRepoPaths(r).fileIn(r, rid, c.Artifact)
+	if err != nil {
+		return err
+	}
+	if name == "" || name == "." {
+		return notFound(fmt.Errorf("%q: %w", c.Artifact, libfossil.ErrFileNotFound))
+	}
+	data, err := r.ReadFile(rid, name)
 	if errors.Is(err, libfossil.ErrFileNotFound) {
 		return notFound(err)
 	}

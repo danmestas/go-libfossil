@@ -164,6 +164,9 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
+		if err := keepRequiredPhantoms(q, candidates); err != nil {
+			return nil, err
+		}
 		if err := a.elide(q, candidates); err != nil {
 			return nil, err
 		}
@@ -172,6 +175,51 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 		a.counts[k]++
 	}
 	return a, nil
+}
+
+// An artifact may be both a file's content and a structural reference or
+// delta ancestor. Its out-of-cone filename does not permit either hole.
+func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) error {
+	rows, err := q.Query(`
+		WITH RECURSIVE retained(rid) AS (
+		  SELECT d.srcid FROM delta d JOIN blob b ON b.rid=d.rid WHERE b.size>=0
+		  UNION SELECT d.srcid FROM delta d JOIN retained r ON d.rid=r.rid
+		)
+		SELECT rid FROM retained
+		UNION SELECT objid FROM event
+		UNION SELECT mid FROM mlink
+		UNION SELECT pid FROM plink
+		UNION SELECT cid FROM plink
+		UNION SELECT baseid FROM plink
+		UNION SELECT rid FROM orphan
+		UNION SELECT baseline FROM orphan
+		UNION SELECT srcid FROM tagxref
+		UNION SELECT origid FROM tagxref
+		UNION SELECT rid FROM tagxref
+		UNION SELECT attachid FROM attachment
+		UNION SELECT b.rid FROM attachment a JOIN blob b ON b.uuid=a.src
+		UNION SELECT parentid FROM cherrypick
+		UNION SELECT childid FROM cherrypick
+		UNION SELECT fpid FROM forumpost
+		UNION SELECT froot FROM forumpost
+		UNION SELECT fprev FROM forumpost
+		UNION SELECT firt FROM forumpost
+		INTERSECT SELECT rid FROM phantom`)
+	if err != nil {
+		return fmt.Errorf("content.LoadAbsences: structural references: %w", err)
+	}
+	for rows.Next() {
+		var rid libfossil.FslID
+		if err := rows.Scan(&rid); err != nil {
+			rows.Close()
+			return fmt.Errorf("content.LoadAbsences: structural references: %w", err)
+		}
+		delete(candidates, rid)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("content.LoadAbsences: structural references: %w", err)
+	}
+	return nil
 }
 
 // elide marks the candidates F cards name only outside the cone.

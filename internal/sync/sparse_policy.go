@@ -2,8 +2,10 @@ package sync
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -67,6 +69,122 @@ func (h *handler) ensureSparseKeep() error {
 
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
 	return k == nil || !k.out[rid] || k.in[rid]
+}
+
+// filterSparseReceived filters only artifacts this transfer newly acquired.
+// Existing holdings survive a narrower policy; only explicit compaction may
+// reclaim them. Reference discovery precedes filtering so arrival order cannot
+// discard a blob before a later manifest names it inside the cone.
+func filterSparseReceived(ctx context.Context, q db.Querier, received map[string]bool, cache *content.Cache) (int, error) {
+	c, err := content.StoreCone(q)
+	if err != nil || c == nil {
+		return 0, err
+	}
+	k, err := newSparseKeep(ctx, q, c)
+	if err != nil {
+		return 0, err
+	}
+	drop := map[libfossil.FslID]bool{}
+	for uuid := range received {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		var rid libfossil.FslID
+		var size int64
+		err := q.QueryRow("SELECT rid,size FROM blob WHERE uuid=?", uuid).Scan(&rid, &size)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if size >= 0 && !k.keeps(rid) {
+			drop[rid] = true
+		}
+	}
+	if err := retainDeltaSources(ctx, q, drop); err != nil {
+		return 0, err
+	}
+	rids := make([]libfossil.FslID, 0, len(drop))
+	for rid := range drop {
+		rids = append(rids, rid)
+	}
+	sort.Slice(rids, func(i, j int) bool { return rids[i] < rids[j] })
+	for _, rid := range rids {
+		if _, err := q.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
+			return 0, err
+		}
+		if _, err := q.Exec("UPDATE blob SET content=NULL,size=-1 WHERE rid=?", rid); err != nil {
+			return 0, err
+		}
+		if _, err := q.Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", rid); err != nil {
+			return 0, err
+		}
+		if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+			return 0, err
+		}
+		cache.Invalidate(rid)
+	}
+	a, err := content.LoadAbsences(q)
+	if err != nil {
+		return 0, err
+	}
+	return a.Count(content.Elided), nil
+}
+
+// Remove every retained delta's transitive sources from the drop set. Each
+// held delta edge is visited at most once, even for shared bases or cycles.
+func retainDeltaSources(ctx context.Context, q db.Querier, drop map[libfossil.FslID]bool) error {
+	rows, err := q.Query("SELECT d.rid,d.srcid FROM delta d JOIN blob b ON b.rid=d.rid WHERE b.size>=0")
+	if err != nil {
+		return err
+	}
+	sources := map[libfossil.FslID]libfossil.FslID{}
+	var queue []libfossil.FslID
+	for rows.Next() {
+		var rid, src libfossil.FslID
+		if err := rows.Scan(&rid, &src); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		sources[rid] = src
+		if !drop[rid] {
+			queue = append(queue, rid)
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return err
+	}
+	seen := map[libfossil.FslID]bool{}
+	for len(queue) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		rid := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if seen[rid] {
+			continue
+		}
+		seen[rid] = true
+		if src, ok := sources[rid]; ok {
+			delete(drop, src)
+			queue = append(queue, src)
+		}
+	}
+	return nil
+}
+
+func rememberSparseReceived(q db.Querier, received map[string]bool, uuid string) error {
+	if received == nil {
+		return nil
+	}
+	held, err := heldReal(q, uuid)
+	if err != nil {
+		return err
+	}
+	if !held {
+		received[uuid] = true
+	}
+	return nil
 }
 
 func coneContains(have, want *cone.Cone) bool {

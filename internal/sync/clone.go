@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/shun"
@@ -69,6 +71,7 @@ func newPhantomStallError(phantoms map[string]bool) *PhantomStallError {
 
 // cloneSession holds the mutable state of a running clone.
 type cloneSession struct {
+	sparseReceived        map[string]bool
 	repo                  *repo.Repo
 	env                   *simio.Env
 	opts                  CloneOpts
@@ -166,6 +169,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		availableDeltaSources: make(map[string]struct{}),
 		seqno:                 1,
 	}
+	if opts.StoreCone != nil {
+		cs.sparseReceived = map[string]bool{}
+	}
 	cs.obs = resolveObserver(opts.Observer)
 
 	result, err = cs.complete(ctx, t)
@@ -207,6 +213,15 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 	if finalizeErr != nil {
 		return cloneResult, fmt.Errorf(
 			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
+	}
+	if cs.sparseReceived != nil {
+		if err := cs.repo.WithTx(func(tx *db.Tx) error {
+			var err error
+			cs.result.Elided, err = filterSparseReceived(ctx, tx, cs.sparseReceived, nil)
+			return err
+		}); err != nil {
+			return cloneResult, err
+		}
 	}
 	return cloneResult, cs.fillPhantoms(ctx, t)
 }
@@ -282,16 +297,24 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 
 // phantomUUIDs returns the artifacts the repository knows of but lacks.
 func phantomUUIDs(r *repo.Repo) (map[string]bool, error) {
+	a, err := elidedPhantoms(r.DB())
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.DB().Query(
-		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
+		"SELECT b.rid,b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
 	if err != nil {
 		return nil, fmt.Errorf("sync.Clone: query phantoms: %w", err)
 	}
 	missing := make(map[string]bool)
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, errors.Join(fmt.Errorf("sync.Clone: scan phantom: %w", err), rows.Close())
+		}
+		if a != nil && a.Class(rid) == content.Elided {
+			continue
 		}
 		missing[uuid] = true
 	}
@@ -773,6 +796,9 @@ func (cs *cloneSession) receiveContent(
 func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if cs.pass == nil {
 		panic("sync.Clone: handleFile: pass must be set by processResponse")
+	}
+	if err := rememberSparseReceived(cs.repo.DB(), cs.sparseReceived, uuid); err != nil {
+		return err
 	}
 	if err := storeReceivedFile(ctx, cs.repo, cs.pass, uuid, deltaSrc, payload, storedBlob,
 		visibilityPublic, cs.linker); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/danmestas/go-libfossil/db"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -57,6 +58,7 @@ type CkinLockReq struct {
 
 // SyncResult reports what happened during a sync.
 type SyncResult struct {
+	Elided                        int // artifacts deliberately absent under the store cone
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int
@@ -73,6 +75,7 @@ type SyncResult struct {
 
 // session holds the mutable state of a running sync.
 type session struct {
+	sparseReceived    map[string]bool
 	repo              *repo.Repo
 	env               *simio.Env
 	opts              SyncOpts
@@ -219,6 +222,9 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		gate = submanifestGate{armed: true}
 	}
 	s.smGate = gate
+	if c, err := content.StoreCone(r.DB()); err == nil && c != nil {
+		s.sparseReceived = map[string]bool{}
+	}
 
 	return s
 }
@@ -383,6 +389,16 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)
 	}
 	s.result.ArtifactsLinked = linked
+	if s.sparseReceived != nil {
+		err := s.repo.WithTx(func(tx *db.Tx) error {
+			var err error
+			s.result.Elided, err = filterSparseReceived(ctx, tx, s.sparseReceived, s.cache)
+			return err
+		})
+		if err != nil {
+			return &s.result, fmt.Errorf("sync: sparse receive filtering: %w", err)
+		}
+	}
 
 	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)
 	return &s.result, nil

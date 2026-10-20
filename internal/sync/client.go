@@ -1601,6 +1601,8 @@ func (s *session) loadDBPhantoms() error {
 			return err
 		}
 		if elided != nil && elided.Class(rid) == content.Elided {
+			delete(s.phantoms, uuid)
+			delete(s.phantomAge, uuid)
 			continue
 		}
 		if !s.remoteHas[uuid] {
@@ -1646,6 +1648,9 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// server-push receive paths.
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
+	}
+	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
+		return false, err
 	}
 	rid, err := storeReceived(ctx, s.repo, s.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)

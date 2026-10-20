@@ -24,6 +24,7 @@ type CloneOpts struct {
 
 // CloneResult reports what happened during a clone.
 type CloneResult struct {
+	Elided          int // artifacts deliberately absent under the store cone
 	Rounds          int
 	BlobsRecvd      int
 	ArtifactsLinked int // Manifests crosslinked into event table

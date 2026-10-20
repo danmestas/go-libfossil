@@ -99,13 +99,13 @@ func wikiNameWellformed(z string) bool {
 	return true
 }
 
-// fileIsReservedName reports whether name is one of fossil's reserved
+// IsReservedName reports whether name is one of fossil's reserved
 // repository filenames, matching file_is_reserved_name (src/file.c): _FOSSIL_
 // or .fslckout, in either case, optionally with a -wal, -shm or -journal
 // suffix, either at the root or as the last component of a path. §4.6.3: such
 // an F-card is silently dropped from a manifest after the sort-order check,
 // not rejected.
-func fileIsReservedName(name string) bool {
+func IsReservedName(name string) bool {
 	n := len(name)
 	if n < 8 { // len("_FOSSIL_")
 		return false

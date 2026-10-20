@@ -7,8 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A checkout-free interface for apps that embed the binary, documented in
+  `docs/site/content/docs/cli-embedding.md` with its stable JSON shapes and
+  exit statuses (0 success, 1 failure, 2 not found). `repo snapshot` commits
+  one file's bytes onto trunk, a no-op that prints the tip when they match;
+  `repo log --path` lists the check-ins that changed a path, as `fossil
+  finfo` does; `repo cat --at VERSION PATH` reads a file as a version holds
+  it, as `fossil cat -r`; `repo diff --json A B [PATH]` diffs two versions.
+  Concurrent snapshots from several processes build one linear trunk.
+  Tracked in #451.
+
+### Fixed
+
+- A stored Julian day converts to the millisecond SQLite's own date
+  functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
+  (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it
+  returned were 1ms before the check-in's D card.
+- Opening a repository sets `busy_timeout` before any other pragma. The
+  drivers ran the DSN's pragmas in map order, so an open while another
+  process held a lock could fail at once with "database is locked".
+
 ### Changed
 
+- A file's history (`manifest.FileHistory`) orders check-ins that share a
+  millisecond by rid, newest first, and applies its limit after dropping rows
+  that list the file unchanged.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

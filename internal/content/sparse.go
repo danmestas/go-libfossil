@@ -180,7 +180,13 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 // An artifact may be both a file's content and a structural reference or
 // delta ancestor. Its out-of-cone filename does not permit either hole.
 func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) error {
-	rows, err := q.Query(`
+	var haveForum bool
+	if err := q.QueryRow(`SELECT EXISTS(
+		SELECT 1 FROM sqlite_master WHERE name='forumpost' AND type='table')`).
+		Scan(&haveForum); err != nil {
+		return fmt.Errorf("content.LoadAbsences: forum table: %w", err)
+	}
+	query := `
 		WITH RECURSIVE retained(rid) AS (
 		  SELECT d.srcid FROM delta d JOIN blob b ON b.rid=d.rid WHERE b.size>=0
 		  UNION SELECT d.srcid FROM delta d JOIN retained r ON d.rid=r.rid
@@ -199,12 +205,15 @@ func keepRequiredPhantoms(q db.Querier, candidates map[libfossil.FslID]bool) err
 		UNION SELECT attachid FROM attachment
 		UNION SELECT b.rid FROM attachment a JOIN blob b ON b.uuid=a.src
 		UNION SELECT parentid FROM cherrypick
-		UNION SELECT childid FROM cherrypick
+		UNION SELECT childid FROM cherrypick`
+	if haveForum {
+		query += `
 		UNION SELECT fpid FROM forumpost
 		UNION SELECT froot FROM forumpost
 		UNION SELECT fprev FROM forumpost
-		UNION SELECT firt FROM forumpost
-		INTERSECT SELECT rid FROM phantom`)
+		UNION SELECT firt FROM forumpost`
+	}
+	rows, err := q.Query(query + " INTERSECT SELECT rid FROM phantom")
 	if err != nil {
 		return fmt.Errorf("content.LoadAbsences: structural references: %w", err)
 	}

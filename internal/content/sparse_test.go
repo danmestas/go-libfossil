@@ -144,6 +144,23 @@ func newAbsenceFixture(t *testing.T) *absenceFixture {
 	return f
 }
 
+func TestAbsencesWithoutForumTable(t *testing.T) {
+	f := newAbsenceFixture(t)
+	if _, err := f.d.Exec("DROP TABLE forumpost"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetStoreCone(f.d, mustCone(t, []string{"src"}, nil)); err != nil {
+		t.Fatal(err)
+	}
+	a, err := LoadAbsences(f.d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Class(f.out); got != Elided {
+		t.Fatalf("file in repository without forum table = %v, want elided", got)
+	}
+}
+
 func TestAbsencesRetainedDeltaChainStaysTransit(t *testing.T) {
 	f := newAbsenceFixture(t)
 	if err := SetStoreCone(f.d, mustCone(t, []string{"src"}, nil)); err != nil {

@@ -65,14 +65,7 @@ func ListFilesFiltered(r *repo.Repo, rid libfossil.FslID, filter FileFilter) ([]
 	if d.Type == deck.Submanifest {
 		return nil, fmt.Errorf("manifest.ListFilesFiltered: a sub-manifest is a slice of a check-in, not a check-in")
 	}
-	if d.B == "" && isTree(d) {
-		cards, err := walkTreeFiltered(r.DB(), nil, d, filter)
-		if err != nil {
-			return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
-		}
-		return fCardsToEntries(cards), nil
-	}
-	cards, err := checkinFileCards(r.DB(), nil, d)
+	cards, err := checkinFileCardsFiltered(r.DB(), nil, d, filter)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
 	}
@@ -93,17 +86,21 @@ func ListFilesFiltered(r *repo.Repo, rid libfossil.FslID, filter FileFilter) ([]
 // ownFileCards for a manifest's own cards; nothing else reads F cards as a
 // file set.
 func checkinFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	return checkinFileCardsFiltered(q, cache, d, nil)
+}
+
+func checkinFileCardsFiltered(q db.Querier, cache *content.Cache, d *deck.Deck, filter FileFilter) ([]deck.FileCard, error) {
 	if d.Type == deck.Submanifest {
 		return nil, fmt.Errorf("a sub-manifest is a slice of a check-in, not a check-in")
 	}
 	if d.B == "" {
-		return baselineFileCards(q, cache, d)
+		return baselineFileCardsFiltered(q, cache, d, filter)
 	}
 	baseDeck, err := loadBaseline(q, cache, d)
 	if err != nil {
 		return nil, err
 	}
-	baseCards, err := baselineFileCards(q, cache, baseDeck)
+	baseCards, err := baselineFileCardsFiltered(q, cache, baseDeck, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +124,12 @@ func ownFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.File
 // tree manifest's are its walked enumeration (§5.1), which can fail; any
 // other manifest's are its F cards.
 func baselineFileCards(q db.Querier, cache *content.Cache, d *deck.Deck) ([]deck.FileCard, error) {
+	return baselineFileCardsFiltered(q, cache, d, nil)
+}
+
+func baselineFileCardsFiltered(q db.Querier, cache *content.Cache, d *deck.Deck, filter FileFilter) ([]deck.FileCard, error) {
 	if isTree(d) {
-		return walkTree(q, cache, d)
+		return walkTreeFiltered(q, cache, d, filter)
 	}
 	return d.F, nil
 }

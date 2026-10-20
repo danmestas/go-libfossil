@@ -130,7 +130,7 @@ func RestoreFiles(disk vfile.Disk, dir string, files []File) error {
 // so fossil's undo reads it, and copies of vfile and vmerge. A stash's undo
 // tables go too, so an older stash is not brought back.
 func createUndoTables(tx *sql.Tx) error {
-	for _, tbl := range []string{"undo", "undo_vfile", "undo_vmerge", "undo_stash", "undo_stashfile"} {
+	for _, tbl := range []string{"undo", "undo_vfile", "undo_vmerge", "undo_stash", "undo_stashfile", "undo_sparse_pending"} {
 		if _, err := tx.Exec("DROP TABLE IF EXISTS " + tbl); err != nil {
 			return fmt.Errorf("drop %s: %w", tbl, err)
 		}
@@ -150,6 +150,15 @@ func createUndoTables(tx *sql.Tx) error {
 	}
 	if _, err := tx.Exec("CREATE TABLE undo_vmerge AS SELECT * FROM vmerge"); err != nil {
 		return fmt.Errorf("copy vmerge: %w", err)
+	}
+	present, err := hasTable(tx, "sparse_pending")
+	if err != nil {
+		return err
+	}
+	if present {
+		if _, err := tx.Exec("CREATE TABLE undo_sparse_pending AS SELECT * FROM sparse_pending"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -516,9 +525,23 @@ func swapDiskFile(disk vfile.Disk, fullPath string, e undoEntry) (swappedFile, e
 	return f, nil
 }
 
+func hasTable(tx *sql.Tx, name string) (bool, error) {
+	var count int
+	err := tx.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&count)
+	return count > 0, err
+}
+
 // swapTables swaps vfile/vmerge with their undo counterparts via temp tables.
 func swapTables(tx *sql.Tx, label string) error {
-	for _, pair := range [][2]string{{"vfile", "undo_vfile"}, {"vmerge", "undo_vmerge"}} {
+	pairs := [][2]string{{"vfile", "undo_vfile"}, {"vmerge", "undo_vmerge"}}
+	present, err := hasTable(tx, "undo_sparse_pending")
+	if err != nil {
+		return err
+	}
+	if present {
+		pairs = append(pairs, [2]string{"sparse_pending", "undo_sparse_pending"})
+	}
+	for _, pair := range pairs {
 		live, saved := pair[0], pair[1]
 		stmts := []string{
 			"DROP TABLE IF EXISTS _tmp_swap",

@@ -299,7 +299,7 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 			return nil, err
 		}
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.effectiveRows(vid)
 	if err != nil {
 		return nil, err
 	}

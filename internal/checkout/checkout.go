@@ -158,6 +158,12 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, err
 	}
 
+	if opts.Cone != nil {
+		if err := ensureSparsePending(ckdb); err != nil {
+			ckdb.Close()
+			return nil, err
+		}
+	}
 	if err := initLocalRecords(ckdb, r, opts.Cone); err != nil {
 		ckdb.Close()
 		return nil, fmt.Errorf("checkout.Create: %w", err)
@@ -278,6 +284,12 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: %w", err)
 	}
 
+	if sparse != nil {
+		if err := ensureSparsePending(ckdb); err != nil {
+			ckdb.Close()
+			return nil, err
+		}
+	}
 	c := &Checkout{
 		db:     ckdb,
 		dbPath: dbPath,
@@ -458,7 +470,7 @@ func checkoutMarker(storage simio.Storage, dir string) (string, error) {
 			stat = local.Lstat
 		}
 		_, err := stat(candidate)
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {

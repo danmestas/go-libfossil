@@ -166,7 +166,7 @@ func vfileCount(t *testing.T, co *Checkout) int {
 }
 
 // §4.1: a checkout given a cone materializes exactly the covered files,
-// over flat and tree manifests; the record keeps every file, and the cone
+// over flat and tree manifests; the managed record is cone-only, and the cone
 // survives a reopen.
 func TestSparseMaterializesExactlyTheCone(t *testing.T) {
 	for _, tree := range []bool{false, true} {
@@ -175,8 +175,8 @@ func TestSparseMaterializesExactlyTheCone(t *testing.T) {
 		if got := onDisk(t, co); !slices.Equal(got, sparseCovered) {
 			t.Fatalf("tree=%v: on disk %q, want %q", tree, got, sparseCovered)
 		}
-		if n := vfileCount(t, co); n != len(sparseFiles) {
-			t.Fatalf("tree=%v: vfile holds %d rows, want the full record of %d", tree, n, len(sparseFiles))
+		if n := vfileCount(t, co); n != len(sparseCovered) {
+			t.Fatalf("tree=%v: vfile holds %d rows, want %d covered files", tree, n, len(sparseCovered))
 		}
 		reopened, err := Open(f.repo, co.Dir(), OpenOpts{})
 		if err != nil {

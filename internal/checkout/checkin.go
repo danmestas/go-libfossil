@@ -570,6 +570,11 @@ func (c *Checkout) finalizeCommit(
 	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
 		return fmt.Errorf("checkout.Commit: clear vmerge: %w", err)
 	}
+	if c.cone != nil {
+		if _, err := c.db.Exec("DELETE FROM sparse_pending"); err != nil {
+			return err
+		}
+	}
 	c.checkinQueue = nil
 	return nil
 }
@@ -739,6 +744,13 @@ func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActiv
 		if !changed {
 			return fmt.Errorf("%w: nothing has changed", ErrNothingToCommit)
 		}
+	}
+	unresolved, err := c.unresolvedSparse()
+	if err != nil {
+		return err
+	}
+	if len(unresolved) > 0 {
+		return fmt.Errorf("%w: widen the sparse cone to resolve %s", ErrUnresolvedConflicts, strings.Join(unresolved, ", "))
 	}
 	if opts.AllowConflict {
 		return nil

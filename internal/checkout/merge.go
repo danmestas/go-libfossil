@@ -156,6 +156,7 @@ type mergeStep struct {
 	exe        bool      // the checkout file's executable bit after the merge
 	fork       forkSides // which versions have the file, for a fork record
 	recordOnly bool      // the shared cone decision; no filesystem access for this step
+	pivotRID   libfossil.FslID
 }
 
 // forkSides says which of the three versions a conflict-fork record names.
@@ -274,7 +275,7 @@ func (c *Checkout) planMerge(plan *mergePlan, strategyName string) error {
 	if err != nil {
 		return err
 	}
-	rows, err := vfile.Load(c.db, int64(plan.vid))
+	rows, err := c.effectiveRows(plan.vid)
 	if err != nil {
 		return err
 	}
@@ -377,7 +378,7 @@ func (c *Checkout) planStep(
 	if kind == mergeSkip {
 		panic("checkout.planStep: nothing to plan for " + name)
 	}
-	step := mergeStep{file: MergeFile{Name: name}, merged: m, recordOnly: !c.covers(name)}
+	step := mergeStep{file: MergeFile{Name: name}, merged: m, recordOnly: !c.covers(name), pivotRID: p.rid}
 	if row != nil {
 		step.exe = mergedExe(*row, p, m)
 	}
@@ -388,6 +389,21 @@ func (c *Checkout) planStep(
 	}
 	if row != nil {
 		step.row = *row
+	}
+	if step.recordOnly {
+		switch kind {
+		case mergeTake:
+			step.file.Action = MergeUpdated
+		case mergeAdd:
+			step.file.Action = MergeAdded
+		case mergeDelete:
+			step.file.Action = MergeDeleted
+		case mergeMode:
+			step.file.Action = MergeMode
+		default:
+			step.file.Action, step.file.Reason = MergeConflict, "outside both-changed path requires widening the sparse cone"
+		}
+		return step, nil
 	}
 	if reason, ok := keepReasons[kind]; ok {
 		return step, keepOrFork(&step, reason, choose)
@@ -445,7 +461,7 @@ func keepOrFork(
 func (c *Checkout) planThreeWay(
 	step *mergeStep, p mergeSide, choose func(string) (merge.Strategy, error),
 ) error {
-	if step.row.ID <= 0 {
+	if step.row.Pathname == "" {
 		panic("checkout.planThreeWay: no checkout row for " + step.file.Name)
 	}
 	local, present, err := c.readWorkingFile(step.row)
@@ -680,6 +696,9 @@ func alwaysDiffers() (bool, error) { return true, nil }
 // applyMergeStep writes one file and records it the way fossil's merge
 // does.
 func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) error {
+	if s.recordOnly {
+		return c.applyRecordOnlyMerge(tx, vid, s)
+	}
 	if s.changesDisk() {
 		if err := c.applyMergeDiskStep(s); err != nil {
 			return err
@@ -874,7 +893,10 @@ func (c *Checkout) Conflicts() ([]string, error) {
 		return nil, fmt.Errorf("checkout.Conflicts: %w", err)
 	}
 
-	var conflicted []string
+	conflicted, err := c.unresolvedSparse()
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
 		if r.IsRemoved() || r.IsLink > 0 || !r.ContentChanged() {
 			continue
@@ -887,5 +909,6 @@ func (c *Checkout) Conflicts() ([]string, error) {
 			conflicted = append(conflicted, r.Pathname)
 		}
 	}
-	return conflicted, nil // vfile.Load orders rows by pathname
+	sort.Strings(conflicted)
+	return conflicted, nil
 }

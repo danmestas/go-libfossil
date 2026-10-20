@@ -4,6 +4,7 @@ package checkout
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,12 +32,54 @@ func TestSparseMergeConflictReported(t *testing.T) {
 	}
 }
 
+func TestSparseBothChangedRequiresWideningWithoutSynthesis(t *testing.T) {
+	f := newSparseRepo(t, false)
+	base := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"}), f.c1)
+	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\ntwo\nthree\nfour\nfive\nsix\nseven\n"}), base)
+	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\ntheirs\n"}), base)
+	co := f.open(t, sparseCone(t), ours)
+	var before int
+	if err := f.repo.DB().QueryRow("SELECT count(*) FROM blob").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
+		t.Fatal(err)
+	}
+	var after, outside int
+	if err := f.repo.DB().QueryRow("SELECT count(*) FROM blob").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("outside merge synthesized content: %d blobs became %d", before, after)
+	}
+	if err := co.db.QueryRow("SELECT count(*) FROM vfile WHERE pathname='tools/t.c'").Scan(&outside); err != nil || outside != 0 {
+		t.Fatalf("outside managed rows = %d: %v", outside, err)
+	}
+	_, _, err := co.Commit(CommitOpts{Message: "must widen", User: "test", AllowConflict: true})
+	if !errors.Is(err, ErrUnresolvedConflicts) {
+		t.Fatalf("allow-conflict bypassed outside unresolved state: %v", err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(co.Dir(), "tools/t.c"))
+	if err != nil || string(data) != "ours\ntwo\nthree\nfour\nfive\nsix\ntheirs\n" {
+		t.Fatalf("widened merge = %q: %v", data, err)
+	}
+	if conflicts, err := co.Conflicts(); err != nil || len(conflicts) != 0 {
+		t.Fatalf("clean widened merge conflicts = %v: %v", conflicts, err)
+	}
+}
+
 func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 	f := newSparseRepo(t, false)
 	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\n"}), f.c1)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "theirs\n"}), f.c1)
 	co := f.open(t, sparseCone(t), ours)
-	if _, err := co.db.Exec(`CREATE TRIGGER reject_merge BEFORE UPDATE OF mrid ON vfile
+	if _, _, err := co.storeMergePayload([]byte("retained legacy uncommitted payload\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec(`CREATE TRIGGER reject_merge BEFORE INSERT ON sparse_pending
 	 BEGIN SELECT RAISE(ABORT, 'injected merge failure'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +106,7 @@ func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(uuids) == 0 {
-		t.Fatal("injected failure did not exercise synthesized payload storage")
+		t.Fatal("failure lost the retained private payload")
 	}
 	for _, uuid := range uuids {
 		assertSparsePayloadSyncVisibility(t, f.repo, uuid, false)
@@ -97,8 +140,14 @@ func TestSparseMergeSynthesizedPayloadPrivate(t *testing.T) {
 	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
 		t.Fatal(err)
 	}
-	var payload int64
-	if err := co.db.QueryRow("SELECT mrid FROM vfile WHERE pathname='tools/t.c'").Scan(&payload); err != nil {
+	// A retained payload from an older writer must remain private through
+	// undo/redo and publish only when a complete commit references it.
+	stored, _, err := co.storeMergePayload([]byte("ours\ntwo\nthree\nfour\nfive\nsix\ntheirs\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := int64(stored)
+	if _, err := co.db.Exec("UPDATE sparse_pending SET mrid=?, unresolved=0 WHERE pathname='tools/t.c'", payload); err != nil {
 		t.Fatal(err)
 	}
 	if !content.IsPrivate(f.repo.DB(), payload) {

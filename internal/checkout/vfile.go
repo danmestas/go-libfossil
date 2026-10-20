@@ -51,7 +51,7 @@ func (c *Checkout) loadVFile(q sqlExecer, rid libfossil.FslID, clear bool) error
 
 	// Resolve every file before changing anything, so a refusal leaves
 	// vfile as it was.
-	files, blobRIDs, err := c.resolveFiles(rid, nil)
+	files, blobRIDs, err := c.resolveFiles(rid, c.fileFilter())
 	if err != nil {
 		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}

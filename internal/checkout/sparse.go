@@ -106,6 +106,9 @@ func (c *Checkout) managedRows(vid libfossil.FslID) ([]vfile.Row, error) {
 // describe disk; the complementary rows carry the uncovered baseline and
 // pending record-only operations.
 func (c *Checkout) coneRows(vid libfossil.FslID, managed bool) ([]vfile.Row, error) {
+	if !managed {
+		return c.pendingRows(vid)
+	}
 	rows, err := vfile.Load(c.db, int64(vid))
 	if err != nil {
 		return nil, err
@@ -235,6 +238,8 @@ type conePlan struct {
 	entering []vfile.Row // rows the new cone covers and the old one did not
 	leaving  []vfile.Row // rows the old cone covers and the new one does not
 	mtimes   map[string]int64
+	merges   map[string]mergeStep
+	pending  []sparseOutcome
 }
 
 // SetCone replaces the checkout's cone; nil returns it to dense. Replacing
@@ -319,7 +324,27 @@ func (c *Checkout) restoreConeMetadata(vid libfossil.FslID, plan conePlan) error
 	}
 	defer tx.Rollback()
 	for _, r := range plan.entering {
-		if _, err := tx.Exec("UPDATE vfile SET mtime = ? WHERE vid = ? AND pathname = ?", plan.mtimes[r.Pathname], int64(vid), r.Pathname); err != nil {
+		if r.ID <= 0 {
+			if _, err := tx.Exec("DELETE FROM vfile WHERE vid=? AND pathname=?", int64(vid), r.Pathname); err != nil {
+				return err
+			}
+		} else if _, err := tx.Exec("UPDATE vfile SET mtime = ? WHERE vid = ? AND pathname = ?", plan.mtimes[r.Pathname], int64(vid), r.Pathname); err != nil {
+			return err
+		}
+	}
+	for _, r := range plan.leaving {
+		if _, err := insertManagedRow(tx, vid, r); err != nil {
+			return err
+		}
+	}
+	if err := ensureSparsePending(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM sparse_pending"); err != nil {
+		return err
+	}
+	for _, outcome := range plan.pending {
+		if err := outcome.save(tx); err != nil {
 			return err
 		}
 	}
@@ -330,17 +355,38 @@ func (c *Checkout) restoreConeMetadata(vid libfossil.FslID, plan conePlan) error
 }
 
 func (c *Checkout) applyConeChange(tx *sql.Tx, vid libfossil.FslID, next *cone.Cone, plan conePlan) error {
+	if err := ensureSparsePending(tx); err != nil {
+		return err
+	}
 	for _, r := range plan.entering {
-		mtime, err := c.extractSingleFile(r.Pathname, r.MRID, r.IsExe, r.IsLink, false)
+		id, err := insertManagedRow(tx, vid, r)
 		if err != nil {
 			return err
 		}
-		if err := c.recordMTime(tx, vid, r.Pathname, r.MRID, mtime); err != nil {
+		if !r.IsRemoved() {
+			mtime, err := c.extractSingleFile(r.Pathname, r.MRID, r.IsExe, r.IsLink, false)
+			if err != nil {
+				return err
+			}
+			if err := c.recordMTime(tx, vid, r.Pathname, r.MRID, mtime); err != nil {
+				return err
+			}
+		}
+		if step, ok := plan.merges[r.Pathname]; ok {
+			step.row.ID = id
+			if err := c.applyMergeStep(tx, vid, step); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM sparse_pending WHERE vid=? AND pathname=?", int64(vid), r.Pathname); err != nil {
 			return err
 		}
 	}
 	for _, r := range plan.leaving {
 		if err := c.dematerialize(r.Pathname); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM vfile WHERE id=?", r.ID); err != nil {
 			return err
 		}
 	}
@@ -354,11 +400,15 @@ func (c *Checkout) planConeChange(vid libfossil.FslID, next *cone.Cone) (conePla
 	if err := c.refreshChanged(vid); err != nil {
 		return conePlan{}, err
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.effectiveRows(vid)
 	if err != nil {
 		return conePlan{}, err
 	}
-	plan := conePlan{mtimes: make(map[string]int64)}
+	plan := conePlan{mtimes: make(map[string]int64), merges: make(map[string]mergeStep)}
+	plan.pending, err = c.snapshotPending()
+	if err != nil {
+		return conePlan{}, err
+	}
 	var atRisk []string
 	for _, r := range rows {
 		was, now := c.covers(r.Pathname), next == nil || next.Covers(r.Pathname)
@@ -373,15 +423,25 @@ func (c *Checkout) planConeChange(vid libfossil.FslID, next *cone.Cone) (conePla
 			}
 			plan.leaving = append(plan.leaving, r)
 		case !was && now:
-			if r.IsRemoved() {
-				continue
+			if !r.IsRemoved() {
+				if err := c.checkEntering(r); err != nil {
+					return conePlan{}, err
+				}
 			}
-			if err := c.checkEntering(r); err != nil {
-				return conePlan{}, err
+			for _, outcome := range plan.pending {
+				if outcome.row.Pathname == r.Pathname && outcome.unresolved != 0 {
+					step, err := c.planEnteringConflict(vid, r, outcome)
+					if err != nil {
+						return conePlan{}, err
+					}
+					plan.merges[r.Pathname] = step
+				}
 			}
 			var mtime int64
-			if err := c.db.QueryRow("SELECT COALESCE(mtime,0) FROM vfile WHERE id = ?", r.ID).Scan(&mtime); err != nil {
-				return conePlan{}, err
+			if r.ID > 0 {
+				if err := c.db.QueryRow("SELECT COALESCE(mtime,0) FROM vfile WHERE id = ?", r.ID).Scan(&mtime); err != nil {
+					return conePlan{}, err
+				}
 			}
 			plan.mtimes[r.Pathname] = mtime
 			plan.entering = append(plan.entering, r)

@@ -64,7 +64,7 @@ func (c *Checkout) revertAll(vid libfossil.FslID, callback func(string, RevertCh
 		panic("checkout.revertAll: negative vid")
 	}
 
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.effectiveRows(vid)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (c *Checkout) revertPaths(
 	for _, p := range paths {
 		named[p] = true
 	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.effectiveRows(vid)
 	if err != nil {
 		return err
 	}
@@ -339,7 +339,7 @@ func (c *Checkout) applyRevert(
 		}
 	}
 	for _, s := range steps {
-		if s.action != revertUndoRename {
+		if s.recordOnly || s.action != revertUndoRename {
 			continue
 		}
 		if _, err := tx.Exec(
@@ -356,8 +356,10 @@ func (c *Checkout) applyRevert(
 			if s.action == revertUndoRename {
 				name, change = s.row.RenamedFrom(), RevertRename
 			}
-			if err := c.restoreCommitted(tx, s.row.ID, name, paths[i], s.row.RID); err != nil {
-				return err
+			if !s.recordOnly {
+				if err := c.restoreCommitted(tx, s.row.ID, name, paths[i], s.row.RID); err != nil {
+					return err
+				}
 			}
 		case revertUnmanage:
 			change = RevertUnmanage
@@ -382,6 +384,10 @@ func (c *Checkout) applyRevert(
 // merge added is removed with its row, and an add or a displaced row leaves
 // vfile, its file left on disk.
 func (c *Checkout) vacateRevertRow(tx *sql.Tx, s revertStep) error {
+	if s.recordOnly {
+		_, err := tx.Exec("DELETE FROM sparse_pending WHERE pathname=?", s.row.Pathname)
+		return err
+	}
 	switch s.action {
 	case revertRestore:
 		return nil

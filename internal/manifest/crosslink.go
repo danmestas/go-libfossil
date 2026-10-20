@@ -299,8 +299,8 @@ func Crosslink(r *repo.Repo) (int, error) {
 }
 
 // CrosslinkContext is a one-shot ReceiveLinker: callers that do not receive
-// blobs incrementally get the same candidate ordering, cache, and single repair
-// gate as a clone, without retaining a linker beyond this call.
+// blobs incrementally get the same candidate ordering, cache, and per-batch
+// repair gates as a clone, without retaining a linker beyond this call.
 //
 // Each sweep batch runs the repair gate before it commits (linkTx), as each
 // phantom-fill cascade batch does (AfterDephantomize, AfterDephantomizeBatch),

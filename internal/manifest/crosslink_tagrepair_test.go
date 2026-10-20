@@ -352,6 +352,64 @@ func assertFullyPropagated(t *testing.T, r *repo.Repo, where string) {
 	}
 }
 
+// A caller-owned transaction leaves its repair to Finalize. If cancellation
+// and a failing gate coincide, retrying the same linker must keep both that
+// committed repair schedule and the normal candidates the cancellation skipped.
+func TestReceiveLinkerFinalizeRetryKeepsPendingRepairAndCandidates(t *testing.T) {
+	r := setupTestRepo(t)
+	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c1 := storeCheckin(t, r, "c1", "trunk", base)
+	if _, err := Crosslink(r); err != nil {
+		t.Fatalf("Crosslink c1: %v", err)
+	}
+	body, c2 := buildCheckin(t, r, "c2", base.Add(time.Minute), nil, c1)
+	rid, _, err := blob.Store(r.DB(), body)
+	if err != nil {
+		t.Fatalf("blob.Store(c2): %v", err)
+	}
+	linker, err := NewReceiveLinker(r)
+	if err != nil {
+		t.Fatalf("NewReceiveLinker: %v", err)
+	}
+	if err := r.WithTx(func(tx *db.Tx) error {
+		return linker.LinkStored(context.Background(), tx, rid, c2, body)
+	}); err != nil {
+		t.Fatalf("caller-owned transaction: %v", err)
+	}
+	c3 := storeCheckin(t, r, "c3", "", base.Add(2*time.Minute), c2)
+	before := linker.state.sched.mark()
+	if !before.owed || before.parents != 1 {
+		t.Fatalf("pending repair = %+v, want one parent and an owed gate", before)
+	}
+
+	restore := failPropagation(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := linker.Finalize(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Finalize = %v, want cancellation", err)
+	}
+	if got := linker.state.sched.mark(); got != before {
+		t.Fatalf("failed repair changed schedule: got %+v, want %+v", got, before)
+	}
+	var events int
+	if err := r.DB().QueryRow("SELECT count(*) FROM event WHERE objid=?",
+		ridOf(t, r, c3)).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("c3 events after cancellation = %d, %v; want 0", events, err)
+	}
+
+	restore()
+	if _, err := linker.Finalize(context.Background()); err != nil {
+		t.Fatalf("Finalize retry: %v", err)
+	}
+	if got := linker.state.sched.mark(); got.owed || got.parents != 0 {
+		t.Fatalf("successful Finalize kept pending work: %+v", got)
+	}
+	assertCheckinTags(t, r, "c2", []string{"branch=trunk/2"})
+	assertCheckinTags(t, r, "c3", []string{"branch=trunk/2"})
+	assertFullyPropagated(t, r, "after Finalize retry")
+	assertMatchesFullRebuild(t, r)
+}
+
 // failPropagation makes the gate's propagation step fail until the returned
 // func is called.
 func failPropagation(t *testing.T) (restore func()) {

@@ -322,9 +322,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	// clone's sweep is (#120): this runs after the round loop, so it has no
 	// round boundary of its own at which a cancelled context could be noticed.
 	// fossil runs manifest_crosslink_end inside each round's transaction
-	// (xfer.c); here the repair runs once, after the rounds, in its own
-	// transaction, so that a cancelled sweep cannot roll back a committed
-	// reply. The phantom-fill cascades need no repair here: each cascade batch
+	// (xfer.c); here each sweep batch repairs in its own transaction, so a
+	// cancelled sweep cannot roll back a committed reply. The phantom-fill
+	// cascades need no repair here: each cascade batch
 	// repairs leaves and propagated tags before it commits, as fossil's
 	// per-round manifest_crosslink_end does (src/xfer.c), so a round that fails
 	// after earlier rounds' cascades committed leaves no check-in with an event

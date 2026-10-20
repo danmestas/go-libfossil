@@ -98,7 +98,7 @@ func TestStashRepointedSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	var isLink int64
-	if err := s.ckout.QueryRow("SELECT isLink FROM stashfile WHERE newname='link'").Scan(&isLink); err != nil {
+	if err := s.ckout.QueryRow("SELECT CAST(isLink AS INTEGER) FROM stashfile WHERE newname='link' AND typeof(isLink)='integer'").Scan(&isLink); err != nil {
 		t.Fatal(err)
 	}
 	if isLink != 1 {

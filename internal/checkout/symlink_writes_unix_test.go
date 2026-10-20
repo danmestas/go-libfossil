@@ -88,7 +88,7 @@ func TestUndoUpdateRestoresSymlink(t *testing.T) {
 	}
 	wantLink(t, co.dir, "link", "plain.txt")
 	var isLink int64
-	if err := co.db.QueryRow("SELECT isLink FROM undo WHERE pathname='link'").Scan(&isLink); err != nil {
+	if err := co.db.QueryRow("SELECT CAST(isLink AS INTEGER) FROM undo WHERE pathname='link' AND typeof(isLink)='integer'").Scan(&isLink); err != nil {
 		t.Fatal(err)
 	}
 	if isLink != 1 {

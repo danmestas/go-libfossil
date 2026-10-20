@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -113,7 +114,29 @@ func buildSQLDSN(path string, pragmas map[string]string) string {
 		}
 		return path
 	}
-	return appendURIParamString(registered.BuildDSN(path, pragmas), wasmDSNSuffix())
+	return appendURIParamString(busyTimeoutFirst(registered.BuildDSN(path, pragmas)), wasmDSNSuffix())
+}
+
+// busyTimeoutFirst moves the DSN's busy_timeout pragma ahead of its other
+// _pragma parameters. The drivers run those in DSN order, and build it from a
+// map, so the order varied by open; a pragma run before busy_timeout fails at
+// once with "database is locked" while another process holds a lock, instead
+// of waiting.
+func busyTimeoutFirst(dsn string) string {
+	base, query, ok := strings.Cut(dsn, "?")
+	if !ok {
+		return dsn
+	}
+	params := strings.Split(query, "&")
+	for i, p := range params {
+		if strings.HasPrefix(p, "_pragma=busy_timeout(") {
+			first := slices.IndexFunc(params, func(q string) bool { return strings.HasPrefix(q, "_pragma=") })
+			copy(params[first+1:i+1], params[first:i])
+			params[first] = p
+			break
+		}
+	}
+	return base + "?" + strings.Join(params, "&")
 }
 
 func appendURIParamString(dsn, params string) string {

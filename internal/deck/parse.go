@@ -509,7 +509,7 @@ func parseFCard(d *Deck, tokens []string) error {
 	// sort-order check above, as fossil does (src/manifest.c, nFile--). The
 	// dropped card is never stored, so the next card's sort check compares
 	// against the previous retained file.
-	if fileIsReservedName(fc.Name) {
+	if IsReservedName(fc.Name) {
 		return nil
 	}
 	d.F = append(d.F, fc)

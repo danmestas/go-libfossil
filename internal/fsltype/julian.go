@@ -50,6 +50,14 @@ func JulianDayFromMillis(millis int64) float64 {
 	return float64(millis+julianEpochMillis) / millisPerDay
 }
 
+// MillisFromJulianDay returns the time a Julian day names, as milliseconds
+// since the Unix epoch, converted exactly as SQLite's date.c does:
+// (sqlite3_int64)(r*86400000.0+0.5), less the epoch. Every Julian day is
+// positive, so the cast truncates where floor would.
+func MillisFromJulianDay(jd float64) int64 {
+	return int64(jd*millisPerDay+0.5) - julianEpochMillis
+}
+
 // TextJulianDayFromMillis returns the Julian day fossil stores where it writes
 // one as SQL text: event, plink, attachment and forumpost times.
 func TextJulianDayFromMillis(millis int64) float64 {

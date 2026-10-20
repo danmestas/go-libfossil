@@ -68,12 +68,6 @@ func WorktreePathname(z string) bool {
 	return simplePathname(z) && strings.IndexByte(z, '\\') < 0 && utf8.ValidString(z)
 }
 
-// ReservedName reports whether name is one of fossil's reserved checkout
-// filenames (see fileIsReservedName), which no tracked path may be.
-func ReservedName(name string) bool {
-	return fileIsReservedName(name)
-}
-
 // dotElementAt reports whether the path element beginning at index start is
 // exactly "." or "..", i.e. one or two dots terminated by '/' or end of string.
 func dotElementAt(z string, start int) bool {
@@ -113,13 +107,13 @@ func wikiNameWellformed(z string) bool {
 	return true
 }
 
-// fileIsReservedName reports whether name is one of fossil's reserved
+// IsReservedName reports whether name is one of fossil's reserved
 // repository filenames, matching file_is_reserved_name (src/file.c): _FOSSIL_
 // or .fslckout, in either case, optionally with a -wal, -shm or -journal
 // suffix, either at the root or as the last component of a path. §4.6.3: such
 // an F-card is silently dropped from a manifest after the sort-order check,
 // not rejected.
-func fileIsReservedName(name string) bool {
+func IsReservedName(name string) bool {
 	n := len(name)
 	if n < 8 { // len("_FOSSIL_")
 		return false

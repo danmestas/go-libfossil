@@ -108,7 +108,7 @@ func validateMember(m string) error {
 	if len(m) > MaxMemberLen || !deck.WorktreePathname(m) {
 		return fmt.Errorf("%w: %q", ErrInvalidMember, m)
 	}
-	if deck.ReservedName(m) {
+	if deck.IsReservedName(m) {
 		return fmt.Errorf("%w: %q", ErrReservedMember, m)
 	}
 	return nil

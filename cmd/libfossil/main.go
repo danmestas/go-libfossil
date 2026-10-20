@@ -1,6 +1,10 @@
 package main
 
 import (
+	"errors"
+	"fmt"
+	"os"
+
 	"github.com/alecthomas/kong"
 	"github.com/danmestas/go-libfossil/cli"
 )
@@ -22,11 +26,23 @@ type CLI struct {
 
 func main() {
 	var c CLI
-	ctx := kong.Parse(&c,
+	parser := kong.Must(&c,
 		kong.Name("libfossil"),
 		kong.Description("Fossil-compatible repository tool (pure Go)"),
 		kong.UsageOnError(),
 	)
-	err := ctx.Run(&c.Globals)
+	ctx, err := parser.Parse(os.Args[1:])
+	if err != nil {
+		// A usage error prints the usage with the error, on stderr, and
+		// exits 80: stdout carries only a command's output.
+		parser.Stdout = parser.Stderr
+		parser.FatalIfErrorf(err)
+	}
+	err = ctx.Run(&c.Globals)
+	var exit *cli.ExitError
+	if errors.As(err, &exit) {
+		fmt.Fprintf(os.Stderr, "libfossil: %v\n", exit)
+		os.Exit(exit.Code)
+	}
 	ctx.FatalIfErrorf(err)
 }

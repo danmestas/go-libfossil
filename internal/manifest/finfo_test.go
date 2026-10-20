@@ -434,3 +434,31 @@ func TestFileAt_WithContentVerification(t *testing.T) {
 		}
 	}
 }
+
+// TestFileHistory_SameTimeOrdersByRIDAndLimits pins the order of check-ins
+// that share a millisecond: the later one first, so a limit keeps it.
+func TestFileHistory_SameTimeOrdersByRIDAndLimits(t *testing.T) {
+	r := setupTestRepo(t)
+	ts := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+
+	rid1, _, err := Checkin(r, CheckinOpts{
+		Files: []File{{Name: "a.txt", Content: []byte("v1")}}, Comment: "one", User: "u", Time: ts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid2, _, err := Checkin(r, CheckinOpts{
+		Files: []File{{Name: "a.txt", Content: []byte("v2")}}, Comment: "two", User: "u", Time: ts, Parent: rid1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	versions, err := FileHistory(r, FileHistoryOpts{Path: "a.txt", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 1 || versions[0].CheckinRID != rid2 {
+		t.Fatalf("FileHistory limit 1 = %+v, want the later check-in %d", versions, rid2)
+	}
+}

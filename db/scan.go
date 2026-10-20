@@ -6,15 +6,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// julianEpoch is the Julian Day Number for the Unix epoch (1970-01-01 12:00:00 UTC).
-const julianEpoch = 2440587.5
-
-// millisPerDay is the number of milliseconds in one day. Every mtime this
-// codebase writes is at millisecond resolution (TimeToJulian rounds to whole
-// millis), so it is the grid the time.Time branch recovers a scanned instant
-// onto.
-const millisPerDay = 86400.0 * 1000.0
-
 // ScanJulianDay converts a scanned mtime value to a float64 Julian Day Number.
 // SQLite drivers return mtime differently: modernc returns float64, ncruces
 // returns time.Time for DATETIME/TIMESTAMP/DATE columns. Scan the column into
@@ -68,16 +59,19 @@ func ScanTextJulianDay(v any) (float64, bool) {
 	return ScanJulianDay(v)
 }
 
-// ScanTime converts a scanned mtime value to time.Time.
+// ScanTime converts a scanned mtime value to time.Time, at the millisecond
+// SQLite's date functions give it: the time a check-in's D card records.
 // Same driver-compatibility rationale as ScanJulianDay.
 func ScanTime(v any) (time.Time, bool) {
 	switch v := v.(type) {
 	case time.Time:
-		return v, true
+		// The driver converted the stored day through its own REAL
+		// arithmetic; see timeToJulian.
+		return v.Round(time.Millisecond).UTC(), true
 	case float64:
-		return julianToTime(v), true
+		return fsltype.JulianToTime(v), true
 	case int64:
-		return julianToTime(float64(v)), true
+		return fsltype.JulianToTime(float64(v)), true
 	default:
 		return time.Time{}, false
 	}
@@ -102,16 +96,6 @@ func ScanInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-// julianToTime converts a julian day to a time.Time. Note this truncates toward
-// zero where timeToJulian rounds; the two are not inverses at sub-millisecond
-// resolution. Pre-existing and left alone deliberately — ScanTime's consumers
-// are display paths with no ordering boundary, and changing a conversion used
-// there is a separate change from the exactness ScanJulianDay's callers need.
-func julianToTime(jd float64) time.Time {
-	millis := int64((jd - julianEpoch) * millisPerDay)
-	return time.UnixMilli(millis).UTC()
 }
 
 // julianDayFromMillis converts whole milliseconds since the Unix epoch to a

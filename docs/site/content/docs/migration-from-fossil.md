@@ -74,6 +74,9 @@ source tree.
 ### History and inspection
 
 - `repo timeline` — repository history.
+- `repo log --path` — the check-ins that changed a path (`fossil finfo`).
+- `repo snapshot` — commit one file's bytes onto trunk without a checkout;
+  see [Embedding the CLI](../cli-embedding).
 - `repo diff` — show changes vs. a version.
 - `repo annotate` / `repo blame` — annotate file lines with commit history.
 - `repo cat` — output artifact content.

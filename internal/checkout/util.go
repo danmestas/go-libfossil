@@ -113,7 +113,20 @@ func (c *Checkout) CheckFilename(name string) (string, error) {
 		return "", fmt.Errorf("checkout.CheckFilename: path escapes checkout: %s", name)
 	}
 
+	for _, component := range strings.Split(cleaned, string(filepath.Separator)) {
+		if sparseMetadataName(component) {
+			return "", fmt.Errorf("checkout.CheckFilename: reserved checkout metadata: %s", name)
+		}
+	}
 	return cleaned, nil
+}
+
+func sparseMetadataName(name string) bool {
+	switch strings.ToLower(name) {
+	case sparseDBName, sparseDBName + "-wal", sparseDBName + "-shm", sparseDBName + "-journal":
+		return true
+	}
+	return false
 }
 
 // IsRootedIn checks if an absolute path is within the checkout directory.

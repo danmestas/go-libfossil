@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,17 +21,9 @@ import (
 // The sparse worktree of draft-fossil-sparse-cone-00 §4.
 //
 // The cone is checkout-local state (§3.1), kept in the vvar table as the
-// lowercase hex of its canonical serialization. fossil ignores vvar names it
-// does not know, so a sparse checkout stays a fossil checkout.
-//
-// The vfile table remains the full record of the checked-out version, one
-// row per file, in cone or not: it is the baseline every commit and update
-// starts from, and fossil reads it as such. What the cone narrows is the
-// managed view of that record (managedRows) and what reaches the disk.
-// fossil opening a sparse checkout therefore sees the uncovered files as
-// MISSING, refuses to commit until they are restored, and restores them on
-// update or revert: it can densify the tree, never commit the uncovered
-// files away.
+// lowercase hex of its canonical serialization. Sparse metadata uses a
+// separate checkout marker so native Fossil cannot interpret uncovered
+// records as missing or deleted working files.
 
 // coneVVar is the vvar holding the cone; absent means dense.
 const coneVVar = "sparse-cone"
@@ -67,14 +60,15 @@ func readCone(ckdb *sql.DB) (*cone.Cone, error) {
 }
 
 // writeCone stores c, or removes the stored cone when c is nil.
-func writeCone(ckdb *sql.DB, c *cone.Cone) error {
+func writeCone(ckdb sqlExecer, c *cone.Cone) error {
 	if c == nil {
 		if _, err := ckdb.Exec("DELETE FROM vvar WHERE name = ?", coneVVar); err != nil {
 			return fmt.Errorf("clear sparse cone: %w", err)
 		}
 		return nil
 	}
-	return setVVar(ckdb, coneVVar, hex.EncodeToString(c.Serialize()))
+	_, err := ckdb.Exec("REPLACE INTO vvar(name,value) VALUES(?,?)", coneVVar, hex.EncodeToString(c.Serialize()))
+	return err
 }
 
 // Cone returns the checkout's cone, or nil for a dense checkout.
@@ -240,6 +234,7 @@ type ConeChange struct {
 type conePlan struct {
 	entering []vfile.Row // rows the new cone covers and the old one did not
 	leaving  []vfile.Row // rows the old cone covers and the new one does not
+	mtimes   map[string]int64
 }
 
 // SetCone replaces the checkout's cone; nil returns it to dense. Replacing
@@ -267,21 +262,89 @@ func (c *Checkout) SetCone(next *cone.Cone) (ConeChange, error) {
 			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 		}
 	}
-	for _, r := range plan.entering {
-		if err := c.materialize(vid, r); err != nil {
+	if next == nil && filepath.Base(c.dbPath) != PreferredDBName() {
+		if err := checkMarkerTarget(filepath.Join(filepath.Dir(c.dbPath), PreferredDBName())); err != nil {
 			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 		}
 	}
-	if err := writeCone(c.db, next); err != nil {
+	change := plan.change()
+	names := append(append([]string(nil), change.Materialized...), change.Dematerialized...)
+	saved, err := c.readFilesUndo(names)
+	if err != nil {
 		return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 	}
-	c.cone = next
-	for _, r := range plan.leaving {
-		if err := c.dematerialize(r.Pathname); err != nil {
+	oldName := filepath.Base(c.dbPath)
+	if next != nil {
+		if err := c.moveMarker(sparseDBName); err != nil {
 			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 		}
 	}
-	return plan.change(), nil
+	tx, err := c.db.Begin()
+	if err == nil {
+		err = c.applyConeChange(tx, vid, next, plan)
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			err = errors.Join(err, tx.Rollback())
+		}
+	}
+	if err != nil {
+		restoreErr := c.rollBackUpdate(saved)
+		if restoreErr == nil && filepath.Base(c.dbPath) != oldName {
+			restoreErr = c.moveMarker(oldName)
+		}
+		return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", errors.Join(err, restoreErr))
+	}
+	if next == nil {
+		if err := c.moveMarker(PreferredDBName()); err != nil {
+			if filepath.Base(c.dbPath) == PreferredDBName() {
+				if moveErr := c.moveMarker(sparseDBName); moveErr != nil {
+					c.cone = nil
+					return change, fmt.Errorf("checkout.SetCone: dense transition completed but marker durability failed: %w", errors.Join(err, moveErr))
+				}
+			}
+			metadataErr := c.restoreConeMetadata(vid, plan)
+			restoreErr := c.rollBackUpdate(saved)
+			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", errors.Join(err, metadataErr, restoreErr))
+		}
+	}
+	c.cone = next
+	return change, nil
+}
+
+func (c *Checkout) restoreConeMetadata(vid libfossil.FslID, plan conePlan) error {
+	tx, err := c.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, r := range plan.entering {
+		if _, err := tx.Exec("UPDATE vfile SET mtime = ? WHERE vid = ? AND pathname = ?", plan.mtimes[r.Pathname], int64(vid), r.Pathname); err != nil {
+			return err
+		}
+	}
+	if err := writeCone(tx, c.cone); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (c *Checkout) applyConeChange(tx *sql.Tx, vid libfossil.FslID, next *cone.Cone, plan conePlan) error {
+	for _, r := range plan.entering {
+		mtime, err := c.extractSingleFile(r.Pathname, r.MRID, r.IsExe, r.IsLink, false)
+		if err != nil {
+			return err
+		}
+		if err := c.recordMTime(tx, vid, r.Pathname, r.MRID, mtime); err != nil {
+			return err
+		}
+	}
+	for _, r := range plan.leaving {
+		if err := c.dematerialize(r.Pathname); err != nil {
+			return err
+		}
+	}
+	return writeCone(tx, next)
 }
 
 // planConeChange sorts version vid's record into the rows a change to next
@@ -295,7 +358,7 @@ func (c *Checkout) planConeChange(vid libfossil.FslID, next *cone.Cone) (conePla
 	if err != nil {
 		return conePlan{}, err
 	}
-	var plan conePlan
+	plan := conePlan{mtimes: make(map[string]int64)}
 	var atRisk []string
 	for _, r := range rows {
 		was, now := c.covers(r.Pathname), next == nil || next.Covers(r.Pathname)
@@ -316,6 +379,11 @@ func (c *Checkout) planConeChange(vid libfossil.FslID, next *cone.Cone) (conePla
 			if err := c.checkEntering(r); err != nil {
 				return conePlan{}, err
 			}
+			var mtime int64
+			if err := c.db.QueryRow("SELECT COALESCE(mtime,0) FROM vfile WHERE id = ?", r.ID).Scan(&mtime); err != nil {
+				return conePlan{}, err
+			}
+			plan.mtimes[r.Pathname] = mtime
 			plan.entering = append(plan.entering, r)
 		}
 	}

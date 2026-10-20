@@ -28,12 +28,13 @@ import (
 // A Checkout owns the checkout DB (*sql.DB) but NOT the repo — the caller
 // owns the repo lifecycle.
 type Checkout struct {
-	db   *sql.DB
-	repo *repo.Repo
-	env  *simio.Env
-	obs  Observer
-	dir  string
-	cone *cone.Cone // nil for a dense checkout
+	db     *sql.DB
+	repo   *repo.Repo
+	env    *simio.Env
+	obs    Observer
+	dir    string
+	dbPath string
+	cone   *cone.Cone // nil for a dense checkout
 
 	checkinQueue map[string]bool // in-memory staging queue (session-scoped)
 }
@@ -163,12 +164,13 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 	}
 
 	c := &Checkout{
-		db:   ckdb,
-		repo: r,
-		env:  env,
-		obs:  obs,
-		dir:  dir,
-		cone: opts.Cone,
+		db:     ckdb,
+		dbPath: dbPath,
+		repo:   r,
+		env:    env,
+		obs:    obs,
+		dir:    dir,
+		cone:   opts.Cone,
 	}
 	if err := c.loadInitialVFile(); err != nil {
 		ckdb.Close()
@@ -277,12 +279,13 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 	}
 
 	c := &Checkout{
-		db:   ckdb,
-		repo: r,
-		env:  env,
-		obs:  obs,
-		dir:  filepath.Dir(dbPath),
-		cone: sparse,
+		db:     ckdb,
+		dbPath: dbPath,
+		repo:   r,
+		env:    env,
+		obs:    obs,
+		dir:    filepath.Dir(dbPath),
+		cone:   sparse,
 	}
 	if err := c.ValidateFingerprint(); err != nil {
 		ckdb.Close()
@@ -448,7 +451,13 @@ func checkoutMarker(storage simio.Storage, dir string) (string, error) {
 	var found string
 	for _, name := range DBNames() {
 		candidate := filepath.Join(dir, name)
-		_, err := storage.Stat(candidate)
+		stat := storage.Stat
+		if local, ok := storage.(interface {
+			Lstat(string) (os.FileInfo, error)
+		}); ok {
+			stat = local.Lstat
+		}
+		_, err := stat(candidate)
 		if os.IsNotExist(err) {
 			continue
 		}

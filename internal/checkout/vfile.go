@@ -670,6 +670,9 @@ func (c *Checkout) walkDir(dir string) (map[string]bool, error) {
 
 		for _, entry := range entries {
 			name := entry.Name()
+			if sparseMetadataName(name) {
+				continue
+			}
 
 			// Skip checkout databases and VCS directories
 			switch name {

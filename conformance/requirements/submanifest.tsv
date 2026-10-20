@@ -14,6 +14,13 @@
 # rule moved to 8.1, which the enable warning states.
 # The e03d91943e57 revision adds sparse canonical-writing obligations in
 # 6.2 and 6.4 and required MAX, final-merge and parent-basis vectors in A.6.
+# SM-7.2-3 applicability: Repo.Commit and Checkout.Checkin are local operations;
+# Sync transfers existing artifacts and has no pending-commit callback. This
+# client commits before or after transfer, never during the exchange; section
+# 7.2 explicitly excludes commit-first/push-after clients from that conditional.
+# Receipt, ungated transfer, unchanged settings and exchange isolation remain
+# executable obligations. Any future commit-in-exchange path must add tests
+# enforcing the unchanged in-session emission conditional before it is shipped.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
 # draft	draft-fossil-submanifests-00.txt	99ea094690fe13866a92edb07885a4a87b7ce2d04a26a93eb43ac2a94ac6daee
 SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.
@@ -73,7 +80,7 @@ SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates
 SM-7.1-2	7.1	Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.
 SM-7.2-1	7.2	A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer that has not sent pragma send-submanifests, whatever version it announces, with an explicit error and never by converting, downgrading or silently omitting it; a server decides from the request it answers, a client from the replies of its session.
 SM-7.2-2	7.2	A server whose enable-submanifests setting is false sends pragma avoid-submanifests in every reply, clone replies included, in the leading pragma run after server-version.
-SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in a commit created during that session; a commit created outside a session follows the client's own setting, and the pragma does not gate receipt.	receipt, unchanged local settings, exchange isolation, outside-session emission and ungated receipt are exercised; no commit is pending during Sync, so the in-session conditional has no executable client path (7.2 explicitly exempts commit-first/push-after clients)
+SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in a commit created during that session; a commit created outside a session follows the client's own setting, and the pragma does not gate receipt.
 SM-7.2-4	7.2	A peer that reads sub-manifests sends pragma send-submanifests: a client in every request, right after client-version, and a server in every reply, clone replies included, right after server-version, whatever the enable-submanifests setting and the avoid-submanifests pragma; the version it announces is the fossil release whose protocol it speaks.
 SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
 SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.

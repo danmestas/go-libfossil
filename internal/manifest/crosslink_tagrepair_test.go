@@ -177,8 +177,11 @@ func TestRepairConvergesParentLinkedAfterChild(t *testing.T) {
 }
 
 // A reparent's new parent is propagated from: the batch records the parents
-// the rewritten plink rows name, so c3 moves to c2's branch.
-func TestRepairConvergesAfterReparent(t *testing.T) {
+// the rewritten plink rows name, so c3 moves to c2's branch. Here both parents
+// carry only the branch tag, and the new parent's is the newer, so the result
+// matches a rebuild. That does not hold in general: a propagating tag only the
+// old parent carried is never removed (see ReparentCheckins).
+func TestRepairPropagatesFromReparentedParent(t *testing.T) {
 	r := setupTestRepo(t)
 	base := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 

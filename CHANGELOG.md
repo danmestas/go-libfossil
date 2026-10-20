@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neither a sweep nor a sync runs a gate at its end, or a repair after a
   failed round. A rebuild links every check-in, so it propagates from every
   parent as before. Tracked in #432.
+- A sync that fails after earlier rounds' phantom fills linked artifacts no
+  longer runs a crosslink sweep before it returns. The artifacts earlier
+  rounds committed outside a phantom fill stay unlinked until the next
+  crosslink (the next sync, clone or `rebuild`), which links them. No tag or
+  leaf state is lost: everything linked was repaired in its own transaction.
 - Check-ins, tags and branches record their time to the millisecond, as
   fossil and zit write it. The default clock time, which carried nanoseconds
   that zit cannot read (danmestas/zit#244), is truncated, as fossil reads its

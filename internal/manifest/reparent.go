@@ -38,9 +38,21 @@ import (
 // transaction runs (issue #432).
 //
 // The new primary parent of each rewritten check-in is recorded on parents,
-// so the gate's propagation reaches the check-in under its new parent.
-// fossil's manifest_reparent_checkin does not propagate after the rewrite; the
-// whole-repository pass this gate replaced did, and so does the gate.
+// so the gate's propagation reaches the check-in under its new parent. This
+// goes beyond fossil: manifest_reparent_checkin rewrites plink and mlink and
+// propagates nothing, so in fossil a reparented check-in inherits its new
+// parent's tags only when a later tag change or crosslink propagates from
+// that parent. The whole-repository pass this gate replaced propagated from
+// every parent, so it did the same as this does.
+//
+// Known divergence: a reparent never removes the tags the check-in and its
+// descendants inherited from the old parent. Propagation from the new parent
+// replaces a tag both parents carry (the branch tag) when the new parent's is
+// the newer, but a propagating tag only the old parent carried stays. Fossil's manifest_reparent_checkin
+// removes none either, and fossil's own rebuild is order-dependent here: the
+// tags a reparented check-in ends with depend on whether the old parent's tag
+// reached it before the rewrite. So an incremental crosslink that reparents
+// can differ from a rebuild in such inherited tags, as fossil's can.
 func ReparentCheckins(tx *db.Tx, parents *parentSet) error {
 	if tx == nil {
 		panic("manifest.ReparentCheckins: tx must not be nil")

@@ -142,6 +142,62 @@ func TestSparseCloneRefusalFatal(t *testing.T) {
 	}
 }
 
+func TestSparseServerTreeClone(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	kept := storeAndLink(t, r, []byte("covered tree file"))
+	out := storeAndLink(t, r, []byte("uncovered tree file"))
+	marshal := func(d *deck.Deck) string {
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return storeAndLink(t, r, data)
+	}
+	outsideLeaf := marshal(&deck.Deck{F: []deck.FileCard{{Name: "zzz/a", UUID: out}}})
+	insideLeaf := marshal(&deck.Deck{F: []deck.FileCard{{Name: "src/a", UUID: kept}}})
+	spine := marshal(&deck.Deck{C: "tree sparse", D: time.Now().UTC(), U: deck.User("u"), S: []deck.SubmanifestCard{{Name: "src/a", UUID: insideLeaf}, {Name: "zzz/a", UUID: outsideLeaf}}})
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
+	cards = append(cards, conePragmas(c)...)
+	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, card := range findCards[*xfer.CFileCard](resp) {
+		seen[card.UUID] = true
+	}
+	if seen[out] || seen[outsideLeaf] {
+		t.Fatalf("sent out-of-cone tree artifacts: %v", seen)
+	}
+	if !seen[kept] || !seen[insideLeaf] || !seen[spine] {
+		t.Fatalf("omitted tree keep set: %v", seen)
+	}
+	transport := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		resp, err := HandleSync(context.Background(), r, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}}
+	got, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "tree.fossil"), transport, CloneOpts{StoreCone: c, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer got.Close()
+	for _, uuid := range []string{kept, insideLeaf, spine} {
+		if _, ok := content.AvailableByUUID(got.DB(), uuid); !ok {
+			t.Fatalf("sparse tree clone lost %s", uuid)
+		}
+	}
+	if res.Elided == 0 {
+		t.Fatal("sparse tree clone reported no elision")
+	}
+}
+
 func TestSparseServerFlatClone(t *testing.T) {
 	r := setupSyncTestRepo(t)
 	kept := storeAndLink(t, r, []byte("keep me"))

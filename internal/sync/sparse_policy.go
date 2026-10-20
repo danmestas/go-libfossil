@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -17,41 +16,18 @@ import (
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
 // shared by covered and uncovered names is kept under either name.
 type sparseKeep struct {
-	cone  *cone.Cone
-	out   map[libfossil.FslID]bool
-	in    map[libfossil.FslID]bool
-	nodes map[string]bool
+	refs *content.ConeReferences
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
 	if c == nil {
 		return nil, nil
 	}
-	k := &sparseKeep{cone: c, out: map[libfossil.FslID]bool{}, in: map[libfossil.FslID]bool{}, nodes: map[string]bool{}}
-	rows, err := q.Query(`SELECT m.fid,f.name FROM mlink m JOIN filename f ON f.fnid=m.fnid WHERE m.fid>0
- UNION SELECT m.pid,f.name FROM mlink m JOIN filename f ON f.fnid=m.fnid WHERE m.pid>0`)
+	refs, err := content.LoadConeReferences(ctx, q, c)
 	if err != nil {
-		return nil, fmt.Errorf("sparse references: %w", err)
-	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		var rid libfossil.FslID
-		var name string
-		if err := rows.Scan(&rid, &name); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		if c.Covers(name) {
-			k.in[rid] = true
-		} else {
-			k.out[rid] = true
-		}
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
-	return k, nil
+	return &sparseKeep{refs: refs}, nil
 }
 
 func (h *handler) ensureSparseKeep() error {
@@ -68,7 +44,7 @@ func (h *handler) ensureSparseKeep() error {
 }
 
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
-	return k == nil || !k.out[rid] || k.in[rid]
+	return k == nil || !k.refs.Outside(rid)
 }
 
 // filterSparseReceived filters only artifacts this transfer newly acquired.

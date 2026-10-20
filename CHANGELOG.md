@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Sparse stores (draft-fossil-sparse-cone-00 §5, Appendix A step 3). The
+  new `Repo.SetStoreCone` and `Repo.StoreCone` methods set and read a
+  store cone, kept in a `storecone` table that exists only while a cone
+  is set. An artifact the store lacks is now classified as a transit
+  phantom, a shunned artifact or an elided phantom, by zit's rule: a
+  blob is elided when F cards name it only outside the cone and no held
+  delta uses it as its base. Elision is computed from the cone and never
+  stored. Changing the cone reclassifies; losing it, or a cone this
+  version cannot read, makes every elided phantom a transit phantom, and
+  the store heals toward dense. `fossil rebuild` drops the table, so it
+  heals there too. Sync never requests an elided phantom, as a client or
+  as a server. `verify.Report` gains `Phantoms` (transit) and `Elided`.
+  Elision is never an issue, so a store complete within its cone
+  verifies OK, and `Rebuild` keeps the cone. A commit over a sparse
+  store has no R card and carries the files the store lacks by hash.
+  `VerifyRCard` skips over a sparse store, and skips an absent R card. A
+  checkout opens over a sparse store when its own cone stays inside the
+  store's. Manifests, sub-manifest nodes and control artifacts are always
+  held, as zit holds them. Nothing yet fills a store sparsely: that
+  needs cone-scoped transfer, Appendix A step 4.
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds

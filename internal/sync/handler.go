@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -115,10 +116,12 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 
 // HandleOpts configures optional behavior for HandleSync.
 type HandleOpts struct {
-	Buggify      BuggifyChecker // nil in production.
-	Observer     Observer       // nil defaults to no-op.
-	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
-	Clock        simio.Clock    // time for the reply's timestamp comment and receipt; nil = real time
+	// PartialMirror permits clone requests beyond this store's cone.
+	PartialMirror bool
+	Buggify       BuggifyChecker // nil in production.
+	Observer      Observer       // nil defaults to no-op.
+	ContentCache  *content.Cache // nil = no caching; rid-keyed, so not across a rollback
+	Clock         simio.Clock    // time for the reply's timestamp comment and receipt; nil = real time
 	// RemoteAddr is the address the request came from, recorded with what it
 	// pushes (fossil's REMOTE_ADDR). "" takes the one WithRemoteAddr put in
 	// the context, if any.
@@ -146,7 +149,7 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -191,6 +194,10 @@ type remoteHasEntry struct {
 
 // handler holds per-request state while processing cards.
 type handler struct {
+	ctx             context.Context
+	cone            *cone.Cone
+	keep            *sparseKeep
+	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -422,6 +429,12 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// request with no client-version gets its reply's pragma run here, at
 	// the head; otherwise it follows server-version (handlePragma).
 	h.peerReadsTrees = sendsSubmanifests(req.Cards)
+	var coneErr error
+	h.cone, coneErr = requestCone(req.Cards)
+	if coneErr != nil {
+		h.fail(coneErr.Error())
+		return h.reply(), nil
+	}
 	if !hasClientVersion(req.Cards) {
 		h.emitCapabilityPragmas()
 	}
@@ -692,6 +705,19 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 	h.handleCloneCard(c)
 	if !h.cloneMode || h.fatal {
 		return nil
+	}
+	if !h.partialMirror {
+		have, err := content.StoreCone(h.repo.DB())
+		if err != nil {
+			return err
+		}
+		if !coneContains(have, h.cone) {
+			h.fail("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
+			return nil
+		}
+	}
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
 	}
 	if err := h.sendCloneUVCatalog(); err != nil {
 		return err
@@ -1155,7 +1181,7 @@ func (h *handler) requestPhantoms() error {
 		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
 	}
 	// draft-fossil-sparse-cone-00 §5.2: an elided phantom is never asked for.
-	elided, err := elidedPhantoms(h.repo.DB())
+	elided, err := elidedPhantoms(h.ctx, h.repo.DB())
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
@@ -1209,6 +1235,12 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	rid, ok := content.AvailableByUUID(h.repo.DB(), c.UUID)
 	if !ok {
 		return nil // blob not found — not fatal, skip.
+	}
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	if !h.keep.keeps(rid) {
+		return nil
 	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
@@ -1390,11 +1422,13 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 }
 
 func (h *handler) emitIGots() error {
-	// Emit igot for all non-phantom blobs so the client can discover
-	// everything the server has. Cluster generation is a client-side
-	// optimization for push; the server always advertises all blobs.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	// Sparse inventories advertise only the request's keep-set; announcing an
+	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
-		SELECT uuid FROM blob WHERE size >= 0
+		SELECT rid,uuid FROM blob WHERE size >= 0
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)
 		AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)`,
 	)
@@ -1405,9 +1439,13 @@ func (h *handler) emitIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
 		// Skip if the client already has this blob as public (non-private).
@@ -1448,8 +1486,11 @@ func (h *handler) emitIGots() error {
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
 func (h *handler) emitPrivateIGots() error {
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
 	rows, err := h.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return fmt.Errorf("handler: listing private blobs: %w", err)
@@ -1458,9 +1499,13 @@ func (h *handler) emitPrivateIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// Skip if the client already has this blob as private.
 		// If the client has it as public, we still emit the private igot so
@@ -1625,6 +1670,9 @@ func (h *handler) emitCloneBatch() error {
 			continue
 		}
 
+		if !h.keep.keeps(libfossil.FslID(rid)) {
+			continue
+		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 		if isPriv && !h.syncPrivate {
 			continue // skip private blob, don't count toward batch
@@ -1795,7 +1843,7 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 			return nil, err
 		}
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			(!info.priv || h.syncPrivate)
+			h.keep.keeps(src) && (!info.priv || h.syncPrivate)
 		if forwardable {
 			// Checked before sent: a withheld source is never on the wire,
 			// whatever an earlier chain recorded.

@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/shun"
@@ -69,6 +71,7 @@ func newPhantomStallError(phantoms map[string]bool) *PhantomStallError {
 
 // cloneSession holds the mutable state of a running clone.
 type cloneSession struct {
+	sparseReceived        map[string]bool
 	repo                  *repo.Repo
 	env                   *simio.Env
 	opts                  CloneOpts
@@ -139,6 +142,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = clearInheritedConfig(r); err != nil {
 		return
 	}
+	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
+		return
+	}
 
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
@@ -162,6 +168,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		phantoms:              make(map[string]bool),
 		availableDeltaSources: make(map[string]struct{}),
 		seqno:                 1,
+	}
+	if opts.StoreCone != nil {
+		cs.sparseReceived = map[string]bool{}
 	}
 	cs.obs = resolveObserver(opts.Observer)
 
@@ -205,6 +214,15 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 		return cloneResult, fmt.Errorf(
 			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
 	}
+	if cs.sparseReceived != nil {
+		if err := cs.repo.WithTx(func(tx *db.Tx) error {
+			var err error
+			cs.result.Elided, err = filterSparseReceived(ctx, tx, cs.sparseReceived, nil)
+			return err
+		}); err != nil {
+			return cloneResult, err
+		}
+	}
 	return cloneResult, cs.fillPhantoms(ctx, t)
 }
 
@@ -244,7 +262,7 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 	if !cs.opts.PullPhantoms {
 		return nil
 	}
-	missing, err := phantomUUIDs(cs.repo)
+	missing, err := phantomUUIDs(ctx, cs.repo)
 	if err != nil {
 		return err
 	}
@@ -268,7 +286,7 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 	if err != nil {
 		return fmt.Errorf("sync.Clone: pull missing artifacts: %w", err)
 	}
-	if missing, err = phantomUUIDs(cs.repo); err != nil {
+	if missing, err = phantomUUIDs(ctx, cs.repo); err != nil {
 		return err
 	}
 	if len(missing) > 0 {
@@ -278,17 +296,25 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 }
 
 // phantomUUIDs returns the artifacts the repository knows of but lacks.
-func phantomUUIDs(r *repo.Repo) (map[string]bool, error) {
+func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
+	a, err := elidedPhantoms(ctx, r.DB())
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.DB().Query(
-		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
+		"SELECT b.rid,b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
 	if err != nil {
 		return nil, fmt.Errorf("sync.Clone: query phantoms: %w", err)
 	}
 	missing := make(map[string]bool)
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, errors.Join(fmt.Errorf("sync.Clone: scan phantom: %w", err), rows.Close())
+		}
+		if a != nil && a.Class(rid) == content.Elided {
+			continue
 		}
 		missing[uuid] = true
 	}
@@ -427,6 +453,11 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 	// (src/xfer.c client_sync), as headerCards does for a sync (#351).
 	// Pragma: client-version, then send-submanifests (every round, §7.2)
 	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
+	sparse, err := localConePragmas(cs.repo.DB())
+	if err != nil {
+		return nil, err
+	}
+	cards = append(cards, sparse...)
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound
@@ -530,6 +561,24 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		return err // the round rolled back
 	}
 	cs.result.BlobsRecvd += filesRecvd
+	// An authentication challenge includes push codes, and a cosmetic error
+	// may accompany content or a clone cursor. An error alone is a refusal,
+	// not a successful empty clone (sparse-cone §5.3).
+	if filesRecvd == 0 && !cs.roundPush {
+		progress := false
+		var refusal string
+		for _, card := range msg.Cards {
+			switch c := card.(type) {
+			case *xfer.CloneSeqNoCard:
+				progress = true
+			case *xfer.ErrorCard:
+				refusal = c.Message
+			}
+		}
+		if refusal != "" && !progress {
+			return fmt.Errorf("sync.Clone: %s", refusal)
+		}
+	}
 	return cardErr
 }
 
@@ -747,6 +796,9 @@ func (cs *cloneSession) receiveContent(
 func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, payload []byte, storedBlob []byte) error {
 	if cs.pass == nil {
 		panic("sync.Clone: handleFile: pass must be set by processResponse")
+	}
+	if err := rememberSparseReceived(cs.repo.DB(), cs.sparseReceived, uuid); err != nil {
+		return err
 	}
 	if err := storeReceivedFile(ctx, cs.repo, cs.pass, uuid, deltaSrc, payload, storedBlob,
 		visibilityPublic, cs.linker); err != nil {

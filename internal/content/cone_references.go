@@ -62,6 +62,9 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 		return nil, err
 	}
 	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
 		var rid libfossil.FslID
 		var uuid string
 		if err := rows.Scan(&rid, &uuid); err != nil {
@@ -79,8 +82,9 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 			return err
 		}
 		if expandErr != nil {
+			p.required[uuid] = true
 			return nil
-		} // An unresolved delta proves no outside provenance.
+		} // Unreadable bytes may be structural; no outside proof permits deletion.
 		d, err := deck.Parse(data)
 		if err != nil {
 			return nil

@@ -120,6 +120,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo new` accepts the repository path as `-R`, as the other embedding
+  commands do (it had required the argument and exited 80), and a path whose
+  parent directory does not exist is refused with exit 1 and a message naming
+  the directory, where it had failed with a SQLite "out of memory" error. The
+  behaviour is documented in `cli-embedding.md`. Tracked in #451.
+- `repo log --path`, `repo cat --at` and `repo diff` match a PATH as fossil
+  does: they drop a leading `./`, a trailing `/` and doubled or `/./`
+  separators, and compare names with the repository's `case-sensitive`
+  setting (fossil's default when unset: off on macOS and Windows, on
+  elsewhere), so `notes/a.md` finds `Notes/A.md` when it is off. They had
+  rejected both with exit 2 and compared case-sensitively. Not found stays
+  exit 2, where fossil exits 1. Tracked in #451.
+- Opening a repository runs every pragma in a fixed order (`busy_timeout`,
+  `journal_mode`, `locking_mode`, `synchronous`, `foreign_keys`, then the
+  rest by name), not only `busy_timeout` first. Tracked in #451.
 - A stored Julian day converts to the millisecond SQLite's own date
   functions give it, `(sqlite3_int64)(r*86400000.0+0.5)`
   (`fsltype.MillisFromJulianDay`). `db.ScanTime` truncated, so most times it

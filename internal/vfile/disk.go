@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -237,40 +237,19 @@ func (d Disk) MTime(fullPath string) (int64, error) {
 // db_get falls back to global_config in ~/.fossil (`fossil settings
 // mtime-changes off --global`); go-libfossil reads no global fossil settings,
 // so a global value is not seen here.
-func BoolSetting(repo RowQuerier, name string, dflt bool) (bool, error) {
-	if repo == nil {
-		panic("vfile.BoolSetting: nil repo")
+func BoolSetting(q RowQuerier, name string, dflt bool) (bool, error) {
+	if q == nil {
+		panic("vfile.BoolSetting: nil querier")
 	}
 	var value sql.NullString
-	err := repo.QueryRow("SELECT value FROM config WHERE name = ?", name).Scan(&value)
+	err := q.QueryRow("SELECT value FROM config WHERE name = ?", name).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && !value.Valid) {
 		return dflt, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read %s: %w", name, err)
 	}
-	return settingBoolean(value.String, dflt), nil
-}
-
-// settingBoolean is fossil's db_get_boolean on a stored value: is_truth
-// ("on", "yes", "true" in any case, or a nonzero C atoi) gives true, is_false
-// ("off", "no", "false", "0" in any case) gives false, anything else dflt.
-func settingBoolean(value string, dflt bool) bool {
-	switch strings.ToLower(value) {
-	case "on", "yes", "true":
-		return true
-	case "off", "no", "false", "0":
-		return false
-	}
-	digits := strings.TrimLeft(value, " \t\n\v\f\r")
-	if digits != "" && (digits[0] == '+' || digits[0] == '-') {
-		digits = digits[1:]
-	}
-	digits = strings.TrimLeft(digits, "0")
-	if digits != "" && digits[0] >= '1' && digits[0] <= '9' {
-		return true // a nonzero atoi
-	}
-	return dflt
+	return repo.SettingBoolean(value.String, dflt), nil
 }
 
 // Remove deletes the file at fullPath, as fossil's file_delete does: a

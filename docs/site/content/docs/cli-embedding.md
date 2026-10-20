@@ -18,11 +18,15 @@ libfossil -R repo.fossil repo diff     [--json] A B [PATH]
 
 **log** lists the check-ins that changed the path, newest first, as `fossil finfo` does. `-n` caps the count; the default is all.
 
+**Paths.** `log --path`, `cat --at` and `diff` match a PATH as fossil does inside a check-out. They normalize it: a leading `./`, a trailing `/`, doubled `/` and `/./` or `/x/../` components are dropped, so `./Notes//A.md` and `Notes/A.md/` name `Notes/A.md`. They compare it with the repository's `case-sensitive` setting: when it is off, names that differ only in ASCII letter case are the same file, so `notes/a.md` finds `Notes/A.md`; `log` then merges the history of every name that matches, and `cat` reads the first matching file in the version. Without that setting the default is fossil's: off on macOS and Windows, on elsewhere. The setting is read from the repository only; a value set globally with `fossil settings --global` is not seen. A repository's names are never folded or rewritten, only matched. What is stored and printed is the name as the check-in recorded it.
+
+The exit status for a PATH or version that is not found is 2 in go-libfossil's own contract. `fossil` exits 1 for the same failures, so a caller that checks for 2 should not expect fossil's status.
+
 A rename ends a name's history, as it does in `fossil finfo`. After `a.md` is renamed to `b.md`, `log --path b.md` lists the check-ins that changed `b.md`, then the rename itself (`action` `renamed`, `prev_name` `a.md`), and stops: it does not continue into `a.md`'s history. To follow a file across renames, run `log` again with `prev_name`. `log --path a.md` lists the rename first, as the check-in that removed `a.md` (`action` `deleted`), then `a.md`'s own changes. That first row is the one difference from `fossil finfo`, which lists only check-ins that hold a version of the file.
 
 **cat** writes the file's bytes as VERSION holds them, as `fossil cat -r` does. VERSION is anything `repo resolve` accepts: `tip`, `trunk`, a branch, a uuid or a unique prefix of one. Without `--at`, `repo cat` still outputs an artifact by uuid.
 
-**diff** with two versions prints the unified diff between them for PATH, or for every file that differs when PATH is omitted. PATH is matched as `fossil diff --from A --to B PATH` matches it: a file of that name, or every file under a directory of that name, in either version, compared case-sensitively. A PATH that matches nothing in either version is not found (exit 2, as fossil fails with `not found`); a PATH that matches only unchanged files is an empty diff. With one or no version it compares the working directory, as before.
+**diff** with two versions prints the unified diff between them for PATH, or for every file that differs when PATH is omitted. PATH is matched as `fossil diff --from A --to B PATH` matches it: a file of that name, or every file under a directory of that name, in either version. A PATH that matches nothing in either version is not found (exit 2; fossil exits 1 with `not found`); a PATH that matches only unchanged files is an empty diff. With one or no version it compares the working directory, as before.
 
 ## Output
 

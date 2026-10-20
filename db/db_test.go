@@ -333,3 +333,27 @@ func TestOpenWithCustomPragmas(t *testing.T) {
 		t.Fatalf("journal_mode = %q, want wal (default should still apply)", mode)
 	}
 }
+
+// TestDSNSetsBusyTimeoutFirst: the drivers run the DSN's _pragma parameters
+// in order, and any pragma that touches the file before busy_timeout is set
+// fails at once with "database is locked" while another process writes. The
+// pragmas arrive as a map, so without an explicit order busy_timeout came
+// first in only some opens.
+func TestDSNSetsBusyTimeoutFirst(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		_, dsn := db.SQLDriverAndDSN("/tmp/x.fossil", db.OpenConfig{}, map[string]string{"mode": "ro"})
+		q := dsn[strings.IndexByte(dsn, '?')+1:]
+		var pragmas []string
+		for _, p := range strings.Split(q, "&") {
+			if strings.HasPrefix(p, "_pragma=") {
+				pragmas = append(pragmas, p)
+			}
+		}
+		if len(pragmas) == 0 || !strings.HasPrefix(pragmas[0], "_pragma=busy_timeout(") {
+			t.Fatalf("open %d: DSN %q runs %v before busy_timeout", i, dsn, pragmas)
+		}
+		if !strings.HasSuffix(dsn, "mode=ro") {
+			t.Fatalf("DSN %q lost the caller's params", dsn)
+		}
+	}
+}

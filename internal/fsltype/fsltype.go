@@ -3,7 +3,6 @@
 package fsltype
 
 import (
-	"math"
 	"time"
 )
 
@@ -70,19 +69,18 @@ func TimeToTextJulian(t time.Time) float64 {
 	return TextJulianDayFromMillis(t.UTC().UnixMilli())
 }
 
-// JulianToTime converts a Fossil Julian day number to time.Time.
+// JulianToTime converts a Fossil Julian day number to time.Time, at the
+// millisecond SQLite's own date functions give it (MillisFromJulianDay).
 //
-// Rounds to the nearest millisecond rather than truncating: a julian value
-// produced by TimeToJulian for an exact millisecond carries float64 error
-// on the order of 1e-10 days, which a plain int64() truncation can turn
-// into a full millisecond of drift when that error lands the value just
-// below the true integer. Rounding makes the pair a true round trip
+// Rounding rather than truncating matters: a Julian day stored for an exact
+// millisecond carries float64 error on the order of 1e-10 days, which a plain
+// truncation turns into a full millisecond of drift whenever the error lands
+// below the true value. Rounding makes the pair a true round trip
 // (TimeToJulian(JulianToTime(m)) == m) for any m that itself came from
 // TimeToJulian — the property the Timeline enumeration's composite
 // (mtime, rid) pagination cursor depends on.
 func JulianToTime(j float64) time.Time {
-	millis := int64(math.Round((j - julianEpoch) * 86400.0 * 1000.0))
-	return time.UnixMilli(millis).UTC()
+	return time.UnixMilli(MillisFromJulianDay(j)).UTC()
 }
 
 // Cursor is an opaque pagination token for a Timeline enumeration. Obtain

@@ -81,11 +81,6 @@ func FileHistory(r *repo.Repo, opts FileHistoryOpts) ([]FileVersion, error) {
 }
 
 func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVersion, error) {
-	limitClause := ""
-	if opts.Limit > 0 {
-		limitClause = fmt.Sprintf(" LIMIT %d", opts.Limit)
-	}
-
 	query := `
 		SELECT
 			m.mid,
@@ -102,7 +97,7 @@ func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVe
 		JOIN event e ON e.objid = m.mid
 		LEFT JOIN blob fb ON fb.rid = m.fid
 		WHERE m.fnid = ? AND NOT m.isaux
-		ORDER BY e.mtime DESC` + limitClause
+		ORDER BY e.mtime DESC, m.mid DESC`
 
 	rows, err := r.DB().Query(query, fnid)
 	if err != nil {
@@ -139,6 +134,11 @@ func fileHistoryByFnid(r *repo.Repo, fnid int64, opts FileHistoryOpts) ([]FileVe
 		}
 
 		versions = append(versions, v)
+		// The limit counts real changes, so it is applied here and not in
+		// SQL, where rows that merely list the file unchanged would use it up.
+		if opts.Limit > 0 && len(versions) == opts.Limit {
+			break
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("manifest.FileHistory: rows: %w", err)

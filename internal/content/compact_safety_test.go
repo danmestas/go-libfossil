@@ -147,13 +147,19 @@ func TestCompactStoreRejectsCorruptionAndIncompleteSpine(t *testing.T) {
 
 type compactCancelContext struct {
 	context.Context
-	cancel context.CancelFunc
-	polls  int
+	cancel  context.CancelFunc
+	db      *db.DB
+	rid     libfossil.FslID
+	demoted bool
 }
 
 func (c *compactCancelContext) Err() error {
-	c.polls++
-	if c.polls == 7 {
+	var size int
+	if err := c.db.QueryRow("SELECT size FROM blob WHERE rid=?", c.rid).Scan(&size); err != nil {
+		return err
+	}
+	if size == -1 {
+		c.demoted = true
 		c.cancel()
 	}
 	return c.Context.Err()
@@ -163,15 +169,30 @@ func TestCompactStoreCancellationRollsBackWrites(t *testing.T) {
 	d, out, _, _ := compactFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	polled := &compactCancelContext{Context: ctx, cancel: cancel}
-	if n, err := CompactStore(polled, d); !errors.Is(err, context.Canceled) || n != 0 {
-		t.Fatalf("cancel after writes = %d, %v", n, err)
-	}
-	if polled.polls != 7 {
-		t.Fatalf("polls = %d, want 7", polled.polls)
-	}
-	if _, err := Expand(d, out); err != nil {
-		t.Fatal("cancel lost content", err)
+	// The bound connection sees uncommitted demotion. Cancel only after actually
+	// observing it, then require compaction's savepoint to restore the payload.
+	err := d.WithBoundTx(func(bound *db.DB) error {
+		polled := &compactCancelContext{Context: ctx, cancel: cancel, db: bound, rid: out}
+		if n, err := CompactStore(polled, bound); !errors.Is(err, context.Canceled) || n != 0 {
+			t.Fatalf("cancel after writes = %d, %v", n, err)
+		}
+		if !polled.demoted {
+			t.Fatal("cancelled before observing a demotion")
+		}
+		if _, err := Expand(bound, out); err != nil {
+			t.Fatal("cancel lost content", err)
+		}
+		var phantoms int
+		if err := bound.QueryRow("SELECT count(*) FROM phantom WHERE rid=?", out).Scan(&phantoms); err != nil {
+			return err
+		}
+		if phantoms != 0 {
+			t.Fatal("cancel left a phantom behind")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

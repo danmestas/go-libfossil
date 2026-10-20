@@ -4,7 +4,13 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -20,6 +26,7 @@ func scCompactCases() []scCase {
 		{Case{ID: "sparsecone.5.4.compact-flat", Req: "SC-5.4-2"}, func(t *testing.T) error { return scCompactHistory(t, "flat") }},
 		{Case{ID: "sparsecone.5.4.compact-tree", Req: "SC-5.4-2"}, func(t *testing.T) error { return scCompactHistory(t, "tree") }},
 		{Case{ID: "sparsecone.5.4.compact-hybrid", Req: "SC-5.4-2"}, func(t *testing.T) error { return scCompactHistory(t, "hybrid") }},
+		{Case{ID: "sparsecone.5.4.compact-partial-tree", Req: "SC-5.4-2"}, scCompactPartialTree},
 	}
 }
 
@@ -102,6 +109,89 @@ func scCompactHistory(t *testing.T, mode string) error {
 		return fmt.Errorf("repeat compact: %d, %v", n, err)
 	}
 	return scCompactHeal(t, s, clone, mode == "tree")
+}
+
+// No crosslink exists for this tree: the outside sibling is truly missing.
+// Raw proofs must survive compaction, including stale derived file indexes.
+func scCompactPartialTree(t *testing.T) error {
+	r := newSCRepo(t, true).r
+	if err := content.SetStoreCone(r.DB(), scCone(t, []string{"src"}, nil)); err != nil {
+		return err
+	}
+	if _, err := content.CompactStore(context.Background(), r.DB()); err != nil {
+		return err
+	}
+	inside, insideName, err := blob.Store(r.DB(), []byte("partial compact inside"))
+	if err != nil {
+		return err
+	}
+	outside, outsideName, err := blob.Store(r.DB(), []byte("partial compact outside"))
+	if err != nil {
+		return err
+	}
+	put := func(d *deck.Deck) string {
+		data, err := d.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, uuid, err := blob.Store(r.DB(), data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return uuid
+	}
+	inLeaf := put(&deck.Deck{Type: deck.Submanifest, F: []deck.FileCard{{Name: "src/compact", UUID: insideName}}})
+	outLeaf := put(&deck.Deck{Type: deck.Submanifest, F: []deck.FileCard{{Name: "zzz/compact", UUID: outsideName}}})
+	outNode := put(&deck.Deck{Type: deck.Submanifest, S: []deck.SubmanifestCard{{Name: "zzz/compact", UUID: outLeaf}}})
+	missingName := strings.Repeat("a", 40)
+	missing, err := blob.StorePhantom(r.DB(), missingName)
+	if err != nil {
+		return err
+	}
+	put(&deck.Deck{Type: deck.Checkin, D: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), S: []deck.SubmanifestCard{
+		{Name: "src/compact", UUID: inLeaf}, {Name: "zzz/compact", UUID: outNode}, {Name: "zzzz/compact", UUID: missingName},
+	}})
+	// A disposable stale link falsely calls the covered blob outside.
+	if _, err := r.DB().Exec("INSERT INTO filename(name) VALUES('zzz/stale-compact')"); err != nil {
+		return err
+	}
+	if _, err := r.DB().Exec("INSERT INTO mlink(mid,fid,fnid) SELECT 999,?,fnid FROM filename WHERE name='zzz/stale-compact'", inside); err != nil {
+		return err
+	}
+	if n, err := content.CompactStore(context.Background(), r.DB()); err != nil || n != 2 {
+		return fmt.Errorf("partial compact = %d, %v; want 2, nil", n, err)
+	}
+	return scCompactPartialProof(r, inside, outside, missing, outNode, outLeaf)
+}
+
+func scCompactPartialProof(r *repo.Repo, inside, outside, missing libfossil.FslID, outNode, outLeaf string) error {
+	if _, err := content.Expand(r.DB(), inside); err != nil {
+		return err
+	}
+	var leaf libfossil.FslID
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", outLeaf).Scan(&leaf); err != nil {
+		return err
+	}
+	if _, err := content.Expand(r.DB(), leaf); err != nil {
+		return err
+	}
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		return err
+	}
+	var node libfossil.FslID
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", outNode).Scan(&node); err != nil {
+		return err
+	}
+	for _, rid := range []libfossil.FslID{outside, missing, node} {
+		if a.Class(rid) != content.Elided {
+			return expectf("partial compact artifact %d is not elided", rid)
+		}
+	}
+	if n, err := content.CompactStore(context.Background(), r.DB()); err != nil || n != 0 {
+		return fmt.Errorf("repeat partial compact = %d, %v", n, err)
+	}
+	return nil
 }
 
 func scCompactHeal(t *testing.T, s *scSparse, clone *repo.Repo, losePolicy bool) error {

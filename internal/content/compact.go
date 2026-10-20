@@ -31,6 +31,9 @@ func CompactStore(ctx context.Context, d *db.DB) (int, error) {
 	}
 	count := 0
 	err := d.WithTx(func(tx *db.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		c, err := StoreCone(tx)
 		if err != nil {
 			return err

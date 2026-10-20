@@ -139,7 +139,7 @@ type compactCancelContext struct {
 
 func (c *compactCancelContext) Err() error {
 	c.polls++
-	if c.polls == 6 {
+	if c.polls == 7 {
 		c.cancel()
 	}
 	return c.Context.Err()
@@ -153,8 +153,8 @@ func TestCompactStoreCancellationRollsBackWrites(t *testing.T) {
 	if n, err := CompactStore(polled, d); !errors.Is(err, context.Canceled) || n != 0 {
 		t.Fatalf("cancel after writes = %d, %v", n, err)
 	}
-	if polled.polls != 6 {
-		t.Fatalf("polls = %d, want 6", polled.polls)
+	if polled.polls != 7 {
+		t.Fatalf("polls = %d, want 7", polled.polls)
 	}
 	if _, err := Expand(d, out); err != nil {
 		t.Fatal("cancel lost content", err)

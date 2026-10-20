@@ -11,10 +11,10 @@
 //
 // What counts as correct, in order:
 //
-//  1. The draft text, with the errata in rfcs/erratum.
-//  2. fossil(1), run on the same input wherever the draft is silent or an
-//     erratum is unsettled. A case that expects something fossil(1) does not
-//     do must say why.
+//  1. The draft text. Each draft records its corrections in its own Changes
+//     appendix; there are no separate errata.
+//  2. fossil(1), run on the same input wherever the draft is silent. A case
+//     that expects something fossil(1) does not do must say why.
 //  3. zit and libfossil, whose own suites inform which cases to write.
 //
 // A case that fails is marked with the issue tracking the fix and is skipped;

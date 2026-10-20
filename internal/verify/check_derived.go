@@ -1,22 +1,26 @@
 package verify
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // checkDerived verifies consistency of derived tables: event, mlink, plink, tagxref, filename, leaf.
-func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
+func checkDerived(r *repo.Repo, report *Report) error {
 	if r == nil {
 		panic("verify: checkDerived: nil repo")
 	}
@@ -24,58 +28,85 @@ func checkDerived(r *repo.Repo, report *Report, cache *content.Cache) error {
 		panic("verify: checkDerived: nil report")
 	}
 
-	// detached collects the parents a P-card or a parent tag names that the
-	// check-in's plink no longer holds, which checkLeaves must not hold to a
-	// leaf verdict.
-	detached := make(map[libfossil.FslID]struct{})
-	if err := checkCheckins(r, report, cache, detached); err != nil {
-		return err
-	}
-	if err := checkLeaves(r, report, detached); err != nil {
-		return err
-	}
+	// Parent history, sparse readiness and leaf findings must use one snapshot.
+	return r.WithBoundTx(func(bound *repo.Repo) error {
+		// A reparent may have removed a child without rechecking its old parent.
+		detached := make(map[libfossil.FslID]struct{})
+		if err := checkCheckins(bound, report, detached); err != nil {
+			return err
+		}
+		return checkLeaves(bound, report, detached)
+	})
+}
 
-	return nil
+// treeGapCacheBytes bounds the cache checkCheckins gives treeGap. It holds
+// manifests and sub-manifests only, never file content, so it is far smaller
+// than an expansion cache; it has not been measured.
+const treeGapCacheBytes = 32 << 20
+
+type checkinVerification struct {
+	cache    *content.Cache
+	cone     *cone.Cone
+	refs     *content.ConeReferences
+	detached map[libfossil.FslID]struct{}
+	history  map[string][][]string
 }
 
 // checkCheckins verifies event and plink tables against checkin manifests.
-func checkCheckins(r *repo.Repo, report *Report, cache *content.Cache, detached map[libfossil.FslID]struct{}) error {
+// ExpandAll visits blobs in delta-tree order; stable rid sorting preserves
+// the report order without expanding each delta chain independently.
+func checkCheckins(r *repo.Repo, report *Report, detached map[libfossil.FslID]struct{}) error {
 	if r == nil {
 		panic("verify: checkCheckins: nil repo")
 	}
 	if report == nil {
 		panic("verify: checkCheckins: nil report")
 	}
-
-	history, err := parentHistory(r.DB(), cache)
+	c, err := content.StoreCone(r.DB())
 	if err != nil {
 		return err
 	}
-	rows, err := r.DB().Query("SELECT rid, uuid FROM blob WHERE size >= 0")
+	refs, err := content.LoadConeReferences(context.Background(), r.DB(), c)
 	if err != nil {
-		return fmt.Errorf("checkCheckins query blobs: %w", err)
+		return err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var rid int64
-		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
-			return fmt.Errorf("checkCheckins scan: %w", err)
-		}
-
-		if err := checkOneCheckin(r, report, libfossil.FslID(rid), uuid, cache, detached, history); err != nil {
-			return err
-		}
+	history, err := parentHistory(r.DB())
+	if err != nil {
+		return err
 	}
-
-	return rows.Err()
+	found := &Report{}
+	// ExpandAll hands each blob over once; the cache serves only treeGap's
+	// baseline and sub-manifest reads, which many check-ins share.
+	state := &checkinVerification{
+		cache: content.NewCache(treeGapCacheBytes), cone: c, refs: refs,
+		detached: detached, history: history,
+	}
+	err = content.ExpandAll(r.DB(), func(rid libfossil.FslID, uuid string, data []byte, err error) error {
+		if err != nil {
+			// Not expandable - skip silently (corrupt, reported by checkBlobs)
+			return nil
+		}
+		return checkOneCheckin(r, found, rid, uuid, data, state)
+	})
+	if err != nil {
+		return fmt.Errorf("checkCheckins: %w", err)
+	}
+	sort.SliceStable(found.Issues, func(i, j int) bool {
+		return found.Issues[i].RID < found.Issues[j].RID
+	})
+	for _, issue := range found.Issues {
+		report.addIssue(issue)
+	}
+	// found is a staging report: carry its counters over with its issues.
+	report.MissingRefs += found.MissingRefs
+	return nil
 }
 
 // checkOneCheckin verifies a single blob's derived data if it's a checkin.
+// data is the blob's expanded content.
 func checkOneCheckin(
-	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, cache *content.Cache,
-	detached map[libfossil.FslID]struct{}, history map[string][][]string,
+	r *repo.Repo, report *Report, rid libfossil.FslID, uuid string, data []byte,
+	state *checkinVerification,
 ) error {
 	if r == nil {
 		panic("verify: checkOneCheckin: nil repo")
@@ -84,23 +115,35 @@ func checkOneCheckin(
 		panic("verify: checkOneCheckin: nil report")
 	}
 
-	data, err := cache.Expand(r.DB(), rid)
-	if err != nil {
-		// Not expandable - skip silently (might be corrupt, already reported)
-		return nil
-	}
-
 	d, err := deck.Parse(data)
 	if err != nil {
 		// Not a valid manifest - skip silently
 		return nil
 	}
 
-	if err := collectReparents(r.DB(), d, uuid, detached); err != nil {
+	if err := collectReparents(r.DB(), d, uuid, state.detached); err != nil {
 		return err
 	}
 	if d.Type != deck.Checkin {
 		return nil
+	}
+
+	// Elided nodes can leave file derivation incomplete without damaging a
+	// cone-complete store. Validate raw references and the covered effective
+	// view, then still verify its spine metadata below.
+	if missing, gap := treeGap(r, d, rid, state.cache); gap {
+		ready, err := manifest.SparseCheckinReady(context.Background(), r.DB(), state.cache, d, state.cone, state.refs)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			report.MissingRefs++
+			report.addIssue(Issue{
+				Kind: IssueMissingReference, RID: rid, UUID: uuid, Table: "blob",
+				Message: fmt.Sprintf("checkin rid=%d uuid=%s waits on sub-manifest %s", rid, uuid, missing),
+			})
+			return nil
+		}
 	}
 
 	// Check event table
@@ -108,19 +151,19 @@ func checkOneCheckin(
 		return err
 	}
 
-	parents, err := checkinParents(r.DB(), rid, uuid, d.P, history)
+	parents, err := checkinParents(r.DB(), rid, uuid, d.P, state.history)
 	if err != nil {
 		return err
 	}
 	if !slices.Equal(parents, d.P) {
 		for _, parentUUID := range d.P {
-			if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, true, detached); err != nil {
+			if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, true, state.detached); err != nil {
 				return err
 			}
 		}
 	}
 	for _, parentUUID := range parents {
-		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, false, detached); err != nil {
+		if err := checkPlink(r.DB(), report, rid, uuid, parentUUID, false, state.detached); err != nil {
 			return err
 		}
 	}
@@ -160,7 +203,7 @@ func parentHashes(value string) []string {
 // parentHistory retains the possible earlier singleton overrides. A cancelled
 // or malformed parent tag cannot tell us which earlier override had reached a
 // crosslink-end pass, but the artifacts bound the possible retained ancestry.
-func parentHistory(q db.Querier, cache *content.Cache) (map[string][][]string, error) {
+func parentHistory(q db.Querier) (map[string][][]string, error) {
 	var count int
 	if err := q.QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
 	 WHERE tagname='parent'`).Scan(&count); err != nil {
@@ -169,25 +212,16 @@ func parentHistory(q db.Querier, cache *content.Cache) (map[string][][]string, e
 	if count == 0 {
 		return nil, nil
 	}
-	rows, err := q.Query("SELECT rid, uuid FROM blob WHERE size >= 0")
-	if err != nil {
-		return nil, fmt.Errorf("parentHistory blobs: %w", err)
-	}
-	defer rows.Close()
 	history := make(map[string][][]string)
-	for rows.Next() {
-		var rid libfossil.FslID
-		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
-			return nil, fmt.Errorf("parentHistory scan: %w", err)
-		}
-		data, err := cache.Expand(q, rid)
+	// Preserve the feature's delta-tree-order scan rather than repeatedly
+	// expanding shared chains through a bounded per-artifact cache.
+	err := content.ExpandAll(q, func(_ libfossil.FslID, uuid string, data []byte, err error) error {
 		if err != nil {
-			continue
+			return nil // Unreadable blobs are reported by checkBlobs.
 		}
 		d, err := deck.Parse(data)
 		if err != nil {
-			continue
+			return nil
 		}
 		for _, tag := range d.T {
 			if tag.Name != "parent" || tag.Type != deck.TagSingleton {
@@ -203,8 +237,12 @@ func parentHistory(q db.Querier, cache *content.Cache) (map[string][][]string, e
 			}
 			history[target] = append(history[target], parents)
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("parentHistory blobs: %w", err)
 	}
-	return history, rows.Err()
+	return history, nil
 }
 
 func checkinParents(q db.Querier, rid libfossil.FslID, uuid string, original []string, history map[string][][]string) ([]string, error) {
@@ -402,4 +440,16 @@ func checkLeaves(r *repo.Repo, report *Report, detached map[libfossil.FslID]stru
 		})
 	}
 	return nil
+}
+
+// treeGap reports the sub-manifest a check-in's tree -- its own, or its
+// baseline's -- is waiting on, when that is why its file set cannot be
+// listed. Only a tree can be waiting on one, so a flat manifest is answered
+// without listing it.
+func treeGap(r *repo.Repo, d *deck.Deck, rid libfossil.FslID, cache *content.Cache) (string, bool) {
+	if len(d.S) == 0 && d.B == "" {
+		return "", false
+	}
+	_, err := manifest.ListFilesCached(r, rid, cache)
+	return manifest.MissingSubmanifest(err)
 }

@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-// Timestamp parsing for the D and E cards, per §4.6.4 as amended by the
-// §4.6.4 erratum. The token is never escape-decoded. fossil parses these with
-// SQLite's julianday(); this accepts the same forms SQLite does for the shapes
-// an artifact carries -- a date-time, a date only, and a bare Julian-day
-// number -- with the field ranges the erratum scopes to forms 1 through 3.
+// Timestamp parsing for the D and E cards, per §4.6.4. The token is never
+// escape-decoded. fossil parses these with SQLite's julianday(); this accepts
+// the same forms SQLite does for the shapes an artifact carries -- a
+// date-time, a date only, and a bare Julian-day number -- with the field
+// ranges §4.6.4 scopes to forms 1 through 3.
 //
 // The relative literals now/subsec/subsecond (form 4) and the bare time-only
 // form (form 3) are deliberately not accepted: no stored artifact carries

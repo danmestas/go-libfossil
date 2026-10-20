@@ -47,6 +47,9 @@ func TestReqConfigMatchesRealFossil(t *testing.T) {
 	names := []string{
 		"/all", "/", "/s", "/sh", "/p", "/u", "/user", "/email", "/skinx", "/ticket",
 		"/xfer", "/alias", "/interwiki", "/subscriber", "project-code", "project-name",
+		// zit's scalar marker for the sub-manifest settings: fossil has no
+		// such group, and neither server sends anything without the settings.
+		"/config",
 	}
 	// Clone implies Read in fossil's trunk (page_xfer sets g.perm.Read when
 	// g.perm.Clone is set) but not in the 2.28 binary the tests run. Like

@@ -457,7 +457,7 @@ func policyCases() []apiCase {
 	// one that is not 0 through 4: a policy name, in any case, included.
 	// Divergence from fossil: 2.28 reads a non-integer as 0 (sha1) and treats
 	// a negative stored value (db.c:2773) as unset to be re-derived under 7.2,
-	// and its behavior above 4 is undefined; -01 is followed here, so any
+	// and its behavior above 4 is undefined; -00 is followed here, so any
 	// stored value outside 0-4 is fatal.
 	for _, value := range []string{"banana", "SHA3", "sha3", "5", "-1", ""} {
 		cases = append(cases, apiCase{

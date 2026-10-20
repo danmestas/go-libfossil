@@ -24,7 +24,7 @@
 // Only an active branch row (tagtype > 0) names a branch. fossil 2.28's
 // is_a_leaf, leaf_check and leaf_rebuild do not filter so: a check-in whose
 // branch tag was cancelled with a value keeps that value there.
-// draft-fossil-repo-state-01 Section 6.4 requires the filter on every path
+// draft-fossil-repo-state-00 Section 6.4 requires the filter on every path
 // that decides branch membership, so both paths here apply it. Audit, which
 // must also accept fossil's tables, reads both ways (fossilSameBranchSQL).
 //
@@ -56,7 +56,7 @@ const BranchTagID = 8
 // mainBranchSQL is the default branch a check-in with no active branch row
 // reads as: the main-branch setting, or trunk when it is unset. Section 6.1
 // forbids assuming "trunk" when the setting is present. fossil's leaf.c uses
-// the literal 'trunk' here; the -01 text is followed, as for repo.MainBranch,
+// the literal 'trunk' here; the -00 text is followed, as for repo.MainBranch,
 // which also reads an empty value as unset.
 const mainBranchSQL = `coalesce(nullif((SELECT value FROM config
 	                                  WHERE name='main-branch'),''),'trunk')`

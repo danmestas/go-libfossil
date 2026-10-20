@@ -1,0 +1,278 @@
+[
+  {
+    "include": [
+      "src"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c",
+      "src/sub/f0.c",
+      "src/sub/f1.c",
+      "src/sub/f2.c",
+      "src/sub/f3.c",
+      "src/sub/f4.c",
+      "src/sub/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src"
+    ],
+    "exclude": [
+      "src/sub"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src",
+      "src/sub/f3.c"
+    ],
+    "exclude": [
+      "src/sub"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c",
+      "src/sub/f3.c"
+    ]
+  },
+  {
+    "include": [
+      "README",
+      "doc/moved.c",
+      "test/f2.c"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "README",
+      "doc/moved.c",
+      "test/f2.c"
+    ]
+  },
+  {
+    "include": [
+      "doc",
+      "test"
+    ],
+    "exclude": [
+      "test/f0.c"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "doc/f1.c",
+      "doc/f2.c",
+      "doc/f3.c",
+      "doc/f4.c",
+      "doc/f5.c",
+      "doc/moved.c",
+      "test/f1.c",
+      "test/f2.c",
+      "test/f3.c",
+      "test/f4.c"
+    ]
+  },
+  {
+    "include": [
+      "src/sub"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "src/sub/f0.c",
+      "src/sub/f1.c",
+      "src/sub/f2.c",
+      "src/sub/f3.c",
+      "src/sub/f4.c",
+      "src/sub/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src-x",
+      "src"
+    ],
+    "exclude": [
+      "src/sub",
+      "src/f0.c"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": [
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "nothing/here"
+    ],
+    "mode": "flat",
+    "checkin": "07f80e91094e42c59bcb8f3676900f35d9cb8bcd2b7b4552639d00c23c95694b",
+    "files": null
+  },
+  {
+    "include": [
+      "src"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c",
+      "src/sub/f0.c",
+      "src/sub/f1.c",
+      "src/sub/f2.c",
+      "src/sub/f3.c",
+      "src/sub/f4.c",
+      "src/sub/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src"
+    ],
+    "exclude": [
+      "src/sub"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src",
+      "src/sub/f3.c"
+    ],
+    "exclude": [
+      "src/sub"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "src/f0.c",
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c",
+      "src/sub/f3.c"
+    ]
+  },
+  {
+    "include": [
+      "README",
+      "doc/moved.c",
+      "test/f2.c"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "README",
+      "doc/moved.c",
+      "test/f2.c"
+    ]
+  },
+  {
+    "include": [
+      "doc",
+      "test"
+    ],
+    "exclude": [
+      "test/f0.c"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "doc/f1.c",
+      "doc/f2.c",
+      "doc/f3.c",
+      "doc/f4.c",
+      "doc/f5.c",
+      "doc/moved.c",
+      "test/f1.c",
+      "test/f2.c",
+      "test/f3.c",
+      "test/f4.c"
+    ]
+  },
+  {
+    "include": [
+      "src/sub"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "src/sub/f0.c",
+      "src/sub/f1.c",
+      "src/sub/f2.c",
+      "src/sub/f3.c",
+      "src/sub/f4.c",
+      "src/sub/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "src-x",
+      "src"
+    ],
+    "exclude": [
+      "src/sub",
+      "src/f0.c"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": [
+      "src/f1.c",
+      "src/f2.c",
+      "src/f3.c",
+      "src/f4.c",
+      "src/f5.c"
+    ]
+  },
+  {
+    "include": [
+      "nothing/here"
+    ],
+    "mode": "tree",
+    "checkin": "b72b0d56c21e4157a4fd93d7195bbaae67bb0206cf5520085d00d4108da75dad",
+    "files": null
+  }
+]

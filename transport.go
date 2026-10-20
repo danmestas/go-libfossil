@@ -61,6 +61,12 @@ func WithHTTPClient(c *http.Client) HTTPOption {
 type httpTransport struct {
 	url    string
 	client *http.Client
+	peer   internalsync.PeerAddr
+}
+
+// PeerAddr returns the IP address of the server the last round trip reached.
+func (t *httpTransport) PeerAddr() string {
+	return t.peer.Get()
 }
 
 func (t *httpTransport) RoundTrip(ctx context.Context, payload []byte) ([]byte, error) {
@@ -90,8 +96,8 @@ func (t *httpTransport) roundTripLoginCookie(ctx context.Context, payload []byte
 
 func (t *httpTransport) roundTrip(ctx context.Context, payload []byte,
 	cookie string) ([]byte, string, error) {
-	resp, err := internalsync.PostXfer(ctx, t.client, t.url, "application/x-fossil", cookie,
-		payload)
+	resp, err := internalsync.PostXfer(t.peer.Trace(ctx), t.client, t.url,
+		"application/x-fossil", cookie, payload)
 	if err != nil {
 		return nil, "", fmt.Errorf("libfossil: http transport: %w", err)
 	}

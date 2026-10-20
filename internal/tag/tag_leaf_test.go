@@ -29,7 +29,7 @@ func leafRids(t *testing.T, r *repo.Repo) []libfossil.FslID {
 	return out
 }
 
-// TestAddBranchTagRechecksLeaves pins draft-fossil-repo-state-01 Sections 7.3
+// TestAddBranchTagRechecksLeaves pins draft-fossil-repo-state-00 Sections 7.3
 // and 7.6: a branch tag applied by a tag control artifact rechecks the
 // check-in and its parent before the transaction commits. Moving c2 onto
 // feat leaves c1, on trunk, without a same-branch child, so c1 is a leaf

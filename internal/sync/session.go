@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/danmestas/go-libfossil/db"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -57,6 +58,7 @@ type CkinLockReq struct {
 
 // SyncResult reports what happened during a sync.
 type SyncResult struct {
+	Elided                        int // artifacts deliberately absent under the store cone
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int
@@ -64,10 +66,17 @@ type SyncResult struct {
 	ArtifactsLinked               int
 	Errors                        []string
 	CkinLockFail                  *CkinLockFail // nil = no conflict
+	// AvoidSubmanifests reports that the server sent pragma
+	// avoid-submanifests: a commit made in this session must not emit S
+	// cards (draft-fossil-submanifests-00 §7.2), which the caller asks of
+	// manifest.Checkin with CheckinOpts.AvoidSubmanifests.
+	AvoidSubmanifests bool
 }
 
 // session holds the mutable state of a running sync.
 type session struct {
+	ctx               context.Context
+	sparseReceived    map[string]bool
 	repo              *repo.Repo
 	env               *simio.Env
 	opts              SyncOpts
@@ -115,6 +124,14 @@ type session struct {
 	// sha3Refusals counts gimmes for SHA3 content withheld from an older
 	// server; the next request carries one refusal error card for each.
 	sha3Refusals int
+	// smGate is the draft-fossil-submanifests-00 §7.2 transfer gate and
+	// smRefusals the gimmes it withheld this round: the next request
+	// carries one refusal card for them, and the result records each.
+	smGate     submanifestGate
+	smRefusals int
+	// peerReadsTrees is set once a reply carries send-submanifests (§7.2);
+	// until then the gate treats the server as one that reads no tree.
+	peerReadsTrees bool
 	// peerDate is the server's check-in date from server-version: 0 before
 	// one arrives, or when it carries no DATE and TIME, which no date gate
 	// passes (§8.6).
@@ -198,6 +215,18 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 		}
 	}
 
+	// A gate whose indicator cannot be read is armed: it then classifies
+	// every artifact an older peer asks for, which costs time but can never
+	// hand that peer a tree.
+	gate, err := newSubmanifestGate(r.DB())
+	if err != nil {
+		gate = submanifestGate{armed: true}
+	}
+	s.smGate = gate
+	if c, err := content.StoreCone(r.DB()); err == nil && c != nil {
+		s.sparseReceived = map[string]bool{}
+	}
+
 	return s
 }
 
@@ -252,14 +281,23 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}()
 
 	obs := resolveObserver(opts.Observer)
+	var clock simio.Clock
+	if opts.Env != nil {
+		clock = opts.Env.Clock
+	}
+	r, err = withClientReceipt(r, opts.User, clock)
+	if err != nil {
+		return nil, fmt.Errorf("sync: %w", err)
+	}
 	s := newSession(r, opts)
+	s.ctx = ctx
 	closed := false
 	defer func() {
 		// A round that fails after earlier rounds' cascades committed their
 		// links must still repair leaves and propagated tags, as fossil's
 		// per-round manifest_crosslink_end does (src/xfer.c): otherwise a
 		// failed pull leaves check-ins with event rows and no leaf rows
-		// (repo-state-01 Section 7.3, RS-7.3-4). The context is detached so a
+		// (repo-state-00 Section 7.3, RS-7.3-4). The context is detached so a
 		// cancelled pull is repaired too.
 		if closed || err == nil || s.cascaded == 0 {
 			return
@@ -312,6 +350,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 			obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
 			return &s.result, fmt.Errorf("sync: exchange round %d: %w", cycle, err)
 		}
+		notePeer(s.repo, t)
 
 		sentBefore := s.result.FilesSent
 		recvdBefore := s.result.FilesRecvd
@@ -352,6 +391,16 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)
 	}
 	s.result.ArtifactsLinked = linked
+	if s.sparseReceived != nil {
+		err := s.repo.WithTx(func(tx *db.Tx) error {
+			var err error
+			s.result.Elided, err = filterSparseReceived(ctx, tx, s.sparseReceived, s.cache)
+			return err
+		})
+		if err != nil {
+			return &s.result, fmt.Errorf("sync: sparse receive filtering: %w", err)
+		}
+	}
 
 	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)
 	return &s.result, nil

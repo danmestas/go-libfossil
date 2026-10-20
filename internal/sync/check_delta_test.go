@@ -61,12 +61,19 @@ func TestCheckDelta(t *testing.T) {
 		{"basis does not reconstruct", other, unreadable, d, deltaMismatch},
 		{"basis not held", other, unheld, d, deltaUnverifiable},
 	} {
-		got, err := checkDelta(r.DB(), tt.uuid, tt.src, tt.payload)
+		got, rebuilt, err := checkDelta(r.DB(), tt.uuid, tt.src, tt.payload)
 		if err != nil {
 			t.Fatalf("%s: checkDelta: %v", tt.name, err)
 		}
 		if got != tt.want {
 			t.Errorf("%s: checkDelta = %v, want %v", tt.name, got, tt.want)
+		}
+		// Only a match hands back content, and then the content named HASH.
+		if (rebuilt != nil) != (got == deltaMatch) {
+			t.Errorf("%s: content returned %v for verdict %v", tt.name, rebuilt != nil, got)
+		}
+		if got == deltaMatch && !hashMatches(tt.uuid, rebuilt) {
+			t.Errorf("%s: rebuilt content is not %s", tt.name, tt.uuid)
 		}
 	}
 }

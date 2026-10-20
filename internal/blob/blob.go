@@ -68,9 +68,15 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 	if err := hash.PromoteFor(q, uuid); err != nil {
 		return 0, fmt.Errorf("hash policy: %w", err)
 	}
+	// The receipt is made only once there is content to store under it, as
+	// content_put_ex calls content_rcvid_init after its already-held check.
+	rcvid, err := db.ReceiptID(q)
+	if err != nil {
+		return 0, fmt.Errorf("receipt: %w", err)
+	}
 	if rid, ok := Exists(q, uuid); ok {
-		if _, err := q.Exec("UPDATE blob SET rcvid=1, size=?, content=? WHERE rid=?",
-			size, compressed, rid); err != nil {
+		if _, err := q.Exec("UPDATE blob SET rcvid=?, size=?, content=? WHERE rid=?",
+			rcvid, size, compressed, rid); err != nil {
 			return 0, fmt.Errorf("fill phantom: %w", err)
 		}
 		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
@@ -79,8 +85,8 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 		return rid, nil
 	}
 	result, err := q.Exec(
-		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-		uuid, size, compressed,
+		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
+		uuid, size, compressed, rcvid,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("insert: %w", err)
@@ -118,34 +124,82 @@ func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err 
 	if rid, name, ok := existingName(q, naming, uuid, content); ok {
 		return rid, name, nil
 	}
-
-	compressed, err := Compress(content)
-	if err != nil {
-		return 0, "", fmt.Errorf("blob.Store compress: %w", err)
-	}
-
-	rid, err = writeRow(q, uuid, int64(len(content)), compressed)
+	rid, err = writeVerified(q, naming.New, uuid, content)
 	if err != nil {
 		return 0, "", fmt.Errorf("blob.Store: %w", err)
+	}
+	return rid, uuid, nil
+}
+
+// Outcome is what StoreUnderPolicy did with an artifact.
+type Outcome int
+
+const (
+	Found         Outcome = iota // already stored under its name
+	Inserted                     // stored as a new row
+	FilledPhantom                // stored into the phantom awaiting it
+)
+
+// StoreUnderPolicy stores content under the name the repository's hash
+// policy gives it, never reusing a copy held under the other algorithm's
+// name: an S card names its sub-manifest "under the repository hash policy"
+// (draft-fossil-submanifests-00 §6.2), so two writers name a tree alike
+// whatever legacy copies either holds. It reports whether the row was
+// found, inserted, or filled a phantom.
+func StoreUnderPolicy(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, outcome Outcome, err error) {
+	if q == nil {
+		panic("blob.StoreUnderPolicy: q must not be nil")
+	}
+	if content == nil {
+		content = []byte{}
+	}
+	naming, err := hash.NamingFor(q)
+	if err != nil {
+		return 0, "", Found, fmt.Errorf("blob: %w", err)
+	}
+	uuid = naming.New.Hash(content)
+	outcome = Inserted
+	if rid, ok := Exists(q, uuid); ok {
+		if !isPhantom(q, rid) {
+			return rid, uuid, Found, nil
+		}
+		outcome = FilledPhantom
+	}
+	rid, err = writeVerified(q, naming.New, uuid, content)
+	if err != nil {
+		return 0, "", Found, fmt.Errorf("blob.StoreUnderPolicy: %w", err)
+	}
+	return rid, uuid, outcome, nil
+}
+
+// writeVerified compresses content into the row for uuid, reads it back to
+// check the name, and marks it unclustered.
+func writeVerified(q db.Querier, alg hash.Alg, uuid string, content []byte) (libfossil.FslID, error) {
+	compressed, err := Compress(content)
+	if err != nil {
+		return 0, fmt.Errorf("compress: %w", err)
+	}
+	rid, err := writeRow(q, uuid, int64(len(content)), compressed)
+	if err != nil {
+		return 0, err
 	}
 
 	// Verify round-trip: re-read, decompress, re-hash.
 	// Matches Fossil's content_put_pk() post-write verification.
 	readBack, err := Load(q, rid)
 	if err != nil {
-		return 0, "", fmt.Errorf("blob.Store verify read-back: %w", err)
+		return 0, fmt.Errorf("verify read-back: %w", err)
 	}
-	if got := naming.New.Hash(readBack); got != uuid {
-		return 0, "", fmt.Errorf("blob.Store verify: hash mismatch after round-trip: stored %s, got %s", uuid, got)
+	if got := alg.Hash(readBack); got != uuid {
+		return 0, fmt.Errorf("verify: hash mismatch after round-trip: stored %s, got %s", uuid, got)
 	}
 
 	// Mark as unclustered — matches Fossil's content_put_ex (content.c:633).
-	// Only new blobs reach here; Exists early-return skips this.
+	// Only new blobs reach here; an existing one returns before.
 	if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
-		return 0, "", fmt.Errorf("blob.Store unclustered: %w", err)
+		return 0, fmt.Errorf("unclustered: %w", err)
 	}
-
-	return rid, uuid, nil
+	return rid, nil
 }
 
 // StoreDelta inserts a NEW row holding content delta-encoded against

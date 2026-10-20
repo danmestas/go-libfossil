@@ -7,7 +7,7 @@ import (
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
-// SetHashPolicy takes the policy names of artifact-format-01 Table 7 and
+// SetHashPolicy takes the policy names of artifact-format-00 Table 7 and
 // stores their ordinal; a wrong-case name is refused and changes nothing.
 func TestSetHashPolicy(t *testing.T) {
 	r, err := Create(filepath.Join(t.TempDir(), "test.fossil"), CreateOpts{User: "test"})

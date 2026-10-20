@@ -1,0 +1,9 @@
+C c1\slarge
+D 2026-10-18T16:38:06.369
+R ecbb70742d785c8e231ccadd5aeb46c4
+S pkg00/sub0/file0000.go cd208585de624fe02b14bdaddbc48f9552f7ba554ec9b25c84b46b8041215067
+S pkg17/sub0/file0905.go 6a1f89591badc979bd3dc4cbff8631006febfbd3b21a896ecd9d2b9b1c19d442
+T *branch * trunk
+T *sym-trunk *
+U u
+Z cf154c35c4875c0b6fa92914dbcd9626

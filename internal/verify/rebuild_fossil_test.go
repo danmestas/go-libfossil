@@ -73,12 +73,15 @@ func fossilHistory(t *testing.T) string {
 	return repoPath
 }
 
-// fossilTextTimesExact reports whether the fossil binary on this machine
-// writes text times the way TimeToTextJulian computes them: its %.17g runs in
-// long double, which is a 64-bit double on macOS arm64 and Windows but wider
-// on Linux and Intel macOS, where the 16th digit can differ.
+// fossilTextTimesExact reports whether the fossil binary on this machine is
+// one whose text times TimeToTextJulian has been checked against bit for
+// bit: fossil's %.17g runs in long double, and fsltype follows the long
+// double of the platform it runs on. Only fossil 2.28 on macOS arm64 and
+// linux-x64 has been compared (see fsltype's julian.go); elsewhere the
+// times are compared to the millisecond.
 func fossilTextTimesExact() bool {
-	return (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") || runtime.GOOS == "windows"
+	return (runtime.GOOS == "darwin" && runtime.GOARCH == "arm64") ||
+		(runtime.GOOS == "linux" && runtime.GOARCH == "amd64")
 }
 
 // textTime renders a column fossil writes as SQL text: bit for bit where
@@ -97,11 +100,8 @@ func textTime(col string) string {
 func derivedRows(t *testing.T, path string) map[string][]string {
 	t.Helper()
 	return queryRows(t, path, map[string]string{
-		// Check-in events only: Rebuild does not yet recreate the events of
-		// other artifacts (control artifacts, wiki, tickets, forum), a gap
-		// apart from the values #258 is about.
 		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
-			", user, comment FROM event WHERE type='ci' ORDER BY objid",
+			", user, comment FROM event ORDER BY objid",
 		"plink": "SELECT pid, cid, isprim, " + textTime("mtime") +
 			" FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, tagtype, quote(value), printf('%!.20g', mtime)
@@ -110,14 +110,12 @@ func derivedRows(t *testing.T, path string) map[string][]string {
 }
 
 // derivedTimes reads the times fossil derives from the artifacts into
-// event, plink and tagxref, keyed by the row each belongs to. Events are
-// check-in events: go-libfossil does not write the event fossil adds for a
-// tag's control artifact, a missing row apart from the times compared here.
+// event, plink and tagxref, keyed by the row each belongs to.
 func derivedTimes(t *testing.T, path string) map[string][]string {
 	t.Helper()
 	return queryRows(t, path, map[string]string{
 		"event": "SELECT objid, type, " + textTime("mtime") + ", " + textTime("omtime") +
-			" FROM event WHERE type='ci' ORDER BY objid",
+			" FROM event ORDER BY objid",
 		"plink": "SELECT pid, cid, " + textTime("mtime") + " FROM plink ORDER BY cid, pid",
 		"tagxref": `SELECT tagid, rid, srcid, origid, printf('%!.20g', mtime)
 			FROM tagxref ORDER BY tagid, rid`,

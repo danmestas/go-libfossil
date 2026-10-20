@@ -224,3 +224,59 @@ func TestUpdateRestoresAndBacksUpLikeFossil(t *testing.T) {
 	}
 	assertSameAfterUpdate(t, bin, repoPath, fossilDir, goDir, ck)
 }
+
+// A symlink edited locally and changed by the target is not merged: fossil's
+// update reports "Cannot merge symlink", counts a conflict and writes
+// nothing, so the file the link points at is left alone (update.c). The
+// local repoint changes the link's length, so fossil's size check sees it.
+func TestUpdateDoesNotMergeSymlinksLikeFossil(t *testing.T) {
+	bin, repoPath, ck := newFossilCheckout(t)
+	fossilRun(t, bin, ck, "settings", "allow-symlinks", "on")
+	writeFile(t, filepath.Join(ck, "p.txt"), "p\n")
+	writeFile(t, filepath.Join(ck, "other.txt"), "other\n")
+	relink := func(dir, to string) {
+		t.Helper()
+		path := filepath.Join(dir, "link")
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(to, path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	relink(ck, "p.txt")
+	fossilRun(t, bin, ck, "add", "p.txt", "other.txt", "link")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "A")
+	relink(ck, "other.txt")
+	fossilRun(t, bin, ck, "commit", "--hash", "--no-warnings", "-m", "B")
+	fossilRun(t, bin, ck, "close")
+	hashOf := func(comment string) string {
+		out := fossilRun(t, bin, ck, "sql", "-R", repoPath,
+			"SELECT uuid FROM blob JOIN event ON objid=rid WHERE comment='"+comment+"'")
+		return strings.Trim(strings.TrimSpace(out), "'")
+	}
+	a, b := hashOf("A"), hashOf("B")
+
+	fossilDir := t.TempDir()
+	fossilRun(t, bin, fossilDir, "open", repoPath, a)
+	relink(fossilDir, "other.txt")
+	if out := fossilRun(t, bin, fossilDir, "update", b); !strings.Contains(out, "Cannot merge symlink") {
+		t.Fatalf("fossil's update did not refuse to merge the link:\n%s", out)
+	}
+
+	goCk, goDir, ridOf := goCheckoutAt(t, bin, repoPath, a)
+	relink(goDir, "other.txt")
+	res, err := goCk.Update(libfossil.UpdateOpts{TargetRID: ridOf(b)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(res.Unmerged, ",") != "link" || len(res.Conflicted) != 0 {
+		t.Errorf("Unmerged = %v, Conflicted = %v; want the link unmerged, no markers", res.Unmerged, res.Conflicted)
+	}
+	for _, dir := range []string{fossilDir, goDir} {
+		if to, err := os.Readlink(filepath.Join(dir, "link")); err != nil || to != "other.txt" {
+			t.Errorf("%s: link -> %q, %v", dir, to, err)
+		}
+	}
+	assertSameAfterUpdate(t, bin, repoPath, fossilDir, goDir, goCk)
+}

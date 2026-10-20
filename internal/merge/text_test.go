@@ -19,6 +19,8 @@ func TestIsText(t *testing.T) {
 		{"longest line", append(append([]byte{}, long...), '\n'), true},
 		{"line too long", append(append([]byte{}, long...), 'a', '\n'), false},
 		{"last line too long", append(append([]byte("x\n"), long...), 'a'), false},
+		{"utf-16 converted", []byte("\xff\xfea\x00\n\x00"), true},
+		{"bom cuts at NUL", []byte("\xef\xbb\xbfa\x00b\n"), true},
 	}
 	for _, tc := range cases {
 		if got := IsText(tc.data); got != tc.want {

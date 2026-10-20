@@ -318,6 +318,11 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	available = true
 
 	d, err := deck.Parse(data)
+	if err == nil {
+		if err := noteTreeReferences(tx, rid, d); err != nil {
+			return err
+		}
+	}
 	if err != nil || !isArtifact(d) {
 		err = recordNonArtifacts(tx, []libfossil.FslID{rid})
 		if err == nil {
@@ -418,6 +423,15 @@ func (rl *ReceiveLinker) settle(rid libfossil.FslID) {
 // artifacts use their tagxref source rows as replay evidence; every other
 // handled artifact type uses its event row.
 func parsedArtifactReplayed(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
+	if d.Type == deck.Checkin {
+		var incomplete int
+		if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM orphan WHERE rid=?)", rid).Scan(&incomplete); err != nil {
+			return false, err
+		}
+		if incomplete != 0 {
+			return false, nil
+		}
+	}
 	table, column := "event", "objid"
 	if d.Type == deck.Event || d.Type == deck.Cluster {
 		table, column = "tagxref", "srcid"
@@ -675,12 +689,14 @@ func newCascadeLinker(r *repo.Repo) *cascadeLinker {
 	// on files as well as the baseline; the session's closing sweep links
 	// whatever is still waiting (see missingCheckinRefs).
 	guard.awaitFiles = true
-	return &cascadeLinker{
+	cl := &cascadeLinker{
 		r:      r,
 		cache:  content.NewCache(crosslinkCacheBytes),
 		guard:  guard,
 		leaves: leaf.NewPending(),
 	}
+	guard.cache = cl.cache
+	return cl
 }
 
 // walk is the work-stack traversal of the orphan/delta-child graph reachable
@@ -899,6 +915,9 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) error {
 		// the failures that do matter (issue #186). A blob that parses but
 		// cannot be linked is still a real fault and still warns, below.
 		return nil
+	}
+	if err := noteTreeReferences(tx, rid, d); err != nil {
+		return fmt.Errorf("manifest.AfterDephantomize rid=%d: %w", rid, err)
 	}
 	if !isArtifact(d) {
 		// Satisfies the card grammar but not the artifact grammar -- a file

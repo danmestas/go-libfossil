@@ -10,7 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
-// The date tag replaces a check-in's event time (draft-fossil-repo-state-01
+// The date tag replaces a check-in's event time (draft-fossil-repo-state-00
 // Section 4.2, step 6). These tests pin the cases where the draft departs
 // from fossil(1) 2.28: a cancel, an unparsable value and a time that is not
 // positive all leave the D-card time, and an inherited row sets nothing.

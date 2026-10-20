@@ -127,7 +127,7 @@ func deltaManifestCases() []apiCase {
 					"\nF d.txt "+h5+"\nU u\n")
 				return wantLookup(r, rid, "c.txt", "", false)
 			}},
-		// Section 4.7.3 (-01): a delta naming a delta is accepted, and its
+		// Section 4.7.3 (-00): a delta naming a delta is accepted, and its
 		// file set is built from the named delta's own F cards only, so
 		// b.txt and c.txt, which that delta inherits, are absent.
 		{Case{ID: "artifact.4.7.3.delta-of-delta-one-level", Req: "AF-4.7.3-1"},
@@ -178,7 +178,7 @@ func deltaManifestCases() []apiCase {
 // Crosslink refuses a B card whose target is not a check-in the same way
 // ListFiles does: the delta gets no mlink rows, where a valid baseline gives it
 // the baseline's files. The files exist, so a refusal cannot be mistaken for a
-// check-in deferred on a missing blob. draft-fossil-artifact-format-01 Section
+// check-in deferred on a missing blob. draft-fossil-artifact-format-00 Section
 // 4.7.3 has a reader accept a delta manifest as the target, resolved one level,
 // so only a control artifact is refused.
 func TestCrosslinkBaselineMustBeCheckin(t *testing.T) {

@@ -65,6 +65,7 @@ var notFossilExec = map[string]string{
 	"cmd/libfossil/driver_dependencies_test.go": "runs the go tool",
 	"testutil/server_unix.go":                   "runs the bin its caller resolved",
 	"testutil/server_other.go":                  "runs the bin its caller resolved",
+	"conformance/zit_interop_test.go":           "runs zit, under a HOME of its own",
 }
 
 // TestFossilInvocationsIsolateHome fails when a Go file runs a subprocess

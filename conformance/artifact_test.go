@@ -9,7 +9,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 )
 
-// The artifact suite checks draft-fossil-artifact-format-01. Most of its
+// The artifact suite checks draft-fossil-artifact-format-00. Most of its
 // cases are byte strings given to deck.Parse; each is built from one of the
 // base artifacts below by a single edit, so the edit is the only thing that
 // can explain a rejection, and every one is also given to fossil(1).
@@ -24,7 +24,7 @@ type artifactCase struct {
 	// check, when set, inspects an accepted parse.
 	check func(*deck.Deck) error
 	// fossil is set only when fossil(1) gives the opposite verdict; it
-	// cites the erratum or the reason the case does not follow fossil.
+	// cites the draft's note or the reason the case does not follow fossil.
 	fossil string
 	// nonCanonical marks an accepted input Marshal need not reproduce byte
 	// for byte, such as a bare U card that reads back as "U anonymous".

@@ -88,7 +88,14 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 	if s.opts.Private && cycle == 0 {
 		cards = append(cards, sendPrivate)
 	}
-	cards = append(cards, versionPragma("client-version"))
+	cards = append(cards, versionPragma("client-version"), sendSubmanifests())
+	if s.opts.Pull {
+		sparse, err := localConePragmas(s.repo.DB())
+		if err != nil {
+			return nil, err
+		}
+		cards = append(cards, sparse...)
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -181,6 +188,10 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 	// cards from pendingSend, respecting the maxSend budget.
 	for ; s.sha3Refusals > 0; s.sha3Refusals-- {
 		cards = append(cards, sha3Refusal())
+	}
+	if s.smRefusals > 0 {
+		cards = append(cards, submanifestRefusal())
+		s.smRefusals = 0
 	}
 	// Private content a gimme asked for outside a private sync is not sent,
 	// but the server is told it exists and is private (§8.6).
@@ -863,6 +874,14 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
 		s.uvPullOnly = true
+	case c.Name == sendSubmanifestsPragma:
+		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
+		// for the session: a reply without the pragma does not unsay it.
+		s.peerReadsTrees = true
+	case c.Name == avoidSubmanifestsPragma:
+		// draft-fossil-submanifests-00 §7.2: no S cards in commits made in
+		// this session, which the session's caller makes.
+		s.result.AvoidSubmanifests = true
 	case c.Name == "avoid-delta-manifests":
 		// §9.5: a hint for the commit that asked for the lock, to write a
 		// baseline manifest. It changes nothing about the transfer, and no
@@ -1109,7 +1128,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		// delta, and a clone's, that xfer_accept_file does not pre-verify.
 		// One whose basis is not held yet is stored dangling and checked by
 		// the pass once the basis arrives.
-		verdict, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
+		verdict, target, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
 		if err != nil {
 			return 0, fmt.Errorf("received file %s: %w", uuid, err)
 		}
@@ -1117,7 +1136,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 			return 0, &hashMismatchError{uuid: uuid}
 		}
 		return 0, storeDeltaContent(ctx, r, pass, uuid, deltaSrc, payload, storedBlob, vis,
-			linker, verdict == deltaMatch)
+			linker, target)
 	}
 
 	return storeResolvedContent(ctx, r, pass, uuid, payload, storedBlob, vis, linker)
@@ -1132,11 +1151,13 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 // or not srcRid is itself currently available.
 //
 // An unverified delta joins pass, to be checked when its basis arrives. A
-// verified one is available now, so the deltas pass holds against it are
-// checked here, and a late mismatch among them aborts the pass.
+// verified one -- target holds the content checkDelta rebuilt -- is
+// available now, so the deltas pass holds against it are checked here, and a
+// late mismatch among them aborts the pass.
 func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uuid,
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
-	linker *manifest.ReceiveLinker, verified bool) error {
+	linker *manifest.ReceiveLinker, target []byte) error {
+	verified := target != nil
 	var dangling, root libfossil.FslID // tracked once the store succeeds
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		alreadyHeld, err := heldReal(tx, uuid)
@@ -1168,6 +1189,10 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 			if err := linker.LinkStored(ctx, tx, rid, uuid, nil); err != nil {
 				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
 			}
+		} else if verified {
+			if err := noteReceived(tx, rid, target); err != nil {
+				return fmt.Errorf("storeDeltaContent: %s: %w", uuid, err)
+			}
 		}
 		switch {
 		case alreadyHeld:
@@ -1185,6 +1210,17 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		pass.track(dangling, root, uuid)
 	}
 	return err
+}
+
+// noteReceived does for a received artifact, given its full content, what
+// storing an S-bearing artifact owes the repository (manifest.NoteStoredArtifact);
+// content that is no artifact owes nothing.
+func noteReceived(tx *db.Tx, rid libfossil.FslID, full []byte) error {
+	d, err := deck.Parse(full)
+	if err != nil {
+		return nil
+	}
+	return manifest.NoteStoredArtifact(tx, rid, d)
 }
 
 // withLinkerTx is r.WithTx for a write that may call linker.LinkStored: a
@@ -1316,9 +1352,16 @@ func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []
 	// cluster manifest, process its M-card UUIDs to create phantoms
 	// for blobs we don't have yet. This is how the client discovers
 	// individual blob UUIDs referenced by a cluster.
-	if d, parseErr := deck.Parse(fullContent); parseErr == nil && d.Type == deck.Cluster {
-		if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
-			return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+	if d, parseErr := deck.Parse(fullContent); parseErr == nil {
+		if d.Type == deck.Cluster {
+			if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
+				return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+			}
+		}
+		// A tree arms the §7.2 gate as it is stored, not at the session's
+		// closing sweep.
+		if err := manifest.NoteStoredArtifact(tx, rid, d); err != nil {
+			return 0, false, fmt.Errorf("received %s: %w", uuid, err)
 		}
 	}
 	return rid, filled, nil
@@ -1342,10 +1385,14 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 	if err != nil {
 		return 0, false, false, err
 	}
+	rcvid, err := db.ReceiptID(tx)
+	if err != nil {
+		return 0, false, false, err
+	}
 	if exists {
 		// Fill phantom: update blob content, remove from phantom table.
-		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=1 WHERE rid=?",
-			len(fullContent), compressed, existingRid); err != nil {
+		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=? WHERE rid=?",
+			len(fullContent), compressed, rcvid, existingRid); err != nil {
 			return 0, false, false, err
 		}
 		if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
@@ -1355,8 +1402,8 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 		filled = true
 	} else {
 		result, err := tx.Exec(
-			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
-			uuid, len(fullContent), compressed)
+			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
+			uuid, len(fullContent), compressed, rcvid)
 		if err != nil {
 			return 0, false, false, err
 		}
@@ -1483,8 +1530,31 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 		s.sha3Refusals++
 		return
 	}
+	if s.submanifestBarred(uuid, rid) {
+		return
+	}
 	s.pendingSend[uuid] = true
 	t.filesSent++
+}
+
+// submanifestBarred applies the draft-fossil-submanifests-00 §7.2 gate to a
+// gimme: a tree or sub-manifest is withheld from a server that has sent no
+// send-submanifests in this session. The withheld artifact is recorded in
+// the result, so a push that left one behind does not read as complete, and
+// the next request says why.
+func (s *session) submanifestBarred(uuid string, rid libfossil.FslID) bool {
+	barred, err := s.smGate.barred(s.repo.DB(), s.cache, rid, s.peerReadsTrees)
+	if err != nil {
+		s.result.Errors = append(s.result.Errors, err.Error())
+		return true
+	}
+	if !barred {
+		return false
+	}
+	s.smRefusals++
+	s.result.Errors = append(s.result.Errors, fmt.Sprintf(
+		"withheld %s: the server does not accept sub-manifests", uuid))
+	return true
 }
 
 // canSend reports whether the client can answer a gimme for uuid: it holds
@@ -1505,13 +1575,19 @@ const phantomEvictRounds = 3
 
 // loadDBPhantoms promotes phantom-table entries into the session's phantom
 // map. This is needed after crosslinking cluster artifacts which create
-// phantom rows for blobs referenced in the cluster.
+// phantom rows for blobs referenced in the cluster. A sparse store's elided
+// phantoms are left out: synchronization never requests one spontaneously
+// (draft-fossil-sparse-cone-00 §5.2).
 func (s *session) loadDBPhantoms() error {
 	if !s.opts.Pull {
 		return nil
 	}
+	elided, err := elidedPhantoms(s.ctx, s.repo.DB())
+	if err != nil {
+		return err
+	}
 	rows, err := s.repo.DB().Query(
-		"SELECT b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
+		"SELECT b.rid, b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
 			" AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)",
 	)
 	if err != nil {
@@ -1519,15 +1595,34 @@ func (s *session) loadDBPhantoms() error {
 	}
 	defer rows.Close()
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if elided != nil && elided.Class(rid) == content.Elided {
+			delete(s.phantoms, uuid)
+			delete(s.phantomAge, uuid)
+			continue
 		}
 		if !s.remoteHas[uuid] {
 			s.phantoms[uuid] = true
 		}
 	}
 	return rows.Err()
+}
+
+// elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
+// store, which has nothing elided and so pays for no classification.
+func elidedPhantoms(ctx context.Context, q db.Querier) (*content.Absences, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	storeCone, err := content.StoreCone(q)
+	if err != nil || storeCone == nil {
+		return nil, err
+	}
+	return content.LoadAbsencesContext(ctx, q)
 }
 
 // handleFileCard stores a received file (or delta-file) into the repo.
@@ -1556,6 +1651,9 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// server-push receive paths.
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
+	}
+	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
+		return false, err
 	}
 	rid, err := storeReceived(ctx, s.repo, s.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
@@ -1706,7 +1804,11 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		}
 	}
 
-	if err := uv.Receive(s.repo.DB(), c.Name, c.MTime, c.Hash, c.Content); err != nil {
+	// Bound, so the row names this sync's receipt.
+	err := s.repo.WithBoundTx(func(b *repo.Repo) error {
+		return uv.Receive(b.DB(), c.Name, c.MTime, c.Hash, c.Content)
+	})
+	if err != nil {
 		return fmt.Errorf("handleUVFileCard: %w", err)
 	}
 	return nil

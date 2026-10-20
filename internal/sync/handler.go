@@ -1581,10 +1581,6 @@ func (h *handler) handleConfigPush() {
 	h.breakLoop("configuration push is not supported by this server")
 }
 
-// cloneBatchCandidates charges excluded and private rows as well as emitted rows.
-// This bounds enumeration, independently of the response's byte budget.
-const cloneBatchCandidates = 1024
-
 func (h *handler) emitCloneBatch() error {
 	// Capture the snapshot bound on the first round of a clone session.
 	// Without an upper bound the batch query keeps picking up blobs that other
@@ -1652,7 +1648,6 @@ func (h *handler) emitCloneBatch() error {
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
 	nextRID := 0
-	examined := 0
 	for rows.Next() {
 		var rid int
 		var uuid string
@@ -1660,12 +1655,6 @@ func (h *handler) emitCloneBatch() error {
 		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
 			return err
 		}
-
-		if h.cone != nil && examined >= cloneBatchCandidates {
-			nextRID = rid
-			break
-		}
-		examined++
 
 		// A higher-rid delta source that a dependent's chain already pulled in
 		// this round is on the wire; skip it before it can consume budget or

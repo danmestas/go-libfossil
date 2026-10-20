@@ -3,20 +3,21 @@ package conformance
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// Candidate pagination does not cover cold raw-reference preprocessing or pull
-// inventories. These cases cannot close the per-round traversal requirement.
+// Depth rejection does not cover the visited-node cap or cold raw-reference
+// preprocessing. This case cannot close the per-round traversal requirement.
 func scProtocolBoundsCases() []scCase {
 	return []scCase{
-		{Case{ID: "sparsecone.6.2.excluded-candidate-budget", Req: "SC-6.2-1"}, scProtocolCandidateBudget},
 		{Case{ID: "sparsecone.8.depth-wire-bound", Req: "SC-8-2"}, scProtocolDepthBound},
 	}
 }
@@ -31,67 +32,57 @@ func TestSparseProtocolBounds(t *testing.T) {
 	}
 }
 
-func scProtocolCandidateBudget(t *testing.T) error {
-	origin := newSCSyncRepo(t, map[string]string{"src/kept": "covered\n"})
-	files := make([]deck.FileCard, 2051)
-	outside := map[string]bool{}
-	for i := range files {
-		_, uuid, err := blob.Store(origin.r.DB(), []byte(fmt.Sprintf("outside candidate %d", i)))
-		if err != nil {
-			return err
-		}
-		files[i] = deck.FileCard{Name: fmt.Sprintf("zzz/%04d", i), UUID: uuid}
-		outside[uuid] = true
+func TestSparseCloneExcludedRunFinalArtifact(t *testing.T) {
+	for _, private := range []bool{true, false} {
+		t.Run(fmt.Sprintf("private=%v", private), func(t *testing.T) {
+			scProtocolCloneExcludedRun(t, private)
+		})
 	}
-	data, err := (&deck.Deck{C: "outside inventory", D: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), U: deck.User("u"), F: files}).Marshal()
+}
+
+func scProtocolCloneExcludedRun(t *testing.T, private bool) {
+	t.Helper()
+	origin := newSCSyncRepo(t, map[string]string{"src/initial": "initial\n"})
+	var outside []deck.FileCard
+	for i := 0; i < 2051; i++ {
+		rid, uuid, err := blob.Store(origin.r.DB(), []byte(fmt.Sprintf("excluded candidate %d", i)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if private {
+			if _, err := origin.r.DB().Exec("INSERT INTO private(rid) VALUES(?)", rid); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			outside = append(outside, deck.FileCard{Name: fmt.Sprintf("zzz/%04d", i), UUID: uuid})
+		}
+	}
+	_, wanted, err := blob.Store(origin.r.DB(), []byte("final in-cone content\n"))
 	if err != nil {
-		return err
+		t.Fatal(err)
+	}
+	data, err := (&deck.Deck{C: "late in-cone artifact", D: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), U: deck.User("u"), F: append([]deck.FileCard{{Name: "src/final", UUID: wanted}}, outside...)}).Marshal()
+	if err != nil {
+		t.Fatal(err)
 	}
 	if _, _, err := blob.Store(origin.r.DB(), data); err != nil {
-		return err
+		t.Fatal(err)
 	}
 	peer := &scSyncPeer{r: origin.r}
-	cursor := 1
-	cookie := ""
-	for round := 0; round < 4; round++ {
-		cards := []xfer.Card{&xfer.PragmaCard{Name: "cone", Values: []string{"src"}}}
-		if cookie != "" {
-			cards = append(cards, &xfer.CookieCard{Value: cookie})
-		}
-		cards = append(cards, &xfer.CloneCard{Version: 3, SeqNo: cursor, SeqNoIsDecimal: true})
-		resp, err := peer.Exchange(context.Background(), &xfer.Message{Cards: cards})
-		if err != nil {
-			return err
-		}
-		next := -1
-		for _, card := range resp.Cards {
-			switch c := card.(type) {
-			case *xfer.CookieCard:
-				cookie = c.Value
-			case *xfer.CloneSeqNoCard:
-				next = c.SeqNo
-			case *xfer.FileCard:
-				if outside[c.UUID] {
-					return fmt.Errorf("outside file emitted: %s", c.UUID)
-				}
-			case *xfer.CFileCard:
-				if outside[c.UUID] {
-					return fmt.Errorf("outside cfile emitted: %s", c.UUID)
-				}
-			}
-		}
-		if next == 0 {
-			if round < 2 {
-				return fmt.Errorf("excluded run exhausted in %d rounds, want at least 3", round+1)
-			}
-			return nil
-		}
-		if next <= cursor || next > cursor+1024 {
-			return fmt.Errorf("cursor %d -> %d exceeded candidate budget or stalled", cursor, next)
-		}
-		cursor = next
+	cloned, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"), peer,
+		sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil), PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return fmt.Errorf("excluded run failed to terminate")
+	defer cloned.Close()
+	if err := scSyncHolding(cloned, "final in-cone content\n", true); err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{0, 2050} {
+		if err := scSyncHolding(cloned, fmt.Sprintf("excluded candidate %d", i), false); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func scProtocolDepthBound(t *testing.T) error {

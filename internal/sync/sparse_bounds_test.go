@@ -8,7 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-func TestCloneBoundsExcludedCandidates(t *testing.T) {
+func TestCloneExcludedCandidatesExhaustWithoutEmptyPage(t *testing.T) {
 	for _, count := range []int{17, 2051} {
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			r := setupSyncTestRepo(t)
@@ -34,10 +34,9 @@ func TestCloneBoundsExcludedCandidates(t *testing.T) {
 					t.Fatal("private candidate emitted")
 				}
 			}
-			if count > 1024 && next != 1025 {
-				t.Fatalf("next RID = %d, want 1025 after examining at most 1024 candidates", next)
-			}
-			if count < 1024 && next != 0 {
+			// An intermediate empty positive page would stop a real clone
+			// under the pinned sync protocol's Section 3.7.
+			if next != 0 {
 				t.Fatalf("next RID = %d, want exhaustion", next)
 			}
 		})

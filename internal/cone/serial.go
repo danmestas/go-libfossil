@@ -161,7 +161,7 @@ func parseHeader(data []byte) (h *Horizon, offset, count int, err error) {
 			return nil, 0, 0, fmt.Errorf("%w: truncated horizon", ErrInvalidMember)
 		}
 		n := int(data[5])
-		if n != 40 && n != 64 || len(data)-fixed < n {
+		if (n != 40 && n != 64) || len(data)-fixed < n {
 			return nil, 0, 0, fmt.Errorf("%w: bad horizon hash length", ErrInvalidMember)
 		}
 		hz, err := NewHorizon(string(data[fixed:fixed+n]), HorizonRule(data[3]), HorizonDepth(data[4]))

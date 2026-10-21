@@ -4,7 +4,16 @@ import (
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/content"
+	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 )
+
+// SettingPartialMirror names the boolean repository setting, read as fossil
+// reads one ("on", "yes", "true" or a nonzero number), that lets a sparse store
+// serve a clone its cone does not cover (draft-fossil-sparse-cone-00 §5.3).
+// Unset, such a clone is refused with one error card and no content, since
+// the clone would receive elided phantoms it must resolve elsewhere. It
+// governs every serving surface: HandleSync, XferHandler and ServeHTTP.
+const SettingPartialMirror = internalsync.SettingPartialMirror
 
 // StoreCone returns the repository's store cone, or nil when the store is
 // dense. A store cone (draft-fossil-sparse-cone-00 §5) is local policy: an

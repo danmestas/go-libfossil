@@ -116,7 +116,8 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 
 // HandleOpts configures optional behavior for HandleSync.
 type HandleOpts struct {
-	// PartialMirror permits clone requests beyond this store's cone.
+	// PartialMirror permits clone requests beyond this store's cone, as the
+	// SettingPartialMirror repository setting does for every caller.
 	PartialMirror bool
 	Buggify       BuggifyChecker // nil in production.
 	Observer      Observer       // nil defaults to no-op.
@@ -720,7 +721,11 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 	if !h.cloneMode || h.fatal {
 		return nil
 	}
-	if !h.partialMirror {
+	mirror, err := h.servesPartialMirror()
+	if err != nil {
+		return err
+	}
+	if !mirror {
 		have, err := content.StoreCone(h.repo.DB())
 		if err != nil {
 			return err

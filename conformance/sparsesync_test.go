@@ -26,6 +26,7 @@ func scSyncCases() []scCase {
 		{Case{ID: "sparsecone.6.1.wire-members", Req: "SC-6.1-1"}, scSyncMembers},
 		{Case{ID: "sparsecone.8.wire-bounds", Req: "SC-8-1"}, scSyncBounds},
 		{Case{ID: "sparsecone.5.3.origin-refusal", Req: "SC-5.3-2"}, scSyncOrigin},
+		{Case{ID: "sparsecone.5.3.partial-mirror-setting", Req: "SC-5.3-2"}, scSyncMirrorSetting},
 		{Case{ID: "sparsecone.5.3.clone-fatal", Req: "SC-5.3-3"}, scSyncFatal},
 		{Case{ID: "sparsecone.5.3.clone-error-only", Req: "SC-5.3-3"}, scSyncErrorOnly},
 		{Case{ID: "sparsecone.5.3.auth-challenge", Req: "SC-5.3-3"}, scSyncAuth},
@@ -153,6 +154,33 @@ func scSyncOrigin(t *testing.T) error {
 		return err
 	}
 	return scSyncHolding(r, "outside\n", false)
+}
+
+// The repository setting, not a per-call option, is what an operator reaches:
+// "off" keeps the refusal and "on" serves the clone over the same handler.
+func scSyncMirrorSetting(t *testing.T) error {
+	origin := newSCSyncRepo(t, scSyncFiles())
+	scSparsify(t, origin.r, scCone(t, []string{"src"}, nil))
+	peer := &scSyncPeer{r: origin.r}
+	clone := &xfer.Message{Cards: []xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}}
+	if err := origin.r.SetConfig(sync.SettingPartialMirror, "off"); err != nil {
+		return err
+	}
+	resp, err := peer.Exchange(context.Background(), clone)
+	if err != nil {
+		return err
+	}
+	if err := scSyncRefused(resp, scSyncOriginRefusal); err != nil {
+		return err
+	}
+	if err := origin.r.SetConfig(sync.SettingPartialMirror, "on"); err != nil {
+		return err
+	}
+	r, result := scSyncClone(t, peer, sync.CloneOpts{})
+	if result.BlobsRecvd == 0 {
+		return fmt.Errorf("partial-mirror setting made no clone progress")
+	}
+	return scSyncHolding(r, "inside\n", true)
 }
 
 func scSyncFatal(t *testing.T) error {

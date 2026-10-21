@@ -137,6 +137,10 @@ func HandleSync(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Mes
 // HandleSyncWithOpts processes an incoming xfer request with optional
 // fault injection. Used by DST harness; production callers use HandleSync.
 func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts) (*xfer.Message, error) {
+	return handleSyncWithFacts(ctx, r, req, opts, nil, false)
+}
+
+func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts, proof *sparsePreparedProof, ignoreSparse bool) (*xfer.Message, error) {
 	if r == nil {
 		panic("sync.HandleSync: r must not be nil")
 	}
@@ -149,7 +153,15 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx, ignoreSparse: ignoreSparse}
+	if proof != nil {
+		h.preparedFacts, h.preparedIndex = proof.facts, proof.index
+		defer func() {
+			if h.keep != nil && h.keep.indexed != nil {
+				proof.work = h.keep.indexed.Work
+			}
+		}()
+	}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -197,6 +209,9 @@ type handler struct {
 	ctx             context.Context
 	cone            *cone.Cone
 	keep            *sparseKeep
+	preparedFacts   *content.ConeReferenceFacts
+	preparedIndex   *content.ConeSuccessors
+	ignoreSparse    bool
 	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker
@@ -1258,6 +1273,12 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		h.resp = append(h.resp, sha3Refusal())
 		return nil
 	}
+	// Preserve send_file's private notice/SHA3 refusal ordering, then withhold
+	// shunned payloads before any submanifest or content expansion.
+	shunned, err := shun.IsShunned(h.repo.DB(), c.UUID)
+	if err != nil || shunned {
+		return err
+	}
 	if barred, err := h.submanifestBarred(rid); err != nil || barred {
 		return err
 	}
@@ -1616,10 +1637,7 @@ func (h *handler) emitCloneBatch() error {
 	if cursorAtEntry <= 0 {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
-	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
-		h.cloneSeq, h.cloneSnapMax,
-	)
+	rows, err := h.cloneCandidates()
 	if err != nil {
 		return fmt.Errorf("handler: clone batch: %w", err)
 	}
@@ -1663,7 +1681,11 @@ func (h *handler) emitCloneBatch() error {
 			continue
 		}
 
-		if !h.keep.keeps(libfossil.FslID(rid)) {
+		shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+		if err != nil {
+			return err
+		}
+		if shunned || !h.keep.keeps(libfossil.FslID(rid)) {
 			continue
 		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
@@ -1794,6 +1816,13 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	}
 	if err != nil {
 		return cloneBlobRow{}, false, fmt.Errorf("handler: clone blob info rid %d: %w", rid, err)
+	}
+	shunned, err := shun.IsShunned(h.repo.DB(), row.uuid)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if shunned {
+		return cloneBlobRow{}, false, nil
 	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil

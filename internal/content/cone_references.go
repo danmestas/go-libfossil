@@ -2,7 +2,6 @@ package content
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -59,74 +58,11 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 	if c == nil {
 		return p, nil
 	}
-	rows, err := q.Query("SELECT rid,uuid FROM blob")
+	facts, err := LoadConeReferenceFacts(ctx, q)
 	if err != nil {
 		return nil, err
 	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		var rid libfossil.FslID
-		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		p.names[rid] = uuid
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, err
-	}
-	nodes := map[string]*deck.Deck{}
-	var roots []*deck.Deck
-	err = ExpandAll(q, func(rid libfossil.FslID, uuid string, data []byte, expandErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if expandErr != nil {
-			p.required[uuid] = true
-			return nil
-		} // Unreadable bytes may be structural; no outside proof permits deletion.
-		p.held[uuid] = rid
-		d, err := deck.Parse(data)
-		if err != nil {
-			return nil
-		} // Ordinary file bytes.
-		if len(nodes)+len(roots) >= coneReferenceNodes {
-			return fmt.Errorf("sparse cone: artifact traversal bound exceeded")
-		}
-		if d.Type == deck.Submanifest {
-			nodes[uuid] = d
-			p.nodes[rid] = d
-		} else {
-			p.required[uuid] = true
-		}
-		if d.Type == deck.Checkin {
-			roots = append(roots, d)
-		}
-		for _, f := range d.F {
-			if f.UUID == "" {
-				continue
-			}
-			if c.Covers(f.Name) {
-				p.inside[f.UUID] = true
-			} else {
-				p.outside[f.UUID] = true
-			}
-		}
-		p.structural(d)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	w := coneReferenceWalk{ctx: ctx, cone: c, refs: p, nodes: nodes, path: map[string]bool{}}
-	for _, root := range roots {
-		if err := w.walk(root.S, "", 1, true); err != nil {
-			return nil, err
-		}
-	}
-	return p, nil
+	return facts.Classify(ctx, c)
 }
 
 // RetainProvenance removes raw proof dependencies from a proposed drop set.

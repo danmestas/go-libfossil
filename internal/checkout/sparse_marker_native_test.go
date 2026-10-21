@@ -4,7 +4,9 @@ package checkout
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,4 +44,22 @@ func TestSparseMarkerNativeRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCheckoutMarker(t, c.Dir(), PreferredDBName())
+	if _, err := f.repo.DB().Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(c.Dir(), "src/a.c"), []byte("native after densification\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "commit", "-m", "dense after sparse", "--user", "test")
+	cmd.Dir = c.Dir()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("native commit after densification: %v: %s", err, output)
+	}
+	rid, _, err := c.Version()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, rid, maps(sparseFiles, map[string]string{"src/a.c": "native after densification\n"}))
 }

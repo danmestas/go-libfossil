@@ -1475,8 +1475,13 @@ func TestScenarioClusterConvergence(t *testing.T) {
 	masterCount, _ := CountBlobs(masterRepo)
 
 	// Generate clusters on master to verify the API works on a repo with
-	// 500+ blobs. This exercises content.GenerateClusters end-to-end.
+	// 500+ blobs. This exercises content.GenerateClusters end-to-end. It
+	// runs after the simulation, so injection is suspended: blob.Store
+	// rightly refuses a write that injection corrupts, and that refusal is
+	// the fault working, not a finding about clusters.
+	resume := simio.SuspendBuggify()
 	nClusters, err := content.GenerateClusters(masterRepo.DB())
+	resume()
 	if err != nil {
 		t.Fatalf("GenerateClusters: %v", err)
 	}

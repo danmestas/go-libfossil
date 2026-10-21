@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // InvariantError records which invariant failed, on which node, and why.
@@ -31,6 +32,7 @@ func (e *InvariantError) Error() string {
 // matching the hash of its expanded content. This catches corruption
 // from buggify (content.Expand byte-flip) or storage bugs.
 func CheckBlobIntegrity(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	rids, err := allBlobRIDs(r.DB())
 	if err != nil {
 		return fmt.Errorf("CheckBlobIntegrity(%s): list blobs: %w", nodeID, err)
@@ -50,6 +52,7 @@ func CheckBlobIntegrity(nodeID string, r *repo.Repo) error {
 // CheckDeltaChains verifies that every delta's srcid points to an
 // existing blob (no dangling references).
 func CheckDeltaChains(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	rows, err := r.DB().Query("SELECT rid, srcid FROM delta")
 	if err != nil {
 		return fmt.Errorf("CheckDeltaChains(%s): query: %w", nodeID, err)
@@ -77,6 +80,7 @@ func CheckDeltaChains(nodeID string, r *repo.Repo) error {
 // CheckNoOrphanPhantoms verifies that phantom entries reference blobs
 // that actually exist in the blob table (they're just missing content).
 func CheckNoOrphanPhantoms(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	rows, err := r.DB().Query("SELECT p.rid FROM phantom p LEFT JOIN blob b ON p.rid=b.rid WHERE b.rid IS NULL")
 	if err != nil {
 		return fmt.Errorf("CheckNoOrphanPhantoms(%s): query: %w", nodeID, err)
@@ -100,6 +104,7 @@ func CheckNoOrphanPhantoms(nodeID string, r *repo.Repo) error {
 // CheckConvergence verifies that every leaf repo contains the same set
 // of artifact UUIDs as the master repo.
 func CheckConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	masterUUIDs, err := allBlobUUIDs(master.DB())
 	if err != nil {
 		return fmt.Errorf("CheckConvergence: master UUIDs: %w", err)
@@ -140,6 +145,7 @@ func CheckConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
 // in every leaf. Unlike CheckConvergence, this allows leaves to have
 // extra artifacts (useful when only pull is being tested).
 func CheckSubsetOf(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	masterUUIDs, err := allBlobUUIDs(master.DB())
 	if err != nil {
 		return fmt.Errorf("CheckSubsetOf: master UUIDs: %w", err)
@@ -169,6 +175,7 @@ func CheckSubsetOf(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
 // unversioned table has a hash matching the SHA1 of its decompressed
 // content, and sz matches the content length.
 func CheckUVIntegrity(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	uv.EnsureSchema(r.DB())
 	entries, err := uv.List(r.DB())
 	if err != nil {
@@ -207,6 +214,7 @@ func CheckUVIntegrity(nodeID string, r *repo.Repo) error {
 
 // CheckUVConvergence verifies that all repos have identical UV content hashes.
 func CheckUVConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	uv.EnsureSchema(master.DB())
 	masterHash, err := uv.ContentHash(master.DB())
 	if err != nil {
@@ -234,6 +242,7 @@ func CheckUVConvergence(master *repo.Repo, leaves map[NodeID]*repo.Repo) error {
 
 // CheckSafety runs all safety invariants on every node in the simulation.
 func (s *Simulator) CheckSafety() error {
+	defer simio.SuspendBuggify()()
 	for _, id := range s.leafIDs {
 		r := s.leaves[id].Repo()
 		if err := CheckBlobIntegrity(string(id), r); err != nil {
@@ -258,6 +267,7 @@ func (s *Simulator) CheckSafety() error {
 // CheckAllConverged checks convergence between master and all leaves.
 // Only meaningful after a fault-free sync period.
 func (s *Simulator) CheckAllConverged(master *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	leaves := make(map[NodeID]*repo.Repo, len(s.leaves))
 	for id, a := range s.leaves {
 		leaves[id] = a.Repo()
@@ -267,6 +277,7 @@ func (s *Simulator) CheckAllConverged(master *repo.Repo) error {
 
 // CheckAllTableSyncConverged checks table sync convergence across all nodes.
 func (s *Simulator) CheckAllTableSyncConverged() error {
+	defer simio.SuspendBuggify()()
 	repos := make(map[string]*repo.Repo)
 	if s.masterRepo != nil {
 		repos["master"] = s.masterRepo
@@ -279,6 +290,7 @@ func (s *Simulator) CheckAllTableSyncConverged() error {
 
 // CheckAllUVConverged checks UV convergence between master and all leaves.
 func (s *Simulator) CheckAllUVConverged(master *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	leaves := make(map[NodeID]*repo.Repo, len(s.leaves))
 	for id, a := range s.leaves {
 		leaves[id] = a.Repo()
@@ -294,6 +306,7 @@ func (s *Simulator) CheckAllUVConverged(master *repo.Repo) error {
 // 3. Propagated entries (srcid=0) have tagtype=2
 // 4. No tagxref.rid references a phantom blob
 func CheckTagxrefIntegrity(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	// Check all tagxref rows reference valid blobs and tags.
 	rows, err := r.DB().Query(`
 		SELECT tx.rid, tx.tagid, tx.srcid, tx.tagtype, t.tagname
@@ -353,6 +366,7 @@ func CheckTagxrefIntegrity(nodeID string, r *repo.Repo) error {
 // 2. Every row's mtime is positive.
 // 3. The computed catalog hash is 40 hex chars.
 func CheckTableSyncIntegrity(nodeID string, r *repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	if err := repo.EnsureSyncSchema(r.DB()); err != nil {
 		return nil // No sync schema — no tables to check.
 	}
@@ -410,6 +424,7 @@ func CheckTableSyncIntegrity(nodeID string, r *repo.Repo) error {
 // for every shared synced table. Tables present in some repos but not others
 // are skipped (schema may still be propagating).
 func CheckTableSyncConvergence(repos map[string]*repo.Repo) error {
+	defer simio.SuspendBuggify()()
 	// Collect table sets per repo.
 	type tableRows struct {
 		catalogHash string
@@ -466,6 +481,7 @@ func CheckTableSyncConvergence(repos map[string]*repo.Repo) error {
 // tombstones for each synced table. Two nodes may have different catalog hashes
 // during convergence, but once converged, their tombstone sets must match.
 func (s *Simulator) CheckTombstoneConvergence(t *testing.T, masterRepo *repo.Repo, tableName string, def repo.TableDef) {
+	defer simio.SuspendBuggify()()
 	t.Helper()
 
 	// Collect tombstone pk_hashes from master.

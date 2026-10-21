@@ -166,6 +166,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
 ### Changed
 
+- Breaking, for callers comparing values with `==`: `ExtractOpts` gained
+  the `Warn` callback and the CLI's `RepoOpenCmd` gained the `Cone` and
+  `ConeNot` lists, so neither struct is comparable any more. Every other
+  change to the exported API is an addition.
 - Tag propagation after a crosslink now starts only from the primary
   parents the batch wrote plink rows for, and from the new parents of a
   reparent, rather than from every primary parent in the repository.
@@ -224,6 +228,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy is re-pinned to `d497c2432f`, whose text is the same.
 
 ### Fixed
+
+- The simulation's safety invariants no longer read through armed fault
+  injection. `CheckSafety` and the other checks ran while Buggify was still
+  on, so read-path sites truncated or flipped the bytes the check itself
+  expanded, and every seed at the adversarial and hostile levels reported a
+  blob-integrity violation that was never in the database. Each check now
+  suspends injection for its own reads with the new
+  `simio.SuspendBuggify`, which restores it with its random stream intact.
 
 - `verify.Verify` audits leaves by repo-state §§7.2–7.3's same-branch
   rule and branch-tag recheck schedule instead of assuming every check-in

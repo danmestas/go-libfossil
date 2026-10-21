@@ -59,12 +59,15 @@ func (h *handler) emitCloneResume(round *cloneBatch) {
 func (h *handler) cloneSparseRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
 	w := h.keep.walk
 	kind, d := w.classify(rid)
+	already := round.sent[rid]
 	if kind == sparseContent || kind == sparseNode {
-		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		if !already {
+			round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		}
 		return true, nil
 	}
 	resuming := round.resume.set && round.resume.row == rid
-	if !resuming {
+	if !resuming && !already {
 		sent, err := h.cloneSend(round, rid, uuid, fullSize)
 		if err != nil || !sent {
 			round.nextRID = rid

@@ -39,9 +39,10 @@ func scProtocolParentDiff(t *testing.T, origin *scRepo, base map[string]string) 
 		parent = origin.commit(t, base, parent)
 	}
 	peer := &scSyncPeer{r: origin.r, opts: sync.HandleOpts{Buggify: scOneArtifactRounds{}}}
-	r, _ := scSyncClone(t, peer, sync.CloneOpts{
-		StoreCone: scCone(t, []string{"src"}, nil), PullPhantoms: true,
-	})
+	r, _ := scSyncClone(t, peer, sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil)})
+	if err := scNoTransit(r); err != nil {
+		return err
+	}
 	unchanged := scTextUUID(origin.r, "inside\n")
 	sent, resumed := 0, false
 	for _, resp := range peer.replies {
@@ -73,4 +74,49 @@ func scTextUUID(origin *repo.Repo, text string) string {
 		return uuid
 	}
 	return hash.SHA1([]byte(text))
+}
+
+// Committing deltifies each manifest against its successor, so the first
+// check-in's chain puts every later manifest on the wire ahead of its row.
+// Each still walks its tree: without pulling phantoms afterwards, the clone
+// holds every check-in's in-cone files.
+func scProtocolDeltaManifestFlat(t *testing.T) error {
+	return scProtocolDeltaManifestWalk(t, newSCSyncRepo(t, scSyncFiles()), scSyncFiles())
+}
+
+func scProtocolDeltaManifestTree(t *testing.T) error {
+	return scProtocolDeltaManifestWalk(t, newSCSyncTreeRepo(t), scSyncTreeFiles())
+}
+
+func scProtocolDeltaManifestWalk(t *testing.T, origin *scRepo, files map[string]string) error {
+	parent := origin.c1
+	for i := 0; i < 3; i++ {
+		files["src/a"] = fmt.Sprintf("inside v%d\n", i)
+		parent = origin.commit(t, files, parent)
+	}
+	peer := &scSyncPeer{r: origin.r}
+	r, _ := scSyncClone(t, peer, sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil)})
+	if err := scNoTransit(r); err != nil {
+		return err
+	}
+	for i := 0; i < 3; i++ {
+		text := fmt.Sprintf("inside v%d\n", i)
+		if _, held, err := content.CheckAvailableByUUID(r.DB(), scTextUUID(origin.r, text)); err != nil || !held {
+			return fmt.Errorf("holding %q = %v (error %v), want held", text, held, err)
+		}
+	}
+	return nil
+}
+
+// scNoTransit holds a clone made without pulling phantoms to the walk alone:
+// whatever the cone needs arrived in the clone rounds themselves.
+func scNoTransit(r *repo.Repo) error {
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		return err
+	}
+	if n := a.Count(content.Transit); n != 0 {
+		return fmt.Errorf("clone rounds left %d transit phantoms", n)
+	}
+	return nil
 }

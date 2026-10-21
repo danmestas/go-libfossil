@@ -1756,8 +1756,10 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
 	// A higher-rid delta source that a dependent's chain already pulled in
 	// this round is on the wire; skip it before it can consume budget or
-	// advance the cursor a second time.
-	if round.sent[rid] {
+	// advance the cursor a second time. A sparse walk still owes the walk of
+	// a check-in that went out as another manifest's delta source.
+	walk := h.keep != nil && h.keep.walk != nil
+	if round.sent[rid] && !walk {
 		return true, nil
 	}
 	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
@@ -1772,7 +1774,7 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 		round.nextRID = rid
 		return false, nil
 	}
-	if h.keep != nil && h.keep.walk != nil {
+	if walk {
 		return h.cloneSparseRow(round, rid, uuid, fullSize)
 	}
 	// §6.2: a cone-excluded row is charged as a dense round would charge

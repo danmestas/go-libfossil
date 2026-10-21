@@ -24,6 +24,8 @@ func scProtocolBoundsCases() []scCase {
 		{Case{ID: "sparsecone.6.2.round-walk-bound", Req: "SC-6.2-1"}, scProtocolRoundWalk},
 		{Case{ID: "sparsecone.6.2.round-work-bound", Req: "SC-6.2-1"}, scProtocolRoundWork},
 		{Case{ID: "sparsecone.6.2.excluded-rounds", Req: "SC-6.2-1"}, scProtocolExcludedRounds},
+		{Case{ID: "sparsecone.6.2.delta-manifest-flat", Req: "SC-6.2-1"}, scProtocolDeltaManifestFlat},
+		{Case{ID: "sparsecone.6.2.delta-manifest-tree", Req: "SC-6.2-1"}, scProtocolDeltaManifestTree},
 		{Case{ID: "sparsecone.6.2.parent-diff-flat", Req: "SC-6.2-1"}, scProtocolParentDiffFlat},
 		{Case{ID: "sparsecone.6.2.parent-diff-tree", Req: "SC-6.2-1"}, scProtocolParentDiffTree},
 	}

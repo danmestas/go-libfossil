@@ -485,20 +485,7 @@ func (c *Checkout) restoreCommitted(tx *sql.Tx, id int64, pathname, fullPath str
 		panic("checkout.restoreCommitted: rid must be positive")
 	}
 	if fullPath == "" {
-		var vid int64
-		if err := tx.QueryRow("SELECT vid FROM vfile WHERE id=?", id).Scan(&vid); err != nil {
-			return err
-		}
-		file, present, err := manifest.LookupFile(c.repo, libfossil.FslID(vid), pathname)
-		if err != nil {
-			return err
-		}
-		if !present {
-			return fmt.Errorf("checkout.Revert: no baseline entry for %s", pathname)
-		}
-		_, err = tx.Exec(`UPDATE vfile SET chnged=0, deleted=0, mrid=rid,
-			mhash=NULL, mtime=0, isexe=?, islink=? WHERE id=?`, file.Perm == "x", file.Perm == "l", id)
-		return err
+		panic("checkout.restoreCommitted: empty fullPath")
 	}
 
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(rid))

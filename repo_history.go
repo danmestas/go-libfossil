@@ -850,9 +850,9 @@ func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
 	if !found {
 		return nil, nil
 	}
-	rid, ok := content.AvailableByUUID(r.DB(), f.UUID)
-	if !ok {
-		return nil, fmt.Errorf("blob not found for uuid %s", f.UUID)
+	rid, err := content.RequireAvailableByUUID(r.DB(), f.UUID)
+	if err != nil {
+		return nil, err
 	}
 	// Bare Expand: Diff is pairwise (two named checkins), not a walk over a
 	// file's whole history, so each side's blob is expanded once. There is

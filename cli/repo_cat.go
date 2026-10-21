@@ -36,6 +36,13 @@ func (c *RepoCatCmd) Run(g *Globals) error {
 	}
 
 	db := r.Inner().DB()
+	var uuid string
+	if err := db.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+		return err
+	}
+	if _, err := content.RequireAvailableByUUID(db, uuid); err != nil {
+		return err
+	}
 	var data []byte
 	if c.Raw {
 		data, err = blob.Load(db, fsltype.FslID(rid))
@@ -46,8 +53,8 @@ func (c *RepoCatCmd) Run(g *Globals) error {
 		return fmt.Errorf("reading artifact: %w", err)
 	}
 
-	os.Stdout.Write(data)
-	return nil
+	_, err = os.Stdout.Write(data)
+	return err
 }
 
 // runAt writes the bytes of file c.Artifact as version c.At holds it. A

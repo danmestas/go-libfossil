@@ -182,7 +182,9 @@ func creditInsertions(credit []int, edit []int, v int) int {
 // loadFileAt loads the content of a file at a given checkin RID, serving both
 // the checkin manifest and the file blob through cache so a full-history walk
 // amortizes their overlapping delta chains. A nil cache reads uncached.
-func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache) ([]byte, error) {
+func loadFileAt(
+	r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache,
+) ([]byte, error) {
 	if r == nil {
 		panic("annotate.loadFileAt: r must not be nil")
 	}
@@ -199,9 +201,9 @@ func loadFileAt(r *repo.Repo, rid libfossil.FslID, filePath string, cache *conte
 		return nil, err
 	}
 	if found {
-		fileRID, ok := content.AvailableByUUID(r.DB(), f.UUID)
-		if !ok {
-			return nil, fmt.Errorf("blob %s not found", f.UUID)
+		fileRID, err := content.RequireAvailableByUUID(r.DB(), f.UUID)
+		if err != nil {
+			return nil, err
 		}
 		return cache.Expand(r.DB(), fileRID)
 	}

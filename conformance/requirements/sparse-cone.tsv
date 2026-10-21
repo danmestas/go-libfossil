@@ -34,11 +34,11 @@ SC-3.4-1	3.4	Members are literal path prefixes; glob and pattern members are not
 SC-3.4-2	3.4	A member names a directory subtree or a single file with equal standing.
 SC-3.4-3	3.4	A metacharacter in a member is a literal character of the path: it is never expanded, and the member may be refused.
 SC-3.5-1	3.5	Amending a cone by wholesale replacement and by member addition or removal are equivalent, and the incremental form should be offered.
-SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of demand fetch).	over a dense store widening materializes from the store; demand fetch over a sparse store is Appendix A step 4
+SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of demand fetch).
 SC-3.5-3	3.5	Narrowing dematerializes and leaves reclamation to explicit compaction.
 SC-4-1	4	The sparse worktree is available to any conforming repository, with flat or tree-structured manifests.
 SC-4.1-1	4.1	A checkout operation given a cone materializes exactly the covered files.
-SC-4.1-2	4.1	The managed-file record covers only in-cone files.	the strict three-physical-row fixture passes on the private-marker implementation; marker transitions, legacy unstamped undo refusal and cone-stamped undo images are reviewed; durable crash recovery of the marker remains unverified
+SC-4.1-2	4.1	The managed-file record covers only in-cone files.
 SC-4.1-3	4.1	Status, untracked-file listing and bulk tracking operate within the cone; an uncovered on-disk path is neither reported as untracked nor eligible for tracking.
 SC-4.1-4	4.1	A request to track a path outside the cone is refused, and the refusal names the cone as the reason; a diagnostic that reports a missing file or alleges damage does not conform.
 SC-4.1-5	4.1	All file-set enumeration flows through the shared enumeration interface with the cone applied there as a range predicate, never filtered at individual call sites.
@@ -49,9 +49,9 @@ SC-4.2-4	4.2	The result is an ordinary check-in: a reader cannot detect that it 
 SC-4.3-1	4.3	A sparse-worktree commit over a dense store may compute the R card by reading out-of-cone content from the store.
 SC-4.3-2	4.3	A commit over a sparse store omits the R card.
 SC-4.3-3	4.3	Verifiers do not treat an absent R card as damage.
-SC-4.3-4	4.3	A verifier checking a present R card during a sparse materialization computes the aggregate over the dense enumeration, reading out-of-cone content from the store.	materialization verifies no R card; manifest.VerifyRCard, which every commit runs, always aggregates the dense enumeration
+SC-4.3-4	4.3	A verifier checking a present R card during a sparse materialization computes the aggregate over the dense enumeration, reading out-of-cone content from the store.
 SC-4.3-5	4.3	A verifier over a sparse store skips R verification rather than report disagreement.
-SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.	record-only merge and conflict, update keeping the pending merge, partial-commit queue handling, mode-only revert and undo after cone changes are reviewed against fossil; revert of a record-only change has no conformance case and stash apply on a sparse checkout is untested
+SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.
 SC-4.4-2	4.4	The count of out-of-cone changes applied should be reported.
 SC-4.4-3	4.4	Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.
 SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.

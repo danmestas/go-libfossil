@@ -37,6 +37,10 @@ type CheckoutOpenOpts struct {
 // ExtractOpts configures file extraction from a checkin.
 type ExtractOpts struct {
 	Force bool // overwrite uncommitted changes
+	// Warn receives what fossil's checkout warns about and proceeds past:
+	// a present R card that disagrees with the files the check-in names,
+	// checked over every file, whatever the cone. nil discards warnings.
+	Warn func(message string)
 }
 
 // UpdateOpts configures updating to a new version with merge.
@@ -211,6 +215,7 @@ func (c *Checkout) Version() (int64, string, error) {
 func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 	err := c.inner.Extract(fsltype.FslID(rid), checkout.ExtractOpts{
 		Force: opts.Force,
+		Warn:  opts.Warn,
 	})
 	if err != nil {
 		return fmt.Errorf("libfossil: extract: %w", err)

@@ -117,6 +117,10 @@ type ExtractOpts struct {
 	SetMTime bool                                         // as fossil's --setmtime: each file's last check-in time
 	DryRun   bool
 	Force    bool // overwrite locally modified files
+	// Warn receives what fossil's checkout prints as a warning and proceeds
+	// past, such as a present R card disagreeing with the manifest's files.
+	// nil discards warnings; they never fail the extract.
+	Warn func(message string)
 }
 
 // UpdateOpts configures updating to a new version with merge.

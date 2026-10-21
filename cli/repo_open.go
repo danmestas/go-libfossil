@@ -58,7 +58,8 @@ func (c *RepoOpenCmd) Run(g *Globals) error {
 	fmt.Printf("opened checkout in %s (repo: %s)\n", c.Dir, absRepo)
 	if tipRid > 0 && cone != nil {
 		// A sparse open materializes the cone: what it covers is the point.
-		if err := co.Extract(tipRid, libfossil.ExtractOpts{}); err != nil {
+		warn := func(message string) { fmt.Printf("WARNING: %s\n", message) }
+		if err := co.Extract(tipRid, libfossil.ExtractOpts{Warn: warn}); err != nil {
 			return err
 		}
 		fmt.Printf("sparse cone: %s\n", cone)

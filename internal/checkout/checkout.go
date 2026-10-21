@@ -255,22 +255,9 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: no SQLite driver registered")
 	}
 
-	// Find the checkout DB
-	dbPath, err := FindCheckoutDB(env.Storage, dir, opts.SearchParents)
+	ckdb, dbPath, err := openCheckoutDB(env.Storage, dir, opts.SearchParents)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Open: %w", err)
-	}
-
-	// Open the checkout database
-	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("checkout.Open: sql.Open: %w", err)
-	}
-
-	// Ping to validate the connection
-	if err := ckdb.Ping(); err != nil {
-		ckdb.Close()
-		return nil, fmt.Errorf("checkout.Open: ping: %w", err)
 	}
 
 	// Verify vvar checkout exists
@@ -314,6 +301,31 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: migrate sparse records: %w", err)
 	}
 	return c, nil
+}
+
+// openCheckoutDB finds the checkout database, first completing a marker move
+// a crash interrupted, and opens it.
+func openCheckoutDB(storage simio.Storage, dir string, searchParents bool) (*sql.DB, string, error) {
+	dbPath, err := FindCheckoutDB(storage, dir, searchParents)
+	var pair *markerPairError
+	if errors.As(err, &pair) {
+		if err := recoverMarkerPair(pair); err != nil {
+			return nil, "", err
+		}
+		dbPath, err = FindCheckoutDB(storage, dir, searchParents)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("sql.Open: %w", err)
+	}
+	if err := ckdb.Ping(); err != nil {
+		ckdb.Close()
+		return nil, "", fmt.Errorf("ping: %w", err)
+	}
+	return ckdb, dbPath, nil
 }
 
 // Close closes the checkout database. Does NOT close the repo.
@@ -487,6 +499,9 @@ func checkoutMarker(storage simio.Storage, dir string) (string, error) {
 			return "", fmt.Errorf("inspect checkout marker %s: %w", candidate, err)
 		}
 		if found != "" {
+			if pair := linkedMarkerPair(found, candidate); pair != nil {
+				return "", pair
+			}
 			return "", fmt.Errorf("multiple checkout markers in %s: %s and %s", dir, found, candidate)
 		}
 		found = candidate

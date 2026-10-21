@@ -226,7 +226,11 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 // distinguish a clean update from one that wrote conflict markers into
 // working-tree files.
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
-	res, err := c.inner.Update(checkout.UpdateOpts{
+	return c.update(context.Background(), opts)
+}
+
+func (c *Checkout) update(ctx context.Context, opts UpdateOpts) (UpdateResult, error) {
+	res, err := c.inner.UpdateContext(ctx, checkout.UpdateOpts{
 		TargetRID: fsltype.FslID(opts.TargetRID),
 	})
 	if err != nil {

@@ -27,8 +27,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `VerifyRCard` skips over a sparse store, and skips an absent R card. A
   checkout opens over a sparse store when its own cone stays inside the
   store's. Manifests, sub-manifest nodes and control artifacts are always
-  held, as zit holds them. Nothing yet fills a store sparsely: that
-  needs cone-scoped transfer, Appendix A step 4.
+  held, as zit holds them. Cone-scoped transfer (Appendix A step 4):
+  `Repo.CommitContext`, `Checkout.CheckinContext`, `Checkout.UpdateContext`
+  and `Checkout.SetConeContext` take a `RequiredContentOpts` naming a peer
+  and recover the sub-manifest closure a sparse store lacks for a commit,
+  update or widening through an authenticated gimme exchange: in one
+  transaction, never widening the store cone, refusing incomplete,
+  corrupt, shunned, unauthorized-private or wrong-project content, and
+  never fetching an outside F payload. `repo ci` and `repo cone
+  add|remove|set` take `--remote`, `--sync-user`, `--sync-pass`,
+  `--sync-private` and `--timeout` (default 10m); the peer defaults to the
+  saved last-sync-url and no password is saved. A cone-aware server
+  answers a cone request from a prepared index of what the cone keeps,
+  visiting only the needed candidates over long excluded runs, with the
+  dense path's private and shun notices and the same cards; it refuses to
+  prepare beyond fixed stored, inflated and card budgets, and serves
+  densely after any foreign commit until rebuilt. The server-side walk
+  keeps the depth and visit bounds of single-name lookup (§8).
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds
@@ -40,9 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manifests; adding, removing, renaming or reverting an uncovered path is
   refused with `ErrOutsideCone`, naming the cone. A commit carries the
   uncovered files from its parent unchanged and is the same check-in a
-  dense checkout makes of the same change. `Update` records uncovered
-  changes without writing them and counts them in `UpdateResult.OutOfCone`;
-  a merge that would change an uncovered file is refused. The checkout
+  dense checkout makes of the same change. `Update` and `Merge` apply
+  changes to uncovered files to the record without writing them, counted
+  in `UpdateResult.OutOfCone`; the pending merge survives `Update` as
+  fossil's does, a partial commit leaves record-only changes pending, and a
+  partial commit of a pending merge is refused, as fossil refuses it.
+  `Revert` and undo restore record-only rows too, and an undo image carries
+  the cone it was saved under and is refused under another. The checkout
   stays readable by fossil, which sees the uncovered files as missing and
   will not commit until they are restored. New `sparsecone` and `horizon`
   conformance suites pin both drafts; with zit installed, a test checks the

@@ -21,6 +21,10 @@ import (
 // inventory. This is not a bounded-work general sync server. No public listener
 // uses it and no capability is advertised.
 //
+// Liveness limit: the service never re-prepares, so once the store's
+// generation changes every later request is served dense; a single foreign
+// commit disables sparse serving until the service is rebuilt.
+//
 // The caller owns the root repository and must keep it open. Its path must
 // still name the opened database, and must not be replaced during preparation:
 // repo does not expose the opened file identity needed to verify that premise.

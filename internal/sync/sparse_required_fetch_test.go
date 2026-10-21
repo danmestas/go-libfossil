@@ -1,8 +1,11 @@
 package sync
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +83,241 @@ func TestFetchRequiredFilesMalformedReply(t *testing.T) {
 			}
 			if _, held := content.AvailableByUUID(r.DB(), uuid); held {
 				t.Fatal("malformed reply published valid prefix")
+			}
+		})
+	}
+}
+
+// Unrelated sync directions must be refused before session setup can create
+// catalog tables or perform network I/O, even when recovery itself will fail.
+func TestFetchRequiredArtifactsRejectsUnrelatedOptions(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	var before, after string
+	const schema = `SELECT COALESCE(group_concat(sql,';'),'') FROM
+		(SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name)`
+	if err := r.DB().QueryRow(schema).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	peer := &MockTransport{Handler: func(*xfer.Message) *xfer.Message {
+		called = true
+		return &xfer.Message{}
+	}}
+	_, uuid := requiredLeaf(t, "outside/a")
+	_, err := FetchRequiredArtifacts(context.Background(), r, peer, []string{uuid}, SyncOpts{UV: true})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Errorf("unrelated UV option was not refused: %v", err)
+	}
+	if called {
+		t.Error("invalid recovery options reached the peer")
+	}
+	if err := r.DB().QueryRow(schema).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Fatal("failed recovery changed unrelated catalog schema")
+	}
+}
+
+// The exchange observation survives later rounds but has no persisted scope:
+// another recovery of already-held bytes must not inherit the earlier hint.
+func TestFetchRequiredFilesAvoidSubmanifests(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	data, basis := []byte("requested payload"), []byte("transfer basis")
+	uuid, basisUUID := hash.SHA3(data), hash.SHA3(basis)
+	diff, err := delta.Create(basis, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, card := range req.Cards {
+			if g, ok := card.(*xfer.GimmeCard); ok && g.UUID == uuid {
+				return &xfer.Message{Cards: []xfer.Card{
+					&xfer.PragmaCard{Name: "avoid-submanifests"},
+					&xfer.FileCard{UUID: uuid, DeltaSrc: basisUUID, Content: diff},
+				}}
+			}
+		}
+		return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: basisUUID, Content: basis}}}
+	}}
+	result, err := FetchRequiredFiles(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Rounds != 2 || !result.AvoidSubmanifests {
+		t.Fatalf("multi-round hint observation: %+v", result)
+	}
+	result, err = FetchRequiredFiles(context.Background(), r, nil, []string{uuid}, SyncOpts{})
+	if err != nil || result.AvoidSubmanifests {
+		t.Fatalf("earlier exchange hint leaked: %+v, %v", result, err)
+	}
+}
+
+// A root's S keys must agree with its children's first keys even when the root
+// is a sub-manifest, or when every artifact was already held before recovery.
+func TestFetchRequiredArtifactsRootRelationships(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		name := "submanifest"
+		if local {
+			name = "held-checkin"
+		}
+		t.Run(name, func(t *testing.T) {
+			r := setupSyncTestRepo(t)
+			if err := r.SetHashPolicy("sha3"); err != nil {
+				t.Fatal(err)
+			}
+			leaf, leafUUID := requiredLeaf(t, "b")
+			d := &deck.Deck{S: []deck.SubmanifestCard{{Name: "a", UUID: leafUUID}}}
+			if local {
+				d.D = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+				user := "test"
+				d.C, d.U = "invalid child boundary", &user
+			}
+			root, err := d.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			uuid := hash.SHA3(root)
+			if local {
+				for _, data := range [][]byte{root, leaf} {
+					if _, _, err := blob.Store(r.DB(), data); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			peer := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+				var reply xfer.Message
+				for _, card := range req.Cards {
+					if g, ok := card.(*xfer.GimmeCard); ok {
+						data := leaf
+						if g.UUID == uuid {
+							data = root
+						}
+						reply.Cards = append(reply.Cards, &xfer.FileCard{UUID: g.UUID, Content: data})
+					}
+				}
+				return &reply
+			}}
+			_, err = FetchRequiredArtifacts(context.Background(), r, peer, []string{uuid}, SyncOpts{})
+			if err == nil || !strings.Contains(err.Error(), "starting at") {
+				t.Fatalf("accepted mismatched S lower bound: %v", err)
+			}
+			if !local {
+				if _, held := content.AvailableByUUID(r.DB(), uuid); held {
+					t.Fatal("invalid sub-manifest closure was published")
+				}
+			}
+		})
+	}
+}
+
+// Recovery must reject a held basis before expansion consumes more than the
+// remaining budget. A small budget makes the allocation assertion inexpensive.
+func TestRequiredLocalExpansionBudget(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	_, uuid, err := blob.Store(r.DB(), bytes.Repeat([]byte("x"), 2<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := requiredFetch{ctx: context.Background(), repo: r,
+		data: make(map[string]*requiredArtifact), bytes: maxRequiredBytes - 1024}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err = f.load(uuid, make(map[string]bool))
+	runtime.ReadMemStats(&after)
+	if err == nil {
+		t.Fatal("local expansion exceeded the remaining budget")
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<10 {
+		t.Fatalf("recovery allocated %d bytes before refusing a 1024-byte budget", allocated)
+	}
+}
+
+// A lying row size cannot bypass the output-size check on a stored delta.
+// Its tiny compressed program declares a 2MiB output under a 1KiB budget.
+func TestRequiredLocalExpansionDeltaOutput(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	basisRID, _, err := blob.Store(r.DB(), []byte("basis"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid := hash.SHA3([]byte("claimed target"))
+	rid, err := blob.StoreDeltaRaw(r.DB(), uuid, []byte("8000\n1:x0;"), basisRID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec("UPDATE blob SET size=1 WHERE rid=?", rid); err != nil {
+		t.Fatal(err)
+	}
+	f := requiredFetch{ctx: context.Background(), repo: r,
+		data: make(map[string]*requiredArtifact), bytes: maxRequiredBytes - 1024}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, err = f.load(uuid, make(map[string]bool))
+	runtime.ReadMemStats(&after)
+	if err == nil || !strings.Contains(err.Error(), "expanded delta exceeds staging budget") {
+		t.Fatalf("local delta output was not bounded before allocation: %v", err)
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > 256<<10 {
+		t.Fatalf("local delta allocated %d bytes before budget refusal", allocated)
+	}
+}
+
+// Neither blob.size nor a forged compressed-length prefix may authorize an
+// unbounded inflate. This header claims a huge artifact over a tiny valid body.
+func TestRequiredLocalExpansionCorruptHeader(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	data := []byte("small local payload")
+	rid, uuid, err := blob.Store(r.DB(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packed []byte
+	if err := r.DB().QueryRow("SELECT content FROM blob WHERE rid=?", rid).Scan(&packed); err != nil {
+		t.Fatal(err)
+	}
+	binary.BigEndian.PutUint32(packed[:4], ^uint32(0))
+	if _, err := r.DB().Exec("UPDATE blob SET content=? WHERE rid=?", packed, rid); err != nil {
+		t.Fatal(err)
+	}
+	_, err = FetchRequiredFiles(context.Background(), r, nil, []string{uuid}, SyncOpts{})
+	if err == nil {
+		t.Fatal("accepted a forged oversized local compression header")
+	}
+}
+
+// Derived-row failures are storage failures, not normal deferred outside gaps.
+// Injected event, mlink and tag failures must roll back recovered bytes too.
+func TestFetchRequiredArtifactsCrosslinkFailure(t *testing.T) {
+	for _, table := range []string{"event", "mlink", "tagxref"} {
+		t.Run(table, func(t *testing.T) {
+			source, target := setupSyncTestRepo(t), setupSyncTestRepo(t)
+			payload := []byte("held file payload")
+			_, uuid, err := manifest.Checkin(source, manifest.CheckinOpts{
+				Files: []manifest.File{{Name: "a", Content: payload}}, User: "test",
+				Tags: []deck.TagCard{{Type: deck.TagPropagating, Name: "branch",
+					UUID: "*", Value: "trunk"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := blob.Store(target.DB(), payload); err != nil {
+				t.Fatal(err)
+			}
+			trigger := "CREATE TRIGGER required_reject BEFORE INSERT ON " + table +
+				" BEGIN SELECT RAISE(ABORT,'injected required crosslink failure'); END"
+			if _, err := target.DB().Exec(trigger); err != nil {
+				t.Fatal(err)
+			}
+			_, err = FetchRequiredArtifacts(context.Background(), target,
+				requiredUnlockedPeer(t, source, target), []string{uuid}, SyncOpts{})
+			if err == nil || !strings.Contains(err.Error(), "injected required crosslink failure") {
+				t.Fatalf("crosslink write failure was suppressed: %v", err)
+			}
+			if _, held := content.AvailableByUUID(target.DB(), uuid); held {
+				t.Fatal("crosslink failure published recovered bytes")
 			}
 		})
 	}

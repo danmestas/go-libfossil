@@ -57,11 +57,12 @@ func RequireParentContent(ctx context.Context, q db.Querier, parents []libfossil
 		roots = append(roots, uuid)
 		unique = append(unique, rid)
 	}
+	cache := content.NewCache(64 << 20)
 	for i, rid := range unique {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := requiredCheckShuns(ctx, q, roots[i]); err != nil {
+		if err := requiredCheckShuns(ctx, q, roots[i], cache); err != nil {
 			return err
 		}
 		_, held, err := content.CheckAvailableByUUID(q, roots[i])
@@ -71,7 +72,7 @@ func RequireParentContent(ctx context.Context, q db.Querier, parents []libfossil
 		if !held {
 			return requiredUnavailable(ctx, q, roots, roots[i], nil)
 		}
-		d, err := loadCheckinDeck(q, rid)
+		d, err := loadCheckinDeckCached(q, rid, cache)
 		if err != nil {
 			return err
 		}
@@ -84,7 +85,7 @@ func RequireParentContent(ctx context.Context, q db.Querier, parents []libfossil
 				return requiredUnavailable(ctx, q, roots, d.B, nil)
 			}
 		}
-		if _, err := checkinFileCards(q, nil, d); err != nil {
+		if _, err := checkinFileCards(q, cache, d); err != nil {
 			if uuid, absent := MissingSubmanifest(err); absent {
 				return requiredUnavailable(ctx, q, roots, uuid, err)
 			}
@@ -94,10 +95,36 @@ func RequireParentContent(ctx context.Context, q db.Querier, parents []libfossil
 	return ctx.Err()
 }
 
+// ValidateRequiredRoot applies the ordinary file-set relationship checks to a
+// structural recovery root, including a sub-manifest used independently of any
+// check-in. The supplied cache holds the recovery's already verified bytes.
+func ValidateRequiredRoot(q db.Querier, cache *content.Cache, d *deck.Deck) error {
+	if q == nil || d == nil {
+		panic("manifest.ValidateRequiredRoot: nil querier or deck")
+	}
+	if d.Type == deck.Checkin {
+		_, err := checkinFileCards(q, cache, d)
+		return err
+	}
+	if d.Type != deck.Submanifest {
+		return fmt.Errorf("sparse required content: root is not structural content")
+	}
+	if len(d.S) > 0 {
+		// A standalone subtree has the same S-edge checks as a tree's root;
+		// this view does not turn its bytes into a check-in artifact.
+		root := &deck.Deck{Type: deck.Checkin, S: d.S}
+		_, err := walkTree(q, cache, root)
+		return err
+	}
+	return nil
+}
+
 // Existing tree readers distinguish absent structure from malformed structure.
 // This independent bounded walk adds the writer's visibility gate without
 // changing read-only enumeration or turning elision into repository corruption.
-func requiredCheckShuns(ctx context.Context, q db.Querier, root string) error {
+func requiredCheckShuns(
+	ctx context.Context, q db.Querier, root string, cache *content.Cache,
+) error {
 	type entry struct {
 		uuid     string
 		baseline bool
@@ -131,7 +158,7 @@ func requiredCheckShuns(ctx context.Context, q db.Querier, root string) error {
 		if !held {
 			continue
 		}
-		data, err := expandManifestBytes(q, nil, rid)
+		data, err := expandManifestBytes(q, cache, rid)
 		if err != nil {
 			return err
 		}

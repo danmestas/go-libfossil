@@ -269,7 +269,13 @@ func selectForCheckin(q db.Querier, current libfossil.FslID) (int, error) {
 
 // loadCheckinDeck parses the check-in manifest at rid.
 func loadCheckinDeck(q db.Querier, rid libfossil.FslID) (*deck.Deck, error) {
-	data, err := content.Expand(q, rid)
+	return loadCheckinDeckCached(q, rid, nil)
+}
+
+func loadCheckinDeckCached(
+	q db.Querier, rid libfossil.FslID, cache *content.Cache,
+) (*deck.Deck, error) {
+	data, err := cache.Expand(q, rid)
 	if err != nil {
 		return nil, fmt.Errorf("expand check-in %d: %w", rid, err)
 	}

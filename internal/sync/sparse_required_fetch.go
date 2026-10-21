@@ -59,6 +59,9 @@ func fetchRequired(
 	if ctx == nil || r == nil {
 		panic("sync.FetchRequiredArtifacts: nil context or repo")
 	}
+	if err := requiredSyncOptions(opts); err != nil {
+		return nil, err
+	}
 	f := requiredFetch{
 		ctx: ctx, repo: r, opts: opts, data: make(map[string]*requiredArtifact), files: files,
 	}
@@ -79,6 +82,7 @@ func fetchRequired(
 			if err := f.store(checkins, structural, &result); err != nil {
 				return nil, err
 			}
+			result.AvoidSubmanifests = f.avoidSubmanifests
 			return &result, nil
 		}
 		if peer == nil {
@@ -101,6 +105,17 @@ func fetchRequired(
 	}
 }
 
+func requiredSyncOptions(opts SyncOpts) error {
+	if opts.Push || opts.UV || opts.XTableSync || opts.ShareLinks || opts.MaxSend != 0 ||
+		opts.PeerID != "" || opts.CkinLock != nil || opts.ContentCache != nil {
+		return fmt.Errorf("sparse required content: recovery options must be read-only")
+	}
+	if opts.Observer != nil || opts.Buggify != nil {
+		return fmt.Errorf("sparse required content: recovery instrumentation is unsupported")
+	}
+	return nil
+}
+
 type requiredArtifact struct {
 	payload []byte
 	basis   string
@@ -110,12 +125,13 @@ type requiredArtifact struct {
 }
 
 type requiredFetch struct {
-	ctx   context.Context
-	repo  *repo.Repo
-	opts  SyncOpts
-	data  map[string]*requiredArtifact
-	bytes int
-	files bool
+	ctx               context.Context
+	repo              *repo.Repo
+	opts              SyncOpts
+	data              map[string]*requiredArtifact
+	bytes             int
+	files             bool
+	avoidSubmanifests bool
 }
 
 func (f *requiredFetch) exchange(peer Transport, wanted []string) error {
@@ -215,15 +231,12 @@ func (f *requiredFetch) load(uuid string, wanted map[string]bool) (*requiredArti
 	if content.IsPrivate(f.repo.DB(), int64(rid)) && !f.opts.Private {
 		return nil, fmt.Errorf("sparse required content: private artifact %s requires permission", uuid)
 	}
-	data, err := content.Expand(f.repo.DB(), rid)
+	data, err := f.expandLocal(f.repo.DB(), rid)
 	if err != nil {
 		return nil, fmt.Errorf("sparse required content: expand %s: %w", uuid, err)
 	}
 	if !hashMatches(uuid, data) {
 		return nil, fmt.Errorf("sparse required content: %s: %w", uuid, errHashMismatch)
-	}
-	if err := f.reserve(len(data)); err != nil {
-		return nil, err
 	}
 	a := &requiredArtifact{full: data, local: true}
 	f.data[uuid] = a
@@ -422,6 +435,11 @@ func (f *requiredFetch) receive(
 		case *xfer.PrivateCard:
 			private = true
 			continue
+		case *xfer.PragmaCard:
+			if c.Name == "avoid-submanifests" {
+				f.avoidSubmanifests = true
+			}
+			continue
 		case *xfer.ErrorCard:
 			return 0, fmt.Errorf("sparse required content: peer refused: %s", c.Message)
 		case *xfer.UnknownCard, *xfer.BadCommandCard, *xfer.BadFileCard:
@@ -545,7 +563,10 @@ func (f *requiredFetch) revalidate(bound *repo.Repo, uuid string) error {
 	if content.IsPrivate(bound.DB(), int64(rid)) && !f.opts.Private {
 		return fmt.Errorf("sparse required content: required artifact %s became private", uuid)
 	}
-	data, err := content.Expand(bound.DB(), rid)
+	// Verification has its own fixed temporary budget; staged bytes remain
+	// bounded separately while the transaction compares current durable inputs.
+	verify := requiredFetch{ctx: f.ctx, repo: bound, opts: f.opts}
+	data, err := verify.expandLocal(bound.DB(), rid)
 	if err != nil {
 		return err
 	}
@@ -556,7 +577,7 @@ func (f *requiredFetch) revalidate(bound *repo.Repo, uuid string) error {
 }
 
 func (f *requiredFetch) finishStore(
-	bound *repo.Repo, roots, names []string, filled []libfossil.FslID,
+	bound *repo.Repo, roots, names []string, structural map[string]bool, result *SyncResult,
 ) error {
 	return bound.WithTx(func(tx *db.Tx) error {
 		for _, uuid := range names {
@@ -568,24 +589,50 @@ func (f *requiredFetch) finishStore(
 				return err
 			}
 		}
-		manifest.AfterDephantomizeBatch(f.ctx, bound, filled)
+		cache, rids, err := f.verifiedCache(tx, structural)
+		if err != nil {
+			return err
+		}
 		for _, uuid := range roots {
 			d, err := deck.Parse(f.data[uuid].full)
 			if err != nil {
 				return err
 			}
-			if d.Type == deck.Checkin {
-				rid, ok := blob.Exists(tx, uuid)
-				if !ok {
-					return fmt.Errorf("sparse required content: root unavailable: %s", uuid)
-				}
-				if _, err := manifest.ListFiles(bound, rid); err != nil {
-					return err
-				}
+			if err := manifest.ValidateRequiredRoot(tx, cache, d); err != nil {
+				return err
 			}
 		}
+		if len(names) == 0 {
+			return f.ctx.Err()
+		}
+		linked, err := manifest.LinkRequiredArtifacts(f.ctx, bound, cache, rids)
+		if err != nil {
+			return err
+		}
+		result.ArtifactsLinked = linked
 		return f.ctx.Err()
 	})
+}
+
+func (f *requiredFetch) verifiedCache(
+	q db.Querier, structural map[string]bool,
+) (*content.Cache, []libfossil.FslID, error) {
+	cache := content.NewCache(maxRequiredBytes)
+	names := make([]string, 0, len(structural))
+	for uuid := range structural {
+		names = append(names, uuid)
+	}
+	sort.Strings(names)
+	rids := make([]libfossil.FslID, 0, len(names))
+	for _, uuid := range names {
+		var rid libfossil.FslID
+		if err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", uuid).Scan(&rid); err != nil {
+			return nil, nil, err
+		}
+		cache.Remember(rid, f.data[uuid].full)
+		rids = append(rids, rid)
+	}
+	return cache, rids, nil
 }
 
 func (f *requiredFetch) store(
@@ -598,19 +645,11 @@ func (f *requiredFetch) store(
 		}
 	}
 	sort.Strings(names)
-	if len(names) == 0 {
-		return f.ctx.Err()
-	}
 	err := f.repo.WithBoundTx(func(bound *repo.Repo) error {
 		pass := newReceivePass()
-		var filled []libfossil.FslID
 		for _, uuid := range names {
-			rid, err := f.storeArtifact(bound, pass, uuid)
-			if err != nil {
+			if _, err := f.storeArtifact(bound, pass, uuid); err != nil {
 				return err
-			}
-			if rid > 0 {
-				filled = append(filled, rid)
 			}
 		}
 		// Recheck local inputs under the publishing transaction: compaction or
@@ -620,7 +659,7 @@ func (f *requiredFetch) store(
 				return err
 			}
 		}
-		return f.finishStore(bound, roots, names, filled)
+		return f.finishStore(bound, roots, names, structural, result)
 	})
 	if err == nil {
 		result.FilesRecvd = len(names)

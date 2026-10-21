@@ -2,14 +2,62 @@ package manifest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
+
+type requiredExpansionCounter struct {
+	db.Querier
+	loads map[string]int
+}
+
+func (q *requiredExpansionCounter) QueryRow(query string, args ...any) *sql.Row {
+	if strings.HasPrefix(query, "SELECT content, size FROM blob") {
+		q.loads[fmt.Sprint(args[0])]++
+	}
+	return q.Querier.QueryRow(query, args...)
+}
+
+// Visibility and relationship validation must share expanded structural bytes:
+// a dense parent cannot pay for the entire S tree twice in a single preflight.
+func TestRequireParentContentExpandsEachArtifactOnce(t *testing.T) {
+	r := sha3Repo(t)
+	for key, value := range map[string]string{
+		SettingEnableSubmanifests: "on", SettingSubmanifestK: "1",
+	} {
+		if err := r.SetConfig(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var files []File
+	for _, card := range sparseBoundaryCandidates(t) {
+		files = append(files, File{Name: card.Name, Content: []byte(card.Name)})
+	}
+	rid, parent := commit(t, r, CheckinOpts{Files: files})
+	if len(parent.S) < 2 {
+		t.Fatal("fixture requires a dense structural tree")
+	}
+	q := &requiredExpansionCounter{Querier: r.DB(), loads: make(map[string]int)}
+	if err := RequireParentContent(context.Background(), q, []libfossil.FslID{rid}); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.loads) < 3 {
+		t.Fatalf("did not observe root and sibling expansion reads: %+v", q.loads)
+	}
+	for artifact, count := range q.loads {
+		if count != 1 {
+			t.Fatalf("artifact %s expanded %d times in one preflight", artifact, count)
+		}
+	}
+}
 
 func TestRequireParentContentElidedSibling(t *testing.T) {
 	files := sparseBoundaryCandidates(t)

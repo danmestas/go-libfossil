@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
@@ -136,6 +139,44 @@ func scSyncBounds(t *testing.T) error {
 const scSyncOriginRefusal = "Sparse cone does not cover requested clone; " +
 	"configure a partial mirror to allow it."
 
+// A refusal carries the push card naming the repository ahead of the error,
+// as page_xfer's refusal of an unauthorized clone does: fossil's clone client
+// reads a first round without one as an empty, finished clone.
+func scSyncRefusedWithCodes(m *xfer.Message) error {
+	for _, card := range m.Cards {
+		switch card.(type) {
+		case *xfer.PushCard:
+			return nil
+		case *xfer.ErrorCard:
+			return fmt.Errorf("refusal error precedes the push card")
+		}
+	}
+	return fmt.Errorf("refusal carries no push card")
+}
+
+// fossil 2.28 cloning from the refusing store must abort with the refusal,
+// exit nonzero and leave no repository, not finish an empty clone.
+func scSyncFossilRefused(t *testing.T, origin *repo.Repo) error {
+	ref := newFossilReference(t)
+	if ref == nil {
+		return nil
+	}
+	server := httptest.NewServer(sync.XferHandler(origin, sync.HandleSync))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "fossil-refused.fossil")
+	out, err := ref.command(context.Background(), "clone", server.URL, path).CombinedOutput()
+	if err == nil {
+		return fmt.Errorf("fossil clone of a refusing sparse store succeeded: %s", out)
+	}
+	if !strings.Contains(string(out), scSyncOriginRefusal) {
+		return fmt.Errorf("fossil clone did not report the refusal: %s", out)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, fs.ErrNotExist) {
+		return fmt.Errorf("fossil clone left %s after the refusal: %v", path, statErr)
+	}
+	return nil
+}
+
 func scSyncOrigin(t *testing.T) error {
 	origin := newSCSyncRepo(t, scSyncFiles())
 	scSparsify(t, origin.r, scCone(t, []string{"src"}, nil))
@@ -147,6 +188,12 @@ func scSyncOrigin(t *testing.T) error {
 		return err
 	}
 	if err := scSyncRefused(resp, scSyncOriginRefusal); err != nil {
+		return err
+	}
+	if err := scSyncRefusedWithCodes(resp); err != nil {
+		return err
+	}
+	if err := scSyncFossilRefused(t, origin.r); err != nil {
 		return err
 	}
 	peer.opts.PartialMirror = true
@@ -201,7 +248,7 @@ func scSyncFatal(t *testing.T) error {
 		return fmt.Errorf("clone refusal lost: %v", err)
 	}
 	if result == nil || result.BlobsRecvd != 0 || len(peer.requests) != 2 {
-		return fmt.Errorf("refused clone did not finish with one cleanup: %+v", result)
+		return fmt.Errorf("refused clone did not stop after one re-ask: %+v", result)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		return fmt.Errorf("failed clone left database: %v", err)
@@ -214,10 +261,13 @@ func scSyncFatal(t *testing.T) error {
 			if _, ok := card.(*xfer.GimmeCard); ok {
 				return fmt.Errorf("refused clone requested content")
 			}
+			// The refusal names the repository, so the client re-asks once,
+			// as fossil's does after a push card, and stops at the second
+			// refusal. The re-ask is a clone, never a pull or push.
 			if round > 0 {
 				switch card.(type) {
-				case *xfer.CloneCard, *xfer.PullCard, *xfer.PushCard:
-					return fmt.Errorf("refusal cleanup sent an operation: %T", card)
+				case *xfer.PullCard, *xfer.PushCard:
+					return fmt.Errorf("refusal re-ask sent an operation: %T", card)
 				}
 			}
 		}

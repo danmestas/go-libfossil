@@ -235,6 +235,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fossil-scm.org's own repository (chains averaging 532 deltas) where
   `fossil test-integrity` takes six and a half. It now makes one sweep down
   the delta forest, applying each delta once: 19 seconds on the same clone.
+
+- Adding a directory (`Checkout.Add`, `repo add DIR`, `repo add .`) adds
+  the files beneath it, as fossil's add does, skipping dotfiles found on
+  the way; a dotfile named explicitly is still added. The directory itself
+  used to be stored as a file, and the next commit failed reading it.
+  `ignore-glob` is not consulted yet.
+
+- `repo verify` runs the full verifier (blob hashes, delta chains, phantom
+  records, derived tables) and prints what the store lacks by class:
+  transit phantoms apart from artifacts the store cone elides, which are
+  healthy (sparse-cone §5.2). It used to hash the held blobs only and print
+  a fixed line, so neither damage outside the blobs nor elision showed.
+
+- `repo clone` remembers its source as `last-sync-url`, as `fossil clone`
+  does, keeping a user name and never a password. Nothing in go-libfossil
+  wrote the setting, so the default peer for `repo cone store`, widening
+  and required-content recovery existed only in repositories fossil had
+  cloned, and a go-libfossil clone needed `--remote` every time.
+
+- `repo status` reports the checkout's changes against the version it has
+  checked out, through `Checkout.Status`, with fossil's labels. Run from
+  inside a checkout with the default `--dir .`, it reported every tracked
+  file MISSING: the walk skipped its own root, named ".", as a hidden
+  directory. It also compared the disk with tip, so a checkout of an older
+  version read as edited, and it listed untracked files, which `fossil
+  status` leaves to `fossil extras`.
+
+- A sparse store that will not serve a clone now refuses it as fossil
+  refuses an unauthorized clone: the push card naming the repository, then
+  the error. fossil 2.28's clone client read the bare error as an empty,
+  finished clone, exited 0 and left a repository with no project code. It
+  now aborts with the refusal and leaves nothing, and go-libfossil's client
+  re-asks once and stops at the second refusal, as fossil's does.
+
 - The simulation's safety invariants no longer read through armed fault
   injection. `CheckSafety` and the other checks ran while Buggify was still
   on, so read-path sites truncated or flipped the bytes the check itself

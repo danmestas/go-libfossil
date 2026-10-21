@@ -63,6 +63,22 @@ func localEdits(t *testing.T, dir string) {
 	}
 }
 
+func TestTreeFilesExcludesSparseMetadata(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		".libfossil-checkout", ".libfossil-checkout-wal",
+		".libfossil-checkout-shm", ".libfossil-checkout-journal", "tracked.txt",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := treeFiles(t, dir)
+	if len(files) != 1 || files["tracked.txt"] != "tracked.txt" {
+		t.Fatalf("working tree includes sparse metadata: %v", files)
+	}
+}
+
 // treeFiles reads every file under dir but the checkout database and its
 // journal files.
 func treeFiles(t *testing.T, dir string) map[string]string {
@@ -76,7 +92,7 @@ func treeFiles(t *testing.T, dir string) map[string]string {
 		if err != nil {
 			return err
 		}
-		if strings.HasPrefix(rel, ".fslckout") || rel == "_FOSSIL_" {
+		if strings.HasPrefix(rel, ".fslckout") || strings.HasPrefix(rel, ".libfossil-checkout") || rel == "_FOSSIL_" {
 			return nil
 		}
 		data, err := os.ReadFile(path)

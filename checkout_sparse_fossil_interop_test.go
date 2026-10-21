@@ -1,22 +1,20 @@
 package libfossil_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	libfossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/testutil"
 )
 
-// A sparse checkout stays a checkout fossil can open safely
-// (draft-fossil-sparse-cone-00 §3.1): the cone lives in a vvar fossil
-// ignores, and vfile keeps a row for every file. fossil therefore sees the
-// uncovered files as MISSING and refuses to commit -- it cannot commit them
-// away -- and its revert brings them back, after which go-libfossil still
-// works within the cone and ignores the restored files.
+// Sparse metadata has its own marker: stock Fossil must refuse checkout
+// operations rather than interpret a cone-only vfile as a complete tree.
 func TestSparseCheckoutUnderFossil(t *testing.T) {
 	bin := testutil.RequireFossilBin(t)
 	_, repoPath, _ := newFossilCheckout(t)
@@ -46,31 +44,26 @@ func TestSparseCheckoutUnderFossil(t *testing.T) {
 	}
 	co.Close()
 	writeFile(t, filepath.Join(dir, "src/s.txt"), "edited by fossil\n")
-	leaves := strings.TrimSpace(fossilRun(t, bin, dir, "leaves"))
-
-	status := fossilRun(t, bin, dir, "status")
-	for _, want := range []string{"MISSING    a.txt", "MISSING    tools/t.txt", "EDITED     src/s.txt"} {
-		if !strings.Contains(status, want) {
-			t.Fatalf("fossil status does not show %q:\n%s", want, status)
+	leaves := strings.TrimSpace(fossilRun(t, bin, dir, "leaves", "-R", repoPath))
+	for _, args := range [][]string{
+		{"status"},
+		{"commit", "-m", "from fossil", "--no-warnings"},
+		{"revert", "a.txt", "b.txt", "tools/t.txt"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, bin, args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err == nil || !strings.Contains(string(out), "within an open check-out") {
+			t.Fatalf("fossil %s did not refuse private sparse metadata: %v: %s", args[0], err, out)
 		}
 	}
-	cmd := exec.Command(bin, "commit", "-m", "from fossil", "--no-warnings")
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("fossil committed a sparse checkout:\n%s", out)
+	if got := strings.TrimSpace(fossilRun(t, bin, dir, "leaves", "-R", repoPath)); got != leaves {
+		t.Fatalf("refused fossil operations changed the leaves:\n%s\nthen\n%s", leaves, got)
 	}
-	if !strings.Contains(strings.ToLower(string(out)), "no such file") {
-		t.Fatalf("fossil refused the commit, but not for the missing files:\n%s", out)
-	}
-	if got := strings.TrimSpace(fossilRun(t, bin, dir, "leaves")); got != leaves {
-		t.Fatalf("a refused fossil commit changed the leaves:\n%s\nthen\n%s", leaves, got)
-	}
-
-	// fossil's revert densifies the tree; go-libfossil keeps to its cone.
-	fossilRun(t, bin, dir, "revert", "a.txt", "b.txt", "tools/t.txt")
-	if _, err := os.Stat(filepath.Join(dir, "tools/t.txt")); err != nil {
-		t.Fatalf("fossil revert did not restore an uncovered file: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "tools/t.txt")); !os.IsNotExist(err) {
+		t.Fatalf("refused fossil revert materialized an uncovered file: %v", err)
 	}
 	co, err = r.OpenCheckout(dir, libfossil.CheckoutOpenOpts{})
 	if err != nil {

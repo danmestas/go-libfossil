@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/simio"
 )
@@ -40,6 +42,81 @@ func TestCreateMemoryStorageRefusesDiskMarker(t *testing.T) {
 	defer reopened.Close()
 	if got, err := getVVar(reopened.db, "undo_available"); err != nil || got != "sentinel" {
 		t.Fatalf("existing metadata overwritten: %q, %v", got, err)
+	}
+}
+
+func TestOpenMigratesLegacySparseManagedRows(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remoteFiles := maps(sparseFiles, map[string]string{"tools/t.c": "legacy merge\n"})
+	remote := f.commit(t, remoteFiles, f.c1)
+	c := f.open(t, nil, f.c1)
+	if _, err := c.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	sparse := sparseCone(t)
+	if err := writeCone(c.db, sparse); err != nil {
+		t.Fatal(err)
+	}
+	for name := range sparseFiles {
+		if !sparse.Covers(name) {
+			if err := os.Remove(filepath.Join(c.Dir(), filepath.FromSlash(name))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(f.repo, c.Dir(), OpenOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertCheckoutMarker(t, c.Dir(), ".libfossil-checkout")
+	var managed, pending int
+	if err := reopened.db.QueryRow("SELECT count(*) FROM vfile").Scan(&managed); err != nil || managed != len(sparseCovered) {
+		t.Fatalf("managed rows = %d: %v", managed, err)
+	}
+	if err := reopened.db.QueryRow("SELECT count(*) FROM sparse_pending").Scan(&pending); err != nil || pending != 1 {
+		t.Fatalf("pending rows = %d: %v", pending, err)
+	}
+	rid, _, err := reopened.Commit(CommitOpts{Message: "migrated merge", User: "test", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, rid, remoteFiles)
+}
+
+func TestLegacySparseMigrationFailureRestoresMarker(t *testing.T) {
+	f := newSparseRepo(t, false)
+	c := f.open(t, nil, f.c1)
+	if err := writeCone(c.db, sparseCone(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.db.Exec(`CREATE TRIGGER reject_prune BEFORE DELETE ON vfile
+	 BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(f.repo, c.Dir(), OpenOpts{})
+	if err == nil {
+		reopened.Close()
+		t.Fatal("migration ignored injected pruning failure")
+	}
+	if !strings.Contains(err.Error(), "injected migration failure") {
+		t.Fatalf("migration = %v", err)
+	}
+	assertCheckoutMarker(t, c.Dir(), PreferredDBName())
+	metadata, err := db.OpenSQL(filepath.Join(c.Dir(), PreferredDBName()), db.OpenConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	var count int
+	if err := metadata.QueryRow("SELECT count(*) FROM vfile").Scan(&count); err != nil || count != len(sparseFiles) {
+		t.Fatalf("failed migration changed managed rows: %d, %v", count, err)
 	}
 }
 

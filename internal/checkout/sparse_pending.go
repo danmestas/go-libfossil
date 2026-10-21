@@ -2,7 +2,9 @@ package checkout
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -57,6 +59,73 @@ func (c *Checkout) snapshotPending() ([]sparseOutcome, error) {
 func (s sparseOutcome) save(q sqlExecer) error {
 	_, err := q.Exec(`INSERT OR REPLACE INTO sparse_pending(vid,pathname,rid,mrid,chnged,deleted,isexe,islink,origname,mhash,pivot,remote,unresolved) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, s.vid, s.row.Pathname, s.row.RID, s.row.MRID, s.row.Chnged, s.row.Deleted, s.row.IsExe, s.row.IsLink, s.row.Origname, s.mhash, s.pivot, s.remote, s.unresolved)
 	return err
+}
+
+// migrateSparseRows removes legacy uncovered vfile records only after native
+// checkout discovery has been disabled. Pending outcomes remain authoritative.
+func (c *Checkout) migrateSparseRows() (err error) {
+	if c.cone == nil {
+		return nil
+	}
+	vid, _, err := c.Version()
+	if err != nil {
+		return err
+	}
+	rows, err := vfile.Load(c.db, int64(vid))
+	if err != nil {
+		return err
+	}
+	outside := false
+	for _, row := range rows {
+		outside = outside || !c.covers(row.Pathname)
+	}
+	if !outside {
+		return c.moveMarker(sparseDBName)
+	}
+	files, err := manifest.ListFiles(c.repo, vid)
+	if err != nil {
+		return err
+	}
+	baseline := make(map[string]manifest.FileEntry, len(files))
+	for _, f := range files {
+		baseline[f.Name] = f
+	}
+	oldName := filepath.Base(c.dbPath)
+	if err := c.moveMarker(sparseDBName); err != nil {
+		return err
+	}
+	tx, err := c.db.Begin()
+	if err != nil {
+		return errors.Join(err, c.moveMarker(oldName))
+	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, tx.Rollback(), c.moveMarker(oldName))
+		}
+	}()
+	for _, row := range rows {
+		if c.covers(row.Pathname) {
+			continue
+		}
+		f, exists := baseline[row.Pathname]
+		changed := !exists || row.ContentChanged() || row.IsRemoved() || row.PendingMerge() || row.RenamedFrom() != "" || (row.IsExe > 0) != (f.Perm == "x") || (row.IsLink > 0) != (f.Perm == "l")
+		if changed {
+			var pending bool
+			if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM sparse_pending WHERE vid=? AND pathname=?)", int64(vid), row.Pathname).Scan(&pending); err != nil {
+				return err
+			}
+			if !pending {
+				outcome := sparseOutcome{vid: int64(vid), row: row}
+				if err := outcome.save(tx); err != nil {
+					return err
+				}
+			}
+		}
+		if _, err := tx.Exec("DELETE FROM vfile WHERE id=?", row.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func ensureSparsePending(q sqlExecer) error {

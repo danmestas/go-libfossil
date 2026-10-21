@@ -306,6 +306,10 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		ckdb.Close()
 		return nil, fmt.Errorf("checkout.Open: %w", err)
 	}
+	if err := c.migrateSparseRows(); err != nil {
+		c.db.Close()
+		return nil, fmt.Errorf("checkout.Open: migrate sparse records: %w", err)
+	}
 	return c, nil
 }
 

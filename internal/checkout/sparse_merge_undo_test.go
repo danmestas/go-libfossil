@@ -18,6 +18,33 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+func TestSparsePendingUndoAfterUpdate(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)
+	target := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "target\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Redo(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	rid, _, err := co.Commit(CommitOpts{Message: "restored pending", User: "test", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, rid, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}))
+}
+
 func TestSparseMergeConflictReported(t *testing.T) {
 	f := newSparseRepo(t, false)
 	ours := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "ours\n"}), f.c1)

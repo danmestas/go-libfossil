@@ -38,14 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add|remove|set` take `--remote`, `--sync-user`, `--sync-pass`,
   `--sync-private` and `--timeout` (default 10m); the peer defaults to the
   saved last-sync-url and no password is saved. A cone-aware server
-  answers a cone request from a prepared index of what the cone keeps,
-  visiting only the needed candidates over long excluded runs, with the
-  dense path's private and shun notices and the same cards; it refuses to
-  prepare beyond fixed stored, inflated and card budgets, and serves
-  densely after any foreign commit until rebuilt. The server-side walk
-  keeps the depth and visit bounds of single-name lookup (§8), and a
-  cone-scoped clone round stops where a dense round would, charging the
-  rows it skips, and resumes from the cursor. A server serves a store it
+  serves a cone-scoped clone check-in by check-in: each check-in's row
+  walks its tree, descending only the nodes whose range meets the cone and
+  that its first parent's tree does not already hold, under the depth and
+  visited-node bounds of single-name lookup (§8); file and sub-manifest
+  rows go out only through those walks, a delta whose base the round did
+  not reach goes out in full, and a round stops where a dense round would
+  and resumes from its cookie, a walk too large for one round included.
+  The round's work is proportional to its batch, not to the store. A
+  gimme in a cone request is answered densely, by name (§6.4). A pull's
+  inventory still announces every held row, as zit's does. A held blob
+  that no F card names is not sent in a sparse clone; zit sends it. A
+  server serves a store it
   holds sparsely only when its new `partial-mirror` setting
   (`SettingPartialMirror`, `repo config set partial-mirror on`) says so;
   otherwise it refuses, as §5.3 requires. `Repo.SetStoreConeContext` and

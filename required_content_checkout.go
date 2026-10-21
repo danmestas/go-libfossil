@@ -38,8 +38,9 @@ func (c *Checkout) CheckinContext(
 }
 
 // SetConeContext recovers only structure needed to enumerate next and payloads
-// newly entering the checkout. Repository retention policy is not changed.
-// Planning and local checks are repeated after recovery, before files move.
+// newly entering the checkout. Explicit widening durably extends store coverage;
+// an attempted fetch retains that intent even on failure. No-peer refusal does
+// not change policy. Planning and local checks repeat before files move.
 func (c *Checkout) SetConeContext(
 	ctx context.Context, next *Cone, required RequiredContentOpts,
 ) (ConeChange, error) {
@@ -49,6 +50,12 @@ func (c *Checkout) SetConeContext(
 	parent, state, err := c.requiredState()
 	if err != nil {
 		return ConeChange{}, err
+	}
+	if required.Peer != nil || parent == 0 {
+		state, err = c.requiredStorePolicy(next, state)
+		if err != nil {
+			return ConeChange{}, err
+		}
 	}
 	if parent == 0 {
 		return c.SetCone(next)
@@ -85,7 +92,7 @@ func (c *Checkout) SetConeContext(
 	if err := required.recoverFiles(ctx, r, names); err != nil {
 		return ConeChange{}, err
 	}
-	if err := c.checkRequiredState(state); err != nil {
+	if _, err := c.requiredStorePolicy(next, state); err != nil {
 		return ConeChange{}, err
 	}
 	return c.SetCone(next)

@@ -315,10 +315,6 @@ func TestCheckinContextRequiredContent(t *testing.T) {
 func TestSetConeContextRequiredContent(t *testing.T) {
 	f := newRequiredPublicFixture(t, "sha3")
 	co := requiredPublicCheckout(t, f)
-	stored, err := content.StoreCone(f.target.inner.DB())
-	if err != nil {
-		t.Fatal(err)
-	}
 	change, err := co.SetConeContext(context.Background(), nil, RequiredContentOpts{Peer: f.peer})
 	if err != nil {
 		t.Fatal(err)
@@ -333,8 +329,8 @@ func TestSetConeContextRequiredContent(t *testing.T) {
 		}
 	}
 	got, err := content.StoreCone(f.target.inner.DB())
-	if err != nil || got == nil || !got.Equal(stored) {
-		t.Fatalf("checkout widening changed store cone: %v, %v", got, err)
+	if err != nil || got != nil {
+		t.Fatalf("dense checkout intent did not densify store: %v, %v", got, err)
 	}
 }
 

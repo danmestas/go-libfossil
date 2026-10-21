@@ -110,6 +110,23 @@ func TestCommitContextFinalizesPublishedCheckin(t *testing.T) {
 	}
 }
 
+func TestCommitCarriedFilesWithoutParent(t *testing.T) {
+	f := newSparseRepo(t, false)
+	co := f.open(t, nil, f.c1)
+	if _, err := co.db.Exec("UPDATE vvar SET value='0' WHERE name='checkout'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("DELETE FROM vvar WHERE name='checkout-hash'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("UPDATE vfile SET vid=0"); err != nil {
+		t.Fatal(err)
+	}
+	if files, err := co.CommitCarriedFiles(context.Background(), []string{"src/a.c"}); err != nil || len(files) != 0 {
+		t.Fatalf("parentless carried files = %+v, %v", files, err)
+	}
+}
+
 func TestCommitCarriedFilesSelectionWithoutMutation(t *testing.T) {
 	f := newSparseRepo(t, true)
 	co := f.open(t, sparseCone(t), f.c1)

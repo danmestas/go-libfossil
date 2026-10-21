@@ -44,6 +44,9 @@ func (c *Checkout) CommitCarriedFiles(ctx context.Context, paths []string) ([]ma
 	if err != nil {
 		return nil, err
 	}
+	if parent == 0 {
+		return nil, nil
+	}
 	entries, _, _, err := c.collectVFileEntries(parent)
 	if err != nil {
 		return nil, err

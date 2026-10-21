@@ -83,7 +83,9 @@ type cloneSession struct {
 	projectCode           string
 	serverCode            string
 	roundRecvd            int  // file/cfile cards the last reply delivered
+	roundFrom             int  // the clone sequence the last request named
 	roundPush             bool // the last reply carried a push card
+	coned                 bool // requests carry the store cone (§6.1)
 	// smConfig stages the sub-manifest settings one reply's config cards
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
@@ -423,7 +425,11 @@ func (cs *cloneSession) continueAfter(cycle int) (bool, error) {
 	if cycle < 0 {
 		panic("cloneSession.continueAfter: negative cycle")
 	}
-	if cycle > 0 && cs.roundRecvd == 0 {
+	// §6.2: a cone-aware server charges the excluded rows it walks past as a
+	// dense batch would, so a round spent inside a long excluded run may carry
+	// nothing while its cursor still advances.
+	advanced := cs.coned && cs.seqno > cs.roundFrom
+	if cycle > 0 && cs.roundRecvd == 0 && !advanced {
 		if cs.seqno > 0 {
 			return false, fmt.Errorf(
 				"sync.Clone: server stopped sending at clone sequence %d", cs.seqno)
@@ -459,6 +465,7 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		return nil, err
 	}
 	cards = append(cards, sparse...)
+	cs.coned = len(sparse) > 0
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound
@@ -546,6 +553,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		panic("sync.Clone.processResponse: msg must not be nil")
 	}
 	filesRecvd := 0
+	cs.roundFrom = cs.seqno
 	defer func() { cs.roundRecvd = filesRecvd }()
 	if cs.refused {
 		// The mandatory cleanup exchange cannot accept more clone content.

@@ -37,10 +37,11 @@ func (h *handler) servesPartialMirror() (bool, error) {
 }
 
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
-// shared by covered and uncovered names is kept under either name.
+// shared by covered and uncovered names is kept under either name. A clone
+// walks its round (walk); a pull's inventory classifies the store (refs).
 type sparseKeep struct {
-	refs    *content.ConeReferences
-	indexed *content.ConeSuccessorQuery
+	refs *content.ConeReferences
+	walk *coneWalk
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
@@ -55,23 +56,15 @@ func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep
 }
 
 func (h *handler) ensureSparseKeep() error {
-	if h.ignoreSparse || h.cone == nil || h.keep != nil {
+	if h.cone == nil || h.keep != nil {
 		return nil
 	}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if h.preparedIndex != nil {
-		h.keep = &sparseKeep{indexed: h.preparedIndex.Query(h.cone)}
-		return nil
-	}
-	if h.preparedFacts != nil {
-		refs, err := h.preparedFacts.Classify(ctx, h.cone)
-		if err != nil {
-			return err
-		}
-		h.keep = &sparseKeep{refs: refs}
+	if h.walkClone {
+		h.keep = &sparseKeep{walk: newConeWalk(ctx, h)}
 		return nil
 	}
 	var err error
@@ -79,14 +72,29 @@ func (h *handler) ensureSparseKeep() error {
 	return err
 }
 
+func (k *sparseKeep) classified() int {
+	switch {
+	case k == nil:
+		return 0
+	case k.walk != nil:
+		return k.walk.classified
+	}
+	return k.refs.Artifacts()
+}
+
+// keeps filters a pull's inventory; a clone's walk never asks.
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
-	if k == nil {
+	if k == nil || k.walk != nil {
 		return true
 	}
-	if k.indexed != nil {
-		return k.indexed.Next(rid, rid) == rid
-	}
 	return !k.refs.Outside(rid)
+}
+
+func (k *sparseKeep) sourceKept(rid int) bool {
+	if k != nil && k.walk != nil {
+		return k.walk.sourceKept(rid)
+	}
+	return k.keeps(libfossil.FslID(rid))
 }
 
 // filterSparseReceived filters only artifacts this transfer newly acquired.

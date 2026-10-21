@@ -13,14 +13,14 @@ type SessionStart struct {
 
 // SessionEnd describes the result of a sync or clone operation.
 type SessionEnd struct {
-	Operation                     string
-	Rounds                        int
-	FilesSent, FilesRecvd         int
-	UVFilesSent, UVFilesRecvd     int
-	UVGimmesSent                  int
-	BytesSent, BytesRecvd         int64
-	ProjectCode                   string
-	Errors                        []string
+	Operation                 string
+	Rounds                    int
+	FilesSent, FilesRecvd     int
+	UVFilesSent, UVFilesRecvd int
+	UVGimmesSent              int
+	BytesSent, BytesRecvd     int64
+	ProjectCode               string
+	Errors                    []string
 }
 
 // RoundStats reports per-round activity for observer callbacks.
@@ -46,7 +46,10 @@ type HandleEnd struct {
 	CardsProcessed int
 	FilesSent      int
 	FilesReceived  int
-	Err            error
+	// SparseClassified counts the artifacts a cone request's keep-set
+	// discovery read and classified (§6.2); zero for a dense request.
+	SparseClassified int
+	Err              error
 }
 
 // TableSyncStart describes the beginning of a table sync operation.
@@ -90,15 +93,15 @@ type Observer interface {
 // nopObserver is the default observer that does nothing.
 type nopObserver struct{}
 
-func (nopObserver) Started(ctx context.Context, _ SessionStart) context.Context    { return ctx }
-func (nopObserver) RoundStarted(ctx context.Context, _ int) context.Context        { return ctx }
-func (nopObserver) RoundCompleted(_ context.Context, _ int, _ RoundStats)          {}
-func (nopObserver) Completed(_ context.Context, _ SessionEnd, _ error)             {}
-func (nopObserver) Error(_ context.Context, _ error)                               {}
+func (nopObserver) Started(ctx context.Context, _ SessionStart) context.Context      { return ctx }
+func (nopObserver) RoundStarted(ctx context.Context, _ int) context.Context          { return ctx }
+func (nopObserver) RoundCompleted(_ context.Context, _ int, _ RoundStats)            {}
+func (nopObserver) Completed(_ context.Context, _ SessionEnd, _ error)               {}
+func (nopObserver) Error(_ context.Context, _ error)                                 {}
 func (nopObserver) HandleStarted(ctx context.Context, _ HandleStart) context.Context { return ctx }
-func (nopObserver) HandleCompleted(_ context.Context, _ HandleEnd)                 {}
-func (nopObserver) TableSyncStarted(_ context.Context, _ TableSyncStart)           {}
-func (nopObserver) TableSyncCompleted(_ context.Context, _ TableSyncEnd)           {}
+func (nopObserver) HandleCompleted(_ context.Context, _ HandleEnd)                   {}
+func (nopObserver) TableSyncStarted(_ context.Context, _ TableSyncStart)             {}
+func (nopObserver) TableSyncCompleted(_ context.Context, _ TableSyncEnd)             {}
 
 // resolveObserver returns obs if non-nil, otherwise nopObserver{}.
 func resolveObserver(obs Observer) Observer {

@@ -45,6 +45,14 @@ func (p *ConeReferences) Required(rid libfossil.FslID) bool {
 	return p.inside[uuid] || p.required[uuid]
 }
 
+// Artifacts counts the artifact names the classification read.
+func (p *ConeReferences) Artifacts() int {
+	if p == nil {
+		return 0
+	}
+	return len(p.names)
+}
+
 // LoadConeReferences classifies both held and phantom artifact names. Traversal
 // shares the single-name lookup depth and node limits across all roots.
 func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeReferences, error) {

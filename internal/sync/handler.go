@@ -100,14 +100,34 @@ const cloneCapPrefix = "lf-clone-cap:"
 // cookies (e.g. arbitrary sync session cookies) leave the bound at zero,
 // which preserves pre-snapshot behavior for forward/back compat.
 func parseCloneCap(v string) (int, bool) {
+	fields, ok := cloneCapFields(v)
+	if !ok {
+		return 0, false
+	}
+	return fields[0], true
+}
+
+// cloneCapFields splits a clone-cap cookie: the snapshot bound, then from a
+// sparse walk the row the next round starts at and, while that row is a
+// check-in part way through its walk, the last rid of the walk already sent
+// ("lf-clone-cap:MAX", "lf-clone-cap:MAX:ROW", "lf-clone-cap:MAX:ROW:LAST").
+func cloneCapFields(v string) ([]int, bool) {
 	if !strings.HasPrefix(v, cloneCapPrefix) {
-		return 0, false
+		return nil, false
 	}
-	rid, err := strconv.Atoi(v[len(cloneCapPrefix):])
-	if err != nil || rid < 0 {
-		return 0, false
+	parts := strings.Split(v[len(cloneCapPrefix):], ":")
+	if len(parts) > 3 {
+		return nil, false
 	}
-	return rid, true
+	fields := make([]int, len(parts))
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		fields[i] = n
+	}
+	return fields, true
 }
 
 // HandleFunc is the server-side sync handler signature.
@@ -138,10 +158,6 @@ func HandleSync(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Mes
 // HandleSyncWithOpts processes an incoming xfer request with optional
 // fault injection. Used by DST harness; production callers use HandleSync.
 func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts) (*xfer.Message, error) {
-	return handleSyncWithFacts(ctx, r, req, opts, nil, false)
-}
-
-func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts, proof *sparsePreparedProof, ignoreSparse bool) (*xfer.Message, error) {
 	if r == nil {
 		panic("sync.HandleSync: r must not be nil")
 	}
@@ -154,15 +170,7 @@ func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, o
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx, ignoreSparse: ignoreSparse}
-	if proof != nil {
-		h.preparedFacts, h.preparedIndex = proof.facts, proof.index
-		defer func() {
-			if h.keep != nil && h.keep.indexed != nil {
-				proof.work = h.keep.indexed.Work
-			}
-		}()
-	}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -182,10 +190,11 @@ func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, o
 	}
 
 	obs.HandleCompleted(ctx, HandleEnd{
-		CardsProcessed: len(req.Cards),
-		FilesSent:      h.filesSent,
-		FilesReceived:  h.filesRecvd,
-		Err:            err,
+		CardsProcessed:   len(req.Cards),
+		FilesSent:        h.filesSent,
+		FilesReceived:    h.filesRecvd,
+		SparseClassified: h.keep.classified(),
+		Err:              err,
 	})
 	return resp, err
 }
@@ -210,9 +219,6 @@ type handler struct {
 	ctx             context.Context
 	cone            *cone.Cone
 	keep            *sparseKeep
-	preparedFacts   *content.ConeReferenceFacts
-	preparedIndex   *content.ConeSuccessors
-	ignoreSparse    bool
 	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker
@@ -232,6 +238,8 @@ type handler struct {
 	peerDate        int                       // client's check-in date, from client-version
 	cloneSeq        int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax    int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
+	cloneResume     cloneResume               // a sparse walk's progress at the cursor row (from cookie)
+	walkClone       bool                      // a clone without pull: keep-set discovery walks the round (§6.2)
 	uvCatalogSent   bool                      // true after sending UV catalog
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
@@ -439,6 +447,8 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// clone batch goes out at the clone card and fossil's client sends its
 	// cookie after that card.
 	h.cloneSnapMax = cloneCapFromCards(req.Cards)
+	h.cloneResume = cloneResumeFromCards(req.Cards)
+	h.walkClone = detectOperation(req) == "clone" && !hasPullCard(req.Cards)
 	// §7.2: a server decides from the request it is answering, so the
 	// capability is read ahead of the card loop like the cookie above. A
 	// request with no client-version gets its reply's pragma run here, at
@@ -1255,12 +1265,8 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if !ok {
 		return nil // blob not found — not fatal, skip.
 	}
-	if err := h.ensureSparseKeep(); err != nil {
-		return err
-	}
-	if !h.keep.keeps(rid) {
-		return nil
-	}
+	// §6.4: a gimme names its artifact, so a cone request is answered
+	// densely; the requester never names what its own cone elides.
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1620,18 +1626,11 @@ func (h *handler) emitCloneBatch() error {
 			return fmt.Errorf("handler: capture clone snapshot: %w", err)
 		}
 		h.cloneSnapMax = maxRid
-		h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		// A sparse walk sends its one cookie with the round's progress.
+		if h.keep == nil || h.keep.walk == nil {
+			h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		}
 	}
-
-	budget := DefaultCloneBatchBytes
-	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
-	// The budget is consulted before each artifact and never suppresses the
-	// first one, so this yields exactly one artifact per round.
-	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
-		budget = 1
-	}
-	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
-
 	// cloneSeq is the rid of the next blob to send and is inclusive, matching
 	// §8.2's "iterate from supplied RID through current maximum" and
 	// canonical's `while( seqno<=max )` loop in page_xfer(). handleControlCard
@@ -1642,35 +1641,88 @@ func (h *handler) emitCloneBatch() error {
 	if cursorAtEntry <= 0 {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
-	rows, err := h.cloneCandidates()
-	if err != nil {
-		return fmt.Errorf("handler: clone batch: %w", err)
+	round := h.newCloneBatch()
+	if err := h.walkCloneRows(round); err != nil {
+		return err
 	}
-	defer rows.Close()
+	if round.truncate && round.sentTop > 1 {
+		h.truncateCloneBatch(round)
+	}
+	// The cursor must strictly advance or signal exhaustion. Catching a stall
+	// here names the round that caused it; letting it through only surfaces
+	// later as an opaque MaxRounds failure on the client. A check-in whose
+	// walk outgrew the round stays the cursor, its progress in the cookie.
+	stalled := round.nextRID != 0 && round.nextRID <= cursorAtEntry
+	if stalled && !(round.pending.set && round.nextRID == cursorAtEntry && round.count > 0) {
+		return fmt.Errorf(
+			"handler: clone cursor did not advance: next %d, cursor %d", round.nextRID, cursorAtEntry)
+	}
+	h.emitCloneResume(round)
+	// SeqNo 0 signals completion so the client stops requesting.
+	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: round.nextRID})
+	return nil
+}
 
-	count := 0
+// cloneBatch is one clone reply's batch state.
+type cloneBatch struct {
+	budget   int
+	truncate bool
 	// sent records every rid emitted this round, including delta sources a
 	// dependent's chain pulls in ahead of their ascending position (issue
 	// #141). It caps re-emission at once per round the way canonical fossil's
 	// per-request "sent" bag does; across rounds the ascending cursor resumes,
 	// and a source pulled in early in a prior round may be re-sent, which the
 	// receiver dedupes by hash.
-	sent := map[int]bool{}
-	// sentTop counts top-level artifacts sent this round. Each carries a whole
-	// delta chain, so it is distinct from count (the card total) and is the
-	// quantity the truncate liveness guard below reasons about.
-	sentTop := 0
+	sent map[int]bool
+	// count is the card total; sentTop counts top-level artifacts sent this
+	// round. Each carries a whole delta chain, so it is the quantity the
+	// truncate liveness guard reasons about.
+	count, sentTop int
 	// bytesSent accumulates the wire cost of the cards emitted this round,
 	// mirroring canonical's `while( mxSend > blob_size(pOut) )`: the budget is
 	// tested before each artifact and the artifact (with its chain) that
 	// crosses it is still sent whole. That ordering is what guarantees forward
 	// progress when a single artifact is larger than the entire budget — a
 	// post-send test would emit nothing and stall the cursor.
-	bytesSent := 0
-	var lastTopRID int
+	bytesSent  int
+	lastTopRID int
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
-	nextRID := 0
+	nextRID int
+	// entry is the cursor the request named.
+	entry int
+	// resume is the walk progress the request's cookie carried; pending is
+	// the progress this reply hands on (§6.2).
+	resume, pending cloneResume
+}
+
+func (h *handler) newCloneBatch() *cloneBatch {
+	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}, entry: h.cloneSeq}
+	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
+	// The budget is consulted before each artifact and never suppresses the
+	// first one, so this yields exactly one artifact per round.
+	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
+		r.budget = 1
+	}
+	// A sparse walk sends rows out of rid order, so dropping the round's last
+	// card cannot name the cursor that owes it; truncation stays dense-only.
+	r.truncate = h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10) &&
+		(h.keep == nil || h.keep.walk == nil)
+	if h.cloneResume.aware && h.cloneResume.row == h.cloneSeq {
+		r.resume = h.cloneResume
+	}
+	return r
+}
+
+func (h *handler) walkCloneRows(round *cloneBatch) error {
+	rows, err := h.repo.DB().Query(
+		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		h.cloneSeq, h.cloneSnapMax,
+	)
+	if err != nil {
+		return fmt.Errorf("handler: clone batch: %w", err)
+	}
+	defer rows.Close()
 	for rows.Next() {
 		var rid int
 		var uuid string
@@ -1678,112 +1730,122 @@ func (h *handler) emitCloneBatch() error {
 		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
 			return err
 		}
-
-		// A higher-rid delta source that a dependent's chain already pulled in
-		// this round is on the wire; skip it before it can consume budget or
-		// advance the cursor a second time.
-		if sent[rid] {
-			continue
-		}
-
-		shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+		more, err := h.cloneRow(round, rid, uuid, fullSize)
 		if err != nil {
 			return err
 		}
-		if shunned {
-			continue
-		}
-		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
-		if isPriv && !h.syncPrivate {
-			continue // skip private blob, don't count toward batch
-		}
-
-		if bytesSent >= budget {
-			nextRID = rid
+		if !more {
 			break
 		}
-		// §6.2: a cone-excluded row is charged as a dense round would charge
-		// it, at no less than its expanded size, so the walk stops no later
-		// than a dense batch over the same rows would.
-		if !h.keep.keeps(libfossil.FslID(rid)) {
-			bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
-			continue
-		}
+	}
+	return rows.Err()
+}
 
-		// §7.2/#141: emit the artifact source-first. A row stored as a delta
-		// goes out as a delta card preceded by the source it names, reclaiming
-		// the delta-transmission bandwidth a plain (expanded) cfile gives up.
-		// content.Deltify deltifies the OLDER artifact against the NEWER one,
-		// so a delta's source almost always has a *greater* rid than the delta
-		// itself and would not yet have been sent under this loop's ascending
-		// order; buildCloneArtifact walks the chain and emits each source ahead
-		// of its dependent so no delta ever forward-references a card that has
-		// not arrived. The delta rides a cfile that names its source, as in
-		// canonical's send_compressed_file.
-		cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, sent)
-		if err != nil {
-			return err
-		}
-		// Respect the client's decode bound: the round the client decompresses
-		// must stay within xfer.MaxDecompressedBytes. If this artifact's chain
-		// would push the round past that bound and the round already carries
-		// content, flush now so the chain leads a round of its own. Without this
-		// the budget check above only bounds the accumulated *filler*, and a
-		// large artifact riding behind sub-budget filler carried the round to
-		// budget-plus-artifact, past what the client could decode (issue #109).
-		//
-		// The first artifact of a round (count == 0) is always sent, so a chain
-		// larger than the bound still makes forward progress -- it is simply
-		// unclonable, a property of the artifact alone and not of what precedes
-		// it in the round.
-		if count > 0 && bytesSent+cost > xfer.MaxDecompressedBytes {
-			nextRID = rid
-			break
-		}
+// cloneRow offers one candidate row to the round. It reports false once the
+// round is full, having set the cursor the client resumes from.
+func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+	// A higher-rid delta source that a dependent's chain already pulled in
+	// this round is on the wire; skip it before it can consume budget or
+	// advance the cursor a second time. A sparse walk still owes the walk of
+	// a check-in that went out as another manifest's delta source.
+	walk := h.keep != nil && h.keep.walk != nil
+	if round.sent[rid] && !walk {
+		return true, nil
+	}
+	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+	if err != nil || shunned {
+		return err == nil, err
+	}
+	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
+	if isPriv && !h.syncPrivate {
+		return true, nil // skip private blob, don't count toward batch
+	}
+	if round.bytesSent >= round.budget {
+		round.nextRID = rid
+		return false, nil
+	}
+	if walk {
+		return h.cloneSparseRow(round, rid, uuid, fullSize)
+	}
+	// §6.2: a cone-excluded row is charged as a dense round would charge
+	// it, at no less than its expanded size, so the walk stops no later
+	// than a dense batch over the same rows would.
+	if !h.keep.keeps(libfossil.FslID(rid)) {
+		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		return true, nil
+	}
+	sent, err := h.cloneSend(round, rid, uuid, fullSize)
+	if err != nil || sent {
+		return sent, err
+	}
+	round.nextRID = rid
+	return false, nil
+}
 
-		h.resp = append(h.resp, cards...)
-		for _, r := range rids {
-			sent[r] = true
+// cloneSend emits rid with its delta chain unless the chain would carry the
+// round past the client's decode bound; it reports whether rid was sent.
+func (h *handler) cloneSend(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+	// §7.2/#141: emit the artifact source-first. A row stored as a delta
+	// goes out as a delta card preceded by the source it names, reclaiming
+	// the delta-transmission bandwidth a plain (expanded) cfile gives up.
+	// content.Deltify deltifies the OLDER artifact against the NEWER one,
+	// so a delta's source almost always has a *greater* rid than the delta
+	// itself and would not yet have been sent under this loop's ascending
+	// order; buildCloneArtifact walks the chain and emits each source ahead
+	// of its dependent so no delta ever forward-references a card that has
+	// not arrived. The delta rides a cfile that names its source, as in
+	// canonical's send_compressed_file.
+	cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, round.sent)
+	if err != nil {
+		return false, err
+	}
+	// Respect the client's decode bound: the round the client decompresses
+	// must stay within xfer.MaxDecompressedBytes. If this artifact's chain
+	// would push the round past that bound and the round already carries
+	// content, flush now so the chain leads a round of its own. Without this
+	// the budget check above only bounds the accumulated *filler*, and a
+	// large artifact riding behind sub-budget filler carried the round to
+	// budget-plus-artifact, past what the client could decode (issue #109).
+	//
+	// The first artifact of a round (count == 0) is always sent, so a chain
+	// larger than the bound still makes forward progress -- it is simply
+	// unclonable, a property of the artifact alone and not of what precedes
+	// it in the round.
+	if round.count > 0 && round.bytesSent+cost > xfer.MaxDecompressedBytes {
+		return false, nil
+	}
+	h.resp = append(h.resp, cards...)
+	for _, r := range rids {
+		round.sent[r] = true
+	}
+	h.filesSent += len(rids)
+	round.lastTopRID = rid
+	round.count += len(rids)
+	round.sentTop++
+	round.bytesSent += cost
+	return true, nil
+}
+
+// truncateCloneBatch is BUGGIFY's truncate: it removes the last cfile card
+// to simulate an incomplete batch. The caller's `sentTop > 1` is a liveness
+// constraint, not just a chaos-injection guard. The removed card is the
+// deepest dependent of the last artifact's chain (emitted last in
+// source-first order, so nothing else on the wire depends on it), and the
+// cursor is set to that artifact's top-level rid. With more than one
+// top-level artifact sent this round that rid strictly exceeds the cursor we
+// entered with, so the client re-requests from it rather than looping on the
+// same batch until MaxRounds.
+func (h *handler) truncateCloneBatch(round *cloneBatch) {
+	for i := len(h.resp) - 1; i >= 0; i-- {
+		if _, ok := h.resp[i].(*xfer.CFileCard); ok {
+			h.resp = append(h.resp[:i], h.resp[i+1:]...)
+			h.filesSent--
+			// The dropped card held lastTopRID, so that rid becomes the
+			// next one owed to the client rather than being skipped.
+			round.nextRID = round.lastTopRID
+			return
 		}
-		h.filesSent += len(rids)
-		lastTopRID = rid
-		count += len(rids)
-		sentTop++
-		bytesSent += cost
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// BUGGIFY: truncate — remove the last cfile card to simulate an incomplete
-	// batch. `sentTop > 1` is a liveness constraint, not just a chaos-injection
-	// guard. The removed card is the deepest dependent of the last artifact's
-	// chain (emitted last in source-first order, so nothing else on the wire
-	// depends on it), and nextRID is set to that artifact's top-level rid. With
-	// more than one top-level artifact sent this round that rid strictly
-	// exceeds the cursor we entered with, so the client re-requests from it
-	// rather than looping on the same batch until MaxRounds.
-	if truncate && sentTop > 1 {
-		for i := len(h.resp) - 1; i >= 0; i-- {
-			if _, ok := h.resp[i].(*xfer.CFileCard); ok {
-				h.resp = append(h.resp[:i], h.resp[i+1:]...)
-				h.filesSent--
-				// The dropped card held lastTopRID, so that rid becomes the
-				// next one owed to the client rather than being skipped.
-				nextRID = lastTopRID
-				break
-			}
-		}
-	}
-	// The cursor must strictly advance or signal exhaustion. Catching a stall
-	// here names the round that caused it; letting it through only surfaces
-	// later as an opaque MaxRounds failure on the client.
-	if nextRID != 0 && nextRID <= cursorAtEntry {
-		return fmt.Errorf(
-			"handler: clone cursor did not advance: next %d, cursor %d", nextRID, cursorAtEntry)
-	}
-	// SeqNo 0 signals completion so the client stops requesting.
-	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: nextRID})
-	return nil
 }
 
 // maxCloneChainWalk bounds the delta-chain walk in walkCloneChain. A real
@@ -1877,7 +1939,7 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 			return nil, err
 		}
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			h.keep.keeps(src) && (!info.priv || h.syncPrivate)
+			h.keep.sourceKept(int(src)) && (!info.priv || h.syncPrivate)
 		if forwardable {
 			// Checked before sent: a withheld source is never on the wire,
 			// whatever an earlier chain recorded.

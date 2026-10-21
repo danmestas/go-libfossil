@@ -13,10 +13,10 @@ import (
 // snapshot, without a cone key. The owner must validate that snapshot before
 // using these facts against a database that may have changed.
 //
-// Preparation reads and inflates the whole store. Classify avoids that I/O,
-// but still examines all parsed references and walks all check-in roots; it
-// is not a bounded-per-round serving index. Retained decks are classification
-// projections, not complete artifacts suitable for marshaling.
+// Loading reads and inflates the whole store, so it serves whole-store work
+// (a pull's inventory, compaction, verification, crosslink), never a clone
+// round. Retained decks are classification projections, not complete
+// artifacts suitable for marshaling.
 type ConeReferenceFacts struct {
 	names      map[libfossil.FslID]string
 	held       map[string]libfossil.FslID
@@ -33,10 +33,10 @@ type coneReferenceRecord struct {
 }
 
 func LoadConeReferenceFacts(ctx context.Context, q db.Querier) (*ConeReferenceFacts, error) {
-	// Ordinary discovery needs the same pre-allocation guards as explicit
-	// preparation. Counting only check-ins/trees does not bound wiki, forum,
-	// cluster or file storage. Oversized snapshots fail rather than allocate
-	// first and discover their budget after parsing.
+	// Discovery is guarded before allocation. Counting only check-ins/trees
+	// does not bound wiki, forum, cluster or file storage. Oversized
+	// snapshots fail rather than allocate first and discover their budget
+	// after parsing.
 	facts, _, err := loadConeReferenceFactsBounded(ctx, q, ReferenceBudget{
 		Artifacts: coneReferenceNodes, StoredBytes: 64 << 20,
 		InflatedBytes: 128 << 20, ExpandedBytes: 128 << 20, Cards: 1 << 20,

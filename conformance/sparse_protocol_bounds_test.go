@@ -17,13 +17,18 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// The round-walk case bounds the clone candidate walk; it does not bound the
-// whole-store keep-set discovery that precedes it on the ordinary path.
 func scProtocolBoundsCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.8.depth-wire-bound", Req: "SC-8-2"}, scProtocolDepthBound},
 		{Case{ID: "sparsecone.8.visited-wire-bound", Req: "SC-8-2"}, scProtocolVisitedBound},
 		{Case{ID: "sparsecone.6.2.round-walk-bound", Req: "SC-6.2-1"}, scProtocolRoundWalk},
+		{Case{ID: "sparsecone.6.2.round-work-bound", Req: "SC-6.2-1"}, scProtocolRoundWork},
+		{Case{ID: "sparsecone.6.2.excluded-rounds", Req: "SC-6.2-1"}, scProtocolExcludedRounds},
+		{Case{ID: "sparsecone.6.2.delta-manifest-flat", Req: "SC-6.2-1"}, scProtocolDeltaManifestFlat},
+		{Case{ID: "sparsecone.6.2.delta-manifest-tree", Req: "SC-6.2-1"}, scProtocolDeltaManifestTree},
+		{Case{ID: "sparsecone.6.2.resume-dropped", Req: "SC-6.2-1"}, scProtocolResumeDropped},
+		{Case{ID: "sparsecone.6.2.parent-diff-flat", Req: "SC-6.2-1"}, scProtocolParentDiffFlat},
+		{Case{ID: "sparsecone.6.2.parent-diff-tree", Req: "SC-6.2-1"}, scProtocolParentDiffTree},
 	}
 }
 
@@ -260,4 +265,169 @@ func scProtocolBoundedRound(m *xfer.Message, wanted string, finalRID int) error 
 		}
 	}
 	return fmt.Errorf("first round carried no clone_seqno")
+}
+
+type scHandleWork struct {
+	classified []int
+}
+
+func (o *scHandleWork) Started(ctx context.Context, _ sync.SessionStart) context.Context { return ctx }
+func (o *scHandleWork) RoundStarted(ctx context.Context, _ int) context.Context          { return ctx }
+func (o *scHandleWork) RoundCompleted(context.Context, int, sync.RoundStats)             {}
+func (o *scHandleWork) Completed(context.Context, sync.SessionEnd, error)                {}
+func (o *scHandleWork) Error(context.Context, error)                                     {}
+func (o *scHandleWork) HandleStarted(ctx context.Context, _ sync.HandleStart) context.Context {
+	return ctx
+}
+func (o *scHandleWork) HandleCompleted(_ context.Context, end sync.HandleEnd) {
+	o.classified = append(o.classified, end.SparseClassified)
+}
+func (o *scHandleWork) TableSyncStarted(context.Context, sync.TableSyncStart) {}
+func (o *scHandleWork) TableSyncCompleted(context.Context, sync.TableSyncEnd) {}
+
+// An excluded run longer than one dense batch precedes many check-ins. The
+// first round must classify only what its window holds: work proportional to
+// the batch it walks, never to the check-ins the store holds behind it.
+func scProtocolRoundWork(t *testing.T) error {
+	const checkins = 400
+	origin := newSCSyncRepo(t, map[string]string{"src/initial": "initial\n"})
+	run, err := scProtocolExcludedRun(origin, "zzz/run", sync.DefaultCloneBatchBytes/(1<<20)+2)
+	if err != nil {
+		return err
+	}
+	if err := scProtocolCheckinChain(origin, run, checkins); err != nil {
+		return err
+	}
+	work := &scHandleWork{}
+	peer := &scSyncPeer{r: origin.r, opts: sync.HandleOpts{Observer: work}}
+	first, err := peer.Exchange(context.Background(), &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "cone", Values: []string{"src"}},
+		&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+	}})
+	if err != nil {
+		return err
+	}
+	cursor := scProtocolCursor(first)
+	if cursor <= 0 || cursor > len(run)+8 {
+		return fmt.Errorf("first round cursor = %d, want inside the excluded run of %d", cursor, len(run))
+	}
+	if got := work.classified[0]; got == 0 || got > cursor+8 {
+		return fmt.Errorf("first round classified %d artifacts below cursor %d over %d check-ins",
+			got, cursor, checkins)
+	}
+	cloned, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"), peer,
+		sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil), PullPhantoms: true})
+	if err != nil {
+		return err
+	}
+	defer cloned.Close()
+	for text, want := range map[string]bool{"shared in cone\n": true, "checkin 0\n": false, "checkin 399\n": false} {
+		if err := scSyncHolding(cloned, text, want); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// scProtocolExcludedRun stores incompressible megabyte blobs and returns the
+// F cards naming them outside the cone.
+func scProtocolExcludedRun(origin *scRepo, dir string, pieces int) ([]deck.FileCard, error) {
+	const piece = 1 << 20
+	noise := rand.New(rand.NewPCG(6, 2))
+	var outside []deck.FileCard
+	for i := 0; i < pieces; i++ {
+		data := make([]byte, piece)
+		for j := range data {
+			data[j] = byte(noise.Uint32())
+		}
+		_, uuid, err := blob.Store(origin.r.DB(), data)
+		if err != nil {
+			return nil, err
+		}
+		outside = append(outside, deck.FileCard{Name: fmt.Sprintf("%s/%04d", dir, i), UUID: uuid})
+	}
+	return outside, nil
+}
+
+// scProtocolCheckinChain stores a linear history: every check-in names one
+// shared in-cone file and its own outside file; the first also names run.
+func scProtocolCheckinChain(origin *scRepo, run []deck.FileCard, n int) error {
+	_, shared, err := blob.Store(origin.r.DB(), []byte("shared in cone\n"))
+	if err != nil {
+		return err
+	}
+	when := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	parent := ""
+	for i := 0; i < n; i++ {
+		_, own, err := blob.Store(origin.r.DB(), []byte(fmt.Sprintf("checkin %d\n", i)))
+		if err != nil {
+			return err
+		}
+		files := []deck.FileCard{{Name: "src/shared", UUID: shared}, {Name: "zzz/own", UUID: own}}
+		if i == 0 {
+			files = append(files, run...)
+		}
+		d := &deck.Deck{C: fmt.Sprintf("chain %d", i), D: when.Add(time.Duration(i) * time.Second),
+			U: deck.User("u"), F: files}
+		if parent != "" {
+			d.P = []string{parent}
+		}
+		data, err := d.Marshal()
+		if err != nil {
+			return err
+		}
+		if _, parent, err = blob.Store(origin.r.DB(), data); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scProtocolCursor(m *xfer.Message) int {
+	for _, card := range m.Cards {
+		if c, ok := card.(*xfer.CloneSeqNoCard); ok {
+			return c.SeqNo
+		}
+	}
+	return -1
+}
+
+// An excluded run spanning more than two dense batches leaves a whole round
+// with nothing in the cone to send; its advancing cursor still carries the
+// clone on to the in-cone artifact behind the run.
+func scProtocolExcludedRounds(t *testing.T) error {
+	origin := newSCSyncRepo(t, map[string]string{"src/initial": "initial\n"})
+	run, err := scProtocolExcludedRun(origin, "zzz/run", 2*sync.DefaultCloneBatchBytes/(1<<20)+2)
+	if err != nil {
+		return err
+	}
+	_, wanted, err := blob.Store(origin.r.DB(), []byte("after the run\n"))
+	if err != nil {
+		return err
+	}
+	data, err := (&deck.Deck{C: "after the run", D: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC),
+		U: deck.User("u"), F: append([]deck.FileCard{{Name: "src/after", UUID: wanted}}, run...)}).Marshal()
+	if err != nil {
+		return err
+	}
+	if _, _, err := blob.Store(origin.r.DB(), data); err != nil {
+		return err
+	}
+	peer := &scSyncPeer{r: origin.r}
+	cloned, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"), peer,
+		sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil)})
+	if err != nil {
+		return err
+	}
+	defer cloned.Close()
+	empty := 0
+	for _, resp := range peer.replies {
+		if len(scSyncPayloads(resp)) == 0 && scProtocolCursor(resp) > 0 {
+			empty++
+		}
+	}
+	if empty == 0 {
+		return fmt.Errorf("no round fell wholly inside the excluded run")
+	}
+	return scSyncHolding(cloned, "after the run\n", true)
 }

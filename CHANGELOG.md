@@ -229,6 +229,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo clone` remembers its source as `last-sync-url`, as `fossil clone`
+  does, keeping a user name and never a password. Nothing in go-libfossil
+  wrote the setting, so the default peer for `repo cone store`, widening
+  and required-content recovery existed only in repositories fossil had
+  cloned, and a go-libfossil clone needed `--remote` every time.
+
 - `repo status` reports the checkout's changes against the version it has
   checked out, through `Checkout.Status`, with fossil's labels. Run from
   inside a checkout with the default `--dir .`, it reported every tracked

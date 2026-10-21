@@ -53,7 +53,7 @@ func (w *coneWalk) tree(
 }
 
 func (w *coneWalk) visit(depth int) error {
-	if err := w.h.ctx.Err(); err != nil {
+	if err := w.ctx.Err(); err != nil {
 		return err
 	}
 	if depth > coneWalkDepth || w.visits >= coneWalkVisits {

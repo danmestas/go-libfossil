@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ const (
 // parent is a row of the same clone, so by induction every in-cone node and
 // blob of every check-in is sent once its own check-in is.
 type coneWalk struct {
+	ctx        context.Context
 	h          *handler
 	cone       *cone.Cone
 	kinds      map[int]sparseKind
@@ -43,11 +45,11 @@ type coneWalk struct {
 	classified int
 }
 
-func newConeWalk(h *handler) *coneWalk {
-	if h == nil || h.cone == nil {
-		panic("sync.newConeWalk: nil handler or cone")
+func newConeWalk(ctx context.Context, h *handler) *coneWalk {
+	if ctx == nil || h == nil || h.cone == nil {
+		panic("sync.newConeWalk: nil context, handler or cone")
 	}
-	return &coneWalk{h: h, cone: h.cone, kinds: map[int]sparseKind{},
+	return &coneWalk{ctx: ctx, h: h, cone: h.cone, kinds: map[int]sparseKind{},
 		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{}}
 }
 
@@ -221,7 +223,7 @@ func (w *coneWalk) fileList(d *deck.Deck) ([]deck.FileCard, error) {
 
 func (w *coneWalk) files(files []deck.FileCard, prior map[deck.FileCard]bool, out map[int]bool) error {
 	for _, f := range files {
-		if err := w.h.ctx.Err(); err != nil {
+		if err := w.ctx.Err(); err != nil {
 			return err
 		}
 		key := deck.FileCard{Name: f.Name, UUID: f.UUID}

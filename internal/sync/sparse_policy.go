@@ -77,7 +77,7 @@ func (h *handler) ensureSparseKeep() error {
 		return nil
 	}
 	if h.walkClone {
-		h.keep = &sparseKeep{walk: newConeWalk(h)}
+		h.keep = &sparseKeep{walk: newConeWalk(ctx, h)}
 		return nil
 	}
 	var err error

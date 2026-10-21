@@ -59,7 +59,7 @@ func sparseconeCases() []scCase {
 	for _, group := range [][]scCase{
 		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(),
 		scStoreCases(), scCompactCases(), scSyncCases(), scCanonicalCases(), scProtocolBoundsCases(),
-		scWorktreeCompleteCases(), scRecoveryCases(), scWidenSparseCases(),
+		scWorktreeCompleteCases(), scRecoveryCases(), scWidenSparseCases(), scRCardCases(),
 	} {
 		all = append(all, group...)
 	}

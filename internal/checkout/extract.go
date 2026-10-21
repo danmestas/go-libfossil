@@ -2,15 +2,19 @@ package checkout
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
@@ -117,9 +121,36 @@ func (c *Checkout) Extract(rid libfossil.FslID, opts ExtractOpts) error {
 		return extractErr
 	}
 	if opts.SetMTime {
-		extractErr = c.setFileMTimes(rid)
+		if extractErr = c.setFileMTimes(rid); extractErr != nil {
+			return extractErr
+		}
 	}
+	extractErr = c.checkRCard(rid, opts.Warn)
 	return extractErr
+}
+
+// checkRCard is fossil's post-checkout "repo-cksum" check: a present R card
+// is compared with the aggregate over every file the manifest names, read
+// from the store, so a cone narrows what is written and never what R is
+// checked against (draft-fossil-sparse-cone-00 §4.3). manifest.VerifyRCard
+// skips a sparse store, whose aggregate is uncomputable. As in fossil a
+// disagreement is a warning; only failing to read the setting is an error.
+func (c *Checkout) checkRCard(rid libfossil.FslID, warn func(string)) error {
+	if rid <= 0 {
+		panic("checkout.checkRCard: rid must be positive")
+	}
+	value, err := c.repo.Config("repo-cksum")
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checkout.Extract: %w", err)
+	}
+	if !repo.SettingBoolean(value, true) {
+		return nil
+	}
+	err = c.repo.WithTx(func(tx *db.Tx) error { return manifest.VerifyRCard(tx, nil, rid) })
+	if err != nil && warn != nil {
+		warn(fmt.Sprintf("manifest checksum does not agree with manifest: %v", err))
+	}
+	return nil
 }
 
 // finalizeExtract looks up the blob UUID for rid and updates the vvar

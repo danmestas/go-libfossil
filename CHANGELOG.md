@@ -54,7 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default, refusing with the cone unchanged when there is no peer.
   `Repo.CompactStore` and `repo cone compact` drop the held blobs the store
   cone elides, as zit's `pack --drop-elided` does; sub-manifest nodes stay
-  held, as zit holds every structural artifact.
+  held, as zit holds every structural artifact. Widening a checkout cone
+  over a sparse store fetches the payloads the widening covers from the
+  peer and materializes them; with no peer the widening is refused and
+  nothing changes. The private checkout marker moves crash-safely: the move
+  is recorded in vvar before it starts and completed on the next open, so a
+  crash at any step leaves a checkout fossil and go-libfossil both read.
+  Checking out verifies the manifest's R card as fossil does, warning
+  through the new `ExtractOpts.Warn` (`repo open` prints a WARNING line)
+  and succeeding, skipped over a sparse store or with `repo-cksum` off.
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds

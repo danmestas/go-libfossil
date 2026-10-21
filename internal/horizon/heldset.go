@@ -9,29 +9,9 @@ import (
 	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
-
-// Rule is the held-set rule a horizon names (Section 3.1).
-type Rule uint8
-
-const (
-	// Descendants holds C and every check-in descended from it; the default.
-	Descendants Rule = iota
-	// Leaves also holds, for every open leaf, its ancestry back to where it
-	// meets C's.
-	Leaves
-)
-
-func (r Rule) String() string {
-	switch r {
-	case Descendants:
-		return "descendants"
-	case Leaves:
-		return "leaves"
-	}
-	return fmt.Sprintf("Rule(%d)", uint8(r))
-}
 
 var (
 	// ErrNotHeld is returned when C is not a check-in the repository holds:
@@ -65,10 +45,10 @@ const heldCheckinSQL = `(EXISTS(SELECT 1 FROM event WHERE objid=%[1]s AND type='
 //
 // Edges follow every P card, the primary parent and merge parents alike,
 // as zit's walk does (src/sparse.zig, ClassifyState.extend pass 2, at
-// horizon-rfc e6ee276c89). Under Descendants, a check-in that names a
+// horizon-rfc e6ee276c89). Under the descendants rule, a check-in naming a
 // member of K as a merge parent is in K.
 //
-// Under Leaves, "the nearest common ancestor of L and C" and "every
+// Under the leaves rule, "the nearest common ancestor of L and C" and "every
 // check-in on a path from L back to" it are read as zit's walkParents
 // reads them: A is C and all of C's ancestors; L's ancestry is walked
 // through every parent, each check-in reached is held, and a check-in in
@@ -84,18 +64,18 @@ const heldCheckinSQL = `(EXISTS(SELECT 1 FROM event WHERE objid=%[1]s AND type='
 // as a leaf, so such a branch below C is held back to its fork, and two
 // open leaves always have their merge base in K. And phantom parents are
 // never held: K is drawn from the check-ins the repository holds.
-func HeldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule Rule) ([]libfossil.FslID, error) {
+func HeldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.HorizonRule) ([]libfossil.FslID, error) {
 	return heldSet(ctx, q, c, rule, heldSetNodes)
 }
 
-func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule Rule, limit int) ([]libfossil.FslID, error) {
+func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.HorizonRule, limit int) ([]libfossil.FslID, error) {
 	if ctx == nil || q == nil {
 		panic("horizon.HeldSet: nil context or querier")
 	}
 	if c <= 0 {
 		panic("horizon.HeldSet: c must be positive")
 	}
-	if rule != Descendants && rule != Leaves {
+	if rule != cone.RuleDescendants && rule != cone.RuleLeaves {
 		panic("horizon.HeldSet: unknown rule")
 	}
 	if limit <= 0 {
@@ -121,7 +101,7 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule Rule, li
 	if err := w.run(c, g.children, k, nil); err != nil {
 		return nil, err
 	}
-	if rule == Leaves {
+	if rule == cone.RuleLeaves {
 		ancestors := map[libfossil.FslID]bool{}
 		if err := w.run(c, g.parents, ancestors, nil); err != nil {
 			return nil, err

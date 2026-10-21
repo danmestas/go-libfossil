@@ -3,6 +3,7 @@ package horizon
 import (
 	"context"
 	"errors"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"slices"
 	"testing"
 	"time"
@@ -82,7 +83,7 @@ func (d *dag) chain(names ...string) []libfossil.FslID {
 
 func p(rids ...libfossil.FslID) []libfossil.FslID { return rids }
 
-func (d *dag) want(c libfossil.FslID, rule Rule, want ...libfossil.FslID) {
+func (d *dag) want(c libfossil.FslID, rule cone.HorizonRule, want ...libfossil.FslID) {
 	d.t.Helper()
 	got, err := HeldSet(context.Background(), d.r.DB(), c, rule)
 	if err != nil {
@@ -97,7 +98,7 @@ func (d *dag) want(c libfossil.FslID, rule Rule, want ...libfossil.FslID) {
 func TestLinearMidChain(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2", "c3", "c4", "c5")
-	for _, rule := range []Rule{Descendants, Leaves} {
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 		d.want(c[2], rule, c[2], c[3], c[4])
 	}
 }
@@ -105,7 +106,7 @@ func TestLinearMidChain(t *testing.T) {
 func TestTipHoldsOnlyItself(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2", "c3")
-	for _, rule := range []Rule{Descendants, Leaves} {
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 		d.want(c[2], rule, c[2])
 	}
 }
@@ -118,8 +119,8 @@ func TestBranchForkedBelowC(t *testing.T) {
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	f2 := d.commit("f2", p(f1))
-	d.want(c[2], Descendants, c[2], c[3])
-	d.want(c[2], Leaves, c[2], c[3], f1, f2, c[0])
+	d.want(c[2], cone.RuleDescendants, c[2], c[3])
+	d.want(c[2], cone.RuleLeaves, c[2], c[3], f1, f2, c[0])
 }
 
 func TestBranchForkedAtC(t *testing.T) {
@@ -127,7 +128,7 @@ func TestBranchForkedAtC(t *testing.T) {
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[2]), branchTags("feat")...)
 	f2 := d.commit("f2", p(f1))
-	for _, rule := range []Rule{Descendants, Leaves} {
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 		d.want(c[2], rule, c[2], c[3], f1, f2)
 	}
 }
@@ -141,8 +142,8 @@ func TestBelowCBranchMergedIntoDescendant(t *testing.T) {
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	m := d.commit("m", p(c[3], f1))
-	d.want(c[2], Descendants, c[2], c[3], m)
-	d.want(c[2], Leaves, c[2], c[3], m, f1, c[0])
+	d.want(c[2], cone.RuleDescendants, c[2], c[3], m)
+	d.want(c[2], cone.RuleLeaves, c[2], c[3], m, f1, c[0])
 }
 
 // A below-C branch that merges a descendant of C in: following merge
@@ -154,7 +155,7 @@ func TestDescendantMergedIntoBelowCBranch(t *testing.T) {
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	f2 := d.commit("f2", p(f1, c[3]))
-	for _, rule := range []Rule{Descendants, Leaves} {
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 		d.want(c[2], rule, c[2], c[3], f2)
 	}
 }
@@ -171,8 +172,8 @@ func TestSeveralNearestCommonAncestors(t *testing.T) {
 	x2 := d.commit("x2", p(x), branchTags("side")...)
 	y2 := d.commit("y2", p(y), branchTags("side")...)
 	l := d.commit("l", p(x2, y2))
-	d.want(cc, Descendants, cc)
-	d.want(cc, Leaves, cc, l, x2, y2, x, y)
+	d.want(cc, cone.RuleDescendants, cc)
+	d.want(cc, cone.RuleLeaves, cc, l, x2, y2, x, y)
 }
 
 func TestClosedLeafExcluded(t *testing.T) {
@@ -181,7 +182,7 @@ func TestClosedLeafExcluded(t *testing.T) {
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	d.commit("f2", p(f1), closedTag)
 	g1 := d.commit("g1", p(c[1]), branchTags("gone")...)
-	d.want(c[2], Leaves, c[2], c[3], g1, c[1])
+	d.want(c[2], cone.RuleLeaves, c[2], c[3], g1, c[1])
 }
 
 // A leaf whose ancestry never meets C's has no common ancestor with it; the
@@ -191,8 +192,8 @@ func TestUnrelatedRootHeldWhole(t *testing.T) {
 	c := d.chain("c1", "c2")
 	u1 := d.commit("u1", nil, branchTags("other")...)
 	u2 := d.commit("u2", p(u1))
-	d.want(c[1], Descendants, c[1])
-	d.want(c[1], Leaves, c[1], u1, u2)
+	d.want(c[1], cone.RuleDescendants, c[1])
+	d.want(c[1], cone.RuleLeaves, c[1], u1, u2)
 }
 
 // A phantom parent is not a held check-in: no walk enters it.
@@ -210,8 +211,8 @@ func TestPhantomParentNeverHeld(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	d.want(c[1], Descendants, c[1], c[2])
-	d.want(c[1], Leaves, c[1], c[2], f1, c[0])
+	d.want(c[1], cone.RuleDescendants, c[1], c[2])
+	d.want(c[1], cone.RuleLeaves, c[1], c[2], f1, c[0])
 }
 
 func TestCNotHeld(t *testing.T) {
@@ -227,7 +228,7 @@ func TestCNotHeld(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, rid := range []libfossil.FslID{c[1] + 1000, ph, file} {
-		for _, rule := range []Rule{Descendants, Leaves} {
+		for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 			_, err := HeldSet(context.Background(), d.r.DB(), rid, rule)
 			if !errors.Is(err, ErrNotHeld) {
 				t.Errorf("HeldSet(%d, %v) error = %v, want ErrNotHeld", rid, rule, err)
@@ -242,14 +243,14 @@ func TestBoundExceeded(t *testing.T) {
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	d.commit("f2", p(f1))
 	cases := []struct {
-		rule  Rule
+		rule  cone.HorizonRule
 		c     libfossil.FslID
 		limit int
 	}{
-		{Descendants, c[0], 3},  // the graph's 6 edges overflow the load
-		{Descendants, c[0], 6},  // c1's 7 descendants overflow the walk
-		{Leaves, c[3], 6},       // c4..c1 plus f1..f2 overflow it
-		{Leaves, c[4], 1 << 20}, // a sanity row: within bounds
+		{cone.RuleDescendants, c[0], 3},  // the graph's 6 edges overflow the load
+		{cone.RuleDescendants, c[0], 6},  // c1's 7 descendants overflow the walk
+		{cone.RuleLeaves, c[3], 6},       // c4..c1 plus f1..f2 overflow it
+		{cone.RuleLeaves, c[4], 1 << 20}, // a sanity row: within bounds
 	}
 	for _, tc := range cases {
 		_, err := heldSet(context.Background(), d.r.DB(), tc.c, tc.rule, tc.limit)
@@ -270,7 +271,7 @@ func TestCancelled(t *testing.T) {
 	c := d.chain("c1", "c2")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := HeldSet(ctx, d.r.DB(), c[0], Leaves); !errors.Is(err, context.Canceled) {
+	if _, err := HeldSet(ctx, d.r.DB(), c[0], cone.RuleLeaves); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
@@ -282,7 +283,7 @@ func TestDeterministic(t *testing.T) {
 	d.commit("m", p(c[3], f1))
 	g1 := d.commit("g1", p(c[1]), branchTags("g")...)
 	d.commit("g2", p(g1, c[2]))
-	for _, rule := range []Rule{Descendants, Leaves} {
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 		first, err := HeldSet(context.Background(), d.r.DB(), c[2], rule)
 		if err != nil {
 			t.Fatal(err)

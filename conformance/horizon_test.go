@@ -156,7 +156,7 @@ func newHZGraph(t *testing.T) *hzGraph {
 	return g
 }
 
-func hzWant(r *repo.Repo, c libfossil.FslID, rule horizon.Rule, want ...libfossil.FslID) error {
+func hzWant(r *repo.Repo, c libfossil.FslID, rule cone.HorizonRule, want ...libfossil.FslID) error {
 	got, err := horizon.HeldSet(context.Background(), r.DB(), c, rule)
 	if err != nil {
 		return err
@@ -174,15 +174,15 @@ func hzWant(r *repo.Repo, c libfossil.FslID, rule horizon.Rule, want ...libfossi
 // ancestor with C. c2 is on no leaf's path and stays out under both.
 func hzRules(t *testing.T) error {
 	g := newHZGraph(t)
-	if err := hzWant(g.f.r, g.c3, horizon.Descendants, g.c3, g.c4, g.m, g.side1, g.side2); err != nil {
+	if err := hzWant(g.f.r, g.c3, cone.RuleDescendants, g.c3, g.c4, g.m, g.side1, g.side2); err != nil {
 		return err
 	}
-	return hzWant(g.f.r, g.c3, horizon.Leaves, g.c3, g.c4, g.m, g.side1, g.side2, g.feat, g.c1)
+	return hzWant(g.f.r, g.c3, cone.RuleLeaves, g.c3, g.c4, g.m, g.side1, g.side2, g.feat, g.c1)
 }
 
 // hzUUIDs names a held set by artifact hash, so sets computed in two
 // repositories compare.
-func hzUUIDs(r *repo.Repo, c string, rule horizon.Rule) ([]string, error) {
+func hzUUIDs(r *repo.Repo, c string, rule cone.HorizonRule) ([]string, error) {
 	var rid libfossil.FslID
 	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", c).Scan(&rid); err != nil {
 		return nil, err
@@ -217,7 +217,7 @@ func hzRecomputed(t *testing.T) error {
 	}
 	compare := func(stage string) ([]string, error) {
 		var last []string
-		for _, rule := range []horizon.Rule{horizon.Descendants, horizon.Leaves} {
+		for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
 			atOrigin, err := hzUUIDs(g.f.r, c, rule)
 			if err != nil {
 				return nil, err

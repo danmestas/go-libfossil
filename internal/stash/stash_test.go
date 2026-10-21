@@ -147,7 +147,7 @@ type noScan struct{}
 
 func (noScan) ScanChanges(checkout.ScanFlags) error { return nil }
 
-func (noScan) VersionPaths() (map[string]bool, error) { return nil, nil }
+func (noScan) VersionPerms() (map[string]string, error) { return nil, nil }
 
 // modifyFile changes a.txt on disk and marks it changed in vfile.
 func modifyFile(t *testing.T, ckout *sql.DB, dir string) {

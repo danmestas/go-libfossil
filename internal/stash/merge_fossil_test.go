@@ -244,6 +244,7 @@ func TestStashPendingMergeMatchesFossil(t *testing.T) {
 	for _, q := range []string{vmergeRows, stashRows} {
 		requireSame(t, "after pop: "+q, query(t, f.ckF, q), query(t, f.ckG, q))
 	}
+	requireSame(t, "working files after pop", worktree(t, f.ckF), worktree(t, f.ckG))
 	fossilIn(t, f.bin, f.ckF, "commit", "-m", "fossil popped", "--no-warnings")
 	fossilIn(t, f.bin, f.ckG, "commit", "-m", "go popped", "--no-warnings", "--allow-fork")
 	requireSame(t, "P card", pCard(t, f, f.ckF), pCard(t, f, f.ckG))

@@ -265,7 +265,12 @@ func scStashRecordOnly(t *testing.T) error {
 		if err != nil {
 			return err
 		}
-		if err := scSameContent("merge after a stash round trip", got, scRecordOnlyRemote()); err != nil {
+		// src/a.c, taken from mid as it was, is stashed as no change from
+		// mid's content; fossil's stash_apply merges that no-op onto the
+		// reverted file, so it keeps c1's content.
+		want := scRecordOnlyRemote()
+		want["src/a.c"] = scFiles["src/a.c"]
+		if err := scSameContent("merge after a stash round trip", got, want); err != nil {
 			return err
 		}
 		d, err := manifest.GetManifest(f.r, rid)

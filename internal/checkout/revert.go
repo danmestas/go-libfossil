@@ -435,17 +435,29 @@ func (c *Checkout) removeTrackedFile(name string) error {
 	return c.removeRegularFile(fullPath)
 }
 
-// VersionPaths returns the names the checked-out version's manifest holds,
-// covered by the cone or not.
-func (c *Checkout) VersionPaths() (map[string]bool, error) {
+// VersionPerms returns the names the checked-out version's manifest holds,
+// covered by the cone or not, each with its F-card permission: "" for a
+// plain file, "x" executable, "l" a symlink.
+func (c *Checkout) VersionPerms() (map[string]string, error) {
 	if c == nil {
-		panic("checkout.VersionPaths: nil *Checkout")
+		panic("checkout.VersionPerms: nil *Checkout")
 	}
 	vid, _, err := c.Version()
 	if err != nil {
-		return nil, fmt.Errorf("checkout.VersionPaths: %w", err)
+		return nil, fmt.Errorf("checkout.VersionPerms: %w", err)
 	}
-	return c.versionPaths(vid)
+	perms := make(map[string]string)
+	if vid <= 0 {
+		return perms, nil
+	}
+	files, err := manifest.ListFiles(c.repo, vid)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.VersionPerms: list version files: %w", err)
+	}
+	for _, f := range files {
+		perms[f.Name] = f.Perm
+	}
+	return perms, nil
 }
 
 // versionPaths returns the set of pathnames in checked-out version vid's

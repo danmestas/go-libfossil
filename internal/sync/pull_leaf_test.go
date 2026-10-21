@@ -32,7 +32,7 @@ func handlerTransport(t *testing.T, src *repo.Repo) *MockTransport {
 // puller already holds. It arrives as an igot phantom filled the next round,
 // so the phantom-fill cascade links it and the session's closing sweep finds
 // nothing left to link. The leaf and tag-propagation repair must still run
-// once for what the cascade linked (repo-state-01 Section 7.3, RS-7.3-3 and
+// once for what the cascade linked (repo-state-00 Section 7.3, RS-7.3-3 and
 // RS-7.3-4): the child replaces its parent as the leaf, and the parent's
 // propagated trunk tag reaches it.
 func TestPullRepairsLeavesOfCascadeLinks(t *testing.T) {

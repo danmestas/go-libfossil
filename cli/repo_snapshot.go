@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -126,7 +127,9 @@ func snapshotLocked(r *libfossil.Repo, bound *repo.Repo, name string, data []byt
 		}
 	}
 
-	files, err := manifest.MergeParentFiles(bound, fsltype.FslID(parent),
+	// snapshot has no deadline of its own; the sparse required-content check
+	// this bounds is a dense repository's no-op.
+	files, err := manifest.MergeParentFiles(context.Background(), bound, fsltype.FslID(parent),
 		[]manifest.File{{Name: name, Content: data, Perm: perm}})
 	if err != nil {
 		return snapshotResult{}, err

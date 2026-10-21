@@ -1,0 +1,273 @@
+package content
+
+import (
+	"bytes"
+	"compress/zlib"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+)
+
+// ReferenceBudget bounds a whole-store reference load. Byte budgets count payload buffers, not Go allocator overhead or parser objects.
+// The artifact/card caps separately bound that overhead. The caller must hold
+// a stable database snapshot through preflight and materialization.
+type ReferenceBudget struct {
+	Artifacts     int
+	StoredBytes   int64
+	InflatedBytes int64
+	ExpandedBytes int64
+	Cards         int
+}
+
+type ReferenceWork struct {
+	PrefixReads  int
+	PrefixBytes  int64
+	PayloadReads int
+	InflateBytes int64
+	ExpandBytes  int64
+	Visits       int
+}
+
+type referenceBlob struct {
+	rid, source libfossil.FslID
+	uuid        string
+	size        int64
+	stored      int64
+	inflated    int64
+	payload     []byte
+	data        []byte
+	children    []int
+	unreadable  bool
+}
+
+// loadConeReferenceFactsBounded proves total stored bytes before prefix reads,
+// which SQLite may materialize internally. It then proves declared inflation
+// before full driver payload reads. Inflation uses a fixed, precharged buffer
+// and verifies EOF. Delta output size is checked before Apply can allocate.
+func loadConeReferenceFactsBounded(
+	ctx context.Context, q db.Querier, budget ReferenceBudget, retainUnreadable bool,
+) (*ConeReferenceFacts, ReferenceWork, error) {
+	var work ReferenceWork
+	blobs, names, err := referencePreflight(ctx, q, budget)
+	if err != nil {
+		return nil, work, err
+	}
+	if err := referencePrefixes(ctx, q, blobs, budget, &work); err != nil {
+		return nil, work, err
+	}
+	facts := &ConeReferenceFacts{names: names, held: map[string]libfossil.FslID{},
+		nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{}}
+	for i := range blobs {
+		b := &blobs[i]
+		if err := ctx.Err(); err != nil {
+			return nil, work, err
+		}
+		if b.unreadable {
+			if retainUnreadable {
+				continue
+			}
+			return nil, work, fmt.Errorf("sparse preparation: invalid compressed prefix")
+		}
+		var packed []byte
+		// Non-BLOB storage classes are unknown, never an allocation proof.
+		// The same-snapshot predicate guards accidental unbound use too.
+		err := q.QueryRow(`SELECT content FROM blob WHERE rid=?
+			AND typeof(content)='blob' AND length(content)=?`, b.rid, b.stored).Scan(&packed)
+		if err != nil {
+			return nil, work, err
+		}
+		work.PayloadReads++
+		work.InflateBytes += b.inflated
+		b.payload, err = referenceInflate(packed, int(b.inflated))
+		if err != nil {
+			if !retainUnreadable {
+				return nil, work, err
+			}
+			b.unreadable = true
+		}
+	}
+	if err := referenceMaterialize(ctx, blobs, facts, budget, &work); err != nil {
+		return nil, work, err
+	}
+	return facts, work, nil
+}
+
+const referenceMetadataSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,
+	CASE WHEN typeof(b.content)='blob' THEN length(b.content) ELSE -1 END,
+	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`
+
+func referencePreflight(
+	ctx context.Context, q db.Querier, budget ReferenceBudget,
+) ([]referenceBlob, map[libfossil.FslID]string, error) {
+	if ctx == nil || q == nil {
+		panic("content.referencePreflight: nil context or querier")
+	}
+	if budget.Artifacts <= 0 || budget.Artifacts > coneReferenceNodes || budget.Cards <= 0 ||
+		budget.StoredBytes <= 0 || budget.InflatedBytes <= 0 || budget.ExpandedBytes <= 0 {
+		return nil, nil, fmt.Errorf("sparse preparation: invalid budget")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+	var count int64
+	if err := q.QueryRow("SELECT count(*) FROM (SELECT rid FROM blob LIMIT ?)", budget.Artifacts+1).Scan(&count); err != nil {
+		return nil, nil, err
+	}
+	if count > int64(budget.Artifacts) {
+		return nil, nil, fmt.Errorf("sparse preparation: artifact budget exceeded")
+	}
+	blobs := make([]referenceBlob, 0, int(count))
+	names := make(map[libfossil.FslID]string, int(count))
+	rows, err := q.Query(referenceMetadataSQL)
+	if err != nil {
+		return nil, nil, err
+	}
+	var stored, expanded int64
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Join(err, rows.Close())
+		}
+		var b referenceBlob
+		if err := rows.Scan(&b.rid, &b.uuid, &b.size, &b.stored, &b.source); err != nil {
+			return nil, nil, errors.Join(err, rows.Close())
+		}
+		if len(names) >= budget.Artifacts || len(b.uuid) > 64 {
+			return nil, nil, errors.Join(fmt.Errorf("sparse preparation: identity budget exceeded"), rows.Close())
+		}
+		names[b.rid] = b.uuid
+		if b.size < 0 {
+			continue
+		}
+		b.unreadable = b.stored < 0
+		if b.unreadable {
+			b.stored = 0
+		}
+		if b.stored > budget.StoredBytes-stored || b.size > budget.ExpandedBytes-expanded {
+			return nil, nil, errors.Join(fmt.Errorf("sparse preparation: byte budget exceeded"), rows.Close())
+		}
+		stored += b.stored
+		expanded += b.size
+		blobs = append(blobs, b)
+	}
+	return blobs, names, errors.Join(rows.Err(), rows.Close())
+}
+
+func referenceInflate(packed []byte, size int) ([]byte, error) {
+	if len(packed) < 5 || size < 0 {
+		return nil, fmt.Errorf("sparse preparation: invalid compressed bytes")
+	}
+	zr, err := zlib.NewReader(bytes.NewReader(packed[4:]))
+	if err != nil {
+		return nil, err
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(zr, data); err != nil {
+		return nil, errors.Join(err, zr.Close())
+	}
+	var extra [1]byte
+	n, err := zr.Read(extra[:])
+	if n != 0 || err != io.EOF {
+		return nil, errors.Join(fmt.Errorf("sparse preparation: compressed size mismatch"), zr.Close())
+	}
+	if err := zr.Close(); err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func referenceMaterialize(
+	ctx context.Context, blobs []referenceBlob, facts *ConeReferenceFacts,
+	budget ReferenceBudget, work *ReferenceWork,
+) error {
+	index := make(map[libfossil.FslID]int, len(blobs))
+	queue := make([]int, 0, len(blobs))
+	for i := range blobs {
+		index[blobs[i].rid] = i
+	}
+	for i := range blobs {
+		if blobs[i].source == 0 {
+			queue = append(queue, i)
+		} else if parent, ok := index[blobs[i].source]; ok {
+			blobs[parent].children = append(blobs[parent].children, i)
+		}
+	}
+	aliases := 0
+	for at := 0; at < len(queue); at++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if work.Visits >= budget.Artifacts {
+			return fmt.Errorf("sparse preparation: visit budget exceeded")
+		}
+		work.Visits++
+		b := &blobs[queue[at]]
+		data := b.payload
+		if b.source != 0 && !b.unreadable {
+			base := blobs[index[b.source]].data
+			size, err := delta.OutputSize(b.payload)
+			if err != nil || size != uint64(b.size) || size > uint64(budget.ExpandedBytes-work.ExpandBytes) {
+				return fmt.Errorf("sparse preparation: delta output budget or size mismatch")
+			}
+			if base == nil {
+				data = nil
+			} else {
+				work.ExpandBytes += int64(size) // Before Apply allocates.
+				var applyErr error
+				data, applyErr = delta.Apply(base, b.payload)
+				if applyErr != nil {
+					data = nil // Corrupt content cannot prove outside membership.
+				}
+			}
+		}
+		if b.unreadable || int64(len(data)) != b.size || bindToUUID(b.rid, b.uuid, data) != nil {
+			data = nil
+		}
+		b.data = data
+		if data == nil {
+			facts.unreadable = append(facts.unreadable, b.uuid)
+		} else if err := referenceRecord(facts, b, &aliases, budget.Cards); err != nil {
+			return err
+		}
+		queue = append(queue, b.children...)
+	}
+	// Missing-source/cyclic components cannot yield verified outside proofs.
+	for i := range blobs {
+		if blobs[i].data == nil {
+			facts.unreadable = append(facts.unreadable, blobs[i].uuid)
+		}
+	}
+	return nil
+}
+
+func referenceRecord(facts *ConeReferenceFacts, b *referenceBlob, aliases *int, max int) error {
+	facts.held[b.uuid] = b.rid
+	if !deck.HasValidZ(b.data) {
+		return nil // Ordinary file bytes are never parsed; byte budgets bound them.
+	}
+	// Bound parser card allocations before Parse, including non-F cards.
+	cards := bytes.Count(b.data, []byte{'\n'})
+	if cards > max-*aliases {
+		return fmt.Errorf("sparse preparation: card budget exceeded")
+	}
+	*aliases += cards
+	d, err := deck.Parse(b.data)
+	if err != nil {
+		return nil // Ordinary file bytes do not provide reference facts.
+	}
+	d = referenceDeck(d)
+	facts.records = append(facts.records, coneReferenceRecord{uuid: b.uuid, deck: d})
+	if d.Type == deck.Submanifest {
+		facts.byUUID[b.uuid] = d
+		facts.nodes[b.rid] = d
+	}
+	if d.Type == deck.Checkin {
+		facts.roots = append(facts.roots, d)
+	}
+	return nil
+}

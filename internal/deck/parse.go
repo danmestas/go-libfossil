@@ -89,12 +89,12 @@ func (s *manifestScanner) nextToken() (token string, ok bool) {
 	return token, true
 }
 
-// cardTokens drains and returns every token of the current card. §4.2 with
-// its empty-trailing-token erratum: a token between two others may not be
-// empty -- two spaces in a row -- but the last token may be, carrying a
-// present-but-empty value (an empty comment, J value, N mimetype or T value).
-// fossil has no such explicit rule; its per-card validators reject an interior
-// empty token at whichever field it lands on, and this is their shared form.
+// cardTokens drains and returns every token of the current card. §4.2: a
+// token between two others may not be empty -- two spaces in a row -- but the
+// last token may be, carrying a present-but-empty value (an empty comment, J
+// value, N mimetype or T value). fossil has no such explicit rule; its
+// per-card validators reject an interior empty token at whichever field it
+// lands on, and this is their shared form.
 func (s *manifestScanner) cardTokens() ([]string, error) {
 	var tokens []string
 	for {
@@ -129,15 +129,16 @@ func (s *manifestScanner) parseW(d *Deck) error {
 	}
 	var size uint64
 	for i := 0; i < len(sizeTok) && sizeTok[i] >= '0' && sizeTok[i] <= '9'; i++ {
-		next := size*10 + uint64(sizeTok[i]-'0')
-		if next < size {
+		digit := uint64(sizeTok[i] - '0')
+		if size > (^uint64(0)-digit)/10 {
 			return fmt.Errorf("size overflow on W-card")
 		}
-		size = next
+		size = size*10 + digit
 	}
 	// fossil requires the body and its terminating LF to leave at least one
 	// more byte before the end, so a W card is never the artifact's last card.
-	if size+1 >= uint64(len(s.buf)-s.pos) {
+	remaining := len(s.buf) - s.pos
+	if remaining < 2 || size >= uint64(remaining-1) {
 		return fmt.Errorf("not enough content after W-card")
 	}
 	n := int(size)
@@ -172,6 +173,13 @@ func Parse(data []byte) (*Deck, error) {
 	// cards this type allows and requires, which includes the universal Z
 	// card) and the §5.4 per-type semantic checks.
 	d.Type = inferType(d)
+	// draft-fossil-submanifests-00 §4.3: once the type is final, a manifest
+	// with no D card is a sub-manifest. This is the only way to reach that
+	// type, and it runs before legality, which then refuses any D-less
+	// artifact carrying a card other than F, S or Z.
+	if d.Type == Checkin && seenMask&(1<<('D'-'A')) == 0 {
+		d.Type = Submanifest
+	}
 	if err := checkType(d, seenMask); err != nil {
 		return nil, fmt.Errorf("deck.Parse: %w", err)
 	}
@@ -323,6 +331,8 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 		return parseQCard(d, tokens)
 	case 'R':
 		return setChecksumCard(tokens, &d.R, "R-card")
+	case 'S':
+		return parseSCard(d, tokens)
 	case 'T':
 		return parseTCard(d, tokens)
 	case 'U':
@@ -336,7 +346,7 @@ func parseCard(d *Deck, card byte, tokens []string) error {
 
 // setStringCard stores a single-token card value. A bare card with no token
 // at all is "missing"; a present-but-empty token -- a card line ending in a
-// space, per the §4.2 erratum -- is kept distinct from that. decode applies
+// space, per §4.2 -- is kept distinct from that. decode applies
 // §4.3 fossil-decoding to the fields §4.3.1 lists as decoded (C, H, L).
 func setStringCard(tokens []string, dst *string, what string, decode bool) error {
 	if len(tokens) == 0 {
@@ -504,6 +514,32 @@ func parseFCard(d *Deck, tokens []string) error {
 		return nil
 	}
 	d.F = append(d.F, fc)
+	return nil
+}
+
+// parseSCard reads one S card of draft-fossil-submanifests-00 §3.6: exactly a
+// filename and a hash. The filename is escape-decoded and must be a simple
+// pathname; the hash is raw and must be 40 or 64 hex digits (§3.5). The run
+// ascends strictly by decoded filename under the canonical comparator (§3.4).
+// Whether the hash names a sub-manifest, and whether the filename is that
+// slice's least member, is the tree walk's to check, not the parser's.
+func parseSCard(d *Deck, tokens []string) error {
+	if len(tokens) != 2 {
+		return fmt.Errorf("S-card takes exactly a filename and a hash")
+	}
+	sc := SubmanifestCard{Name: FossilDecode(tokens[0]), UUID: tokens[1]}
+	if !simplePathname(sc.Name) {
+		return fmt.Errorf("invalid filename on S-card: %q", sc.Name)
+	}
+	if !validArtifactHash(sc.UUID) {
+		return fmt.Errorf("invalid hash on S-card %q: %q", sc.Name, sc.UUID)
+	}
+	if n := len(d.S); n > 0 {
+		if err := requireAscending('S', d.S[n-1].Name, sc.Name); err != nil {
+			return err
+		}
+	}
+	d.S = append(d.S, sc)
 	return nil
 }
 
@@ -722,7 +758,8 @@ func inferType(d *Deck) ArtifactType {
 	switch {
 	// The type-setting cards of §5.3, matching fossil's per-card `p->type`
 	// assignments (src/manifest.c): M sets cluster, G/H/I forum, A attachment,
-	// J/K ticket, L wiki, E event, and B/F/Q/R manifest.
+	// J/K ticket, L wiki, E event, and B/F/Q/R manifest. S joins the manifest
+	// letters (draft-fossil-submanifests-00 §4.3).
 	case len(d.M) > 0:
 		return Cluster
 	case d.G != "" || d.H != "" || d.I != "":
@@ -735,7 +772,7 @@ func inferType(d *Deck) ArtifactType {
 		return Wiki
 	case d.E != nil:
 		return Event
-	case d.B != "" || len(d.F) > 0 || len(d.Q) > 0 || d.R != "":
+	case d.B != "" || len(d.F) > 0 || len(d.Q) > 0 || d.R != "" || len(d.S) > 0:
 		return Checkin
 	// No type-setting card: fossil then settles check-in versus control, both
 	// D/T/U/Z-shaped, on whether the artifact describes a tree position -- a

@@ -39,7 +39,7 @@ func BranchLeaves(r *repo.Repo, branch string) ([]libfossil.FslID, error) {
 }
 
 // BranchOpenLeaf names one open leaf of branch, as BranchLeaves defines
-// them: the one with the greatest event mtime, which repo-state-01 Section 9
+// them: the one with the greatest event mtime, which repo-state-00 Section 9
 // requires of any report that names a single open leaf. open is false when
 // the branch has no open leaf, that is, when it is not open. An exact mtime
 // tie, which the draft leaves implementation-defined, goes to the greater
@@ -170,7 +170,7 @@ func LeafAmbiguous(r *repo.Repo, rid libfossil.FslID) (bool, error) {
 	if !open {
 		return false, nil
 	}
-	// repo-state-01 Section 6.1 attributes a check-in with no branch tag to
+	// repo-state-00 Section 6.1 attributes a check-in with no branch tag to
 	// the default branch but says that does not make it an open leaf of that
 	// branch, so there is no branch to share and nothing to be ambiguous
 	// with (fossil's leaf_ambiguity compares the raw value, NULL matches

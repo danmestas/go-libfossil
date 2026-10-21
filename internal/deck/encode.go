@@ -73,3 +73,27 @@ func FossilDecode(s string) string {
 	}
 	return b.String()
 }
+
+// CanonicalEncode is the minimal escaping draft-fossil-submanifests-00 §6.2
+// fixes for every filename a tree construction emits -- S card filenames and
+// a leaf's F card filename and old-name tokens: exactly space, newline and
+// backslash are escaped; every other byte, the decoder's other escape bytes
+// included, is written raw. FossilDecode reverses it. A flat manifest keeps
+// FossilEncode, so no artifact written before trees existed changes name.
+func CanonicalEncode(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\n':
+			b.WriteString(`\n`)
+		case ' ':
+			b.WriteString(`\s`)
+		case '\\':
+			b.WriteString(`\\`)
+		default:
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
+}

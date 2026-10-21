@@ -163,3 +163,37 @@ func TestStoreReusesLegacyNameBesideAPrimaryPhantom(t *testing.T) {
 		t.Errorf("the SHA3 phantom was filled; want it left alone")
 	}
 }
+
+// StoreUnderPolicy names content by the policy's algorithm alone -- a legacy
+// copy under the other name is not reused -- and reports whether it found,
+// inserted, or filled a phantom with the row.
+func TestStoreUnderPolicy(t *testing.T) {
+	d := setupTestDB(t)
+	setHashPolicy(t, d, "0")
+	content := []byte("a leaf first stored under its sha1 name")
+	if _, _, err := Store(d, content); err != nil {
+		t.Fatal(err)
+	}
+	setHashPolicy(t, d, "2")
+	rid, uuid, outcome, err := StoreUnderPolicy(d, content)
+	if err != nil || uuid != hash.SHA3(content) || outcome != Inserted {
+		t.Fatalf("StoreUnderPolicy = %d, %s, %v, %v; want a new sha3 row", rid, uuid, outcome, err)
+	}
+	again, uuid2, outcome, err := StoreUnderPolicy(d, content)
+	if err != nil || again != rid || uuid2 != uuid || outcome != Found {
+		t.Fatalf("second StoreUnderPolicy = %d, %s, %v, %v; want the existing row", again, uuid2, outcome, err)
+	}
+	other := []byte("a phantom filled in place")
+	phantom, err := StorePhantom(d, hash.SHA3(other))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filled, _, outcome, err := StoreUnderPolicy(d, other)
+	if err != nil || filled != phantom || outcome != FilledPhantom {
+		t.Fatalf("filling a phantom = %d, %v, %v; want rid %d filled", filled, outcome, err, phantom)
+	}
+	setHashPolicy(t, d, "0")
+	if _, uuid, _, err := StoreUnderPolicy(d, []byte("sha1 repo")); err != nil || uuid != hash.SHA1([]byte("sha1 repo")) {
+		t.Fatalf("sha1 policy named %s (%v)", uuid, err)
+	}
+}

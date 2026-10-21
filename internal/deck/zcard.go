@@ -16,6 +16,19 @@ func VerifyZ(data []byte) error {
 	return verifyZ(stripClearsign(data))
 }
 
+// HasValidZ reports whether data, clearsign-stripped, ends in a Z card whose
+// checksum verifies. Every artifact type requires a Z card (§5.2), so data
+// without one can never parse as a deck; this costs one MD5 pass and no card
+// allocation.
+func HasValidZ(data []byte) bool {
+	body := stripClearsign(data)
+	n := len(body)
+	if n < 35 || body[n-1] != '\n' || body[n-35] != 'Z' || body[n-34] != ' ' {
+		return false
+	}
+	return verifyZ(body) == nil
+}
+
 // verifyZ checks the Z card of already-clearsign-stripped artifact content.
 // It mirrors fossil's verify_z_card (src/manifest.c): the Z card is located
 // as the last 35 bytes beginning "Z ", the checksum covers every byte before

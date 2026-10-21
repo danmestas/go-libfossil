@@ -3,6 +3,7 @@ package checkout
 import (
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 	"github.com/danmestas/go-libfossil/simio"
@@ -35,6 +36,11 @@ const (
 	ChangeMissing  = vfile.ChangeMissing
 	ChangeRenamed  = vfile.ChangeRenamed
 	ChangeModified = vfile.ChangeModified
+
+	ChangeExecutable = vfile.ChangeExecutable
+	ChangeSymlink    = vfile.ChangeSymlink
+	ChangeUnexec     = vfile.ChangeUnexec
+	ChangeUnlink     = vfile.ChangeUnlink
 )
 
 // UpdateChange — file states during extract/update (maps to fsl_ckup_fchange_e)
@@ -76,7 +82,7 @@ type ScanFlags uint32
 
 const (
 	ScanHash       ScanFlags = 1 << iota // hash file content (not just mtime)
-	ScanENotFile                         // mark non-regular files
+	ScanENotFile                         // refuse non-regular files (fossil's CKSIG_ENOTFILE)
 	ScanSetMTime                         // update mtime in vfile
 	ScanKeepOthers                       // keep other version entries
 )
@@ -100,6 +106,9 @@ type OpenOpts struct {
 type CreateOpts struct {
 	Env      *simio.Env // nil → RealEnv
 	Observer Observer   // nil → nopObserver
+	// Cone makes the checkout sparse (draft-fossil-sparse-cone-00 §4): only
+	// the files it covers are materialized and managed. nil is dense.
+	Cone *cone.Cone
 }
 
 // ExtractOpts configures file extraction from a checkin.
@@ -108,6 +117,10 @@ type ExtractOpts struct {
 	SetMTime bool                                         // as fossil's --setmtime: each file's last check-in time
 	DryRun   bool
 	Force    bool // overwrite locally modified files
+	// Warn receives what fossil's checkout prints as a warning and proceeds
+	// past, such as a present R card disagreeing with the manifest's files.
+	// nil discards warnings; they never fail the extract.
+	Warn func(message string)
 }
 
 // UpdateOpts configures updating to a new version with merge.
@@ -141,11 +154,18 @@ type UpdateOpts struct {
 //   - a binary file both the working copy and the target changed: the
 //     target's content written (so also in FilesWritten), the working
 //     copy saved beside it as NAME-original.
+//   - a file edited locally that the target renamed without changing it:
+//     left under its old name, untracked, the new name not written (as
+//     fossil does; the new name shows as missing).
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers; also present in FilesWritten
 	Unmerged     []string // paths left to reconcile without markers (see above)
+	// OutOfCone counts the changes a sparse checkout's update applied to
+	// files outside its cone: recorded, never written to disk
+	// (draft-fossil-sparse-cone-00 §4.4).
+	OutOfCone int
 }
 
 // ManageOpts configures adding files to tracking.

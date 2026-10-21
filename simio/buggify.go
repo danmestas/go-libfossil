@@ -50,3 +50,20 @@ func Buggify(probability float64) bool {
 func BuggifyEnabled() bool {
 	return buggifyState.enabled
 }
+
+// SuspendBuggify switches fault injection off until the returned resume is
+// called, which restores the previous state with its random stream intact.
+// An invariant check uses it so it observes what is persisted, not faults
+// injected into its own reads, without perturbing the run's later choices.
+// Suspensions nest.
+func SuspendBuggify() (resume func()) {
+	buggifyState.mu.Lock()
+	defer buggifyState.mu.Unlock()
+	was := buggifyState.enabled
+	buggifyState.enabled = false
+	return func() {
+		buggifyState.mu.Lock()
+		defer buggifyState.mu.Unlock()
+		buggifyState.enabled = was
+	}
+}

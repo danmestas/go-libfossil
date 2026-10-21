@@ -27,6 +27,7 @@ import (
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -55,6 +56,9 @@ type manifestFiles struct {
 	// ownNames is own's keys in sorted order, so the delta-vs-delta pass walks
 	// the parent's cards deterministically.
 	ownNames []string
+	// ownList is the manifest's own cards in comparator order: its F cards,
+	// or for a tree manifest the walked enumeration (ownFileCards).
+	ownList []deck.FileCard
 	// tree is the effective file set: the baseline's cards overlaid with own's,
 	// with deletion cards removing the name. Empty-UUID entries never appear.
 	//
@@ -67,7 +71,8 @@ type manifestFiles struct {
 }
 
 // loadManifestFiles builds the file views for one parsed check-in manifest,
-// expanding its baseline when it is a delta manifest. A delta manifest whose
+// expanding its baseline when it is a delta manifest and walking its tree
+// when it is a tree manifest, both through the enumeration seam (files.go). A delta manifest whose
 // baseline is absent or unparseable is an error: canonical's fetch_baseline
 // failure makes add_mlink return without writing a row, and the caller must be
 // able to tell that apart from "the manifest has no files".
@@ -79,10 +84,15 @@ func loadManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (*manif
 		panic("manifest.loadManifestFiles: d must not be nil")
 	}
 
+	own, err := ownFileCards(q, cache, d)
+	if err != nil {
+		return nil, err
+	}
 	mf := &manifestFiles{
 		isDelta: d.B != "",
-		own:     make(map[string]deck.FileCard, len(d.F)),
-		tree:    make(map[string]deck.FileCard, len(d.F)),
+		own:     make(map[string]deck.FileCard, len(own)),
+		tree:    make(map[string]deck.FileCard, len(own)),
+		ownList: own,
 	}
 
 	if mf.isDelta {
@@ -90,7 +100,11 @@ func loadManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (*manif
 		if err != nil {
 			return nil, err
 		}
-		for _, f := range baseDeck.F {
+		baseCards, err := baselineFileCards(q, cache, baseDeck)
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range baseCards {
 			if f.UUID == "" {
 				delete(mf.tree, f.Name)
 				continue
@@ -99,7 +113,7 @@ func loadManifestFiles(q db.Querier, cache *content.Cache, d *deck.Deck) (*manif
 		}
 	}
 
-	for _, f := range d.F {
+	for _, f := range own {
 		mf.own[f.Name] = f
 		if f.UUID == "" {
 			delete(mf.tree, f.Name)
@@ -317,7 +331,7 @@ func addMlink(
 		return nil
 	}
 
-	for _, f := range child.F {
+	for _, f := range childFiles.ownList {
 		mperm := permToMperm(f.Perm)
 		if f.OldName != "" {
 			// A rename whose prior name this parent has is a rename relative to
@@ -474,8 +488,10 @@ func validateCheckinMlinkBounds(d *deck.Deck) error {
 }
 
 // preflightCheckinMlinks verifies that direct Checkin can derive every
-// parent-to-child mlink transition before it stores the child manifest.
-func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck) error {
+// parent-to-child mlink transition before it stores the child manifest. A
+// file a sparse store's cone leaves out may be absent: mlink derivation
+// needs its name, never its content.
+func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck, storeCone *cone.Cone) error {
 	if tx == nil {
 		panic("manifest.preflightCheckinMlinks: tx must not be nil")
 	}
@@ -508,7 +524,7 @@ func preflightCheckinMlinks(tx *db.Tx, cache *content.Cache, d *deck.Deck) error
 		}
 		for _, name := range files.treeNames() {
 			file, _ := files.seek(name)
-			if _, ok := content.AvailableByUUID(tx, file.UUID); !ok {
+			if _, ok := content.AvailableByUUID(tx, file.UUID); !ok && !elidable(storeCone, name) {
 				return fmt.Errorf("%s %s: effective file %q (%s): not available", kind, uuid, name, file.UUID)
 			}
 		}
@@ -608,7 +624,7 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 		if tx.QueryRow("SELECT 1 FROM mlink WHERE mid=? AND pmid=0", rid).Scan(&one) == nil {
 			return nil
 		}
-		for _, f := range d.F {
+		for _, f := range childFiles.ownList {
 			if f.UUID == "" {
 				continue
 			}

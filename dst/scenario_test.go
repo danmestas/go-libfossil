@@ -19,6 +19,18 @@ import (
 	"github.com/danmestas/go-libfossil/simio"
 )
 
+// seedTx writes a scenario's fixtures with fault injection suspended and fails
+// the test if they do not go in. The simulator arms Buggify when it is built,
+// before the fixtures are written, and a fault there is a broken fixture, not
+// a finding: a store that fails leaves an empty UUID for the assertions.
+func seedTx(t *testing.T, r *repo.Repo, fn func(tx *db.Tx) error) {
+	t.Helper()
+	defer simio.SuspendBuggify()()
+	if err := r.WithTx(fn); err != nil {
+		t.Fatalf("seed fixtures: %v", err)
+	}
+}
+
 // Command-line flags for CI seed sweeps:
 //
 //	go test -run TestDST -seed=42 -level=adversarial -steps=50000
@@ -173,11 +185,14 @@ func TestScenarioBidirectional(t *testing.T) {
 		for j := range 10 {
 			data := []byte(fmt.Sprintf("leaf-%s-artifact-%d", id, j))
 			var uuid string
-			r.WithTx(func(tx *db.Tx) error {
-				rid, u, _ := blob.Store(tx, data)
+			seedTx(t, r, func(tx *db.Tx) error {
+				rid, u, err := blob.Store(tx, data)
+				if err != nil {
+					return err
+				}
 				uuid = u
-				tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
-				return nil
+				_, err = tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
+				return err
 			})
 			leafUUIDs[id] = append(leafUUIDs[id], uuid)
 		}
@@ -637,7 +652,7 @@ func TestDST(t *testing.T) {
 	// Seed private blobs so sweep exercises private sync paths.
 	for i := range 3 {
 		data := []byte(fmt.Sprintf("dst-private-%04d-seed%d", i, seed))
-		masterRepo.WithTx(func(tx *db.Tx) error {
+		seedTx(t, masterRepo, func(tx *db.Tx) error {
 			rid, _, err := blob.Store(tx, data)
 			if err != nil {
 				return err
@@ -1236,11 +1251,14 @@ func TestScenarioAuthRestrictedCaps(t *testing.T) {
 	for i := range 5 {
 		data := []byte(fmt.Sprintf("leaf-push-attempt-%d-seed%d", i, seed))
 		var uuid string
-		leaf0.Repo().WithTx(func(tx *db.Tx) error {
-			rid, u, _ := blob.Store(tx, data)
+		seedTx(t, leaf0.Repo(), func(tx *db.Tx) error {
+			rid, u, err := blob.Store(tx, data)
+			if err != nil {
+				return err
+			}
 			uuid = u
-			tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
-			return nil
+			_, err = tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
+			return err
 		})
 		leafUUIDs = append(leafUUIDs, uuid)
 	}
@@ -1457,8 +1475,13 @@ func TestScenarioClusterConvergence(t *testing.T) {
 	masterCount, _ := CountBlobs(masterRepo)
 
 	// Generate clusters on master to verify the API works on a repo with
-	// 500+ blobs. This exercises content.GenerateClusters end-to-end.
+	// 500+ blobs. This exercises content.GenerateClusters end-to-end. It
+	// runs after the simulation, so injection is suspended: blob.Store
+	// rightly refuses a write that injection corrupts, and that refusal is
+	// the fault working, not a finding about clusters.
+	resume := simio.SuspendBuggify()
 	nClusters, err := content.GenerateClusters(masterRepo.DB())
+	resume()
 	if err != nil {
 		t.Fatalf("GenerateClusters: %v", err)
 	}
@@ -1508,7 +1531,7 @@ func TestScenarioPrivateSync(t *testing.T) {
 	for i := range 3 {
 		data := []byte(fmt.Sprintf("private-sync-secret-%d-seed%d", i, seed))
 		var uuid string
-		masterRepo.WithTx(func(tx *db.Tx) error {
+		seedTx(t, masterRepo, func(tx *db.Tx) error {
 			rid, u, err := blob.Store(tx, data)
 			if err != nil {
 				return err

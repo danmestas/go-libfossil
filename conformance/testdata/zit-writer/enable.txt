@@ -1,0 +1,4 @@
+deep 3
+edge 2
+medium 3
+small 3

@@ -1,6 +1,7 @@
 package dst
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,6 +31,27 @@ func TestCheckBlobIntegrityCleanRepo(t *testing.T) {
 
 	if err := CheckBlobIntegrity("test", r); err != nil {
 		t.Fatalf("expected no error on clean repo: %v", err)
+	}
+}
+
+// Invariants observe what is persisted. With read-path faults armed, as they
+// are for the whole of a Buggify run, a clean repository must still pass:
+// the check suspends injection for its own reads and restores it after.
+func TestCheckBlobIntegrityIgnoresArmedBuggify(t *testing.T) {
+	r := openTestRepo(t, "armed")
+	for i := 0; i < 500; i++ {
+		data := []byte(fmt.Sprintf("armed buggify artifact %d with enough text to compress", i))
+		if _, _, err := blob.Store(r.DB(), data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	simio.EnableBuggify(7)
+	defer simio.DisableBuggify()
+	if err := CheckBlobIntegrity("test", r); err != nil {
+		t.Fatalf("clean repo failed with Buggify armed: %v", err)
+	}
+	if !simio.BuggifyEnabled() {
+		t.Fatal("the check did not restore Buggify")
 	}
 }
 

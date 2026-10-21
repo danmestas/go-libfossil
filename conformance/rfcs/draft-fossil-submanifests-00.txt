@@ -1,0 +1,2072 @@
+
+
+
+
+Network Working Group                                    D. R. Hipp, Ed.
+Internet-Draft                                                    Fossil
+Intended status: Experimental                                    S. Beal
+Expires: 22 April 2027                                         libfossil
+                                                              D. Shearer
+                                                         19 October 2026
+
+
+ The Fossil Distributed Version Control System: Sub-Manifests and the S
+                                  Card
+                      draft-fossil-submanifests-00
+
+Abstract
+
+   This document defines an experimental extension to the Fossil
+   artifact format: the sub-manifest, a new structural artifact type,
+   and the S card, a new manifest card, which let a check-in manifest
+   carry its file set as a tree of shared, content-addressed slices
+   instead of one flat list.  It specifies the card grammar, the
+   validity rules, a deterministic partition function that makes
+   construction canonical, the tree walk that reconstructs the file set,
+   the interaction with delta manifests and the aggregate checksum,
+   synchronization behavior, and deployment gates.  This document
+   updates draft-fossil-artifact-format-00.  It derives from a 2010
+   design note.  Two implementations, zit and go-libfossil, write and
+   read the format and interoperate; Fossil itself does not implement
+   it.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 22 April 2027.
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 1]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.1.  Motivation  . . . . . . . . . . . . . . . . . . . . . . .   3
+     1.2.  Design Overview . . . . . . . . . . . . . . . . . . . . .   4
+     1.3.  Status of This Specification  . . . . . . . . . . . . . .   4
+     1.4.  Relationship to the Fossil Specification Suite  . . . . .   4
+   2.  Conventions and Terminology . . . . . . . . . . . . . . . . .   5
+   3.  Card-Syntax Amendments  . . . . . . . . . . . . . . . . . . .   6
+     3.1.  Closed Card Alphabet  . . . . . . . . . . . . . . . . . .   6
+     3.2.  Exact Arity . . . . . . . . . . . . . . . . . . . . . . .   6
+     3.3.  Decoded Token Positions . . . . . . . . . . . . . . . . .   6
+     3.4.  Occurrence Class and Intra-Run Ordering . . . . . . . . .   6
+     3.5.  Hash-Token Validation . . . . . . . . . . . . . . . . . .   7
+     3.6.  The S Card  . . . . . . . . . . . . . . . . . . . . . . .   7
+   4.  The SUBMANIFEST Artifact Type . . . . . . . . . . . . . . . .   7
+     4.1.  Type Code and Name  . . . . . . . . . . . . . . . . . . .   7
+     4.2.  Card Legality . . . . . . . . . . . . . . . . . . . . . .   7
+     4.3.  Type Determination  . . . . . . . . . . . . . . . . . . .   8
+     4.4.  Per-Type Semantic Checks  . . . . . . . . . . . . . . . .   8
+     4.5.  Well-Formedness Pre-Filter  . . . . . . . . . . . . . . .   9
+   5.  Tree Reconstruction . . . . . . . . . . . . . . . . . . . . .   9
+     5.1.  Full File-Set Enumeration (Tree-Walk) . . . . . . . . . .   9
+     5.2.  Sub-Manifest Resolution . . . . . . . . . . . . . . . . .  10
+     5.3.  Single-Name Lookup  . . . . . . . . . . . . . . . . . . .  11
+     5.4.  Composition with Delta Manifests  . . . . . . . . . . . .  11
+     5.5.  R Card over Tree Manifests  . . . . . . . . . . . . . . .  11
+     5.6.  Verification  . . . . . . . . . . . . . . . . . . . . . .  12
+   6.  Canonical Tree Construction . . . . . . . . . . . . . . . . .  12
+     6.1.  The Partition Predicate and the Parameter k . . . . . . .  13
+     6.2.  Construction  . . . . . . . . . . . . . . . . . . . . . .  13
+     6.3.  Parameter Selection and Pinning . . . . . . . . . . . . .  15
+     6.4.  Re-Tuning . . . . . . . . . . . . . . . . . . . . . . . .  17
+     6.5.  Consequences of the Partition . . . . . . . . . . . . . .  18
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 2]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   7.  Synchronization and Repository State  . . . . . . . . . . . .  19
+     7.1.  Phantom Sub-Manifests . . . . . . . . . . . . . . . . . .  19
+     7.2.  Peer Capability Gate  . . . . . . . . . . . . . . . . . .  19
+     7.3.  Crosslink and Deferred Processing . . . . . . . . . . . .  20
+     7.4.  Enumeration Memoization . . . . . . . . . . . . . . . . .  20
+   8.  Deployment  . . . . . . . . . . . . . . . . . . . . . . . . .  21
+     8.1.  Emission Gate . . . . . . . . . . . . . . . . . . . . . .  21
+   9.  Implementation Requirements . . . . . . . . . . . . . . . . .  22
+     9.1.  Type Determination Without a Positive Signal  . . . . . .  22
+     9.2.  Sweep Termination . . . . . . . . . . . . . . . . . . . .  22
+     9.3.  The Enumeration Seam  . . . . . . . . . . . . . . . . . .  22
+     9.4.  Dephantomization of S References  . . . . . . . . . . . .  23
+   10. Security Considerations . . . . . . . . . . . . . . . . . . .  23
+   11. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  24
+   12. References  . . . . . . . . . . . . . . . . . . . . . . . . .  24
+     12.1.  Normative References . . . . . . . . . . . . . . . . . .  24
+     12.2.  Informative References . . . . . . . . . . . . . . . . .  25
+   Appendix A.  Conformance Vectors  . . . . . . . . . . . . . . . .  26
+     A.1.  The Example Tree  . . . . . . . . . . . . . . . . . . . .  26
+     A.2.  Leaf Sub-Manifests  . . . . . . . . . . . . . . . . . . .  27
+     A.3.  The Tree Manifest . . . . . . . . . . . . . . . . . . . .  28
+     A.4.  The Interior-Height Merge . . . . . . . . . . . . . . . .  29
+     A.5.  Required Vector Set . . . . . . . . . . . . . . . . . . .  32
+     A.6.  Sparse Canonical Rewrite Vectors  . . . . . . . . . . . .  34
+   Appendix B.  Collected ABNF . . . . . . . . . . . . . . . . . . .  35
+   Appendix C.  Changes in This Revision . . . . . . . . . . . . . .  35
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  36
+
+1.  Introduction
+
+1.1.  Motivation
+
+   A baseline check-in manifest carries one F card per file, not per
+   changed file: manifest size is linear in tree width, and every
+   operation touching a file set pays that cost per check-in; a delta
+   manifest reduces the bytes stored, not the work performed.
+   [ScalingUp] measured 10.2 MB manifests and hours of rebuild parsing
+   at roughly 103,000 files, and proposed the remedy adopted here: a
+   tree of sub-manifests linked by a new S card, so that a typical
+   check-in rewrites the manifest and one leaf.  This document resolves
+   what the note left open, above all the partition function, which in a
+   content-addressed format determines the check-in hash.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 3]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+1.2.  Design Overview
+
+   A sub-manifest carries a contiguous slice of a check-in's sorted file
+   set, as F cards (a leaf) or as S cards referencing lower sub-
+   manifests (interior).  A manifest whose file set is conveyed by S
+   cards is a tree manifest; an in-order walk (Section 5.1) recovers
+   exactly the enumeration a flat manifest would carry.
+
+   A name starts a new leaf when the SHA3-256 digest of the name carries
+   at least k leading zero bits (Section 6), where k is initially
+   selected from the repository's name set and pinned as a writer-side
+   setting until a permitted re-tune (Section 6.3, Section 6.4); minimum
+   and maximum group limits govern boundary placement.  Boundaries never
+   depend on file contents or history: editing a file changes exactly
+   one leaf, while inserting or deleting a name can cascade until the
+   scan re-synchronizes (Section 6.5).  Writers build the canonical
+   tree; readers accept any tree satisfying the structural invariants,
+   so k never appears in artifact bytes.
+
+1.3.  Status of This Specification
+
+   Two implementations exist: zit writes and reads sub-manifests and
+   serves them, and go-libfossil writes and reads them.  The two
+   interoperate, and the errata of this document record where each
+   departed from the text and which side changed.  Fossil does not
+   implement this specification.  The closed card alphabet
+   ([FossilArtifact], Section 4.2.2) still makes deployment a flag day
+   -- every reader of a repository must understand sub-manifests before
+   any writer emits one into it -- so the gates of Section 7.2 and
+   Section 8 keep S-bearing artifacts away from readers that do not.
+   Conformance of two implementations establishes nothing about the
+   wider ecosystem (Section 9).  This document is authoritative for sub-
+   manifests and the S card; [FossilArtifact] remains authoritative for
+   everything this document does not amend.  The two fold into one text
+   when [FossilArtifact] is next revised.
+
+1.4.  Relationship to the Fossil Specification Suite
+
+   This document updates [FossilArtifact]: Section 3 and Section 4 amend
+   its card-syntax rules, Section 5.5 extends its R card computation,
+   and SUBMANIFEST joins its type system; text not explicitly revised
+   here is unchanged.  Section 7 and Section 8 state requirements on
+   implementations of [FossilSync] and [FossilRepoState].  [FossilDelta]
+   is unaffected: delta encoding operates below the card layer.
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 4]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+2.  Conventions and Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in
+   BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   The terms artifact, card, token, decoded form, manifest, baseline
+   manifest, delta manifest, and check-in are used as defined in
+   [FossilArtifact], Section 2.  The canonical comparator, character-
+   escape decoding, and the pathname predicate are those of
+   [FossilArtifact], Sections 4.5.3, 4.3, and 4.6.1.  This document
+   adds:
+
+   Sub-manifest:  A structural artifact of type SUBMANIFEST
+      (Section 4.1) carrying a contiguous slice of a check-in's file set
+      as F cards (a leaf sub-manifest) or as S cards referencing lower
+      sub-manifests (an interior sub-manifest).  It has no identity
+      beyond its content hash and is shared by every check-in whose tree
+      contains its slice.
+
+   Tree manifest:  A manifest whose file set is conveyed exclusively by
+      S cards (Section 3.6); its complete file set is derived by the
+      tree walk of Section 5.1.
+
+   Flat manifest:  A baseline manifest whose file set is conveyed
+      exclusively by F cards.
+
+   Zero-bit count:  The number of leading zero bits of the SHA3-256
+      digest of a decoded filename, written zbits(name) (Section 6.1).
+
+   Partition parameter:  The positive integer k, initially selected and
+      pinned per repository as a writer-side setting until a permitted
+      re-tune (Section 6.3, Section 6.4), that scales every boundary
+      test of Section 6.2.  It never appears in artifact bytes.
+
+   Group:  A contiguous span of members -- file entries at height 0,
+      child nodes above -- formed by the scan of Section 6.2, each
+      becoming one node of the tree.  Distinct from a card run
+      ([FossilArtifact], Section 4.5); "run" in this document always
+      means a card run.
+
+   Height, depth, and level:  Height counts from the leaves upward (a
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 5]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+      leaf sub-manifest has height 0): the construction-side coordinate.
+      Depth counts sub-manifest artifacts from the manifest downward,
+      counting the leaf: the reader-side coordinate (Section 5.1).  A
+      tree of depth d has d sub-manifest levels; the depth bound of 16
+      admits at most 16 levels and a walk of at most 17 frames.
+
+3.  Card-Syntax Amendments
+
+   This section amends the card-syntax rules of [FossilArtifact],
+   Section 4.  Each subsection states the amended rule in full; rules
+   not restated are unchanged.
+
+3.1.  Closed Card Alphabet
+
+   [FossilArtifact], Section 4.2.2 is revised to read:
+
+   Exactly 22 card letters are defined: A, B, C, D, E, F, G, H, I, J, K,
+   L, M, N, P, Q, R, S, T, U, W, Z.  A card letter outside A-Z MUST be
+   rejected; an in-range but undefined letter (O, V, X, Y) MUST be
+   rejected.  The card alphabet is closed: there is no forward-
+   compatibility acceptance path for unknown card letters.
+
+3.2.  Exact Arity
+
+   The exact-arity enumeration of [FossilArtifact], Section 4.2.1 gains
+   the S card: a third token on S is rejected.  The rule is otherwise
+   unchanged, including its rejection of residual bytes after the final
+   card.
+
+3.3.  Decoded Token Positions
+
+   The decoder of [FossilArtifact], Section 4.3 applies at exactly 13
+   token positions across 10 card letters: the 12 positions enumerated
+   in [FossilArtifact], Section 4.3.1, and the S card filename.  The S
+   card hash is never decoded.
+
+3.4.  Occurrence Class and Intra-Run Ordering
+
+   S joins the repeatable occurrence class of [FossilArtifact],
+   Section 4.5.1, which becomes: F, J, M, T, P, Q, S.  The intra-run
+   ordering table of [FossilArtifact], Section 4.5.2 gains the row:
+
+   +------+-----------------------------------------------------+
+   | S    | Strictly ascending by decoded filename (equal or    |
+   |      | descending rejected)                                |
+   +------+-----------------------------------------------------+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 6]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   The comparator is the canonical comparator, as for the F card run.
+   The inter-type ordering rule of [FossilArtifact], Section 4.4 is
+   unchanged; S falls between R and T, so a manifest's S run precedes
+   its T cards.
+
+3.5.  Hash-Token Validation
+
+   The hash-token enumeration of [FossilArtifact], Section 4.7.1 gains
+   the S card hash: every artifact-hash-bearing position, now including
+   the S card hash, MUST be exactly 40 or 64 case-insensitive
+   hexadecimal characters.
+
+3.6.  The S Card
+
+   s-card = %x53 SP filename SP hash LF                   ; "S"
+
+   A sub-manifest reference.  Repeatable; intra-run ordering per
+   Section 3.4.  The filename is escape-decoded and MUST pass the
+   pathname predicate of [FossilArtifact], Section 4.6.1; the hash is
+   raw (never decoded), validated per Section 3.5.  The card announces
+   that the referenced artifact is a sub-manifest carrying the
+   contiguous slice of this artifact's file set whose least member is
+   exactly the decoded filename; the slice extends to, and excludes, the
+   next S card's decoded filename, and the final S card's slice is
+   unbounded above.
+
+   Parse-time acceptance validates only token shapes and intra-run
+   ordering; the tree walk of Section 5.1 enforces hash resolution and
+   the least-filename property.  The referenced artifact MUST be of type
+   SUBMANIFEST; a reference to any other type MUST cause the tree walk
+   to fail.
+
+4.  The SUBMANIFEST Artifact Type
+
+4.1.  Type Code and Name
+
+   The type table of [FossilArtifact], Section 5.1 gains the row:
+
+   +------+-------------+---------------+
+   | 9    | SUBMANIFEST | submanifest   |
+   +------+-------------+---------------+
+
+4.2.  Card Legality
+
+   The card-legality table of [FossilArtifact], Section 5.2 is revised
+   in its MANIFEST row and gains a SUBMANIFEST row; all other rows are
+   unchanged:
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 7]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+     +======+=============+=========================+================+
+     | Code | Type        | Allowed cards           | Required cards |
+     +======+=============+=========================+================+
+     | 1    | MANIFEST    | B C D F N P Q R S T U Z | D Z            |
+     +------+-------------+-------------------------+----------------+
+     | 9    | SUBMANIFEST | F S Z                   | Z              |
+     +------+-------------+-------------------------+----------------+
+
+                                  Table 1
+
+   The SUBMANIFEST content rule -- at least one of F or S, and never
+   both -- is a semantic check of Section 4.4, not expressible in the
+   required-set column.
+
+4.3.  Type Determination
+
+   In the type-setting table of [FossilArtifact], Section 5.3, S joins
+   B, F, Q, and R as a MANIFEST-setting letter:
+
+   +---------------+-------------+
+   | B, F, Q, R, S | MANIFEST    |
+   +---------------+-------------+
+
+   One reassignment rule runs after the fallback of [FossilArtifact],
+   Section 5.3 finalizes the type and before the card-legality checks:
+   an artifact whose finalized type is MANIFEST and which contains no D
+   card MUST be reclassified as SUBMANIFEST (code 9).  The reassignment
+   is the sole assignment path for SUBMANIFEST; no card letter assigns
+   it directly.  The legality table of Section 4.2 then disambiguates: a
+   D-less artifact carrying any card outside F, S, Z is rejected.  No
+   artifact that was valid under [FossilArtifact] as published changes
+   classification under this revision.
+
+4.4.  Per-Type Semantic Checks
+
+   The per-type semantic checks of [FossilArtifact], Section 5.4 gain
+   three items:
+
+   *  A MANIFEST MUST NOT contain both a B card and an S card.
+
+   *  A MANIFEST MUST NOT contain both an F card and an S card: the file
+      set is conveyed entirely by one or the other, never a mixture.
+
+   *  A SUBMANIFEST MUST contain at least one F card or at least one S
+      card, and MUST NOT contain both.  Every F card in a SUBMANIFEST
+      MUST carry a hash: the delete-marker form of [FossilArtifact],
+      Section 4.7.6 is permitted only in a delta manifest.  Permission
+      and old-name tokens are legal exactly as in a baseline manifest,
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 8]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+      and the tree walk (Section 5.1, step 4) MUST deliver each emitted
+      entry's hash, permission, and old-name tokens to consumers
+      unaltered.
+
+4.5.  Well-Formedness Pre-Filter
+
+   The pre-filter bound of [FossilArtifact], Section 5.5 is revised: an
+   implementation may reject any input whose first card letter falls in
+   N through Z, excluding S, before full parsing is attempted.  The
+   exclusion is required because an interior sub-manifest's smallest
+   allowed card letter is S.
+
+5.  Tree Reconstruction
+
+   A manifest is a tree manifest if and only if it contains an S card.
+   Consumers that need the file set MUST derive it by the walk specified
+   here.  The walk requires every S run and every F run sorted under the
+   canonical comparator -- parse-time invariants (Section 3.4;
+   [FossilArtifact], Section 4.5.2) -- and the tree closure, every sub-
+   manifest reachable through S references, present and parsed;
+   resolution failure is governed by Section 5.2.
+
+5.1.  Full File-Set Enumeration (Tree-Walk)
+
+   To enumerate the complete file set of a tree manifest, an
+   implementation MUST perform a depth-first, in-order walk over the S
+   references, maintaining a stack of frames (one per artifact being
+   read, each with a cursor over that artifact's S run) and a running
+   value LAST, the decoded filename most recently emitted.  At each
+   step:
+
+   1.  Initialize the stack with one frame over the manifest's S run,
+       and LAST as the absent value, which sorts before any present
+       value.
+
+   2.  If the top frame's cursor is exhausted, pop the frame.  When the
+       popped frame is the manifest's, enumeration terminates.
+
+   3.  Otherwise read the cursor's S card.  Its decoded filename MUST
+       compare strictly greater than LAST.  Resolve its hash; each of
+       the following violations MUST cause the enumeration to fail:
+
+       *  the referenced artifact is absent (Section 5.2);
+
+       *  the referenced artifact is not of type SUBMANIFEST;
+
+       *  the referenced artifact is the artifact of any frame currently
+          on the stack;
+
+
+
+Hipp, et al.              Expires 22 April 2027                 [Page 9]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+       *  the referenced artifact's depth (Section 2) -- sub-manifest
+          artifacts on the reference path from the manifest down to and
+          including the resolved artifact, counting leaves -- exceeds
+          16.
+
+   4.  If the resolved sub-manifest is a leaf, emit its F cards in
+       order.  The first emitted decoded filename MUST be byte-identical
+       to the S card's decoded filename, and every emitted decoded
+       filename MUST compare strictly greater than LAST, updating LAST
+       as it is emitted.  Then advance the referencing frame's cursor
+       and continue at step 2.
+
+   5.  If the resolved sub-manifest is interior, its first S card's
+       decoded filename MUST be byte-identical to the referencing S
+       card's decoded filename.  Advance the referencing frame's cursor,
+       push a frame over the resolved sub-manifest's S run, and continue
+       at step 2.
+
+   Downstream consumers (the R card computation, file-difference walks,
+   checkout) MUST NOT distinguish a walked enumeration from a flat or
+   delta one ([FossilArtifact], Section 8.2).
+
+5.2.  Sub-Manifest Resolution
+
+   S card hashes are resolved lazily, on first need, like the B card
+   baseline of [FossilArtifact], Section 8.3, under the same two
+   disciplines:
+
+   *  Hard failure: the enumeration entry points -- beginning the tree
+      walk, and single-name lookup (Section 5.3) -- MUST treat an
+      unresolvable sub-manifest (absent, or present but not of type
+      SUBMANIFEST) as a fatal error.
+
+   *  Soft failure: consumers that can defer, such as post-parse
+      relationship processing, MAY record the gap (keyed by the
+      dependent artifact and the missing hash, inserted idempotently),
+      report failure to the caller, and retry when the sub-manifest
+      arrives.
+
+   An implementation MUST NOT present a partially resolved tree as a
+   complete file set: there is no degraded partial enumeration analogous
+   to the delta-only degradation cautioned against in [FossilArtifact],
+   Section 8.3.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 10]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+5.3.  Single-Name Lookup
+
+   When resolving a single filename against a tree manifest, an
+   implementation MUST binary-search the S run for the last S card whose
+   decoded filename compares less than or equal to the target; if no
+   such card exists the name is absent.  Otherwise it resolves that
+   card's sub-manifest (hard-failure discipline) and repeats -- the S
+   run of an interior node, the F run of a leaf -- until a leaf either
+   contains the name or proves it absent.  A lookup that would resolve a
+   sub-manifest at depth greater than 16 (Section 5.1, step 3) MUST fail
+   hard; at most one sub-manifest per tree level, hence at most 16 per
+   lookup, is read.
+
+5.4.  Composition with Delta Manifests
+
+   A tree manifest carries no B card (Section 4.4) and is therefore a
+   baseline manifest under the predicate of [FossilArtifact], Section 8:
+   a delta manifest MAY name a tree manifest in its B card.  Full
+   enumeration composes the two walks: the baseline cursor of the merge-
+   walk of [FossilArtifact], Section 8.2 is the enumeration of
+   Section 5.1, and the merge-walk itself is unchanged.  Single-name
+   lookup follows [FossilArtifact], Section 8.4 with Section 5.3 as the
+   baseline-search step.
+
+   While the enable-submanifests setting (Section 8.1) is in force, a
+   writer MUST NOT create a delta manifest: the setting overrides the
+   seen-delta-manifest latch -- the persistent indicator, set when a
+   repository first processes a delta manifest, under which writers
+   otherwise generally attempt delta manifests -- with the same
+   precedence that forbid-delta-manifests already takes over that latch.
+   A writer with the setting off SHOULD NOT create new delta manifests
+   against tree baselines.
+
+5.5.  R Card over Tree Manifests
+
+   For a tree manifest, the R card MUST be computed over the walk
+   enumeration of Section 5.1 -- the tracked files in filename order
+   under the canonical comparator -- after which the MD5 [RFC1321]
+   computation of [FossilArtifact], Section 6.3.2 applies byte-for-byte
+   unchanged.  No absent-hash filtering arises: every F card reachable
+   through a tree carries a hash (Section 4.4).  For a delta manifest
+   whose baseline is a tree manifest, [FossilArtifact], Section 6.3.3
+   applies with the baseline's file set obtained from the tree walk.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 11]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+5.6.  Verification
+
+   This section is informative.  A reader arriving from delta manifests
+   may assume that indirection makes a tree check-in hard to verify with
+   light tools.  The opposite holds, in both verification modes.
+
+   Whole-tree: the root manifest's R card covers the complete file set
+   (Section 5.5), so a consumer holding a checkout computes the R-card
+   input of [FossilArtifact], Section 6.3.2 over the checkout and
+   compares its MD5 against one artifact's R card -- no tree walk.
+
+   Per-file: verification needs the file list, and a tree's list is a
+   concatenation, not a merge: leaves hold contiguous slices of the
+   sorted namespace (Section 3.6), so emitting each leaf's F run in S
+   card order is the enumeration.  A delta manifest's list needs a two-
+   cursor merge with precedence rules and deletion markers
+   ([FossilArtifact], Section 8.2) -- what puts deltas beyond shell
+   tooling; a tree needs neither.  This POSIX shell function, run in a
+   directory holding each artifact as a file named by its hash, emits a
+   tree manifest's complete F card list, and reproduces the Appendix A.3
+   and Appendix A.4 enumerations exactly:
+
+   walk() {
+     sed -n 's/^S [^ ]* //p' "$1" | while read -r h; do
+       if grep -q '^S ' "$h"
+       then walk "$h"
+       else grep '^F ' "$h"
+       fi
+     done
+   }
+
+   (SP delimits card tokens, so a filename token never contains a raw SP
+   and the sed pattern is exact.)
+
+6.  Canonical Tree Construction
+
+   Given the file-entry list, the hash policy, and the repository's
+   pinned partition parameter (Section 6.3), the construction in this
+   section fully determines the sub-manifest bytes and the manifest's S
+   run: two conforming writers MUST produce byte-identical artifacts for
+   the same check-in.  A reader, by contrast, accepts any tree
+   satisfying Sections 3, 4, and 5, and MUST NOT reject an artifact
+   because its partition differs from the canonical construction.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 12]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+6.1.  The Partition Predicate and the Parameter k
+
+   Define PH(name) as the SHA3-256 [FIPS202] digest of a decoded
+   filename -- the byte string ordered by the canonical comparator, with
+   no terminator and no transformation -- and the zero-bit count:
+
+   zbits(name) = the number of leading zero bits of PH(name)
+
+   Every boundary test of Section 6.2 compares zbits against a multiple
+   of a single positive integer k, the partition parameter: a leaf
+   boundary requires zbits(name) >= k, and a boundary between height-h
+   nodes requires zbits(key) >= (h+1)*k.
+
+   The digest algorithm, the bit granularity, and the input bytes are
+   fixed and MUST NOT be configurable or negotiable per artifact.  The
+   parameter k is a writer-side, per-repository setting (Section 6.3):
+   it MUST NOT be recorded in any artifact, and a reader MUST NOT
+   consult it -- which is why it can be revised without a format change
+   (Section 6.4).  The predicate reads the filename only: content hash,
+   permission, and old-name never influence the partition.
+
+6.2.  Construction
+
+   A writer emitting a check-in under this specification (subject to the
+   gate of Section 8.1) MUST construct the tree as follows from the
+   check-in's file entries e1 < ... < eN in canonical filename order --
+   the entries, identical tokens included, that a flat baseline manifest
+   would emit as F cards after the reserved-name exclusions of
+   [FossilArtifact], Section 4.6.3.  The group limits MIN = 2^k / 4
+   (rounded down) and MAX = 4 * 2^k count members (file entries at
+   height 0, child nodes above), never bytes: the same name set MUST
+   partition identically under either hash policy of [FossilArtifact],
+   Section 7.
+
+   1.  Scan e1..eN once, left to right, into height-0 groups: e1 starts
+       the first group, and each subsequent ei (2 <= i <= N) starts a
+       new group if and only if the open group holds MAX members, or
+       zbits(name(ei)) >= k and the open group holds at least MIN
+       members.  When the scan completes, if the final group holds fewer
+       than MIN members, a preceding group exists, and the two together
+       hold at most MAX members, the final group is merged into the
+       group preceding it.
+
+   2.  If the scan yields fewer than two groups, the writer MUST emit a
+       flat manifest and no sub-manifests; the case N = 0 (an empty
+       check-in, which Fossil permits) yields zero groups and a flat
+       manifest carrying no F cards and no S cards.  Otherwise the
+       writer MUST emit the tree this construction determines: subject
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 13]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+       only to the gate of Section 8.1, the avoid-submanifests pragma of
+       Section 7.2, and the out-of-range fallback of Section 6.3, an
+       enabled writer that emits a flat manifest where the construction
+       yields a tree does not conform.  Each group becomes a leaf sub-
+       manifest carrying exactly that group's F cards, in order, and a Z
+       card.  The key of a node is the decoded filename of the first
+       file entry in its subtree.
+
+   3.  For h = 1, 2, ...: let n1..nm be the height-(h-1) nodes in key
+       order.  Partition them by the scan of step 1 in full, including
+       its final-group merge, with the boundary test zbits(key(ni)) >=
+       (h+1)*k and the MIN and MAX limits counting nodes.  The merge
+       applies at every height, uniformly; Appendix A.4 is a vector on
+       which merging at every height and merging at height 0 only
+       produce different trees and therefore different check-in hashes.
+       If the scan, after the merge, yields a single group, or yields as
+       many groups as it was given nodes -- a non-reducing scan, which
+       would make every node a one-child parent -- the writer MUST
+       disregard that scan and emit one S card per height-(h-1) node, in
+       key order, in the manifest itself, and construction terminates.
+       Otherwise each group becomes an interior sub-manifest carrying
+       one S card per member node, in key order, and a Z card, and the
+       process repeats at height h+1 -- except that construction MUST
+       NOT create a node of height 16: if the scan at h = 16 yields,
+       after the merge, more than one group, the writer MUST disregard
+       that scan and emit one S card per height-15 node in the manifest,
+       keeping every canonical tree within the reader-side depth bound
+       of Section 5.1.
+
+   Each S card's filename token is the canonical encoding of the child's
+   key; its hash token is the child artifact's name under the repository
+   hash policy ([FossilArtifact], Section 7).  Canonical emission is
+   minimal escaping: exactly SP (0x20) as \s, LF (0x0A) as \n, and
+   backslash (0x5C) as \\; every other octet, including the decoder's
+   five other escape octets TAB, CR, VT, FF, and NUL ([FossilArtifact],
+   Section 4.3), is emitted raw, and escaping it is non-canonical.
+   Decoding a canonical encoding restores the decoded name exactly.  The
+   encoding applies to every escape-decoded filename position this
+   construction emits: S card filenames and the filename and old-name
+   tokens of leaf F cards.
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 14]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   Sub-manifest artifacts are stored before the manifest that references
+   them; content-addressed storage deduplicates any node identical to
+   one already stored.  A writer MAY reuse a subtree of a parent check-
+   in's tree, provided the resulting artifacts are byte-identical to
+   those of the full construction; reuse is position-dependent under the
+   group limits, and across a change of k survives exactly for nodes
+   whose full recursive construction remains byte-identical
+   (Section 6.4).
+
+   This requirement applies equally to sparse writers.  The structural
+   affected range includes MAX-cut shifts, MIN and final-small-group
+   merges, renames, and their propagation at every height; it is not
+   restricted to nodes whose ranges intersect edited paths, and has no
+   fixed rewrite or fetch radius.  A writer MUST obtain any absent nodes
+   needed by construction or partition validation, or explicitly refuse
+   without publishing a partial check-in; it MUST NOT replace absent
+   content with an empty subtree or silently splice a noncanonical
+   result.
+
+   Opaque reuse requires established compatible partition evidence:
+   verification under the requested k from the necessary descriptors and
+   entries, or trusted local derivation tied to the immutable parent
+   identity, construction rules, and k.  The current mutable setting
+   alone does not establish the parent's k.  For different or unknown
+   parent k, the writer MUST validate or reconstruct under the requested
+   k, obtaining needed nodes even for edits preserving every filename.
+   This is a writer obligation, not an unchecked precondition imposed on
+   its caller.  Appendix A.6 gives regression cases.
+
+6.3.  Parameter Selection and Pinning
+
+   The partition parameter k is a project-scope integer configuration
+   setting, provisionally named submanifest-k.  If the repository has no
+   valid pinned value when the enable-submanifests setting (Section 8.1)
+   is first turned on, k is selected and pinned as specified below.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 15]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   The three settings travel by configuration exchange under
+   [FossilSync], Section 9.3, as scalar entries: a client requests them
+   with reqconfig /config, the scalar marker of that section, not a
+   named group.  Retrieval is clone-time adoption.  A client supporting
+   this specification requests them in the clone's cleanup round, after
+   clone authorization succeeds, and applies the returned values to the
+   new repository, which has no values of its own.  A pull does not
+   request them; an explicit configuration pull MAY.  A newly cloned
+   repository that could not retrieve the settings MUST leave enable-
+   submanifests false until an authorized exchange retrieves them.  A
+   supporting server answers the request with the three entries when the
+   requester holds Read permission; pushing any of the three is subject
+   to that section's Admin authorization.
+
+   A receiver validates the adopted state: enable-submanifests true
+   requires a submanifest-k from 1 to 12 inclusive, and an adoption that
+   yields any other state, or carries an invalid value, applies none of
+   the three and leaves the repository's values unchanged.  Card order
+   does not affect the result.
+
+   Project scope is REQUIRED so writers given the same file entries use
+   the same pinned value and maximize content-addressed sharing.
+   Writers using different pinned values remain interoperable and may
+   still share byte-identical sub-manifests (Section 6.4).  A writer
+   MUST take k from a successfully stored pinned setting, MUST NOT
+   derive a value per commit, and MUST support every value from 1 to 12
+   inclusive.  An out-of-range value received through configuration
+   exchange is rejected at adoption as above and does not trigger writer
+   fallback.  If an out-of-range value is nevertheless present in local
+   stored state, a writer MUST fall back to emitting flat manifests
+   rather than substitute a parameter of its own, and SHOULD report the
+   fallback to the operator.
+
+   To select k automatically, the implementation analyzes the canonical
+   file-entry list of the repository's current check-in, resolved once
+   at the start of the analysis.  In a checkout, the current check-in is
+   the one the checkout is on, the parent of the next commit.  With no
+   checkout, it is the newest leaf of the main branch, by the leaf rule
+   of [FossilRepoState].  If the repository has no check-in, automatic
+   selection has no result.  For analysis only, it performs the full
+   construction under the sha3 hash policy for every k from 1 through
+   12.  A value is a candidate if and only if its height-0 scan of
+   Section 6.2 yields at least two groups.
+
+   For each candidate, let L_i be the complete serialized byte length of
+   leaf artifact i, including every card and terminating LF.  Let S be
+   the sum of the complete serialized byte lengths, including LF, of
+   every S card in the manifest or an interior sub-manifest whose hash
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 16]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   names a leaf.  The cost is C(k) = S + (sum(L_i * L_i) / sum(L_i))
+   bytes.  The implementation SHOULD choose the candidate with the
+   lowest C(k), and MUST choose the lowest k among candidates with equal
+   minimum cost.  If no value is a candidate, automatic selection has no
+   result and an implementation MUST NOT silently substitute a value.
+   An operator MAY explicitly supply any value from 1 to 12 inclusive;
+   any pinned value yields conforming artifacts.
+
+   The snapshot cost is theory over one file set.  An implementation
+   with history to replay SHOULD refine the snapshot choice against it
+   as follows, so that writers given the same repository pin the same
+   value.  Let k_s be the snapshot choice.  The candidates are k_s - 1,
+   k_s and k_s + 1, those within 1 to 12.  For each candidate, replay
+   the last 200 check-ins of the repository in the order they were
+   persisted, constructing each check-in's tree under the candidate and
+   charging every sub-manifest and root manifest whose bytes differ from
+   the previous check-in's: an unchanged node costs nothing, and a
+   changed node costs the smaller of its full form and its delta against
+   the same-position node of the previous check-in.  The pinned value is
+   the candidate with the lowest total, the lowest k on a tie.  A
+   candidate under which every replayed check-in is flat is not chosen.
+   If fewer than two check-ins can be replayed, the snapshot choice
+   stands.  An implementation MAY replay more history for the operator's
+   information; the pin follows the rule above.
+
+   The selection is advisory rather than canonical, and the analyzed
+   optimum tracks roughly half the base-2 logarithm of the file count
+   (Section 6.5).  An implementation MAY expose the pinned value;
+   changing it is a re-tune (Section 6.4).
+
+6.4.  Re-Tuning
+
+   The pinned partition parameter MAY be changed at any time; a re-tune
+   is forward-only.  The first commit after the change is constructed
+   under the new value.  Its result can be flat or a tree.  If both it
+   and its parent are trees, they share exactly the sub-manifest
+   artifacts whose bytes are identical under the two full constructions;
+   this can be every, some, or none of the parent's sub-manifests,
+   including every, some, or none of its leaves.  If either is flat,
+   that side has no sub-manifest to share.  No history is rewritten, and
+   a reader MUST NOT behave differently across the change.  Repositories
+   pinned to different values exchange artifacts correctly; differing
+   values can reduce sharing but do not prevent it, so propagation of
+   Section 6.3 need be reliable only for cost.
+
+   Because a re-tune can reduce sharing and increase the artifact bytes
+   introduced by the next commit, a re-tune MUST be manual and operator-
+   initiated unless automatic re-tuning is authorized below.  An
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 17]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   implementation MAY advise of drift from the analyzed optimum at any
+   time.  A writer MAY re-tune automatically only while the repository's
+   submanifest-auto-retune setting -- a project-scope boolean, default
+   false -- is true.  That setting MUST NOT be enabled by default or
+   inferred from repository state; setting it true is the durable
+   project-operator act authorizing subsequent automatic re-tunes.
+
+   For the single current-check-in snapshot defined by Section 6.3, the
+   writer MUST compare the deterministic candidate and current pinned
+   value using the same cost definition and arithmetic.  If the current
+   pinned value is not itself a candidate on that snapshot, the current
+   pin remains.  Otherwise, let C_candidate and C_current be their
+   costs.  The writer MUST retain the current value unless the candidate
+   is distinct and C_candidate < (1 - m) * C_current, where m is a
+   documented, implementation-defined relative margin satisfying 0 < m <
+   1.  If the analysis yields no candidate, the current pin remains.
+   The selection objective and margin are advisory rather than
+   canonical; this specification does not require the margin to be
+   stored or propagated.  This gate does not restrict advisory notices
+   or a manual, operator-initiated re-tune.
+
+6.5.  Consequences of the Partition
+
+   This subsection is informative.
+
+   Between the limits, group sizes follow the geometric distribution of
+   the boundary test, mean 2^k members; tree depth grows
+   logarithmically, base 2^k.  An insertion or deletion can cascade -- a
+   boundary decision depends on the group preceding it -- and MAX-cut
+   propagation can traverse a long suffix before re-synchronization.
+   Final-small-group merges and changed node keys can propagate at every
+   height.  With an established compatible partition basis, editing only
+   a file's content changes exactly one leaf and its referencing
+   ancestors: no boundary test reads anything but filenames and group
+   positions.  A different or unknown parent k does not give that
+   guarantee.
+
+   Measured on eight Fossil-hosted repositories (28 to 2,215 files,
+   analyzed k of 2 to 5), expected bytes read to resolve one file drop
+   by a factor of 2.2 to 19.9 versus flat F card bytes; exhaustive
+   insertion and deletion sweeps change 0.96 to 1.38 leaves on average,
+   worst observed 3.  Full tables remain with the benchmark harness.
+
+   There is no rebalance operation: every boundary is decided by the
+   one-pass scan at construction.  The construction is that of Merkle
+   Search Trees [MST], with the standard content-defined-chunking group-
+   limit corrective [FastCDC].
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 18]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+7.  Synchronization and Repository State
+
+   Sub-manifests are ordinary artifacts for every discovery and transfer
+   purpose: announced by igot, requested by gimme, carried by file and
+   cfile, and included in cluster artifacts through M cards; no wire-
+   format change exists.  This section states the requirements the S
+   card places on implementations of [FossilSync] and [FossilRepoState].
+
+7.1.  Phantom Sub-Manifests
+
+   Storing a structural artifact that carries S cards whose referenced
+   sub-manifests are absent MUST create a phantom for each missing
+   reference, with the referencing artifact's privacy classification,
+   exactly as an absent delta source creates a source phantom
+   ([FossilSync], Section 3.3).  An interior sub-manifest's own S
+   references become known only when it arrives, so a tree of depth d
+   converges in at most d+1 pull rounds.  Dephantomization of a sub-
+   manifest MUST retry the deferred processing of every recorded
+   dependent (Section 7.3, Section 9.4).
+
+7.2.  Peer Capability Gate
+
+   A peer that reads sub-manifests (Section 5) announces it with the
+   flag pragma send-submanifests.  A client sends it in every request,
+   in the leading pragma run after client-version; a server sends it in
+   every reply, in the leading pragma run after server-version, on a
+   clone reply as on any other.  The pragma states what the peer can
+   read; it is independent of the enable-submanifests setting
+   (Section 8.1) and of the avoid-submanifests pragma below.  A peer
+   that does not implement this specification never sends it and ignores
+   it when received ([FossilSync], Section 3.5).  The gate does not read
+   the announced version: Fossil does not implement sub-manifests, so
+   every version integer a Fossil release announces denotes a peer that
+   does not read them.
+
+   When the remote peer has not sent send-submanifests and a local
+   artifact is of type SUBMANIFEST, or is a manifest carrying an S card,
+   the sender MUST refuse to transmit that artifact, with an explicit
+   error -- never by converting, downgrading, or silently omitting it.
+   A server decides from the request it is answering; a client decides
+   from the replies it has received in the session, and a client uploads
+   only in answer to a gimme, which arrives in a reply, so the server's
+   announcement precedes the first artifact the client could send.  A
+   peer that has not sent the pragma is treated as one that does not
+   read sub-manifests.  The rule parallels the SHA3-256 peer-version
+   gate of [FossilSync], Section 7.6, in its refusal; it differs in what
+   it reads.
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 19]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   A server whose enable-submanifests setting (Section 8.1) is false
+   sends the flag pragma avoid-submanifests in every reply, in the
+   leading pragma run, after server-version when that is emitted, on a
+   clone reply as on any other.  A sync session is one exchange between
+   a client and a server, from its first request to its last reply.  A
+   client that receives the pragma MUST NOT emit S cards in a commit it
+   creates during that session.  A commit created outside a session is
+   governed by the client's own enable-submanifests setting alone
+   (Section 8.1); an implementation that commits first and pushes
+   afterwards therefore never creates a commit the pragma binds, and the
+   pragma informs it that the server's operator has not enabled emission
+   there.  The pragma does not gate receipt: a server stores an
+   S-bearing artifact pushed to it whatever its setting, as Section 8.1
+   says of existing artifacts.  A peer that does not implement this
+   specification ignores the pragma ([FossilSync], Section 3.5).
+
+7.3.  Crosslink and Deferred Processing
+
+   Crosslinking a tree manifest requires its full enumeration
+   (Section 5.1) wherever crosslinking a flat manifest requires the F
+   card list.  When a referenced sub-manifest is absent, the deferred-
+   processing discipline for a missing delta baseline applies unchanged:
+   record the gap keyed by dependent and missing hash, idempotently, and
+   retry on arrival.
+
+   A SUBMANIFEST artifact has no direct crosslink effect: it carries no
+   state-bearing card and contributes to repository state only through
+   the manifests whose trees contain it; its arrival triggers retry of
+   recorded dependents and nothing else.  Derived views computed over an
+   incomplete tree closure follow the available-closure rule of
+   [FossilSync] and MUST NOT be presented as a complete file set
+   (Section 5.2).
+
+7.4.  Enumeration Memoization
+
+   Implementations SHOULD cache per-sub-manifest enumeration results
+   keyed by artifact name: unchanged subtrees are shared by hash across
+   check-ins, so a memoizing rebuild parses each distinct sub-manifest
+   once, converting rebuild cost from the sum of full file-set sizes to
+   the sum of distinct-artifact sizes.  A naive implementation obtains
+   the byte reduction of this format but not the parse-count reduction
+   that motivated it.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 20]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+8.  Deployment
+
+   The card alphabet is closed (Section 3.1), so a sub-manifest or tree
+   manifest is unreadable -- rejected as structural, held as opaque
+   content -- by every reader conforming to [FossilArtifact] as
+   published; such a reader's check-in graph is visibly truncated, never
+   silently divergent.  Deployment is therefore gated at two layers:
+   emission (Section 8.1) and transfer (Section 7.2).
+
+8.1.  Emission Gate
+
+   A writer MUST NOT emit an S card unless the repository's enable-
+   submanifests setting -- a project-scope boolean, default false -- is
+   true, and MUST NOT emit one in a commit created during a sync session
+   in which it has received the avoid-submanifests pragma (Section 7.2).
+
+   This paragraph governs a local operator request to enable the setting
+   while it is false; settings received through configuration exchange
+   are governed only by the adoption rule of Section 6.3.  For a local
+   request, an existing pinned k from 1 to 12 inclusive takes
+   precedence.  A stored submanifest-k outside that range is not a valid
+   pin and is not treated as absent either: a request that supplies no
+   explicit k MUST be refused with the stored value named, and automatic
+   selection MUST NOT run over it.  A request that supplies an explicit
+   k from 1 to 12 inclusive replaces the stored value.  If the request
+   supplies a different explicit k over a valid pin, the writer MUST
+   reject the request atomically and direct the operator to the re-tune
+   operation of Section 6.4; otherwise it MUST retain and use the
+   existing value.  If no valid pin exists and the request supplies an
+   explicit k outside 1..12, the writer MUST reject the request
+   atomically and MUST NOT treat the value as absent or invoke automatic
+   selection.  If no valid pin exists, an operator MAY supply an
+   explicit k from 1 to 12 inclusive; if no explicit value is supplied,
+   the writer performs the automatic selection of Section 6.3.  If
+   automatic selection has no result, the writer MUST refuse the request
+   atomically: enable-submanifests and submanifest-k retain their pre-
+   request values, and no S card is emitted.  An implementation MUST NOT
+   enable emission on a repository with no valid pinned parameter.
+
+   Disabling the setting stops the emission of new tree manifests; it
+   cannot retire existing ones (artifact names are immutable;
+   [FossilArtifact], Section 7.6).  When the first S-bearing artifact is
+   stored, an implementation SHOULD record a local seen-submanifest
+   indicator so operational surfaces can warn before the setting is
+   enabled or a client that does not read sub-manifests is granted
+   access.
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 21]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   The setting MUST NOT be enabled on a repository that any
+   implementation not announcing sub-manifest support (Section 7.2)
+   serves.  The card alphabet is closed, so such a reader rejects the
+   first tree manifest as structural and its view of the history stops
+   there, visibly; the gates of Section 7.2 refuse it the artifact but
+   cannot give it the check-in.  Enabling is therefore a decision for
+   every reader of a repository at once, not for one writer.
+
+9.  Implementation Requirements
+
+   The requirements in this section constrain implementation structure
+   rather than artifact bytes; each failure mode they prevent is a
+   silent divergence or livelock identified in structural audits of the
+   four extant Fossil implementations.
+
+9.1.  Type Determination Without a Positive Signal
+
+   An implementation MUST determine SUBMANIFEST through the reassignment
+   rule of Section 4.3 -- a post-pass keyed on the absence of a D card
+   -- and MUST NOT commit to a type while cards are still being read.
+   Required-card logic that assumes every type requires a D card MUST
+   treat SUBMANIFEST (like CLUSTER) as an explicit exception.
+
+9.2.  Sweep Termination
+
+   A SUBMANIFEST artifact never produces a derived row of its own
+   (Section 7.3).  An implementation that discovers crosslink work by
+   negative space -- selecting every structural artifact for which no
+   derived row exists -- MUST exclude SUBMANIFEST artifacts from the
+   sweep, or record an explicit completion marker for them; otherwise it
+   re-selects and re-parses them on every pass, forever.
+
+9.3.  The Enumeration Seam
+
+   Every consumer of a check-in's file set -- checkout, diff, crosslink,
+   rebuild, annotate, commit -- MUST obtain it through one shared
+   enumeration interface implementing the tree walk of Section 5.1 and
+   its delta composition (Section 5.4).  Implementations MUST route
+   every bypass site -- any site iterating a raw file-card array, which
+   either fails on tree manifests or silently diverges from the seam --
+   through the interface before enabling the reader, and SHOULD enforce
+   the seam with an assertion or type distinction.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 22]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+9.4.  Dephantomization of S References
+
+   Deferred-processing cascades typically know two edge kinds: delta-
+   manifest baselines and content delta sources.  The S reference is a
+   third.  An implementation MUST record, when a tree manifest's
+   processing is deferred (Section 7.3), enough to rediscover that
+   manifest when the missing sub-manifest arrives, and its
+   dephantomization path MUST traverse that record; a cascade that walks
+   only the two older edge kinds leaves such a check-in permanently
+   unprocessed.
+
+10.  Security Considerations
+
+   The security considerations of [FossilArtifact], Section 9 apply.
+   This section adds the considerations specific to sub-manifests.
+
+   The tree walk of Section 5.1 recurses through attacker-suppliable
+   artifacts; the depth bound and the repeated-artifact check of
+   Section 5.1, step 3 MUST be enforced -- together they reject
+   reference cycles and bound the stack.  Implementations SHOULD bound
+   total sub-manifests visited per enumeration and MUST bound it when
+   serving unauthenticated requests; in particular, the depth bound MUST
+   be enforced in single-name lookup (Section 5.3), or a crafted deep
+   spine turns an unauthenticated lookup endpoint into unbounded
+   sequential artifact reads.
+
+   A phantom sub-manifest leaves a tree unresolvable, exactly as a
+   phantom baseline leaves a delta manifest unresolvable.  Shunning a
+   sub-manifest renders every check-in whose tree contains it
+   unenumerable, a strictly wider blast radius than shunning one file's
+   content; operators should shun sub-manifests only with the same
+   caution as baseline manifests.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 23]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   The partition predicate (Section 6.1) is not an integrity mechanism:
+   integrity binds through S and F card hashes; SHA3-256's role in the
+   partition is only to choose boundaries.  A committer who controls
+   filenames can shape the tree within the group limits: all-non-
+   qualifying names partition into MAX-member groups once the file count
+   exceeds MAX, all-qualifying names yield MIN-member leaves, and a name
+   whose digest carries (h+1)*k leading zero bits, findable by search at
+   small k, raises a boundary at height h.  The MIN limit suppresses the
+   single-member spine such names would otherwise chain (at k <= 2,
+   where MIN is 1 or 0, it cannot, and the non-reducing-scan stop and
+   height cap of Section 6.2, step 3 bound spines instead; partial
+   single-child nodes inside otherwise-reducing levels still occur): a
+   crafted name distorts shape, not validity.  Commit privilege is
+   required, and already suffices to write a flat manifest of arbitrary
+   size; repositories accepting commits from marginally trusted users
+   SHOULD monitor artifact-count growth.
+
+   The gates of Section 7.2 and Section 8 keep readers that do not
+   announce sub-manifest support from encountering S-bearing artifacts
+   in normal operation.
+
+11.  IANA Considerations
+
+   This document has no IANA actions.
+
+12.  References
+
+12.1.  Normative References
+
+   [FIPS202]  National Institute of Standards and Technology, "SHA-3
+              Standard: Permutation-Based Hash and Extendable-Output
+              Functions", FIPS 202, DOI 10.6028/NIST.FIPS.202, August
+              2015, <https://nvlpubs.nist.gov/nistpubs/FIPS/
+              NIST.FIPS.202.pdf>.
+
+   [FossilArtifact]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Artifact Format", Work
+              in Progress, Internet-Draft, draft-fossil-artifact-format-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 24]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   [FossilRepoState]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Repository State and
+              Check-in Resolution", Work in Progress, Internet-Draft,
+              draft-fossil-repo-state-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-repo-
+              state-00>.
+
+   [FossilSync]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sync Protocol", Work
+              in Progress, Internet-Draft, draft-fossil-sync-protocol-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
+
+   [RFC1321]  Rivest, R., "The MD5 Message-Digest Algorithm", RFC 1321,
+              DOI 10.17487/RFC1321, April 1992,
+              <https://www.rfc-editor.org/rfc/rfc1321>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/rfc/rfc5234>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+12.2.  Informative References
+
+   [FastCDC]  Xia, W., Zhou, Y., Jiang, H., Feng, D., Hua, Y., Hu, Y.,
+              Liu, Q., and Y. Zhang, "FastCDC: a Fast and Efficient
+              Content-Defined Chunking Approach for Data Deduplication",
+              USENIX ATC 2016, June 2016,
+              <https://www.usenix.org/conference/atc16/technical-
+              sessions/presentation/xia>.
+
+   [FossilDelta]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Delta Format", Work in Progress, Internet-Draft, draft-
+              fossil-delta-format-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-delta-
+              format-00>.
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 25]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   [MST]      Auvolat, A. and F. Taiani, "Merkle Search Trees: Efficient
+              State-Based CRDTs in Open Networks", IEEE SRDS 2019,
+              DOI 10.1109/SRDS47363.2019.00032, October 2019,
+              <https://doi.org/10.1109/SRDS47363.2019.00032>.
+
+   [RFC8792]  Watsen, K., Auerswald, E., Farrel, A., and Q. Wu,
+              "Handling Long Lines in Content of Internet-Drafts and
+              RFCs", RFC 8792, DOI 10.17487/RFC8792, June 2020,
+              <https://www.rfc-editor.org/rfc/rfc8792>.
+
+   [ScalingUp]
+              Hipp, D. R., "Scaling Fossil Up", Fossil project design
+              note, October 2010, <https://fossil-scm.org/home/technote/
+              be8f2f3447ef2ea3344f8058b6733aa08c08336f>.
+
+Appendix A.  Conformance Vectors
+
+   The displayed vectors in this appendix are non-normative in
+   presentation but binding in content: every displayed artifact name,
+   checksum, and byte-count claim recomputes from the exact displayed
+   byte sequence, and a conforming implementation reproduces all of
+   them.  A requirement marked (to author) specifies a mandatory future
+   fixture but is not yet a binding byte vector; this document is not
+   ready for release while any such requirement remains.  Some literal
+   lines are folded per the single-backslash strategy of [RFC8792], with
+   the header it prescribes; no unfolded artifact line ends in a
+   backslash, so unfolding is unambiguous.  All artifacts are named
+   under the sha3 hash policy (64-character names) and are structurally
+   valid at every partition parameter, so a reader MUST accept them
+   regardless of any repository's pinned k; only the writer-side
+   reproduction claim depends on the parameter, and each construction
+   vector states the pinned value at which it holds.
+
+A.1.  The Example Tree
+
+   The example check-in tracks four files:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 26]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+        +==============+============+=============================+
+        | Path         | Byte count | Content                     |
+        +==============+============+=============================+
+        | README.md    | 10         | # Example\n                 |
+        +--------------+------------+-----------------------------+
+        | src/main.c   | 26         | int main(void){return 0;}\n |
+        +--------------+------------+-----------------------------+
+        | src/node11.c | 13         | /* node11 */\n              |
+        +--------------+------------+-----------------------------+
+        | src/util.c   | 11         | /* util */\n                |
+        +--------------+------------+-----------------------------+
+
+                                  Table 2
+
+   (Here \n represents a literal newline byte.)  The pinned partition
+   parameter (Section 6.3) is k = 3, giving MIN = 2 and MAX = 32.  The
+   first four octets of each name's SHA3-256 digest (Section 6.1):
+
+             +==============+=======================+=======+
+             | Filename     | SHA3-256(name) [0..3] | zbits |
+             +==============+=======================+=======+
+             | README.md    | 42 d6 8a 3e           | 1     |
+             +--------------+-----------------------+-------+
+             | src/main.c   | ee 62 2c a8           | 0     |
+             +--------------+-----------------------+-------+
+             | src/node11.c | 00 9c b1 40           | 8     |
+             +--------------+-----------------------+-------+
+             | src/util.c   | af 9f 5a 2b           | 0     |
+             +--------------+-----------------------+-------+
+
+                                 Table 3
+
+   Only src/node11.c qualifies as a boundary (zbits 8 >= k), tested
+   while the open group holds 2 >= MIN entries, so the scan of
+   Section 6.2, step 1 yields two leaves: (README.md, src/main.c) and
+   (src/node11.c, src/util.c).  At height 1 the second leaf's key
+   qualifies (zbits 8 >= 2*k = 6) but MIN suppresses it (the open group
+   holds one node); that scan yields a single group, so step 3
+   terminates and the manifest carries the two S cards directly.  The
+   final-group merge fires at neither height.  At k = 4, MIN = 4
+   suppresses the only qualifying boundary and step 2 emits a flat
+   manifest.
+
+A.2.  Leaf Sub-Manifests
+
+   The first leaf sub-manifest is the following 190-byte artifact.
+   Every byte shown is part of the artifact; the F card hashes are the
+   SHA3-256 digests of the file contents given in Appendix A.1.
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 27]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   F README.md \
+     a4ab3d6bba47168d231f8ebdfaeb9bce15e134d7150bf20800a42551409bfbfb
+   F src/main.c \
+     ef30bf8ab404da88c777979d0eeb8729f59cff33423382cfb212ed7b70a7f31c
+   Z bdbb5692981c3a9e28c8320434534bf1
+
+   The Z card value is the MD5 digest of the first 155 bytes (all bytes
+   strictly before the Z marker).  The artifact name, the SHA3-256
+   digest of all 190 bytes, is:
+
+   aa9d404c14fe4dadd2ab398961fb0dfe650a877c061f650d8233a5888e920acf
+
+   The second leaf sub-manifest is the following 193-byte artifact:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   F src/node11.c \
+     6fcb87a7bb8c870c25fc38dd5e0c6b86bc411ac40123daafcb1f333c9c49783d
+   F src/util.c \
+     0492c41ce513d93a9fc9eda08715cc0a1d28eb57e639d9d05f6ea6856a42ac9d
+   Z 87c55af5fe5e8baeb6a9a97b83d34a6e
+
+   Its Z card is the MD5 of the first 158 bytes, and its name is:
+
+   a50a722b465ed67b42ee0fbe61e4a19d6b1d22940ba5740e99e450921e3f52ea
+
+   Both artifacts are of type SUBMANIFEST by the reassignment rule of
+   Section 4.3: their F cards assign MANIFEST, and no D card is present.
+
+A.3.  The Tree Manifest
+
+   The tree manifest is the following 281-byte artifact, a root check-in
+   (no P card) whose file set is conveyed entirely by its two S cards:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   C Tree\smanifest\sexample
+   D 2026-07-26T00:00:00
+   R 152bc688378069a3c22a1a4c55bc8b1a
+   S README.md \
+     aa9d404c14fe4dadd2ab398961fb0dfe650a877c061f650d8233a5888e920acf
+   S src/node11.c \
+     a50a722b465ed67b42ee0fbe61e4a19d6b1d22940ba5740e99e450921e3f52ea
+   U drh
+   Z 90e5857974adae6f63af727ace2635ac
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 28]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   Each S card's filename is the key of its leaf -- byte-identical to
+   the first F card filename that leaf enumerates -- and each S card's
+   hash is the leaf artifact name computed in Appendix A.2.  The tree
+   walk of Section 5.1 enumerates README.md, src/main.c, src/node11.c,
+   src/util.c: the same list a flat manifest would carry.
+
+   The R card is computed over that enumeration per Section 5.5 and
+   [FossilArtifact], Section 6.3.2.  The R-card input string (117 bytes
+   total) is:
+
+   README.md 10\n# Example\n
+   src/main.c 26\nint main(void){return 0;}\n
+   src/node11.c 13\n/* node11 */\n
+   src/util.c 11\n/* util */\n
+
+   (Here \n represents a literal newline byte; the above is shown as
+   human-readable text.)  MD5 of these 117 bytes =
+   152bc688378069a3c22a1a4c55bc8b1a, which matches the R card.  The Z
+   card is the MD5 of the first 246 bytes of the artifact, and the
+   artifact name, the SHA3-256 digest of all 281 bytes, is:
+
+   95fba39cbaba76fccb15571516659cea6a0e8a60123c3e7bda1397649d87c509
+
+A.4.  The Interior-Height Merge
+
+   This vector separates two readings of Section 6.2, step 3 that agree
+   on most name sets: applying the final-group merge at every height,
+   which is the rule, versus applying it at height 0 only.  On this
+   nine-name check-in the readings produce different trees.  The pinned
+   parameter is k = 3, giving MIN = 2 and MAX = 32.  The content of each
+   file fNNNN.c is the 10 bytes "/* NNNN */" followed by one newline
+   byte.  The zero-bit counts:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 29]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+               +==========+=======================+=======+
+               | Filename | SHA3-256(name) [0..3] | zbits |
+               +==========+=======================+=======+
+               | f1257.c  | a8 a4 92 6e           | 0     |
+               +----------+-----------------------+-------+
+               | f1346.c  | 47 58 70 30           | 1     |
+               +----------+-----------------------+-------+
+               | f1523.c  | 19 d0 08 96           | 3     |
+               +----------+-----------------------+-------+
+               | f2146.c  | 47 aa 49 53           | 1     |
+               +----------+-----------------------+-------+
+               | f2260.c  | 6a 78 7d d2           | 1     |
+               +----------+-----------------------+-------+
+               | f2468.c  | 6d cc c1 91           | 1     |
+               +----------+-----------------------+-------+
+               | f2614.c  | 00 45 61 23           | 9     |
+               +----------+-----------------------+-------+
+               | f2954.c  | f4 8c cb 2e           | 0     |
+               +----------+-----------------------+-------+
+               | f3514.c  | 85 10 50 80           | 0     |
+               +----------+-----------------------+-------+
+
+                                 Table 4
+
+   The height-0 scan places boundaries at f1523.c and f2614.c; its final
+   group holds 3 >= MIN entries, so the merge does not fire, and the
+   scan yields three leaves of 2, 4, and 3 entries.  At height 1 the
+   node keys are f1257.c, f1523.c, and f2614.c, with zbits 0, 3, and 9;
+   only f2614.c meets the height-1 threshold 2*k = 6, so the scan yields
+   groups of 2 and 1 nodes.  The final group holds 1 < MIN node, a
+   preceding group exists, and 1 + 2 = 3 <= MAX, so the merge fires at
+   height 1: a single group of all three leaves, and the manifest
+   carries three S cards directly.  A writer that merges only at height
+   0 keeps the two height-1 groups, emits two interior sub-manifests,
+   and produces a two-S-card manifest -- different artifact bytes and a
+   different check-in hash for the identical file set.
+
+   The first leaf, 185 bytes, Z over the first 150:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   F f1257.c \
+     ba805134a0884ff1f73181fa99a43e252f844ecc09f613e406b92f324e3d3af6
+   F f1346.c \
+     91f863d738651566c184eabfd6ffa69cd7d3b60d95fc7b5fac60043c41046dd4
+   Z 9766d90b8e5eac2cb483e5e872c653f8
+
+   Its name is:
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 30]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   b8e53d0c46cb57b616cc0ed6de5ce2453715be6157b73d247bcd5de8a6510aaa
+
+   The second leaf, 335 bytes, Z over the first 300:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   F f1523.c \
+     293c4544a0f3842536e0533939724555fa5c0cbb30f93fbe6f6b82ebbd59d222
+   F f2146.c \
+     ea41979228440cbeb2ce4f6754375d7b72e2a054a49760ddf914b84365a6ba55
+   F f2260.c \
+     a7dec12cae865c5fd41348ba3d41f3d094a5864d655c7f0dd8c48b46974e3068
+   F f2468.c \
+     e293718cea0c0a2be3b824c649f5ef23b35d5de2f6b80695c4b7d3c73893780e
+   Z 79a81d90d722f8ebf0a16ac7d4b1ac1f
+
+   Its name is:
+
+   cff23e5ba71569397c1d816afa2dd0bfffc42339e402df36b63623846bd5fcbe
+
+   The third leaf, 260 bytes, Z over the first 225:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   F f2614.c \
+     df090e7df6eec1735949afc6c3225a6d2bd94ef5df60d8eda979624bc283f2e6
+   F f2954.c \
+     b5ad768551f213e369f6eb0227cc1dd55a40a716b5e55a8a975ea6caad8df89b
+   F f3514.c \
+     79f730c36c0796a4755a0497eb55d93f7c21e71a4cf7a46cb3783204cdaee614
+   Z bfedd27d9d84f6fea75fb0a69bb70bea
+
+   Its name is:
+
+   9604c3f9774f7472d7bff44d5965f30250358a3e7a18046eeaf5f9d83bd5cdc6
+
+   The manifest, 350 bytes, Z over the first 315, its R card the MD5 of
+   the 198-byte R-card input formed from the walked enumeration per
+   Section 5.5:
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 31]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   C Interior\smerge\sexample
+   D 2026-07-27T00:00:00
+   R c1155756fd2fa431f9c663496775f8e2
+   S f1257.c \
+     b8e53d0c46cb57b616cc0ed6de5ce2453715be6157b73d247bcd5de8a6510aaa
+   S f1523.c \
+     cff23e5ba71569397c1d816afa2dd0bfffc42339e402df36b63623846bd5fcbe
+   S f2614.c \
+     9604c3f9774f7472d7bff44d5965f30250358a3e7a18046eeaf5f9d83bd5cdc6
+   U drh
+   Z 490e899e4e1bcf2c9c3a5a8ebfadebc5
+
+   Its name is:
+
+   02dad8d4451ecf930c0c8637cf66351579aa746aebf0cf10f249b2a6dea37caa
+
+   The walk of Section 5.1 enumerates the nine names in filename order,
+   and these four artifacts are binding in content exactly as those of
+   Appendix A.2 and Appendix A.3.
+
+A.5.  Required Vector Set
+
+   The artifacts above are the seed of the conformance corpus, not its
+   extent.  Vectors marked (to author) are specified here and are to be
+   authored with genuinely computed hashes at implementation time.
+   Before any implementation's reader is enabled by default, its test
+   corpus MUST include, at minimum:
+
+   *  Acceptance: the Appendix A.2 and A.3 pair -- parse, type-
+      determine, tree-walk, verify the R card over the walked
+      enumeration and all three artifact names.
+
+   *  Acceptance and writer: the Appendix A.4 set -- parse, walk, R
+      card, all four artifact names, and writer-side reproduction at
+      pinned k = 3, confirming the interior-height merge.
+
+   *  Acceptance: a name set of at most MAX entries with no qualifying
+      boundary, confirming flat canonical output even with emission
+      enabled; and one of more than MAX such entries, confirming that
+      forced boundaries partition it regardless.
+
+   *  Acceptance: a qualifying natural boundary suppressed by the MIN
+      limit, with flat canonical output -- the Appendix A.1 list at
+      pinned k = 4 is such a set.
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 32]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   *  Acceptance (to author): a scan ending in a group shorter than MIN
+      with a predecessor able to absorb it within MAX, confirming the
+      height-0 final-group merge.  (The interior-height counterpart is
+      Appendix A.4.)
+
+   *  Acceptance (to author): a three-level tree (manifest, interior
+      nodes, leaves), exercising step 5 of the tree walk.
+
+   *  Rejection: a manifest carrying both F and S cards; a manifest
+      carrying both B and S cards; a sub-manifest carrying both F and S
+      cards, or neither; a sub-manifest F card without a hash
+      (Section 4.4).
+
+   *  Rejection: an S run not in strict ascending order (Section 3.4);
+      an S card whose decoded filename is not byte-identical to the
+      first filename of its subtree (Section 5.1, steps 4 and 5); an
+      enumeration that does not strictly ascend across sibling slices.
+
+   *  Acceptance: a flat manifest emitted for N = 0 -- no F cards and no
+      S cards -- and for N = 1, confirming the fewer-than-two-groups
+      exit of Section 6.2, step 2.
+
+   *  Behavior (to author): automatic parameter selection over the N = 1
+      name set has no candidate for every k from 1 through 12.  A first-
+      enable request with no explicit k fails atomically, leaving
+      enable-submanifests false and submanifest-k unset; an injected
+      persistence failure likewise leaves neither setting partially
+      applied.
+
+   *  Behavior (to author): a /project reply carrying submanifest-k,
+      enable-submanifests, and submanifest-auto-retune in every card
+      order yields the same atomic state.  An invalid value or enable-
+      submanifests true without an in-range resulting pin rejects all
+      three entries without partial application; a newly cloned client
+      lacking Read permission retains enable-submanifests false until an
+      authorized exchange retrieves the group.
+
+   *  Acceptance (to author): a delta manifest whose B card names a tree
+      manifest (Section 5.4), its R card verified over the composed
+      enumeration ([FossilArtifact], Section 6.3.3).
+
+   *  Acceptance: single-name lookup (Section 5.3) against the
+      Appendix A.3 and A.4 trees, covering a present name in each leaf,
+      an absent name whose binary search descends into a leaf, and an
+      absent name sorting before the first S card.
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 33]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   *  Acceptance (to author): a tree whose filenames exercise the
+      canonical encoding of Section 6.2 -- a name containing SP and a
+      name containing a backslash -- round-tripping through emission and
+      decoding; a writer emitting any non-canonical spelling fails byte-
+      identity against it.
+
+   *  Rejection: an S reference to an artifact that is not a
+      SUBMANIFEST; a reference cycle; a path of more than 16 sub-
+      manifest artifacts, counting the leaf (Section 5.1, step 3).
+
+   *  Behavior: a tree manifest with one sub-manifest absent -- hard
+      failure from the enumeration entry points, idempotent deferred
+      record from post-receive processing, retry on arrival
+      (Section 5.2, Section 9.4).
+
+   *  Writer: the canonical construction applied to the Appendix A.1
+      file list under the sha3 policy at pinned k = 3 reproduces the
+      Appendix A.2 and A.3 artifacts byte-identically.
+
+   *  Writer (to author): under the sha3 policy, use one fixed set of
+      complete F-card entries with canonical filenames src/f000.c, src/
+      f001.c, src/f002.c, and src/f003.c, whose zbits values are 2, 2,
+      3, and 1, respectively, and construct that same set at pinned k =
+      1 and k = 3.  At k = 1, the height-0 scan yields four singleton
+      leaves, the height-1 scan yields three interior nodes, the
+      height-2 scan yields two interior nodes, and the height-3 scan
+      terminates with those two nodes referenced by the manifest.  At k
+      = 3, the height-0 scan yields the two leaves (src/f000.c, src/
+      f001.c) and (src/f002.c, src/f003.c), and the height-1 scan
+      terminates with those leaves referenced by the manifest.  The
+      authored vector MUST include both manifests and every transitively
+      referenced sub-manifest with genuinely computed artifact names,
+      MUST verify that both tree walks enumerate the same four F cards,
+      and MUST verify that the two transitive sets of sub-manifest
+      artifact names are disjoint.
+
+A.6.  Sparse Canonical Rewrite Vectors
+
+   The following writer regression vectors are REQUIRED.  Use SHA3-256
+   artifact naming, each filename's UTF-8 bytes as its file content, and
+   regular F cards without permission or old-name tokens.  Compare every
+   successful result with full construction under the requested k,
+   including all transitively referenced artifact bytes.  For each
+   absent-node case, remove the sub-manifest payload itself, not merely
+   a referenced file blob.  A writer MUST either fetch the needed
+   payloads and reproduce full construction or explicitly refuse without
+   publishing a partial check-in.
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 34]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   *  MAX propagation: at k = 1, retain the first 18 names f0000, f0001,
+      ... whose zbits is zero.  They are f0000, f0001, f0003, f0004,
+      f0005, f0006, f0008, f0010, f0014, f0015, f0016, f0017, f0018,
+      f0019, f0021, f0022, f0023, f0024.  Construct the parent without
+      f0001: its leaves contain 8/8/1 entries.  Retain only the first
+      leaf payload and all root S descriptors, eliding the two other
+      leaf payloads.  Inserting f0001 requires leaves of 8/8/2 entries;
+      both outside leaves change.  A nine-entry first leaf or a
+      noncanonical extra leaf fails this vector.
+
+   *  Final-small-group merge: at k = 3, construct g0000, g0001, g0005,
+      g0006.  Their zbits are 1, 0, 5, 0; the parent has two two-entry
+      leaves.  Delete g0006 with the first leaf payload absent.  The
+      final one-entry group merges into its predecessor, and the
+      required result is a flat manifest containing g0000, g0001, g0005.
+      An opaque first-leaf reference cannot supply this result.
+
+   *  Different or unknown parent basis: construct the 17-name MAX
+      parent above at k = 1, then request k = 2 and replace f0000's
+      content without changing its filename.  The required leaf sizes
+      are 16/1, not 8/8/1.  Repeat with the parent's construction k
+      unknown, both at requested k = 1 and k = 2.  In each run make a
+      sibling payload absent and provide no trusted derivation evidence.
+      The current setting is not sufficient evidence for opaque reuse;
+      validation or reconstruction MUST fetch the needed nodes or
+      refuse.  Repeat densely and require canonical success.
+
+Appendix B.  Collected ABNF
+
+   The following production is in ABNF [RFC5234] and extends the
+   collected ABNF of [FossilArtifact], Appendix B; the productions
+   filename, hash, SP, and LF are imported from there unchanged.
+
+   s-card = %x53 SP filename SP hash LF                   ; "S"
+
+Appendix C.  Changes in This Revision
+
+   This revision of draft-fossil-submanifests-00, dated 20 October 2026,
+   applies the following corrections to the 27 July 2026 text.
+
+   *  Abstract, Section 1.3: zit and go-libfossil implement the
+      specification and interoperate; Fossil does not implement it.
+      Editorial.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 35]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   *  Section 1.3, Section 8, Section 8.1, Section 8.2, Section 10: the
+      provisional phase retires.  Section 8.2 is removed; its flag-day
+      rule, that the setting MUST NOT be enabled on a repository served
+      by an implementation that does not announce sub-manifest support,
+      moves to Section 8.1.  Normative change.
+
+   *  Section 6.3: the three settings travel as scalar entries adopted
+      once at clone through reqconfig /config; no per-pull request and
+      no staged transaction.  Normative change.
+
+   *  Section 6.3: automatic selection refines the snapshot choice by
+      replaying the last 200 check-ins at the neighbouring values of k.
+      Normative change.
+
+   *  Section 6.3: the current check-in is the checkout's, or the newest
+      leaf of the main branch when there is no checkout.  Normative
+      change.
+
+   *  Section 7.2: the gate reads the send-submanifests pragma, not the
+      announced version; every Fossil release reads as a peer that does
+      not read sub-manifests.  Normative change.
+
+   *  Section 7.2: avoid-submanifests is sent on every reply, in the
+      leading pragma run after server-version.  Normative change.
+
+   *  Section 7.2, Section 8.1: a sync session is one exchange; the
+      pragma binds commits created inside one and does not gate receipt.
+      Normative change.
+
+   *  Section 8.1: a stored k outside 1 to 12 refuses an enable request
+      without an explicit k and is replaced by an explicit one.
+      Normative change.
+
+   *  Section 6.2, Section 6.5, Appendix A.6: retain mandatory canonical
+      construction for sparse writers; define structural propagation and
+      compatible partition evidence, require necessary content or
+      explicit refusal, and add MAX, final-merge, and unknown/
+      different-k regression vectors.  Normative change.
+
+Authors' Addresses
+
+   D. Richard Hipp (editor)
+   Fossil
+
+
+   Stephan Beal
+   libfossil
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 36]
+
+Internet-Draft            Fossil Sub-Manifests              October 2026
+
+
+   Dan Shearer
+   Email: dan@shearer.org
+   URI:   https://shearer.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 22 April 2027                [Page 37]

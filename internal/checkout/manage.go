@@ -3,6 +3,9 @@ package checkout
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
@@ -25,17 +28,19 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		return nil, fmt.Errorf("checkout.Manage: %w", err)
 	}
 
-	for _, path := range opts.Paths {
-		// Check if already tracked
-		var existingID int64
-		err := c.db.QueryRow(
-			"SELECT id FROM vfile WHERE vid=? AND pathname=?",
-			int64(vid), path,
-		).Scan(&existingID)
-		if err != nil && err != sql.ErrNoRows {
-			return counts, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+	paths, err := c.expandManagePaths(opts.Paths)
+	if err != nil {
+		return counts, err
+	}
+	if err := c.refuseUncovered("Manage", paths...); err != nil {
+		return counts, err
+	}
+	for _, path := range paths {
+		tracked, err := c.isTracked(vid, path)
+		if err != nil {
+			return counts, err
 		}
-		if err == nil {
+		if tracked {
 			// Already tracked
 			counts.Skipped++
 			if opts.Callback != nil {
@@ -85,6 +90,21 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 	return counts, nil
 }
 
+// isTracked reports whether version vid's record has a row for path.
+func (c *Checkout) isTracked(vid libfossil.FslID, path string) (bool, error) {
+	var id int64
+	err := c.db.QueryRow(
+		"SELECT id FROM vfile WHERE vid=? AND pathname=?", int64(vid), path,
+	).Scan(&id)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("checkout.Manage: query vfile: %w", err)
+	}
+	return true, nil
+}
+
 // Unmanage removes files from tracking. For each path:
 // - If rid=0 (newly added, never committed): DELETE from vfile
 // - If rid>0 (existing tracked file): UPDATE vfile SET deleted=1
@@ -115,6 +135,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 			if err != nil {
 				return fmt.Errorf("checkout.Unmanage: query vfile id=%d: %w", vfileID, err)
 			}
+			if err := c.refuseUncovered("Unmanage", pathname); err != nil {
+				return err
+			}
 
 			if err := c.unmanageFile(vfileID, rid, pathname, opts.Callback); err != nil {
 				return fmt.Errorf("checkout.Unmanage: %w", err)
@@ -124,6 +147,9 @@ func (c *Checkout) Unmanage(opts UnmanageOpts) error {
 	}
 
 	// Handle Paths
+	if err := c.refuseUncovered("Unmanage", opts.Paths...); err != nil {
+		return err
+	}
 	for _, path := range opts.Paths {
 		var vfileID libfossil.FslID
 		var rid int64
@@ -175,4 +201,54 @@ func (c *Checkout) unmanageFile(
 	}
 
 	return nil
+}
+
+// expandManagePaths replaces each named directory with the files beneath it,
+// as fossil's add does: through the checkout's bounded, cone-aware walk,
+// skipping any path with a component that starts with "." (fossil's default
+// without --dotfiles). A named file is kept as given, dotfile or not.
+func (c *Checkout) expandManagePaths(paths []string) ([]string, error) {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		full, err := c.safePath(path)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Manage: path traversal in %s: %w", path, err)
+		}
+		info, statErr := c.env.Storage.Stat(full)
+		if statErr != nil || !info.IsDir() {
+			// An uncovered path is refused as such before its absence on
+			// disk, which a sparse checkout makes ordinary.
+			if err := c.refuseUncovered("Manage", path); err != nil {
+				return nil, err
+			}
+			if statErr != nil {
+				return nil, fmt.Errorf("checkout.Manage: stat %s: %w", path, statErr)
+			}
+			out = append(out, path)
+			continue
+		}
+		files, err := c.walkDir(full)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Manage: %w", err)
+		}
+		names := make([]string, 0, len(files))
+		for rel := range files {
+			name := filepath.ToSlash(rel)
+			if !hasDotComponent(name) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		out = append(out, names...)
+	}
+	return out, nil
+}
+
+func hasDotComponent(name string) bool {
+	for _, part := range strings.Split(name, "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
 }

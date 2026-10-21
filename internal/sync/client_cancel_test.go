@@ -277,9 +277,8 @@ func TestProcessResponseWrongHashRollsBackReply(t *testing.T) {
 	if got := countCrosslinkedRids(t, r, children); got != 0 {
 		t.Fatalf("crosslinked %d children in a rolled-back reply, want 0", got)
 	}
-	if s.cascaded != 0 || s.result.FilesRecvd != 0 {
-		t.Fatalf("session counts cascaded=%d files=%d after a rollback, want 0",
-			s.cascaded, s.result.FilesRecvd)
+	if s.result.FilesRecvd != 0 {
+		t.Fatalf("session counts files=%d after a rollback, want 0", s.result.FilesRecvd)
 	}
 }
 
@@ -317,8 +316,7 @@ func TestProcessResponseLateMismatchRollsBackReply(t *testing.T) {
 	if got := countCrosslinkedRids(t, r, children); got != 0 {
 		t.Fatalf("crosslinked %d children in a rolled-back reply, want 0", got)
 	}
-	if s.cascaded != 0 || s.result.FilesRecvd != 0 {
-		t.Fatalf("session counts cascaded=%d files=%d after a rollback, want 0",
-			s.cascaded, s.result.FilesRecvd)
+	if s.result.FilesRecvd != 0 {
+		t.Fatalf("session counts files=%d after a rollback, want 0", s.result.FilesRecvd)
 	}
 }

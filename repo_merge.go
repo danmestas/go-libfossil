@@ -118,7 +118,7 @@ func (r *Repo) BranchTip(name string) (int64, error) {
 	return rid, nil
 }
 
-// BranchOpenLeaf names one open leaf of the named branch (repo-state-01
+// BranchOpenLeaf names one open leaf of the named branch (repo-state-00
 // Section 9): a check-in whose active branch tag is name, that is a leaf and
 // that is not closed. When the branch has several, the one with the greatest
 // event.mtime is returned, as the draft requires of any report that names a

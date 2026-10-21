@@ -64,3 +64,21 @@ func TestBuggifyDisableStops(t *testing.T) {
 		t.Fatal("should not fire after disable")
 	}
 }
+
+func TestSuspendBuggifyRestores(t *testing.T) {
+	EnableBuggify(1)
+	defer DisableBuggify()
+	resume := SuspendBuggify()
+	inner := SuspendBuggify()
+	if Buggify(1.0) {
+		t.Fatal("should not fire while suspended")
+	}
+	inner()
+	if Buggify(1.0) {
+		t.Fatal("an inner resume must not end the outer suspension")
+	}
+	resume()
+	if !Buggify(1.0) {
+		t.Fatal("should fire again after resume")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // fileCheckinTimesQuery is fossil's mtime_of_manifest_file (src/descendants.c)
@@ -94,7 +95,7 @@ func (c *Checkout) setFileMTimes(vid libfossil.FslID) error {
 		}
 		when := time.Unix(secs, 0)
 		if c.env.Storage.Chtimes(fullPath, when, when) == nil {
-			set[name] = recordableMTime(when, c.env.Clock.Now().Unix())
+			set[name] = vfile.RecordableMTime(when, c.env.Clock.Now().Unix())
 		}
 	}
 	if err := rows.Err(); err != nil {

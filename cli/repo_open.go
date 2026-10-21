@@ -10,7 +10,9 @@ import (
 
 // RepoOpenCmd opens a checkout in a directory, creating the .fslckout database.
 type RepoOpenCmd struct {
-	Dir string `arg:"" optional:"" help:"Checkout directory (default: current dir)" default:"."`
+	Dir     string   `arg:"" optional:"" help:"Checkout directory (default: current dir)" default:"."`
+	Cone    []string `name:"cone" help:"Make a sparse checkout: materialize and track only this path's subtree (repeatable)"`
+	ConeNot []string `name:"cone-not" help:"Exclude this path's subtree from an enclosing --cone (repeatable)"`
 }
 
 func (c *RepoOpenCmd) Run(g *Globals) error {
@@ -28,6 +30,11 @@ func (c *RepoOpenCmd) Run(g *Globals) error {
 		return fmt.Errorf("checkout already exists: %s", ckoutPath)
 	}
 
+	cone, err := coneFlags(c.Cone, c.ConeNot)
+	if err != nil {
+		return err
+	}
+
 	g.Repo = absRepo
 	r, err := g.OpenRepo()
 	if err != nil {
@@ -35,7 +42,7 @@ func (c *RepoOpenCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	co, err := r.CreateCheckout(c.Dir, libfossil.CheckoutCreateOpts{})
+	co, err := r.CreateCheckout(c.Dir, libfossil.CheckoutCreateOpts{Cone: cone})
 	if err != nil {
 		os.Remove(ckoutPath)
 		return err
@@ -49,6 +56,14 @@ func (c *RepoOpenCmd) Run(g *Globals) error {
 	}
 
 	fmt.Printf("opened checkout in %s (repo: %s)\n", c.Dir, absRepo)
+	if tipRid > 0 && cone != nil {
+		// A sparse open materializes the cone: what it covers is the point.
+		warn := func(message string) { fmt.Printf("WARNING: %s\n", message) }
+		if err := co.Extract(tipRid, libfossil.ExtractOpts{Warn: warn}); err != nil {
+			return err
+		}
+		fmt.Printf("sparse cone: %s\n", cone)
+	}
 	if tipRid > 0 {
 		fmt.Printf("checked out version %s\n", tipHash[:10])
 	} else {

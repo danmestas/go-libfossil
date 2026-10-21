@@ -1,15 +1,19 @@
 package sync
 
-import "github.com/danmestas/go-libfossil/simio"
+import (
+	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/simio"
+)
 
 // CloneOpts configures a clone operation.
 type CloneOpts struct {
-	User     string // Credentials for clone auth (also default admin user)
-	Password string
-	Version  int            // Protocol version (default 3)
-	Env      *simio.Env     // nil defaults to RealEnv
-	Observer Observer       // nil defaults to no-op
-	Buggify  BuggifyChecker // fault injection for DST (nil = no faults)
+	StoreCone *cone.Cone // nil is dense; local policy, never synchronized
+	User      string     // Credentials for clone auth (also default admin user)
+	Password  string
+	Version   int            // Protocol version (default 3)
+	Env       *simio.Env     // nil defaults to RealEnv
+	Observer  Observer       // nil defaults to no-op
+	Buggify   BuggifyChecker // fault injection for DST (nil = no faults)
 	// PullPhantoms, when set, makes Clone fetch the artifacts the clone
 	// rounds left missing with a follow-up pull session, and fail with a
 	// *PhantomStallError if any are still missing after it. That pull
@@ -20,6 +24,8 @@ type CloneOpts struct {
 
 // CloneResult reports what happened during a clone.
 type CloneResult struct {
+	Elided          int // artifacts deliberately absent under the store cone
+	ConeServed      int // replies acknowledging the store cone (sparse-cone §6.3); the rest were filtered locally
 	Rounds          int
 	BlobsRecvd      int
 	ArtifactsLinked int // Manifests crosslinked into event table

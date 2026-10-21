@@ -2,6 +2,7 @@ package cli
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -10,6 +11,8 @@ import (
 	libdb "github.com/danmestas/go-libfossil/db"
 
 	libfossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/internal/checkout"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // Globals holds flags shared by all CLI commands.
@@ -19,7 +22,7 @@ type Globals struct {
 }
 
 // OpenRepo opens a Fossil repository using the handle API.
-// If Repo is empty, it searches for a .fossil file or .fslckout checkout.
+// If Repo is empty, it searches for a .fossil file or checkout database.
 func (g *Globals) OpenRepo() (*libfossil.Repo, error) {
 	if g.Repo == "" {
 		found, err := findRepo()
@@ -50,16 +53,19 @@ func currentUser() string {
 }
 
 // findRepo searches the current directory and its parents for a .fossil file
-// or a .fslckout checkout database that points to a repo.
+// or an authoritative checkout database that points to a repo.
 func findRepo() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	for {
-		ckout := filepath.Join(dir, ".fslckout")
-		if _, err := os.Stat(ckout); err == nil {
+		ckout, err := checkoutDBPath(dir)
+		if err == nil {
 			return repoFromCheckout(ckout)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
 		}
 
 		matches, _ := filepath.Glob(filepath.Join(dir, "*.fossil"))
@@ -157,23 +163,14 @@ func closeWith(done func() error, err *error) {
 
 // checkoutDBPath returns the path of the checkout database in dir.
 func checkoutDBPath(dir string) (string, error) {
-	for _, name := range []string{".fslckout", "_FOSSIL_"} {
-		path := filepath.Join(dir, name)
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("no checkout found in %s (run 'fossil repo open' first)", dir)
+	return checkout.FindCheckoutDB(simio.OSStorage{}, dir, false)
 }
 
-// openCheckout opens the .fslckout database in the given directory.
+// openCheckout opens the authoritative checkout database in the given directory.
 func openCheckout(dir string) (*sql.DB, error) {
-	ckoutPath := filepath.Join(dir, ".fslckout")
-	if _, err := os.Stat(ckoutPath); err != nil {
-		ckoutPath = filepath.Join(dir, "_FOSSIL_")
-		if _, err := os.Stat(ckoutPath); err != nil {
-			return nil, fmt.Errorf("no checkout found in %s (run 'fossil repo open' first)", dir)
-		}
+	ckoutPath, err := checkoutDBPath(dir)
+	if err != nil {
+		return nil, err
 	}
 	return libdb.OpenSQL(ckoutPath, libdb.OpenConfig{}, nil)
 }

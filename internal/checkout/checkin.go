@@ -87,7 +87,7 @@ type vfileCommitEntry struct {
 	origname string // prior pathname if renamed, else empty
 	deleted  bool
 	rid      int64
-	isexe    bool
+	perm     filePerm // the permission vfile records
 }
 
 // collectVFileEntries reads vfile for all entries of the given version and
@@ -99,7 +99,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 	deletedFiles []string,
 	err error,
 ) {
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.managedRows(vid)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("checkout.Commit: %w", err)
 	}
@@ -111,7 +111,7 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 			origname: r.RenamedFrom(),
 			deleted:  r.IsRemoved(),
 			rid:      r.RID,
-			isexe:    r.IsExe > 0,
+			perm:     recordedPerm(r.IsExe, r.IsLink),
 		}
 		if r.IsRemoved() {
 			deletedFiles = append(deletedFiles, r.Pathname)
@@ -124,18 +124,15 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 
 // buildCommitFiles constructs the complete file list for a new checkin by
 // starting from the parent manifest, applying vfile changes (modified/deleted),
-// and loading unchanged file content from the repo.
-func (c *Checkout) buildCommitFiles(
-	parentRID libfossil.FslID,
-	vfEntries map[string]vfileCommitEntry,
-	changedFiles []string,
-	deletedFiles []string,
-	shouldInclude func(string) bool,
-) ([]manifest.File, error) {
+// and loading unchanged file content from the repo. Record-only changes
+// outside a sparse cone are applied only by a full commit.
+func (c *Checkout) buildCommitFiles(in commitInputs) ([]manifest.File, error) {
+	parentRID, vfEntries, shouldInclude := in.parent, in.entries, in.include
+	changedFiles, deletedFiles := in.changed, in.deleted
 	var parentFiles []manifest.FileEntry
 	if parentRID != 0 {
 		var err error
-		parentFiles, err = manifest.ListFiles(c.repo, parentRID)
+		parentFiles, err = c.commitBaseline(parentRID, !in.partial)
 		if err != nil {
 			return nil, fmt.Errorf("checkout.Commit: list parent files: %w", err)
 		}
@@ -163,6 +160,11 @@ func (c *Checkout) buildCommitFiles(
 		}
 	}
 
+	disk, err := c.newDiskView()
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+
 	// 2. Update changed files with new content from disk
 	loadedFromDisk := make(map[string]bool, len(changedFiles))
 	for _, name := range changedFiles {
@@ -170,13 +172,9 @@ func (c *Checkout) buildCommitFiles(
 			continue
 		}
 
-		fullPath, err := c.safePath(name)
+		fileData, err := c.readCommitFile(disk, name)
 		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
-		}
-		fileData, err := c.env.Storage.ReadFile(fullPath)
-		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: read %s: %w", name, err)
+			return nil, err
 		}
 
 		perm := ""
@@ -184,10 +182,10 @@ func (c *Checkout) buildCommitFiles(
 			perm = existing.Perm
 		}
 
-		// The executable marker is re-derived from the live on-disk mode by
-		// restatCommitPerms below, for every included non-symlink file (not
-		// only ones change scanning flagged) — so permission is decided
-		// later, from the filesystem, rather than from vfile.isexe here.
+		// The permission is re-derived from the live on-disk mode by
+		// restatCommitPerms below, for every included file (not only ones
+		// change scanning flagged) — so permission is decided later, from
+		// the filesystem, rather than from vfile.isexe here.
 		fileMap[name] = manifest.File{
 			Name:    name,
 			Content: fileData,
@@ -213,68 +211,16 @@ func (c *Checkout) buildCommitFiles(
 			continue
 		}
 
-		// A tracked file this commit is scoped to (shouldInclude) but that
-		// is missing from disk cannot be silently carried forward with its
-		// stale content — that would record a commit claiming content that
-		// no longer exists (issue #79). A file outside this commit's scope
-		// (relevant only for an explicit Enqueue) is left untouched exactly
-		// as before: canonical Fossil only fails on a missing file that is
-		// actually part of the commit being made.
-		//
-		// Only files with a live vfile row are checked — matching
-		// restatCommitPerms and canonical Fossil's own vfile-driven manifest
-		// loop. A name present only in the parent manifest (no vfEntries
-		// row) isn't tracked by this checkout's vfile at all; there is
-		// nothing to have "gone missing" from a local scan that never
-		// covered it.
-		if _, hasVFileRow := vfEntries[name]; hasVFileRow && shouldInclude(name) {
-			fullPath, err := c.safePath(name)
-			if err != nil {
-				return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
-			}
-			if _, err := c.env.Storage.Stat(fullPath); err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					return nil, fmt.Errorf(
-						"checkout.Commit: tracked file missing from disk: %s", name,
-					)
-				}
-				return nil, fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
-			}
-		}
-
-		var fileRID int64
-		if ve, ok := vfEntries[name]; ok {
-			fileRID = ve.rid
-		} else if pf, ok := parentFileMap[name]; ok {
-			// File is in parent but not in vfile — look up RID by UUID
-			var rid int64
-			err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid = ?", pf.UUID).Scan(&rid)
-			if err != nil {
-				return nil, fmt.Errorf("checkout.Commit: resolve RID for %s: %w", name, err)
-			}
-			fileRID = rid
-		}
-
-		if fileRID == 0 {
-			return nil, fmt.Errorf("checkout.Commit: no RID for unchanged file %s", name)
-		}
-
-		fileData, err := content.Expand(c.repo.DB(), libfossil.FslID(fileRID))
+		file, err := c.unchangedFile(name, entry, vfEntries, parentFileMap, shouldInclude)
 		if err != nil {
-			return nil, fmt.Errorf("checkout.Commit: expand %s: %w", name, err)
+			return nil, err
 		}
-
-		fileMap[name] = manifest.File{
-			Name:    name,
-			Content: fileData,
-			Perm:    entry.Perm,
-			OldName: entry.OldName,
-		}
+		fileMap[name] = file
 	}
 
 	// 4. Independently re-stat every included file's on-disk executable bit,
 	// belt-and-braces, regardless of whether change scanning flagged it.
-	if err := c.restatCommitPerms(fileMap, vfEntries, shouldInclude); err != nil {
+	if err := c.restatCommitPerms(disk, fileMap, vfEntries, shouldInclude); err != nil {
 		return nil, err
 	}
 
@@ -284,6 +230,88 @@ func (c *Checkout) buildCommitFiles(
 		commitFiles = append(commitFiles, f)
 	}
 	return commitFiles, nil
+}
+
+// unchangedFile is step 3 of buildCommitFiles for one file the commit does
+// not read from disk: its committed content, loaded from the repository, or,
+// outside a sparse checkout's cone, its baseline entry carried by name.
+func (c *Checkout) unchangedFile(
+	name string,
+	entry manifest.File,
+	vfEntries map[string]vfileCommitEntry,
+	parentFileMap map[string]manifest.FileEntry,
+	shouldInclude func(string) bool,
+) (manifest.File, error) {
+	// A tracked file this commit is scoped to (shouldInclude) but that
+	// is missing from disk cannot be silently carried forward with its
+	// stale content — that would record a commit claiming content that
+	// no longer exists (issue #79). A file outside this commit's scope
+	// (relevant only for an explicit Enqueue) is left untouched exactly
+	// as before: canonical Fossil only fails on a missing file that is
+	// actually part of the commit being made.
+	//
+	// Only files with a live vfile row are checked — matching
+	// restatCommitPerms and canonical Fossil's own vfile-driven manifest
+	// loop. A name present only in the parent manifest (no vfEntries
+	// row) isn't tracked by this checkout's vfile at all; there is
+	// nothing to have "gone missing" from a local scan that never
+	// covered it.
+	if _, hasVFileRow := vfEntries[name]; hasVFileRow && shouldInclude(name) {
+		if err := c.requireOnDisk(name); err != nil {
+			return manifest.File{}, err
+		}
+	}
+
+	// A file outside a sparse checkout's cone is the baseline's entry,
+	// carried by its name, never read from disk or re-stored
+	// (draft-fossil-sparse-cone-00 §4.2).
+	if _, managed := vfEntries[name]; !managed && !c.covers(name) {
+		return manifest.File{Name: name, Perm: entry.Perm, UUID: parentFileMap[name].UUID}, nil
+	}
+
+	var fileRID int64
+	if ve, ok := vfEntries[name]; ok {
+		fileRID = ve.rid
+	} else if pf, ok := parentFileMap[name]; ok {
+		// File is in parent but not in vfile — look up RID by UUID
+		var rid int64
+		err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid = ?", pf.UUID).Scan(&rid)
+		if err != nil {
+			return manifest.File{}, fmt.Errorf("checkout.Commit: resolve RID for %s: %w", name, err)
+		}
+		fileRID = rid
+	}
+
+	if fileRID == 0 {
+		return manifest.File{}, fmt.Errorf("checkout.Commit: no RID for unchanged file %s", name)
+	}
+
+	fileData, err := content.Expand(c.repo.DB(), libfossil.FslID(fileRID))
+	if err != nil {
+		return manifest.File{}, fmt.Errorf("checkout.Commit: expand %s: %w", name, err)
+	}
+
+	return manifest.File{
+		Name:    name,
+		Content: fileData,
+		Perm:    entry.Perm,
+		OldName: entry.OldName,
+	}, nil
+}
+
+// requireOnDisk refuses a commit of a tracked file missing from disk.
+func (c *Checkout) requireOnDisk(name string) error {
+	fullPath, err := c.safePath(name)
+	if err != nil {
+		return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+	}
+	if _, err := c.env.Storage.Stat(fullPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("checkout.Commit: tracked file missing from disk: %s", name)
+		}
+		return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
+	}
+	return nil
 }
 
 // applyRenames rewrites fileMap so each renamed file is emitted exactly once,
@@ -354,26 +382,35 @@ func (c *Checkout) applyRenames(
 	}
 }
 
-// restatCommitPerms re-derives each included file's executable permission
-// directly from its live on-disk mode, overriding whatever change scanning
-// captured earlier. This exists because change scanning compares content
-// hashes: a file whose only edit is a chmod has an unchanged hash, so
-// vfile.chnged/isexe can go stale and silently carry forward the wrong
-// permission. Manifest generation must consult the filesystem itself for
-// every file it is about to serialize — mirroring canonical Fossil's
-// belt-and-braces re-stat in src/checkin.c — rather than trust a cached
-// flag a second time.
+// readCommitFile reads name's content for a commit, seen through disk: a
+// symlink seen as itself holds its target's name, as fossil commits it.
+func (c *Checkout) readCommitFile(disk vfile.Disk, name string) ([]byte, error) {
+	fullPath, err := c.safePath(name)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
+	}
+	info, err := disk.Stat(fullPath)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	data, err := disk.Read(fullPath, info)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	return data, nil
+}
+
+// restatCommitPerms re-derives each included file's permission (x, l or
+// none) directly from its live on-disk mode, as fossil's create_manifest
+// does with file_perm, overriding whatever change scanning captured
+// earlier: a scan that trusted an mtime may not have looked at the mode.
 //
 // Only files that actually have a vfile row are considered — matching
 // canonical Fossil, whose manifest loop is driven by a query over vfile
 // (JOIN blob) rather than the union of parent-manifest and vfile names.
-// Files carried forward from the parent manifest but no longer present in
-// the local vfile (should not happen once LoadVFile has run, but is not an
-// invariant this function enforces) are left untouched, since there is no
-// live vfile row to justify a re-stat. Symlinks (Perm == "l") and files not
-// selected for this commit are also left untouched. On Windows,
-// os.FileMode never carries an owner-execute bit, so modeIsExecutable
-// always returns false and this is a no-op.
+// Files not selected for this commit are left untouched. Where permissions
+// are not read from disk (a storage without modes, or Windows), each file
+// takes the permission vfile records, as fossil on Windows does.
 //
 // A file that has gone missing from disk (deleted outside of Unmanage, or
 // otherwise untracked-but-not-told) is skipped, carrying its existing Perm
@@ -386,6 +423,7 @@ func (c *Checkout) applyRenames(
 // (permission denied, I/O fault, ...) is a real problem and still fails
 // the commit.
 func (c *Checkout) restatCommitPerms(
+	disk vfile.Disk,
 	fileMap map[string]manifest.File,
 	vfEntries map[string]vfileCommitEntry,
 	shouldInclude func(string) bool,
@@ -397,13 +435,10 @@ func (c *Checkout) restatCommitPerms(
 		panic("checkout.restatCommitPerms: shouldInclude must not be nil")
 	}
 
-	for name := range vfEntries {
+	for name, ve := range vfEntries {
 		entry, ok := fileMap[name]
 		if !ok {
 			continue // deleted, or otherwise dropped from this commit
-		}
-		if entry.Perm == "l" {
-			continue
 		}
 		if !shouldInclude(name) {
 			continue
@@ -413,22 +448,16 @@ func (c *Checkout) restatCommitPerms(
 		if err != nil {
 			return fmt.Errorf("checkout.Commit: path traversal in %s: %w", name, err)
 		}
-		info, err := c.env.Storage.Stat(fullPath)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
+		var info os.FileInfo
+		if disk.ReadsPerms() {
+			if info, err = disk.Stat(fullPath); err != nil {
+				return fmt.Errorf("checkout.Commit: %w", err)
+			}
+			if info == nil {
 				continue // missing on disk: carry the existing Perm forward unchanged
 			}
-			return fmt.Errorf("checkout.Commit: stat %s: %w", name, err)
 		}
-
-		if modeIsExecutable(info.Mode()) {
-			entry.Perm = "x"
-		} else {
-			entry.Perm = ""
-		}
-		if entry.Perm != "" && entry.Perm != "x" {
-			panic("checkout.restatCommitPerms: re-derived perm must be \"\" or \"x\"")
-		}
+		entry.Perm = diskPerm(disk, info, ve.perm).manifestPerm()
 		fileMap[name] = entry
 	}
 
@@ -538,6 +567,18 @@ func (c *Checkout) finalizeCommit(
 	if _, err := c.db.Exec("DELETE FROM vmerge"); err != nil {
 		return fmt.Errorf("checkout.Commit: clear vmerge: %w", err)
 	}
+	if c.cone != nil {
+		// A partial commit carries the parent's entries outside the cone, so
+		// their pending changes stay pending against the new version.
+		if in.partial {
+			_, err = c.db.Exec("UPDATE sparse_pending SET vid = ? WHERE vid = ?", int64(newRID), int64(in.parent))
+		} else {
+			_, err = c.db.Exec("DELETE FROM sparse_pending")
+		}
+		if err != nil {
+			return fmt.Errorf("checkout.Commit: carry pending outcomes: %w", err)
+		}
+	}
 	c.checkinQueue = nil
 	return nil
 }
@@ -545,16 +586,28 @@ func (c *Checkout) finalizeCommit(
 // Commit creates a new checkin from staged files in the checkout.
 // Returns the new manifest RID and UUID.
 func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
-	if c == nil {
-		panic("checkout.Commit: nil *Checkout")
-	}
+	return c.CommitContext(context.Background(), opts)
+}
 
+// CommitContext is Commit with cancellation carried through publication.
+// It remains local-only: missing parent structure is returned to the caller.
+func (c *Checkout) CommitContext(ctx context.Context, opts CommitOpts) (libfossil.FslID, string, error) {
+	if c == nil || ctx == nil {
+		panic("checkout.CommitContext: checkout and context must be set")
+	}
+	if err := c.RequireCommitContent(ctx); err != nil {
+		return 0, "", err
+	}
 	in, err := c.gatherCommit(opts)
 	if err != nil {
 		return 0, "", err
 	}
 
-	ctx := c.obs.CommitStarted(context.Background(), CommitStart{
+	parents := append([]libfossil.FslID{in.parent}, in.mergeParents...)
+	if err := manifest.RequireParentContent(ctx, c.repo.DB(), parents); err != nil {
+		return 0, "", err
+	}
+	ctx = c.obs.CommitStarted(ctx, CommitStart{
 		FilesEnqueued: in.enqueued,
 		Branch:        opts.Branch,
 		User:          opts.User,
@@ -563,10 +616,7 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 	var result CommitEnd
 	defer func() { c.obs.CommitCompleted(ctx, result) }()
 
-	commitFiles, err := c.buildCommitFiles(
-		in.parent, in.entries, in.changed,
-		in.deleted, in.include,
-	)
+	commitFiles, err := c.buildCommitFiles(in)
 	if err != nil {
 		result.Err = err
 		return 0, "", err
@@ -576,12 +626,14 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 		return 0, "", result.Err
 	}
 
-	newRID, newUUID, err := manifest.Checkin(c.repo, c.checkinOptions(opts, in, commitFiles))
+	newRID, newUUID, err := manifest.CheckinContext(ctx, c.repo, c.checkinOptions(opts, in, commitFiles))
 	if err != nil {
 		result.Err = fmt.Errorf("checkout.Commit: checkin: %w", err)
 		return 0, "", result.Err
 	}
 
+	// Publication is the cancellation boundary: finish local metadata once the
+	// repository has committed rather than report cancellation for a live commit.
 	if err := c.finalizeCommit(in, newRID, newUUID); err != nil {
 		result.Err = err
 		return 0, "", err
@@ -602,6 +654,7 @@ type commitInputs struct {
 	deleted      []string
 	mergeParents []libfossil.FslID
 	include      func(name string) bool // the checkin queue's filter
+	partial      bool                   // the queue selects some files, not all
 	enqueued     int
 }
 
@@ -630,25 +683,25 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 		return in, err
 	}
 
-	selected, err := c.selectedFiles(in.entries)
+	selected, err := c.selectedFiles(in.entries, c.checkinQueue)
 	if err != nil {
 		return in, err
 	}
-	queueActive := selected != nil
-	if queueActive && len(in.mergeParents) > 0 {
+	in.partial = selected != nil
+	if in.partial && len(in.mergeParents) > 0 {
 		return in, errPartialMergeCommit
 	}
 	in.include = func(name string) bool {
-		if !queueActive {
+		if !in.partial {
 			return true
 		}
 		return selected[name]
 	}
 	in.enqueued = len(in.changed)
-	if queueActive {
+	if in.partial {
 		in.enqueued = len(selected)
 	}
-	return in, c.checkCommittable(opts, in, queueActive)
+	return in, c.checkCommittable(opts, in)
 }
 
 // selectedFiles resolves the checkin queue the way fossil's commit resolves
@@ -656,13 +709,13 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 // every tracked file under it when it names a directory, and "." selects
 // everything. It returns nil when every file is selected, and refuses a name
 // that selects nothing, as fossil does ("knows nothing about").
-func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[string]bool, error) {
-	if len(c.checkinQueue) == 0 {
+func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry, queue map[string]bool) (map[string]bool, error) {
+	if len(queue) == 0 {
 		return nil, nil
 	}
-	selected := make(map[string]bool, len(c.checkinQueue))
+	selected := make(map[string]bool, len(queue))
 	var unknown []string
-	for queued := range c.checkinQueue {
+	for queued := range queue {
 		name := path.Clean(filepath.ToSlash(queued))
 		if name == "." {
 			return nil, nil
@@ -678,6 +731,9 @@ func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[strin
 			unknown = append(unknown, queued)
 		}
 	}
+	if err := c.refuseUnreachable("Commit", unknown); err != nil {
+		return nil, err
+	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
 		return nil, fmt.Errorf("checkout.Commit: not tracked: %s", strings.Join(unknown, ", "))
@@ -692,18 +748,25 @@ func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[strin
 // to record (unless opts.AllowEmpty) and one that includes a file still
 // holding conflict markers (unless opts.AllowConflict). A pending merge is
 // something to record even when no file changed.
-func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActive bool) error {
+func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs) error {
 	if !opts.AllowEmpty && len(in.mergeParents) == 0 {
 		changed, err := c.hasSelectedChange(in)
 		if err != nil {
 			return err
 		}
-		if !changed && queueActive {
+		if !changed && in.partial {
 			return fmt.Errorf("%w: none of the selected files have changed", ErrNothingToCommit)
 		}
 		if !changed {
 			return fmt.Errorf("%w: nothing has changed", ErrNothingToCommit)
 		}
+	}
+	unresolved, err := c.unresolvedSparse()
+	if err != nil {
+		return err
+	}
+	if len(unresolved) > 0 {
+		return fmt.Errorf("%w: widen the sparse cone to resolve %s", ErrUnresolvedConflicts, strings.Join(unresolved, ", "))
 	}
 	if opts.AllowConflict {
 		return nil
@@ -711,10 +774,17 @@ func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActiv
 	return c.checkNoConflicts(in)
 }
 
-// hasModeDrift reports whether a selected file's executable bit on disk
-// differs from the checkout's record: a chmod the scan does not record,
-// which the commit picks up (see restatCommitPerms).
+// hasModeDrift reports whether a selected file's permission on disk
+// differs from the checkout's record: a mode change the scan has not
+// recorded, which the commit picks up (see restatCommitPerms).
 func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
+	disk, err := c.newDiskView()
+	if err != nil {
+		return false, fmt.Errorf("checkout.Commit: %w", err)
+	}
+	if !disk.ReadsPerms() {
+		return false, nil
+	}
 	for name, e := range in.entries {
 		if e.deleted || !in.include(name) {
 			continue
@@ -723,14 +793,11 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		info, err := c.env.Storage.Stat(fullPath)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+		info, err := disk.Stat(fullPath)
 		if err != nil {
-			return false, fmt.Errorf("checkout.Commit: stat %s: %w", fullPath, err)
+			return false, fmt.Errorf("checkout.Commit: %w", err)
 		}
-		if info.Mode().IsRegular() && modeIsExecutable(info.Mode()) != e.isexe {
+		if isFileOrLink(info) && diskPerm(disk, info, e.perm) != e.perm {
 			return true, nil
 		}
 	}
@@ -738,8 +805,18 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 }
 
 // hasSelectedChange reports whether a selected file is changed, added,
-// removed or renamed, or has had its executable bit changed on disk.
+// removed or renamed, or has had its executable bit changed on disk. A
+// record-only change outside a sparse cone counts for a full commit only.
 func (c *Checkout) hasSelectedChange(in commitInputs) (bool, error) {
+	if !in.partial {
+		pending, err := c.pendingRows(in.parent)
+		if err != nil {
+			return false, err
+		}
+		if len(pending) > 0 {
+			return true, nil
+		}
+	}
 	for _, name := range in.changed {
 		if in.include(name) {
 			return true, nil
@@ -779,6 +856,30 @@ func (c *Checkout) checkNoConflicts(in commitInputs) error {
 			conflicted = append(conflicted, name)
 		}
 	}
+	if in.partial {
+		return conflictsErr(conflicted)
+	}
+	rows, err := c.coneRows(in.parent, false)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if row.IsRemoved() || !row.ContentChanged() {
+			continue
+		}
+		data, present, err := c.readWorkingFile(row)
+		if err != nil {
+			return err
+		}
+		if present && merge.HasConflictMarkers(data) {
+			conflicted = append(conflicted, row.Pathname)
+		}
+	}
+	return conflictsErr(conflicted)
+}
+
+// conflictsErr refuses a commit of the conflicted files, if any.
+func conflictsErr(conflicted []string) error {
 	if len(conflicted) > 0 {
 		return fmt.Errorf("%w: %s", ErrUnresolvedConflicts, strings.Join(conflicted, ", "))
 	}

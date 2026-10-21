@@ -1,0 +1,3192 @@
+
+
+
+
+Network Working Group                                    D. R. Hipp, Ed.
+Internet-Draft                                                    Fossil
+Intended status: Standards Track                                 S. Beal
+Expires: 19 April 2027                                         libfossil
+                                                              D. Shearer
+                                                         16 October 2026
+
+
+      The Fossil Distributed Version Control System: Sync Protocol
+                     draft-fossil-sync-protocol-00
+
+Abstract
+
+   Fossil repositories store complete project history as content-
+   addressed artifacts.  This document specifies the HTTP sync protocol
+   that replicates those artifacts and unversioned files: framing,
+   authentication, cards, version negotiation, phantom discovery, clone,
+   multi-round continuation, and termination.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 19 April 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 1]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   4
+   2.  Conventions and Terminology . . . . . . . . . . . . . . . . .   4
+   3.  Protocol Operation  . . . . . . . . . . . . . . . . . . . . .   5
+     3.1.  Endpoint State  . . . . . . . . . . . . . . . . . . . . .   5
+     3.2.  Round Structure . . . . . . . . . . . . . . . . . . . . .   7
+       3.2.1.  Round Message Layout  . . . . . . . . . . . . . . . .   8
+     3.3.  Phantom Record Lifecycle  . . . . . . . . . . . . . . . .  10
+     3.4.  The Clone Loop  . . . . . . . . . . . . . . . . . . . . .  11
+     3.5.  Request and Response Pragmas  . . . . . . . . . . . . . .  11
+     3.6.  Cookie Card . . . . . . . . . . . . . . . . . . . . . . .  11
+     3.7.  Termination . . . . . . . . . . . . . . . . . . . . . . .  11
+     3.8.  Client Protocol State Machine . . . . . . . . . . . . . .  12
+     3.9.  Robustness Posture  . . . . . . . . . . . . . . . . . . .  15
+   4.  Transport . . . . . . . . . . . . . . . . . . . . . . . . . .  15
+     4.1.  Message Compression and Media Types . . . . . . . . . . .  16
+     4.2.  Round Structure . . . . . . . . . . . . . . . . . . . . .  17
+     4.3.  Cookie Card . . . . . . . . . . . . . . . . . . . . . . .  17
+   5.  Card Format . . . . . . . . . . . . . . . . . . . . . . . . .  17
+     5.1.  Message Structure . . . . . . . . . . . . . . . . . . . .  17
+     5.2.  Card Syntax . . . . . . . . . . . . . . . . . . . . . . .  18
+       5.2.1.  Defined Operators . . . . . . . . . . . . . . . . . .  19
+     5.3.  Comment Lines . . . . . . . . . . . . . . . . . . . . . .  19
+   6.  Authentication  . . . . . . . . . . . . . . . . . . . . . . .  20
+     6.1.  Login Card  . . . . . . . . . . . . . . . . . . . . . . .  20
+     6.2.  Nonce Derivation  . . . . . . . . . . . . . . . . . . . .  20
+     6.3.  Shared Secret . . . . . . . . . . . . . . . . . . . . . .  20
+     6.4.  Signature Computation . . . . . . . . . . . . . . . . . .  20
+     6.5.  Cookie-Login Mode . . . . . . . . . . . . . . . . . . . .  21
+     6.6.  Capability Model  . . . . . . . . . . . . . . . . . . . .  22
+   7.  Content Transfer  . . . . . . . . . . . . . . . . . . . . . .  23
+     7.1.  file Card . . . . . . . . . . . . . . . . . . . . . . . .  23
+     7.2.  cfile Card  . . . . . . . . . . . . . . . . . . . . . . .  23
+     7.3.  uvfile Card . . . . . . . . . . . . . . . . . . . . . . .  23
+     7.4.  Delta Sources and Phantom Creation  . . . . . . . . . . .  25
+     7.5.  Private Content . . . . . . . . . . . . . . . . . . . . .  25
+     7.6.  SHA3-256 Peer-Version Gate  . . . . . . . . . . . . . . .  26
+     7.7.  Hash-Policy Admission . . . . . . . . . . . . . . . . . .  27
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 2]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   8.  Clone . . . . . . . . . . . . . . . . . . . . . . . . . . . .  28
+     8.1.  Clone Protocol Version  . . . . . . . . . . . . . . . . .  28
+     8.2.  Sequence Numbers  . . . . . . . . . . . . . . . . . . . .  28
+     8.3.  First Clone Round . . . . . . . . . . . . . . . . . . . .  30
+     8.4.  Configuration During Clone  . . . . . . . . . . . . . . .  30
+     8.5.  Push, Pull, and Sync  . . . . . . . . . . . . . . . . . .  31
+       8.5.1.  Unversioned-File Synchronisation  . . . . . . . . . .  31
+     8.6.  Announcement and Request Cards  . . . . . . . . . . . . .  33
+       8.6.1.  Derived Branch, Tag, Leaf, Closed, and Current-Trunk
+               Views . . . . . . . . . . . . . . . . . . . . . . . .  33
+     8.7.  Phantom Records . . . . . . . . . . . . . . . . . . . . .  33
+     8.8.  Gimme Eligibility Filters . . . . . . . . . . . . . . . .  33
+     8.9.  Loop Termination  . . . . . . . . . . . . . . . . . . . .  34
+   9.  Pragmas . . . . . . . . . . . . . . . . . . . . . . . . . . .  34
+     9.1.  Version Negotiation . . . . . . . . . . . . . . . . . . .  34
+     9.2.  Unversioned-File Pragmas  . . . . . . . . . . . . . . . .  35
+     9.3.  Configuration Exchange  . . . . . . . . . . . . . . . . .  35
+     9.4.  Commit-Lock Pragmas . . . . . . . . . . . . . . . . . . .  36
+     9.5.  Private-Content and Discovery Pragmas . . . . . . . . . .  37
+   10. Error Handling  . . . . . . . . . . . . . . . . . . . . . . .  38
+     10.1.  Error Card . . . . . . . . . . . . . . . . . . . . . . .  38
+     10.2.  Message Card . . . . . . . . . . . . . . . . . . . . . .  39
+   11. Security Considerations . . . . . . . . . . . . . . . . . . .  40
+     11.1.  Credential Replay  . . . . . . . . . . . . . . . . . . .  40
+     11.2.  Private-Content Exposure and Protected Transport . . . .  41
+     11.3.  Line-Length Bounds and Resource Exhaustion . . . . . . .  41
+     11.4.  SHA3-256 Downgrade Prevention  . . . . . . . . . . . . .  41
+   12. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  41
+   13. References  . . . . . . . . . . . . . . . . . . . . . . . . .  43
+     13.1.  Normative References . . . . . . . . . . . . . . . . . .  44
+     13.2.  Informative References . . . . . . . . . . . . . . . . .  45
+   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  45
+     A.1.  Basic Push/Pull Convergence (Two Rounds)  . . . . . . . .  45
+     A.2.  SHA3 Version Gate (Clone Reply) . . . . . . . . . . . . .  47
+     A.3.  Private Content Suppression . . . . . . . . . . . . . . .  47
+     A.4.  Comment Lines and Clock-Skew Timestamp  . . . . . . . . .  50
+     A.5.  Authentication Example  . . . . . . . . . . . . . . . . .  50
+   Appendix B.  ABNF . . . . . . . . . . . . . . . . . . . . . . . .  51
+   Appendix C.  Anomalies  . . . . . . . . . . . . . . . . . . . . .  55
+   Appendix D.  Changes in This Revision . . . . . . . . . . . . . .  55
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  57
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 3]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+1.  Introduction
+
+   Fossil repositories hold grow-only sets of hash-named artifacts
+   [FossilArtifact].  Sync exchanges the set difference, converging on
+   the union independent of direction or timing [GSET].  A known hash
+   without content is a phantom; rounds announce artifacts, create and
+   request phantoms, transfer content, and repeat while Section 3.7
+   requires progress.  The client drives HTTP request/reply rounds; the
+   server retains no per-session state.
+
+   This document specifies transport, authentication, artifact and
+   unversioned-file transfer, clone, configuration framing, and
+   termination.  Table-group row serialization for /user, /reportfmt,
+   /shun, /concealed, and /subscriber is out of scope.  Implementations
+   MAY omit those table groups; config /GROUPNAME SIZE framing alone
+   does not define their payloads.  Sections 3–11 are normative;
+   Section 11 contains the security requirements.
+
+   Omitting the optional /shun table group omits its configuration
+   exchange, not the repository-local shun set defined in Section 3.3.
+   That set exists independently for the request and admission rules in
+   Sections 3.3 and 7.7.
+
+2.  Conventions and Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   Artifact, hash, manifest, cluster: :: As defined in [FossilArtifact].
+
+   Phantom: :: A known artifact hash whose content is absent;
+   Section 3.3 governs it.
+
+   Branch, tag, closed marker, leaf, current-trunk: :: Views derived
+   after artifact parsing and crosslink/tag-state processing.  T syntax
+   is in [FossilArtifact]; derivation, including current-trunk using the
+   local main-branch setting, is in [FossilRepoState].  Sync transports
+   only their source artifacts.
+
+   Unversioned file: :: Repository-local state outside the content-
+   addressed artifact set, synchronized using uv-hash, uvigot, uvgimme,
+   and uvfile; unversioned files are not artifacts and do not
+   participate in the artifact hash-policy or tag-state rules.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 4]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Card: :: An LF-terminated operator line, optionally followed by a
+   byte-counted payload.
+
+   Client; server; round: :: The client initiates and carries session
+   state.  The server independently processes each request.  One
+   request/reply pair is a round; body exhaustion ends it without a
+   terminal card.
+
+   servercode; projectcode: :: A repository instance identifier and
+   shared project identifier.  Servercode is informational.  A push or
+   pull PROJECTCODE mismatch MUST be refused.
+
+   pragma: ::: A pragma directive.  Unknown pragma names are silently
+   ignored.  For an unknown non-pragma operator, the server emits error
+   bad command and continues its request-card loop; the client stops its
+   current reply-card loop, then evaluates ordinary post-reply
+   continuation.
+
+   igot; gimme: :: Artifact possession announcement and content request.
+
+   Fossil release integer: :: MAJOR*10000 + MINOR*100 + PATCH; 2.0 is
+   20000.  It is distinct from clone VERSION.
+
+   Clone protocol version: :: The clone VERSION selecting transfer
+   encoding; this document defines version 3 using cfile.
+
+   fossilize encoding: :: The escaping scheme in [FossilArtifact]
+   Section 4.
+
+3.  Protocol Operation
+
+3.1.  Endpoint State
+
+   The client carries the following state; the server carries persistent
+   repository data plus the request-scoped parser, catalog, and
+   transaction state explicitly listed below.
+
+   +===================+============+=================================+
+   | State             | Scope      | Meaning                         |
+   +===================+============+=================================+
+   | projectcode       | persistent | Required shared identifier      |
+   +-------------------+------------+---------------------------------+
+   | peer version/date | session    | Last server-version; before     |
+   |                   |            | one, VERSION is the client      |
+   |                   |            | release VERSION and DATE/TIME   |
+   |                   |            | are 00000000/000000             |
+   +-------------------+------------+---------------------------------+
+   | phantom set       | persistent | Known hashes lacking content    |
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 5]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   +-------------------+------------+---------------------------------+
+   | clone sequence    | session    | Positive cursor; zero           |
+   | number            |            | permanently bars later clone    |
+   |                   |            | cards                           |
+   +-------------------+------------+---------------------------------+
+   | clone received-   | session    | Raw parser artifact-card count  |
+   | artifact count    |            | during clone; it increments     |
+   |                   |            | after every file, cfile,        |
+   |                   |            | uvfile, or config handler       |
+   |                   |            | invocation                      |
+   +-------------------+------------+---------------------------------+
+   | sync cookie       | persistent | Opaque server token             |
+   +-------------------+------------+---------------------------------+
+   | round number      | session    | Incremented after reply         |
+   |                   |            | processing, immediately before  |
+   |                   |            | Section 3.7                     |
+   +-------------------+------------+---------------------------------+
+   | UV catalog-sent   | server     | Whether the clone handler       |
+   | flag              | request    | emitted its immediate catalog   |
+   |                   |            | in the current request          |
+   +-------------------+------------+---------------------------------+
+   | UV send table     | session    | Eligible local non-tombstone    |
+   |                   |            | names and mtimeOnly             |
+   +-------------------+------------+---------------------------------+
+   | UV upload-enabled | session    | Set by uv-push-ok / uv-pull-    |
+   | / pull-only       |            | only                            |
+   +-------------------+------------+---------------------------------+
+   | outbound send     | session    | Single accumulating next-       |
+   | buffer            |            | request buffer                  |
+   +-------------------+------------+---------------------------------+
+   | pending private   | client     | Single-use marker for the next  |
+   | marker            | session    | file/cfile.  The client sets it |
+   |                   | parser;    | on private; the server sets it  |
+   |                   | server     | only when private is            |
+   |                   | request    | authorized.  Handler entry      |
+   |                   | parser     | clears it.  An unconsumed       |
+   |                   |            | client marker survives a normal |
+   |                   |            | reply boundary until consumed   |
+   |                   |            | or session end; a server marker |
+   |                   |            | ends with its current request   |
+   +-------------------+------------+---------------------------------+
+   | new-phantom flag  | round      | An igot created a phantom       |
+   +-------------------+------------+---------------------------------+
+   | content-received  | round      | A file/cfile, including         |
+   | flag              |            | dangling delta, stored bytes    |
+   +-------------------+------------+---------------------------------+
+   | peer-has / peer-  | round      | Hashes announced/sent or        |
+   | lacks             |            | requested by peer               |
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 6]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   +-------------------+------------+---------------------------------+
+   | UV-gimme count    | round      | uvgimme cards emitted in this   |
+   |                   |            | request                         |
+   +-------------------+------------+---------------------------------+
+   | UV-content count  | round      | uvfile cards received in its    |
+   |                   |            | reply                           |
+   +-------------------+------------+---------------------------------+
+   | UV-upload count   | round      | uvfile cards appended to the    |
+   |                   |            | next request buffer             |
+   +-------------------+------------+---------------------------------+
+   | private-igot      | round      | igot HASH 1 cards appended in   |
+   | counter           |            | answer to a gimme               |
+   |                   |            | (Section 8.6); private-         |
+   |                   |            | inventory cards do not count    |
+   +-------------------+------------+---------------------------------+
+
+                                 Table 1
+
+   Only round-scoped entries are reset at round start; they remain until
+   Section 3.7 is evaluated, then are discarded.  Session entries
+   survive boundaries.
+
+   The outbound buffer invariant is: dispatch current bytes; reset
+   exactly once to begin constructing the next request; seed client-
+   version and fixed pull/push operation cards; for later seeded rounds,
+   append stored state cookie immediately afterward.  In the initial
+   non-clone request, applicable client-url and req-links cards precede
+   the stored cookie after the operation.  Process the reply and append
+   responsive content, UV cards, and an eligible clone reissue; append
+   uvgimme while processing each qualifying uvigot, then remaining igot,
+   gimme, and randomness; dispatch without another reset.  Clone reissue
+   is reply-dependent, not fixed preamble.  File-send and delta-send
+   counts in Section 3.7(b) count content appended during this reply-
+   processing window and clear with the next reset.
+
+3.2.  Round Structure
+
+   Every request MUST contain pragma client-version.  It MUST precede
+   content-requesting cards so the server can gate SHA3 at handler time.
+   Exceptions affecting the beginning are: a body login precedes the
+   nonce-covered body; initial private sync places send-private before
+   client-version, later rounds place it after.  The first round-trip of
+   a modern clone suppresses both body and HTTP cookie login.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 7]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Push, pull, and sync requests carry push, pull, or both each round.
+   Modern clone starts with clone 3 1; later clone reissue requires both
+   a well-formed push in the just-received reply and a positive recorded
+   clone sequence.  Cleanup after zero has no operation card.  After a
+   matched message pull only *, Section 10.2 governs operation
+   suppression.
+
+   Requests MAY also contain eligible gimme; responsive or pushed file/
+   cfile; igot; configuration and UV cards; returned state cookie; and
+   MUST end with randomness comment(s).  Ordinary completed replies MAY
+   contain responding pragmas, repository push/pull, igot, requested
+   content, gimme, UV cards, clone sequence, messages/errors, and end
+   with the timestamp/error-count comment.  Pre-dispatch and fail-fast
+   server replies need not contain that comment.
+
+   Process reply cards in order:
+
+for each card:
+  push/pull: record peer identifiers and project code; do not change operation
+  igot: apply Section 3.3
+  file/cfile: apply Section 7; set content-received only when it
+              stores content or creates a dangling-delta source phantom
+  gimme: add peer-lacks; if push remains enabled: append held content
+         to next request when policy permits, or igot HASH 1 for
+         private content outside private sync when Section 8.6 permits
+  uvigot: apply the server-to-client Unversioned-File
+          Synchronisation state machine
+  uvgimme: wrong direction; apply Section 5.2
+  uvfile: apply Section 7.3 and the Unversioned-File
+          Synchronisation state machine
+  clone_seqno N: if N is decimal, record N; otherwise leave it unchanged
+  error: apply Section 10.1
+  cookie: replace stored cookie
+  #...: apply Section 5.3
+  otherwise: apply the owning card rule
+increment round number; evaluate Section 3.7; only then discard round state
+
+3.2.1.  Round Message Layout
+
+    +================+================================================+
+    | Request card   | Presence/order                                 |
+    +================+================================================+
+    | body login     | Absent in first clone; otherwise first body    |
+    |                | card when named body authentication applies    |
+    +----------------+------------------------------------------------+
+    | send-private   | Before client-version initially; after it      |
+    |                | later                                          |
+    +----------------+------------------------------------------------+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 8]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+    | client-version | Every request; before content requests         |
+    +----------------+------------------------------------------------+
+    | fixed push/    | Required as above; absent in clone cleanup and |
+    | pull operation | post-pure-push suppression                     |
+    +----------------+------------------------------------------------+
+    | clone 3 NEXT   | Reply-dependent; append during reply           |
+    | reissue        | processing as Section 3.1 specifies, after     |
+    |                | seeded request content and before dispatch     |
+    +----------------+------------------------------------------------+
+    | state cookie   | Later seeded requests: immediately after fixed |
+    | TEXT           | operation, or after client-version if no fixed |
+    |                | operation.  Initial non-clone request: after   |
+    |                | any applicable client-url and req-links cards. |
+    +----------------+------------------------------------------------+
+    | gimme; file/   | As applicable                                  |
+    | cfile; config/ |                                                |
+    | UV             |                                                |
+    +----------------+------------------------------------------------+
+    | igot           | As applicable; never applicable during clone   |
+    |                | (Section 8.2)                                  |
+    +----------------+------------------------------------------------+
+    | # randomness   | Every request, last                            |
+    +----------------+------------------------------------------------+
+
+                                  Table 2
+
+   Cookie-login instead places login in HTTP Cookie: x-f-l-c= and leaves
+   no body login.  The first clone sends neither body nor cookie login.
+   State cookie TEXT is independent.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 9]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+          +====================+================================+
+          | Reply card         | Presence/order                 |
+          +====================+================================+
+          | pragmas            | As applicable; server-version  |
+          |                    | precedes clone-specific cards  |
+          +--------------------+--------------------------------+
+          | push/pull, igot,   | As applicable                  |
+          | content, gimme, UV |                                |
+          +--------------------+--------------------------------+
+          | clone accepting    | zero or more clone cfile cards |
+          | sequence           | and per-artifact errors, then  |
+          |                    | clone_seqno NEXT, then push    |
+          +--------------------+--------------------------------+
+          | clone              | push, then error; no cfile or  |
+          | authorization      | clone_seqno                    |
+          | refusal            |                                |
+          +--------------------+--------------------------------+
+          | closing comment    | Always last                    |
+          +--------------------+--------------------------------+
+
+                                  Table 3
+
+   An SHA3 gate emits a standalone error at its attempted send site; it
+   is not a cfile artifact card and does not increment the client's raw
+   artifact-card count.
+
+3.3.  Phantom Record Lifecycle
+
+   An igot HASH creates a phantom only when HASH is absent and the
+   receiver can obtain it in the current pull, clone, or push-receive
+   direction.  A delta-form file/cfile whose DELTASRC is absent creates
+   a source phantom.
+
+   Each round, peer-has records hashes announced or successfully sent by
+   the peer; peer-lacks records gimme requests.  Newly created phantoms
+   become gimme-eligible.  The repository shun table is a persistent,
+   repository-local set keyed by complete artifact name, distinct from
+   peer-has, peer-lacks, and other round-local state.  Local
+   administration MAY add or remove names.  If /shun configuration
+   exchange is implemented, accepted rows update the same set;
+   Section 9.3 leaves their row serialization out of scope.  Omitting
+   that exchange does not omit the local set, which is empty when no
+   local or exchanged entries supply names.
+
+   The ordinary phantom scan excludes peer-lacks hashes, names in the
+   repository shun table, and private hashes unless private sync is
+   enabled; shun-sha1 does not itself suppress an otherwise eligible
+   gimme.  (Fossil's client discards the peer-lacks it records from a
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 10]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   reply before building the next request, so it may repeat gimme for a
+   hash the peer has just requested.  Receivers already skip a gimme for
+   absent content silently; no further handling is needed.)
+
+   Receiving gimme HASH records peer-lacks.  If content is held and
+   direction and policy permit, send it now or subsequently.  If
+   direction forbids sending, emit neither content nor error and do not
+   defer.  If absent, silently skip.
+
+   Successful storage deletes HASH’s phantom.  For a dangling delta,
+   DELTASRC’s phantom is created, the delta payload for HASH is stored
+   as received, the phantom record for HASH is deleted, and the per-
+   round content-received flag of Section 3.7 is set.  No per-artifact
+   "received" state is recorded: the received-but-unreconstructed
+   condition is represented implicitly by the stored delta payload whose
+   basis remains a phantom, and a receiver suppresses re-requests for
+   HASH solely by removing it from the phantom set.  Reconstructability
+   is derived when the basis arrives, not stored.  Reconstruction
+   becomes possible on demand after recursive basis availability
+   propagates to a fixpoint.
+
+3.4.  The Clone Loop
+
+   Modern clone uses the ordinary dispatch and Section 3.7, with clone 3
+   SEQNO during transfer and operation-less cleanup after sequence zero.
+   Sections 8.1 through 8.4 are authoritative.
+
+3.5.  Request and Response Pragmas
+
+   Pragmas are ordered body cards.  Unknown names MUST be ignored;
+   unknown non-pragma operators follow Section 5.2.  Section 9 is
+   authoritative.
+
+3.6.  Cookie Card
+
+   A server MAY emit cookie TEXT; the client MUST replace its stored
+   value and MAY return it later.  Servers MUST NOT depend on it, MUST
+   tolerate foreign and multiple cookies, and clients need not return
+   one.
+
+3.7.  Termination
+
+   After reply processing and round-number increment, the client MUST
+   issue another round iff:
+
+   *(a)* (file/cfile, including dangling delta, stored content *or* igot
+   created a phantom) *and* the phantom table remains non-empty.
+   Applies to every operation.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 11]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   *(b)* During construction of the next-request buffer while processing
+   this reply, at least one full-content card (file-send count) or delta
+   card (delta-send count) was appended, *or* the UV upload phase is
+   selected.  Section 8.5.1 clears that phase after dry-run, revert, or
+   a completed scan, and preserves it through an output-threshold
+   continuation. uvfile count is not an independent condition.
+
+   *(c)* The post-increment round number is exactly 1 and processing
+   this reply appended at least one igot HASH 1 answering a gimme
+   (Section 8.6, private sync not in effect).  Private-inventory igot
+   cards sent under private sync never satisfy this condition.
+
+   *(d)* Either the current request emitted at least one uvgimme and
+   either its reply contained at least one uvfile or the post-increment
+   round number is less than 3, *or* processing this reply appended at
+   least one uvgimme to the next-request buffer.  The latter condition
+   dispatches that newly appended request; this is a global cycle
+   condition, not a per-NAME retry policy.
+
+   *(e)* The operation is modern clone, none of (a)–(d) fired, and at
+   least one holds: this was the first clone round; this round stored
+   one or more file, cfile, or dangling-delta deliveries; or the
+   recorded sequence remains positive and the clone received-artifact
+   count increased during the round.
+
+   A positive clone sequence alone does not continue a non-advancing
+   session.  Sequence zero bars later clone but does not terminate if
+   another limb requires cleanup.  When continuation holds but clone
+   reissue is barred, send the Section 8.2 cleanup request.
+
+   Remaining phantoms alone MUST NOT continue or cause error.  With no
+   true condition, stop; the server sends no completion card.
+
+3.8.  Client Protocol State Machine
+
+   This state model uses the named-state and carried-state terminology
+   of TCP [RFC9293] and the request/response organization of IMAP
+   [RFC9051].  It restates requirements owned by the controlling
+   sections; where they differ, the controlling rule governs.  The
+   internal round counter starts at zero immediately before the first
+   dispatch and increments only after the reply is consumed.  Its round-
+   zero label is independent of the clone 3 1 sequence argument.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 12]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+          +==============+=====================================+
+          | State        | Meaning                             |
+          +==============+=====================================+
+          | INIT         | Initialized; no round sent          |
+          +--------------+-------------------------------------+
+          | CLONE_ROUND0 | First modern-clone round; no normal |
+          |              | body or cookie login, no config/UV  |
+          |              | hash; received server error ignored |
+          +--------------+-------------------------------------+
+          | EXCHANGE     | Normal authenticated loop           |
+          +--------------+-------------------------------------+
+          | TERMINATED   | No continuation condition           |
+          +--------------+-------------------------------------+
+          | ABORTED      | Fatal failure                       |
+          +--------------+-------------------------------------+
+
+                                 Table 4
+
+                          +------+
+                          | INIT |
+                          +--+---+
+           clone 3 SEQNO   /    \   push / pull / sync
+                          v      \
+                +--------------+  \
+                | CLONE_ROUND0 |   \
+                +------+-------+    \
+              reply;   |            |
+       errors ignored  |            |
+                       v            v
+                     +----------------+ ---.
+                     |    EXCHANGE    |    | any 3.7(a)..(e)
+                     +----------------+ <--'
+                        |          |
+             none       |          | fatal
+                        v          v
+                 +------------+  +---------+
+                 | TERMINATED |  | ABORTED |
+                 +------------+  +---------+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 13]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+    +==============+===============+===================+==============+
+    | From         | Guard         | Action            | To           |
+    +==============+===============+===================+==============+
+    | INIT         | modern clone  | send client-      | CLONE_ROUND0 |
+    |              |               | version, clone 3  |              |
+    |              |               | 1, randomness; no |              |
+    |              |               | normal body or    |              |
+    |              |               | cookie login and  |              |
+    |              |               | no config/UV hash |              |
+    +--------------+---------------+-------------------+--------------+
+    | INIT         | push/pull/    | authenticate;     | EXCHANGE     |
+    |              | sync          | send version and  |              |
+    |              |               | operation         |              |
+    +--------------+---------------+-------------------+--------------+
+    | CLONE_ROUND0 | any server    | record preceding  | EXCHANGE     |
+    |              | error         | project-code push |              |
+    |              |               | when present;     |              |
+    |              |               | ignore error,     |              |
+    |              |               | continue parsing, |              |
+    |              |               | and force second  |              |
+    |              |               | clone round       |              |
+    +--------------+---------------+-------------------+--------------+
+    | CLONE_ROUND0 | completed     | record sequence   | EXCHANGE     |
+    |              | reply without | and continue      |              |
+    |              | error         | ordinary first-   |              |
+    |              |               | round processing  |              |
+    +--------------+---------------+-------------------+--------------+
+    | CLONE_ROUND0 | transport or  | abort             | ABORTED      |
+    |              | process-fatal |                   |              |
+    |              | failure       |                   |              |
+    +--------------+---------------+-------------------+--------------+
+    | EXCHANGE     | any           | send next request | EXCHANGE     |
+    |              | Section 3.7   |                   |              |
+    |              | condition     |                   |              |
+    +--------------+---------------+-------------------+--------------+
+    | EXCHANGE     | none          | stop              | TERMINATED   |
+    +--------------+---------------+-------------------+--------------+
+    | EXCHANGE     | fatal error   | reset partial     | ABORTED      |
+    |              |               | output where      |              |
+    |              |               | required; abort   |              |
+    +--------------+---------------+-------------------+--------------+
+
+                                  Table 5
+
+   Unknown or locally malformed reply cards record a local warning and
+   end only the current reply-card loop.  Effects of the successfully
+   parsed prefix remain, then the client increments the cycle and
+   evaluates Section 3.7; CLONE_ROUND0 therefore still performs its
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 14]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   forced second clone round.  On a server request, an unknown non-
+   pragma operator resets the response, emits error bad command: LINE
+   (Section 5.2), and continues later request cards.  SHA3 refusal is
+   per-artifact at its sender: server-sent error is handled by
+   Section 10.1; client-sent direction-invalid error by Section 7.6.
+
+3.9.  Robustness Posture
+
+   Receiver tolerance is limited to explicitly defined cases: unknown
+   pragmas; the known-pragma argument and visible-surplus tolerance in
+   Section 9; visible surplus tokens on private and igot; one post-
+   payload byte in config that the reference receiver consumes without
+   validation; optional Fossil-whitespace acceptance; foreign cookies;
+   first-clone errors; and invisible tokens beyond the fixed parser
+   vector.  An unknown non-pragma request card produces error bad
+   command and continues; an unknown or locally malformed reply card
+   stops only that reply-card loop before ordinary continuation is
+   evaluated.  This protocol deliberately rejects the receiver-side
+   liberal-acceptance principle associated with TCP [RFC9293]: guessing
+   at malformed input lets implementations diverge.  Fossil tokenization
+   exposes at most six tokens.  Senders MUST NOT emit a seventh token; a
+   receiver conforming to Fossil behavior ignores otherwise invisible
+   seventh-and-later tokens rather than creating another card condition.
+
+4.  Transport
+
+   Sync uses HTTP POST [RFC9110] to the repository URL path unchanged;
+   empty path becomes /. The Fossil reference client emits POST <path>
+   HTTP/1.0.  Clients MUST NOT append /xfer. application/x-fossil and
+   application/x-fossil-debug dispatch to sync regardless of path.  Non-
+   POST requests are redirected home.  Every request has exact Content-
+   Length; sync bodies are nonempty.
+
+   SSH adds X-Fossil-Transport: SSH.  Ordinary Content-Type, Content-
+   Length, User-Agent, Host, Proxy-Authorization, and Authorization:
+   Basic behave normally.
+
+   Every request MUST carry Content-Length.  A reply MAY omit it, in
+   which case Fossil reads the entity through EOF.  Fossil does not
+   treat Transfer-Encoding as a header error: it ignores that field, so
+   encoded or chunked bytes fail only if later body framing or payload
+   handling rejects them.  Fossil parses Content-Length as an integer,
+   but imposes neither a separate 512 MiB entity limit nor a pre-
+   admission guarantee that an artifact or UV row can later fit in a
+   complete entity.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 15]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Follow at most 19 redirects with status 301, 302, 307, or 308; the
+   twentieth is fatal.  Never downgrade HTTPS to HTTP, nor redirect SSH
+   or local-file transports.  Strip one trailing /xfer, if present, from
+   the redirect target, then parse the result as the new base; apply no
+   other path transformation.  For an accepted redirect, Fossil parses
+   the target, refuses an HTTPS-to-HTTP downgrade and targets using SSH
+   or local-file transports, reloads HTTP authorization for the parsed
+   target, and recursively reuses the selected decompressed card body.
+   On that recursive exchange it reconstructs compression, HTTP headers,
+   and the applicable body or cookie login for the parsed target; it
+   does not rerun card selection.  It has no trusted-origin allowlist.
+
+   An accepted redirect is not an acknowledgment of the dispatched
+   request.  The redirect handler reuses the selected request body
+   rather than restoring a pre-dispatch protocol snapshot and
+   reselecting its cards.
+
+   Only HTTP 200 is a non-redirect protocol response; any other status
+   aborts before card parsing.  A missing Content-Type is accepted as
+   compressed application/x-fossil.  If the field is present, Fossil
+   compares the value after Content-Type: case-insensitively by
+   expected-type prefix: an application/x-fossil-debug or application/x-
+   fossil-uncompressed prefix selects uncompressed mode; any
+   application/x-fossil prefix selects compressed mode.  Parameters and
+   other suffixes are accepted by that prefix behavior; another present
+   value is rejected.
+
+   Changing scheme, host, or port does not cause the redirect handler to
+   reset protocol peer state or reselect the cards.  Fossil reconstructs
+   the transport envelope and applicable body or cookie login for the
+   parsed target, and reloads HTTP authorization.
+
+4.1.  Message Compression and Media Types
+
+   application/x-fossil :: All production requests and ordinary replies;
+   body uses the compressed container below.
+
+   application/x-fossil-debug :: Same decompressed content, no outer
+   compression; diagnostics only and MUST NOT be used in production.
+
+   application/x-fossil-uncompressed ::: Clone-protocol-version 3 or
+   greater replies only; this document specifies version 3.  No outer
+   compression is applied because cfile payloads are stored compressed.
+
+   The compressed container is a 4-byte big-endian pre-compression input
+   length followed by a zlib stream [RFC1950]: 2-byte header, DEFLATE
+   body [RFC1951], and 4-byte Adler-32 trailer.  It is neither raw
+   DEFLATE nor gzip.  The sender MUST encode actual input length.  On
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 16]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   malformed zlib, bad Adler-32, or decoded-capacity overflow, Fossil's
+   decompressor retains the original entity buffer; the CGI sync path
+   applies ordinary card processing to that retained buffer and does not
+   issue a separate pre-card-parsing rejection.  Bytes after a
+   successfully decoded zlib stream are ignored.  The advertised length
+   is a capacity, not a decode-success equality check: after a
+   successful decode, the receiver processes the actual decoded byte
+   count and MUST NOT reject solely because it is shorter than that
+   capacity.  The length field is an unsigned 32-bit zlib output-
+   capacity value.  Fossil attempts to resize temporary storage to nOut
+   + 1 and passes nOut to zlib; an advertised 0xffffffff wraps that
+   resize operand, so reception does not guarantee allocation across
+   every advertised value.  This protocol specifies no separate 512 MiB
+   limit.
+
+   Ordinary compression uses zlib default level.  Inline body-login
+   concatenates login and body inputs into one container at DEFLATE
+   level 9; receivers MUST be level-independent.  Stored blobs use the
+   same byte-identical container and are retransmitted verbatim.
+
+4.2.  Round Structure
+
+   A round is one POST/reply and ends at reply-body exhaustion.  No done
+   or end exists; exhaustion is not error.
+
+4.3.  Cookie Card
+
+   cookie TEXT carries one opaque value in either direction solely for
+   the Section 3.6 optimization.
+
+5.  Card Format
+
+5.1.  Message Structure
+
+   Bodies are sequences of LF-terminated lines.  Byte-counted payloads
+   begin immediately after the line LF and may contain LF.  They end
+   only at the declared count.  A body that ends before a payload's
+   declared count is malformed; senders MUST NOT produce one.  A
+   receiver MUST NOT store the partial payload: a server treats the card
+   as a validation failure of its handler (Section 5.2), with the error
+   text malformed file line, malformed cfile line or malformed uvfile
+   line, and a client stops reading the reply at that card, keeps the
+   prefix it has already processed, and continues as Section 10.1
+   describes for a handler content error.  (Fossil instead uses the
+   bytes that are present, and stores a full-content file whose shorter
+   payload still hashes to HASH.)  A cfile sender appends one further LF
+   only when the counted compressed payload does not itself end in LF;
+   reference receivers consume that padding as an empty line. config
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 17]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   uses its specified trailing LF.
+
+5.2.  Card Syntax
+
+   Canonical cards have one SP between tokens, no leading/trailing
+   whitespace, and one LF.  Operators are lowercase ASCII letters,
+   except clone_seqno; fossilized arguments MUST be defossilized.
+
+   Receivers MUST accept canonical form and MAY tokenize runs of SP,
+   HTAB, VT, FF, or CR; LF remains terminator.  Senders MUST emit
+   canonical form.
+
+   Card and comment lines are parsed through LF before payload framing.
+   This protocol imposes no separate maximum line length.
+
+   The reference parser exposes at most six tokens.  A receiver does not
+   reject an otherwise valid six-token card merely because additional
+   tokens are present beyond that visible vector; the surplus is not
+   exposed to its card handler.
+
+   Unknown first token has precedence as unknown operator: server resets
+   partial output and emits an error card whose TEXT is "bad command: "
+   followed by the offending line, then continues parsing later request
+   cards.  As for every error card (Section 10.1), TEXT is fossilized on
+   the wire: the card is "error bad\scommand:\sLINE" with LINE's own
+   bytes escaped, never four SP-separated tokens.  A receiver that finds
+   more than two tokens on an error card does not recognize it as one.
+   Client records a local unknown command: [LINE] warning, emits no
+   outbound error, and stops the current reply-card loop; its processed
+   prefix remains effective and ordinary post-reply continuation is then
+   evaluated.
+
+   For a defined operator, its visible-vector arity/argument rule
+   governs, except that receivers examine only the operator token of
+   private and ignore visible surplus tokens.  An igot receiver accepts
+   a valid HASH with at least two visible tokens: an exact third token 1
+   marks it private, every other third token marks it public, and later
+   visible tokens are ignored.  Canonical senders emit argument-free
+   private and the two Appendix B igot forms.
+
+   There is no single default disposition for malformed defined request
+   cards: the result depends on whether the line fails a dispatch-
+   recognition guard or enters a card handler and fails that handler’s
+   validation.
+
+   If a request line matches no request-dispatch branch—including a
+   defined operator whose visible arity does not satisfy that branch—or
+   a defined non-pragma operator received in the wrong direction, the
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 18]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   server resets accumulated response output, emits error bad command:
+   LINE, and continues with later request cards.  A client-sent error
+   reaches this catch-all path.  That path does not itself roll back
+   earlier request mutations; Section 10.1 governs transaction effects.
+
+   After dispatch enters the file, cfile, or uvfile handler, a
+   validation failure reported by that handler instead resets
+   accumulated response output, emits the handler's fossilized error,
+   increments the request error count, and stops request-card parsing.
+   (Fossil instead URL-encodes the text of these three handler errors,
+   so spaces arrive as "+"; the card remains a single TEXT token, and a
+   receiver that defossilizes it, as Section 10.1 requires, shows the
+   "+" characters.  Senders SHOULD fossilize, as for every other error
+   card.)  Any single-use state consumed at handler entry remains
+   consumed as Section 7.5 specifies.  This path likewise does not
+   itself roll back earlier request mutations.  Duplicate or failed
+   login, invalid clone sequence, invalid config, and authorization
+   failures use their explicit owning rules; Section 10.1 governs their
+   transaction effects.
+
+   On a client reply, an unknown or locally malformed card records a
+   local warning and stops only the current reply-card loop; its
+   successfully processed prefix remains effective, and ordinary post-
+   reply continuation is then evaluated.  The argument-insensitive
+   private marker in Section 7.5 and unknown or wrong-direction pragmas
+   in Section 9 are explicit exceptions.  No "unknown message" text
+   exists.
+
+5.2.1.  Defined Operators
+
+   Defined operators are login, push, pull, cookie, clone, file, cfile,
+   uvfile, private, igot, uvigot, gimme, uvgimme, reqconfig, config,
+   clone_seqno, pragma, error, and message.
+
+5.3.  Comment Lines
+
+   A line beginning # is not dispatched.  Servers silently skip it.
+   Clients likewise skip it, except they recognize:
+
+   # timestamp DATETIME errors N
+
+   DATETIME is exactly 19 bytes YYYY-MM-DDTHH:MM:SS, UTC, with fixed-
+   width zero-padded fields and no fraction/zone.  N is unsigned decimal
+   with no leading zeros except 0.  Senders MUST use this form.
+   Receivers read the first 19 bytes after # timestamp without requiring
+   additional internal validation; DATETIME estimates skew, while N is
+   informational and not a wire error.  N counts the errors the server
+   raised while handling the request; it can exceed the error cards
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 19]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   present, because a reset discards earlier output.  Fossil's server
+   does not count the unknown-operator error, the private-content
+   refusal, or the SHA3 version refusal.  A receiver MUST NOT act on N.
+
+   For pragma req-clusters, a nonempty public-cluster igot run MUST be
+   immediately enclosed by # sending-clusters and # end-of-clusters;
+   emit neither for an empty run.  Receivers ignore both, and pairing
+   has no receive-side semantics.
+
+   Every request ends with implementation-generated random bytes in a #
+   comment, varying the login nonce-covered tail.
+
+6.  Authentication
+
+6.1.  Login Card
+
+   Exactly one login-card mechanism is allowed:
+
+   login USER NONCE SIGNATURE
+
+   USER is fossilized; NONCE and SIGNATURE are exactly 40 lowercase
+   hexadecimal characters.  Duplicate body/header login is fatal: reset
+   partial output and emit error. anonymous, nobody, and SSH are exempt
+   from named authentication.  The first clone sends neither body nor
+   cookie login.
+
+6.2.  Nonce Derivation
+
+   NONCE is SHA-1 [RFC3174] over every decompressed body byte after the
+   body login line’s LF through body end.  In cookie-login mode it
+   covers the body only, not the HTTP header.
+
+6.3.  Shared Secret
+
+shared-secret = SHA1(project-code "/" login-name "/" plaintext-password)
+
+   The result is 40 lowercase hex.  Login name is exactly USER.  This
+   calculation applies when named authentication is constructed after
+   the project code is known.  The initial clone sends no login card and
+   does not use an alternate plaintext-password branch on the wire.
+
+6.4.  Signature Computation
+
+   SIGNATURE = SHA1(NONCE-hex || shared-secret-hex)
+
+   Random comments vary independently generated nonces.  Fossil has no
+   dedicated login replay cache and does not issue a dedicated
+   credential-replay rejection.  A successful named login records the
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 20]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   current user and nonce in process state; when a later content
+   mutation initializes its received-from provenance, that nonce may be
+   inserted into the receipt table, whose nonce column is unique.
+   Login-only or pull-only replay is therefore not rejected by a login
+   replay cache, while a mutation replay can encounter receipt-
+   provenance uniqueness.
+
+   Before parsing cards, the server establishes baseline capabilities
+   from normal session/cookie/HTTP Basic/remote-user machinery; this is
+   the only point at which capability state is reset from scratch.
+   Successful login only unions capabilities with that baseline and
+   cannot remove them; failed login leaves baseline untouched but ends
+   card processing as described below.
+
+   Verification order:
+
+   1.  nobody and anonymous succeed without signature; configured
+       matching remote-user is honored.
+
+   2.  For named users, treat stored credential bytes directly as shared
+       secret and constant-time, case-sensitive compare SHA1(NONCE-
+       hex || stored-bytes) against SIGNATURE.
+
+   3.  Only if that fails and stored credential length is not exactly 40
+       bytes, derive the secret from stored cleartext, name, and server
+       project code; retry without rewriting storage.
+
+   4.  Independently, case-sensitively compare NONCE to SHA-1 of the
+       body tail.  A stored credential of exactly 40 bytes never
+       receives cleartext fallback: for this protocol it is exclusively
+       the direct shared-secret value.  Deployments that need cleartext
+       fallback MUST avoid storing such a credential at exactly 40
+       bytes.
+
+   Either failure keeps HTTP 200, discards staged output, emits error
+   login failed, records failure, and ends card processing: later
+   request cards are not parsed.  The request is not rolled back, and
+   the server still performs the end-of-request steps for any direction
+   an earlier card established (phantom gimme for push, igot inventory
+   for pull) and ends the reply with the timestamp/error-count comment
+   (Section 3.2).  When the login card is first, as Section 3.2 requires
+   of a client, no direction has been established and the reply is the
+   error and that comment alone.
+
+6.5.  Cookie-Login Mode
+
+   Use cookie login iff recorded server fields satisfy:
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 21]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+VERSION >= 22700 AND (DATE > 20250727 OR (DATE == 20250727 AND TIME >= 110500))
+
+   Then the client MUST omit body login and send:
+
+   Cookie: x-f-l-c=login+USER+NONCE+SIGNATURE
+
+   Spaces become +; URL-unsafe bytes in fossilized USER are percent-
+   encoded.  The server URL-decodes and uses the body-login code path.
+   This standard Cookie header is the only login-cookie header; there is
+   no X-Fossil-* equivalent.
+
+   If the gate is false or no server-version has been observed, a
+   request subject to named authentication uses body login.  The
+   exemptions in Section 6.1 use neither form.  Never send cookie login
+   to an ungated peer.  Servers MUST accept body login regardless of
+   gate.  Both forms together violate the one-login invariant.
+
+6.6.  Capability Model
+
+   Server capability letters include Read o for pull and discovery,
+   Write i for push, Clone g, Private x, and Admin a for configuration/
+   user management.  The server checks each card’s required capability
+   and emits error when lacking, except where an owning section
+   specifies silent behavior.  A push card from a principal without
+   Write is refused in one of two forms, and neither ends card
+   processing.  If a pull card was already accepted earlier in the same
+   request, the server MUST NOT reset accumulated output and MUST emit
+   the nonfatal message "pull only - not authorized to push"
+   (fossilized: message pull\sonly\s-\snot\sauthorized\sto\spush), which
+   a client handles as Section 10.2 states.  Otherwise the server resets
+   accumulated output and emits error not authorized to write.  In both
+   forms push is not enabled for the request.  Later cards, including a
+   pull, are still processed until the first file or cfile card: that
+   card is refused with reset output and error not authorized to write,
+   and ends card processing for the request, as a handler validation
+   failure does (Section 5.2).  The end-of-request steps for a direction
+   established earlier, such as the igot inventory for an accepted pull,
+   are still performed (Section 6.4).  A client that sends both cards
+   SHOULD send pull before push, as the reference client does, so that a
+   refused push yields the message form.  Commit-lock acquisition and
+   release are governed solely by Section 9.4’s lock-table rules, not by
+   an additional Write-capability check.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 22]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   A server MAY append further words to the text of any refusal this
+   document gives in the form "not authorized to ...", including the
+   message form above.  Fossil appends " because the 'localauth' setting
+   is enabled" when it refuses a request from the loopback address
+   because that setting requires such requests to log in.  A client MUST
+   recognize a refusal by the text this document gives at the start of
+   the decoded text, not by the whole text.
+
+7.  Content Transfer
+
+7.1.  file Card
+
+   file HASH SIZE
+   file HASH DELTASRC SIZE
+
+   SIZE counts immediately following uncompressed opaque bytes.  Full
+   form carries full artifact; delta form carries [FossilDelta] against
+   DELTASRC.  No trailing separator follows.  Push/pull use file; clone
+   3 server transfer does not.
+
+7.2.  cfile Card
+
+   cfile HASH USIZE CSIZE
+   cfile HASH DELTASRC USIZE CSIZE
+
+   CSIZE alone frames the following stored compressed bytes.  USIZE is
+   the sender’s full reconstructed artifact size, parsed syntactically
+   but not transfer-layer validated; in delta form it is not delta size.
+   Payload is the repository’s stored compressed full artifact or stored
+   compressed delta, retransmitted verbatim.  Clone 3 uses cfile without
+   size threshold, pragma, or capability negotiation; push/pull use
+   file.
+
+7.3.  uvfile Card
+
+   uvfile NAME MTIME HASH SIZE FLAGS
+
+   NAME is fossilized; MTIME is a nonnegative signed-64-bit decimal Unix
+   second.  The 0..253402300799 subset renders as the exact 19-byte UTC
+   timestamp 1970-01-01T00:00:00 through 9999-12-31T23:59:59; this
+   timestamp-renderability bound does not restrict uvfile reception.
+   HASH is content hash or -; SIZE describes current content; FLAGS is
+   non-negative decimal. 0x0001 marks deletion metadata; 0x0004 means
+   omitted content.  Senders MUST clear all reserved bits.  Receivers
+   reject negative FLAGS and ignore reserved bits completely (2 equals
+   0; 6 or 20 equals 4).
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 23]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   The canonical sender emits deletion as HASH -, SIZE 0, and FLAGS with
+   0x0001 set.  On reception, HASH - deletes when SIZE is zero or either
+   0x0001 or 0x0004 suppresses payload/hash processing.  Otherwise, a
+   positive SIZE supplies exactly SIZE bytes; verification against HASH
+   - fails, so the receiver rejects the card without storing or
+   deleting.
+
+   Immediately before applying every received uvfile, the receiver MUST
+   recompute status 0 through 5 from the then-current local row using
+   Section 8.5.1, steps 1 through 5; it MUST NOT reuse a status or
+   remote-wins decision computed for an earlier uvigot.  Statuses 3
+   through 5 make no local-row change.  Status 2 updates MTIME only.
+   For status 0 or 1, HASH - applies deletion and is a no-op when no row
+   exists; otherwise, the receiver replaces or creates the row using the
+   received metadata and content.  When content is omitted by FLAGS
+   0x0004, or when SIZE is zero, the stored representation has size
+   zero, encoding zero, and NULL content.  These rules also govern
+   omitted-content cards.
+
+   A non-deletion card with SIZE zero and no omitted-content flag
+   carries zero payload bytes.  Fossil treats it as null content and
+   does not verify HASH against a zero-byte digest before applying the
+   normal unversioned status and storage path; a declared HASH can
+   therefore be stored with NULL content.
+
+   uvigot NAME MTIME HASH SIZE is a server-to-client state announcement;
+   uvgimme NAME is a client-to-server request.  Server receipt of
+   client-sent UV changes requires UV Write permission; unauthorized
+   receipt is error.  A client receiving server-sent uvfile applies the
+   permitted update without a client-side UV Write check.  Accepted
+   changes invalidate cached catalog hash.  On a syntactically valid
+   server-received uvgimme NAME from a requester with Read permission,
+   the server MUST look up NAME.  Without Read permission, the server
+   emits neither content nor error for the card, as for a gimme whose
+   direction forbids sending (Section 3.3); the catalog is withheld from
+   the same requester (Section 9.2).  For this check, Clone permission
+   implies Read.  If NAME is absent, it emits no card.  If the named
+   HASH is SHA3-256 and the remote version is below 20000, it emits the
+   SHA3-version error and no UV card.  Otherwise, if the response has
+   already reached its ordinary output cap, a non-tombstone emits uvigot
+   NAME MTIME HASH SIZE, which causes a later request.  A tombstone
+   instead emits uvigot NAME MTIME SIZE with an empty HASH field; this
+   malformed short line is not accepted as uvigot.  Without the cap, the
+   server emits a full uvfile NAME MTIME HASH SIZE FLAGS with FLAGS 0,
+   or a tombstone with HASH -, SIZE 0, and FLAGS 1.  This request reads
+   server state: it requires Read permission, as the catalog does, and
+   has no UV write requirement.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 24]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+7.4.  Delta Sources and Phantom Creation
+
+   If HASH already names a locally verified artifact, the receiver
+   consumes and ignores the duplicate card's payload and MUST NOT
+   replace or downgrade the verified target.  For a delta-form file or
+   cfile, Fossil resolves or creates the DELTASRC record before its
+   storage operation detects the duplicate, so an absent DELTASRC is
+   left behind as a phantom and is requested by a later gimme; the card
+   counts as a dangling delta for the content-received flag of
+   Section 3.7.  A receiver MAY check HASH first and skip delta-source
+   handling; peers MUST tolerate either behavior.
+
+   For an as-yet-unverified target, missing DELTASRC does not reject
+   content: Fossil retains the delta under HASH, deletes HASH’s phantom,
+   and creates a DELTASRC phantom with the received content card’s
+   private classification.  There is no persistent deferred-verification
+   FIFO or later target-HASH-verification guarantee.  At commit
+   verification, an unavailable record is skipped and the verification
+   bag is cleared; later dephantomization reconstructs and crosslinks
+   dependents without re-queuing their target hashes.
+
+   For a non-clone delta file with a missing basis, the receiver creates
+   the source phantom with the received privacy classification, stores
+   the received delta, removes the target phantom, and leaves the target
+   dangling without immediate reconstruction.  Once its basis is
+   available, Fossil can reconstruct and crosslink the dependent target,
+   but does not promise a later target-name hash verification or an
+   edge-specific recovery transaction.
+
+7.5.  Private Content
+
+   Canonical private has no arguments, but a receiver ignores any
+   visible surplus tokens and treats it as the marker card.  On a client
+   reply, private sets the marker for the next file or cfile; on a
+   server request, it sets the marker only when the sender is authorized
+   for Private.  An unauthorized server-side private emits its private-
+   transfer authorization error and leaves no marker, so the following
+   content card is processed unmarked.  Repetition leaves a set marker;
+   comments, other cards, and uvfile do not consume it.  A client marker
+   persists across replies until consumed or session end; a server
+   marker ends with its current request.
+
+   Private admission is receiver- and card-specific.  Both file and
+   cfile handler entries clear a pending marker.  With an unauthorized
+   marked server file, the server extracts then discards the payload.
+   With an unauthorized marked server cfile, it returns before
+   extracting the compressed payload, leaving those bytes at the parser
+   cursor rather than silently discarding a complete card.  The client
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 25]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   sets its marker upon private receipt; its subsequent content
+   admission follows its client receive handler rather than the server’s
+   unauthorized-marker paths.  A missing DELTASRC for a marked delta
+   creates a private phantom; a missing DELTASRC for an unmarked delta
+   creates a public phantom.  A sender MUST NOT send a delta against a
+   private basis to a peer lacking private authorization; it sends full
+   content instead.  Unauthorized private igot HASH 1 is not error: do
+   not create a phantom, but reclassify an existing HASH artifact or
+   phantom private; record peer possession and continue.  Pulling
+   private content requires successful send-private.
+
+   For a received igot HASH 1, Fossil reclassifies an existing HASH
+   artifact or phantom private before applying the missing-artifact
+   permission check.  If HASH is absent and Private capability is
+   absent, it creates no phantom; a later public igot HASH reclassifies
+   an existing HASH artifact or phantom public.
+
+7.6.  SHA3-256 Peer-Version Gate
+
+   Do not emit file/cfile whose target HASH is SHA3-256, or uvfile with
+   a 64-character lowercase hexadecimal HASH, to a recorded peer VERSION
+   below 20000.  The server records unknown client VERSION as 0 until
+   client-version appears.  The client initializes its recorded server
+   VERSION to its own release VERSION and replaces it when server-
+   version appears.  At each independent send site emit:
+
+   error Fossil\sversion\s2.0\sor\slater\srequired.
+
+   Abandon only that artifact; append the error and continue
+   constructing remaining cards.  Never substitute SHA1.
+
+   Outside the first clone reply, a server-sent error ends the current
+   reply-card loop, preserves the successfully processed prefix,
+   increments the cycle, and evaluates Section 3.7; it terminates the
+   session only when no continuation condition holds.  SYNC_IFABLE is a
+   client-side mode set only by post-commit autopush.  In that mode, a
+   decoded error that matches SQLite's ASCII-case-insensitive LIKE
+   pattern %not authorized to write%, where % matches any sequence of
+   bytes, instead marks autopush failure, increments the error count,
+   and continues reply parsing; it creates no independent continuation
+   condition.  In the first clone reply, the client records a push
+   wherever it is subsequently parsed, treats the error as nonterminal,
+   continues parsing permitted trailing cards, and issues its required
+   second clone request.  A client-sent error is direction-invalid but
+   defined, not unknown: server resets accumulated response, emits error
+   bad command: LINE (Section 5.2), and continues parsing remaining
+   request cards.  A preceding server request-scoped private marker is
+   consumed and cleared by that substituted error handler.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 26]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+7.7.  Hash-Policy Admission
+
+   For a received artifact-transfer card, shun-sha1 applies exactly when
+   the receiving repository's effective hash-policy value at the start
+   of processing that card is the shun-sha1 value defined by
+   [FossilArtifact], Section 7.  No peer state or artifact-transfer card
+   field participates in this predicate.
+
+   Admission applies to the received target HASH, not independently to
+   DELTASRC.  A target is shunned for admission when its complete name
+   is in the repository shun table or when shun-sha1 applies to its SHA1
+   name.  A non-clone file whose target is shunned is consumed and
+   discarded after its payload and pending private marker; it emits no
+   error, does not set content-received, and makes no repository
+   mutation.  A clone file bypasses this combined target check.  For
+   cfile, the private-admission behavior of Section 7.5 runs first; if
+   processing continues, a shunned target is consumed and discarded
+   after its payload even in clone, and its raw parser artifact-card
+   count nevertheless increments after handler invocation.  For an
+   admitted target whose DELTASRC name is in the repository shun table,
+   the receiver does not apply admission independently to that source:
+   content still held locally MAY serve as the delta basis; if the
+   content is unavailable, ordinary dangling-delta handling creates or
+   retains the source phantom, but the Section 3.3 scan excludes it, so
+   it is not requested.  For a non-SHA1 target with SHA1 DELTASRC under
+   shun-sha1, the scan MAY instead emit one gimme; if its arriving
+   source card is then discarded, the stored delta and source phantom
+   remain and no non-delta retry exists.  Section 3.7 permits either
+   unresolved phantom to remain when the session ends.  This is source-
+   faithful behavior, not a recovery path.
+
+   Integrity hashes reconstructed artifact bytes, not wire payload.
+   Pre-storage verification applies to reconstructable non-clone file.
+   Deferred deltas and transfer-layer cfile records whose complete bytes
+   are unavailable during the current verification pass gain no later-
+   verification guarantee from this protocol.  A repository transaction-
+   commit hook MUST recompute each newly stored artifact whose complete
+   bytes are available in that pass and abort commit on mismatch.
+
+   Only successful storage and verification of a SHA3-256-named artifact
+   under auto permanently promotes repository policy to sha3
+   [FossilArtifact].
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 27]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+8.  Clone
+
+   Except when initial private sync places pragma send-private first,
+   clone begins with client-version, clone 3 SEQNO, and randomness;
+   first sequence is 1.  The first clone request sends no login card.  A
+   later clone request uses the applicable normal authentication
+   transport.
+
+8.1.  Clone Protocol Version
+
+   clone VERSION SEQNO
+
+   Only version 3 is interoperable here: server emits storage-order
+   cfile and uses application/x-fossil-uncompressed.  Other values are
+   out of scope.  Clone VERSION is unrelated to release VERSION.
+
+   For an otherwise authorized server clone request with exactly three
+   tokens, an integer VERSION of at least 2, and a digit-only SEQNO
+   whose parsed value is no greater than zero, the server clears
+   accumulated response output, rolls back the request transaction,
+   emits error invalid clone sequence number, and returns without
+   parsing later request cards.  This rule does not assign that fatal
+   outcome to wrong arity, noninteger VERSION, or a SEQNO that fails
+   digit-only recognition or does not yield that condition.  Fossil
+   gives no stable reply to a SEQNO that is not digit-only: it tests an
+   uninitialized value, so builds differ between the fatal error, an
+   empty clone_seqno 0 reply, and serving from an arbitrary RID.  Such a
+   card does not match the clone-card grammar (Appendix B) and is never
+   produced by the client loop of Section 8.2; clients MUST send a
+   positive decimal SEQNO, and neither a client nor a test can rely on
+   any particular reply to another value.
+
+8.2.  Sequence Numbers
+
+   SEQNO is a server blob-table RID.  Iterate from supplied RID through
+   current maximum, silently skipping gaps; clients MUST NOT infer count
+   or size from range.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 28]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   An accepting clone reply emits zero or more clone cfile cards in RID
+   order, interspersed with any per-artifact SHA3 error, then
+   clone_seqno NEXT, push SERVERCODE PROJECTCODE, and final comment.
+   server-version precedes this sequence.  NEXT zero signals exhaustion.
+   A canonical sender uses decimal NEXT.  The client records a digit-
+   only NEXT and does not validate that a positive value advances from
+   the supplied SEQNO; a nondecimal but visible NEXT is a defined
+   receiver-tolerance exception that leaves the recorded sequence
+   unchanged and does not stop parsing later reply cards.  A Clone-
+   authorization refusal resets the response, then emits push SERVERCODE
+   PROJECTCODE immediately before error with no cfile or clone_seqno.
+
+   For positive NEXT, Section 3.7 decides continuation; positive alone
+   is insufficient.  The clone received-artifact count is the client's
+   raw handler count: every file, cfile, uvfile, or config handler
+   invocation increments it, including a verified duplicate or policy-
+   discarded cfile; an error card does not.  A handler-reported client
+   error preserves the successfully processed reply prefix and then
+   follows ordinary cycle, continuation, and commit handling; only an
+   explicit fail-fast path rolls back and starts no further round.  If
+   continuing, reissue clone 3 NEXT iff the just-received reply
+   contained a well-formed push and recorded NEXT is positive; otherwise
+   Section 3.7 may issue operation-less cleanup.
+
+   NEXT zero means exhausted.  It permanently bars clone, pull, and push
+   additions to this clone session, but separately true Section 3.7
+   guards require a cleanup request.  Cleanup MAY carry, in ordinary
+   request order, applicable normal body login (cookie/HTTP login
+   remains outside the body); mandatory client-version; applicable
+   pragmas; remaining-work reqconfig, gimme, or uvgimme; returned state
+   cookie; and trailing randomness.  No operation card is allowed.  In
+   that directionless cleanup, a gimme is recorded but MUST produce
+   neither file/cfile nor error: the server has no pull direction and
+   the client has no push enablement.  Any still-unresolved phantom
+   therefore remains unresolved when cleanup terminates.
+
+   The recorded sequence persists until overwritten.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 29]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+SEQNO := 1
+first request := [send-private if requested];
+                 client-version; clone 3 1; randomness
+loop:
+  send; process reply in order; remember whether well-formed push occurred
+  if first clone round and error: record any preceding push,
+     ignore error and continue parsing;
+     the second clone round is mandatory
+  if clone_seqno NEXT is decimal: SEQNO := NEXT
+  evaluate Section 3.7
+  if continue and push-seen and SEQNO>0: next includes clone 3 SEQNO
+  else if continue: next is operation-less cleanup
+  else stop
+
+   Clone rounds carry no push direction (Section 8.5), so a server
+   creates no phantoms from, and takes no other action on, client igot
+   cards received in a clone session; the accepting reply is driven
+   solely by the sequence cursor.  The Section 3.2 permission for
+   request igot is therefore never applicable to clone rounds: a client
+   SHOULD NOT announce held artifacts during clone transfer or cleanup
+   rounds, and the reference client emits none.  A server MUST accept
+   and ignore igot cards received without push enablement.
+
+8.3.  First Clone Round
+
+   The first request sends no normal login card.  It uses client-
+   version, clone 3 1, and randomness; if private sync is requested,
+   pragma send-private precedes client-version.  An unauthorized send-
+   private appends its own non-reset error and parsing continues; Clone
+   authorization is checked independently by the later clone card.  Any
+   server error in this initial clone reply, including a private-
+   transfer, Clone, or SHA3 error, is ignored as an error condition
+   while the client consumes permitted trailing cards, records any push
+   it subsequently receives, retains its initial UV send table without
+   rebuild or requeue, and makes the mandatory second clone request.
+
+8.4.  Configuration During Clone
+
+   Defer all client reqconfig and, when requested, uv-hash until after
+   clone round 0.  This deferral does not remove, rebuild, or requeue
+   the session's pre-seeded UV send table.  Independently, after Clone
+   authorization succeeds, an enabled server UV sync with no catalog yet
+   sent in the current request emits pragma uv-pull-only and the full UV
+   catalog immediately in the clone reply; that clone-specific catalog
+   is not conditional on the deferred client uv-hash.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 30]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+8.5.  Push, Pull, and Sync
+
+   push SERVERCODE PROJECTCODE, pull SERVERCODE PROJECTCODE, or both
+   select direction.  Servercode is informational; project mismatch is
+   fatal.  Pull creates client phantoms from server igot; push creates
+   server phantoms from client igot; gimme obtains content.  Section 3.3
+   governs.
+
+8.5.1.  Unversioned-File Synchronisation
+
+   At session start seed the UV send table with every local row whose
+   hash is non-NULL and mtimeOnly=false; tombstones are excluded.  On
+   the first eligible round send pragma uv-hash HASH exactly once; clone
+   round 0 is ineligible.
+
+   HASH is SHA-1 over one line for every non-tombstone row, sorted by
+   unsigned bytewise NAME bytes (BINARY collation):
+
+   NAME SP YYYY-MM-DD SP HH:MM:SS SP HASH LF
+
+   NAME is stored fossilized name bytes.  Timestamp is the direct SQLite
+   datetime(MTIME,'unixepoch') value passed to printf('%s %s %s\n',
+   name, datetime, hash): it is the 19-byte UTC YYYY-MM-DD SP HH:MM:SS
+   rendering for 0..253402300799, and an empty field when SQLite returns
+   NULL.  HASH is stored lowercase SHA-1 or SHA3-256 bytes.  No CR or
+   trailing whitespace.  Tombstones are excluded from equality
+   detection; when a mismatch causes a catalog response, its full
+   inventory still includes tombstones represented by HASH -.
+
+   If hashes match, server sends no UV catalog.  Otherwise, with Read
+   permission and no catalog yet sent in the current request, it emits
+   uv-push-ok or uv-pull-only, then the *full inventory*, one uvigot
+   NAME MTIME HASH SIZE for every current unversioned entry, including
+   tombstones represented by HASH -. Duplicate suppression is request-
+   local only.
+
+   For each uvigot, compute:
+
+   1.  No local row: status 0.
+
+   2.  Else LOCAL-HASH is stored hash or -; MTIME-CMP compares local/
+       remote mtime; HASH-CMP is bytewise LOCAL-HASH/HASH comparison.
+
+   3.  Equal hashes: status 3+MTIME-CMP (2 older, 3 identical, 4 newer).
+
+   4.  Different hashes and (MTIME-CMP<0 or (MTIME-CMP=0 and HASH-
+       CMP<0)): status 1.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 31]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   5.  Otherwise status 5.
+
+   Equal-time hash lexical order is deterministic tie-breaker.  Revert
+   maps 4→2 and 5→1.  Dry-run suppresses local changes and reply
+   messages.
+
+   Actions:
+
+        +========+===============================================+
+        | Status | Required action                               |
+        +========+===============================================+
+        | 0      | Remote wins; if HASH != -, append one uvgimme |
+        |        | while processing this uvigot; if HASH is -,   |
+        |        | make no local-row change                      |
+        +--------+-----------------------------------------------+
+        | 1      | Remote wins; if content, append one uvgimme   |
+        |        | while processing this uvigot and immediately  |
+        |        | delete the existing local row; if -, store    |
+        |        | mtime and clear hash, size, encoding, content |
+        +--------+-----------------------------------------------+
+        | 2      | Same hash, remote newer: update mtime only    |
+        +--------+-----------------------------------------------+
+        | 3      | Identical                                     |
+        +--------+-----------------------------------------------+
+        | 4      | Local mtime newer: retain send-table row with |
+        |        | mtimeOnly=true if upload allowed              |
+        +--------+-----------------------------------------------+
+        | 5      | Local content/deletion wins: retain or insert |
+        |        | row with mtimeOnly=false if upload allowed    |
+        +--------+-----------------------------------------------+
+
+                                 Table 6
+
+   Afterward, 0–3 remove NAME from send table; 4/5 set markers.  Pull-
+   only removes 4/5 too.
+
+   Each qualifying uvigot with non-- HASH appends one uvgimme NAME
+   during that reply’s processing; there is no persistent per-NAME
+   request table, retry count, or protected old-row retention.  A
+   repeated uvigot is independently recomputed and can append another
+   one-request response.  For remote content wins, Fossil deletes the
+   old local row immediately; a later failed or absent transfer does not
+   restore it.  Section 3.7(d) supplies the global cycle condition.
+
+   At next-request construction, an enabled UV upload phase visits
+   selected send-table rows and removes each row immediately after
+   invoking its send helper, regardless of whether that helper emits a
+   full, mtime-only, or tombstone uvfile, a reference-specific uvigot, a
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 32]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   SHA3 error, or no card.  The reference client emits that uvigot once
+   the request has reached its upload threshold: the well-formed uvigot
+   NAME MTIME HASH SIZE for a row with content, and a malformed short
+   line with an empty HASH field for a tombstone.  Both are a Fossil
+   source defect: uvigot is server-to-client only (Section 7.3), the
+   server answers either with error bad command, and the row's change is
+   not uploaded in that session.  A cleanroom client MUST NOT send
+   uvigot in either form.  Dry-run or revert clears the phase
+   immediately.  Otherwise the client clears the phase when its table
+   scan reaches completion, including an empty table; if the current
+   output exceeds the ordinary threshold, it stops with the phase still
+   selected and Section 3.7(b) dispatches exactly the next continuation.
+   Section 3.7(d) governs the global uvgimme cycle.
+
+8.6.  Announcement and Request Cards
+
+   igot HASH announces public possession; igot HASH 1 private
+   possession; gimme HASH requests content.  Section 3.3 governs.  No
+   ordering constraint exists between igot and gimme.  When private sync
+   is in effect, a client lists its private inventory as igot HASH 1 in
+   every request that carries push, starting with the first, and a
+   server lists its own in every pull reply; no peer date is consulted.
+   When private sync is not in effect, a gimme for content held as
+   private is answered with igot HASH 1 only if the peer's date is
+   2020-04-13 or later; for an earlier or unknown date, send nothing for
+   it.
+
+8.6.1.  Derived Branch, Tag, Leaf, Closed, and Current-Trunk Views
+
+   These views are not wire operations.  After relevant artifacts and
+   bases are stored and crosslinked, derive them per [FossilArtifact]
+   and [FossilRepoState].  Current-trunk also uses each peer’s local
+   main-branch setting, so synchronized peers may differ.  With
+   unresolved phantoms, views cover only available closure and may
+   change later without sync error.
+
+8.7.  Phantom Records
+
+   Section 3.3 is authoritative.
+
+8.8.  Gimme Eligibility Filters
+
+   Apply the peer-lacks, repository-shun-table, and private eligibility
+   filters defined in Section 3.3.  Never persist peer-lacks or other
+   round-local state.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 33]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+8.9.  Loop Termination
+
+   Section 3.7 is authoritative; the stateless server signals no
+   completion.
+
+9.  Pragmas
+
+   pragma NAME [ARGUMENTS] is an ordinary body card.  Unknown names MUST
+   be silently ignored; unlike unknown card operators, no pragma is
+   version-gated at the receiver, and every unrecognized pragma takes
+   that ignore path.  Defined client-to-server names are send-private,
+   send-catalog, client-version, uv-hash, ci-lock, ci-unlock, client-
+   url, req-links, and req-clusters; server-to-client names are server-
+   version, uv-push-ok, uv-pull-only, ci-lock-fail, avoid-delta-
+   manifests, and link.
+
+   A known pragma received in the direction not assigned above is
+   silently ignored before argument parsing, exactly like an unknown
+   pragma, and MUST NOT change receiver state.  A bare pragma has no
+   NAME and falls through to the unknown request-card branch: the server
+   resets accumulated response, emits error bad command: LINE
+   (Section 5.2), continues parsing, and does not itself roll back
+   earlier mutations.  A direction-correct known NAME enters its own
+   handler; there is no generic defined-card malformed outcome.  The
+   extension-pragma production applies only to a NAME outside both
+   defined-name lists in this section; a known NAME MUST NOT fall
+   through to that production regardless of its arguments. send-private,
+   send-catalog, req-links, and req-clusters act despite visible
+   surplus; client-version and server-version act with at least three
+   tokens and parse VERSION with atoi, reading DATE/TIME only with at
+   least five.  A guarded named handler whose predicate fails silently
+   takes no action, emits no error, does not reset response output,
+   continues its card loop, and leaves the transaction for ordinary
+   commit.  The client ci-lock-fail handler has its own exception: on
+   its exact four-token form, a parsed negative MTIME that is earlier
+   than current time invokes fatal error invalid ci-lock-fail time;
+   other time-parse failures remain nonfatal. extension-pragma is
+   reserved for a NAME not in the defined-name lists above; a known NAME
+   never falls through as an extension.
+
+9.1.  Version Negotiation
+
+   pragma client-version VERSION DATE TIME
+
+   VERSION is the release integer.  A full pragma client-version VERSION
+   DATE TIME carries DATE/TIME as YYYYMMDD/HHMMSS integers.  On a full
+   client version, the server replaces request-local peer VERSION, DATE,
+   and TIME and emits full server-version VERSION DATE TIME; before one,
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 34]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   these server peer values are 0, 00000000, and 000000.  A short three-
+   or four-token version pragma updates only VERSION and retains its
+   prior DATE/TIME; a short client-version emits no server-version.  The
+   client applies the same full-versus-short update to received server-
+   version; before one, it records peer VERSION as its own
+   RELEASE_VERSION_NUMBER and DATE/TIME as 00000000/000000.  These
+   values govern the SHA3 gate, the private-content gimme answer of
+   Section 8.6, and the cookie gate.
+
+9.2.  Unversioned-File Pragmas
+
+   uv-hash, catalog response, uv-push-ok, and uv-pull-only obey the
+   Unversioned-File Synchronisation rules.  Client sends hash at most
+   once and not clone round 0.  Matching hash produces no UV response.
+   On a mismatch with Read permission, the server sends exactly one uv-
+   push-ok when the authenticated principal has UV write permission;
+   otherwise it sends exactly one uv-pull-only. uv-push-ok enables
+   client upload; uv-pull-only disables it and causes the state machine
+   to remove local-only status-4/5 entries.  In either case the server
+   sends the full catalog.  Deduplication is request-local.  Canonical
+   uv-hash emission is SHA-1.  The server accepts an artifact-hash,
+   including SHA3-256, as received HASH; a nonmatching accepted value
+   takes the ordinary catalog-mismatch path.
+
+9.3.  Configuration Exchange
+
+   reqconfig NAME requires NAME beginning /. Without Read permission the
+   server silently ignores it.  Clone defers requests.  A client MAY
+   issue multiple reqconfig groups in one request.  If Read is present
+   but /NAME matches no supported group, its group mask is zero and the
+   server emits no config cards; no error occurs.
+
+   Canonical config senders use config GROUPNAME SIZE, exactly SIZE
+   payload bytes, then one mandatory LF.  A Fossil-compatible receiver
+   consumes one byte after the declared payload without checking that it
+   is LF.
+
+   Scalar settings always use config /config SIZE, regardless of
+   requested group.  Payload is:
+
+   MTIME SP QUOTED-NAME SP value SP QUOTED-VALUE
+
+   MTIME is decimal Unix seconds.  Fossil quote encoding surrounds
+   values with ' and doubles internal '; receivers unquote and undouble.
+   A client receiving scalar /config evaluates its setting against the
+   union of all scalar groups it requested for the exchange; it does not
+   need or get per-card group identity.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 35]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Table groups /shun, /user, /reportfmt, /concealed, and /subscriber
+   use config /GROUPNAME SIZE; GROUPNAME remains the response
+   correlation; row serialization is out of scope.
+
+   This document specifies scalar /config push payloads using the same
+   payload and trailing LF.  The reference implementation also emits and
+   accepts authorized /shun, /user, /reportfmt, /concealed, and
+   /subscriber table-group cards using their out-of-scope row
+   serializations.  Only exactly config NAME SIZE with decimal SIZE
+   enters the configuration handler.  Other malformed config forms,
+   including signed or non-decimal SIZE, take the unknown-card path,
+   which resets output, emits error bad command: LINE (Section 5.2),
+   continues parsing, and does not itself roll back earlier mutations.
+   For a recognized card, the server MUST require Admin; otherwise emit
+   error not authorized to push configuration and do not apply.  An
+   authorized, well-formed card is applied to server configuration after
+   the server consumes its SIZE payload bytes and single trailing LF.
+
+   The transfer-hook group contains exactly four server-side hook
+   settings, encoded as scalar /config; their execution and identities
+   are server-local and outside interoperability.
+
+9.4.  Commit-Lock Pragmas
+
+   pragma ci-lock HASH CLIENT-ID has exactly an artifact-hash HASH
+   argument and an opaque fossilized CLIENT-ID argument; the server does
+   not validate that fourth token as a hash name.  On receipt, the
+   server scans all valid ci-lock-* rows.  It deletes a row before any
+   conflict check when its MTIME is at least the configured lock-timeout
+   old or its HASH is no longer a leaf.  It considers only a remaining
+   row named for the requested HASH; locks for other HASH values do not
+   conflict.  If a matching row exists, it preserves that row without
+   refresh or replacement.  If its stored CLIENT-ID differs from the
+   request CLIENT-ID, the server emits pragma ci-lock-fail LOGIN MTIME;
+   if it matches, it emits no lock result.  In either case, a matching
+   live row prevents a new row.  After this processing, whether or not a
+   lock was written, the server emits pragma avoid-delta-manifests when
+   its forbid-delta-manifests setting (default on) is true; when ci-
+   lock-fail is emitted, avoid-delta-manifests follows it.  A ci-lock
+   that fails the handler's argument guard emits neither.
+
+   If no matching live row remains, the server writes ci-lock-HASH with
+   the current server login value, CLIENT-ID, and current MTIME.  It
+   emits no positive lock acknowledgement; the avoid-delta-manifests
+   pragma above is not one.  The transfer dispatcher applies this
+   behavior without a separate Write-capability or named-principal test
+   at this pragma; authentication and operation-card authorization
+   remain governed by their own ordered cards. ci-lock-fail is server-
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 36]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   to-client and contains only the fossilized LOGIN and unsigned-decimal
+   MTIME.  The reference client treats it as a diagnostic for the
+   current checkout, records the failure, and continues reply
+   processing; silence after ci-lock is not a confirmation protocol.
+
+   pragma ci-unlock CLIENT-ID has one hash-name argument.  It emits no
+   reply pragma or error.  The server deletes every ci-lock-* row whose
+   JSON is invalid or whose stored CLIENT-ID equals the argument,
+   without an additional principal-ownership or Write-capability check.
+   The reference client emits 40 lowercase hexadecimal characters for
+   CLIENT-ID.  A client that has a persisted CLIENT-ID but no current
+   check-in lock emits ci-unlock in the next request; because the
+   operation is unacknowledged, it may repeat in later requests.
+
+9.5.  Private-Content and Discovery Pragmas
+
+   send-private enables private sync only with x; otherwise append non-
+   reset error not authorized to sync private content.  Clients repeat
+   it every private round; authorization is idempotent.
+
+   send-catalog unconditionally enables the server's resync state; it
+   has no Read-capability check at pragma processing.  A subsequent
+   read-authorized transfer path requests igot for every eligible
+   holding after the Section 3.3 shun, phantom, private, and peer-has
+   filters; private inventory is separately added only when private sync
+   is enabled.  Without Read, the server emits no inventory.
+
+   req-clusters has no Read-capability check in the reference server and
+   emits eligible public cluster igot announcements, enclosed as
+   Section 5.3 requires.
+
+   req-links is request-local: it permits zero or more pragma link URL
+   ARG MTIME only in the response to that same request; absent it,
+   server MUST emit no links.  URL is fossilized HTTP(S) alternative
+   location for the current repository.  ARG is fossilized opaque server
+   data: defossilize and store verbatim; MUST NOT parse, alter, or echo
+   it.  Client acceptance is session-gated by local share-links mode and
+   additionally requires a parsed HTTP(S) URL and positive Unix-second
+   MTIME; otherwise discard all fields.  An enabled client need not
+   separately remember whether the current request sent req-links.
+   Accepted triples are receiver-local.  This OPTIONAL mechanism is not
+   artifact inventory, graph, delta, or content relationship.
+
+   client-url URL is a request pragma.  Without Write i, the server
+   silently ignores it.  With Write, exact lowercase http:// and
+   https:// forms enter HTTP(S) parsing and can be stored; exact
+   lowercase ssh:// and file: forms are also recognized but are not
+   stored.  Other forms fall through to local-path parsing: an existing
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 37]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   repository path gets protocol file and is not stored; otherwise the
+   server fails fatally as an unknown repository.  An HTTP(S) port
+   consumes its run of decimal digits without range validation; parsing
+   fails only when the first following non-decimal byte is neither / nor
+   end-of-input.  Fossil omits user information and stores an HTTP(S)
+   URL when its parsed host pointer is non-NULL, including an empty
+   host, unless the host matches SQLite's ASCII-case-insensitive LIKE
+   pattern %localhost%, where % matches any sequence of bytes.  Its
+   canonical serializer lowercases and percent-decodes the host;
+   percent-decodes the path; retains no separate fragment delimiter, so
+   # is path text; omits a scheme-default port; and fossilizes output
+   fields.  It splits the query only on &, ignores every field whose
+   name is not the case-sensitive fossil, and, for repeated fossil
+   fields, keeps the last: its value is percent-decoded then fossilized
+   as the sole ?fossil=VALUE query field.  The server stores
+   syncfrom:CANONICAL with value {} and current mtime.  A later req-
+   links response MAY select recent eligible syncfrom:http* entries as
+   link candidates; client-url itself emits no immediate link response.
+   Applicable clients send client-url once before the loop and req-links
+   in every request for which they want links.
+
+   avoid-delta-manifests is a server-to-client pragma with no arguments,
+   sent only in reply to ci-lock (Section 9.4).  It asks the client not
+   to create delta manifests (manifests with a B card, [FossilArtifact])
+   for the commit that requested the lock.  Upon receipt, a client that
+   is about to commit SHOULD write that check-in as a baseline manifest,
+   even if a delta manifest was requested.  The pragma does not change
+   which artifacts the client sends or requests, does not affect
+   artifacts already created, and is not stored in the repository.
+
+10.  Error Handling
+
+10.1.  Error Card
+
+   error TEXT
+
+   TEXT is fossilized and MUST be defossilized.  Outside the first clone
+   reply, an ordinary server error ends the current reply-card loop
+   without alternate encoding/hash retry, records the error, increments
+   the cycle, and then evaluates Section 3.7; the session ends only if
+   that evaluation finds no continuation condition.  The Section 7.6
+   SYNC_IFABLE post-commit-autopush exception instead marks autopush
+   failure, increments the error count, and continues parsing without an
+   independent continuation rule.  Every first-clone error is silently
+   discarded as an error condition but does not terminate parsing: the
+   client consumes permitted trailing cards, records any push it
+   subsequently receives, and attempts the mandatory second clone round.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 38]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Client reply processing preserves the successfully processed prefix
+   of a reply.  Receipt of an ordinary error card commits that prefix
+   and ends only the reply-card loop, after which it increments the
+   cycle and evaluates Section 3.7.  A client-local unknown or card-
+   parse failure records a warning and ends only the reply-card loop;
+   its prefix remains effective, then the client increments the cycle
+   and evaluates Section 3.7, including the forced second clone round.
+   A handler-reported content error that leaves the stored artifacts
+   consistent, such as a malformed card or a refused private file,
+   warns, preserves and commits the processed prefix, and follows
+   ordinary continuation.  An integrity error, a received file or cfile
+   whose reconstructed content does not match its HASH, is an explicit
+   fail-fast path: the client MUST NOT commit the round that received
+   it.  Explicit fail-fast paths roll back transaction-visible current-
+   round state, the processed prefix included, and start no further
+   round.  (Fossil stores the content and detects the mismatch when the
+   round's transaction commits, where it aborts; this paragraph is
+   informative.)  A pending private marker is client session parser
+   state (and server request parser state), not transaction-visible:
+   handler entry clears it before validation; an ordinary reply end
+   leaves an unconsumed client marker set, and a rollback never restores
+   a marker already consumed at handler entry.
+
+   At wrong-project, authorization, duplicate-login, unknown-card, and
+   other reset sites, server discards partial output before error (the
+   push refusal of Section 6.6 has a non-reset message form, and both
+   push-refusal forms and the unknown-card error continue card
+   processing); later authorized cards may still follow where explicitly
+   defined, e.g. clone refusal resets then writes push before error.
+   SHA3 gate and unauthorized send-private are non-reset append sites.
+   Unauthorized marked private content has the receiver- and card-
+   specific behavior in Section 7.5.  Every non-reset append site
+   continues parsing in the same request transaction; prior and later
+   authorized mutations commit at ordinary request exhaustion unless a
+   later fail-fast rollback occurs.  HTTP status remains 200.
+
+   For each request that reaches request-card processing, the server
+   begins one database write transaction.  It returns before opening
+   that transaction for pre-dispatch failures such as a schema-out-of-
+   date response.  It rolls back an opened transaction for the wire-
+   visible fail-fast errors error invalid clone sequence number and
+   error invalid config record.  Other server card-error paths that
+   reset partial output, including error bad command: LINE
+   (Section 5.2), do not by themselves roll back prior request
+   mutations; at ordinary request end, those prior mutations commit.
+
+10.2.  Message Card
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 39]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   message TEXT
+
+   Exactly two visible tokens are required.  Defossilize TEXT.  It is
+   nonfatal.
+
+   If SYNC_PUSH is set and decoded bytes match SQLite GLOB pull only *,
+   case-sensitively, clear SYNC_PUSH for the session and suppress
+   display.  The literal prefix is pull only followed by one ASCII
+   space; * then matches zero or more bytes.  No trimming occurs, so a
+   payload ending immediately after that single ASCII space matches.
+   Otherwise MAY display verbatim and MUST change no state.
+
+   Clearing does not edit the already seeded next-request buffer.
+   Earlier reply cards’ push-derived appends and its seeded push remain
+   in that buffer.  Later cards in the same reply observe cleared
+   SYNC_PUSH; in particular, later gimme MUST NOT append content, while
+   earlier gimme content remains.  If another Section 3.7 condition
+   starts a further round, that round dispatches the retained buffer.
+
+   On the reset/reseed following any such subsequent dispatch, omit push
+   and other SYNC_PUSH-gated versioned cards.  Clearing SYNC_PUSH does
+   not clear SYNC_UNVERSIONED or uvDoPush: uvfile and push-side UV cards
+   remain eligible.  If SYNC_PULL remains, seed pull and continue pull
+   work.  If original intent was pure push, seed no operation or
+   directional versioned content; Section 3.7 alone decides whether that
+   request exists.  A matching text received while SYNC_PUSH is already
+   clear follows the ordinary advisory path.
+
+11.  Security Considerations
+
+   The body-login mechanism sends USER, NONCE, and a calculated
+   SIGNATURE rather than raw password bytes.  HTTP Basic and proxy
+   credentials are transport-layer mechanisms outside that body-login
+   property.  Random comments vary generated nonce-covered tails.  The
+   server maintains no dedicated login replay cache, though a content
+   mutation can persist the login nonce as received-from provenance.
+
+   A sender MUST enforce the 20000 SHA3 gate and MUST NOT truncate,
+   rename, or downgrade SHA3 identifiers.
+
+11.1.  Credential Replay
+
+   Each client-generated request ends with a fresh random comment; when
+   body login is used, that changes its nonce.  The server validates the
+   signature but does not look up a nonce in a dedicated login replay
+   cache, so a byte-for-byte replay with a valid authentication token is
+   not rejected by that cache.  A successful named login can supply the
+   nonce later stored with mutation receipt provenance, whose uniqueness
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 40]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   is distinct from a protocol-level replay decision.
+
+11.2.  Private-Content Exposure and Protected Transport
+
+   The protocol implementation does not impose a transport-scheme guard:
+   plain HTTP can carry authenticated bodies, private artifacts, and
+   cookie login.  Such traffic exposes its contents to readable
+   intermediaries.  Deployments SHOULD use HTTPS, SSH, or an equivalent
+   confidential, integrity-protected, server-authenticated transport.
+
+11.3.  Line-Length Bounds and Resource Exhaustion
+
+   This protocol defines no separate per-line byte limit before LF.
+   Receivers parse a line through its LF; entity and payload limits
+   remain governed by their declared counts and storage policy.
+
+11.4.  SHA3-256 Downgrade Prevention
+
+   SHA3 refusal is explicit; implementations MUST NOT truncate or re-
+   identify SHA3 as SHA1.  See [FossilArtifact] Section 7.
+
+12.  IANA Considerations
+
+   This document requests these application media-type registrations.
+   No port or service-name registration is required.
+
+   application/x-fossil  Type name: application
+
+      Subtype name: x-fossil
+
+      Required parameters: none
+
+      Optional parameters: none
+
+      Encoding considerations: binary; zlib-compressed Fossil sync,
+      arbitrary octets after decompression
+
+      Security considerations: Section 11; may carry authentication
+      material, private artifacts, and repository content
+
+      Interoperability considerations: ordinary requests and non-clone
+      replies per Section 4.1
+
+      Published specification: this document
+
+      Applications that use this media type: Fossil sync clients,
+      servers, and compatible replication tools
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 41]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+      Fragment identifier considerations: none
+
+      Additional information: * Deprecated alias names for this type:
+      none * Magic number(s): none * File extension(s): none * Macintosh
+      file type code(s): none
+
+      Person and email address to contact for further information: Dan
+      Shearer, dan@shearer.org (mailto:dan@shearer.org)
+
+      Intended usage: COMMON
+
+      Restrictions on usage: none
+
+      Author: D.  Richard Hipp, Stephan Beal, Dan Shearer
+
+      Change controller: IETF
+
+   application/x-fossil-debug  Type name: application
+
+      Subtype name: x-fossil-debug
+
+      Required parameters: none
+
+      Optional parameters: none
+
+      Encoding considerations: binary; uncompressed sync with arbitrary
+      payload octets
+
+      Security considerations: Section 11; exposed diagnostic traffic
+      may carry authentication material and repository content, and
+      therefore requires an appropriately protected deployment transport
+
+      Interoperability considerations: decompressed-wire-compatible with
+      application/x-fossil; diagnostics/testing only
+
+      Published specification: this document
+
+      Applications that use this media type: Fossil debugging, test
+      harnesses, and compatible debugging tools
+
+      Fragment identifier considerations: none
+
+      Additional information: * Deprecated alias names for this type:
+      none * Magic number(s): none * File extension(s): none * Macintosh
+      file type code(s): none
+
+      Person and email address to contact for further information: Dan
+      Shearer, dan@shearer.org (mailto:dan@shearer.org)
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 42]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+      Intended usage: LIMITED USE
+
+      Restrictions on usage: debugging and testing only
+
+      Author: D.  Richard Hipp, Stephan Beal, Dan Shearer
+
+      Change controller: IETF
+
+   application/x-fossil-uncompressed  Type name: application
+
+      Subtype name: x-fossil-uncompressed
+
+      Required parameters: none
+
+      Optional parameters: none
+
+      Encoding considerations: binary; uncompressed outer clone reply
+      with arbitrary cfile octets
+
+      Security considerations: Section 11; clone replies carry
+      repository content and authentication-adjacent state
+
+      Interoperability considerations: version-3 clone replies only
+
+      Published specification: this document
+
+      Applications that use this media type: Fossil bootstrap servers,
+      clients, and compatible tools
+
+      Fragment identifier considerations: none
+
+      Additional information: * Deprecated alias names for this type:
+      none * Magic number(s): none * File extension(s): none * Macintosh
+      file type code(s): none
+
+      Person and email address to contact for further information: Dan
+      Shearer, dan@shearer.org (mailto:dan@shearer.org)
+
+      Intended usage: COMMON
+
+      Restrictions on usage: reply media type only; not used for
+      requests
+
+      Author: D.  Richard Hipp, Stephan Beal, Dan Shearer
+
+      Change controller: IETF
+
+13.  References
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 43]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+13.1.  Normative References
+
+   [FossilArtifact]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Artifact Format", Work
+              in Progress, Internet-Draft, draft-fossil-artifact-format-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-artifact-format-00>.
+
+   [FossilDelta]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Delta Format", Work in Progress, Internet-Draft, draft-
+              fossil-delta-format-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-delta-
+              format-00>.
+
+   [FossilRepoState]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Repository State and
+              Check-in Resolution", Work in Progress, Internet-Draft,
+              draft-fossil-repo-state-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-repo-
+              state-00>.
+
+   [RFC1950]  Deutsch, P. and J. Gailly, "ZLIB Compressed Data Format
+              Specification version 3.3", RFC 1950,
+              DOI 10.17487/RFC1950, May 1996,
+              <https://www.rfc-editor.org/rfc/rfc1950>.
+
+   [RFC1951]  Deutsch, P., "DEFLATE Compressed Data Format Specification
+              version 1.3", RFC 1951, DOI 10.17487/RFC1951, May 1996,
+              <https://www.rfc-editor.org/rfc/rfc1951>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC3174]  Eastlake 3rd, D. and P. Jones, "US Secure Hash Algorithm 1
+              (SHA1)", RFC 3174, DOI 10.17487/RFC3174, September 2001,
+              <https://www.rfc-editor.org/rfc/rfc3174>.
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/rfc/rfc5234>.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 44]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+   [RFC9110]  Fielding, R., Ed., Nottingham, M., Ed., and J. Reschke,
+              Ed., "HTTP Semantics", STD 97, RFC 9110,
+              DOI 10.17487/RFC9110, June 2022,
+              <https://www.rfc-editor.org/rfc/rfc9110>.
+
+13.2.  Informative References
+
+   [GSET]     Shapiro, M., Preguica, N., Baquero, C., and M. Zawirski,
+              "A comprehensive study of Convergent and Commutative
+              Replicated Data Types", INRIA RR-7506, January 2011,
+              <https://hal.inria.fr/inria-00555588>.
+
+   [RFC9051]  Melnikov, A., Ed. and B. Leiba, Ed., "Internet Message
+              Access Protocol (IMAP) - Version 4rev2", RFC 9051,
+              DOI 10.17487/RFC9051, August 2021,
+              <https://www.rfc-editor.org/rfc/rfc9051>.
+
+   [RFC9293]  Eddy, W., Ed., "Transmission Control Protocol (TCP)",
+              STD 7, RFC 9293, DOI 10.17487/RFC9293, August 2022,
+              <https://www.rfc-editor.org/rfc/rfc9293>.
+
+Appendix A.  Examples
+
+   fossil-sync fences contain decompressed bodies; http fences include
+   framing.  Binary omissions are described outside fences.  The Fossil
+   reference client emits HTTP/1.0 request lines; Section 4 is
+   normative.
+
+A.1.  Basic Push/Pull Convergence (Two Rounds)
+
+   Repositories share project-code
+   aa87ea41b0bb05ba528f7a3bdba700d7e23d6318.
+
+   *Round 1 request* (application/x-fossil-debug, 471 bytes body):
+
+   pragma client-version 22800 20260311 113146
+   pull da3e69ab0655a7dd2aba2520b2d3302a97c85787 aa87ea41b0bb05ba528f7a3bdba700d7e23d6318
+   push da3e69ab0655a7dd2aba2520b2d3302a97c85787 aa87ea41b0bb05ba528f7a3bdba700d7e23d6318
+   igot 8e0933ed1ef9aa0051d185c8123f0b9ac79865e4b70098b877543fca0092c259
+   igot b1c1b05fea4f52bd90b15fdffd13f5c91dce6505f498eeb79b4952c2ea8d4d15
+   igot c5b2e0ecb779a7616b32553d973bc9c4ae5a07569a2cee18001386da6bd9ae57
+   # F2A895EF75B47B7157664A7FEAC978EFFFDB01C4
+
+   *Round 1 reply* (application/x-fossil-debug, 367 bytes body):
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 45]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   pragma server-version 22800 20260311 113146
+   gimme 8e0933ed1ef9aa0051d185c8123f0b9ac79865e4b70098b877543fca0092c259
+   gimme b1c1b05fea4f52bd90b15fdffd13f5c91dce6505f498eeb79b4952c2ea8d4d15
+   igot 4361252d0f450879dcd2e0b6a42b95ffe8a41d8e948130253ae8eefa7f4b79ea
+   igot f5116517775075ea483901021282ba97eebe5a2b993a47eb78198adc10efe128
+   # timestamp 2026-07-02T18:31:13 errors 0
+
+   The client creates two phantoms.
+
+   *Round 2 request* (1058 bytes body):
+
+   pragma client-version 22800 20260311 113146
+   pull da3e69ab0655a7dd2aba2520b2d3302a97c85787 aa87ea41b0bb05ba528f7a3bdba700d7e23d6318
+   push da3e69ab0655a7dd2aba2520b2d3302a97c85787 aa87ea41b0bb05ba528f7a3bdba700d7e23d6318
+   file 8e0933ed1ef9aa0051d185c8123f0b9ac79865e4b70098b877543fca0092c259 272
+   C client:\sadd\salpha.txt
+   D 2026-07-02T18:30:46.860
+   F alpha.txt b1c1b05fea4f52bd90b15fdffd13f5c91dce6505f498eeb79b4952c2ea8d4d15
+   P c5b2e0ecb779a7616b32553d973bc9c4ae5a07569a2cee18001386da6bd9ae57
+   R 6b3e7488d36fc39ea8093fdea87c3641
+   U drh
+   Z ed00cdc67449c3949587aa83b3fd8a67
+   file b1c1b05fea4f52bd90b15fdffd13f5c91dce6505f498eeb79b4952c2ea8d4d15 26
+   alpha content from client
+   gimme 4361252d0f450879dcd2e0b6a42b95ffe8a41d8e948130253ae8eefa7f4b79ea
+   gimme f5116517775075ea483901021282ba97eebe5a2b993a47eb78198adc10efe128
+   igot 8e0933ed1ef9aa0051d185c8123f0b9ac79865e4b70098b877543fca0092c259
+   igot b1c1b05fea4f52bd90b15fdffd13f5c91dce6505f498eeb79b4952c2ea8d4d15
+   igot c5b2e0ecb779a7616b32553d973bc9c4ae5a07569a2cee18001386da6bd9ae57
+   # F155AB07186D7F394649AB08DB88BD4179159D07
+
+   The first payload is 272 bytes including seven terminating LFs; the
+   second is 26 bytes including its LF.
+
+   *Round 2 reply* (533 bytes body):
+
+   pragma server-version 22800 20260311 113146
+   file 4361252d0f450879dcd2e0b6a42b95ffe8a41d8e948130253ae8eefa7f4b79ea 270
+   C server:\sadd\sbeta.txt
+   D 2026-07-02T18:30:46.907
+   F beta.txt f5116517775075ea483901021282ba97eebe5a2b993a47eb78198adc10efe128
+   P c5b2e0ecb779a7616b32553d973bc9c4ae5a07569a2cee18001386da6bd9ae57
+   R 5aa7ac70dd267efe64fe354554a33895
+   U drh
+   Z 7330b90458172595afd5c246c62c096d
+   file f5116517775075ea483901021282ba97eebe5a2b993a47eb78198adc10efe128 31
+   beta content added server-side
+   # timestamp 2026-07-02T18:31:13 errors 0
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 46]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   The payloads are exactly 270 and 31 bytes.  No Round 3 is needed.  No
+   login appears because anonymous push/pull is allowed; no delta
+   appears; production uses application/x-fossil; 22800 means 2.28.00.
+
+A.2.  SHA3 Version Gate (Clone Reply)
+
+   *Request* (Content-Type: application/x-fossil-debug, Content-Length:
+   97):
+
+   pragma client-version 19999 20260702 182649
+   clone 3 1
+   # 3A8C1D4EE99F1B0782F7C4A67B39D0C512E7F540
+
+   *Response* (HTTP 200, Content-Type: application/x-fossil-
+   uncompressed, Content-Length: 235):
+
+   pragma server-version 22800 20260311 113146
+   error Fossil\sversion\s2.0\sor\slater\srequired.
+   clone_seqno 0
+   push 34302acad64fe2397bd907704dec457899e2f9a3 c85e3efddf993e86e8325d08672ea94bdba6c2c4
+   # timestamp 2026-07-02T18:26:49 errors 0
+
+   Decoded error: Fossil version 2.0 or later required.  No SHA1
+   fallback occurs.  The SHA3 refusal occupies its RID position before
+   clone_seqno and the later push.  A first-round clone client treats
+   this error as nonterminal, continues parsing, records that later
+   project code, and makes the required second clone request.
+
+A.3.  Private Content Suppression
+
+   *Scenario 1 — Natural pull (anonymous): private artifacts absent*
+
+   Request (174-byte body):
+
+   pragma client-version 20028 20260702 183000
+   pull cccccccccccccccccccccccccccccccccccccccc ea2e766b68008b6c3b3ca547df136ded07c7f921
+   # 9B21F7CE5A48D3126FE0B48A0D5C71D3F26AA810
+
+   Response (295-byte body):
+
+   pragma server-version 22800 20260311 113146
+   igot 23813573dea5ec687052a067866751f481e58ef4c478939ac601587a43f50b35
+   igot 2c215398c6ea4e3c0994d41918f632d5208d6a24da3ac894c9d9d167a711f30b
+   igot ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc
+   # timestamp 2026-07-02T18:33:01 errors 0
+
+   *Scenario 2 — Crafted gimme: date-gated private announcement*
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 47]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   Request (245-byte body):
+
+   pragma client-version 20028 20260702 183000
+   pull cccccccccccccccccccccccccccccccccccccccc ea2e766b68008b6c3b3ca547df136ded07c7f921
+   gimme da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091
+   # C7D40B21E5F84A9308B21A5F63C4A9E70152D3B4
+
+   Response (367-byte body):
+
+   pragma server-version 22800 20260311 113146
+   igot da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091 1
+   igot 23813573dea5ec687052a067866751f481e58ef4c478939ac601587a43f50b35
+   igot 2c215398c6ea4e3c0994d41918f632d5208d6a24da3ac894c9d9d167a711f30b
+   igot ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc
+   # timestamp 2026-07-02T18:33:01 errors 0
+
+   *Scenario 3 — Unauthorized send-private*
+
+   This crafted order is not the normative initial private-sync order.
+
+   Request (194-byte body):
+
+   pragma client-version 20028 20260702 183000
+   pragma send-private
+   pull cccccccccccccccccccccccccccccccccccccccc ea2e766b68008b6c3b3ca547df136ded07c7f921
+   # 6E1A97F2B4D08C51A73F0592E4C68B10D97AC531
+
+   Response (345-byte body):
+
+   pragma server-version 22800 20260311 113146
+   error not\sauthorized\sto\ssync\sprivate\scontent
+   igot 23813573dea5ec687052a067866751f481e58ef4c478939ac601587a43f50b35
+   igot 2c215398c6ea4e3c0994d41918f632d5208d6a24da3ac894c9d9d167a711f30b
+   igot ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc
+   # timestamp 2026-07-02T18:33:01 errors 0
+
+   *Scenario 4 — Authorized private pull*
+
+   Round 1 request (455 bytes total):
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 48]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   POST / HTTP/1.0
+   Host: 127.0.0.1:9872
+   User-Agent: Fossil/2.28 (2026-03-11 11:31:46 [52445a27f1])
+   Content-Type: application/x-fossil-debug
+   Content-Length: 291
+
+   login privuser ee71329ef84fb77b428c6f626ad0103a426e0652 c3ee0be781c9ebcfc6e24756cbb75e6319ca255b
+   pragma send-private
+   pragma client-version 22800 20260311 113146
+   pull 3921d47b51aad4027faac6467b4a87b4e7951c64 ea2e766b68008b6c3b3ca547df136ded07c7f921
+   # 7258235C6A6B727E5C0F6E2E2576D36A234E63A3
+
+   Round 1 reply (content-length 439 bytes):
+
+   pragma server-version 22800 20260311 113146
+   igot 23813573dea5ec687052a067866751f481e58ef4c478939ac601587a43f50b35
+   igot 2c215398c6ea4e3c0994d41918f632d5208d6a24da3ac894c9d9d167a711f30b
+   igot ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc
+   igot 393953a9803595823fb560ddbe333767840a5ad89748a12fc2cd00f533c6df8a 1
+   igot da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091 1
+   # timestamp 2026-07-02T18:34:48 errors 0
+
+   Round 2 request (614 bytes total):
+
+   POST / HTTP/1.0
+   Host: 127.0.0.1:9872
+   User-Agent: Fossil/2.28 (2026-03-11 11:31:46 [52445a27f1])
+   Cookie: x-f-l-c=login+privuser+653828a8fc753c1685501de457c104f0b20938c9+bec32fbc6a2589413ee6d1f47a4ae0098dafcad2
+   Content-Type: application/x-fossil-debug
+   Content-Length: 336
+
+   pragma client-version 22800 20260311 113146
+   pragma send-private
+   pull 3921d47b51aad4027faac6467b4a87b4e7951c64 ea2e766b68008b6c3b3ca547df136ded07c7f921
+   gimme 393953a9803595823fb560ddbe333767840a5ad89748a12fc2cd00f533c6df8a
+   gimme da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091
+   # 4D85B916A821F5198416D9F01D4F75F45714F45C
+
+   Round 2 reply (content-length 1033 bytes):
+
+   pragma server-version 22800 20260311 113146
+   private
+   file 393953a9803595823fb560ddbe333767840a5ad89748a12fc2cd00f533c6df8a 49
+   Private content — must not reach x-less peers.
+
+   The 49-byte payload ends with LF and is immediately followed by:
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 49]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   private
+   file da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091 ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc 317
+
+   Exactly 317 binary delta bytes follow, possibly containing LF, then:
+
+   igot 23813573dea5ec687052a067866751f481e58ef4c478939ac601587a43f50b35
+   igot 2c215398c6ea4e3c0994d41918f632d5208d6a24da3ac894c9d9d167a711f30b
+   igot ed76b084599a372a5a17232f0bb67211145c0bde6b5a5ff542813d60fa07d3dc
+   igot 393953a9803595823fb560ddbe333767840a5ad89748a12fc2cd00f533c6df8a 1
+   igot da4b6b0ea2b060ff6bf29c16a3b10be05afc9c1a75d605a45cf7267ea3e74091 1
+   # timestamp 2026-07-02T18:34:48 errors 0
+
+A.4.  Comment Lines and Clock-Skew Timestamp
+
+   Client randomness:
+
+   # F2A895EF75B47B7157664A7FEAC978EFFFDB01C4
+
+   # F155AB07186D7F394649AB08DB88BD4179159D07
+
+   Server comments:
+
+   # timestamp 2026-07-02T18:31:13 errors 0
+
+   # timestamp 2026-07-02T18:31:13 errors 0
+
+   Random lines are ignored as cards; timestamp is used for skew and
+   errors 0 is informational.
+
+A.5.  Authentication Example
+
+       +==============+===========================================+
+       | Field        | Value                                     |
+       +==============+===========================================+
+       | USER         | alice                                     |
+       +--------------+-------------------------------------------+
+       | password     | secret-passphrase                         |
+       +--------------+-------------------------------------------+
+       | project code | c1b2a3d4e5f60718293a4b5c6d7e8f9012345678  |
+       +--------------+-------------------------------------------+
+       | covered body | 26 ASCII bytes example-request-body-bytes |
+       +--------------+-------------------------------------------+
+
+                                 Table 7
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 50]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   NONCE         = SHA1("example-request-body-bytes")
+                 = 5dfa03bd8645938b4e312a4fcdad5ebe6d4d4840
+   shared-secret = SHA1("c1b2a3d4e5f60718293a4b5c6d7e8f9012345678"
+                        "/alice/secret-passphrase")
+                 = d7a235115bf97d126c42140196c4fc6087312353
+   SIGNATURE     = SHA1(NONCE-hex || shared-secret-hex)
+                 = e3dba1c99442823b76ae64a8afca940e0327f9f8
+
+Appendix B.  ABNF
+
+   ABNF follows [RFC5234].  Prose enforces exact payload arithmetic.
+
+  ; § B.1  Core tokens
+
+  LF               = %x0A
+  SP               = %x20
+  ALPHA-LC         = %x61-7A
+  DIGIT            = %x30-39
+  HEXDIG-LC        = DIGIT / %x61-66
+  HEXDIG-UC        = DIGIT / %x41-46
+  HEXDIG-CI        = DIGIT / %x41-46 / %x61-66
+  sha1-hash        = 40HEXDIG-LC
+  sha3-hash        = 64HEXDIG-LC
+  artifact-hash    = sha1-hash / sha3-hash
+  decimal           = 1*DIGIT
+  signed-decimal    = [ "-" ] decimal
+  NZDIGIT           = %x31-39
+  canonical-decimal = "0" / ( NZDIGIT *DIGIT )
+  fossil-token      = 1*( ALPHA-LC / DIGIT / %x5F )
+  fossilized        = 1*( %x21-FF ) ; non-SP fossilized octets;
+                                      ; \s \t \n \r \f \v \0 \\ per
+                                      ; [FossilArtifact] §4
+  config-name      = "/" 1*( ALPHA-LC / DIGIT / "-" / "_" )
+  pragma-name      = 1*( ALPHA-LC / DIGIT / "-" )
+  ci-lock-client-id   = fossilized
+  ci-unlock-client-id = artifact-hash
+  non-lf-byte      = %x00-09 / %x0B-FF
+  qchar            = %x20-26 / %x28-7E / %x80-FF
+  fossil-quoted    = %x27 *( qchar / %x27 %x27 ) %x27
+  timestamp        = 4DIGIT "-" 2DIGIT "-" 2DIGIT %x54 2DIGIT ":" 2DIGIT ":" 2DIGIT
+                                      ; 19-byte fixed UTC YYYY-MM-DDTHH:MM:SS
+                                      ; per §5.3
+  uv-hash-field    = artifact-hash / "-"
+  payload-octets   = *OCTET
+
+  ; § B.2  Message-body structure
+
+  sync-message     = 1*( sync-element )
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 51]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+  sync-element     = bare-card / file-transfer / cfile-transfer /
+                     uvfile-transfer / config-transfer / comment-line
+
+  bare-card        = cookie-card / login-card / push-card / pull-card /
+                     clone-card / private-card / igot-card / gimme-card /
+                     uvigot-card / uvgimme-card / pragma-card /
+                     reqconfig-card / clone-seqno-card / error-card /
+                     message-card
+
+  file-transfer    = file-card payload-octets
+  cfile-transfer   = cfile-card payload-octets [ LF ]
+  uvfile-transfer  = uvfile-card [ payload-octets ]
+  config-transfer  = config-card payload-octets LF
+
+  ; payload-octets is consumed by the exact SIZE or CSIZE value declared
+  ; in the immediately preceding card line.
+
+  ; § B.3  Comment lines (§5.3)
+
+  comment-line             = timestamp-comment / sending-clusters-comment /
+                             end-of-clusters-comment / nonce-comment /
+                             generic-comment
+  timestamp-comment        = "# timestamp" SP timestamp SP "errors" SP canonical-decimal LF
+  sending-clusters-comment = "# sending-clusters" LF
+  end-of-clusters-comment  = "# end-of-clusters" LF
+  nonce-comment            = "#" SP 40HEXDIG-UC LF
+  generic-comment          = "#" *non-lf-byte LF
+
+  ; § B.4  Transport and authentication (§§4, 6)
+
+  cookie-card       = "cookie" SP fossilized LF
+  login-card        = "login" SP user SP nonce SP signature LF
+  user              = fossilized
+  nonce             = sha1-hash
+  signature         = sha1-hash
+
+  cookie-login-header = "Cookie: x-f-l-c=" url-login-value
+  url-login-value     = "login+" pct-user "+" nonce "+" signature
+  pct-user            = 1*( unreserved / pct-encoded )
+  unreserved          = ALPHA / DIGIT / "-" / "." / "_" / "~"
+  pct-encoded         = "%" HEXDIG-CI HEXDIG-CI
+
+  ; § B.5  Operation and announcement cards (§§3, 8, 9)
+
+  push-card         = "push" SP servercode SP projectcode LF
+  pull-card         = "pull" SP servercode SP projectcode LF
+  servercode        = fossil-token
+  projectcode       = artifact-hash
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 52]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+  clone-card        = "clone" SP decimal SP decimal LF
+  clone-seqno-card  = "clone_seqno" SP decimal LF
+  private-card      = "private" LF
+
+  igot-card         = "igot" SP artifact-hash LF /
+                      "igot" SP artifact-hash SP "1" LF
+  gimme-card        = "gimme" SP artifact-hash LF
+  uvigot-card       = "uvigot" SP fossilized SP decimal SP uv-hash-field
+                      SP decimal LF
+  uvgimme-card      = "uvgimme" SP fossilized LF
+
+  ; § B.6  Content-transfer cards (§7)
+
+  file-card         = "file" SP artifact-hash SP decimal LF /
+                      "file" SP artifact-hash SP artifact-hash SP decimal LF
+  cfile-card        = "cfile" SP artifact-hash SP decimal SP decimal LF /
+                      "cfile" SP artifact-hash SP artifact-hash SP decimal
+                      SP decimal LF
+  uvfile-card       = "uvfile" SP fossilized SP decimal SP uv-hash-field
+                      SP decimal SP decimal LF
+
+  ; § B.7  Configuration and pragma cards (§9)
+
+  reqconfig-card    = "reqconfig" SP config-name LF
+  config-card       = "config" SP config-name SP decimal LF
+  config-scalar-payload = decimal SP fossil-quoted SP "value" SP fossil-quoted
+                          ; payload form used by config /config
+
+  pragma-card       = client-version-pragma / server-version-pragma /
+                      uv-hash-pragma / uv-push-ok-pragma /
+                      uv-pull-only-pragma / ci-lock-pragma /
+                      ci-lock-fail-pragma / ci-unlock-pragma /
+                      send-private-pragma / send-catalog-pragma /
+                      client-url-pragma / req-links-pragma /
+                      req-clusters-pragma / link-pragma /
+                      avoid-delta-manifests-pragma / extension-pragma
+                     ; no-argument productions below are canonical sender
+                     ; forms; §9 defines correct-direction surplus tolerance
+
+  client-version-pragma =
+                     "pragma" SP "client-version" SP decimal
+                     [SP 8DIGIT [SP 6DIGIT]] LF
+  server-version-pragma =
+                     "pragma" SP "server-version" SP decimal
+                     [SP 8DIGIT [SP 6DIGIT]] LF
+  uv-hash-pragma    = "pragma" SP "uv-hash" SP artifact-hash LF
+  uv-push-ok-pragma = "pragma" SP "uv-push-ok" LF
+  uv-pull-only-pragma =
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 53]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+                     "pragma" SP "uv-pull-only" LF
+  ci-lock-pragma    = "pragma" SP "ci-lock" SP artifact-hash
+                     SP ci-lock-client-id LF
+  ci-lock-fail-pragma =
+                     "pragma" SP "ci-lock-fail" SP fossilized SP signed-decimal LF
+                     ; canonical senders use nonnegative decimal; receiver
+                     ; detects a negative value as its defined fatal error
+  ci-unlock-pragma  = "pragma" SP "ci-unlock" SP ci-unlock-client-id LF
+  send-private-pragma =
+                     "pragma" SP "send-private" LF
+  send-catalog-pragma =
+                     "pragma" SP "send-catalog" LF
+  client-url-pragma = "pragma" SP "client-url" SP fossilized LF
+req-links-pragma  = "pragma" SP "req-links" LF
+                    ; client-to-server; request-local opt-in to
+                    ; `link` cards in this request's response; a
+                    ; client emits it in every request for which it
+                    ; wants links and has local `share-links` mode
+req-clusters-pragma =
+                    "pragma" SP "req-clusters" LF
+link-pragma       = "pragma" SP "link" SP link-url SP link-arg SP link-mtime LF
+                    ; server-to-client; response is permitted only
+                    ; when its request carried `pragma req-links`.
+                    ; Client-side acceptance requires local `share-links`
+                    ; mode, a parsed HTTP(S) URL, and positive MTIME; it
+                    ; does not depend on whether its request carried
+                    ; `req-links`. Otherwise silently discard every `link`
+                    ; and record no fields.
+                    ; This card carries no artifact-graph or
+                    ; content-relationship semantics.
+  link-url          = fossilized     ; fossilize-encoded http(s) URL naming
+                                     ; an alternative location for the
+                                     ; current repository
+  link-arg          = fossilized     ; fossilize-encoded server-generated
+                                     ; opaque token; the receiver stores the
+                                     ; defossilized bytes verbatim, MUST NOT
+                                     ; parse them, and MUST NOT echo them
+                                     ; onward on the wire
+  link-mtime        = decimal        ; Unix seconds since the epoch; the
+                                     ; client stores only values greater than 0
+  avoid-delta-manifests-pragma =
+                     "pragma" SP "avoid-delta-manifests" LF
+  extension-pragma  = "pragma" SP pragma-name *( SP fossilized ) LF
+                     ; receivers inspect the name and silently ignore unknown
+                     ; extensions despite surplus tokens beyond the fixed vector
+
+  ; § B.8  Error signalling (§10)
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 54]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+  error-card        = "error" SP fossilized LF
+  message-card      = "message" SP fossilized LF
+
+Appendix C.  Anomalies
+
+   "Unknown message" response. ::: No such wire text exists.  Server-
+   side unknown operators reset and emit error bad command: LINE, then
+   continue later request cards.  The text bad command: LINE is a
+   fossilized TEXT (Section 10.1); it is rendered here as words for
+   readability.  Clients only warn locally, stop the reply-card loop,
+   and then evaluate ordinary continuation.  Section 5.2 governs.
+
+   Cumulative multi-login permissions. :: Withdrawn.  A second login in
+   one request is fatal.  One successful login unions capabilities only
+   with the request’s baseline.
+
+Appendix D.  Changes in This Revision
+
+   This revision of draft-fossil-sync-protocol-00, dated 16 October
+   2026, makes the following corrections and clarifications to the 6
+   July 2026 text.
+
+   *  Section 3.3: A note records that Fossil's client discards the
+      peer-lacks hashes it recorded from a reply before building its
+      next request, so it may repeat a gimme the peer has just sent; the
+      filter rule is unchanged.  Informative note.
+
+   *  Section 3.3: The dangling-delta text now names the per-round
+      content-received flag of Section 3.7 and states that no per-
+      artifact received state exists; re-request suppression follows
+      from removal from the phantom set.  Editorial clarification.
+
+   *  Section 4: A redirect target has one trailing /xfer stripped, if
+      present, rather than repeated strips.  Normative change.
+
+   *  Section 5.1: A body that ends before a payload's declared count is
+      malformed and senders MUST NOT produce one; a receiver MUST NOT
+      store the partial payload: a server treats the card as a handler
+      validation failure and a client stops reading the reply and
+      continues as Section 10.1 describes; a note records that Fossil
+      uses the bytes present and stores a full-content file that still
+      hashes correctly.  Normative change.
+
+   *  Section 5.2 and Appendix C: The unknown-operator error is defined
+      as a fossilized TEXT, error bad\scommand:\sLINE, never four SP-
+      separated tokens, and other mentions of the phrase refer to
+      Section 5.2.  Normative change.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 55]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   *  Section 5.3: N in the closing timestamp comment is defined as the
+      count of errors the server raised, with the three refusals
+      Fossil's server leaves out of its count, and receivers MUST NOT
+      act on it.  Normative change.
+
+   *  Section 5.2: A note records that Fossil URL-encodes the text of
+      the file, cfile, and uvfile handler errors; senders SHOULD
+      fossilize as for every other error.  Informative note.
+
+   *  Section 6.4: A login failure ends card parsing without rolling
+      back the request; the server still performs end-of-request steps
+      for any direction an earlier card established and ends the reply
+      with the timestamp comment.  Normative change.
+
+   *  Sections 6.6 and 10.1: A refused push takes a non-reset message
+      pull only - not authorized to push form when a pull preceded it
+      and an error not authorized to write form otherwise; neither ends
+      card processing, but the first file or cfile card sent while push
+      is not enabled is refused and ends it; clients SHOULD send pull
+      before push.  Normative change.
+
+   *  Section 7.3: A server-received uvgimme requires Read permission,
+      with Clone implying Read; without it the server emits neither
+      content nor error.  Normative change.
+
+   *  Section 7.4: A receiver is no longer required to check for a
+      verified duplicate before delta-source handling; Fossil leaves an
+      absent DELTASRC behind as a phantom, which counts for the content-
+      received flag, either behavior is permitted, and peers MUST
+      tolerate both.  Normative change.
+
+   *  Section 8.1: A note records that Fossil's reply to a SEQNO that is
+      not digit-only is unstable; clients MUST send a positive decimal
+      SEQNO.  Normative change.
+
+   *  Section 8.5.1: The reference client's upload-phase uvigot is
+      described in both its well-formed and short forms, both are
+      refused by the server, and a cleanroom client MUST NOT send uvigot
+      in either form.  Normative change.
+
+   *  Sections 8.6 and 3.7: Under private sync, private inventory is
+      sent in every push request and every pull reply without a peer-
+      date check; the 2020-04-13 date gate applies only to answering a
+      gimme for private content when private sync is off, and
+      continuation limb (c) now follows only that case; the state table
+      of Section 3.1, the reply processing of Section 3.2, and
+      Section 9.1 say the same.  Normative change.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 56]
+
+Internet-Draft            Fossil Sync Protocol              October 2026
+
+
+   *  Sections 9.4 and 9.5: The ci-lock reply carries pragma avoid-
+      delta-manifests whenever the server's forbid-delta-manifests
+      setting is on, after a ci-lock-fail when one is emitted; the
+      pragma asks the client to write the commit that requested the lock
+      as a baseline manifest and changes nothing about what the client
+      transfers.  Normative change.
+
+   *  Section 10.1: A received file or cfile whose content does not
+      match its hash is a fail-fast path that discards the round, prefix
+      included, and starts no further round; the prefix rule stays for
+      content errors that leave the stored artifacts consistent.
+      Normative change.
+
+   *  Section 6.6: A server MAY append words to a "not authorized to
+      ..." refusal, as Fossil does when its localauth setting is
+      enabled, and a client MUST recognize a refusal by its leading
+      text.  Normative change.
+
+Authors' Addresses
+
+   D. Richard Hipp (editor)
+   Fossil
+
+
+   Stephan Beal
+   libfossil
+
+
+   Dan Shearer
+   Email: dan@shearer.org
+   URI:   https://shearer.org
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 57]

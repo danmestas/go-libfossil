@@ -232,7 +232,7 @@ func TestRepairLeafTableKeepsParentlessCheckin(t *testing.T) {
 	}
 }
 
-// TestCheckinOntoSingletonBranchKeepsVerdicts pins draft-fossil-repo-state-01
+// TestCheckinOntoSingletonBranchKeepsVerdicts pins draft-fossil-repo-state-00
 // Section 7.3 on the local commit path: a commit is rechecked, with its
 // parents, only when a branch row lands on it. c1's branch row is a
 // singleton, so c2 inherits none and nothing is scheduled: c1 keeps its leaf
@@ -291,7 +291,7 @@ func TestReceiveLinkerWithTxDropsRechecksOnFailure(t *testing.T) {
 		if err := linker.LinkStored(context.Background(), tx, rid, uuid, body); err != nil {
 			return err
 		}
-		if linker.state.leaves.Len() == 0 {
+		if linker.state.sched.leaves.Len() == 0 {
 			t.Fatal("LinkStored scheduled no recheck for a branch tag")
 		}
 		return boom
@@ -299,7 +299,7 @@ func TestReceiveLinkerWithTxDropsRechecksOnFailure(t *testing.T) {
 	if !errors.Is(err, boom) {
 		t.Fatalf("WithTx error = %v, want %v", err, boom)
 	}
-	if got := linker.state.leaves.Len(); got != 0 {
+	if got := linker.state.sched.leaves.Len(); got != 0 {
 		t.Fatalf("schedule after a rolled-back transaction has %d entries, want 0", got)
 	}
 }

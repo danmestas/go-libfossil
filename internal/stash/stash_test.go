@@ -13,8 +13,10 @@ import (
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // testEnv sets up a repo DB with one blob ("hello" in a.txt), a checkout DB
@@ -65,6 +67,16 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 		)`,
 		`CREATE INDEX delta_i1 ON delta(srcid)`,
 		`CREATE TABLE unclustered(rid INTEGER PRIMARY KEY)`,
+		// Every stored blob names the rcvfrom row of its receipt.
+		`CREATE TABLE rcvfrom(
+			rcvid INTEGER PRIMARY KEY,
+			uid INTEGER,
+			mtime DATETIME,
+			nonce TEXT UNIQUE,
+			ipaddr TEXT
+		)`,
+		// Settings such as allow-symlinks are read from it.
+		`CREATE TABLE config(name TEXT PRIMARY KEY NOT NULL, value CLOB, mtime DATE)`,
 	}
 	_ = repoSchema
 	for _, s := range repoSchema2 {
@@ -100,7 +112,8 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 			mrid     INTEGER DEFAULT 0,
 			mtime    REAL DEFAULT 0,
 			pathname TEXT,
-			origname TEXT
+			origname TEXT,
+			mhash    TEXT
 		)`,
 		`CREATE TABLE vmerge(id INTEGER, merge INTEGER, mhash TEXT)`,
 	}
@@ -129,6 +142,13 @@ func testEnv(t *testing.T) (repoDB *sql.DB, ckout *sql.DB, dir string) {
 	return repoDB, ckout, dir
 }
 
+// noScan is a Scanner for tests that set vfile by hand: it changes nothing.
+type noScan struct{}
+
+func (noScan) ScanChanges(checkout.ScanFlags) error { return nil }
+
+func (noScan) VersionPerms() (map[string]string, error) { return nil, nil }
+
 // modifyFile changes a.txt on disk and marks it changed in vfile.
 func modifyFile(t *testing.T, ckout *sql.DB, dir string) {
 	t.Helper()
@@ -156,7 +176,7 @@ func TestSaveAndList(t *testing.T) {
 	modifyFile(t, ckout, dir)
 
 	// Save.
-	if err := Save(ckout, repoDB, dir, "test stash"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -200,7 +220,7 @@ func TestPopRestoresChanges(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, dir, "pop test"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "pop test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -210,7 +230,7 @@ func TestPopRestoresChanges(t *testing.T) {
 	}
 
 	// Pop.
-	if err := Pop(ckout, repoDB, dir); err != nil {
+	if _, err := Pop(ckout, repoDB, simio.RealEnv(), dir); err != nil {
 		t.Fatalf("Pop: %v", err)
 	}
 
@@ -235,7 +255,7 @@ func TestApplyKeepsStash(t *testing.T) {
 
 	modifyFile(t, ckout, dir)
 
-	if err := Save(ckout, repoDB, dir, "apply test"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "apply test"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -249,7 +269,7 @@ func TestApplyKeepsStash(t *testing.T) {
 	}
 
 	// Apply.
-	if err := Apply(ckout, repoDB, dir, entries[0].ID); err != nil {
+	if _, err := Apply(ckout, repoDB, simio.RealEnv(), dir, entries[0].ID); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 
@@ -274,12 +294,12 @@ func TestDropAndClear(t *testing.T) {
 
 	// Save twice (need to re-modify between saves).
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, dir, "first"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "first"); err != nil {
 		t.Fatalf("Save 1: %v", err)
 	}
 
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, dir, "second"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "second"); err != nil {
 		t.Fatalf("Save 2: %v", err)
 	}
 
@@ -322,44 +342,6 @@ func TestDropAndClear(t *testing.T) {
 	}
 }
 
-// Save cannot yet stash a pending merge: its revert path would rewrite the
-// committed version and drop the merge. It must refuse, naming the file,
-// rather than silently leave the merged file out of the stash (#233).
-func TestSaveRefusesPendingMerge(t *testing.T) {
-	repoDB, ckout, dir := testEnv(t)
-	modifyFile(t, ckout, dir)
-	if _, err := ckout.Exec("UPDATE vfile SET chnged=2 WHERE pathname='a.txt'"); err != nil {
-		t.Fatal(err)
-	}
-
-	err := Save(ckout, repoDB, dir, "merge")
-	if err == nil || !strings.Contains(err.Error(), "merge") {
-		t.Fatalf("Save over a pending merge = %v, want a pending-merge refusal", err)
-	}
-	if got := readFile(t, filepath.Join(dir, "a.txt")); got != "hello world" {
-		t.Fatalf("a.txt = %q after refusal, want the merged content kept", got)
-	}
-}
-
-// A clean three-way merge leaves a plain edit (chnged=1, mrid=rid) and a
-// vmerge record. Stashing the edit would leave the record naming a merge
-// whose content is gone, and the next commit would claim the merge (#244).
-func TestSaveRefusesCleanThreeWayMerge(t *testing.T) {
-	repoDB, ckout, dir := testEnv(t)
-	modifyFile(t, ckout, dir)
-	if _, err := ckout.Exec("INSERT INTO vmerge(id, merge, mhash) VALUES(0, 99, 'h')"); err != nil {
-		t.Fatal(err)
-	}
-
-	err := Save(ckout, repoDB, dir, "merged")
-	if err == nil || !strings.Contains(err.Error(), "merge") {
-		t.Fatalf("Save during a merge = %v, want a pending-merge refusal", err)
-	}
-	if got := readFile(t, filepath.Join(dir, "a.txt")); got != "hello world" {
-		t.Fatalf("a.txt = %q after refusal, want the merged content kept", got)
-	}
-}
-
 // Save cannot yet stash a rename: it records and restores files by their
 // current name only. It must refuse rather than stash the rename as a plain
 // edit and lose it (#233).
@@ -370,24 +352,9 @@ func TestSaveRefusesRename(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "rename")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "rename")
 	if err == nil || !strings.Contains(err.Error(), "rename") {
 		t.Fatalf("Save over a rename = %v, want a rename refusal", err)
-	}
-}
-
-// An edit made on top of a merge drops chnged back to 1 but leaves mrid on
-// the merged-in content: still a pending merge, still refused (#233).
-func TestSaveRefusesEditOnTopOfMerge(t *testing.T) {
-	repoDB, ckout, dir := testEnv(t)
-	modifyFile(t, ckout, dir)
-	if _, err := ckout.Exec("UPDATE vfile SET mrid=mrid+100 WHERE pathname='a.txt'"); err != nil {
-		t.Fatal(err)
-	}
-
-	err := Save(ckout, repoDB, dir, "edited merge")
-	if err == nil || !strings.Contains(err.Error(), "merge") {
-		t.Fatalf("Save over an edited merge = %v, want a pending-merge refusal", err)
 	}
 }
 
@@ -400,7 +367,7 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Save(ckout, repoDB, dir, "mode")
+	err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "mode")
 	if err == nil || !strings.Contains(err.Error(), "permission") {
 		t.Fatalf("Save over a mode change = %v, want a permission-change refusal", err)
 	}
@@ -415,7 +382,7 @@ func TestSaveRefusesModeChangeAccurately(t *testing.T) {
 func TestStashTimeAsFossil(t *testing.T) {
 	repoDB, ckout, dir := testEnv(t)
 	modifyFile(t, ckout, dir)
-	if err := Save(ckout, repoDB, dir, "test stash"); err != nil {
+	if err := Save(noScan{}, ckout, repoDB, simio.RealEnv(), dir, "test stash"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	var typ string

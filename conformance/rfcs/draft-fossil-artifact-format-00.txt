@@ -1,0 +1,3248 @@
+
+
+
+
+Network Working Group                                    D. R. Hipp, Ed.
+Internet-Draft                                                    Fossil
+Intended status: Standards Track                                 S. Beal
+Expires: 19 April 2027                                         libfossil
+                                                              D. Shearer
+                                                         16 October 2026
+
+
+     The Fossil Distributed Version Control System: Artifact Format
+                    draft-fossil-artifact-format-00
+
+Abstract
+
+   This document is a largely automated transformation of existing
+   implementation texts, pending ratification by the Fossil and
+   libfossil contributors identified in the Author list before adoption
+   as a working group document.  Once adopted it is maintained through
+   the IETF process.  Fossil is a distributed version-control system
+   that stores a project's entire state as a set of immutable, content-
+   addressed artifacts.  This document specifies artifact naming, the
+   card syntax of structural artifacts, the structural artifact types
+   and their validity rules, the two checksum computations, the hash
+   policy that governs how new artifacts are named, and the procedure
+   for reconstructing the complete file set of a delta manifest.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at https://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on 19 April 2027.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 1]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents (https://trustee.ietf.org/
+   license-info) in effect on the date of publication of this document.
+   Please review these documents carefully, as they describe your rights
+   and restrictions with respect to this document.  Code Components
+   extracted from this document must include Revised BSD License text as
+   described in Section 4.e of the Trust Legal Provisions and are
+   provided without warranty as described in the Revised BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   4
+   2.  Conventions and Terminology . . . . . . . . . . . . . . . . .   5
+   3.  Artifact Naming . . . . . . . . . . . . . . . . . . . . . . .   6
+     3.1.  Name Computation  . . . . . . . . . . . . . . . . . . . .   6
+     3.2.  Hash Algorithms and Name Length . . . . . . . . . . . . .   7
+     3.3.  Case Handling . . . . . . . . . . . . . . . . . . . . . .   7
+     3.4.  Name Verification . . . . . . . . . . . . . . . . . . . .   7
+     3.5.  ABNF  . . . . . . . . . . . . . . . . . . . . . . . . . .   8
+     3.6.  Prefix Resolution . . . . . . . . . . . . . . . . . . . .   9
+   4.  Card Syntax . . . . . . . . . . . . . . . . . . . . . . . . .   9
+     4.1.  Artifact Framing  . . . . . . . . . . . . . . . . . . . .   9
+       4.1.1.  Signature-Wrapper Removal . . . . . . . . . . . . . .  10
+       4.1.2.  Sterilization . . . . . . . . . . . . . . . . . . . .  11
+     4.2.  Line and Token Grammar  . . . . . . . . . . . . . . . . .  11
+       4.2.1.  Exact Arity . . . . . . . . . . . . . . . . . . . . .  12
+       4.2.2.  Closed Card Alphabet  . . . . . . . . . . . . . . . .  12
+     4.3.  Character-Escape Encoding . . . . . . . . . . . . . . . .  12
+       4.3.1.  Decoded Token Positions . . . . . . . . . . . . . . .  13
+     4.4.  Card Ordering . . . . . . . . . . . . . . . . . . . . . .  14
+     4.5.  Occurrence Classes and Intra-Type Ordering  . . . . . . .  15
+       4.5.1.  Occurrence Classes  . . . . . . . . . . . . . . . . .  15
+       4.5.2.  Intra-Run Ordering of Repeatable Cards  . . . . . . .  15
+       4.5.3.  The Canonical Comparator  . . . . . . . . . . . . . .  16
+     4.6.  Validity Predicates . . . . . . . . . . . . . . . . . . .  17
+       4.6.1.  Simple-Pathname Predicate . . . . . . . . . . . . . .  17
+       4.6.2.  Wiki-Name Predicate . . . . . . . . . . . . . . . . .  18
+       4.6.3.  Reserved Filenames  . . . . . . . . . . . . . . . . .  18
+       4.6.4.  Timestamps  . . . . . . . . . . . . . . . . . . . . .  19
+     4.7.  Per-Card Grammars . . . . . . . . . . . . . . . . . . . .  20
+       4.7.1.  Hash-Token Validation Map . . . . . . . . . . . . . .  21
+       4.7.2.  A Card  . . . . . . . . . . . . . . . . . . . . . . .  21
+       4.7.3.  B Card  . . . . . . . . . . . . . . . . . . . . . . .  22
+       4.7.4.  C Card  . . . . . . . . . . . . . . . . . . . . . . .  23
+       4.7.5.  D Card and E Card . . . . . . . . . . . . . . . . . .  23
+       4.7.6.  F Card  . . . . . . . . . . . . . . . . . . . . . . .  23
+       4.7.7.  G Card, H Card, and I Card  . . . . . . . . . . . . .  24
+       4.7.8.  J Card  . . . . . . . . . . . . . . . . . . . . . . .  24
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 2]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+       4.7.9.  K Card  . . . . . . . . . . . . . . . . . . . . . . .  25
+       4.7.10. L Card  . . . . . . . . . . . . . . . . . . . . . . .  25
+       4.7.11. M Card  . . . . . . . . . . . . . . . . . . . . . . .  25
+       4.7.12. N Card  . . . . . . . . . . . . . . . . . . . . . . .  25
+       4.7.13. P Card  . . . . . . . . . . . . . . . . . . . . . . .  25
+       4.7.14. Q Card  . . . . . . . . . . . . . . . . . . . . . . .  26
+       4.7.15. R Card  . . . . . . . . . . . . . . . . . . . . . . .  26
+       4.7.16. T Card  . . . . . . . . . . . . . . . . . . . . . . .  27
+       4.7.17. U Card  . . . . . . . . . . . . . . . . . . . . . . .  28
+       4.7.18. W Card  . . . . . . . . . . . . . . . . . . . . . . .  28
+       4.7.19. Z Card  . . . . . . . . . . . . . . . . . . . . . . .  29
+   5.  Structural Artifact Types . . . . . . . . . . . . . . . . . .  29
+     5.1.  Type Codes and Names  . . . . . . . . . . . . . . . . . .  29
+     5.2.  Card Legality by Type . . . . . . . . . . . . . . . . . .  30
+     5.3.  Type Determination  . . . . . . . . . . . . . . . . . . .  31
+     5.4.  Per-Type Semantic Checks  . . . . . . . . . . . . . . . .  32
+     5.5.  Well-Formedness Pre-Filter  . . . . . . . . . . . . . . .  33
+   6.  Checksums . . . . . . . . . . . . . . . . . . . . . . . . . .  33
+     6.1.  Digest Token Grammar  . . . . . . . . . . . . . . . . . .  33
+     6.2.  Z Card: Artifact Self-Checksum  . . . . . . . . . . . . .  34
+     6.3.  R Card: Aggregate Content Checksum  . . . . . . . . . . .  35
+       6.3.1.  Parse-Time Handling . . . . . . . . . . . . . . . . .  35
+       6.3.2.  R-Card Computation  . . . . . . . . . . . . . . . . .  35
+       6.3.3.  Delta Manifests . . . . . . . . . . . . . . . . . . .  36
+       6.3.4.  Emitted Form  . . . . . . . . . . . . . . . . . . . .  36
+   7.  Hash Policy . . . . . . . . . . . . . . . . . . . . . . . . .  36
+     7.1.  Policy Values . . . . . . . . . . . . . . . . . . . . . .  37
+     7.2.  Default Policy  . . . . . . . . . . . . . . . . . . . . .  37
+     7.3.  Assigning the Policy  . . . . . . . . . . . . . . . . . .  38
+     7.4.  Automatic Promotion (Ratchet) . . . . . . . . . . . . . .  38
+     7.5.  Cross-Algorithm Deduplication . . . . . . . . . . . . . .  39
+     7.6.  Name Immutability . . . . . . . . . . . . . . . . . . . .  39
+     7.7.  Synchronization Behavior  . . . . . . . . . . . . . . . .  40
+   8.  Delta Manifest Reconstruction . . . . . . . . . . . . . . . .  40
+     8.1.  Preconditions . . . . . . . . . . . . . . . . . . . . . .  40
+     8.2.  Full File-Set Enumeration (Merge-Walk)  . . . . . . . . .  41
+     8.3.  Baseline Resolution . . . . . . . . . . . . . . . . . . .  41
+     8.4.  Single-Name Lookup  . . . . . . . . . . . . . . . . . . .  42
+     8.5.  Renderings That Intentionally Do Not Reconstruct  . . . .  42
+   9.  Security Considerations . . . . . . . . . . . . . . . . . . .  43
+   10. IANA Considerations . . . . . . . . . . . . . . . . . . . . .  45
+   11. References  . . . . . . . . . . . . . . . . . . . . . . . . .  45
+     11.1.  Normative References . . . . . . . . . . . . . . . . . .  45
+     11.2.  Informative References . . . . . . . . . . . . . . . . .  46
+   Appendix A.  Examples . . . . . . . . . . . . . . . . . . . . . .  46
+     A.1.  Artifact Naming . . . . . . . . . . . . . . . . . . . . .  46
+       A.1.1.  SHA-1 Example . . . . . . . . . . . . . . . . . . . .  47
+       A.1.2.  SHA3-256 Example  . . . . . . . . . . . . . . . . . .  47
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 3]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+     A.2.  Z-Card Checksum . . . . . . . . . . . . . . . . . . . . .  48
+     A.3.  R-Card Aggregate Checksum . . . . . . . . . . . . . . . .  49
+     A.4.  Delta Manifest  . . . . . . . . . . . . . . . . . . . . .  50
+       A.4.1.  Baseline Manifest . . . . . . . . . . . . . . . . . .  50
+       A.4.2.  Example Delta Manifest  . . . . . . . . . . . . . . .  51
+       A.4.3.  Merge Algorithm . . . . . . . . . . . . . . . . . . .  51
+       A.4.4.  R-card Over Reconstructed Set . . . . . . . . . . . .  52
+   Appendix B.  ABNF . . . . . . . . . . . . . . . . . . . . . . . .  53
+   Appendix C.  Anomalous artifacts and behaviours . . . . . . . . .  55
+   Appendix D.  Changes in This Revision . . . . . . . . . . . . . .  57
+   Authors' Addresses  . . . . . . . . . . . . . . . . . . . . . . .  58
+
+1.  Introduction
+
+   Fossil is a distributed version control system.  Its purpose is to
+   let any participant verify exactly what a project contained at any
+   point in its history, and reconcile that history with other copies of
+   the repository; it meets both needs by making every unit of state an
+   immutable, content-addressed artifact.  Its global state is a set of
+   artifacts.  An artifact is an immutable byte sequence named by the
+   cryptographic hash of its content.  The set is unordered: an
+   artifact's membership in a repository does not depend on the order in
+   which artifacts were added, and two repositories that hold the same
+   set of artifacts represent the same global state.
+
+   Artifacts are of two kinds.  A content artifact is an arbitrary byte
+   sequence, such as the contents of a file under version control.  A
+   structural artifact is a text document built from cards (Section 4)
+   that records relationships among artifacts: a check-in, a wiki page,
+   a ticket change, and the other types enumerated in Section 5.  Both
+   kinds are named and stored the same way; a reader distinguishes them
+   by attempting a structural parse.
+
+   A repository also holds local state, such as user accounts,
+   configuration settings, and the mapping from artifact names to local
+   storage.  Local state is outside the artifact model and is not
+   content-addressed.  This document specifies the artifact model only.
+   Content may be held or transferred in delta-encoded form
+   [FossilDelta]; delta encoding is a storage and transfer concern and
+   does not change an artifact's bytes or its name.
+
+   The artifact set has the properties of a grow-only set, a convergent
+   replicated data type [GSET].  Artifacts are added but never modified
+   or removed as part of normal operation; the name of an artifact is a
+   function of its content, so an artifact received from any source is
+   identical to the same artifact held locally.  Two repositories
+   converge by exchanging the artifacts each lacks; the synchronization
+   procedure is specified in [FossilSync].
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 4]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   This document covers naming (Section 3), card syntax (Section 4), the
+   structural artifact types (Section 5), the Z card and R card
+   checksums (Section 6), the hash policy that governs which hash
+   algorithm names a new artifact (Section 7), and the reconstruction of
+   a delta manifest's file set (Section 8).  The appendices record
+   divergent statements in existing documentation (Appendix C), give
+   worked examples (Appendix A), and collect the ABNF (Appendix B).
+
+   The companion Fossil Repository State specification [FossilRepoState]
+   defines the repository-state views computed over these artifacts.
+   Those views are branch and tag membership, leaves, closed markers,
+   and the current-trunk check-in.  This document defines the artifact
+   bytes, cards, and checksums from which they are computed.
+
+   This section is informative.  The requirements appear in Section 3
+   through Section 8.
+
+2.  Conventions and Terminology
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and
+   "OPTIONAL" in this document are to be interpreted as described in BCP
+   14 [RFC2119] [RFC8174] when, and only when, they appear in all
+   capitals, as shown here.
+
+   This section is the canonical definition of the core artifact-model
+   vocabulary for the Fossil specification suite.  The Fossil Delta
+   Format [FossilDelta], the Fossil Sync Protocol [FossilSync], and the
+   Fossil Repository State specification [FossilRepoState] reuse these
+   terms rather than restating them.  Where one of those documents uses
+   a term such as _artifact_, _card_, _manifest_, or _hash_ without
+   defining it, the definition is here.
+
+   The terms delta, source, and target are used as defined in
+   [FossilDelta].
+
+   Artifact:  An immutable byte sequence named by the cryptographic hash
+      of its content.
+
+   Hash (artifact name):  The cryptographic digest of an artifact's
+      content that serves as the artifact's name.  The permitted
+      algorithms, and the policy governing which hash algorithm names a
+      new artifact, are specified in Section 3 and Section 7.
+
+   Content artifact:  An artifact whose bytes carry no structure defined
+      by this document.
+
+   Structural artifact:  An artifact that parses as a sequence of cards
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 5]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+      under the rules of Section 4 and Section 5.
+
+   Card:  One line of a structural artifact: a card-type letter followed
+      by zero or more space-separated tokens.
+
+   Token:  A maximal run of octets within a card containing neither
+      space (0x20) nor LF (0x0A).
+
+   Decoded form:  The value of a token after character-escape decoding
+      (Section 4.3).
+
+   Stripped content:  The bytes of an artifact after signature-wrapper
+      removal (Section 4.1.1).
+
+   Manifest:  The structural artifact type that records a check-in.
+
+   Baseline manifest:  A manifest without a B card; its F cards carry
+      its complete file set.
+
+   Delta manifest:  A manifest with a B card; its F cards record
+      differences against the baseline manifest the B card names
+      (Section 8).
+
+   Check-in:  A snapshot of a project's files at one point in its
+      history, together with the check-in's parent relationships.  A
+      check-in is recorded by a manifest (Section 5).  The graph of
+      check-ins, and the branch, tag, leaf, and current-trunk views
+      derived from it, are specified in [FossilRepoState].
+
+3.  Artifact Naming
+
+3.1.  Name Computation
+
+   An artifact's name is the cryptographic hash of the artifact's
+   complete raw bytes, computed over the byte sequence as a single
+   undifferentiated blob.  No prefixes, suffixes, or other information
+   may be added to an artifact before its hash is computed, and no
+   canonicalization, encoding transform, or signature stripping is
+   applied: the bytes hashed MUST be exactly the artifact's stored
+   bytes, undisturbed.  For a signed structural artifact the stored
+   bytes include the signature wrapper (Section 4.1.1), so the name
+   covers the wrapper.
+
+   When content is ingested together with an already-known name, the
+   receiver's storage operation uses that supplied name as the candidate
+   storage name rather than first recomputing a new one.  Verifying that
+   the candidate name matches the content is a distinct caller
+   responsibility from assigning a name at ingest time (Section 3.4);
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 6]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   the hash policy ratchet observes the candidate name selected for
+   storage (Section 7.4), and Section 9 discusses the consequences when
+   a receive path stores before it can verify.
+
+3.2.  Hash Algorithms and Name Length
+
+   Exactly two artifact-name forms exist: a 40-hexadecimal-digit name,
+   which denotes a SHA-1 hash [RFC3174], and a 64-hexadecimal-digit
+   name, which denotes a SHA3-256 hash [FIPS202].  A candidate name of
+   any other length MUST be rejected as invalid, and this length check
+   applies before any character-class validation.  Because the two
+   lengths are disjoint, the hash algorithm of any artifact name is
+   fully determined by its length alone; validation, verification, and
+   algorithm display all dispatch on length with no other algorithm
+   indicator.
+
+   The 64-character form is the SHA3-256 of [FIPS202] — the variant with
+   the 01 domain-separation padding, distinct from the original Keccak
+   submission — computed over the raw artifact bytes and encoded as
+   lowercase hexadecimal.  The 40-character form is SHA-1 computed over
+   the same bytes and encoded the same way.  Which algorithm names newly
+   stored content is governed by the repository hash policy (Section 7).
+
+3.3.  Case Handling
+
+   Case handling is asymmetric between the producing and accepting
+   sides.  Every name a conforming implementation computes and emits
+   MUST use lowercase hexadecimal digits; the artifact name is the
+   lowercase hexadecimal encoding of the raw artifact's hash.  A name
+   that contains an uppercase hexadecimal digit is therefore invalid: no
+   conforming artifact bears one, and such a token can never verify
+   against content (Section 3.4).  Because a valid name is always
+   lowercase, an implementation MAY reject an uppercase-hex token at
+   name validation, or MAY accept it there and let it fail at
+   verification; the two are interoperable, because conforming data
+   never contains an uppercase name.  A parser that accepts uppercase
+   hexadecimal at name validation MUST NOT case-normalize it there.
+
+3.4.  Name Verification
+
+   Verification of a name against content dispatches on length alone: a
+   40-character name is compared against the SHA-1 digest of the
+   content, a 64-character name against the SHA3-256 digest, and a name
+   of any other length never verifies.  The comparison is a byte-for-
+   byte match of the candidate name against the digest rendered as
+   lowercase hexadecimal.  An uppercase-hexadecimal name is not a valid
+   artifact name and never verifies against content.  A token-validation
+   stage MAY reject it, or MAY accept it and let verification fail;
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 7]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   every content-verification comparison is exact-lowercase, so an
+   uppercase name cannot pass either way.
+
+   Verification yields a single undifferentiated failure signal: a wrong
+   length, a non-hexadecimal character, and a digest mismatch are
+   indistinguishable to the caller.
+
+   Receive-side handling of a caller-supplied name follows this order:
+
+   1.  The receiver parses the supplied token as an artifact name and
+       selects it as the candidate storage name.
+
+   2.  The normal non-clone sync file path, after reconstructing the
+       full artifact bytes from any available delta source, verifies the
+       candidate name before its storage call and before successful
+       receive admission.  If verification fails, the receive path
+       reports an error and the artifact MUST NOT be treated as verified
+       under that name.  This is a caller-path responsibility, not
+       behavior supplied by the storage primitive.
+
+   3.  Clone file, compressed cfile, and non-clone dangling-delta paths
+       can store the candidate name without first verifying the complete
+       reconstructed bytes.  Those paths rely on later reconstruction,
+       recoverability, or commit-time checks when the required content
+       becomes available.  Storage under a candidate name is not itself
+       evidence that the supplied name has verified.
+
+   4.  The storage operation then uses the selected candidate name for
+       duplicate lookup, insertion or dephantomization, and any hash-
+       policy ratchet described in Section 7.4.
+
+3.5.  ABNF
+
+   The canonical (writer) grammar and the parser accept-grammar are as
+   follows:
+
+   lhexdig        = DIGIT / %x61-66     ; 0-9 / a-f (lowercase)
+   hexdig-ci      = DIGIT / %x41-46 / %x61-66 ; 0-9 / A-F / a-f
+
+   ; Canonical form: what writers MUST produce
+   artifact-name  = sha1-name / sha3-name
+   sha1-name      = 40lhexdig
+   sha3-name      = 64lhexdig
+
+   ; Accept form: parser-tolerated (reference form); acceptance is not
+   ; a conformance requirement — see the prose above
+   accepted-name  = 40hexdig-ci / 64hexdig-ci
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 8]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+3.6.  Prefix Resolution
+
+   This section is informative: prefix lookup is a local name-resolution
+   convenience and is not part of the artifact wire format.
+
+   Resolution of a hexadecimal name or name prefix to an artifact is
+   uniform across both hash lengths.  A lookup accepts any hexadecimal
+   string of 4 to 64 characters, lowercases it before matching (so
+   uppercase input is canonicalized on the lookup path, in contrast to
+   the parse path), and resolves it with a single prefix-match query
+   that does not branch on the 40-versus-64 distinction.  If more than
+   one artifact matches the prefix, the lookup reports an ambiguous
+   name; a cross-algorithm collision, where one matching artifact is
+   SHA-1-named and the other SHA3-named, is reported identically to a
+   same-algorithm collision.  Collision detection counts artifact names,
+   ticket identifiers, and event-tag prefixes together in a single pass.
+
+4.  Card Syntax
+
+   This section defines the syntax of structural artifacts: framing,
+   signature-wrapper removal, the line and token grammar, the character-
+   escape encoding, card ordering, occurrence rules, the validity
+   predicates, and the per-card grammars.
+
+4.1.  Artifact Framing
+
+   A parser MUST evaluate the following gates, in this order, before
+   interpreting any card:
+
+   1.  The input MUST be non-empty and its final byte MUST be LF (0x0A).
+       This gate is evaluated on the raw input bytes, before signature-
+       wrapper removal; a signed artifact must therefore end its outer
+       signature wrapper with LF.
+
+   2.  Signature wrappers, when present, are removed (Section 4.1.1).
+       When a trailing signature block is found and removed, the
+       remaining content also ends in LF, because the truncation retains
+       the LF immediately preceding the signature armor.
+
+   3.  Line 1 of the stripped content is held to a stricter standard
+       than the general card grammar: the stripped content MUST be at
+       least 10 bytes long, its first byte MUST be an uppercase letter
+       in the range A-Z, and its second byte MUST be a single space.  An
+       argument-less first card is rejected here even though the general
+       card grammar permits argument-less cards elsewhere.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                 [Page 9]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   4.  The Z card self-checksum of the stripped content is verified
+       (Section 6.2).  A present-but-mismatched Z card MUST cause
+       rejection; an absent Z card passes this gate (absence is caught
+       later by the required-card rule of Section 5.2).
+
+   After the card loop completes, any unconsumed bytes MUST cause
+   rejection.
+
+4.1.1.  Signature-Wrapper Removal
+
+   A reader MUST remove both PGP clearsign wrappers (-----BEGIN PGP
+   SIGNED MESSAGE----- … -----BEGIN PGP SIGNATURE-----) and SSH signed
+   wrappers (-----BEGIN SSH SIGNED MESSAGE----- … -----BEGIN SSH
+   SIGNATURE-----) before parsing.  The exact mechanics are:
+
+   1.  Stripping occurs only when the first 34 bytes of the input, at
+       offset 0, exactly match -----BEGIN PGP SIGNED MESSAGE----- or
+       -----BEGIN SSH SIGNED MESSAGE-----.
+
+   2.  The body begins at the first position preceded by a blank line,
+       where "blank line" is detected as either LF LF or LF CR LF — this
+       CR tolerance is the only CR handling anywhere in the parse
+       pipeline.  If no blank line is found before end of input, the
+       content is left wholly unstripped.
+
+   3.  A backward scan truncates the content at the first occurrence of
+       <LF>-----BEGIN PGP SIGNATURE----- or <LF>-----BEGIN SSH
+       SIGNATURE-----, retaining the matched LF as the final byte.
+       Absent a match, the content runs to end of input.
+
+   The trailing-armor literals are 30 bytes, but only 29 bytes are
+   compared, so an armor line one dash short (…SIGNATURE----) followed
+   by any byte also matches.
+
+   Compatibility note: Receivers that do not recognize the SSH prefix
+   leave the leading -----BEGIN… bytes in place, so the artifact fails
+   the line-1 gate of Section 4.1 and is treated as an opaque content
+   artifact rather than a structural artifact.  The SSH armor is
+   assembled around an external detached signature.  Existing
+   documentation describes only the PGP form (Appendix C).
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 10]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.1.2.  Sterilization
+
+   This subsection is informative.  To render content deliberately
+   unparseable as a structural artifact, a writer appends a comment line
+   beginning with # after the final card, and before the signature block
+   when the content is PGP- or SSH-signed, so that a signature remains
+   trailing; the boundary is located by the same wrapper-detection logic
+   of Section 4.1.1.  The marker reads "# Remove this line to create a
+   well-formed Fossil manifest." for a check-in and "# Remove this line
+   to create a well-formed Fossil control artifact." for any other type.
+   Because the marker follows the cards, the line-1 gate never sees it.
+   It is rejected by the card-ordering rule of Section 4.4: the card
+   loop reads it as a line, and "#" sorts below every card letter,
+   including the "Z" before it.
+
+   An implementation providing both a fast well-formedness probe and a
+   full parser SHOULD ensure the two return identical verdicts on every
+   input.
+
+4.2.  Line and Token Grammar
+
+   Cards are one per line, with a single exception: the W card body
+   (Section 4.7.18) may contain embedded LF bytes.  The wire grammar of
+   a card is:
+
+   card        = card-letter ( SP card-args LF / LF )
+   card-letter = %x41-5A          ; A-Z; 21 letters defined
+   card-args   = *( token SP ) value
+   token       = 1*tchar
+   value       = *tchar
+   tchar       = %x00-09 / %x0B-1F / %x21-FF
+                 ; any octet except SP (0x20) and LF (0x0A)
+
+   The final token of a card MAY be empty, on any card letter.  When a
+   card line's last octet before LF is SP, the final token is PRESENT
+   and its decoded form is the empty string — distinct from a card that
+   omits the token entirely, which is the argument-less form card-letter
+   LF.  Whether an empty final token is legal for a given card is then
+   decided by that card's own arity and validation in Section 4.7, not
+   by this grammar.  Empty tokens remain invalid in every other
+   position: a card line containing two consecutive SP octets is
+   malformed.
+
+   The byte immediately following the card-type letter MUST be exactly
+   one space (0x20, arguments follow) or LF (argument-less card).  Any
+   other second byte — including tab (0x09) — makes the card invalid.
+   Tokens are split on space and LF only; tab is not a delimiter and is
+   retained as literal token content.  Consequently a token can never
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 11]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   contain an embedded space.  There is no CR (0x0D) handling in the
+   card and token path — a CR is an ordinary token byte; the sole CR
+   tolerance in the pipeline is the blank-line detection of
+   Section 4.1.1.
+
+4.2.1.  Exact Arity
+
+   Every card's positional grammar in Section 4.7 is exact, an upper
+   bound as well as a minimum.  A card line that carries more tokens
+   than its grammar defines MUST cause rejection of the whole artifact.
+   This one rule enforces maximum arity for every fixed-arity card (a
+   second token on B, C, G, H, I, K, L, N, R, U, W, or Z; a third on J;
+   a third on the two-token form of Q; a fourth on A; a fifth on F) and
+   equally rejects residual bytes after the final card.
+
+4.2.2.  Closed Card Alphabet
+
+   Exactly 21 card letters are defined: A, B, C, D, E, F, G, H, I, J, K,
+   L, M, N, P, Q, R, T, U, W, Z.  A card letter outside A-Z MUST be
+   rejected; an in-range but undefined letter (O, S, V, X, Y) MUST be
+   rejected.  The card alphabet is closed: there is no forward-
+   compatibility acceptance path for unknown card letters.
+
+4.3.  Character-Escape Encoding
+
+   Tokens that carry free text are encoded so that they contain no
+   delimiter bytes.  The decoder MUST recognize exactly eight backslash
+   escape pairs, decoded in place:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 12]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+                       +========+==================+
+                       | Escape | Decoded octet    |
+                       +========+==================+
+                       | \n     | LF (0x0A)        |
+                       +--------+------------------+
+                       | \s     | SP (0x20)        |
+                       +--------+------------------+
+                       | \t     | TAB (0x09)       |
+                       +--------+------------------+
+                       | \r     | CR (0x0D)        |
+                       +--------+------------------+
+                       | \v     | VT (0x0B)        |
+                       +--------+------------------+
+                       | \f     | FF (0x0C)        |
+                       +--------+------------------+
+                       | \0     | NUL (0x00)       |
+                       +--------+------------------+
+                       | \\     | backslash (0x5C) |
+                       +--------+------------------+
+
+                                  Table 1
+
+   For any other character following a backslash, the decoder discards
+   the backslash and emits the following character unchanged.  A
+   backslash followed by an unrecognized character C decodes to the
+   single byte C.  No error is raised.  A backslash that is the final
+   byte of a token has no following character and introduces no escape
+   pair; the decoder emits the backslash (0x5C) unchanged.  As with an
+   unrecognized escape, no error is raised.
+
+4.3.1.  Decoded Token Positions
+
+   The decoder applies at exactly 12 token positions across 9 card
+   letters: the A card filename and target (but not the source hash);
+   the C card comment; the F card filename always, and the old-name when
+   present (but never the hash or permission tokens); the H card thread
+   title; the J card value only (not the field name); the L card wiki
+   title; the N card mimetype; the T card value (if present) and tag
+   name (but not the target hash); and the U card login, when non-empty.
+   All hash and checksum tokens (B, the E card identifier, the F card
+   hash, G, I, K, M, P, Q, R, the T card target, Z), both timestamps (D,
+   E), and the W card size and body are never decoded.
+
+   The A card target is the one hash-bearing position that is escape-
+   decoded before validation, because the same position may
+   alternatively hold an encoded wiki name (Section 4.7.2).  Validation
+   applies to the decoded value, not the wire token.  Because an
+   unrecognized escape decodes to the single character following the
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 13]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   backslash, a wire token containing backslash escapes MAY decode to a
+   value that is entirely hexadecimal; that decoded value is validated
+   as an artifact hash exactly as an unescaped hexadecimal token would
+   be.  A pure-hexadecimal wire token decodes to itself.
+
+   The compatibility divergences around decoded token positions are
+   recorded in Appendix C.
+
+4.4.  Card Ordering
+
+   Cards within a structural artifact MUST appear in non-decreasing
+   lexicographic card-type order: each card's type letter MUST be
+   greater than or equal to the previous card's type letter.  The
+   rejection condition fires only when a card's letter sorts below the
+   previous card's letter, so consecutive cards of the same type letter
+   are permitted — this is what allows repeatable card types.  The
+   ordering is non-decreasing, not strictly increasing, at the card-type
+   level.
+
+   One compatibility exception is normative: an N card MAY appear
+   immediately after a P card when the artifact has already presented a
+   valid E card.  A parser MUST accept that sequence, and any other out-
+   of-order card MUST be rejected.  The exception is observable at the
+   moment the out-of-order N card is encountered: the artifact is a
+   technote.  The historical divergence that motivates this exception is
+   recorded in Appendix C.
+
+   Two structural consequences follow:
+
+   *  *B precedes F.* Because B < F, any B card is always parsed before
+      every F card in the same artifact.  The baseline reference is thus
+      fully settled (present or absent) by the time each F card's
+      conditional hash-required check runs, so the delta/baseline
+      distinction is decidable in a single forward pass.
+
+   *  *Nothing follows Z.* Z is the lexicographically last defined
+      letter and the ordering rule admits no letter after it (the
+      N-after-P exception does not involve Z), so only another Z card
+      can follow a Z card.  Every artifact type requires a Z card
+      (Section 5.2), so the last line of an accepted artifact is a Z
+      card, and because its token is exactly 32 hexadecimal digits it
+      occupies exactly the final 35 bytes of the stripped content: Z,
+      space, 32 hexadecimal digits, LF.  The must-be-last property
+      follows from ordering and the required-card rule, not from an
+      explicit last-card check in the Z card grammar, which validates
+      only token syntax.  Checksum verification (Section 6.2) does not
+      establish it either: it reads the final 35 bytes by position,
+      whatever card they belong to.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 14]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.5.  Occurrence Classes and Intra-Type Ordering
+
+4.5.1.  Occurrence Classes
+
+   Twenty of the 21 card types divide into two classes:
+
+   *  *Single-occurrence* (a duplicate MUST be rejected): A, B, C, D, E,
+      G, H, I, K, L, N, R, U, W.
+
+   *  *Repeatable* (each occurrence appends to the artifact's growing
+      list for that type): F, J, M, T, P, Q.
+
+   It is not the case that any duplicate card type is a syntax error;
+   the rule is per-class as above.
+
+   The Z card, the 21st letter, belongs to neither class.  It has no
+   duplicate guard, and the ordering rule permits equal consecutive
+   letters.  No separate rule requires the Z card to be exactly one, and
+   that it is last follows from the ordering and required-card rules
+   (Section 4.4).  Checksum verification examines only the final 35
+   bytes of the stripped content (Section 4.4), so any earlier Z line is
+   simply content covered by the final checksum.
+
+4.5.2.  Intra-Run Ordering of Repeatable Cards
+
+   The repeatable card types carry distinct per-list sort rules, each
+   enforced with the byte-wise comparator of Section 4.5.3:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 15]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+      +======+=====================================================+
+      | Type | Intra-run rule                                      |
+      +======+=====================================================+
+      | F    | Strictly ascending by decoded filename (equal or    |
+      |      | descending rejected)                                |
+      +------+-----------------------------------------------------+
+      | J    | Strictly ascending by field name (equal or          |
+      |      | descending rejected)                                |
+      +------+-----------------------------------------------------+
+      | M    | Strictly ascending by hash (equal or descending     |
+      |      | rejected)                                           |
+      +------+-----------------------------------------------------+
+      | T    | Two-level ascending by (tag name, then target       |
+      |      | hash); equal names require strictly increasing hash |
+      +------+-----------------------------------------------------+
+      | P    | Not sorted or deduplicated; order is semantic       |
+      |      | (primary parent first)                              |
+      +------+-----------------------------------------------------+
+      | Q    | No duplicate guard or ordering check; unordered-    |
+      |      | repeatable                                          |
+      +------+-----------------------------------------------------+
+
+                                 Table 2
+
+   F card ordering in detail: entries MUST be in strict ascending sort
+   order by the decoded filename within a single manifest or delta
+   manifest.  The check rejects both duplicates and descending pairs and
+   runs on the post-decode filename, not on the raw wire-encoded token
+   (decoding happens before the sort check).  This per-list ordering is
+   independent of, and in addition to, the card-type ordering of
+   Section 4.4; it underlies the binary search into a baseline's file
+   list and the merge walk that materializes a delta manifest against
+   its baseline (Section 8.2).
+
+4.5.3.  The Canonical Comparator
+
+   A single comparison function governs the F, J, M, and T sort checks,
+   the delta-baseline merge walk (Section 8.2), and single-name search
+   (Section 8.4): a raw-byte comparison in which octets are compared as
+   unsigned values, locale-independent, with no Unicode normalization
+   and no case folding.  A shorter string sorts before any extension of
+   itself, and an absent value sorts before any present value.  The
+   directory separator / (0x2F) receives no special treatment.
+
+   The R card has no comparator role: it is a single 32-character
+   hexadecimal token with no ordering semantics.  "Filename order" in
+   the R card computation (Section 6.3) means the file-enumeration order
+   under this same comparator.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 16]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   Writers emit F cards by iterating files in the same ascending byte-
+   wise pathname order the parser enforces, and independent
+   implementations agree on unsigned-octet, locale-free, case-sensitive
+   ordering.
+
+4.6.  Validity Predicates
+
+   Three predicates named by the per-card grammars are defined here.
+   Each operates on the decoded form of its token, treated as a sequence
+   of unsigned octets.
+
+4.6.1.  Simple-Pathname Predicate
+
+   The pathname predicate applies to the A card filename and to the F
+   card filename and old-name.  A parser MUST reject the decoded name if
+   and only if any of the following holds:
+
+   *  it is empty;
+
+   *  its first byte is /;
+
+   *  the whole string is . or ..;
+
+   *  it begins with ./ or ../;
+
+   *  it contains //;
+
+   *  it ends with /;
+
+   *  any path element equals . or .. — that is, it contains /./ or
+      /../, or ends with /. or /...
+
+   The predicate imposes no other byte-content restriction: backslashes,
+   spaces (reachable via \s decoding), control bytes, and arbitrary or
+   invalid UTF-8 sequences all pass.  Accept or reject is decidable from
+   the separator structure alone.
+
+   A writer is held to a stricter profile when creating new filenames.
+   In addition to the rules above, a writer MUST NOT emit a filename
+   containing a backslash, and MUST emit valid UTF-8, excluding: invalid
+   or stray continuation bytes, overlong encodings, characters above
+   U+FFFF, surrogates U+D800 through U+DFFF, private-use characters
+   U+E000 through U+F8FF, and the noncharacters U+FDD0 through U+FDEF
+   and U+FFFE through U+FFFF.  A validator of existing artifacts MUST
+   apply only the parser rules; the writer profile does not constrain
+   acceptance.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 17]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.6.2.  Wiki-Name Predicate
+
+   The wiki-name predicate applies to the L card title and to the A card
+   target in its wiki-name alternative.  A parser MUST reject the
+   decoded name if and only if any of the following holds:
+
+   *  its first byte is less than or equal to 0x20 (this rejects the
+      empty string, a leading space, and any leading control byte);
+
+   *  any subsequent byte is less than 0x20 (all control bytes,
+      including tab and LF);
+
+   *  two consecutive space bytes (0x20 0x20) appear anywhere;
+
+   *  its final byte is a space (0x20);
+
+   *  its total length in bytes is outside 1 through 100 inclusive.
+
+   All bytes greater than or equal to 0x21 are otherwise unconstrained:
+   0x7F and all bytes at or above 0x80 are accepted, no UTF-8 validity
+   check is performed, and length is counted in bytes, not characters.
+
+4.6.3.  Reserved Filenames
+
+   A decoded current F-card filename is reserved if and only if the
+   following deterministic predicate matches:
+
+   1.  Start with the decoded filename.  If it ends, case-insensitively,
+       with exactly one of -wal, -shm, or -journal, strip that one
+       suffix for the rest of this predicate and record that a sidecar
+       suffix was stripped.
+
+   2.  The remaining string ends, case-insensitively, with either
+       _FOSSIL_ (8 bytes) or .fslckout (9 bytes).
+
+   3.  At least one of the following is true: the reserved tail is the
+       entire remaining string; the byte immediately before the tail is
+       /; or a sidecar suffix was stripped in step 1.
+
+   A tail match that satisfies none of step 3, such as x_FOSSIL_, is not
+   reserved.  A sidecar-suffix match such as x_FOSSIL_-wal or
+   dir/.fslckout-journal is reserved because step 1 stripped a suffix.
+   The predicate is limited to Fossil repository metadata filenames; it
+   does not include platform checkout filters or Windows device names
+   such as CON.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 18]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   This rule applies only to the current filename field of an F card,
+   after escape decoding.  The old-name field is not tested by this
+   reserved-name rule.
+
+   An F card whose decoded current filename is reserved MUST be silently
+   dropped, not rejected.  Dropping removes the card from the effective
+   file set.  The drop occurs before the F card would set the artifact
+   type to MANIFEST (Section 5.3): a dropped card assigns no type and
+   records no file entry, though its letter still counts as present for
+   the allowed-card check of Section 5.2.  Such names leaked into
+   historical manifests, and existing documentation contains no mention
+   of this behavior (Appendix C); the drop alters the effective file set
+   of affected historical manifests (Section 9).
+
+   Sequencing: the F card sort check (Section 4.5.2) runs before the
+   reserved-name drop, so a reserved-named F card must itself be in sort
+   position relative to the previously retained entry, and the next F
+   card is compared against that same retained entry.  The dropped name
+   never becomes the comparison anchor.  A validator that checks order
+   before dropping reproduces this behavior exactly.
+
+4.6.4.  Timestamps
+
+   The D and E card timestamps are each a single raw (never decoded)
+   token.  A writer emits the combined date-time form:
+
+   timestamp = date %x54 time [ frac ]   ; %x54 = "T"
+   date      = 4DIGIT "-" 2DIGIT "-" 2DIGIT
+   time      = 2DIGIT ":" 2DIGIT ":" 2DIGIT
+   frac      = "." 1*DIGIT
+
+   A parser accepts a broader set of forms.  The accepted grammar for
+   the token is:
+
+   1.  A date-time: an optional leading -, then YYYY-MM-DD, then one or
+       more separator bytes each of which is either a whitespace-class
+       byte or the uppercase letter T, then HH:MM, HH:MM:SS, or
+       HH:MM:SS. followed by one or more digits, then an optional
+       timezone of optional whitespace plus +HH:MM, -HH:MM, Z, or z.
+       Lowercase t as the separator is rejected.  Because the token is
+       space-delimited on the wire and never decoded, T is the only
+       usable date-time separator in an artifact (a literal tab inside
+       the token would also satisfy the whitespace class).
+
+   2.  A date only: optional leading -, then YYYY-MM-DD.
+
+   3.  A time only: HH:MM, optionally :SS and a fraction, interpreted as
+       a time on 2000-01-01.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 19]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   4.  The literals now, subsec, or subsecond, case-insensitive.
+
+   5.  A bare decimal number, treated as a Julian day number when its
+       value r satisfies 0 < r < 5373484.5.  The number is an optional
+       sign, then digits with an optional fraction (at least one digit
+       in all), then an optional decimal exponent introduced by E or e
+       with an optional sign, such as 2451545.5, +2451545, .5 or 2.45e6.
+       No other numeric spelling is recognized.  A number whose value is
+       zero, negative, or 5373484.5 or more MUST be rejected.  The check
+       is made on the value rounded to the nearest millisecond, so a
+       positive value that rounds to zero is rejected, as is a value
+       just below 5373484.5 that rounds up to it.
+
+   In forms 1 through 3, each field present has exact digit counts and
+   ranges: the year is exactly 4 digits, the month exactly 2 digits in
+   01-12, the day exactly 2 digits in 01-31 with no calendar-aware check
+   (2024-02-31 is accepted), the hour 2 digits in 00-24, the minute and
+   second 2 digits each in 00-59, and the fraction one or more digits.
+
+   Finally: a date or date-time token MUST denote a date strictly after
+   -4713-11-24 — its (year, month, day) lexicographically greater than
+   (-4713, 11, 24), independent of any time-of-day component — and a
+   bare Julian-day-number token MUST be greater than zero.
+   Equivalently, the numeric token 0 and every date at or before
+   -4713-11-24 are rejected.
+
+   Compatibility admission is broader than interoperable output.  For
+   stored structural artifacts whose D or E card timestamp can feed
+   repository-state ordering, a producer MUST emit the absolute date-
+   time form above.  A reader MAY accept the broader forms in items 2
+   through 5 for compatibility.
+
+   In particular, now, subsec, and subsecond are resolved against parse-
+   time clock state rather than denoting a stable instant in the
+   artifact bytes.  Two ingestions of identical bytes can therefore
+   yield different stored mtime values.  The ordering rules in
+   [FossilRepoState] apply to the stored numeric mtime produced by
+   parsing, not to the literal token text, so these relative literals
+   are parser-compatibility admissions outside conforming repository-
+   state semantics.
+
+4.7.  Per-Card Grammars
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 20]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.7.1.  Hash-Token Validation Map
+
+   Every artifact-hash-bearing position — the A card target (as one of
+   its two alternatives), the A card source, B, the E card identifier,
+   the F card hash, G, I, M, each P card token, both Q card tokens (the
+   first after stripping its + or - sign), and the T card target (unless
+   it is the literal *) — MUST be exactly 40 or 64 case-insensitive
+   hexadecimal characters (Section 3.5).  Two exceptions:
+
+   *  The K card ticket identifier is pinned to the 40-character SHA-1
+      length and can never be 64 characters, regardless of hash policy.
+      Its canonical writer form is 40 lowercase hexadecimal digits, and
+      a conforming implementation MUST emit lowercase; a parser MAY
+      accept 40 upper- or lowercase hexadecimal digits on input, the
+      same canonical-versus-parser-tolerant split used for artifact
+      names (Section 3).
+
+   *  The R card and Z card checksum tokens MUST be exactly 32
+      hexadecimal characters (MD5, Section 6).
+
+   None of these hash or checksum tokens is escape-decoded, with the
+   single A card target carve-out of Section 4.3.1.
+
+4.7.2.  A Card
+
+   a-card = %x41 SP filename SP target [ SP source ] LF   ; "A"
+
+   An attachment card.  An attachment artifact carries exactly one A
+   card; a second A card is a syntax error.  The card describes one
+   attachment operation on one target object.
+
+   Parse-time acceptance is syntactic only.  It does not resolve the
+   target to an object.
+
+   *  The filename is escape-decoded and MUST pass the pathname
+      predicate (Section 4.6.1).  Only its final path component is
+      retained as the stored attachment name; any directory prefix is
+      discarded.
+
+   *  The target is escape-decoded and MUST be syntactically either a
+      valid artifact hash or a well-formed wiki name (Section 4.6.2).
+      Parse-time acceptance checks this shape only.  It does not confirm
+      that the target names an existing object.
+
+   *  The source, when present, is a raw (never decoded) artifact hash
+      validated per the hash map.  A present but empty source
+      (Section 4.2) fails that validation and MUST be rejected.  When
+      absent, no source is recorded.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 21]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   Target resolution happens at crosslink time.  The decoded target is
+   classified against the repository in a fixed precedence: a forum
+   post, then a ticket, then a wiki page, then a technote.  A hash-
+   shaped target binds to the artifact that hash names, which is a
+   ticket, technote, or forum post.  A wiki-name-shaped target binds to
+   the wiki page of that name.  When the decoded target is syntactically
+   valid for more than one family, the first match in that precedence
+   order is used.  When the target resolves to no known object, because
+   it is not present in this repository or names an unsupported kind,
+   the attachment is still recorded and is treated as a generic artifact
+   reference.  This is not an error and is not deferred.
+
+   The source field carries the operation's behavior, not only a field
+   shape.  A present source names the content being attached, and the
+   operation adds that attachment.  An absent source deletes the
+   attachment association for the (target, retained filename) pair.  An
+   attachment is identified by that (target, filename) pair, and the
+   operation with the greatest modification time is the one in effect: a
+   later add with the same pair supersedes an earlier one, and an absent
+   source deletes the association regardless of any earlier add.
+
+4.7.3.  B Card
+
+   b-card = %x42 SP hash LF                               ; "B"
+
+   The baseline card.  Exactly one hash token, validated per the hash
+   map; at most one B card.  Its presence marks the artifact as a delta
+   manifest (Section 8).  The referenced artifact MUST itself be a
+   baseline manifest: a writer MUST NOT emit a B card naming another
+   delta manifest.  Fossil does not enforce this on read: it parses and
+   cross-links a delta manifest whose baseline is itself a delta and
+   computes its file set from that delta's own F cards and the named
+   artifact's own F cards only.  Files the named artifact inherits from
+   its own baseline are absent from the result, and the file listing
+   reports no error.  A reader MUST accept such an artifact and MUST
+   compute its file set in the same way (Section 8.2); rejecting it, or
+   resolving it recursively, diverges from Fossil.  The named artifact's
+   delete markers enter that walk on the baseline side, and like the
+   delta's own they add no file: a consumer MUST filter out every merged
+   entry without a hash.  Ordering guarantees relative to F cards are
+   given in Section 4.4.
+
+   This paragraph is informative.  Fossil 2.28 is not consistent on such
+   an artifact beyond its file listing.  Its zip, tarball, and sqlar
+   commands do not filter the named artifact's delete markers and
+   terminate with a segmentation fault when it carries one; Fossil
+   check-in 4886b7de6d (2026-10-14), on the development line after 2.28,
+   filters them.  The file-change records it writes when it cross-links
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 22]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   the check-in do not describe the difference between the parent's file
+   set and the check-in's: files the one-level rule drops get no record,
+   while unchanged files and delete markers can be recorded as changes.
+   This document does not define those records for such a check-in.
+
+4.7.4.  C Card
+
+   c-card = %x43 SP comment LF                            ; "C"
+
+   The comment card.  Exactly one required token, escape-decoded;
+   single-occurrence.  A C card with no token — a bare C immediately
+   followed by LF — MUST be rejected.  A C card whose single token is
+   empty (C, SP, LF) is a present comment whose decoded value is the
+   empty string, and MUST be accepted.  The decoded comment content is
+   otherwise unvalidated.  The C card never assigns the artifact type;
+   its presence participates in type resolution only through the
+   fallback of Section 5.3.
+
+4.7.5.  D Card and E Card
+
+   d-card = %x44 SP timestamp LF                          ; "D"
+   e-card = %x45 SP timestamp SP technote-id LF           ; "E"
+
+   The date card and the technote card.  Each timestamp is a single raw
+   token validated per Section 4.6.4.  The E card additionally requires
+   a second token — a technote identifier validated per the hash map —
+   and marks the artifact as a technote (EVENT type).
+
+4.7.6.  F Card
+
+   f-card = %x46 SP filename                              ; "F"
+            [ SP hash [ SP perm [ SP old-name ] ] ] LF
+
+   A file-list entry.  The filename is always escape-decoded and MUST
+   pass the pathname predicate (Section 4.6.1); the old-name (fourth
+   position) is decoded when present and held to the same predicate; the
+   hash and permission tokens are never decoded.  Constraints:
+
+   *  *Sort order:* strict ascending by decoded filename; duplicates
+      rejected (Section 4.5.2).
+
+   *  *Hash presence:* in a baseline manifest, every F card MUST carry a
+      hash.  In a delta manifest, the hash MAY be omitted; a hash-less F
+      card carries a null hash and is interpreted by the merge walk as a
+      file-deletion marker relative to the baseline (Section 8.2).  A
+      hash-less F card is therefore permitted only when a B card is
+      present.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 23]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   *  *Permission token:* for interoperability a producer SHOULD emit
+      only w, x, or l.  When an old-name is present in conforming
+      output, a producer MUST emit an explicit permission token so the
+      old-name remains in the fourth positional field defined by the
+      grammar; in the regular-file case that token SHOULD be w.  A
+      reader MUST parse any third positional token as the raw permission
+      token, never as old-name, and MUST accept it without parse-time
+      validation against {w,x,l}. Only the fourth positional token, when
+      present, is old-name.  A raw permission token containing x marks
+      the entry executable; otherwise, a token containing l marks it as
+      a symbolic link; all other raw permission tokens yield regular-
+      file behavior.
+
+   *  *Reserved names:* an F card whose decoded current filename is
+      reserved MUST be silently dropped, after sort checking, per
+      Section 4.6.3.  The old-name field is not tested by that rule.
+
+4.7.7.  G Card, H Card, and I Card
+
+   g-card = %x47 SP hash LF                               ; "G"
+   h-card = %x48 SP threadtitle LF                        ; "H"
+   i-card = %x49 SP hash LF                               ; "I"
+
+   The forum cards.  Each is single-occurrence with exactly one required
+   token, and each marks the artifact as a forum post.  The G card
+   carries a raw (never decoded) artifact hash, validated per the hash
+   map, identifying the thread-root post.  The I card carries a raw
+   artifact hash identifying the post being replied to.  The H card
+   carries an escape-decoded thread title with no content validation —
+   any decoded string is accepted (in contrast to the L card below).  An
+   artifact MUST NOT contain both an H card and an I card (Section 5.4).
+
+4.7.8.  J Card
+
+   j-card = %x4A SP fieldname [ SP value ] LF             ; "J"
+
+   A ticket field-change card.  Repeatable, strictly ascending by field
+   name (Section 4.5.2).  The value is escape-decoded; the field name is
+   stored verbatim, including any leading +. An absent value and a
+   present empty one (J, SP, fieldname, SP, LF) both decode to the empty
+   string, not null, and a reader MUST NOT distinguish them; Fossil
+   writes the present empty form when a ticket field is set to the empty
+   string.  How a consumer applies J cards to ticket state — including
+   the +-prefix append rule and tolerance of unknown field names — is
+   ticket-processing semantics, which the current Fossil specification
+   set does not define (ticket semantics are a separate, forthcoming
+   concern); at the artifact layer a J card is exactly the grammar given
+   here.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 24]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.7.9.  K Card
+
+   k-card = %x4B SP ticket-id LF                          ; "K"
+
+   The ticket card.  A single raw ticket identifier of exactly 40
+   hexadecimal characters (Section 4.7.1); single-occurrence; marks the
+   artifact as a ticket change.  The identifier is pinned to the
+   40-character SHA-1 length; a 64-character SHA3-length identifier is
+   always invalid.  Its canonical writer form is lowercase, and a
+   conforming implementation MUST emit lowercase; a parser MAY accept
+   uppercase, mirroring the artifact-name split of Section 3.
+
+4.7.10.  L Card
+
+   l-card = %x4C SP wikititle LF                          ; "L"
+
+   The wiki-title card.  A single escape-decoded title token that MUST
+   pass the wiki-name predicate (Section 4.6.2); single-occurrence;
+   marks the artifact as a wiki page.
+
+4.7.11.  M Card
+
+   m-card = %x4D SP hash LF                               ; "M"
+
+   A cluster member.  Repeatable; each occurrence carries a hash
+   validated per the hash map; runs MUST be strictly ascending by hash
+   (Section 4.5.2).  Marks the artifact as a cluster.
+
+4.7.12.  N Card
+
+   n-card = %x4E SP mimetype LF                           ; "N"
+
+   The mimetype card.  A single escape-decoded mimetype token with no
+   mime-syntax validation; single-occurrence.  Per-type semantics
+   diverge: on a check-in manifest the N card is grammatically legal but
+   functionally inert — no implementation has interpreted it, and
+   comments are rendered as Fossil wiki text regardless; on wiki,
+   technote, and forum artifacts it names the W card body's mimetype,
+   defaulting to text/x-fossil-wiki when omitted; on an attachment it
+   names the C card comment's mimetype, defaulting to text/plain — both
+   a different default and a different target field than the other
+   types.
+
+4.7.13.  P Card
+
+   p-card = %x50 *( SP hash ) LF                          ; "P"
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 25]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   The parent card.  Zero or more hash tokens on one line, each
+   validated per the hash map.  An empty P card (zero tokens) MUST be
+   accepted: the initial empty check-in historically has an empty P
+   card.  Tokens are neither sorted nor deduplicated; their order is
+   semantic.  Per-type meanings (parsed identically): on a manifest, the
+   first token is the primary ancestor and remaining tokens are merge
+   parents; on a wiki page, the prior version or versions; on a
+   technote, a single prior technote with the same technote identifier
+   being edited (an edit-chain link, not a merge); on a forum post, a
+   single prior version of the same post.
+
+   On a check-in manifest, the P-card tokens define the check-in's
+   parent and merge-parent references as artifact syntax only.  The
+   check-in ancestry graph built from those references, and the branch,
+   leaf, and current-trunk semantics computed over it, are specified in
+   [FossilRepoState].
+
+   For interoperability a producer SHOULD emit at most one P card.
+   Existing receiver behavior for a repeated P card is a compatibility
+   divergence recorded in Appendix C; this section does not strengthen
+   the parse-time receiver rule for repeated P cards.
+
+4.7.14.  Q Card
+
+   q-card = %x51 SP q-sign hash [ SP hash ] LF            ; "Q"
+   q-sign = "+" / "-"
+
+   The cherry-pick card.  The + (cherry-pick into) or - (backout of)
+   sign is concatenated without a space onto the first hash, inside a
+   single token: the sign byte is checked, then the remainder is
+   validated per the hash map.  Contrast the T card, where the sign is
+   on the name.  The optional second token is a plain unprefixed hash
+   naming the baseline of the range; when omitted, the documented
+   default is the target's primary parent, but that default is not
+   resolved at parse time — the field is left null.  Q cards are
+   unordered-repeatable: no duplicate guard and no ordering check.
+   Receivers that do not recognize the Q card reject manifests
+   containing it.
+
+4.7.15.  R Card
+
+   r-card = %x52 SP md5-token LF                          ; "R"
+
+   The repository checksum card.  A single checksum token of exactly 32
+   hexadecimal characters; single-occurrence; never decoded.  Its
+   computation and verification are specified in Section 6.3.  An R card
+   may appear only in a manifest (Section 5.2) and is never required.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 26]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+4.7.16.  T Card
+
+   t-card   = %x54 SP tag-sign tagname                    ; "T"
+              SP ( hash / "*" ) [ SP value ] LF
+   tag-sign = "+" / "-" / "*"
+
+   The tag card.  The sign prefix is embedded in the name token.  Tokens
+   are read in order name, target, value, and validated as follows: the
+   value (if present) is escape-decoded; the target MUST be a valid
+   artifact hash or the exact one-character literal * denoting a self-
+   referential tag (carried with a null target); the name is escape-
+   decoded, its first character MUST be +, -, or *, and the remainder
+   after the prefix MUST NOT consist entirely of hexadecimal digits, at
+   any length — a tag name must remain distinguishable from a hash
+   prefix.  The target token is never decoded.  An absent value yields
+   null (unlike the J card's empty-string default).  Intra-run ordering
+   is the two-level rule of Section 4.5.2; the name used as the primary
+   ordering key is the full name token including its leading sign
+   character (+, -, or *), not the sign-stripped tag name.
+
+   At parse time, T validity ends with this token syntax, the intra-run
+   ordering rule, the per-type legality table, and the self-referential-
+   tag checks in Section 5.4.  Repository-state effects are applied
+   later when a stored structural artifact is crosslinked.  Crosslink
+   processing maps the decoded name prefix to a tag operation: + applies
+   a singleton tag to the target only, * applies a propagating tag
+   through primary child links until blocked, and - cancels or blocks
+   the tag.  The target is the named artifact hash, or the artifact
+   carrying the card when the target token is *; the stored tag name is
+   the decoded name with the prefix removed.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 27]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   Branch, ordinary tag, closed-leaf, and current-trunk views are
+   derived from those crosslinked tag records, not from T parsing alone.
+   In canonical artifacts, T *branch * NAME supplies the propagating
+   branch property, T *sym-NAME * supplies a symbolic tag, T +closed *
+   marks a closed leaf, and T -closed * cancels that closed marker.  A
+   leaf is a check-in with no child on the same branch; a check-in with
+   no branch tag uses the repository's main branch name, whose default
+   is trunk.  Open-leaf, closed-marker, and current-trunk answers are
+   therefore repository views over the check-in DAG, the branch tag
+   value, symbolic tags, and the closed tag.  Current-trunk additionally
+   depends on the repository-local main-branch setting that selects
+   which branch name to resolve, so it is not a pure function of the
+   artifact set; its full definition, including that local input, is in
+   [FossilRepoState].  This document defines the artifact syntax and
+   routes those effects to repository crosslink/tag-state processing,
+   which is specified in [FossilRepoState]; [FossilSync] owns discovery,
+   transfer, phantom/delta convergence, and the point at which a sync
+   participant may rely on the derived views.
+
+4.7.17.  U Card
+
+   u-card = %x55 [ SP [ login ] ] LF                      ; "U"
+
+   The user card.  A single escape-decoded login token; single-
+   occurrence.  When a U card is present but carries an empty or omitted
+   login token — a bare U line, or a U followed by an empty token — the
+   reader MUST substitute the literal string anonymous.  The U card's
+   possibly-empty login token is the general trailing-value rule of
+   Section 4.2; the substitution of anonymous is what is specific to
+   this card.  This substitution never fires for a wholly absent U card:
+   absence is governed by the per-type required-card rule of Section 5.2
+   (a wiki artifact lacking a U card is rejected there; see also
+   Appendix C).
+
+4.7.18.  W Card
+
+   w-card = %x57 SP size LF body LF                       ; "W"
+   size   = "0" / ( nonzero-digit *DIGIT )
+   nonzero-digit = %x31-39
+   body   = <size> OCTET
+
+   The body card.  Writer form: a producer MUST emit the size as
+   canonical decimal ASCII digits with one or more digits and no sign,
+   leading padding, or suffix bytes.  The size token is followed,
+   starting immediately after its terminating LF, by the raw body of
+   exactly size octets.  The body is opaque bytes: it is located by the
+   byte count that precedes it, it MAY contain the byte 0x0A and any
+   other byte, and it is not line-split.  The W card is the sole
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 28]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   exception to the one-card-per-line rule.  The byte immediately after
+   the declared-length body MUST be exactly LF, and the position one
+   past that byte MUST remain within the artifact.
+
+   Reader acceptance is wider than the writer form.  A reader
+   accumulates only leading decimal digits from the size token, stops at
+   the first non-digit byte, and does not re-check that the remainder of
+   that token is empty.  Accumulator overflow MUST be detected and
+   rejected.  A reader MUST bound the resulting size against the
+   remaining artifact length before consuming the body, MUST consume
+   exactly that many body bytes by counting, and MUST NOT scan the body
+   for a card boundary.  Therefore a token such as 12x is accepted only
+   if exactly 12 content bytes and then LF follow.  A token with no
+   leading digit, such as abc, parses as zero and is accepted only in
+   the narrow case where the next byte is immediately LF and the
+   surrounding artifact otherwise satisfies all card and type rules.
+
+4.7.19.  Z Card
+
+   z-card = %x5A SP md5-token LF                          ; "Z"
+
+   The self-checksum card.  A checksum token of exactly 32 hexadecimal
+   characters, never decoded, structurally last: it occupies exactly the
+   final 35 bytes of the stripped content (Section 4.4).  Its
+   verification is specified in Section 6.2.
+
+5.  Structural Artifact Types
+
+5.1.  Type Codes and Names
+
+   Every structural artifact is classified as exactly one of eight
+   types.  Each type has a stable numeric code and an external name —
+   the name emitted on machine-readable (JSON/API) surfaces:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 29]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+                   +======+============+===============+
+                   | Code | Type       | External name |
+                   +======+============+===============+
+                   | 1    | MANIFEST   | checkin       |
+                   +------+------------+---------------+
+                   | 2    | CLUSTER    | cluster       |
+                   +------+------------+---------------+
+                   | 3    | CONTROL    | tag           |
+                   +------+------------+---------------+
+                   | 4    | WIKI       | wiki          |
+                   +------+------------+---------------+
+                   | 5    | TICKET     | ticket        |
+                   +------+------------+---------------+
+                   | 6    | ATTACHMENT | attachment    |
+                   +------+------------+---------------+
+                   | 7    | EVENT      | technote      |
+                   +------+------------+---------------+
+                   | 8    | FORUM      | forumpost     |
+                   +------+------------+---------------+
+
+                                  Table 3
+
+   Code 0 is a sentinel meaning "type not yet determined"; it exists
+   only transiently during parsing, is consumed by the fallback of
+   Section 5.3, and is never a valid final classification.
+
+   Note (informative): diagnostic text in existing implementations uses
+   a second vocabulary that differs for two types: MANIFEST appears as
+   manifest and FORUM as forum post (with an embedded space); the six
+   other names are identical in both vocabularies.  The two vocabularies
+   are not interchangeable and readers are cautioned not to conflate
+   them.
+
+5.2.  Card Legality by Type
+
+   Each artifact type has a fixed set of allowed card letters and a
+   fixed subset of required card letters:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 30]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+      +======+============+=======================+================+
+      | Code | Type       | Allowed cards         | Required cards |
+      +======+============+=======================+================+
+      | 1    | MANIFEST   | B C D F N P Q R T U Z | D Z            |
+      +------+------------+-----------------------+----------------+
+      | 2    | CLUSTER    | M Z                   | M Z            |
+      +------+------------+-----------------------+----------------+
+      | 3    | CONTROL    | D T U Z               | D T U Z        |
+      +------+------------+-----------------------+----------------+
+      | 4    | WIKI       | C D L N P U W Z       | D L U W Z      |
+      +------+------------+-----------------------+----------------+
+      | 5    | TICKET     | D J K U Z             | D J K U Z      |
+      +------+------------+-----------------------+----------------+
+      | 6    | ATTACHMENT | A C D N U Z           | A D Z          |
+      +------+------------+-----------------------+----------------+
+      | 7    | EVENT      | C D E N P T U W Z     | D E W Z        |
+      +------+------------+-----------------------+----------------+
+      | 8    | FORUM      | D G H I N P U W Z     | D U W Z        |
+      +------+------------+-----------------------+----------------+
+
+                                 Table 4
+
+   An artifact MUST NOT contain any card whose letter is outside its
+   type's allowed set, and MUST contain every card in its type's
+   required set.  A parser MUST reject an artifact that violates either
+   rule.  Both checks run after the type is finalized (Section 5.3).
+
+   Consequences worth stating plainly: a manifest requires only the D
+   and Z cards, so the C and U cards are optional on a manifest; a wiki
+   artifact lacking a U card is rejected here; and the Z card is
+   required for every artifact type, even though the checksum-
+   verification gate of Section 4.1 tolerates its absence — an artifact
+   with no Z card passes that gate and is rejected by this rule instead.
+
+5.3.  Type Determination
+
+   The artifact's type is determined during the single pass over the
+   cards.  Thirteen card letters are type-setting; each assigns the
+   artifact type when processed, with no guard against a previously
+   assigned value.  The one exception is an F card dropped for a
+   reserved filename (Section 4.6.3), which assigns nothing:
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 31]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+                      +=============+===============+
+                      | Card letter | Type assigned |
+                      +=============+===============+
+                      | A           | ATTACHMENT    |
+                      +-------------+---------------+
+                      | B, F, Q, R  | MANIFEST      |
+                      +-------------+---------------+
+                      | E           | EVENT         |
+                      +-------------+---------------+
+                      | G, H, I     | FORUM         |
+                      +-------------+---------------+
+                      | J, K        | TICKET        |
+                      +-------------+---------------+
+                      | L           | WIKI          |
+                      +-------------+---------------+
+                      | M           | CLUSTER       |
+                      +-------------+---------------+
+
+                                  Table 5
+
+   The eight remaining card letters (C, D, N, P, T, U, W, Z) never set
+   the type.  Because card ordering is non-decreasing (Section 4.4),
+   when cards with multiple distinct type-setting letters are present,
+   the type that survives MUST be that of the alphabetically latest —
+   that is, last-processed — type-setting card.  L, the wiki title card,
+   is itself a direct type-setter; only the W body card is type-implicit
+   for wiki artifacts.
+
+   If, after all cards are processed, no type-setting card was seen, the
+   type MUST be resolved by fallback: the artifact is a MANIFEST if a C
+   card was present, or if any F card file entries were recorded, or if
+   any P card parents were recorded; otherwise it is a CONTROL artifact.
+   In practice this fallback is reachable via the C card or P card,
+   whose grammars never assign a type, and also when every F card was
+   dropped for a reserved filename.  In the last case, with no C card
+   and no P card, the artifact resolves to CONTROL and is then rejected
+   because F is not an allowed CONTROL card.  The allowed-card and
+   required-card checks of Section 5.2 run strictly after this fallback
+   finalizes the type, and are the effective disambiguator that rejects
+   any artifact whose card set does not match its implied type.
+
+5.4.  Per-Type Semantic Checks
+
+   Beyond card legality, four semantic checks apply after the type is
+   finalized, and a parser MUST enforce them:
+
+   1.  A CONTROL artifact MUST NOT contain a self-referential T card.
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 32]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   2.  In an EVENT (technote) artifact, every T card MUST be self-
+       referential and every T card MUST carry the + prefix.
+
+   3.  A FORUM artifact MUST NOT contain both an H card and an I card.
+
+   4.  A FORUM artifact's P card MUST NOT list more than one parent,
+       since forum posts cannot be merged.
+
+   A G card is valid when its token satisfies the hash grammar of
+   Section 4.7.1.  Conformance of a forum artifact does not depend on
+   any cross-artifact consistency check over the G, I, and P chains;
+   following the I chain to the thread root and that root's P chain to
+   its initial version need not yield the artifact named by G.
+
+5.5.  Well-Formedness Pre-Filter
+
+   This subsection is informative.  A fast pre-filter for well-
+   formedness may reject any input whose first card letter falls in N
+   through Z — narrower than the line-1 gate's bound of A through Z —
+   before full parsing is attempted.  The narrower range is sound given
+   the per-type card tables: for every artifact type the
+   lexicographically smallest allowed card letter is less than or equal
+   to M (minima: MANIFEST B, CLUSTER M, CONTROL D, WIKI C, TICKET D,
+   ATTACHMENT A, EVENT C, FORUM D), and non-decreasing card ordering
+   guarantees the smallest present card appears first.
+
+6.  Checksums
+
+   Structural artifacts carry two MD5-based [RFC1321] checksum cards:
+   the R card, an aggregate checksum over the check-in's tracked file
+   content, and the Z card, a self-checksum over the artifact text
+   itself.  Both cards carry a fixed-width 32-character hexadecimal MD5
+   digest token.
+
+6.1.  Digest Token Grammar
+
+   r-card    = %x52 SP md5-token LF        ; "R"
+   z-card    = %x5A SP md5-token LF        ; "Z", emitted form
+   md5-token = 32hexdig-ci
+
+   At parse time the digest token of both cards MUST be exactly 32
+   characters and MUST consist only of hexadecimal digits; the parse-
+   accept grammar is case-insensitive, admitting both 0-9a-f and A-F.
+   Case-insensitivity applies only to structural acceptance: as
+   specified below, checksum verification is byte-exact against
+   lowercase renderings, so digests are effectively lowercase-only
+   wherever their values are actually checked.  There is no case-folding
+   or canonicalization of artifact bytes anywhere in the parse path.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 33]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+6.2.  Z Card: Artifact Self-Checksum
+
+   Let n be the length in bytes of the artifact text after any PGP or
+   SSH signature wrapper has been stripped (Section 4.1.1); the wrapper
+   removal procedure there defines the byte range this section operates
+   on.  A Z card, when present, occupies the tail of the artifact: the
+   marker Z followed by a space begins at offset n-35, the 32 digest
+   bytes occupy offsets n-33 through n-2, and offset n-1 holds the
+   artifact's terminating byte.
+
+   Verification MUST proceed as follows:
+
+   1.  Compute the MD5 digest over exactly the first n-35 bytes of the
+       (wrapper-stripped) artifact text — all bytes strictly before the
+       Z marker.
+
+   2.  Render the digest as 32 lowercase hexadecimal characters.
+
+   3.  Compare it byte-for-byte against the 32 stored digest bytes at
+       offsets n-33 through n-2.
+
+   The outcome is one of three states:
+
+    +==========+===========================================+==========+
+    | State    | Condition                                 | Action   |
+    +==========+===========================================+==========+
+    | absent   | offsets n-35 and n-34 do not hold Z and a | continue |
+    |          | space, or artifact too short to hold one  | parsing  |
+    +----------+-------------------------------------------+----------+
+    | match    | stored token equals recomputed digest     | continue |
+    |          |                                           | parsing  |
+    +----------+-------------------------------------------+----------+
+    | mismatch | offsets n-35 and n-34 hold Z and a space, | abort    |
+    |          | but the token differs                     | parsing  |
+    +----------+-------------------------------------------+----------+
+
+                                  Table 6
+
+   A parser MUST reject an artifact whose Z card is present but
+   mismatched.  The verification stage MUST NOT itself reject an
+   artifact for lacking a Z card; absence is instead rejected by the
+   required-card rule of Section 5.2, which includes Z for every
+   artifact type.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 34]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   The state is decided by the bytes at those offsets, not by where card
+   lines begin: an artifact with no Z card whose last line ends in Z, a
+   space and 32 further bytes before its LF takes the match or mismatch
+   state rather than absent.  Such an artifact is rejected either way,
+   by the mismatch here or by the card rules, so only the reported
+   reason differs.
+
+   Because the comparison in step 3 is byte-exact against a digest that
+   is always rendered in lowercase, Z card verification is case-
+   sensitive: a Z card whose token contains any uppercase hexadecimal
+   digit MUST fail verification even if it is numerically the correct
+   digest, despite having been accepted by the case-insensitive
+   structural grammar.
+
+   Z card verification never reads byte n-1 (the artifact's terminating
+   byte); a conformant verifier neither checks nor requires any
+   particular value at that offset as part of Z card verification.  The
+   requirement that an artifact end with a final LF is the artifact-
+   level framing rule of Section 4.1, imposed on the raw, wrapper-
+   inclusive bytes before signature removal.  Producers MUST emit the Z
+   card in the form shown in the grammar above — the literal Z, one
+   space, the 32-character lowercase digest, and a terminating LF.
+
+   Note (informative): existing implementations verify the Z card
+   unconditionally; no supported configuration disables the check.
+   Implementations SHOULD NOT be designed on the assumption that any
+   deployed configuration skips Z card verification.
+
+6.3.  R Card: Aggregate Content Checksum
+
+6.3.1.  Parse-Time Handling
+
+   At parse time the R card is validated structurally only — the
+   32-character length and hexadecimal-digit checks of Section 6.1.  A
+   parser MUST NOT be expected to recompute the R card's value against
+   file content during parsing; the parse path never does so.  Semantic
+   verification of the R card value is a separate, writer-side operation
+   performed at commit time against the working checkout.  An R card may
+   appear only in a manifest and is never required (Section 5.2).
+
+6.3.2.  R-Card Computation
+
+   The R card value is the MD5 digest of a single running hash context
+   fed, for every tracked file in filename order, with the following
+   byte sequence per file:
+
+   1.  the filename text;
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 35]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   2.  a single space, then the file's size in bytes rendered as
+       canonical minimal decimal ASCII — no leading zeros, no sign, no
+       digit separators — then a LF;
+
+   3.  the raw file content bytes.
+
+   Equivalently:
+
+   ctx = MD5-Init()
+   for each tracked file f, in filename order:
+       MD5-Update(ctx, name(f))
+       MD5-Update(ctx, SP || decimal(size-in-bytes(f)) || LF)
+       MD5-Update(ctx, content(f))
+   r-value = lowercase-hex(MD5-Final(ctx))
+
+   The checksum covers filename plus size-header plus content for each
+   file, concatenated across all files — not merely the concatenation of
+   raw file bytes.  "Filename order" is the byte-wise unsigned-octet
+   order of the canonical comparator (Section 4.5.3), identical to the
+   file-enumeration order; / receives no special collation treatment.
+
+6.3.3.  Delta Manifests
+
+   For a delta manifest, the R card MUST be computed over the fully
+   reconstructed file set obtained by merging the delta with its
+   baseline (Section 8.2) — iterating the merged file list and skipping
+   entries that carry no hash (delete markers) — and NOT over the delta
+   manifest's literal F cards.
+
+6.3.4.  Emitted Form
+
+   The writer emits the R card as exactly the literal R, one space, the
+   checksum bytes, and LF — nothing else — and the checksum value is
+   always rendered as exactly 32 lowercase hexadecimal digits.  The
+   emitted form is strictly lowercase even though the parse-accept
+   grammar is case-insensitive.  The commit-time self-consistency check
+   compares byte-exactly against an always-lowercase recomputed digest,
+   so an uppercase R card — although accepted at parse time — fails that
+   check.  Value correctness of the R card is checked only at commit
+   time, never during artifact parsing.
+
+7.  Hash Policy
+
+   A repository carries a hash policy that governs which hash algorithm
+   names newly stored artifacts and whether a secondary algorithm may be
+   consulted when storing or resolving content.  The policy is a per-
+   repository, purely local concern: it shapes how names are assigned
+   going forward, and it never alters names already assigned.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 36]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+7.1.  Policy Values
+
+   Five policy values are defined.  Value strings MUST be matched case-
+   sensitively and exactly; an unrecognized value is a fatal error.  The
+   ordinal column gives each policy's stable numeric encoding (0 through
+   4, in the order listed).
+
+         +===========+=========+==============+==================+
+         | Value     | Ordinal | Primary hash | Alternative hash |
+         +===========+=========+==============+==================+
+         | sha1      | 0       | SHA-1        | SHA3-256         |
+         +-----------+---------+--------------+------------------+
+         | auto      | 1       | SHA-1        | SHA3-256         |
+         +-----------+---------+--------------+------------------+
+         | sha3      | 2       | SHA3-256     | SHA-1            |
+         +-----------+---------+--------------+------------------+
+         | sha3-only | 3       | SHA3-256     | disallowed       |
+         +-----------+---------+--------------+------------------+
+         | shun-sha1 | 4       | SHA3-256     | disallowed       |
+         +-----------+---------+--------------+------------------+
+
+                                  Table 7
+
+   The primary hash is the algorithm used to name newly stored content.
+   Under sha1 and auto the primary hash MUST be SHA-1; under sha3,
+   sha3-only, and shun-sha1 it MUST be SHA3-256.  The alternative hash
+   is a second algorithm that MAY be consulted to detect whether
+   identical content is already stored under the other algorithm's name.
+   The alternative hash is permitted only under sha1 and auto (where it
+   is SHA3-256) and under sha3 (where it is SHA-1).  Under sha3-only and
+   shun-sha1, a request for the alternative hash MUST fail, yielding a
+   failure indication and an empty result rather than a hash value.
+
+   sha3-only and shun-sha1 are indistinguishable in local hash selection
+   and deduplication; they diverge only in sync-admission behavior,
+   specified in [FossilSync].
+
+7.2.  Default Policy
+
+   A repository with no assigned hash-policy setting MUST derive its
+   effective policy as follows:
+
+   1.  If the repository already contains any SHA3-named artifact (a
+       name longer than 40 hexadecimal characters), or contains no SHA-
+       1-named artifact (40 hexadecimal characters) at all — including
+       the case of an empty repository — the default is sha3.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 37]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   2.  Otherwise — only when at least one SHA-1 artifact exists and zero
+       SHA3 artifacts exist — the default is auto.
+
+   This derivation never yields shun-sha1.
+
+7.3.  Assigning the Policy
+
+   The policy is repository-local state, persisted as a single
+   configuration value.  Administrative surfaces for viewing or
+   assigning the hash policy (the command line fossil hash-policy ?NEW-
+   POLICY?; web setup pages) are operational interfaces outside this
+   format specification.
+
+   Two properties of assignment deserve emphasis:
+
+   *  *No demotion guard.* Nothing prevents an operator from explicitly
+      setting the policy back to sha1; the automatic forward ratchet
+      (Section 7.4) applies only while the effective policy is auto.
+
+   *  *Set-time coercion of auto.* Requesting auto when the repository
+      already holds a SHA3-named artifact silently stores sha3 instead.
+      Once a SHA3 artifact exists, auto is unreachable via assignment.
+
+7.4.  Automatic Promotion (Ratchet)
+
+   While the effective policy is auto, the content-storage operation
+   first selects the name it is actually going to assign — either a
+   computed name or a caller-supplied candidate name — and then MUST
+   promote the repository to sha3, persisting the new policy immediately
+   as part of that same write, whenever that selected name exceeds 40
+   characters.  This ratchet decision happens before duplicate lookup,
+   insertion or dephantomization, crosslink processing, or commit-time
+   recoverability verification.  If a caller verifies a supplied name
+   and rejects it before invoking storage, that failed candidate causes
+   no ratchet; if a receive path stores a 64-character supplied name
+   before it can verify the reconstructed bytes, the ratchet observes
+   the supplied name.
+
+   Under auto the primary hash for fresh local naming is SHA-1, whose
+   names are exactly 40 characters, so the trigger is reachable in
+   exactly two ways:
+
+   1.  a caller-supplied 64-hexadecimal SHA3-256 name accepted for
+       storage during transfer or ingest; or
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 38]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   2.  locally created content whose auxiliary SHA3-256 hash (computed
+       as the alternative hash under auto) matches an artifact already
+       present, causing the existing 64-hexadecimal name to be reused
+       (Section 7.5).
+
+   The promotion is a silent side effect of a content write: hash-policy
+   state can ratchet forward from auto to sha3 without any explicit
+   administrative action.
+
+7.5.  Cross-Algorithm Deduplication
+
+   When content is stored without an externally supplied name, the
+   storage operation MUST first compute the alternative-algorithm hash
+   (where the policy permits one) and look it up; only if that lookup
+   misses does it fall back to naming the content with the primary hash.
+   Combined with an early return when the computed name already exists
+   as a fully present artifact, this guarantees that content already
+   stored under the other algorithm's name keeps its existing name and
+   is never inserted a second time: under sha1, auto, and sha3, the same
+   bytes never acquire two names through local writes.
+
+   *Exception under sha3-only and shun-sha1.* Because these policies
+   disallow the alternative hash, the pre-check cannot discover an
+   existing SHA-1 name for the same bytes.  New artifacts MUST be named
+   with SHA3-256 even when identical content already carries a SHA-1
+   name, deliberately accepting that some content ends up stored twice —
+   once under each name — with delta compression [FossilDelta] relied
+   upon to mitigate the size cost.  This is the one exception to the
+   never-two-names behavior above.  The failed alternative-hash request
+   is absorbed silently: the flow falls back to the primary hash with no
+   diagnostic, making the disallowed-alternative case behaviorally
+   indistinguishable from a legitimate lookup miss.
+
+7.6.  Name Immutability
+
+   Artifact names are immutable once assigned.  A name is assigned only
+   when content is first stored; subsequent writes to the same artifact
+   update only ancillary storage state, never the name.  Assigning a new
+   hash policy writes only the policy value.  Changing the hash policy
+   therefore MUST NOT retroactively rename or rehash any stored
+   artifact: policy affects only subsequently stored content, and
+   historical artifacts keep their historical names.
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 39]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+7.7.  Synchronization Behavior
+
+   Hash policy is never negotiated or communicated between sync peers:
+   no recognized sync message carries policy information, and each side
+   applies its own local policy independently to its own reads and
+   writes.  The only cross-peer capability signal is a client-version
+   announcement, used purely as a SHA3-capability gate: when the remote
+   version predates SHA3 support and a local artifact's name exceeds 40
+   characters, the sender refuses to transmit that artifact — with an
+   explicit error, never by converting, downgrading, or silently
+   omitting it.  The mechanism is part of the sync protocol
+   [FossilSync].
+
+   Receive-side admission of SHA-1-named artifacts under shun-sha1 is
+   sync-protocol behavior, specified in [FossilSync]; within this
+   document shun-sha1 affects only local name selection.
+
+8.  Delta Manifest Reconstruction
+
+   A manifest is a delta manifest if and only if it contains a B card;
+   otherwise it is a baseline manifest.  Every consumer pivots on
+   exactly this predicate: no other property (file count, presence of an
+   R card, emptiness) participates in the classification.  A delta
+   manifest does not carry the complete file set of its check-in; its F
+   cards record only differences against the baseline manifest named by
+   its B card (Section 4.7.3).  Consumers that need the full file set
+   MUST derive it by merging the delta's F cards with the baseline's, as
+   specified in this section.
+
+   A delta manifest is distinct from the delta encoding of artifact
+   content: [FossilDelta] specifies how an artifact's bytes may be
+   stored or transferred as a delta against another artifact's bytes, a
+   layer below this one.  The file content named by an F card hash may
+   itself be held in that encoded form; reconstruction here operates on
+   cards, not on content bytes.
+
+8.1.  Preconditions
+
+   The merge walk requires both file lists sorted by decoded filename
+   under the canonical comparator (Section 4.5.3).  That sortedness is a
+   parse-time invariant (Section 4.5.2): every successfully parsed
+   manifest satisfies it, so the precondition holds for any manifest
+   obtained from a conforming parser.
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 40]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   A delete marker is an F card that carries no hash.  It is permitted
+   only in a delta manifest — in a baseline manifest every F card MUST
+   carry a hash (Section 4.7.6) — and it carries a null hash,
+   interpreted by the merge walk as removal of the named file from the
+   baseline's set.
+
+8.2.  Full File-Set Enumeration (Merge-Walk)
+
+   To enumerate the complete file set of a delta manifest, an
+   implementation MUST perform a filename-ordered merge-walk over two
+   cursors: one over the baseline's own F cards (never those of an
+   artifact the baseline itself names, Section 4.7.3) and one over the
+   delta's.  Filenames are compared byte-wise on their decoded form
+   (Section 4.5.3).  At each step:
+
+   1.  If both cursors name the same file and the delta entry carries a
+       hash, the delta entry replaces the baseline entry: both cursors
+       advance and the delta entry is emitted.
+
+   2.  If both cursors name the same file and the delta entry carries no
+       hash (a delete marker), the file is removed: both cursors advance
+       and no entry is emitted.
+
+   3.  If the names differ, the entry that sorts first is emitted and
+       only its cursor advances.  A delta delete marker whose name is
+       not present in the baseline (an unmatched deletion) is emitted
+       here like any other sorts-first entry, but because it carries no
+       hash it adds no file to the reconstructed set.  An unmatched
+       deletion is therefore a no-op for materialization, not an error.
+
+   Enumeration terminates only when both cursors are exhausted.  Once
+   either list runs out, the remaining entries of the other list are
+   emitted verbatim — including any delete markers remaining in the
+   delta's tail.  Consumers of the merged stream MUST therefore filter
+   out entries whose hash is absent when computing derived results, as
+   the aggregate-checksum computation over the merged file set does
+   (Section 6.3.3).
+
+8.3.  Baseline Resolution
+
+   The baseline identified by the B card hash is resolved lazily: it is
+   located and parsed as a manifest artifact the first time the baseline
+   is needed.  When the baseline cannot be located, or the located
+   artifact is not a manifest, resolution follows one of two
+   disciplines:
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 41]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   *  *Hard failure*, for the file-enumeration entry points: beginning
+      full file-set enumeration, and single-name search (Section 8.4),
+      MUST treat an unresolvable baseline as a fatal error of the
+      enumeration.
+
+   *  *Soft failure*, for consumers that can defer: a parent-child file
+      difference walk or post-parse relationship processing MAY instead
+      record the gap — keyed by the dependent artifact and the missing
+      baseline hash, inserted idempotently — report failure to the
+      caller, and retry when the baseline arrives.
+
+   Per-step enumeration reports no error for an unresolved baseline: an
+   enumeration begun without resolving the baseline silently degrades to
+   delta-only enumeration.  Implementations MUST therefore ensure the
+   baseline is resolved, under the hard-failure discipline, before
+   iteration begins rather than relying on per-step error reporting.
+
+8.4.  Single-Name Lookup
+
+   When resolving a single filename against a delta manifest, an
+   implementation MUST search the delta's own F cards first, and best-
+   match (closest-name) lookup MUST be suppressed for delta manifests
+   even when the caller requests it.  If the delta contains an entry for
+   the name whose hash is absent (a delete marker), the lookup MUST
+   report not-found without consulting the baseline.  Only when the name
+   is entirely absent from the delta is the baseline resolved and its
+   own F cards searched; the search does not continue into an artifact
+   the baseline itself names (Section 4.7.3).
+
+8.5.  Renderings That Intentionally Do Not Reconstruct
+
+   This subsection is informative; it describes an existing rendering
+   surface rather than a requirement on the artifact format.
+
+   The JSON rendering of a manifest artifact traverses the manifest's
+   own F card list directly rather than the merged enumeration.  A delta
+   manifest's JSON rendering therefore shows only its literal, authored
+   F cards — not the derived full file set.  This is a deliberate
+   exception for that one rendering surface, in contrast with consumers
+   such as the aggregate-checksum computation, which operate on the
+   fully merged file set.
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 42]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+9.  Security Considerations
+
+   An artifact's name is the hash of its content, so a reader detects
+   any alteration of an artifact's bytes by recomputing the hash and
+   comparing it to the name.  This binding is only as strong as the
+   hash.  SHA-1 [RFC3174] has known collision attacks: a party able to
+   construct two byte sequences with the same SHA-1 digest could offer
+   either under one name.  SHA3-256 [FIPS202] is not subject to these
+   attacks and is the default for new artifacts in most repository
+   states (Section 7).  A SHA-1 artifact's name continues to verify its
+   content against accidental corruption; existing implementations
+   compute SHA-1 through a collision-detecting implementation, and the
+   shun-sha1 policy lets a repository decline SHA-1-named artifacts
+   arriving through synchronization ([FossilSync]).
+
+   The Z and R cards use MD5 [RFC1321], which is not collision-
+   resistant.  They detect accidental corruption within an artifact and
+   across a file set; they are not integrity guarantees against a
+   deliberately constructed artifact, which the artifact name provides.
+
+   Three distinct operations apply to a stored artifact, each over a
+   different byte extent (Section 4.1.1): name computation covers the
+   complete stored bytes, including any signature wrapper; Z card
+   verification covers the stripped card stream from which the wrapper
+   has been removed; and signature verification, when performed, covers
+   the complete stored bytes before stripping.  Implementations MUST
+   keep these operations separate: the input to Z card verification MUST
+   NOT include wrapper bytes, and the input to name computation MUST
+   include them.  A signed artifact and its unsigned inner content are
+   distinct artifacts with distinct names and MUST be handled
+   independently.
+
+   The presence of a recognized signature wrapper indicates the byte-
+   level structure of the artifact only.  This document specifies which
+   byte extents are used for naming, card parsing, and Z card
+   verification; it does not mandate signature verification, and it does
+   not define signer trust or authorization, certificate management,
+   revocation, freshness, or replay prevention.  The presence of a
+   wrapper is not evidence that the signature has been verified, that
+   the signer is authorized, or that the artifact is protected against
+   replay.  Implementations that verify signatures do so through
+   mechanisms outside the scope of this document.
+
+   Name assignment on ingest can use a supplied candidate name
+   (Section 3.1).  The integrity consequence is separate from the
+   storage timing: a receiver that admits content as verified under a
+   supplied name without comparing that name to the reconstructed bytes
+   (Section 3.4) breaks the integrity binding above for every downstream
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 43]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   consumer of that repository.  The normal non-clone file receive path
+   verifies the reconstructed content before successful admission and
+   reports a receive error if the supplied name does not match.  Clone
+   file, compressed cfile, and dangling-delta paths may store a
+   candidate name before complete verification is possible; such storage
+   MUST NOT be treated as evidence that the supplied name matched the
+   eventual reconstructed bytes.  Later recoverability or verification
+   is still required before derived repository state is relied upon.
+
+   Verification comparisons are exact-lowercase (Section 3.4,
+   Section 6.2).  An uppercase-hexadecimal name or digest is invalid and
+   can never verify; a token-validation stage MAY reject it or MAY defer
+   the failure to verification.  Implementations MUST NOT treat token-
+   validation acceptance as evidence of verified integrity.
+
+   The reserved-filename drop (Section 4.6.3) removes only matching
+   current F-card filenames from the effective file set, after decoded-
+   name sort checking, and does not by itself fail the parse; type
+   determination may still reject the artifact (Section 5.3).  The
+   artifact's name covers the dropped bytes, so two readers disagree
+   about an affected manifest's file set only if one omits the drop; a
+   conformant reader applies the same deterministic predicate.
+   Implementations comparing file sets across readers of unknown
+   provenance should account for this carve-out.
+
+   The W card body is located by byte count (Section 4.7.18).  A reader
+   MUST use the size value obtained by the reader-acceptance rule, MUST
+   NOT scan the body for card boundaries, MUST bound the declared size
+   against the remaining artifact length before consuming it, and MUST
+   reject size-token accumulator overflow.  A parser MUST NOT read
+   beyond the end of the artifact buffer under any malformed input.
+
+   A repeated Z line earlier in an artifact is ordinary content covered
+   by the final checksum (Section 4.5.1); only the final 35 bytes
+   participate in self-checksum verification.  Tools that scan artifacts
+   textually for a Z card can be misled; verification MUST use the byte-
+   position framing of Section 6.2.
+
+   The artifact set is grow-only: reconstructing the file set of a delta
+   manifest, or verifying any artifact, requires that the referenced
+   artifacts (the baseline of a delta manifest, the source of a delta,
+   the parents of a check-in) be present.  A reader that lacks a
+   referenced artifact cannot complete these operations and treats the
+   reference as unresolved until the artifact is obtained (Section 8.3);
+   [FossilSync] specifies how missing artifacts are requested.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 44]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+10.  IANA Considerations
+
+   This document has no IANA actions.
+
+11.  References
+
+11.1.  Normative References
+
+   [FIPS202]  National Institute of Standards and Technology, "SHA-3
+              Standard: Permutation-Based Hash and Extendable-Output
+              Functions", FIPS 202, DOI 10.6028/NIST.FIPS.202, August
+              2015, <https://nvlpubs.nist.gov/nistpubs/FIPS/
+              NIST.FIPS.202.pdf>.
+
+   [FossilDelta]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Delta Format", Work in Progress, Internet-Draft, draft-
+              fossil-delta-format-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-delta-
+              format-00>.
+
+   [FossilRepoState]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Repository State and
+              Check-in Resolution", Work in Progress, Internet-Draft,
+              draft-fossil-repo-state-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-repo-
+              state-00>.
+
+   [FossilSync]
+              Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
+              Distributed Version Control System: Sync Protocol", Work
+              in Progress, Internet-Draft, draft-fossil-sync-protocol-
+              00, 2026, <https://datatracker.ietf.org/doc/html/draft-
+              fossil-sync-protocol-00>.
+
+   [RFC1321]  Rivest, R., "The MD5 Message-Digest Algorithm", RFC 1321,
+              DOI 10.17487/RFC1321, April 1992,
+              <https://www.rfc-editor.org/rfc/rfc1321>.
+
+   [RFC2119]  Bradner, S., "Key words for use in RFCs to Indicate
+              Requirement Levels", BCP 14, RFC 2119,
+              DOI 10.17487/RFC2119, March 1997,
+              <https://www.rfc-editor.org/rfc/rfc2119>.
+
+   [RFC3174]  Eastlake 3rd, D. and P. Jones, "US Secure Hash Algorithm 1
+              (SHA1)", RFC 3174, DOI 10.17487/RFC3174, September 2001,
+              <https://www.rfc-editor.org/rfc/rfc3174>.
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 45]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   [RFC5234]  Crocker, D., Ed. and P. Overell, "Augmented BNF for Syntax
+              Specifications: ABNF", STD 68, RFC 5234,
+              DOI 10.17487/RFC5234, January 2008,
+              <https://www.rfc-editor.org/rfc/rfc5234>.
+
+   [RFC8174]  Leiba, B., "Ambiguity of Uppercase vs Lowercase in RFC
+              2119 Key Words", BCP 14, RFC 8174, DOI 10.17487/RFC8174,
+              May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
+
+11.2.  Informative References
+
+   [GSET]     Shapiro, M., Preguica, N., Baquero, C., and M. Zawirski,
+              "A comprehensive study of Convergent and Commutative
+              Replicated Data Types", INRIA RR-7506, January 2011,
+              <https://hal.inria.fr/inria-00555588>.
+
+   [RFC8792]  Watsen, K., Auerswald, E., Farrel, A., and Q. Wu,
+              "Handling Long Lines in Content of Internet-Drafts and
+              RFCs", RFC 8792, DOI 10.17487/RFC8792, June 2020,
+              <https://www.rfc-editor.org/rfc/rfc8792>.
+
+Appendix A.  Examples
+
+   The examples in this appendix are non-normative.  Each subsection
+   shows a complete artifact or exact byte sequence sufficient to
+   reproduce the name, checksum, or merge result stated there.  In every
+   case, the artifact name, checksum, and byte-count claims shown here
+   recompute from the exact displayed byte sequence.
+
+   Some literal lines exceed the width available here and are folded
+   using the single-backslash strategy of [RFC8792]; a block containing
+   folded lines carries the header that the strategy prescribes.  No
+   unfolded artifact line ends in a backslash, so unfolding is
+   unambiguous.
+
+A.1.  Artifact Naming
+
+   A Fossil artifact name is the lowercase hexadecimal encoding of
+   either the SHA-1 or SHA3-256 cryptographic hash of the artifact's raw
+   bytes, with no length prefix, framing, or modification.
+
+   Artifacts created before the SHA3 transition carry 40-character
+   names; those created afterward carry 64-character names.  Both
+   families are stored and retrieved identically.
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 46]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+A.1.1.  SHA-1 Example
+
+   The following is a complete check-in manifest with a 40-character
+   (SHA-1) name.  Every byte shown is part of the artifact as stored; no
+   bytes are omitted.
+
+   C initial\sempty\sbaseline
+   D 2007-07-21T14:09:59
+   P
+   R d41d8cd98f00b204e9800998ecf8427e
+   U drh
+   Z c62e3619f7c41ee77b33f00df8ec26f4
+
+   Artifact name: a28c83647dfa805f05f3204a7e146eb1f0d90505
+
+   SHA-1 of the 127 bytes above equals this name exactly.
+
+   This artifact also demonstrates the empty-P-card tolerance: the P
+   card is present but carries no arguments (the line reads P followed
+   immediately by a newline).  The artifact is the root check-in of the
+   repository, which has no parent.  The R card value
+   d41d8cd98f00b204e9800998ecf8427e is the MD5 of an empty file tree.
+
+A.1.2.  SHA3-256 Example
+
+   The following is a complete technote (event) artifact with a
+   64-character (SHA3-256) name.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 47]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   C Test\stech-note
+   D 2017-12-06T15:36:24.287
+   E 2013-08-26T07:35:00 bfdf42305400f6caa441fa816cb89231e90f8c82
+   P 94694585cd2f85f75b4316515bbb09aa7e9acaa5
+   N text/x-fossil-wiki
+   T +bgcolor * #c0f0ff
+   U drh
+   W 415
+   This technote is only for test-purposes.
+
+   The original version of this technote had an empty C-card \
+     demonstrating that the C-card in event artifacts are optional. \
+     Even when doing a "fossil rebuild" using fossil version \
+     1.22, this events displays fine. Of course, making the \
+     Timeline Comment non-empty would be better. But nothing \
+     in Fossil prevents leaving this line empty, so the C-card \
+     could as well be left out.
+
+   Z a7789c6da4c12b8feb6e290f3083f5f0
+
+   Artifact name:
+   2fa494a18a766efe9a8ba706d669b7157d5329e1fbcc2a6d6c15a386d113218d
+
+   SHA3-256 of the 655 bytes above equals this name exactly.  The
+   SHA3-256 variant used is the standardized Keccak-based function, not
+   SHA2-256.
+
+   This artifact also illustrates the P-before-N ordering tolerance: the
+   N card (MIME type) appears after the P card even though N sorts
+   before P in ASCII order.  This is accepted because the E card has
+   already been parsed when N is encountered; see Appendix C.
+
+A.2.  Z-Card Checksum
+
+   The Z card value is the lowercase hexadecimal MD5 of all bytes that
+   precede the Z line in the artifact.  The checksum covers from the
+   very first byte of the artifact through the newline terminating the
+   last card before Z.
+
+   Using the SHA-1 artifact above:
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 48]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+                                             byte offsets
+    C initial\sempty\sbaseline\n                   0 ..  26  (27 bytes)
+    D 2007-07-21T14:09:59\n                       27 ..  48  (22 bytes)
+    P\n                                           49 ..  50  ( 2 bytes)
+    R d41d8cd98f00b204e9800998ecf8427e\n          51 ..  85  (35 bytes)
+    U drh\n                                       86 ..  91  ( 6 bytes)
+                                             -------- 92 bytes checksummed
+    Z c62e3619f7c41ee77b33f00df8ec26f4\n          92 .. 126
+
+   MD5(bytes 0 through 91) = c62e3619f7c41ee77b33f00df8ec26f4
+
+   This value matches the Z card exactly.
+
+   The Z card is always the last card in the stripped artifact.  A
+   recognized signature wrapper (PGP-cleartext or SSH-signed envelope),
+   when present, is an outer envelope around the card stream; wrapper
+   bytes are stripped before Z-card verification and are not part of the
+   checksum input.
+
+A.3.  R-Card Aggregate Checksum
+
+   The R card value is the lowercase hexadecimal MD5 of a byte string
+   formed by concatenating one record per tracked file, in lexicographic
+   order of the file path.  Each record is:
+
+   <path> SP <decimal-byte-count> LF <file-content-bytes>
+
+   The decimal byte count is the count of the file content bytes only;
+   the header line is not counted.
+
+   The following example uses a check-in with three files:
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   C Add\sthree\stest\sfiles
+   D 2026-07-02T11:18:42.940
+   F alpha.txt \
+     a8009a7a528d87778c356da3a55d964719e818666a04e4f960c9e2439e35f138
+   F beta.txt \
+     1f6ecac38305308107bc78753cec3b4c390c80e6c1660ac9b5de3273ff479d01
+   F gamma.txt \
+     67cef386c3cfbb45365917c591deeca9b5c668da781bc743a5f9157ab8f1ac56
+   P 9cacef5c0b7713741534ed096e934d0c95d71db734ba569dbcfe70edf798df2f
+   R 95feb799536dc053e7968efb7cdd3ec3
+   U drh
+   Z bbc0f8f7d682cf02ebcea0ece47347f6
+
+   The three file contents and their byte counts are:
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 49]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+           +===========+============+==========================+
+           | Path      | Byte count | Content                  |
+           +===========+============+==========================+
+           | alpha.txt | 12         | hello world\n            |
+           +-----------+------------+--------------------------+
+           | beta.txt  | 23         | fossil artifact format\n |
+           +-----------+------------+--------------------------+
+           | gamma.txt | 12         | R card test\n            |
+           +-----------+------------+--------------------------+
+
+                                  Table 8
+
+   The R-card input string (85 bytes total) is:
+
+   alpha.txt 12\nhello world\n
+   beta.txt 23\nfossil artifact format\n
+   gamma.txt 12\nR card test\n
+
+   (Here \n represents a literal newline byte; the above is shown as
+   human-readable text.)
+
+   MD5 of these 85 bytes = 95feb799536dc053e7968efb7cdd3ec3, which
+   matches the R card.
+
+A.4.  Delta Manifest
+
+   A delta manifest contains a B card identifying a baseline manifest.
+   F cards list only those files that differ from the baseline.  Files
+   absent from the delta's F cards are inherited unchanged from the
+   baseline.
+
+A.4.1.  Baseline Manifest
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   C Baseline:\sthree\sfiles
+   D 2026-07-02T11:21:49.651
+   F file-a.txt \
+     b3cd28e8bc79c1cb9876e546eccbbab42df7b0f77c341b4aa5367ea7fa440ac0
+   F file-b.txt \
+     780ac49d69af62510e0f2e60ae74457665ababd0ca4acf2a6e61cbce1e86bcec
+   F file-c.txt \
+     a37be80eddab7fdecfc07fe68d898788b14b3d54d8fd077b5188be57bd397c70
+   P 3dc18da551fbdcf5805cb04fb2adf4debf9f12faaaaa66cca9a383d788bfc7f0
+   R 06173855f6d58f175132e78ff021ce3a
+   U drh
+   Z 9456a4a7d875ac24816ce3189b19458b
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 50]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   This is a full manifest tracking three files.  Its name (SHA3-256) is
+   24b831afb9fff3d3ada94e6d3d3731bd04632e3780ded71a668aa174968a30d2.
+
+A.4.2.  Example Delta Manifest
+
+   The following check-in modifies file-a.txt, deletes file-c.txt, and
+   adds file-d.txt. file-b.txt is unchanged.
+
+   NOTE: '\' line wrapping per RFC 8792
+
+   B 24b831afb9fff3d3ada94e6d3d3731bd04632e3780ded71a668aa174968a30d2
+   C Delta:\sadd\sD,\smodify\sA,\sdelete\sC
+   D 2026-07-02T11:21:57.150
+   F file-a.txt \
+     a61d8bf8fcc44bce875134b1cc61107b3c5dc60411330f11a2b4dc124ebec989
+   F file-c.txt
+   F file-d.txt \
+     4ff0cf8db40756aaae1eba29e028087ae34bfc678c0d0f1429f481939b752ca6
+   P 24b831afb9fff3d3ada94e6d3d3731bd04632e3780ded71a668aa174968a30d2
+   R 0d7675864b46dd3f197e988759ac2dfa
+   U drh
+   Z 7d5f4990cfbfb088a1c585be1979d377
+
+   Artifact name:
+   66b56d2cd770c9ffa4ed9c93498c1c8312fe791cd580c148ed799bfc57d962e3
+
+A.4.3.  Merge Algorithm
+
+   To reconstruct the complete file tree from a delta manifest, an
+   implementation applies the following rules, processing the baseline's
+   F cards and the delta's F cards together:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 51]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   +==========================================+=======================+
+   | Condition                                | Interpretation        |
+   +==========================================+=======================+
+   | F card in delta with a UUID; path not in | *ADD* -- file is new  |
+   | baseline                                 |                       |
+   +------------------------------------------+-----------------------+
+   | F card in delta with a UUID; path exists | *MODIFY* -- replace   |
+   | in baseline with a different UUID        | baseline file content |
+   +------------------------------------------+-----------------------+
+   | F card in delta with no UUID argument    | *DELETE* -- file is   |
+   | (bare path only)                         | removed from the tree |
+   +------------------------------------------+-----------------------+
+   | Path in baseline; absent from delta's F  | *CARRY FORWARD* --    |
+   | cards                                    | file unchanged        |
+   +------------------------------------------+-----------------------+
+
+                                 Table 9
+
+   Applied to the example above:
+
+    +============+===============+========================+==========+
+    | File       | Baseline UUID | Delta F card           | Result   |
+    +============+===============+========================+==========+
+    | file-a.txt | b3cd28e8...   | a61d8bf8... (new UUID) | MODIFIED |
+    +------------+---------------+------------------------+----------+
+    | file-b.txt | 780ac49d...   | _(absent)_             | CARRY    |
+    |            |               |                        | FORWARD  |
+    +------------+---------------+------------------------+----------+
+    | file-c.txt | a37be80e...   | F file-c.txt _(no      | DELETED  |
+    |            |               | UUID)_                 |          |
+    +------------+---------------+------------------------+----------+
+    | file-d.txt | _(absent)_    | 4ff0cf8d...            | ADDED    |
+    +------------+---------------+------------------------+----------+
+
+                                 Table 10
+
+   The reconstructed file set is file-a.txt (new content), file-b.txt
+   (unchanged), and file-d.txt (new file).
+
+A.4.4.  R-card Over Reconstructed Set
+
+   The R card in a delta manifest covers the full reconstructed file
+   set, not merely the files listed in the delta's own F cards.
+
+   Reconstructed set and content bytes:
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 52]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   +============+============+=====================+==================+
+   | File       | Byte count | UUID                | Content bytes    |
+   +============+============+=====================+==================+
+   | file-a.txt | 27         | a61d8bf8fcc44bce... | modified content |
+   |            |            |                     | of file A\n      |
+   +------------+------------+---------------------+------------------+
+   | file-b.txt | 18         | 780ac49d69af6251... | content of file  |
+   |            |            |                     | B\n              |
+   +------------+------------+---------------------+------------------+
+   | file-d.txt | 11         | 4ff0cf8db40756aa... | new file D\n     |
+   +------------+------------+---------------------+------------------+
+
+                                 Table 11
+
+   The exact R-card preimage is the following 98-byte sequence.  Here \n
+   denotes one LF byte, and the three display lines abut directly; do
+   not insert quotes, indentation, wrapping, or any other separator
+   bytes:
+
+   file-a.txt 27\nmodified content of file A\n
+   file-b.txt 18\ncontent of file B\n
+   file-d.txt 11\nnew file D\n
+
+   The computed MD5 is 0d7675864b46dd3f197e988759ac2dfa, which matches
+   the R card.
+
+Appendix B.  ABNF
+
+   The following grammar is in ABNF [RFC5234].  Card letters and escape
+   sequences are case-sensitive and are given as numeric values where
+   the quoted-string form would be case-insensitive.  The W card body
+   and the byte-counted payloads are opaque bytes located by count
+   (Section 4.7.18) and are shown as counted rules rather than by
+   content.  The grammar gives the canonical writer wire syntax only;
+   ordering (Section 4.4), occurrence (Section 4.5.1), per-type legality
+   (Section 5.2), the validity predicates (Section 4.6), checksum
+   verifications (Section 6), and reader compatibility acceptances are
+   specified in the body.  Where a production's final token is token, a
+   reader nevertheless accepts an empty final token as Section 4.2
+   states, subject to that card's own validation in the body; value
+   marks the final tokens that writers emit empty.
+
+   In particular, size = "0" / ( nonzero-digit *DIGIT ) is the writer
+   form for a W card size token.  Reader acceptance of suffix-bearing or
+   no-leading-digit size tokens is the compatibility behavior specified
+   in Section 4.7.18, not a permission for writers to emit those forms.
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 53]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+ artifact    = 1*card
+               ; final byte of the artifact is LF
+
+ card        = a-card / b-card / c-card / d-card / e-card /
+               f-card / g-card / h-card / i-card / j-card /
+               k-card / l-card / m-card / n-card / p-card /
+               q-card / r-card / t-card / u-card / w-card /
+               z-card
+
+ a-card      = %x41 SP filename SP target [ SP hash ] LF
+ target      = hash / wikiname
+ b-card      = %x42 SP hash LF
+ c-card      = %x43 SP comment LF
+ d-card      = %x44 SP timestamp LF
+ e-card      = %x45 SP timestamp SP hash LF
+ f-card      = %x46 SP filename
+               [ SP hash [ SP perm [ SP old-name ] ] ] LF
+ g-card      = %x47 SP hash LF
+ h-card      = %x48 SP token LF
+ i-card      = %x49 SP hash LF
+ j-card      = %x4A SP token [ SP value ] LF
+ k-card      = %x4B SP 40hexdig-ci LF  ; parser-tolerated/reference form
+ l-card      = %x4C SP wikiname LF
+ m-card      = %x4D SP hash LF
+ n-card      = %x4E SP token LF
+ p-card      = %x50 *( SP hash ) LF
+ q-card      = %x51 SP q-sign hash [ SP hash ] LF
+ q-sign      = "+" / "-"
+ r-card      = %x52 SP md5-token LF
+ t-card      = %x54 SP tag-sign token SP ( hash / "*" )
+               [ SP value ] LF
+ tag-sign    = "+" / "-" / "*"
+ u-card      = %x55 [ SP [ token ] ] LF
+ w-card      = %x57 SP size LF body LF
+ size        = "0" / ( nonzero-digit *DIGIT )
+ nonzero-digit = %x31-39
+ body        = *OCTET
+               ; exactly <size> octets; MAY contain LF;
+               ; located by count, not by scanning
+ z-card      = %x5A SP md5-token LF
+
+ token       = 1*tchar
+ value       = *tchar         ; final token only; MAY be empty
+ tchar       = %x00-09 / %x0B-1F / %x21-FF
+               ; any octet except SP (0x20) and LF (0x0A)
+ comment     = value          ; escape-decoded
+ filename    = token          ; escape-decoded; pathname predicate
+ old-name    = token          ; escape-decoded; pathname predicate
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 54]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+ perm        = token          ; old-name requires perm; SHOULD be w/x/l
+ wikiname    = token          ; escape-decoded; wiki-name predicate
+
+ hash        = 40hexdig-ci / 64hexdig-ci
+ md5-token   = 32hexdig-ci
+ hexdig-ci   = DIGIT / %x41-46 / %x61-66
+ lhexdig     = DIGIT / %x61-66
+
+ timestamp   = date %x54 time [ frac ]    ; writer form; %x54 = "T"
+ date        = 4DIGIT "-" 2DIGIT "-" 2DIGIT
+ time        = 2DIGIT ":" 2DIGIT ":" 2DIGIT
+ frac        = "." 1*DIGIT
+
+ ; Artifact names
+ artifact-name = sha1-name / sha3-name    ; writer form
+ sha1-name     = 40lhexdig
+ sha3-name     = 64lhexdig
+ accepted-name = 40hexdig-ci / 64hexdig-ci  ; parser-tolerated/reference
+                                            ; form, not required
+
+ SP          = %x20
+ LF          = %x0A
+ DIGIT       = %x30-39
+ OCTET       = %x00-FF
+
+Appendix C.  Anomalous artifacts and behaviours
+
+   The following statements in existing Fossil documentation, or in text
+   accompanying existing implementations, do not match the behavior
+   specified in the body of this document.  The body is definitive; the
+   divergent statements are recorded here for reference.
+
+   *Manifest required cards.* The file-format documentation presents the
+   C and U cards as mandatory on a manifest, implying a required set of
+   {C, D, U, Z}. The enforced required set is {D, Z} (Section 5.2): the
+   C and U cards are optional on a manifest, a relaxation retained for
+   compatibility with historical artifacts.
+
+   *Z card on manifests.* One passage accompanying an existing
+   implementation states that the Z card is required for all artifact
+   types except manifests.  A manifest lacking a Z card is rejected; the
+   Z card is required for every artifact type (Section 5.2).
+
+   *Wiki user card.* The file-format documentation recommends accepting
+   a wholly missing U card on a wiki artifact as an alias for the user
+   nobody.  That recommendation is unimplemented: a wiki artifact
+   lacking a U card is rejected by the required-card rule (Section 5.2),
+   and a present-but-empty U card defaults to anonymous
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 55]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   (Section 4.7.17).  Three mutually distinct behaviors — reject,
+   nobody, anonymous — appear across documentation and behavior; the
+   body specifies the first and third.
+
+   *G card chain invariant.* The file-format documentation states that a
+   forum post whose G card does not match the thread root reached via
+   its I and P chains is invalid and should be ignored.  No parser
+   enforces this cross-artifact property, and this document does not
+   require it (Section 5.4).
+
+   *Timestamp separator.* Passages accompanying existing implementations
+   render the D and E card timestamp separator as a lowercase t (YYYY-
+   MM-DDtHH:MM:SS).  The accepted separator is uppercase T only
+   (Section 4.6.4); a lowercase t is rejected.
+
+   *Signature wrappers.* The file-format documentation describes only
+   the PGP clearsign wrapper.  SSH signed wrappers are also removed
+   (Section 4.1.1); their acceptance had been undocumented behavior,
+   made explicit by this document.
+
+   *J card encoding.* The file-format documentation states that the J
+   card field name and value are both escape-encoded.  Only the value is
+   decoded; the field name is stored verbatim (Section 4.7.8).  Existing
+   implementations differ here, one siding with the documentation.
+
+   *Decoded-token positions.* Existing implementations differ at two
+   decoded token positions: one does not decode the N card mimetype, and
+   one decodes the J card field name.  The body's decode map is the
+   operative rule (Section 4.3.1).
+
+   *N-after-P ordering exception.* The parser accepts an N card
+   immediately after a P card once a valid E card has made the artifact
+   a technote.  That compatibility exception is part of the ordering
+   rule; other out-of-order cards remain rejected (Section 4.4).
+
+   *F permission-token receiver divergence.* Existing implementations
+   historically differed on parse-time validation of the third F-card
+   positional field.  One stores any raw token verbatim and later
+   searches it for x (executable) or l (symlink), with everything else
+   resolving to a regular file; another accepts only absent, w, x, or l
+   at parse time.  The body settles the interoperable public rule: third
+   position is always the raw permission token, fourth position (when
+   present) is old-name, and producers still SHOULD emit w, x, or l
+   (Section 4.7.6).
+
+   *P-card multiplicity divergence.* The ordering rule permits a second
+   P card, because equal consecutive type letters pass the non-
+   decreasing check.  One parser concatenates the tokens of repeated P
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 56]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   cards into a single parent list; another rejects a second P card.
+   The body gives interoperable producer guidance without converting
+   that divergence into a stronger receiver requirement
+   (Section 4.7.13).
+
+   *Reserved filename drop.* The file-format documentation's F card
+   description contains no mention of the reserved-name silent drop
+   (Section 4.6.3), which alters the effective file set of affected
+   historical manifests.
+
+   *Default hash policy.* Some user documentation states that the
+   default hash policy for new repositories is shun-sha1.  The default
+   derivation (Section 7.2) never produces shun-sha1; for an empty or
+   new repository it produces sha3.
+
+Appendix D.  Changes in This Revision
+
+   This revision of draft-fossil-artifact-format-00, dated 16 October
+   2026, makes the following corrections to the 9 July 2026 text.
+
+   *  Section 4.1.2: The sterilization marker is described as appended
+      after the final card, and before a trailing signature block,
+      rather than inserted as the first line.  The two marker literals
+      actually written are quoted, and rejection is attributed to the
+      card-ordering rule instead of the line-1 gate.  Informative note.
+
+   *  Section 4.2, Section 4.7.4, Section 4.7.17: The final token of any
+      card may be empty, and the token grammar now says so.  A C card
+      with an empty token is an empty comment that MUST be accepted,
+      while a bare C card is still rejected, and the U card text now
+      refers to the general rule.  The collected ABNF of Appendix B uses
+      the same possibly-empty final value for the C, J and T cards and
+      says that a reader accepts an empty final token on every card
+      subject to the card's own validation; Section 4.7.2 now says an
+      empty source is rejected by its hash validation.  Normative
+      change.
+
+   *  Section 4.4, Section 4.5.1, Section 6.2: The Z card is last
+      because the ordering rule admits only another Z after a Z and
+      every type requires one, not because of the checksum framing,
+      which reads the final 35 bytes by position; the verification
+      states are now stated in terms of those bytes, and a paragraph
+      notes that an artifact without a Z card can reach the match or
+      mismatch state and is rejected either way.  Editorial
+      clarification.
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 57]
+
+Internet-Draft           Fossil Artifact Format             October 2026
+
+
+   *  Section 4.6.3, Section 5.3: An F card dropped for a reserved
+      filename assigns no artifact type and records no file entry, but
+      its letter still counts for the allowed-card check.  The type
+      fallback can therefore be reached when every F card was dropped,
+      and such an artifact without C or P cards is rejected as CONTROL.
+      Section 9 no longer says the drop cannot fail the parse.
+      Normative change.
+
+   *  Section 4.6.4: The digit-count and range constraints move out of
+      the Julian-day item into their own paragraph, scoped to the date-
+      time, date-only, and time-only forms.  The constraints themselves
+      are unchanged.  Editorial clarification.  Form 5, the bare Julian
+      day number, now states its lexical form and that out-of-range
+      values are rejected.  Normative change.
+
+   *  Section 4.7.3: The prohibition on a delta manifest naming another
+      delta manifest is now a writer requirement.  Readers are told that
+      Fossil accepts such an artifact and resolves its file set one
+      level only, and are now required to accept it and compute the same
+      file set; the merge-walk of Section 8.2 says the baseline cursor
+      covers the baseline's own F cards only, and the single-name lookup
+      of Section 8.4 searches the same one level.  The named artifact's
+      delete markers are filtered like the delta's own, and an
+      informative paragraph records that Fossil's archive commands crash
+      on them and that its file-change records for such a check-in are
+      not defined here.  Normative change.
+
+   *  Section 4.7.8: A J card with an absent value and one with a
+      present empty value decode alike, and a reader MUST NOT
+      distinguish them; the text notes that Fossil writes the present
+      empty form.  Normative change.
+
+Authors' Addresses
+
+   D. Richard Hipp (editor)
+   Fossil
+
+
+   Stephan Beal
+   libfossil
+
+
+   Dan Shearer
+   Email: dan@shearer.org
+   URI:   https://shearer.org
+
+
+
+
+
+
+Hipp, et al.              Expires 19 April 2027                [Page 58]

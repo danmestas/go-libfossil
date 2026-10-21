@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -99,14 +100,34 @@ const cloneCapPrefix = "lf-clone-cap:"
 // cookies (e.g. arbitrary sync session cookies) leave the bound at zero,
 // which preserves pre-snapshot behavior for forward/back compat.
 func parseCloneCap(v string) (int, bool) {
+	fields, ok := cloneCapFields(v)
+	if !ok {
+		return 0, false
+	}
+	return fields[0], true
+}
+
+// cloneCapFields splits a clone-cap cookie: the snapshot bound, then from a
+// sparse walk the row the next round starts at and, while that row is a
+// check-in part way through its walk, the last rid of the walk already sent
+// ("lf-clone-cap:MAX", "lf-clone-cap:MAX:ROW", "lf-clone-cap:MAX:ROW:LAST").
+func cloneCapFields(v string) ([]int, bool) {
 	if !strings.HasPrefix(v, cloneCapPrefix) {
-		return 0, false
+		return nil, false
 	}
-	rid, err := strconv.Atoi(v[len(cloneCapPrefix):])
-	if err != nil || rid < 0 {
-		return 0, false
+	parts := strings.Split(v[len(cloneCapPrefix):], ":")
+	if len(parts) > 3 {
+		return nil, false
 	}
-	return rid, true
+	fields := make([]int, len(parts))
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		fields[i] = n
+	}
+	return fields, true
 }
 
 // HandleFunc is the server-side sync handler signature.
@@ -115,10 +136,17 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 
 // HandleOpts configures optional behavior for HandleSync.
 type HandleOpts struct {
-	Buggify      BuggifyChecker // nil in production.
-	Observer     Observer       // nil defaults to no-op.
-	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
-	Clock        simio.Clock    // time for the reply's timestamp comment; nil = real time
+	// PartialMirror permits clone requests beyond this store's cone, as the
+	// SettingPartialMirror repository setting does for every caller.
+	PartialMirror bool
+	Buggify       BuggifyChecker // nil in production.
+	Observer      Observer       // nil defaults to no-op.
+	ContentCache  *content.Cache // nil = no caching; rid-keyed, so not across a rollback
+	Clock         simio.Clock    // time for the reply's timestamp comment and receipt; nil = real time
+	// RemoteAddr is the address the request came from, recorded with what it
+	// pushes (fossil's REMOTE_ADDR). "" takes the one WithRemoteAddr put in
+	// the context, if any.
+	RemoteAddr string
 }
 
 // HandleSync processes an incoming xfer request and produces a response.
@@ -142,20 +170,31 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
+	gate, err := newSubmanifestGate(r.DB())
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.smGate = gate
+	rc, err := serverReceipt(ctx, r, opts)
+	if err != nil {
+		return nil, fmt.Errorf("sync.HandleSync: %w", err)
+	}
+	h.repo, h.receipt = r.WithReceipt(rc), rc
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
 	}
 
 	obs.HandleCompleted(ctx, HandleEnd{
-		CardsProcessed: len(req.Cards),
-		FilesSent:      h.filesSent,
-		FilesReceived:  h.filesRecvd,
-		Err:            err,
+		CardsProcessed:   len(req.Cards),
+		FilesSent:        h.filesSent,
+		FilesReceived:    h.filesRecvd,
+		SparseClassified: h.keep.classified(),
+		Err:              err,
 	})
 	return resp, err
 }
@@ -177,6 +216,10 @@ type remoteHasEntry struct {
 
 // handler holds per-request state while processing cards.
 type handler struct {
+	ctx             context.Context
+	cone            *cone.Cone
+	keep            *sparseKeep
+	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -195,11 +238,16 @@ type handler struct {
 	peerDate        int                       // client's check-in date, from client-version
 	cloneSeq        int                       // rid of the next blob to send, from the client's clone card
 	cloneSnapMax    int                       // upper rid bound for this clone session (from cookie); 0 = capture fresh in emitCloneBatch
+	cloneResume     cloneResume               // a sparse walk's progress at the cursor row (from cookie)
+	walkClone       bool                      // a clone without pull: keep-set discovery walks the round (§6.2)
 	uvCatalogSent   bool                      // true after sending UV catalog
 	pendingPhantoms []pendingPhantom          // igot names awaiting flushPhantoms
 	filesSent       int                       // files sent in response (for observer)
+	smGate          submanifestGate           // §7.2 transfer gate, read once per request
+	peerReadsTrees  bool                      // the request carries send-submanifests (§7.2)
+	capabilitySent  bool                      // the reply's §7.2 pragma run is emitted
+	smRefused       bool                      // this reply already carries the §7.2 refusal
 	filesRecvd      int                       // files received from client (for observer)
-	cascaded        int                       // artifacts the phantom-fill cascades linked
 	syncPrivate     bool                      // true if pragma send-private was accepted
 	nextIsPrivate   bool                      // true if a private card precedes the next file/cfile
 	syncedTables    map[string]*SyncedTable   // cached table definitions
@@ -211,6 +259,7 @@ type handler struct {
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
+	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -240,7 +289,7 @@ func (h *handler) initAuth() {
 //
 // Clone implies Read for the capabilities a request starts with, nobody's,
 // as fossil's page_xfer sets it (`if( g.perm.Clone ) g.perm.Read = 1;`,
-// xfer.c:1301) before its card loop and the §7.3 erratum states. A Clone
+// xfer.c:1301) before its card loop and §7.3 states. A Clone
 // that a login card grants does not become Read: check_login only adds the
 // user's capabilities, after that point.
 //
@@ -271,6 +320,12 @@ func (h *handler) handleLoginCard(c *xfer.LoginCard) string {
 	h.user = u.Login
 	h.caps += u.Cap
 	h.authed = true
+	// check_login credits what the request stores to the user and records
+	// the card's nonce; a nobody or anonymous login changes neither.
+	if u.UID != 0 {
+		h.receipt.UID = int64(u.UID)
+		h.receipt.Nonce = c.Nonce
+	}
 	return ""
 }
 
@@ -392,6 +447,22 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// clone batch goes out at the clone card and fossil's client sends its
 	// cookie after that card.
 	h.cloneSnapMax = cloneCapFromCards(req.Cards)
+	h.cloneResume = cloneResumeFromCards(req.Cards)
+	h.walkClone = detectOperation(req) == "clone" && !hasPullCard(req.Cards)
+	// §7.2: a server decides from the request it is answering, so the
+	// capability is read ahead of the card loop like the cookie above. A
+	// request with no client-version gets its reply's pragma run here, at
+	// the head; otherwise it follows server-version (handlePragma).
+	h.peerReadsTrees = sendsSubmanifests(req.Cards)
+	var coneErr error
+	h.cone, coneErr = requestCone(req.Cards)
+	if coneErr != nil {
+		h.fail(coneErr.Error())
+		return h.reply(), nil
+	}
+	if !hasClientVersion(req.Cards) {
+		h.emitCapabilityPragmas()
+	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
 	// runs them after db_begin_write, and so does the closing crosslink.
 	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
@@ -527,7 +598,7 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 	if h.filesRecvd == 0 {
 		return nil
 	}
-	if _, err := manifest.CrosslinkAfterCascades(ctx, h.repo, h.cascaded); err != nil {
+	if _, err := manifest.CrosslinkContext(ctx, h.repo); err != nil {
 		return fmt.Errorf("HandleSync: crosslink: %w", err)
 	}
 	return nil
@@ -604,7 +675,7 @@ const privateRefusal = "not authorized to sync private content"
 // countedErrors counts the error cards that §5.3's errors N counts. N is the
 // errors raised, as page_xfer's nErr is, and three of them fossil never adds
 // to nErr: the unknown-operator error, the private-content refusal and the
-// SHA3 version refusal (erratum sync-protocol-01-s5.3-errors-count). The
+// SHA3 version refusal (§5.3). The
 // count is made from card text because those three texts are fixed by the
 // draft and no other error carries them.
 func countedErrors(cards []xfer.Card) int {
@@ -659,6 +730,23 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 	h.handleCloneCard(c)
 	if !h.cloneMode || h.fatal {
 		return nil
+	}
+	mirror, err := h.servesPartialMirror()
+	if err != nil {
+		return err
+	}
+	if !mirror {
+		have, err := content.StoreCone(h.repo.DB())
+		if err != nil {
+			return err
+		}
+		if !coneContains(have, h.cone) {
+			h.refuseClone("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
+			return nil
+		}
+	}
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
 	}
 	if err := h.sendCloneUVCatalog(); err != nil {
 		return err
@@ -745,7 +833,7 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 // card's SEQNO names.
 func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	if !auth.CanClone(h.caps) {
-		h.refuseClone()
+		h.refuseClone("not authorized to clone")
 		return
 	}
 	// §4.1, §8.1: page_xfer sends a version 3 clone's reply uncompressed,
@@ -777,10 +865,14 @@ func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	}
 }
 
-// refuseClone answers a clone from a requester without Clone as page_xfer
-// does (§8.2, §10.1): the reply so far is reset, the push card naming the
-// repository goes ahead of the error, and no later card is processed.
-func (h *handler) refuseClone() {
+// refuseClone answers a clone it will not serve as page_xfer answers one from
+// a requester without Clone (§8.2, §10.1): the reply so far is reset, the
+// push card naming the repository goes ahead of the error, and no later card
+// is processed. A sparse store that does not cover the request refuses the
+// same way (sparse-cone §5.3). fossil's clone client needs the push card: a
+// first round without one reads as an empty, finished clone, and it exits 0
+// with no project code, where with the codes it reads the error as fatal.
+func (h *handler) refuseClone(msg string) {
 	h.resetContent()
 	serverCode := h.serverCode
 	if serverCode == "" {
@@ -788,7 +880,7 @@ func (h *handler) refuseClone() {
 	}
 	h.resp = append(h.resp,
 		&xfer.PushCard{ServerCode: serverCode, ProjectCode: h.projectCode},
-		&xfer.ErrorCard{Message: "not authorized to clone"})
+		&xfer.ErrorCard{Message: msg})
 	h.broke = true
 }
 
@@ -826,6 +918,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		if len(c.Values) >= 3 {
 			h.resp = append(h.resp, versionPragma("server-version"))
 		}
+		h.emitCapabilityPragmas()
 	case c.Name == "uv-hash" && len(c.Values) >= 1:
 		if err := h.handlePragmaUVHash(c.Values[0]); err != nil {
 			h.resp = append(h.resp, &xfer.ErrorCard{
@@ -868,10 +961,27 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 	return nil
 }
 
+// emitCapabilityPragmas appends the reply's §7.2 pragma run, once per
+// reply: send-submanifests, then avoid-submanifests while this repository's
+// enable-submanifests is off.
+func (h *handler) emitCapabilityPragmas() {
+	if h.capabilitySent {
+		return
+	}
+	h.capabilitySent = true
+	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
+	// Sparse-cone §6.3: this server applies a request's whole cone or
+	// refuses it (requestCone, handleClone), so a cone request's reply is
+	// acknowledged here. A refusal resets the reply and discards it.
+	if h.cone != nil {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
+	}
+}
+
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
 // the requester's login, null for nobody as fossil's g.zLogin is, and
 // ci-lock-fail carries the holder's login fossilized (%F in xfer.c). For a
-// lock with no login fossil emits an empty LOGIN, which the -01 grammar
+// lock with no login fossil emits an empty LOGIN, which the -00 grammar
 // (1*fossilized) does not allow and which fossil's own client drops as a
 // short card; this server names the holder nobody instead.
 //
@@ -904,6 +1014,22 @@ func (h *handler) handleCkinLock(parentUUID, clientID string) {
 	if forbidDeltaManifests(h.repo.DB()) {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: "avoid-delta-manifests"})
 	}
+}
+
+// submanifestBarred applies the §7.2 gate to an answer to a gimme: a tree or
+// sub-manifest is withheld from a client whose request did not carry
+// send-submanifests, and the reply says so once, explicitly, rather than
+// omitting it in silence.
+func (h *handler) submanifestBarred(rid libfossil.FslID) (bool, error) {
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, rid, h.peerReadsTrees)
+	if err != nil || !barred {
+		return false, err
+	}
+	if !h.smRefused {
+		h.resp = append(h.resp, submanifestRefusal())
+		h.smRefused = true
+	}
+	return true, nil
 }
 
 func (h *handler) handleDataCard(ctx context.Context, card xfer.Card) error {
@@ -1081,16 +1207,22 @@ const maxPhantomGimme = 500
 
 // requestPhantoms asks a pushing client for the server's phantoms, as
 // page_xfer's request_phantoms does after the card loop: every phantom but
-// those the client asked for this round (it lacks them), shunned names, and
-// private ones outside a private sync (§3.3), at most maxPhantomGimme.
+// those the client asked for this round (it lacks them), shunned names,
+// private ones outside a private sync (§3.3), and a sparse store's elided
+// ones, at most maxPhantomGimme.
 func (h *handler) requestPhantoms() error {
 	if !h.pushOK {
 		panic("handler.requestPhantoms: push not accepted")
 	}
-	query := "SELECT uuid FROM phantom CROSS JOIN blob USING(rid)" +
+	query := "SELECT rid, uuid FROM phantom CROSS JOIN blob USING(rid)" +
 		" WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
 	if !h.syncPrivate {
 		query += " AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)"
+	}
+	// draft-fossil-sparse-cone-00 §5.2: an elided phantom is never asked for.
+	elided, err := elidedPhantoms(h.ctx, h.repo.DB())
+	if err != nil {
+		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
@@ -1099,11 +1231,12 @@ func (h *handler) requestPhantoms() error {
 	defer rows.Close()
 	sent := 0
 	for sent < maxPhantomGimme && rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return fmt.Errorf("handler: listing phantoms: %w", err)
 		}
-		if h.remoteLacks[uuid] {
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1142,6 +1275,8 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if !ok {
 		return nil // blob not found — not fatal, skip.
 	}
+	// §6.4: a gimme names its artifact, so a cone request is answered
+	// densely; the requester never names what its own cone elides.
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1158,6 +1293,15 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if sha3Barred(c.UUID, h.peerVersion) {
 		h.resp = append(h.resp, sha3Refusal())
 		return nil
+	}
+	// Preserve send_file's private notice/SHA3 refusal ordering, then withhold
+	// shunned payloads before any submanifest or content expansion.
+	shunned, err := shun.IsShunned(h.repo.DB(), c.UUID)
+	if err != nil || shunned {
+		return err
+	}
+	if barred, err := h.submanifestBarred(rid); err != nil || barred {
+		return err
 	}
 	data, err := h.cache.Expand(h.repo.DB(), rid)
 	if err != nil {
@@ -1247,14 +1391,8 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	// storeReceivedFile's cascade, inline, to keep its count: the cascade
-	// leaves the leaf and tag repair to crosslinkReceived (issue #414), and
-	// both run in the request transaction.
-	rid, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
+	err := storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
-	if rid > 0 {
-		h.cascaded += manifest.AfterDephantomize(ctx, h.repo, rid)
-	}
 	// A late mismatch names the delta at fault, which this request stored
 	// earlier, not the card that made its bytes available.
 	var mismatch *hashMismatchError
@@ -1296,6 +1434,16 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 	if c == nil {
 		panic("handler.handleReqConfig: c must not be nil")
 	}
+	if c.Name == configScalarMarker && h.canRead() {
+		// zit's request for the sub-manifest settings (§6.3), which fossil
+		// matches to no group and answers with nothing.
+		cards, err := submanifestConfigCards(h.repo.DB())
+		if err != nil {
+			return fmt.Errorf("handler: reqconfig %q: %w", c.Name, err)
+		}
+		h.resp = append(h.resp, cards...)
+		return nil
+	}
 	mask := configRequestMask(c.Name, h.caps, h.canRead(), h.authed)
 	if mask == 0 {
 		return nil
@@ -1309,11 +1457,13 @@ func (h *handler) handleReqConfig(c *xfer.ReqConfigCard) error {
 }
 
 func (h *handler) emitIGots() error {
-	// Emit igot for all non-phantom blobs so the client can discover
-	// everything the server has. Cluster generation is a client-side
-	// optimization for push; the server always advertises all blobs.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	// Sparse inventories advertise only the request's keep-set; announcing an
+	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
-		SELECT uuid FROM blob WHERE size >= 0
+		SELECT rid,uuid FROM blob WHERE size >= 0
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)
 		AND NOT EXISTS(SELECT 1 FROM private WHERE rid=blob.rid)`,
 	)
@@ -1324,9 +1474,13 @@ func (h *handler) emitIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
 		// Skip if the client already has this blob as public (non-private).
@@ -1367,8 +1521,11 @@ func (h *handler) emitIGots() error {
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
 func (h *handler) emitPrivateIGots() error {
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
 	rows, err := h.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return fmt.Errorf("handler: listing private blobs: %w", err)
@@ -1377,9 +1534,13 @@ func (h *handler) emitPrivateIGots() error {
 
 	var uuids []string
 	for rows.Next() {
+		var rid libfossil.FslID
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
+		}
+		if !h.keep.keeps(rid) {
+			continue
 		}
 		// Skip if the client already has this blob as private.
 		// If the client has it as public, we still emit the private igot so
@@ -1475,18 +1636,11 @@ func (h *handler) emitCloneBatch() error {
 			return fmt.Errorf("handler: capture clone snapshot: %w", err)
 		}
 		h.cloneSnapMax = maxRid
-		h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		// A sparse walk sends its one cookie with the round's progress.
+		if h.keep == nil || h.keep.walk == nil {
+			h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		}
 	}
-
-	budget := DefaultCloneBatchBytes
-	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
-	// The budget is consulted before each artifact and never suppresses the
-	// first one, so this yields exactly one artifact per round.
-	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
-		budget = 1
-	}
-	truncate := h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10)
-
 	// cloneSeq is the rid of the next blob to send and is inclusive, matching
 	// §8.2's "iterate from supplied RID through current maximum" and
 	// canonical's `while( seqno<=max )` loop in page_xfer(). handleControlCard
@@ -1497,6 +1651,80 @@ func (h *handler) emitCloneBatch() error {
 	if cursorAtEntry <= 0 {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
+	round := h.newCloneBatch()
+	if err := h.walkCloneRows(round); err != nil {
+		return err
+	}
+	if round.truncate && round.sentTop > 1 {
+		h.truncateCloneBatch(round)
+	}
+	// The cursor must strictly advance or signal exhaustion. Catching a stall
+	// here names the round that caused it; letting it through only surfaces
+	// later as an opaque MaxRounds failure on the client. A check-in whose
+	// walk outgrew the round stays the cursor, its progress in the cookie.
+	stalled := round.nextRID != 0 && round.nextRID <= cursorAtEntry
+	if stalled && !(round.pending.set && round.nextRID == cursorAtEntry && round.count > 0) {
+		return fmt.Errorf(
+			"handler: clone cursor did not advance: next %d, cursor %d", round.nextRID, cursorAtEntry)
+	}
+	h.emitCloneResume(round)
+	// SeqNo 0 signals completion so the client stops requesting.
+	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: round.nextRID})
+	return nil
+}
+
+// cloneBatch is one clone reply's batch state.
+type cloneBatch struct {
+	budget   int
+	truncate bool
+	// sent records every rid emitted this round, including delta sources a
+	// dependent's chain pulls in ahead of their ascending position (issue
+	// #141). It caps re-emission at once per round the way canonical fossil's
+	// per-request "sent" bag does; across rounds the ascending cursor resumes,
+	// and a source pulled in early in a prior round may be re-sent, which the
+	// receiver dedupes by hash.
+	sent map[int]bool
+	// count is the card total; sentTop counts top-level artifacts sent this
+	// round. Each carries a whole delta chain, so it is the quantity the
+	// truncate liveness guard reasons about.
+	count, sentTop int
+	// bytesSent accumulates the wire cost of the cards emitted this round,
+	// mirroring canonical's `while( mxSend > blob_size(pOut) )`: the budget is
+	// tested before each artifact and the artifact (with its chain) that
+	// crosses it is still sent whole. That ordering is what guarantees forward
+	// progress when a single artifact is larger than the entire budget — a
+	// post-send test would emit nothing and stall the cursor.
+	bytesSent  int
+	lastTopRID int
+	// nextRID is the cursor reported back to the client: the rid of the first
+	// blob this batch did not send, or 0 once the snapshot is exhausted.
+	nextRID int
+	// entry is the cursor the request named.
+	entry int
+	// resume is the walk progress the request's cookie carried; pending is
+	// the progress this reply hands on (§6.2).
+	resume, pending cloneResume
+}
+
+func (h *handler) newCloneBatch() *cloneBatch {
+	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}, entry: h.cloneSeq}
+	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
+	// The budget is consulted before each artifact and never suppresses the
+	// first one, so this yields exactly one artifact per round.
+	if h.buggify != nil && h.buggify.Check("handler.emitCloneBatch.smallBatch", 0.10) {
+		r.budget = 1
+	}
+	// A sparse walk sends rows out of rid order, so dropping the round's last
+	// card cannot name the cursor that owes it; truncation stays dense-only.
+	r.truncate = h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10) &&
+		(h.keep == nil || h.keep.walk == nil)
+	if h.cloneResume.aware && h.cloneResume.row == h.cloneSeq {
+		r.resume = h.cloneResume
+	}
+	return r
+}
+
+func (h *handler) walkCloneRows(round *cloneBatch) error {
 	rows, err := h.repo.DB().Query(
 		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
 		h.cloneSeq, h.cloneSnapMax,
@@ -1505,30 +1733,6 @@ func (h *handler) emitCloneBatch() error {
 		return fmt.Errorf("handler: clone batch: %w", err)
 	}
 	defer rows.Close()
-
-	count := 0
-	// sent records every rid emitted this round, including delta sources a
-	// dependent's chain pulls in ahead of their ascending position (issue
-	// #141). It caps re-emission at once per round the way canonical fossil's
-	// per-request "sent" bag does; across rounds the ascending cursor resumes,
-	// and a source pulled in early in a prior round may be re-sent, which the
-	// receiver dedupes by hash.
-	sent := map[int]bool{}
-	// sentTop counts top-level artifacts sent this round. Each carries a whole
-	// delta chain, so it is distinct from count (the card total) and is the
-	// quantity the truncate liveness guard below reasons about.
-	sentTop := 0
-	// bytesSent accumulates the wire cost of the cards emitted this round,
-	// mirroring canonical's `while( mxSend > blob_size(pOut) )`: the budget is
-	// tested before each artifact and the artifact (with its chain) that
-	// crosses it is still sent whole. That ordering is what guarantees forward
-	// progress when a single artifact is larger than the entire budget — a
-	// post-send test would emit nothing and stall the cursor.
-	bytesSent := 0
-	var lastTopRID int
-	// nextRID is the cursor reported back to the client: the rid of the first
-	// blob this batch did not send, or 0 once the snapshot is exhausted.
-	nextRID := 0
 	for rows.Next() {
 		var rid int
 		var uuid string
@@ -1536,98 +1740,122 @@ func (h *handler) emitCloneBatch() error {
 		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
 			return err
 		}
-
-		// A higher-rid delta source that a dependent's chain already pulled in
-		// this round is on the wire; skip it before it can consume budget or
-		// advance the cursor a second time.
-		if sent[rid] {
-			continue
-		}
-
-		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
-		if isPriv && !h.syncPrivate {
-			continue // skip private blob, don't count toward batch
-		}
-
-		if bytesSent >= budget {
-			nextRID = rid
-			break
-		}
-
-		// §7.2/#141: emit the artifact source-first. A row stored as a delta
-		// goes out as a delta card preceded by the source it names, reclaiming
-		// the delta-transmission bandwidth a plain (expanded) cfile gives up.
-		// content.Deltify deltifies the OLDER artifact against the NEWER one,
-		// so a delta's source almost always has a *greater* rid than the delta
-		// itself and would not yet have been sent under this loop's ascending
-		// order; buildCloneArtifact walks the chain and emits each source ahead
-		// of its dependent so no delta ever forward-references a card that has
-		// not arrived. The delta rides a cfile that names its source, as in
-		// canonical's send_compressed_file.
-		cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, sent)
+		more, err := h.cloneRow(round, rid, uuid, fullSize)
 		if err != nil {
 			return err
 		}
-		// Respect the client's decode bound: the round the client decompresses
-		// must stay within xfer.MaxDecompressedBytes. If this artifact's chain
-		// would push the round past that bound and the round already carries
-		// content, flush now so the chain leads a round of its own. Without this
-		// the budget check above only bounds the accumulated *filler*, and a
-		// large artifact riding behind sub-budget filler carried the round to
-		// budget-plus-artifact, past what the client could decode (issue #109).
-		//
-		// The first artifact of a round (count == 0) is always sent, so a chain
-		// larger than the bound still makes forward progress -- it is simply
-		// unclonable, a property of the artifact alone and not of what precedes
-		// it in the round.
-		if count > 0 && bytesSent+cost > xfer.MaxDecompressedBytes {
-			nextRID = rid
+		if !more {
 			break
 		}
+	}
+	return rows.Err()
+}
 
-		h.resp = append(h.resp, cards...)
-		for _, r := range rids {
-			sent[r] = true
+// cloneRow offers one candidate row to the round. It reports false once the
+// round is full, having set the cursor the client resumes from.
+func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+	// A higher-rid delta source that a dependent's chain already pulled in
+	// this round is on the wire; skip it before it can consume budget or
+	// advance the cursor a second time. A sparse walk still owes the walk of
+	// a check-in that went out as another manifest's delta source.
+	walk := h.keep != nil && h.keep.walk != nil
+	if round.sent[rid] && !walk {
+		return true, nil
+	}
+	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+	if err != nil || shunned {
+		return err == nil, err
+	}
+	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
+	if isPriv && !h.syncPrivate {
+		return true, nil // skip private blob, don't count toward batch
+	}
+	if round.bytesSent >= round.budget {
+		round.nextRID = rid
+		return false, nil
+	}
+	if walk {
+		return h.cloneSparseRow(round, rid, uuid, fullSize)
+	}
+	// §6.2: a cone-excluded row is charged as a dense round would charge
+	// it, at no less than its expanded size, so the walk stops no later
+	// than a dense batch over the same rows would.
+	if !h.keep.keeps(libfossil.FslID(rid)) {
+		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		return true, nil
+	}
+	sent, err := h.cloneSend(round, rid, uuid, fullSize)
+	if err != nil || sent {
+		return sent, err
+	}
+	round.nextRID = rid
+	return false, nil
+}
+
+// cloneSend emits rid with its delta chain unless the chain would carry the
+// round past the client's decode bound; it reports whether rid was sent.
+func (h *handler) cloneSend(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+	// §7.2/#141: emit the artifact source-first. A row stored as a delta
+	// goes out as a delta card preceded by the source it names, reclaiming
+	// the delta-transmission bandwidth a plain (expanded) cfile gives up.
+	// content.Deltify deltifies the OLDER artifact against the NEWER one,
+	// so a delta's source almost always has a *greater* rid than the delta
+	// itself and would not yet have been sent under this loop's ascending
+	// order; buildCloneArtifact walks the chain and emits each source ahead
+	// of its dependent so no delta ever forward-references a card that has
+	// not arrived. The delta rides a cfile that names its source, as in
+	// canonical's send_compressed_file.
+	cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, round.sent)
+	if err != nil {
+		return false, err
+	}
+	// Respect the client's decode bound: the round the client decompresses
+	// must stay within xfer.MaxDecompressedBytes. If this artifact's chain
+	// would push the round past that bound and the round already carries
+	// content, flush now so the chain leads a round of its own. Without this
+	// the budget check above only bounds the accumulated *filler*, and a
+	// large artifact riding behind sub-budget filler carried the round to
+	// budget-plus-artifact, past what the client could decode (issue #109).
+	//
+	// The first artifact of a round (count == 0) is always sent, so a chain
+	// larger than the bound still makes forward progress -- it is simply
+	// unclonable, a property of the artifact alone and not of what precedes
+	// it in the round.
+	if round.count > 0 && round.bytesSent+cost > xfer.MaxDecompressedBytes {
+		return false, nil
+	}
+	h.resp = append(h.resp, cards...)
+	for _, r := range rids {
+		round.sent[r] = true
+	}
+	h.filesSent += len(rids)
+	round.lastTopRID = rid
+	round.count += len(rids)
+	round.sentTop++
+	round.bytesSent += cost
+	return true, nil
+}
+
+// truncateCloneBatch is BUGGIFY's truncate: it removes the last cfile card
+// to simulate an incomplete batch. The caller's `sentTop > 1` is a liveness
+// constraint, not just a chaos-injection guard. The removed card is the
+// deepest dependent of the last artifact's chain (emitted last in
+// source-first order, so nothing else on the wire depends on it), and the
+// cursor is set to that artifact's top-level rid. With more than one
+// top-level artifact sent this round that rid strictly exceeds the cursor we
+// entered with, so the client re-requests from it rather than looping on the
+// same batch until MaxRounds.
+func (h *handler) truncateCloneBatch(round *cloneBatch) {
+	for i := len(h.resp) - 1; i >= 0; i-- {
+		if _, ok := h.resp[i].(*xfer.CFileCard); ok {
+			h.resp = append(h.resp[:i], h.resp[i+1:]...)
+			h.filesSent--
+			// The dropped card held lastTopRID, so that rid becomes the
+			// next one owed to the client rather than being skipped.
+			round.nextRID = round.lastTopRID
+			return
 		}
-		h.filesSent += len(rids)
-		lastTopRID = rid
-		count += len(rids)
-		sentTop++
-		bytesSent += cost
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// BUGGIFY: truncate — remove the last cfile card to simulate an incomplete
-	// batch. `sentTop > 1` is a liveness constraint, not just a chaos-injection
-	// guard. The removed card is the deepest dependent of the last artifact's
-	// chain (emitted last in source-first order, so nothing else on the wire
-	// depends on it), and nextRID is set to that artifact's top-level rid. With
-	// more than one top-level artifact sent this round that rid strictly
-	// exceeds the cursor we entered with, so the client re-requests from it
-	// rather than looping on the same batch until MaxRounds.
-	if truncate && sentTop > 1 {
-		for i := len(h.resp) - 1; i >= 0; i-- {
-			if _, ok := h.resp[i].(*xfer.CFileCard); ok {
-				h.resp = append(h.resp[:i], h.resp[i+1:]...)
-				h.filesSent--
-				// The dropped card held lastTopRID, so that rid becomes the
-				// next one owed to the client rather than being skipped.
-				nextRID = lastTopRID
-				break
-			}
-		}
-	}
-	// The cursor must strictly advance or signal exhaustion. Catching a stall
-	// here names the round that caused it; letting it through only surfaces
-	// later as an opaque MaxRounds failure on the client.
-	if nextRID != 0 && nextRID <= cursorAtEntry {
-		return fmt.Errorf(
-			"handler: clone cursor did not advance: next %d, cursor %d", nextRID, cursorAtEntry)
-	}
-	// SeqNo 0 signals completion so the client stops requesting.
-	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: nextRID})
-	return nil
 }
 
 // maxCloneChainWalk bounds the delta-chain walk in walkCloneChain. A real
@@ -1673,6 +1901,13 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	if err != nil {
 		return cloneBlobRow{}, false, fmt.Errorf("handler: clone blob info rid %d: %w", rid, err)
 	}
+	shunned, err := shun.IsShunned(h.repo.DB(), row.uuid)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if shunned {
+		return cloneBlobRow{}, false, nil
+	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil
 }
@@ -1692,9 +1927,10 @@ func (h *handler) storedContent(rid int) ([]byte, error) {
 // returns the artifacts to emit, ordered DEPENDENT-FIRST (rid itself first).
 // The walk stops at the first source that is already available to the receiver
 // (emitted earlier this round) or that cannot be forwarded this clone —
-// outside the snapshot bound, a phantom, or a private source under a public
-// clone — and tags the artifact below such a source for full-content emission
-// so it never depends on a card that will not arrive.
+// outside the snapshot bound, a phantom, a private source under a public
+// clone, or a tree the §7.2 gate withholds from this client — and tags the
+// artifact below such a source for full-content emission so it never depends
+// on a card that will not arrive.
 func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]bool) ([]cloneArtifact, error) {
 	chain := make([]cloneArtifact, 0, 8)
 	curRID, curUUID, curUSize := rid, uuid, usize
@@ -1713,7 +1949,16 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 			return nil, err
 		}
 		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			(!info.priv || h.syncPrivate)
+			h.keep.sourceKept(int(src)) && (!info.priv || h.syncPrivate)
+		if forwardable {
+			// Checked before sent: a withheld source is never on the wire,
+			// whatever an earlier chain recorded.
+			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerReadsTrees)
+			if err != nil {
+				return nil, err
+			}
+			forwardable = !barred
+		}
 		if !forwardable {
 			m.expanded = true
 			return append(chain, m), nil // source unsendable: emit curRID full
@@ -1759,6 +2004,24 @@ func (h *handler) buildCloneArtifact(
 		// §7.6, Appendix A.2: the refusal takes a SHA3 artifact's place.
 		if sha3Barred(m.uuid, h.peerVersion) {
 			cards = append(cards, sha3Refusal())
+			continue
+		}
+		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client
+		// that did not send send-submanifests. walkCloneChain never names a
+		// withheld tree as a source, so a dependent stored as a delta of one
+		// goes out whole.
+		barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(m.rid), h.peerReadsTrees)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if barred {
+			if !h.smRefused {
+				cards = append(cards, submanifestRefusal())
+				h.smRefused = true
+			}
+			// Not sent, so not recorded as sent: a later chain must never
+			// take it as a source already on the wire.
+			rids = rids[:len(rids)-1]
 			continue
 		}
 		var data []byte

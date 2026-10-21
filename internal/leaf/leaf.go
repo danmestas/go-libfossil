@@ -21,11 +21,12 @@
 //	                  WHERE tagid=TAG_BRANCH AND rid=plink.cid
 //	                    AND tagtype>0),'trunk')
 //
-// Only an active branch row (tagtype > 0) names a branch. fossil's is_a_leaf
-// and leaf_rebuild filter so, but its leaf_check, which maintains the table,
-// does not: a check-in whose branch tag was cancelled with a value keeps that
-// value there. draft-fossil-repo-state-01 Section 6.4 requires the filter on
-// every path that decides branch membership, so both paths here apply it.
+// Only an active branch row (tagtype > 0) names a branch. fossil 2.28's
+// is_a_leaf, leaf_check and leaf_rebuild do not filter so: a check-in whose
+// branch tag was cancelled with a value keeps that value there.
+// draft-fossil-repo-state-00 Section 6.4 requires the filter on every path
+// that decides branch membership, so both paths here apply it. Audit, which
+// must also accept fossil's tables, reads both ways (fossilSameBranchSQL).
 //
 // Two consequences are easy to get wrong and are what issue #189 was:
 //
@@ -55,7 +56,7 @@ const BranchTagID = 8
 // mainBranchSQL is the default branch a check-in with no active branch row
 // reads as: the main-branch setting, or trunk when it is unset. Section 6.1
 // forbids assuming "trunk" when the setting is present. fossil's leaf.c uses
-// the literal 'trunk' here; the -01 text is followed, as for repo.MainBranch,
+// the literal 'trunk' here; the -00 text is followed, as for repo.MainBranch,
 // which also reads an empty value as unset.
 const mainBranchSQL = `coalesce(nullif((SELECT value FROM config
 	                                  WHERE name='main-branch'),''),'trunk')`
@@ -68,6 +69,18 @@ var sameBranchSQL = fmt.Sprintf(`
 	  = coalesce((SELECT value FROM tagxref
 	               WHERE tagid=%[1]d AND rid=plink.cid AND tagtype>0),%[2]s)`,
 	BranchTagID, mainBranchSQL)
+
+// fossilSameBranchSQL is sameBranchSQL as fossil 2.28 reads it (src/leaf.c
+// leaf_check): a branch row of any type names a branch, and a check-in with
+// none reads as the literal trunk. A table fossil wrote follows it, and a
+// table written here while main-branch was unset reads as it does for every
+// check-in with no branch row, once the setting is changed.
+var fossilSameBranchSQL = fmt.Sprintf(`
+	coalesce((SELECT value FROM tagxref
+	           WHERE tagid=%[1]d AND rid=plink.pid),'trunk')
+	  = coalesce((SELECT value FROM tagxref
+	               WHERE tagid=%[1]d AND rid=plink.cid),'trunk')`,
+	BranchTagID)
 
 // Check brings rid's leaf row in line with the rule above, inserting or
 // deleting as needed: Section 7.3's incremental check, fossil's leaf_check().
@@ -151,6 +164,135 @@ func Rebuild(q db.Querier) error {
 		return fmt.Errorf("leaf.Rebuild insert: %w", err)
 	}
 	return nil
+}
+
+// Findings are the leaf-table errors Audit finds, each in ascending rid order.
+type Findings struct {
+	// Stale are rows a recheck has removed: check-ins with a same-branch
+	// child whose branch row was written once the child was linked.
+	Stale []libfossil.FslID
+	// Missing are check-ins a recheck has inserted: each carries a branch
+	// row and has no same-branch child, yet has no row.
+	Missing []libfossil.FslID
+	// Stray are rows no recheck writes: rids that are no candidate at all.
+	Stray []libfossil.FslID
+}
+
+// Audit checks the leaf table against what Section 7.3 lets a reader decide
+// without knowing the order the artifacts arrived in. The table is not a
+// function of the repository: a check-in keeps its verdict when a child that
+// carries no branch row is linked to it in a later batch, or when a reparent
+// moves a child onto or off it, since neither schedules a recheck. So the
+// incremental table and a full rebuild can differ, and both are consistent.
+// Audit applies the Section 7.2 test, the one Check applies, only where every
+// arrival order agrees:
+//
+//   - A row is stale when a same-branch child carries a branch row that was
+//     written once the child was linked: propagated along the link (srcid 0),
+//     or the child's own T card (srcid the child), on a child that carries no
+//     parent tag row. Writing it scheduled the child's parents, and that
+//     recheck removed the row. A row a control artifact wrote proves nothing,
+//     as the tag may have arrived before the check-in it names, and neither
+//     does a reparented child, whose link may be newer than its branch row.
+//     That holds for a cancelled parent tag too: the cancel re-derives
+//     nothing, so the link the reparent wrote stays until a full rebuild
+//     re-derives plink from the P-card (fossil's reparent pass reads only
+//     tagtype 1 rows, src/manifest.c manifest_crosslink_end).
+//   - A check-in carrying a branch row of any type is missing when it has no
+//     same-branch child, no row, and is not in detached. Its last branch
+//     write rechecked it, and after that only a branch write to it or to a
+//     child, which schedules it again, or a reparent taking a child away can
+//     change its verdict. detached names the check-ins a reparent may have
+//     taken a child from: the parents a check-in's P-card or any parent tag
+//     naming it lists, that its plink no longer holds. Only those artifacts
+//     record them, and a later parent tag replaces an earlier one's row.
+//   - A row is stray when its rid carries no branch row, appears in no plink
+//     row and is not in detached: a file artifact, say, or a rid with no
+//     artifact. fossil's leaf_check runs only on a check-in a branch write
+//     scheduled and on that check-in's plink parents (src/leaf.c
+//     leaf_eventually_check), and leaf_rebuild, behind `fossil leaves
+//     --recompute`, inserts only plink children; Check and Rebuild here
+//     reach no other rid either.
+//
+// A check-in with no branch row and no same-branch child may lack a row,
+// being a candidate only as the parent of a tagged check-in, and Audit does
+// not report it.
+//
+// "Same-branch" is read two ways, and Audit holds a table to a finding only
+// where both agree: each has a same-branch child witnessing a stale row
+// (not necessarily the same child), and neither has one for a missing row. One is the draft's, which Check
+// applies: active branch rows only, and the main-branch setting as it is
+// now. The other is fossil 2.28's leaf_check (fossilSameBranchSQL): a branch
+// row of any type, and the literal trunk. fossil writes its tables that way,
+// departing from Sections 6.1 and 6.4 when main-branch is not trunk or a
+// branch tag was cancelled. A table written here while main-branch was
+// unset reads the default branch that way too once the setting is changed,
+// since changing it rechecks nothing.
+func Audit(q db.Querier, detached map[libfossil.FslID]struct{}) (Findings, error) {
+	if q == nil {
+		panic("leaf.Audit: q must not be nil")
+	}
+	var f Findings
+	var err error
+	f.Stale, err = rids(q, fmt.Sprintf(`
+		SELECT leaf.rid FROM leaf
+		 WHERE EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = leaf.rid AND %[2]s
+		       AND EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%[1]d AND rid=plink.cid
+		                     AND srcid IN (0, plink.cid))
+		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
+		                       WHERE tag.tagname='parent'
+		                         AND tagxref.rid=plink.cid))
+		   AND EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = leaf.rid AND %[3]s
+		       AND EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%[1]d AND rid=plink.cid
+		                     AND srcid IN (0, plink.cid))
+		       AND NOT EXISTS(SELECT 1 FROM tagxref JOIN tag USING(tagid)
+		                       WHERE tag.tagname='parent'
+		                         AND tagxref.rid=plink.cid))
+		 ORDER BY leaf.rid`, BranchTagID, sameBranchSQL, fossilSameBranchSQL))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit stale: %w", err)
+	}
+	missing, err := rids(q, fmt.Sprintf(`
+		SELECT t.rid FROM tagxref t
+		 WHERE t.tagid=%[1]d
+		   AND NOT EXISTS(SELECT 1 FROM leaf WHERE leaf.rid = t.rid)
+		   AND NOT EXISTS(
+		    SELECT 1 FROM plink
+		     WHERE plink.pid = t.rid AND (%[2]s OR %[3]s))
+		 ORDER BY t.rid`, BranchTagID, sameBranchSQL, fossilSameBranchSQL))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit missing: %w", err)
+	}
+	stray, err := rids(q, fmt.Sprintf(`
+		SELECT leaf.rid FROM leaf
+		 WHERE NOT EXISTS(SELECT 1 FROM tagxref
+		                   WHERE tagid=%d AND rid=leaf.rid)
+		   AND NOT EXISTS(SELECT 1 FROM plink WHERE pid=leaf.rid)
+		   AND NOT EXISTS(SELECT 1 FROM plink WHERE cid=leaf.rid)
+		 ORDER BY leaf.rid`, BranchTagID))
+	if err != nil {
+		return Findings{}, fmt.Errorf("leaf.Audit stray: %w", err)
+	}
+	f.Missing = undetached(missing, detached)
+	f.Stray = undetached(stray, detached)
+	return f, nil
+}
+
+// undetached drops the rids in detached, keeping the order.
+func undetached(rids []libfossil.FslID, detached map[libfossil.FslID]struct{}) []libfossil.FslID {
+	var kept []libfossil.FslID
+	for _, rid := range rids {
+		if _, ok := detached[rid]; !ok {
+			kept = append(kept, rid)
+		}
+	}
+	return kept
 }
 
 // Pending is Section 7.3's deferred schedule, fossil's needToCheck bag
@@ -315,18 +457,23 @@ func (p *Pending) Reset() {
 
 // parentsOf lists rid's plink parents, merge parents included.
 func parentsOf(q db.Querier, rid libfossil.FslID) ([]libfossil.FslID, error) {
-	rows, err := q.Query("SELECT pid FROM plink WHERE cid=? AND pid>0", rid)
+	return rids(q, "SELECT pid FROM plink WHERE cid=? AND pid>0", rid)
+}
+
+// rids runs a query selecting one rid column.
+func rids(q db.Querier, query string, args ...any) ([]libfossil.FslID, error) {
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []libfossil.FslID
 	for rows.Next() {
-		var pid int64
-		if err := rows.Scan(&pid); err != nil {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
 			return nil, err
 		}
-		out = append(out, libfossil.FslID(pid))
+		out = append(out, libfossil.FslID(rid))
 	}
 	return out, rows.Err()
 }

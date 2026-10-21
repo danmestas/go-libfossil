@@ -21,6 +21,10 @@ type Checkout struct {
 type CheckoutCreateOpts struct {
 	Env      *simio.Env       // nil = real env
 	Observer CheckoutObserver // nil = nop
+	// Cone makes the checkout sparse: Extract, Update and Status work only on
+	// the files it covers, and Checkin carries the others from the parent
+	// unchanged. nil is dense. See Cone and Checkout.SetCone.
+	Cone *Cone
 }
 
 // CheckoutOpenOpts configures opening an existing checkout.
@@ -33,6 +37,10 @@ type CheckoutOpenOpts struct {
 // ExtractOpts configures file extraction from a checkin.
 type ExtractOpts struct {
 	Force bool // overwrite uncommitted changes
+	// Warn receives what fossil's checkout warns about and proceeds past:
+	// a present R card that disagrees with the files the check-in names,
+	// checked over every file, whatever the cone. nil discards warnings.
+	Warn func(message string)
 }
 
 // UpdateOpts configures updating to a new version with merge.
@@ -69,14 +77,19 @@ type UpdateOpts struct {
 // Unmerged lists files left for the caller to reconcile that hold no
 // markers: a file edited locally that the target deletes (kept on disk,
 // no longer tracked), a file added both locally and by the target (the
-// local file kept, so it shows as edited), and a binary file both sides
+// local file kept, so it shows as edited), a binary file both sides
 // changed (the target's content written, the working copy saved as
-// NAME-original). Like Conflicted, it is not an error.
+// NAME-original), and a file edited locally that the target renamed
+// without changing it (left under its old name, untracked; the new name
+// shows as missing, as in fossil). Like Conflicted, it is not an error.
 type UpdateResult struct {
 	FilesWritten []string // paths written (added, updated, or merged, clean or not); includes every Conflicted path
 	FilesRemoved []string // paths deleted from the working tree
 	Conflicted   []string // paths that now contain conflict markers — not an error; also present in FilesWritten
 	Unmerged     []string // paths left to reconcile without markers — not an error
+	// OutOfCone counts the changes a sparse checkout's update applied to files
+	// outside its cone: recorded for the next checkin, never written to disk.
+	OutOfCone int
 }
 
 // RevertOpts configures reverting file changes.
@@ -135,9 +148,14 @@ type CheckoutMergeFile struct {
 }
 
 // CheckoutChange describes a single file change in the checkout.
+//
+// Change is "added", "modified", "deleted", "renamed" or "missing", or one of
+// the mode changes fossil's changes command reports: "executable" (became
+// executable), "symlink" (became a symlink), "unexec" (lost the executable
+// bit) or "unlink" (was a symlink, now is not).
 type CheckoutChange struct {
 	Name   string
-	Change string // "added", "modified", "deleted", "renamed", "missing"
+	Change string
 }
 
 // CreateCheckout creates a new checkout directory linked to this repository.
@@ -147,6 +165,7 @@ func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, e
 	inner, err := checkout.Create(r.inner, dir, checkout.CreateOpts{
 		Env:      opts.Env,
 		Observer: adaptCheckoutObserver(opts.Observer),
+		Cone:     unwrapCone(opts.Cone),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: create checkout: %w", err)
@@ -196,6 +215,7 @@ func (c *Checkout) Version() (int64, string, error) {
 func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 	err := c.inner.Extract(fsltype.FslID(rid), checkout.ExtractOpts{
 		Force: opts.Force,
+		Warn:  opts.Warn,
 	})
 	if err != nil {
 		return fmt.Errorf("libfossil: extract: %w", err)
@@ -211,7 +231,11 @@ func (c *Checkout) Extract(rid int64, opts ExtractOpts) error {
 // distinguish a clean update from one that wrote conflict markers into
 // working-tree files.
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
-	res, err := c.inner.Update(checkout.UpdateOpts{
+	return c.update(context.Background(), opts)
+}
+
+func (c *Checkout) update(ctx context.Context, opts UpdateOpts) (UpdateResult, error) {
+	res, err := c.inner.UpdateContext(ctx, checkout.UpdateOpts{
 		TargetRID: fsltype.FslID(opts.TargetRID),
 	})
 	if err != nil {
@@ -222,6 +246,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		FilesRemoved: res.FilesRemoved,
 		Conflicted:   res.Conflicted,
 		Unmerged:     res.Unmerged,
+		OutOfCone:    res.OutOfCone,
 	}, nil
 }
 
@@ -298,7 +323,9 @@ func (c *Checkout) Rename(oldName, newName string) error {
 }
 
 // Revert restores files to their checkout version state.
-// If opts.Files is empty, reverts all changed files.
+// If opts.Files is empty, reverts all changed files. A renamed file goes
+// back to its committed name, whatever holds that name now. Each file it
+// writes or deletes is saved for undo first, so Undo brings it back.
 func (c *Checkout) Revert(opts RevertOpts) error {
 	err := c.inner.Revert(checkout.RevertOpts{
 		Paths: opts.Files,
@@ -318,6 +345,12 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 // pending merge.
 // Returns the RID and UUID of the new checkin manifest.
 func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err error) {
+	return c.checkin(context.Background(), opts)
+}
+
+func (c *Checkout) checkin(
+	ctx context.Context, opts CheckoutCommitOpts,
+) (rid int64, uuid string, err error) {
 	if len(opts.Files) > 0 {
 		if err := c.inner.Enqueue(checkout.EnqueueOpts{Paths: opts.Files}); err != nil {
 			return 0, "", fmt.Errorf("libfossil: checkin: %w", err)
@@ -329,7 +362,7 @@ func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err
 			}
 		}()
 	}
-	innerRID, uuid, err := c.inner.Commit(checkout.CommitOpts{
+	innerRID, uuid, err := c.inner.CommitContext(ctx, checkout.CommitOpts{
 		Message: opts.Message,
 		User:    opts.User,
 		Branch:  opts.Branch,
@@ -439,6 +472,14 @@ func fileChangeString(fc checkout.FileChange) string {
 		return "renamed"
 	case checkout.ChangeModified:
 		return "modified"
+	case checkout.ChangeExecutable:
+		return "executable"
+	case checkout.ChangeSymlink:
+		return "symlink"
+	case checkout.ChangeUnexec:
+		return "unexec"
+	case checkout.ChangeUnlink:
+		return "unlink"
 	default:
 		return "unknown"
 	}
@@ -522,7 +563,7 @@ func convertUpdateChange(c checkout.UpdateChange) UpdateChange {
 }
 
 // ResolveVersion resolves name as Repo.ResolveVersion does and also
-// resolves the names relative to this checkout (repo-state-01 Section 8.3),
+// resolves the names relative to this checkout (repo-state-00 Section 8.3),
 // tried after "tip" and before every other form, as fossil's
 // symbolic_name_to_rid does (src/name.c):
 //
@@ -560,7 +601,7 @@ type WorkingVersion struct {
 // does, except that only check-ins can answer: the request is a check-in
 // request, so a technote or wiki page carrying the tag does not.
 //
-// As repo-state-01 Section 8.3 says, only "ci+" has the keyword, so
+// As repo-state-00 Section 8.3 says, only "ci+" has the keyword, so
 // ResolveVersion and Repo.ResolveBranchStart read "ckout" as an ordinary
 // name. It is a keyword only as the whole name: in "root:ckout" or "ckout."
 // the inner name is resolved as a plain check-in request, as in fossil.

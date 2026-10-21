@@ -41,6 +41,13 @@ func (t *MockTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 // NOT the URL path. URL should be the repo root (e.g. "http://localhost:8080").
 type HTTPTransport struct {
 	URL string // repo root, e.g. "http://localhost:8080"
+
+	peer PeerAddr
+}
+
+// PeerAddr returns the IP address of the server the last exchange reached.
+func (t *HTTPTransport) PeerAddr() string {
+	return t.peer.Get()
 }
 
 func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -52,8 +59,8 @@ func (t *HTTPTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport encode: %w", err)
 	}
-	resp, err := PostXfer(ctx, http.DefaultClient, t.URL, xfer.ContentTypeCompressed, cookie,
-		body)
+	resp, err := PostXfer(t.peer.Trace(ctx), http.DefaultClient, t.URL,
+		xfer.ContentTypeCompressed, cookie, body)
 	if err != nil {
 		return nil, fmt.Errorf("sync.HTTPTransport do: %w", err)
 	}

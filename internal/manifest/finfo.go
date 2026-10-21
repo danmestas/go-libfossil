@@ -76,6 +76,15 @@ func FileHistory(r *repo.Repo, opts FileHistoryOpts) ([]FileVersion, error) {
 	if opts.Path == "" {
 		return nil, fmt.Errorf("manifest.FileHistory: Path is required")
 	}
+	// A spine event is valid history metadata, but does not prove its mlinks
+	// are complete. Unknown paths and renames can live in an elided subtree.
+	var incomplete int
+	if err := r.DB().QueryRow("SELECT EXISTS(SELECT 1 FROM orphan o JOIN event e ON e.objid=o.rid WHERE e.type='ci')").Scan(&incomplete); err != nil {
+		return nil, fmt.Errorf("manifest.FileHistory: completeness: %w", err)
+	}
+	if incomplete != 0 {
+		return nil, fmt.Errorf("manifest.FileHistory: file history derivation is incomplete while sub-manifests are elided")
+	}
 
 	collation := ""
 	if opts.FoldCase {

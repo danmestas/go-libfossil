@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"time"
 
 	libfossil "github.com/danmestas/go-libfossil"
@@ -67,10 +68,27 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("clone failed: %w", err)
 	}
 	defer r.Close()
+	// fossil clone remembers its source as last-sync-url, the default peer
+	// for later syncs, widening and required-content recovery.
+	if err := r.SetConfig("last-sync-url", rememberedSyncURL(c.URL)); err != nil {
+		return fmt.Errorf("clone: remember %s: %w", c.URL, err)
+	}
 
 	fmt.Printf("Cloned into %s\n", c.Path)
 	fmt.Printf("  Rounds:       %d\n", result.Rounds)
 	fmt.Printf("  Blobs:        %d\n", result.BlobsRecvd)
 	fmt.Printf("  Project-code: %s\n", result.ProjectCode)
 	return nil
+}
+
+// rememberedSyncURL is url as fossil stores last-sync-url: a user name stays,
+// a password never does. An unparsable URL is stored as given, since the
+// clone already reached it.
+func rememberedSyncURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = url.User(u.User.Username())
+	return u.String()
 }

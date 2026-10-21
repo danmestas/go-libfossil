@@ -610,6 +610,11 @@ var cardCases = []artifactCase{
 	rejected("artifact.4.7.w-short", "AF-4.7.18-4", edit(baseWiki, "W 12\n", "W 999\n")),
 	rejected("artifact.4.7.w-overflow", "AF-4.7.18-4",
 		edit(baseWiki, "W 12\nhello\nworld\n\n", "W 184467440737095516160\n\n")),
+	// UINT64_MAX must not wrap the body-plus-LF bounds check to zero.
+	rejected("artifact.4.7.18.w-max-uint64", "AF-4.7.18-4",
+		edit(baseWiki, "W 12\nhello\nworld\n\n", "W 18446744073709551615\n\n")),
+	rejected("artifact.4.7.18.w-overflow-increasing", "AF-4.7.18-4",
+		edit(baseWiki, "W 12\nhello\nworld\n\n", "W 30000000000000000000\n\n")),
 	// 2^64 + 12: an accumulator that wraps instead of failing reads 12.
 	rejected("artifact.4.7.18.w-overflow-wrap", "AF-4.7.18-4",
 		edit(baseWiki, "W 12\n", "W 18446744073709551628\n")),

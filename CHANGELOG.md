@@ -7,6 +7,449 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sparse stores (draft-fossil-sparse-cone-00 §5, Appendix A step 3). The
+  new `Repo.SetStoreCone` and `Repo.StoreCone` methods set and read a
+  store cone, kept in a `storecone` table that exists only while a cone
+  is set. An artifact the store lacks is now classified as a transit
+  phantom, a shunned artifact or an elided phantom, by zit's rule: a
+  blob is elided when F cards name it only outside the cone and no held
+  delta uses it as its base. Elision is computed from the cone and never
+  stored. Changing the cone reclassifies; losing it, or a cone this
+  version cannot read, makes every elided phantom a transit phantom, and
+  the store heals toward dense. `fossil rebuild` drops the table, so it
+  heals there too. Sync never requests an elided phantom, as a client or
+  as a server. `verify.Report` gains `Phantoms` (transit) and `Elided`.
+  Elision is never an issue, so a store complete within its cone
+  verifies OK, and `Rebuild` keeps the cone. A commit over a sparse
+  store has no R card and carries the files the store lacks by hash.
+  `VerifyRCard` skips over a sparse store, and skips an absent R card. A
+  checkout opens over a sparse store when its own cone stays inside the
+  store's. Manifests, sub-manifest nodes and control artifacts are always
+  held, as zit holds them. Cone-scoped transfer (Appendix A step 4):
+  `Repo.CommitContext`, `Checkout.CheckinContext`, `Checkout.UpdateContext`
+  and `Checkout.SetConeContext` take a `RequiredContentOpts` naming a peer
+  and recover the sub-manifest closure a sparse store lacks for a commit,
+  update or widening through an authenticated gimme exchange: in one
+  transaction, never widening the store cone, refusing incomplete,
+  corrupt, shunned, unauthorized-private or wrong-project content, and
+  never fetching an outside F payload. `repo ci` and `repo cone
+  add|remove|set` take `--remote`, `--sync-user`, `--sync-pass`,
+  `--sync-private` and `--timeout` (default 10m); the peer defaults to the
+  saved last-sync-url and no password is saved. A cone-aware server
+  serves a cone-scoped clone check-in by check-in: each check-in's row
+  walks its tree, descending only the nodes whose range meets the cone and
+  that its first parent's tree does not already hold, under the depth and
+  visited-node bounds of single-name lookup (§8); file and sub-manifest
+  rows go out only through those walks, a delta whose base the round did
+  not reach goes out in full, and a round stops where a dense round would
+  and resumes from its cookie, a walk too large for one round included.
+  The round's work is proportional to its batch, not to the store. A
+  gimme in a cone request is answered densely, by name (§6.4). A pull's
+  inventory still announces every held row, as zit's does. A held blob
+  that no F card names is not sent in a sparse clone; zit sends it. A
+  server serves a store it
+  holds sparsely only when its new `partial-mirror` setting
+  (`SettingPartialMirror`, `repo config set partial-mirror on`) says so;
+  otherwise it refuses, as §5.3 requires. `Repo.SetStoreConeContext` and
+  `repo cone store [PATH... | --not | --dense]` replace the store cone and
+  pull what the widening covers from the peer, the saved last-sync-url by
+  default, refusing with the cone unchanged when there is no peer.
+  `Repo.CompactStore` and `repo cone compact` drop the held blobs the store
+  cone elides, as zit's `pack --drop-elided` does; every manifest and
+  sub-manifest node stays held, interiors included, as sparse-cone §5.4
+  requires, and so does every node a sparse sync receives (§6.3). A server
+  answering a cone request acknowledges the reply with `pragma cone-served`
+  (§6.3), and `SyncResult` and `CloneResult` report `ConeServed`, the
+  acknowledged replies, beside `Elided`. Widening a checkout cone
+  over a sparse store fetches the payloads the widening covers from the
+  peer and materializes them; with no peer the widening is refused and
+  nothing changes. The private checkout marker moves crash-safely: the move
+  is recorded in vvar before it starts and completed on the next open, so a
+  crash at any step leaves a checkout fossil and go-libfossil both read.
+  Checking out verifies the manifest's R card as fossil does, warning
+  through the new `ExtractOpts.Warn` (`repo open` prints a WARNING line)
+  and succeeding, skipped over a sparse store or with `repo-cksum` off.
+  Stash saves with a merge pending, as fossil does: the merge parent stays
+  recorded, pop leaves it in place, and the next commit carries both
+  parents; a pop that would overwrite a file the stash does not hold is
+  refused before anything is written. It used to refuse the save. Pop
+  merges a stashed change onto a file that changed since, as fossil's
+  does: three-way with fossil's conflict markers and `-baseline`,
+  `-original` and `-merge` files, a binary conflict left empty, and
+  "WARNING: N merge conflicts" with the stash still dropped; it used to
+  overwrite the file with the stashed bytes. Stash and revert restore a
+  file's executable bit from the checked-in version, not from a merge.
+- Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
+  set of paths, each a directory subtree or a single file, included or
+  excluded; the longest member covering a path decides. `NewCone` builds
+  one, normalized and serialized byte for byte as zit does;
+  `CheckoutCreateOpts.Cone` makes a checkout sparse, and `Checkout.SetCone`
+  widens, narrows or drops it (`libfossil repo open --cone/--cone-not`,
+  `libfossil repo cone show|add|remove|set|dense|test`). A sparse checkout
+  materializes, scans and tracks only the covered files, over flat and tree
+  manifests; adding, removing, renaming or reverting an uncovered path is
+  refused with `ErrOutsideCone`, naming the cone. A commit carries the
+  uncovered files from its parent unchanged and is the same check-in a
+  dense checkout makes of the same change. `Update` and `Merge` apply
+  changes to uncovered files to the record without writing them, counted
+  in `UpdateResult.OutOfCone`; the pending merge survives `Update` as
+  fossil's does, a partial commit leaves record-only changes pending, and a
+  partial commit of a pending merge is refused, as fossil refuses it.
+  `Revert` and undo restore record-only rows too, and an undo image carries
+  the cone it was saved under and is refused under another. The checkout
+  stays readable by fossil, which sees the uncovered files as missing and
+  will not commit until they are restored. New `sparsecone` and `horizon`
+  conformance suites pin both drafts; with zit installed, a test checks the
+  serialized cones, the materialized files and commits in both directions
+  against zit, and its recorded answers are replayed without it.
+- go-libfossil reads sub-manifest trees (draft-fossil-submanifests-00), the
+  check-in form zit writes. It parses the S card and
+  the SUBMANIFEST artifact type, and every reader of a check-in's file set
+  -- `ListFiles`, `LookupFile`, checkout, diff, annotate, crosslink,
+  rebuild, verify and commit -- walks a tree through one enumeration
+  function: depth first, at most 16 levels, never presenting a tree it
+  cannot walk in part. A delta manifest may name a tree as its baseline. A
+  tree check-in whose sub-manifest has not arrived is deferred, with
+  phantoms for its missing references, and linked when they arrive;
+  `Verify` reports it as a missing reference, not damage. The new
+  `submanifest` conformance suite covers 72 reader and writer requirements,
+  the Appendix A vectors included, and a test reads trees zit wrote and,
+  with zit installed, syncs with zit in both directions.
+- go-libfossil writes sub-manifest trees when a repository opts in. Emission
+  is off by default, and every commit stays byte-identical to before.
+  `Repo.EnableSubmanifests(k)`, or `libfossil repo submanifests enable
+  [--k N]`, turns it on. It keeps an existing pin of the partition
+  parameter k and refuses a different one. With no pin it takes an explicit
+  k from 1 to 12, or selects one as zit does: the draft's cost rule over the
+  main-branch tip, refined by replaying recent history. It refuses, changing
+  nothing, when no k partitions the file set. It returns the warning an
+  operator must see, worded as zit's: peers that do not announce
+  sub-manifest support are refused trees, trees cannot be retired, and the
+  setting must not be enabled on a repository such a peer serves (§8.1).
+  `Repo.RetuneSubmanifests(k)` (`retune --k N`) moves the
+  pin for later commits, `Repo.DisableSubmanifests()` (`disable`) turns
+  emission off again, leaving existing trees in place, and `status` shows
+  the settings and whether the repository holds a tree. A commit then stores its leaves and interior
+  sub-manifests, rebuilt in full and shared by content addressing, before a
+  manifest that carries only S cards and never a B card. A stored k outside
+  1..12 falls back to flat manifests with a warning. With
+  `submanifest-auto-retune` on, a commit re-pins k when another value costs
+  more than 15% less. A commit made in a sync session whose server sent
+  `avoid-submanifests` stays flat. The construction reproduces every
+  Appendix A vector, and a recorded set of zit check-ins byte for byte:
+  3,000 files at k = 1, 3 and 5, deep paths, and names with spaces, tabs,
+  newlines and renames. Enabling pins the k zit pins on the same history.
+  With zit installed, zit verifies and lists go-libfossil's trees, and
+  verifies a tree go-libfossil commits on top of one of zit's.
+- Sync follows zit for trees: a peer that reads them says so with
+  `pragma send-submanifests`, which go-libfossil sends in every request
+  right after `client-version` and in every reply, clone replies included,
+  right after `server-version`, whatever the sub-manifest settings. Once a
+  repository holds a tree, a tree manifest or sub-manifest is refused to a
+  peer that has not sent the pragma, whatever version it announces, with
+  the error `Peer does not accept sub-manifests.`, so no fossil release
+  receives one. A server decides from the request it answers, a client from
+  the replies of its session. An artifact stored as a delta of a withheld
+  tree goes to such a peer as full content. A server whose
+  `enable-submanifests` is off sends `pragma avoid-submanifests` in the same
+  leading run of every reply; it binds only a commit made inside the
+  session, so commits, made outside any session, follow the repository's
+  own setting, and a server stores a pushed tree whatever its setting. A
+  clone asks once, in its cleanup round, for `enable-submanifests`,
+  `submanifest-k` and `submanifest-auto-retune` with zit's
+  `reqconfig /config`, applying all three or none; a pull asks for none.
+  Enabling emission over a stored `submanifest-k` outside 1 to 12 is
+  refused, naming it, unless an explicit k replaces it. The conformance
+  suite pins the draft's 19 October 2026 revision, which applies the
+  2026-10-19 errata and settles its sub-manifest deviations. Tracked in #452.
+### Changed
+
+- Breaking, for callers comparing values with `==`: `ExtractOpts` gained
+  the `Warn` callback and the CLI's `RepoOpenCmd` gained the `Cone` and
+  `ConeNot` lists, so neither struct is comparable any more. Every other
+  change to the exported API is an addition.
+- Tag propagation after a crosslink now starts only from the primary
+  parents the batch wrote plink rows for, and from the new parents of a
+  reparent, rather than from every primary parent in the repository.
+  It runs in the transaction that wrote those rows, as fossil's crosslink
+  propagates from a check-in's parent as it links it, so a link and its
+  propagation commit or roll back together. The same transaction runs the
+  reparent pass and applies the leaf rechecks it scheduled, as fossil's
+  manifest_crosslink_end does: no committed link leaves scheduled rechecks
+  pending. Neither a sweep nor a sync runs a redundant gate at its end,
+  or a repair after a failed round. A rebuild links every check-in, so it
+  propagates from every parent as before. Tracked in #432.
+- A sync that fails after earlier rounds' phantom fills linked artifacts no
+  longer runs a crosslink sweep before it returns. The artifacts earlier
+  rounds committed outside a phantom fill stay unlinked until the next
+  crosslink (the next sync, clone or `rebuild`), which links them. No tag or
+  leaf state is lost: everything linked was repaired in its own transaction.
+
+- The conformance suite no longer reads erratum files. zit applied every
+  erratum in its draft text and retired `docs/rfcs/erratum/` at check-in
+  `62a7d1bb3f`; each draft now records its corrections in its own Changes
+  appendix, and the draft text is the authority. The `# erratum` pins and
+  `conformance/rfcs/erratum/` are gone. The artifact-format, repo-state,
+  sync-protocol and delta-format drafts are unchanged. The sub-manifest
+  draft is re-pinned with only its expiry date and a reflow changed. The
+  sparse-cone draft is re-pinned to its 19 October 2026 revision on zit's
+  `horizon-rfc` branch, where §3.6 is removed and §3.4 states the literal
+  prefix rule once: a metacharacter in a member is a literal character,
+  never expanded, and the member may be refused. `SC-3.6-1` is replaced by
+  `SC-3.4-3`, which the same case covers.
+- `S` is no longer rejected as an undefined card letter, and a manifest
+  with no `D` card is reclassified as a sub-manifest before its cards are
+  checked, so it is rejected for its first illegal card rather than for the
+  missing `D` card. The crosslink sweep's record of examined blobs is
+  versioned; the first sweep after upgrading drops the old record and
+  examines every blob again, once, so trees an earlier version could not
+  parse are linked.
+- The three-way merge behind `Merge` and `Update` is a port of fossil
+  2.28's `merge3.c` and the diff it runs on, and writes what fossil writes
+  for the same three files, byte for byte. A conflict's markers carry
+  fossil's `(line N)` numbers and include the suggested resolution fossil
+  computes by merging the conflicting lines token by token; marker lines end
+  in CRLF when both versions' first line does. Content is aligned as
+  fossil's diff aligns it, so clean merges and conflict regions match too.
+  As in fossil, a UTF-8 byte-order mark is dropped and UTF-16 text is
+  merged as UTF-8, and a file fossil cannot diff as text (a NUL byte, or a
+  line over 32767 bytes) is not merged: the local copy is kept and the
+  merge reports a conflict. `HasConflictMarkers` now skips `\r` as well as
+  `\n` between lines, as fossil's `contains_merge_marker` does.
+- The conformance suite is re-pinned to zit check-in `68a3f76cb7`, where the
+  artifact-format, repo-state and sync-protocol drafts name themselves
+  `-00` instead of `-01` throughout and their Changes appendices are headed
+  "Changes in This Revision". No normative text changed and no section
+  number moved, so the requirement tables and the coverage counts are
+  unchanged; the pinned copies take zit's file names, and the comments and
+  tables that cited the `-01` drafts cite the `-00` ones. The sparse-cone
+  copy is re-pinned to `d497c2432f`, whose text is the same.
+
+### Fixed
+
+- `Repo.Verify`, and `repo verify` with it, no longer slows quadratically on
+  long delta chains. It expanded every blob on its own, re-applying the
+  blob's whole chain each time, which took 49 minutes on a clone of
+  fossil-scm.org's own repository (chains averaging 532 deltas) where
+  `fossil test-integrity` takes six and a half. It now makes one sweep down
+  the delta forest, applying each delta once: 19 seconds on the same clone.
+
+- Adding a directory (`Checkout.Add`, `repo add DIR`, `repo add .`) adds
+  the files beneath it, as fossil's add does, skipping dotfiles found on
+  the way; a dotfile named explicitly is still added. The directory itself
+  used to be stored as a file, and the next commit failed reading it.
+  `ignore-glob` is not consulted yet.
+
+- `repo verify` runs the full verifier (blob hashes, delta chains, phantom
+  records, derived tables) and prints what the store lacks by class:
+  transit phantoms apart from artifacts the store cone elides, which are
+  healthy (sparse-cone §5.2). It used to hash the held blobs only and print
+  a fixed line, so neither damage outside the blobs nor elision showed.
+
+- `repo clone` remembers its source as `last-sync-url`, as `fossil clone`
+  does, keeping a user name and never a password. Nothing in go-libfossil
+  wrote the setting, so the default peer for `repo cone store`, widening
+  and required-content recovery existed only in repositories fossil had
+  cloned, and a go-libfossil clone needed `--remote` every time.
+
+- `repo status` reports the checkout's changes against the version it has
+  checked out, through `Checkout.Status`, with fossil's labels. Run from
+  inside a checkout with the default `--dir .`, it reported every tracked
+  file MISSING: the walk skipped its own root, named ".", as a hidden
+  directory. It also compared the disk with tip, so a checkout of an older
+  version read as edited, and it listed untracked files, which `fossil
+  status` leaves to `fossil extras`.
+
+- A sparse store that will not serve a clone now refuses it as fossil
+  refuses an unauthorized clone: the push card naming the repository, then
+  the error. fossil 2.28's clone client read the bare error as an empty,
+  finished clone, exited 0 and left a repository with no project code. It
+  now aborts with the refusal and leaves nothing, and go-libfossil's client
+  re-asks once and stops at the second refusal, as fossil's does.
+
+- The simulation's safety invariants no longer read through armed fault
+  injection. `CheckSafety` and the other checks ran while Buggify was still
+  on, so read-path sites truncated or flipped the bytes the check itself
+  expanded, and every seed at the adversarial and hostile levels reported a
+  blob-integrity violation that was never in the database. Each check now
+  suspends injection for its own reads with the new
+  `simio.SuspendBuggify`, which restores it with its random stream intact.
+  Scenario fixtures are written the same way and fail the test if they do
+  not go in; before, a store that injection failed during setup left an
+  empty UUID, and the assertion that read it panicked. The cluster scenario
+  generates its clusters after the run with injection suspended too.
+
+- `verify.Verify` audits leaves by repo-state §§7.2–7.3's same-branch
+  rule and branch-tag recheck schedule instead of assuming every check-in
+  without children must be a leaf. Arrival-order retained verdicts are
+  accepted; decidable stale, missing and stray rows are reported. Both the
+  draft's branch reading and Fossil 2.28's literal-trunk reading must agree
+  that a row is wrong, although their same-branch witnesses may differ.
+  Parent tags replace P-card ancestry only when valid and active; retained
+  ancestry after cancellation is checked against recorded parent-tag history.
+  Parent-tag tokenization now follows Fossil's single-byte separators rather
+  than collapsing whitespace; malformed lists retain their previous ancestry.
+  Uppercase hashes and NUL-terminated values follow Fossil too. Leaf and
+  parent-parser conformance cases run Verify on both implementations' tables.
+  Tracked in #433.
+
+- `Checkout.Update` no longer merges a symlink: one edited locally and
+  changed by the target is left as it is and listed in
+  `UpdateResult.Unmerged`, as fossil's update reports "Cannot merge
+  symlink", instead of writing conflict markers through the link into the
+  file it points at. In a sparse checkout, a rename outside the cone no
+  longer refuses the update: the rename moves the record, or writes the
+  file when its new name is in the cone.
+- `Checkout.Update` saves undo state as fossil's `update` does, and the new
+  `Checkout.Undo` and `Checkout.Redo` reverse and replay it: the files the
+  update wrote, merged or removed come back, with the file list, pending
+  merges and the checked-out version (`checkout-hash` included). The undo
+  tables now use fossil's schema (`isExe`, a unique `pathname`, replayed in
+  `rowid` order), so `fossil undo` reverses a go-libfossil update and
+  `Checkout.Undo` reverses `fossil update`; the executable bit saved is the
+  file's own, as fossil reads it. Like fossil, the update saves a file
+  merged into a renamed one under its old name only, and saves neither a
+  `NAME-original` backup nor a change of executable bit alone. An update
+  whose writes fail partway puts the files it changed back, as fossil's
+  `undo_rollback` does. Under js/wasm, which has no undo, Update saves none.
+  Tracked in #446.
+
+- `Checkout.Revert` undoes a rename whose old name another file now holds:
+  a swap, a chain (`a.txt` to `c.txt`, then `b.txt` to `a.txt`), a new
+  file added under the old name, or an untracked file there. It used to
+  refuse. Like fossil's `revert`, it now saves each file it writes or
+  deletes for undo first, so `Checkout.Undo` or `fossil undo` brings back
+  what it overwrote, and a revert that fails partway puts the files back.
+  Every committed file ends under its committed name with its committed
+  content, and the add at the old name is dropped, as fossil drops it.
+  Fossil's own revert leaves a swap's files renamed and stops tracking the
+  second file of a chain; go-libfossil reverts both. Revert now changes
+  vfile in one transaction. Under js/wasm, which has no undo, it saves
+  none. Tracked in #248.
+
+- A public check-in makes every file blob it names public, as fossil's
+  commit does. Content first stored privately, for example by syncing a
+  private branch, stayed private when a public check-in reused it, so a
+  peer without private access never received it and the check-in's file
+  stayed a phantom there. Tracked in #439.
+
+- The checkout scan sets `vfile.chnged` as fossil's `vfile_check_signature`
+  does in every case. A file missing from disk is marked changed, with
+  mtime -1, and so is a removed file. A change to the executable bit is
+  recorded as 6 (became executable) or 8 (lost it), and a change to or from
+  a symlink as 7 or 9, and a mode change that is undone returns to 0.
+  Symlinks follow fossil's `allow-symlinks` setting, off by default: off,
+  a symlink is seen as what it points to; on, as itself, its content being
+  its target's name. Status reports the mode changes as fossil's `changes`
+  command does, with the new change types `executable`, `symlink`, `unexec`
+  and `unlink` (`CheckoutChange.Change`). Commit records the permission it
+  finds on disk, `l` included, and a symlink's target as its content. As on
+  Windows in fossil, permissions are not read where the storage has no file
+  modes (`MemStorage`) or on Windows: the recorded ones are kept, where
+  commit used to drop every `x`. `ScanENotFile` now refuses something other
+  than a file where a tracked file belongs, as fossil's merge does, except
+  at a pending add or removal, which fossil does not check.
+  Extract and Update write a symlink entry as a symlink while
+  `allow-symlinks` is on and the storage has symlinks, and otherwise as a
+  plain file holding the target's name, as fossil does. They delete a symlink
+  before writing a file over it, and never change a symlink's mode.
+  With `allow-symlinks` off, fossil reports such a file `UNLINK`, and its
+  checkout then refuses without `--force`; Extract does the same. Extract
+  still writes a missing file without asking for `Force`, an unlinked
+  symlink entry included, since nothing on disk is lost. That keeps
+  Create followed by Extract working, as fossil's open does.
+- Stash and undo read and write working files through the checkout's
+  storage (`simio.Storage`) instead of the `os` package, so they work on a
+  `MemStorage` checkout and under simulation (tracked in #448). Their
+  functions take a `*simio.Env`. Stash save records each reverted file's
+  mtime on its now unchanged row, as fossil's revert does. Stash apply and
+  pop add a stashed added file again, as fossil's `stash_apply` does, and
+  mark a restored edit's row changed with the mtime it was written with,
+  where fossil leaves the reverted row (unchanged, the revert's mtime) for
+  its next scan to correct; fossil misses an edit of the same size whose
+  write lands in the revert's second. Undo and redo restore vfile as fossil
+  does, and record each written file's mtime on its restored row when that
+  row's mtime matched the file when it was saved, the case where the row
+  vouches for the content; otherwise the row is restored with mtime 0 and
+  the next scan hashes the file.
+- Stash save scans the checkout first, as fossil's `stash_create` does, so
+  an edit no scan has recorded yet is stashed too; before, it was left out,
+  or the save failed with nothing to stash. `stash.Save` takes the scanner,
+  a `*checkout.Checkout`, as its first argument.
+- Undo and redo no longer print to standard output, and neither does
+  Update's rollback of a failed update. `Checkout.Undo` and `Checkout.Redo`
+  return an `UndoResult` listing the files they restored, created and
+  removed, in fossil's order, for the caller to show as fossil's `UNDO`,
+  `NEW` and `DELETE` lines.
+- `verify.Rebuild` and `verify.Verify` check blob integrity in time linear
+  in the repository, as fossil's rebuild does. They expanded blob by blob
+  through a bounded cache, so on a real repository, whose delta chains run
+  hundreds of revisions deep, every evicted chain was walked again from its
+  root: the blob check on the Fossil SCM repository ran for over 45 minutes.
+  The new `content.ExpandAll` walks each delta tree once from its root,
+  expanding every blob from its parent's content, and reports for each blob
+  what an expansion of it alone reports. On the same repository the blob
+  check takes about 12 seconds and a whole `Verify` about 40; the issues
+  reported are unchanged.
+- `Checkout.Update` follows renames between the checkout's version and the
+  target, as fossil's `update` does (`find_filename_changes`). A file with
+  local changes that the target renamed and changed is merged under the
+  new name, and the old name is removed; before, the edit was left behind
+  as an untracked file under the old name and the new name got the
+  target's content. The rename path runs through the two versions' common
+  ancestor, so a rename on the checkout's own branch is followed backwards.
+  Two cases follow fossil rather than the issue's wish: when the target
+  only renamed the file, the edit stays under the old name, untracked, and
+  the new name is not written (it shows as missing; the file is listed in
+  `UpdateResult.Unmerged`); and a local rename of a file the target edited
+  is not followed: the target's file is written under the old name, and the
+  renamed copy is removed if unedited or kept, untracked, if edited.
+  Tracked in #445.
+
+- Each arrival of content is recorded in `rcvfrom` as fossil records it:
+  one row per check-in, tag, sync, clone, served request that stores
+  something, and unversioned write, made when the first content arrives, with
+  the time as a Julian day, the credited user, the login card's nonce on a
+  server, and the peer's address (or `#!fossil unversioned add` for a local
+  unversioned write). Every blob and unversioned file stored names its row in
+  `rcvid`, a phantom names none, and an applied deletion keeps the row's
+  `rcvid`. A new repository no longer starts with a placeholder row that every
+  blob pointed at; an existing repository keeps it, and new receipts follow
+  it. `HandleOpts.RemoteAddr` passes the client's address to a server that
+  is not `ServeHTTP` or `XferHandler`.
+- The event rows of control, attachment and other non-check-in artifacts
+  match the ones fossil derives. A tag's control artifact ('g') now carries
+  fossil's comment byte for byte: each target introduced by an
+  `Edit [hash|hash]:` link, its changes ordered by target and tag name,
+  `sym-` tags named as tags, a branch move linked to its timeline and the
+  move's own `sym-` changes left out, values HTML-escaped, and no leading
+  space. Attachment comments link the attached artifact and the ticket or
+  tech note as fossil 2.28 does, and a deleted attachment's `src` is NULL,
+  not empty. `Repo.Tag` and closing a branch write the 'g' row fossil's
+  `tag add` writes; they wrote none until the next rebuild or clone. Hash prefixes in these comments, and in ticket comments, follow the
+  `hash-digits` setting up to 64 digits, where they stopped at 40.
+  `Timeline` shows a tag change with the new text, and lists a tag added
+  through this library as soon as it is added, as fossil's timeline does.
+- A check-in with no C card has a NULL event comment, as fossil stores it,
+  not an empty one.
+- Event, plink, attachment and forum post times match, in every bit, the
+  ones fossil 2.28 stores when it is built for the same platform. fossil
+  writes these times as 16-digit SQL text and reads them back with its
+  bundled SQLite 3.52.0, whose text-to-double conversion is not correctly
+  rounded. go-libfossil parsed the text with a correctly rounded
+  conversion, so about one time in 3,000 was one unit in the last place
+  away from fossil's (13 rows of fossil's own repository); it now uses
+  SQLite 3.52.0's conversion. fossil's printf also computes the text in C
+  `long double`, which is a 64-bit double on macOS arm64 and Windows but
+  80-bit on x86-64 Linux, so the 16th digit differs between platforms for
+  about one time in five. go-libfossil now computes in the long double of
+  the platform it runs on, and matches fossil 2.28 bit for bit on macOS arm64
+  and linux-x64. Times written on one platform and rebuilt by fossil on
+  another can still differ in the last place, as two fossils do; never by
+  a millisecond.
+
 ## [0.13.0] - 2026-10-20
 
 ### Added

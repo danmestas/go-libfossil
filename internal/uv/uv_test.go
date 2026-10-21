@@ -245,7 +245,7 @@ func TestReceiveDeletionOfAbsentName(t *testing.T) {
 	}
 }
 
-// TestContentHashFossilizesNames checks sync-protocol-01 §8.5.1: the catalog
+// TestContentHashFossilizesNames checks sync-protocol-00 §8.5.1: the catalog
 // hashes each name in its fossilized form and sorts by those bytes. The
 // unfossilized order puts "a b.txt" first; the fossilized one, "a\sb.txt",
 // puts it after "a-b.txt".

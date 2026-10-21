@@ -99,8 +99,28 @@ func leafCases() []rsCase {
 		leaves("repostate.7.3.cancel-propagation-recheck", "RS-7.3-3",
 			with(chain(), control("t", 9, "-branch {c1}")), []string{"c4"},
 			"-leaf: c4"),
-		pulledChild(), pulledRetag(),
+		pulledChild(), pulledRetag(), reparentTwice(),
 	}, untaggedLeafCases()...)
+}
+
+// reparentTwice reparents c, whose P-card names x, onto x and y, then back
+// onto x alone, one artifact at a time. Between the two, t3's trunk tag on x
+// propagates to y and c and rechecks them with their parents, so y, with c
+// as its trunk child, loses its row. The second reparent takes c from y and
+// rechecks nothing: y keeps its verdict with no child at all. No manifest
+// names y as c's parent, only t1 does, so verify.Verify must read the parent
+// tags as well as the P-cards to accept the table.
+func reparentTwice() rsCase {
+	c := leaves("repostate.7.3.reparent-twice-no-recheck", "RS-7.3-3", []rsArt{
+		checkin("x", 1, nil, rsRoot...),
+		checkin("y", 2, of("x")),
+		checkin("c", 3, of("x")),
+		control("t1", 8, `+parent {c} {x}\s{y}`),
+		control("t3", 9, "*branch {x} trunk"),
+		control("t2", 10, "+parent {c} {x}"),
+	}, []string{"c"}, "+leaf: y")
+	c.each, c.rebuild = true, false
+	return c
 }
 
 // untaggedLeafCases are Section 7.3's candidates: only a check-in a branch

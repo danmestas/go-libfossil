@@ -286,13 +286,17 @@ func clientIntegrityCases() []syncClientCase {
 		want: every(rounds(1), notKept("A1"),
 			mentions("mismatch", "wrong hash", "does not match")),
 	}, {
-		// Section 9.5: avoid-delta-manifests is a hint for a pending commit;
-		// the gimme after it is answered as ever.
+		// Section 9.5 binds only a pending lock-requesting commit. This client
+		// commits locally before syncing, with no autosync or pending commit.
+		// The real exchange must still answer the gimme, must not echo the
+		// hint in later requests, and must not persist it in the repository.
 		Case:    Case{ID: "sync.9.5.avoid-delta-manifests-transfer", Req: "SP-9.5-7"},
 		op:      opSync,
 		setup:   quiet,
 		replies: [][]string{reply("pragma avoid-delta-manifests", "gimme {A1}")},
-		want:    every(noFailure, sentPrefix(2, "file {A1} ")),
-		fc:      true,
+		want: every(noFailure, sentPrefix(2, "file {A1} "),
+			neverSent("pragma avoid-delta-manifests"),
+			clientRows("SELECT count(*) FROM config WHERE name LIKE '%avoid%delta%manifest%'", 0)),
+		fc: true,
 	}}
 }

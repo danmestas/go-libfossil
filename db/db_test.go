@@ -205,13 +205,6 @@ func TestCreateRepoSchema(t *testing.T) {
 		t.Fatalf("application_id = %d, want 252006673", id)
 	}
 
-	// Verify seed rcvfrom row
-	var rcvid int
-	err = d.QueryRow("SELECT rcvid FROM rcvfrom WHERE rcvid=1").Scan(&rcvid)
-	if err != nil {
-		t.Fatalf("seed rcvfrom row missing: %v", err)
-	}
-
 	// Verify seed tag rows (1-11)
 	var tagCount int
 	err = d.QueryRow("SELECT count(*) FROM tag").Scan(&tagCount)

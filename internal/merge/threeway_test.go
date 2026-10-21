@@ -175,24 +175,109 @@ func TestThreeWayBothAddDifferentRegions(t *testing.T) {
 	}
 }
 
-// TestThreeWayConflictUsesFossilMarkers pins the conflict block to fossil's
-// layout: local copy, common ancestor, merged-in content, each introduced by
-// fossil's marker line, so fossil reports the file as a CONFLICT.
+// fossil 2.28's marker lines, spelled out so the tests pin them literally.
+const (
+	fsBegin     = "<<<<<<< BEGIN MERGE CONFLICT: local copy shown first <<<<<<<<<<<<"
+	fsSuggested = "####### SUGGESTED CONFLICT RESOLUTION follows ###################"
+	fsAncestor  = "||||||| COMMON ANCESTOR content follows |||||||||||||||||||||||||"
+	fsMergedIn  = "======= MERGED IN content follows ==============================="
+	fsEnd       = ">>>>>>> END MERGE CONFLICT >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+)
+
+// TestThreeWayConflictUsesFossilMarkers pins the conflict block to what
+// fossil 2.28's merge3 writes for the same inputs (captured from
+// "fossil 3-way-merge"): line-numbered markers, the suggested resolution, the
+// ancestor and the merged-in content, with the file's line endings.
 func TestThreeWayConflictUsesFossilMarkers(t *testing.T) {
-	base := []byte("a\nbase\nz\n")
-	local := []byte("a\nlocal\nz\n")
-	remote := []byte("a\nremote\nz\n")
-	r, err := (&ThreeWayText{}).Merge(base, local, remote)
-	if err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name, base, local, remote, want string
+	}{
+		{
+			name:   "lf",
+			base:   "a\nbase line here\nz\n",
+			local:  "a\nlocal line here\nz\n",
+			remote: "a\nremote text there\nz\n",
+			want: "a\n" +
+				fsBegin + " (line 2)\n" + "local line here\n" +
+				fsSuggested + "\n" + "remote text there\n" +
+				fsAncestor + " (line 2)\n" + "base line here\n" +
+				fsMergedIn + " (line 2)\n" + "remote text there\n" +
+				fsEnd + "\n" + "z\n",
+		},
+		{
+			name:   "crlf",
+			base:   "a\r\nbase\r\nz\r\n",
+			local:  "a\r\nlocal one\r\nz\r\n",
+			remote: "a\r\nremote two\r\nz\r\n",
+			want: "a\r\n" +
+				fsBegin + " (line 2)\r\n" + "local one\r\n" +
+				fsSuggested + "\r\n" + "remote two\r\n" +
+				fsAncestor + " (line 2)\r\n" + "base\r\n" +
+				fsMergedIn + " (line 2)\r\n" + "remote two\r\n" +
+				fsEnd + "\r\n" + "z\r\n",
+		},
+		{
+			name:   "no trailing newline",
+			base:   "a\nb",
+			local:  "a\nx y",
+			remote: "a\nx z",
+			want: "a\n" +
+				fsBegin + " (line 2)\n" + "x y\n" +
+				fsSuggested + "\n" + "x z\n" +
+				fsAncestor + " (line 2)\n" + "b\n" +
+				fsMergedIn + " (line 2)\n" + "x z\n" +
+				fsEnd + "\n",
+		},
+		{ // Different words of one line: the token merge resolves it.
+			name:   "token resolvable",
+			base:   "one two three\n",
+			local:  "ONE two three\n",
+			remote: "one two THREE\n",
+			want: fsBegin + " (line 1)\n" + "ONE two three\n" +
+				fsSuggested + "\n" + "ONE two THREE\n" +
+				fsAncestor + " (line 1)\n" + "one two three\n" +
+				fsMergedIn + " (line 1)\n" + "one two THREE\n" +
+				fsEnd + "\n",
+		},
 	}
-	want := "a\n" +
-		markerBegin + "\n" + "local\n" +
-		markerAncestor + "\n" + "base\n" +
-		markerMergedIn + "\n" + "remote\n" +
-		markerEnd + "\n" + "z\n"
-	if string(r.Content) != want {
-		t.Fatalf("conflict block:\n%s\nwant:\n%s", r.Content, want)
+	for _, tc := range cases {
+		r, err := (&ThreeWayText{}).Merge([]byte(tc.base), []byte(tc.local), []byte(tc.remote))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Clean || len(r.Conflicts) != 1 {
+			t.Errorf("%s: Clean=%v conflicts=%d, want one conflict", tc.name, r.Clean, len(r.Conflicts))
+		}
+		if string(r.Content) != tc.want {
+			t.Errorf("%s: conflict block:\n%q\nwant:\n%q", tc.name, r.Content, tc.want)
+		}
+	}
+}
+
+// TestThreeWayBinaryIsNotMerged mirrors fossil: content its diff cannot read
+// as text (a NUL byte, or a line longer than 32767 bytes) is not merged, so
+// the local copy is kept and the merge is not clean.
+func TestThreeWayBinaryIsNotMerged(t *testing.T) {
+	long := strings.Repeat("x", 32768) + "\n"
+	cases := []struct{ name, base, local, remote string }{
+		{"nul in local", "a\n", "a\x00b\n", "c\n"},
+		{"nul in base", "a\x00\n", "b\n", "c\n"},
+		{"long line in remote", "a\n", "b\n", long},
+	}
+	for _, tc := range cases {
+		r, err := (&ThreeWayText{}).Merge([]byte(tc.base), []byte(tc.local), []byte(tc.remote))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Clean {
+			t.Errorf("%s: binary merge reported clean", tc.name)
+		}
+		if string(r.Content) != tc.local {
+			t.Errorf("%s: content = %q, want the local copy", tc.name, r.Content)
+		}
+		if HasConflictMarkers(r.Content) {
+			t.Errorf("%s: binary merge wrote conflict markers", tc.name)
+		}
 	}
 }
 
@@ -215,6 +300,9 @@ func TestHasConflictMarkers(t *testing.T) {
 		{"not at line start", " " + markerBegin + "\n", false},
 		{"git-style marker", "<<<<<<< HEAD\n", false},
 		{"crlf lines", "x\r\n" + markerBegin + "\r\n", true},
+		{"after blank crlf lines", "x\r\n\r\r\n" + markerAncestor + "\r\n", true},
+		{"after a lone cr", "x\n\r" + markerBegin + "\n", true},
+		{"marker with line number", "x\n" + markerMergedIn + " (line 7)\n", true},
 	}
 	for _, tc := range cases {
 		if got := HasConflictMarkers([]byte(tc.data)); got != tc.want {

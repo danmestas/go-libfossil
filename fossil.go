@@ -88,6 +88,11 @@ type CloneResult struct {
 	ProjectCode     string
 	ServerCode      string
 	Messages        []string
+	// Elided counts the artifacts left absent under the store cone, and
+	// ConeServed the replies whose server acknowledged applying it (pragma
+	// cone-served, draft-fossil-sparse-cone-00 §6.3). Both are zero for a
+	// dense clone.
+	Elided, ConeServed int
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -115,6 +120,8 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		ProjectCode:     iResult.ProjectCode,
 		ServerCode:      iResult.ServerCode,
 		Messages:        iResult.Messages,
+		Elided:          iResult.Elided,
+		ConeServed:      iResult.ConeServed,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
 }

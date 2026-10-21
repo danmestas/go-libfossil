@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/merge"
+	"github.com/danmestas/go-libfossil/internal/path"
 	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
@@ -32,17 +33,31 @@ import (
 //   - a file the target adds over an untracked file is written after the
 //     untracked one is copied to NAME-original;
 //   - a binary file edited locally and changed by the target is not merged:
-//     the working copy is saved as NAME-original and the target written.
+//     the working copy is saved as NAME-original and the target written;
+//   - a symlink, on either side, edited locally and changed by the target is
+//     not merged either: nothing is written and it is listed in
+//     UpdateResult.Unmerged.
+//
+// Renames between the two versions are followed as fossil follows them
+// (path.NameChanges): a file with local changes that the target renamed is
+// matched to the target's file under its new name. When the target also
+// changed it, the merge is written under the new name and the old name is
+// removed; when the target only renamed it, nothing is written and the
+// edited file stays under its old name, untracked, as in fossil. A file
+// without local changes is matched by name, so the target's file under the
+// new name is written and the old one removed. A local rename is not
+// followed: as in fossil, the file is matched under its new local name.
 //
 // Every file then gets the target's executable bit. An update that could
 // not finish (a directory where a file must be written, or a file or
 // directory this process may not change) is refused before anything is
-// written, and the checkout
-// database moves to the target in one transaction. A dry run reports the
-// same result and changes nothing, on disk or in the checkout database.
-//
-// Unlike fossil, nothing follows a file the target renamed: files are
-// matched by name, and no undo state is saved.
+// written, and the checkout database moves to the target in one
+// transaction. A dry run reports the same result and changes nothing, on
+// disk or in the checkout database. As fossil's update does, Update saves
+// undo state (except under js/wasm, which has no undo): Undo puts back the
+// files it changed, the file list and the version. Like fossil, it saves a
+// file merged into a renamed one under the old name only, and neither a
+// NAME-original backup nor a change of executable bit alone.
 //
 // If opts.TargetRID is 0, CalcUpdateVersion is used to find the target.
 // If the target equals the current version, Update returns a zero-value
@@ -56,11 +71,13 @@ import (
 //
 // Panics if c is nil (TigerStyle precondition).
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
-	if c == nil {
-		panic("checkout.Update: nil *Checkout")
-	}
+	return c.UpdateContext(context.Background(), opts)
+}
 
-	target, current, err := c.updateTarget(opts.TargetRID)
+// UpdateContext performs a local update with cancellation before finalization.
+// It never fetches missing repository content.
+func (c *Checkout) UpdateContext(ctx context.Context, opts UpdateOpts) (UpdateResult, error) {
+	target, steps, files, err := c.prepareUpdate(ctx, opts)
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -68,7 +85,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, nil // nothing to update, or already there
 	}
 
-	ctx := c.obs.ExtractStarted(context.Background(), ExtractStart{
+	ctx = c.obs.ExtractStarted(ctx, ExtractStart{
 		Operation: "update",
 		TargetRID: target,
 	})
@@ -85,7 +102,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		})
 	}()
 
-	steps, err := c.planUpdate(current, target, opts.DryRun)
+	err = c.requireUpdateFiles(ctx, files)
 	if err == nil && !opts.DryRun {
 		err = c.checkUpdateTargets(steps)
 	}
@@ -93,19 +110,38 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		updateErr = fmt.Errorf("checkout.Update: %w", err)
 		return UpdateResult{}, updateErr
 	}
+	if res, updateErr = c.runUpdate(ctx, target, steps, opts); updateErr != nil {
+		return UpdateResult{}, updateErr
+	}
+	return res, nil
+}
+
+// runUpdate carries out planned steps. Unless it is a dry run, the files the
+// steps change are read first for undo, as fossil's undo_save reads them
+// before its update writes; should a write fail they are put back, as
+// fossil's undo_rollback does, and otherwise the undo state is saved with
+// the move to target, in one transaction.
+func (c *Checkout) runUpdate(
+	ctx context.Context, target libfossil.FslID, steps []updateStep, opts UpdateOpts,
+) (UpdateResult, error) {
 	fresh := map[string]writtenFile{}
-	if res, updateErr = c.applyUpdate(ctx, steps, opts, fresh); updateErr != nil {
-		return UpdateResult{}, updateErr
-	}
 	if opts.DryRun {
-		return res, nil
+		return c.applyUpdate(ctx, steps, opts, fresh)
 	}
-	if updateErr = c.finalizeUpdate(target, steps, fresh); updateErr != nil {
-		return UpdateResult{}, updateErr
+	saved, err := c.readUpdateUndo(steps)
+	if err != nil {
+		return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
+	}
+	res, err := c.applyUpdate(ctx, steps, opts, fresh)
+	if err != nil {
+		return UpdateResult{}, errors.Join(err, c.rollBackUpdate(saved))
+	}
+	if err := c.finalizeUpdate(target, steps, fresh, saved); err != nil {
+		return UpdateResult{}, errors.Join(err, c.rollBackUpdate(saved))
 	}
 	if opts.SetMTime {
-		if updateErr = c.setFileMTimes(target); updateErr != nil {
-			return UpdateResult{}, updateErr
+		if err := c.setFileMTimes(target); err != nil {
+			return UpdateResult{}, err
 		}
 	}
 	return res, nil
@@ -123,12 +159,15 @@ const (
 	updateKeepEdited                        // edited locally, and the target does not have it: keep it, untracked
 	updateKeepDuplicate                     // added locally and by the target: keep the local file
 	updateKeepAdd                           // added locally only: it stays a pending add
+	updateKeepRenamed                       // edited locally, renamed but not changed by the target: left as it is
+	updateOutOfCone                         // outside a sparse checkout's cone, changed by the target: record only
 )
 
 // updateTargetFile is a file of the version Update moves to.
 type updateTargetFile struct {
-	rid int64
-	exe bool
+	rid  int64
+	exe  bool
+	link bool // a symlink entry (F-card permission l)
 }
 
 // writtenFile is a file Update wrote with the target's artifact rid, and
@@ -139,17 +178,20 @@ type writtenFile struct {
 
 // updateStep is one file's part in an update.
 type updateStep struct {
-	name   string
-	row    *vfile.Row        // the current version's row, nil when it has none
-	target *updateTargetFile // nil when the target does not have the file
-	action updateAction
+	name    string            // the file's name in the checkout
+	tname   string            // its name in the target: name, or where the target renamed it
+	row     *vfile.Row        // the current version's row, nil when it has none
+	target  *updateTargetFile // nil when the target does not have the file
+	action  updateAction
+	pending *sparseOutcome
 }
 
 // classifyUpdate is fossil's update loop deciding one file, in its order.
 // missing reports that row's file is not on disk; unmanaged that an
-// untracked file stands where the target adds one. As fossil's scan leaves
-// them, a removed or missing file counts as changed.
-func classifyUpdate(row *vfile.Row, tgt *updateTargetFile, missing, unmanaged bool) updateAction {
+// untracked file stands where the target adds one; renamed that tgt is the
+// file under the name the target renamed it to. As fossil's scan leaves
+// them, a removed or missing file counts as changed (rowChanged).
+func classifyUpdate(row *vfile.Row, tgt *updateTargetFile, missing, unmanaged, renamed bool) updateAction {
 	if row == nil && tgt == nil {
 		panic("checkout.classifyUpdate: file in neither version")
 	}
@@ -160,7 +202,7 @@ func classifyUpdate(row *vfile.Row, tgt *updateTargetFile, missing, unmanaged bo
 		return updateWrite
 	}
 	deleted := row.Deleted > 0
-	changed := row.Chnged > 0 || deleted || missing
+	changed := rowChanged(*row, missing)
 	switch {
 	case row.RID == 0 && tgt != nil:
 		return updateKeepDuplicate
@@ -176,8 +218,18 @@ func classifyUpdate(row *vfile.Row, tgt *updateTargetFile, missing, unmanaged bo
 		return updateRemove
 	case tgt.rid != row.RID:
 		return updateMerge
+	case renamed && changed:
+		// Fossil's update has nothing to merge here and writes nothing: the
+		// edited file stays under its old name, the new name stays unwritten.
+		return updateKeepRenamed
 	}
 	return updateNothing
+}
+
+// rowChanged reports whether fossil's scan leaves row changed: edited, a
+// pending add, removed, or missing from disk.
+func rowChanged(row vfile.Row, missing bool) bool {
+	return row.Chnged > 0 || row.Deleted > 0 || missing
 }
 
 // updateTarget picks the version Update moves to and the current one. A
@@ -217,11 +269,10 @@ func (c *Checkout) updateTarget(
 }
 
 // planUpdate scans the checkout, as fossil's update does first, and decides
-// each file of the current version vid and the target. It refuses a target
-// whose content is not all here before anything is written. A dry run keeps
-// the scan's findings to itself.
-func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updateStep, error) {
-	files, rids, err := c.resolveFiles(target)
+// each file of the current version vid and the target. Scan findings stay
+// in the plan so readiness checks and failed updates do not alter metadata.
+func (c *Checkout) planUpdate(vid, target libfossil.FslID) ([]updateStep, error) {
+	files, rids, err := c.updateFiles(target)
 	if err != nil {
 		return nil, err
 	}
@@ -231,37 +282,56 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 			return nil, err
 		}
 	}
-	if !dryRun {
-		if err := c.storeScan(scanned); err != nil {
+	targets := make(map[string]*updateTargetFile, len(files))
+	for i, f := range files {
+		targets[f.Name] = &updateTargetFile{
+			rid:  int64(rids[i]),
+			exe:  strings.Contains(f.Perm, "x"),
+			link: strings.Contains(f.Perm, "l"),
+		}
+	}
+	renames := map[string]string{}
+	if vid > 0 {
+		if renames, err = path.NameChanges(c.repo.DB(), vid, target); err != nil {
 			return nil, err
 		}
 	}
-	targets := make(map[string]*updateTargetFile, len(files))
-	for i, f := range files {
-		targets[f.Name] = &updateTargetFile{rid: int64(rids[i]), exe: strings.Contains(f.Perm, "x")}
-	}
-	rows, err := vfile.Load(c.db, int64(vid))
+	rows, err := c.effectiveRows(vid)
 	if err != nil {
 		return nil, err
 	}
 	overlayScan(rows, scanned)
 	steps := make([]updateStep, 0, len(rows)+len(files))
+	matched := make(map[string]bool, len(rows))
 	for i := range rows {
-		row := &rows[i]
-		missing, err := c.isMissing(*row)
+		// A file outside the cone is decided before renames are followed:
+		// never on disk, it would read as missing, so changed, and follow
+		// the target's rename. It is matched by name, so a rename moves it
+		// in the record, or onto disk when the new name is in the cone.
+		if row := &rows[i]; !c.covers(row.Pathname) {
+			matched[row.Pathname] = true
+			steps = append(steps, outOfConeStep(row.Pathname, row, targets[row.Pathname]))
+			continue
+		}
+		step, err := c.planRow(&rows[i], targets, renames)
 		if err != nil {
 			return nil, err
 		}
-		tgt := targets[row.Pathname]
-		delete(targets, row.Pathname)
-		steps = append(steps, updateStep{
-			name: row.Pathname, row: row, target: tgt,
-			action: classifyUpdate(row, tgt, missing, false),
-		})
+		if !c.covers(step.tname) {
+			// Local edits would follow the target's rename out of the
+			// cone, where nothing can carry them.
+			return nil, c.outsideCone("Update", []string{step.tname})
+		}
+		matched[step.tname] = true
+		steps = append(steps, step)
 	}
 	for _, f := range files {
-		tgt, ok := targets[f.Name]
-		if !ok {
+		tgt := targets[f.Name]
+		if matched[f.Name] {
+			continue
+		}
+		if !c.covers(f.Name) {
+			steps = append(steps, outOfConeStep(f.Name, nil, tgt))
 			continue
 		}
 		unmanaged, err := c.isUntrackedFile(f.Name)
@@ -269,10 +339,47 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 			return nil, err
 		}
 		steps = append(steps, updateStep{
-			name: f.Name, target: tgt, action: classifyUpdate(nil, tgt, false, unmanaged),
+			name: f.Name, tname: f.Name, target: tgt,
+			action: classifyUpdate(nil, tgt, false, unmanaged, false),
 		})
 	}
+	if err := c.planPendingUpdate(vid, target, steps); err != nil {
+		return nil, err
+	}
 	return steps, nil
+}
+
+// outOfConeStep counts target changes without filesystem access. Pending
+// outside edits are carried separately by planPendingUpdate; clearing merge
+// ancestry does not discard their content (draft-fossil-sparse-cone-00 §4.4).
+func outOfConeStep(name string, row *vfile.Row, tgt *updateTargetFile) updateStep {
+	action := updateNothing
+	if (row == nil) != (tgt == nil) || (row != nil && tgt != nil && row.RID != tgt.rid) {
+		action = updateOutOfCone
+	}
+	return updateStep{name: name, tname: name, row: row, target: tgt, action: action}
+}
+
+// planRow decides the file of one current row. A changed file the target
+// renamed (renames, from path.NameChanges) is matched to the target's file
+// under its new name, as fossil's update matches it; an unchanged one keeps
+// its name, so it is removed and the new name written.
+func (c *Checkout) planRow(
+	row *vfile.Row, targets map[string]*updateTargetFile, renames map[string]string,
+) (updateStep, error) {
+	missing, err := c.isMissing(*row)
+	if err != nil {
+		return updateStep{}, err
+	}
+	tname := row.Pathname
+	if renamed, ok := renames[row.Pathname]; ok && rowChanged(*row, missing) {
+		tname = renamed
+	}
+	tgt := targets[tname]
+	return updateStep{
+		name: row.Pathname, tname: tname, row: row, target: tgt,
+		action: classifyUpdate(row, tgt, missing, false, tname != row.Pathname),
+	}, nil
 }
 
 // isUntrackedFile reports whether a regular file stands at name.
@@ -303,34 +410,36 @@ func (c *Checkout) applyUpdate(
 	}
 	var res UpdateResult
 	for _, s := range steps {
+		if err := ctx.Err(); err != nil {
+			return UpdateResult{}, err
+		}
+		if s.action == updateOutOfCone {
+			res.OutOfCone++
+			continue
+		}
 		change, err := c.applyUpdateStep(s, strategy, opts.DryRun, fresh)
 		if err != nil {
 			return UpdateResult{}, fmt.Errorf("checkout.Update: %s: %w", s.name, err)
 		}
-		switch change {
-		case UpdateNone:
+		if change == UpdateNone {
 			continue
-		case UpdateAdded, UpdateUpdated, UpdateMerged, UpdateConflictUnmanaged:
-			res.FilesWritten = append(res.FilesWritten, s.name)
-		case UpdateConflictMerged:
-			res.FilesWritten = append(res.FilesWritten, s.name)
-			res.Conflicted = append(res.Conflicted, s.name)
-			c.obs.Error(ctx, fmt.Errorf("checkout.Update: merge conflict in %s", s.name))
-		case UpdateConflictBinary:
-			res.FilesWritten = append(res.FilesWritten, s.name)
-			res.Unmerged = append(res.Unmerged, s.name)
-		case UpdateConflictRm, UpdateConflictAdded:
-			res.Unmerged = append(res.Unmerged, s.name)
-		case UpdateRemoved:
-			res.FilesRemoved = append(res.FilesRemoved, s.name)
 		}
-		c.obs.ExtractFileCompleted(ctx, s.name, change)
+		name := recordUpdateChange(&res, s, change)
+		if change == UpdateConflictMerged {
+			c.obs.Error(ctx, fmt.Errorf("checkout.Update: merge conflict in %s", name))
+		}
+		c.obs.ExtractFileCompleted(ctx, name, change)
 		if opts.Callback != nil {
-			if err := opts.Callback(s.name, change); err != nil {
-				return UpdateResult{}, fmt.Errorf("checkout.Update: callback for %s: %w", s.name, err)
+			if err := opts.Callback(name, change); err != nil {
+				return UpdateResult{}, fmt.Errorf("checkout.Update: callback for %s: %w", name, err)
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return UpdateResult{}, err
+	}
+	// Once mode-only changes begin, finish metadata rather than return a late
+	// cancellation: native undo does not retain executable-bit-only changes.
 	if !opts.DryRun {
 		if err := c.setUpdatedModes(steps); err != nil {
 			return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)
@@ -341,6 +450,35 @@ func (c *Checkout) applyUpdate(
 	sort.Strings(res.Conflicted)
 	sort.Strings(res.Unmerged)
 	return res, nil
+}
+
+// recordUpdateChange adds step s, which made change, to res, and returns
+// the name to report it under: the target's name for a file written, the
+// checkout's for one removed or left as it was. A merge into a renamed file
+// also removes the old name.
+func recordUpdateChange(res *UpdateResult, s updateStep, change UpdateChange) string {
+	switch change {
+	case UpdateAdded, UpdateUpdated, UpdateMerged, UpdateConflictUnmanaged:
+		res.FilesWritten = append(res.FilesWritten, s.tname)
+	case UpdateConflictMerged:
+		res.FilesWritten = append(res.FilesWritten, s.tname)
+		res.Conflicted = append(res.Conflicted, s.tname)
+	case UpdateConflictBinary:
+		res.FilesWritten = append(res.FilesWritten, s.tname)
+		res.Unmerged = append(res.Unmerged, s.tname)
+	case UpdateConflictSymlink:
+		res.Unmerged = append(res.Unmerged, s.tname)
+	case UpdateConflictRm, UpdateConflictAdded:
+		res.Unmerged = append(res.Unmerged, s.name)
+		return s.name
+	case UpdateRemoved:
+		res.FilesRemoved = append(res.FilesRemoved, s.name)
+		return s.name
+	}
+	if s.action == updateMerge && s.tname != s.name {
+		res.FilesRemoved = append(res.FilesRemoved, s.name)
+	}
+	return s.tname
 }
 
 // applyUpdateStep carries out one step and names the change it made.
@@ -385,29 +523,38 @@ func (c *Checkout) applyUpdateStep(
 		return UpdateConflictAdded, nil
 	case updateKeepAdd:
 		return UpdateAddPropagated, nil
+	case updateKeepRenamed:
+		return UpdateConflictRm, nil
+	case updateOutOfCone:
+		panic("checkout.applyUpdateStep: an out-of-cone step reaches the disk: " + s.name)
 	}
 	panic(fmt.Sprintf("checkout.applyUpdateStep: unknown action %d", s.action))
 }
 
-// writeUpdateTarget writes the target's content for s and records in fresh
+// writeUpdateTarget writes the target's content for s, a symlink entry as
+// fossil's vfile_to_disk writes it (vfile.Disk.Write), and records in fresh
 // the mtime the write gave it.
 func (c *Checkout) writeUpdateTarget(s updateStep, fresh map[string]writtenFile) error {
 	data, err := content.Expand(c.repo.DB(), libfossil.FslID(s.target.rid))
 	if err != nil {
 		return fmt.Errorf("expand rid %d: %w", s.target.rid, err)
 	}
-	if err := c.writeMergedFile(s.name, data, s.target.exe); err != nil {
-		return err
-	}
-	fullPath, err := c.safePath(s.name)
+	fullPath, err := c.safePath(s.tname)
 	if err != nil {
 		return err
 	}
-	mtime, err := c.writtenMTime(fullPath)
+	disk, err := c.newDiskView()
 	if err != nil {
 		return err
 	}
-	fresh[s.name] = writtenFile{rid: s.target.rid, mtime: mtime}
+	if err := disk.Write(fullPath, data, s.target.exe, s.target.link); err != nil {
+		return err
+	}
+	mtime, err := disk.MTime(fullPath)
+	if err != nil {
+		return err
+	}
+	fresh[s.tname] = writtenFile{rid: s.target.rid, mtime: mtime}
 	return nil
 }
 
@@ -422,6 +569,16 @@ func (c *Checkout) mergeUpdate(
 ) (UpdateChange, error) {
 	if s.row == nil || s.row.RID <= 0 || s.target == nil {
 		panic("checkout.mergeUpdate: merge needs both versions")
+	}
+	// A symlink on either side is not merged: as fossil's update ("Cannot
+	// merge symlink"), it is a conflict and nothing is written -- reading
+	// and writing the working file would go through the link -- though a
+	// rename still drops the old name.
+	if s.row.IsLink > 0 || s.target.link {
+		if dryRun {
+			return UpdateConflictSymlink, nil
+		}
+		return UpdateConflictSymlink, c.removeRenamedFrom(s)
 	}
 	base, err := content.Expand(c.repo.DB(), libfossil.FslID(s.row.RID))
 	if err != nil {
@@ -445,7 +602,10 @@ func (c *Checkout) mergeUpdate(
 		if err := c.backUpOriginal(s.name); err != nil {
 			return UpdateNone, err
 		}
-		return UpdateConflictBinary, c.writeUpdateTarget(s, fresh)
+		if err := c.writeUpdateTarget(s, fresh); err != nil {
+			return UpdateNone, err
+		}
+		return UpdateConflictBinary, c.removeRenamedFrom(s)
 	}
 	merged, err := strategy.Merge(base, local, other)
 	if err != nil {
@@ -460,7 +620,19 @@ func (c *Checkout) mergeUpdate(
 	}
 	// The row the target's version gets records no mtime, so the next scan
 	// hashes the merged file and finds it edited.
-	return change, c.writeMergedFile(s.name, merged.Content, s.target.exe)
+	if err := c.writeMergedFile(s.tname, merged.Content, s.target.exe); err != nil {
+		return UpdateNone, err
+	}
+	return change, c.removeRenamedFrom(s)
+}
+
+// removeRenamedFrom deletes the old name of a file merged into the name the
+// target renamed it to, as fossil's update does.
+func (c *Checkout) removeRenamedFrom(s updateStep) error {
+	if s.tname == s.name {
+		return nil
+	}
+	return c.removeUpdated(s.name)
 }
 
 // removeUpdated deletes name's file, which the target does not have. One
@@ -507,15 +679,15 @@ func (c *Checkout) backUpOriginal(name string) error {
 // backupNamesMax bounds the search for a free backup name.
 const backupNamesMax = 1000
 
-// finalizeUpdate moves the checkout database to target in one
-// transaction. A pending add keeps its row, now in the target version, as
+// finalizeUpdate saves the undo state and moves the checkout database to
+// target, in one transaction. A pending add keeps its row, now in the target version, as
 // fossil's update moves it; the target's files are loaded, a file removed
 // locally stays removed, and each file written with the target's content
 // records the mtime of that write (an unchanged file keeps its mtime
 // through loadVFile, as fossil's update transfers it). Last, vvar names the
 // new version.
 func (c *Checkout) finalizeUpdate(
-	target libfossil.FslID, steps []updateStep, fresh map[string]writtenFile,
+	target libfossil.FslID, steps []updateStep, fresh map[string]writtenFile, saved updateUndo,
 ) (err error) {
 	tx, err := c.db.Begin()
 	if err != nil {
@@ -526,6 +698,21 @@ func (c *Checkout) finalizeUpdate(
 			err = errors.Join(err, tx.Rollback())
 		}
 	}()
+	if err := saved.save(tx); err != nil {
+		return fmt.Errorf("checkout.Update: save undo state: %w", err)
+	}
+	if c.cone != nil {
+		if _, err := tx.Exec("DELETE FROM sparse_pending"); err != nil {
+			return fmt.Errorf("checkout.Update: clear pending outcomes: %w", err)
+		}
+		for _, step := range steps {
+			if step.pending != nil {
+				if err := step.pending.save(tx); err != nil {
+					return fmt.Errorf("checkout.Update: carry pending outcome: %w", err)
+				}
+			}
+		}
+	}
 	if err := c.moveUpdateRows(tx, target, steps); err != nil {
 		return err
 	}
@@ -563,7 +750,7 @@ func (c *Checkout) moveUpdateRows(q sqlExecer, target libfossil.FslID, steps []u
 			continue
 		}
 		if _, err := q.Exec("UPDATE vfile SET deleted = 1 WHERE vid = ? AND pathname = ?",
-			int64(target), s.name); err != nil {
+			int64(target), s.tname); err != nil {
 			return fmt.Errorf("checkout.Update: keep the removal of %s: %w", s.name, err)
 		}
 	}
@@ -612,10 +799,17 @@ func (c *Checkout) checkUpdateTargets(steps []updateStep) error {
 		default:
 			continue
 		}
-		if err := c.checkMergeTarget(s.name); err != nil {
+		if err := c.checkMergeTarget(s.tname); err != nil {
 			return err
 		}
-		if err := c.checkWritable(s); err != nil {
+		writes := s.action == updateWrite || s.action == updateMerge
+		if err := c.checkWritable(s.tname, writes); err != nil {
+			return fmt.Errorf("cannot update %s: %w", s.tname, err)
+		}
+		if s.tname == s.name {
+			continue
+		}
+		if err := c.checkWritable(s.name, false); err != nil {
 			return fmt.Errorf("cannot update %s: %w", s.name, err)
 		}
 	}
@@ -628,17 +822,17 @@ type writableChecker interface {
 	CheckWritable(path string) error
 }
 
-// checkWritable checks the access step s needs. Every step changes the
-// entries of the file's directory (its nearest existing ancestor, should
-// it have to be made): a remove, a new file, a NAME-original backup. A
-// write or merge over an existing file also writes the file itself; an
-// untracked file the target adds over is removed, not written.
-func (c *Checkout) checkWritable(s updateStep) error {
+// checkWritable checks the access a step needs on name. Every step changes
+// the entries of the file's directory (its nearest existing ancestor, should
+// it have to be made): a remove, a new file, a NAME-original backup. With
+// writes, the step also writes over the file should it exist (a write or a
+// merge); an untracked file the target adds over is removed, not written.
+func (c *Checkout) checkWritable(name string, writes bool) error {
 	checker, ok := c.env.Storage.(writableChecker)
 	if !ok {
 		return nil
 	}
-	fullPath, err := c.safePath(s.name)
+	fullPath, err := c.safePath(name)
 	if err != nil {
 		return err
 	}
@@ -655,7 +849,7 @@ func (c *Checkout) checkWritable(s updateStep) error {
 	if err := checker.CheckWritable(dir); err != nil {
 		return err
 	}
-	if s.action != updateWrite && s.action != updateMerge {
+	if !writes {
 		return nil
 	}
 	if _, err := c.env.Storage.Stat(fullPath); errors.Is(err, os.ErrNotExist) {
@@ -668,10 +862,10 @@ func (c *Checkout) checkWritable(s updateStep) error {
 // executable bit, as fossil's checkout_set_all_exe does after an update.
 func (c *Checkout) setUpdatedModes(steps []updateStep) error {
 	for _, s := range steps {
-		if s.target == nil {
+		if s.target == nil || !c.covers(s.tname) {
 			continue
 		}
-		if err := c.setMergedMode(s.name, s.target.exe); err != nil {
+		if err := c.setMergedMode(s.tname, s.target.exe); err != nil {
 			return err
 		}
 	}

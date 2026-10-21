@@ -138,3 +138,29 @@ func TestParseClearsignedRealFossilManifest(t *testing.T) {
 		t.Error("expected F cards to be parsed from the clearsigned manifest")
 	}
 }
+
+func TestHasValidZ(t *testing.T) {
+	body := zBody("C hello\nD 2024-01-15T10:30:00.000\nU alice\n")
+	raw, err := os.ReadFile("testdata/clearsigned-61829b07.manifest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{"plain", body, true},
+		{"clearsigned", string(buildClearsigned(body)), true},
+		{"real-clearsigned", string(raw), true},
+		{"absent", "C hello\nU alice\n", false},
+		{"bad-checksum", "C hello\nU alice\nZ 00000000000000000000000000000000\n", false},
+		{"no-final-lf", body[:len(body)-1], false},
+		{"file-text", "line one\nline two\n", false},
+	}
+	for _, tc := range cases {
+		if got := HasValidZ([]byte(tc.data)); got != tc.want {
+			t.Errorf("%s: HasValidZ=%v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

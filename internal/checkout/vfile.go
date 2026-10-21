@@ -9,11 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
-	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/vfile"
 )
 
 // errMissingContent reports a version whose files' content the repository
@@ -50,7 +51,7 @@ func (c *Checkout) loadVFile(q sqlExecer, rid libfossil.FslID, clear bool) error
 
 	// Resolve every file before changing anything, so a refusal leaves
 	// vfile as it was.
-	files, blobRIDs, err := c.resolveFiles(rid)
+	files, blobRIDs, err := c.resolveFiles(rid, c.fileFilter())
 	if err != nil {
 		return fmt.Errorf("checkout.LoadVFile: %w", err)
 	}
@@ -59,15 +60,18 @@ func (c *Checkout) loadVFile(q sqlExecer, rid libfossil.FslID, clear bool) error
 		if blobRIDs[i] <= 0 {
 			panic("checkout.LoadVFile: unresolved blob for " + file.Name)
 		}
-		isexe := 0
+		isexe, islink := 0, 0
 		if strings.Contains(file.Perm, "x") {
 			isexe = 1
+		}
+		if strings.Contains(file.Perm, "l") {
+			islink = 1
 		}
 		// INSERT OR IGNORE keeps an existing row for this version as it is.
 		_, err := q.Exec(`
 			INSERT OR IGNORE INTO vfile(vid, pathname, rid, mrid, isexe, islink)
-			VALUES(?, ?, ?, ?, ?, 0)`,
-			int64(rid), file.Name, int64(blobRIDs[i]), int64(blobRIDs[i]), isexe,
+			VALUES(?, ?, ?, ?, ?, ?)`,
+			int64(rid), file.Name, int64(blobRIDs[i]), int64(blobRIDs[i]), isexe, islink,
 		)
 		if err != nil {
 			return fmt.Errorf("checkout.LoadVFile: insert %s: %w", file.Name, err)
@@ -85,12 +89,13 @@ func (c *Checkout) loadVFile(q sqlExecer, rid libfossil.FslID, clear bool) error
 	return nil
 }
 
-// resolveFiles lists the files of checkin rid with the blob each one's
-// content lives in. It fails, wrapping errMissingContent, when the repository
-// does not hold all of that content; callers run it before changing anything
-// so that a version they cannot finish is refused up front.
+// resolveFiles lists the files of checkin rid that filter covers (all of
+// them for a nil filter) with the blob each one's content lives in. It
+// fails, wrapping errMissingContent, when the repository does not hold all
+// of that content; callers run it before changing anything so that a
+// version they cannot finish is refused up front.
 func (c *Checkout) resolveFiles(
-	rid libfossil.FslID,
+	rid libfossil.FslID, filter manifest.FileFilter,
 ) ([]manifest.FileEntry, []libfossil.FslID, error) {
 	if rid <= 0 {
 		panic("checkout.resolveFiles: rid must be positive")
@@ -99,7 +104,14 @@ func (c *Checkout) resolveFiles(
 		panic("checkout.resolveFiles: nil repo")
 	}
 
-	files, err := manifest.ListFiles(c.repo, rid)
+	storeCone, err := content.StoreCone(c.repo.DB())
+	if err != nil {
+		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
+	}
+	if filter == nil && storeCone != nil {
+		filter = c.fileFilter()
+	}
+	files, err := manifest.ListFilesFiltered(c.repo, rid, filter)
 	if err != nil {
 		return nil, nil, fmt.Errorf("checkout.resolveFiles: %w", err)
 	}
@@ -113,6 +125,12 @@ func (c *Checkout) resolveFiles(
 			return nil, nil, fmt.Errorf("checkout.resolveFiles: %s: %w", file.Name, err)
 		}
 		if !available {
+			blobRID, err = c.elidedRID(storeCone, file)
+			if err != nil {
+				return nil, nil, fmt.Errorf("checkout.resolveFiles: %s: %w", file.Name, err)
+			}
+		}
+		if blobRID <= 0 {
 			missing = append(missing, file.Name)
 			continue
 		}
@@ -125,6 +143,27 @@ func (c *Checkout) resolveFiles(
 		panic("checkout.resolveFiles: blobRIDs out of step with files")
 	}
 	return files, blobRIDs, nil
+}
+
+// elidedRID is the phantom that stands for file's content when a sparse
+// store lacks it by design (draft-fossil-sparse-cone-00 §5.2) and this
+// checkout never materializes it: neither the store cone nor the worktree
+// cone covers the file. The record names the phantom, as it would name the
+// blob, and a commit carries it forward by hash. It is 0 when the content is
+// simply missing.
+func (c *Checkout) elidedRID(storeCone *cone.Cone, file manifest.FileEntry) (libfossil.FslID, error) {
+	if storeCone == nil || storeCone.Covers(file.Name) || c.cone == nil || c.cone.Covers(file.Name) {
+		return 0, nil
+	}
+	var rid int64
+	err := c.repo.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", file.UUID).Scan(&rid)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return libfossil.FslID(rid), nil
 }
 
 // missingContentError names up to missingNamesMax of the missing files.
@@ -173,6 +212,8 @@ type scanVFileEntry struct {
 	chnged   int64
 	deleted  int64
 	mtime    int64 // vfile.mtime: seconds since 1970, 0 when not known
+	isexe    int64
+	islink   int64
 }
 
 // baseline returns the hash and size of the artifact a file on disk is
@@ -199,19 +240,28 @@ func (c *Checkout) baseline(mergeRid int64) (string, int64, error) {
 	return uuid, size, nil
 }
 
+// scanFacts is what fossil's scan knows of a file before it hashes it.
+type scanFacts struct {
+	hasBaseline  bool // vfile.mrid names an artifact; a pending add has none
+	deleted      bool // removed with fossil rm
+	notFile      bool // something other than a file or symlink is at the path
+	sizeDiffers  bool // the size is not the baseline's; a missing file's never is
+	mtimeTrusted bool // the mtime is the one recorded, and may be trusted
+}
+
 // nextChangedState is the content half of fossil's vfile_check_signature:
-// the vfile.chnged value its scan stores for a file present on disk. A row
-// with no artifact behind it (mrid=0) is a pending add, written with
-// chnged=0, which the scan promotes to 1. A size other than the artifact's is
-// an edit outright. A file believed edited (1) is hashed, and returns to 0
-// when its content is back at the baseline. An unchanged file (0) or a clean
-// merge outcome (2, 4) is hashed only when its mtime cannot be trusted, and
-// becomes 1 when its content differs. Every other state is kept: the
-// remaining merge outcomes (3, 5) and the mode changes (6 through 9).
-// differs hashes the file; it is called only when the verdict needs it.
+// the vfile.chnged value its scan stores before the permission half (see
+// nextPermState). A pending add or removal recorded with chnged=0 is
+// promoted to 1, as is anything that is not a file. A size other than the
+// artifact's, a missing file's included, is an edit outright. A file
+// believed edited (1) is hashed, and returns to 0 when its content is back at
+// the baseline. An unchanged file (0) or a clean merge outcome (2, 4) is
+// hashed only when its mtime cannot be trusted, and becomes 1 when its
+// content differs. Every other state is kept: the remaining merge outcomes
+// (3, 5) and the mode changes (6 through 9). differs hashes the file; it is
+// called only when the verdict needs it.
 func nextChangedState(
-	chnged int64, hasBaseline, sizeDiffers, mtimeTrusted bool,
-	differs func() (bool, error),
+	chnged int64, f scanFacts, differs func() (bool, error),
 ) (int64, error) {
 	if chnged < 0 {
 		panic("checkout.nextChangedState: negative chnged")
@@ -219,21 +269,23 @@ func nextChangedState(
 	if differs == nil {
 		panic("checkout.nextChangedState: nil differs")
 	}
-	if chnged == 0 && !hasBaseline {
+	if chnged == 0 && (f.deleted || !f.hasBaseline) {
+		chnged = 1
+	} else if f.notFile {
 		chnged = 1
 	}
 	unchanged := chnged == 0 || chnged == 2 || chnged == 4
 	switch {
-	case sizeDiffers:
+	case f.sizeDiffers:
 		return 1, nil
-	case chnged == 1 && hasBaseline:
+	case chnged == 1 && f.hasBaseline && !f.deleted:
 		d, err := differs()
 		if err != nil || d {
 			return 1, err
 		}
 		return 0, nil
-	case unchanged && !mtimeTrusted:
-		if !hasBaseline {
+	case unchanged && !f.mtimeTrusted:
+		if !f.hasBaseline {
 			return 1, nil // nothing to verify against, as fossil finds
 		}
 		d, err := differs()
@@ -247,19 +299,26 @@ func nextChangedState(
 
 // scanPolicy is how a scan decides whether a file needs hashing.
 type scanPolicy struct {
-	trustMTime bool  // fossil's useMtime: no ScanHash and mtime-changes on
-	now        int64 // the scan's time; see recordableMTime
+	trustMTime bool       // fossil's useMtime: no ScanHash and mtime-changes on
+	now        int64      // the scan's time; see vfile.RecordableMTime
+	disk       vfile.Disk // how files and their permissions are seen
+	enotfile   bool       // ScanENotFile: refuse something that is not a file
 }
 
 // newScanPolicy reads the policy for flags: a hash scan (fossil's --hash)
 // never trusts mtimes, and neither does any scan while the repository's
 // mtime-changes setting is off.
 func (c *Checkout) newScanPolicy(flags ScanFlags) (scanPolicy, error) {
-	p := scanPolicy{now: c.env.Clock.Now().Unix()}
+	p := scanPolicy{now: c.env.Clock.Now().Unix(), enotfile: flags&ScanENotFile != 0}
+	disk, err := c.newDiskView()
+	if err != nil {
+		return p, err
+	}
+	p.disk = disk
 	if flags&ScanHash != 0 {
 		return p, nil
 	}
-	on, err := c.mtimeChanges()
+	on, err := c.boolSetting("mtime-changes", true)
 	if err != nil {
 		return p, err
 	}
@@ -267,31 +326,24 @@ func (c *Checkout) newScanPolicy(flags ScanFlags) (scanPolicy, error) {
 	return p, nil
 }
 
-// mtimeChanges reads fossil's mtime-changes setting, on by default, as
-// db_get_boolean reads it from the repository's config table. Fossil's
-// db_get falls back to global_config in ~/.fossil (`fossil settings
-// mtime-changes off --global`); go-libfossil reads no global fossil settings,
-// so a global value is not seen here.
-func (c *Checkout) mtimeChanges() (bool, error) {
-	var value sql.NullString
-	err := c.repo.DB().QueryRow(
-		"SELECT value FROM config WHERE name = 'mtime-changes'",
-	).Scan(&value)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && !value.Valid) {
-		return true, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("read mtime-changes: %w", err)
-	}
-	return repo.SettingBoolean(value.String, true), nil
+// boolSetting reads a boolean fossil setting from the repository, dflt when
+// unset (vfile.BoolSetting).
+func (c *Checkout) boolSetting(name string, dflt bool) (bool, error) {
+	return vfile.BoolSetting(c.repo.DB(), name, dflt)
 }
 
-// fileDiffers reports whether the file at fullPath hashes to other than
-// uuid.
-func (c *Checkout) fileDiffers(fullPath, uuid string) (bool, error) {
-	data, err := c.env.Storage.ReadFile(fullPath)
+// fileDiffers reports whether the file at fullPath, seen through v with
+// info from v.stat, hashes to other than uuid. Something that is not a file
+// or symlink, or nothing at all, has no content that could match.
+func (c *Checkout) fileDiffers(
+	v vfile.Disk, fullPath string, info os.FileInfo, uuid string,
+) (bool, error) {
+	if !isFileOrLink(info) {
+		return true, nil
+	}
+	data, err := v.Read(fullPath, info)
 	if err != nil {
-		return false, fmt.Errorf("read %s: %w", fullPath, err)
+		return false, err
 	}
 	return hash.ContentHash(data, uuid) != uuid, nil
 }
@@ -332,15 +384,13 @@ func (c *Checkout) storeScan(writes []scanWrite) (err error) {
 // scanSingleEntry checks a single vfile entry against the file on disk the
 // way fossil's vfile_check_signature does, appending to writes the update
 // that stores the verdict in vfile.chnged and the file's mtime in
-// vfile.mtime. Returns (changed, missing): changed when the file newly
-// became edited.
+// vfile.mtime (-1 for a missing file, as fossil stores). Returns (changed,
+// missing): changed when a file present on disk newly became edited or had
+// its mode changed; missing when nothing, or something other than a file or
+// symlink, is at the path of a file not removed.
 func (c *Checkout) scanSingleEntry(
 	e scanVFileEntry, p scanPolicy, writes *[]scanWrite,
 ) (changed, missing bool, err error) {
-	if e.deleted != 0 {
-		return false, false, nil
-	}
-
 	fullPath, err := c.safePath(e.pathname)
 	if err != nil {
 		return false, false, fmt.Errorf(
@@ -348,44 +398,66 @@ func (c *Checkout) scanSingleEntry(
 			e.pathname, err,
 		)
 	}
-
-	// Anything that is not a regular file is missing, as fossil's scan
-	// treats a directory where a file belongs (NOT_A_FILE).
-	info, err := c.env.Storage.Stat(fullPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return false, true, nil
-		}
-		return false, false, fmt.Errorf(
-			"checkout.ScanChanges: stat %s: %w", fullPath, err,
-		)
-	}
-	if !info.Mode().IsRegular() {
-		return false, true, nil
-	}
-
-	uuid, size := "", int64(0)
-	if e.mergeRid > 0 {
-		if uuid, size, err = c.baseline(e.mergeRid); err != nil {
-			return false, false, fmt.Errorf("checkout.ScanChanges: %s: %w", e.pathname, err)
-		}
-	}
-	// A recorded 0 means not known, even for a file dated 1970.
-	trusted := p.trustMTime && e.mtime != 0 && info.ModTime().Unix() == e.mtime
-	next, err := nextChangedState(e.chnged, e.mergeRid > 0, info.Size() != size, trusted,
-		func() (bool, error) { return c.fileDiffers(fullPath, uuid) })
+	info, err := p.disk.Stat(fullPath)
 	if err != nil {
 		return false, false, fmt.Errorf("checkout.ScanChanges: %w", err)
 	}
-	mtime := recordableMTime(info.ModTime(), p.now)
+	// Fossil's else-if: a pending add or removal still recorded with
+	// chnged=0 is promoted to changed and never checked for being a file.
+	promoted := e.chnged == 0 && (e.deleted != 0 || e.mergeRid == 0)
+	if p.enotfile && !promoted && info != nil && !isFileOrLink(info) {
+		return false, false, fmt.Errorf("checkout.ScanChanges: not a regular file: %s", e.pathname)
+	}
+	next, err := c.scanVerdict(e, p, fullPath, info)
+	if err != nil {
+		return false, false, fmt.Errorf("checkout.ScanChanges: %s: %w", e.pathname, err)
+	}
+	mtime := int64(-1)
+	if info != nil {
+		mtime = vfile.RecordableMTime(info.ModTime(), p.now)
+	}
+	missing = e.deleted == 0 && !isFileOrLink(info)
 	if next == e.chnged && mtime == e.mtime {
-		return false, false, nil
+		return false, missing, nil
 	}
 	*writes = append(*writes, scanWrite{id: e.id, mtime: mtime, chnged: next})
-	return next == 1 && e.chnged != 1, false, nil
+	changed = !missing && e.deleted == 0 && next != e.chnged && (next == 1 || next >= 6)
+	return changed, missing, nil
 }
 
-// loadScanEntries reads every vfile row of version rid. The rows are
+// scanVerdict is the vfile.chnged value fossil's scan stores for e, given
+// info from p.disk.stat (nil for a missing file): the content half, then,
+// where permissions are read from disk, the permission half.
+func (c *Checkout) scanVerdict(
+	e scanVFileEntry, p scanPolicy, fullPath string, info os.FileInfo,
+) (int64, error) {
+	uuid, size := "", int64(0)
+	if e.mergeRid > 0 {
+		var err error
+		if uuid, size, err = c.baseline(e.mergeRid); err != nil {
+			return 0, err
+		}
+	}
+	f := scanFacts{
+		hasBaseline: e.mergeRid > 0,
+		deleted:     e.deleted != 0,
+		notFile:     info != nil && !isFileOrLink(info),
+		sizeDiffers: info == nil || info.Size() != size,
+	}
+	// A recorded 0 means not known, even for a file dated 1970.
+	f.mtimeTrusted = p.trustMTime && info != nil && e.mtime != 0 &&
+		info.ModTime().Unix() == e.mtime
+	next, err := nextChangedState(e.chnged, f, func() (bool, error) {
+		return c.fileDiffers(p.disk, fullPath, info, uuid)
+	})
+	if err != nil || !p.disk.ReadsPerms() {
+		return next, err
+	}
+	orig := recordedPerm(e.isexe, e.islink)
+	return nextPermState(next, orig, diskPerm(p.disk, info, orig)), nil
+}
+
+// loadScanEntries reads every vfile row of version rid the cone covers. The rows are
 // collected up front so no cursor is held open during file I/O and the
 // per-row updates. Fossil leaves mtime NULL on a row it adds.
 func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error) {
@@ -395,7 +467,8 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 
 	rows, err := c.db.Query(`
 		SELECT id, pathname, mrid, CAST(chnged AS INTEGER), CAST(deleted AS INTEGER),
-		       CAST(coalesce(mtime, 0) AS INTEGER)
+		       CAST(coalesce(mtime, 0) AS INTEGER),
+		       CAST(coalesce(isexe, 0) AS INTEGER), CAST(coalesce(islink, 0) AS INTEGER)
 		FROM vfile WHERE vid = ?
 	`, int64(rid))
 	if err != nil {
@@ -408,10 +481,15 @@ func (c *Checkout) loadScanEntries(rid libfossil.FslID) ([]scanVFileEntry, error
 		var e scanVFileEntry
 		if err := rows.Scan(
 			&e.id, &e.pathname, &e.mergeRid, &e.chnged, &e.deleted, &e.mtime,
+			&e.isexe, &e.islink,
 		); err != nil {
 			return nil, fmt.Errorf("checkout.ScanChanges: scan vfile row: %w", err)
 		}
-		entries = append(entries, e)
+		// An uncovered file is not on disk by design: it is never
+		// scanned, so it is never missing (§4.1).
+		if c.covers(e.pathname) {
+			entries = append(entries, e)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("checkout.ScanChanges: iterate vfile rows: %w", err)
@@ -466,6 +544,8 @@ func (c *Checkout) scanVersion(vid libfossil.FslID) ([]scanWrite, error) {
 // taken as unchanged without reading it, unless flags includes ScanHash
 // (fossil's --hash) or the mtime-changes setting is off; any other file is
 // hashed and compared with the artifact vfile.mrid names (see baseline).
+// With ScanENotFile, as fossil's CKSIG_ENOTFILE, something other than a file
+// or symlink where a tracked file belongs fails the scan, storing nothing.
 //
 // Panics if c is nil (TigerStyle precondition).
 func (c *Checkout) ScanChanges(flags ScanFlags) error {
@@ -590,6 +670,9 @@ func (c *Checkout) walkDir(dir string) (map[string]bool, error) {
 
 		for _, entry := range entries {
 			name := entry.Name()
+			if sparseMetadataName(name) {
+				continue
+			}
 
 			// Skip checkout databases and VCS directories
 			switch name {
@@ -598,14 +681,19 @@ func (c *Checkout) walkDir(dir string) (map[string]bool, error) {
 			}
 
 			fullPath := filepath.Join(top.path, name)
+			relPath, err := filepath.Rel(c.dir, fullPath)
+			if err != nil {
+				return nil, fmt.Errorf("walkDir: compute relative path for %s: %w", fullPath, err)
+			}
 
+			// A sparse checkout neither walks a subtree its cone cannot
+			// reach nor reports an uncovered file: an uncovered path is
+			// not untracked (draft-fossil-sparse-cone-00 §4.1, §4.5).
 			if entry.IsDir() {
-				stack = append(stack, walkDirEntry{path: fullPath, depth: top.depth + 1})
-			} else {
-				relPath, err := filepath.Rel(c.dir, fullPath)
-				if err != nil {
-					return nil, fmt.Errorf("walkDir: compute relative path for %s: %w", fullPath, err)
+				if c.cone == nil || c.cone.IntersectsSubtree(filepath.ToSlash(relPath)) {
+					stack = append(stack, walkDirEntry{path: fullPath, depth: top.depth + 1})
 				}
+			} else if c.covers(filepath.ToSlash(relPath)) {
 				result[relPath] = true
 			}
 		}

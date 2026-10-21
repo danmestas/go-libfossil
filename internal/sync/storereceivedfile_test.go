@@ -513,7 +513,7 @@ func TestIssue214ReceiveLinkerAvoidsFinalSweepWork(t *testing.T) {
 	}
 	var nonArtifactVerdicts int
 	if err := r.DB().QueryRow(
-		"SELECT count(*) FROM crosslink_nonartifact WHERE rid IN ("+
+		"SELECT count(*) FROM crosslink_nonartifact_v2 WHERE rid IN ("+
 			"(SELECT rid FROM blob WHERE uuid=?), (SELECT rid FROM blob WHERE uuid=?))",
 		baseUUID, fileUUID,
 	).Scan(&nonArtifactVerdicts); err != nil {

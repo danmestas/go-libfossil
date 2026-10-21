@@ -124,7 +124,7 @@ func relinkDerived(t *testing.T, path string) {
 //
 // c2, left without a child, keeps the verdict it had: the parent tag is no
 // branch tag and rewriting plink schedules no leaf recheck
-// (draft-fossil-repo-state-01 Section 7.3), as in fossil's own crosslink of a
+// (draft-fossil-repo-state-00 Section 7.3), as in fossil's own crosslink of a
 // parent tag. An explicit full rebuild, which is the single-batch result,
 // makes it a leaf.
 func TestReparent(t *testing.T) {
@@ -193,8 +193,12 @@ func TestReparent(t *testing.T) {
 		}
 	}
 	assertAfter("after reparent", false, u3)
+	// The relink keeps the branch rows propagation wrote (srcid 0), so
+	// relinking c2 finds it already tagged and rechecks it with the plink rows
+	// it has now (recheckTaggedBeforeLinking): c2 gets the verdict a rebuild
+	// gives it. plink and mlink are unchanged, which is what #286 pins.
 	relinkDerived(t, path)
-	assertAfter("after relink (idempotent)", false, u3)
+	assertAfter("after relink (idempotent)", false, u2, u3)
 	assertAfter("after leaf.Rebuild", true, u2, u3)
 }
 

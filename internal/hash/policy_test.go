@@ -167,7 +167,7 @@ func TestPromoteFor(t *testing.T) {
 	}
 }
 
-// artifact-format-01 7.1 (AF-7.1-2): an unrecognized policy value is fatal,
+// artifact-format-00 7.1 (AF-7.1-2): an unrecognized policy value is fatal,
 // and the match is exact, so neither a name nor a wrong-case name nor an
 // ordinal outside 0-4 is read as a policy.
 func TestNamingForUnrecognizedPolicy(t *testing.T) {
@@ -185,7 +185,7 @@ func TestNamingForUnrecognizedPolicy(t *testing.T) {
 	}
 }
 
-// artifact-format-01 7.1 (AF-7.1-2): policy names match case-sensitively
+// artifact-format-00 7.1 (AF-7.1-2): policy names match case-sensitively
 // and exactly, as fossil's hash-policy command does with fossil_strcmp.
 func TestPolicyByName(t *testing.T) {
 	for want, name := range []string{"sha1", "auto", "sha3", "sha3-only", "shun-sha1"} {

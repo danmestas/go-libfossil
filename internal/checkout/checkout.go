@@ -12,11 +12,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/simio"
@@ -26,11 +28,14 @@ import (
 // A Checkout owns the checkout DB (*sql.DB) but NOT the repo — the caller
 // owns the repo lifecycle.
 type Checkout struct {
-	db           *sql.DB
-	repo         *repo.Repo
-	env          *simio.Env
-	obs          Observer
-	dir          string
+	db     *sql.DB
+	repo   *repo.Repo
+	env    *simio.Env
+	obs    Observer
+	dir    string
+	dbPath string
+	cone   *cone.Cone // nil for a dense checkout
+
 	checkinQueue map[string]bool // in-memory staging queue (session-scoped)
 }
 
@@ -82,8 +87,18 @@ func initUndoState(ckdb *sql.DB) error {
 	return nil
 }
 
-// Create creates a new checkout database at dir/.fslckout (or dir/_FOSSIL_ on Windows),
-// finds the tip checkin from the repo, and sets vvar checkout/checkout-hash.
+// initLocalRecords records the repository, so tools can find it, and the
+// sparse cone, if any.
+func initLocalRecords(ckdb *sql.DB, r *repo.Repo, sparse *cone.Cone) error {
+	if err := setVVar(ckdb, "repository", r.Path()); err != nil {
+		return err
+	}
+	return writeCone(ckdb, sparse)
+}
+
+// Create creates a checkout database, finds the tip checkin from the repo,
+// and sets vvar checkout/checkout-hash. Dense checkouts use the native name;
+// sparse checkouts use .libfossil-checkout, which native Fossil does not open.
 //
 // Panics if r or dir is nil/empty (TigerStyle precondition).
 func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
@@ -103,8 +118,24 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Create: no SQLite driver registered")
 	}
 
-	// Determine DB path
-	dbPath := filepath.Join(dir, PreferredDBName())
+	// SQLite uses the real path even when working files use simulated storage.
+	for _, storage := range []simio.Storage{env.Storage, simio.OSStorage{}} {
+		marker, err := checkoutMarker(storage, dir)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Create: %w", err)
+		}
+		if marker != "" {
+			return nil, fmt.Errorf("checkout.Create: checkout marker already exists: %s", marker)
+		}
+	}
+	name := PreferredDBName()
+	if opts.Cone != nil {
+		name = sparseDBName
+	}
+	dbPath := filepath.Join(dir, name)
+	if err := checkMarkerTarget(dbPath); err != nil {
+		return nil, fmt.Errorf("checkout.Create: %w", err)
+	}
 
 	// Create parent directory if needed
 	if err := env.Storage.MkdirAll(dir, 0o755); err != nil {
@@ -133,18 +164,25 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, err
 	}
 
-	// Set the repository vvar so tools can find the repo.
-	if err := setVVar(ckdb, "repository", r.Path()); err != nil {
+	if opts.Cone != nil {
+		if err := ensureSparsePending(ckdb); err != nil {
+			ckdb.Close()
+			return nil, err
+		}
+	}
+	if err := initLocalRecords(ckdb, r, opts.Cone); err != nil {
 		ckdb.Close()
 		return nil, fmt.Errorf("checkout.Create: %w", err)
 	}
 
 	c := &Checkout{
-		db:   ckdb,
-		repo: r,
-		env:  env,
-		obs:  obs,
-		dir:  dir,
+		db:     ckdb,
+		dbPath: dbPath,
+		repo:   r,
+		env:    env,
+		obs:    obs,
+		dir:    dir,
+		cone:   opts.Cone,
 	}
 	if err := c.loadInitialVFile(); err != nil {
 		ckdb.Close()
@@ -217,22 +255,9 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: no SQLite driver registered")
 	}
 
-	// Find the checkout DB
-	dbPath, err := FindCheckoutDB(env.Storage, dir, opts.SearchParents)
+	ckdb, dbPath, err := openCheckoutDB(env.Storage, dir, opts.SearchParents)
 	if err != nil {
 		return nil, fmt.Errorf("checkout.Open: %w", err)
-	}
-
-	// Open the checkout database
-	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("checkout.Open: sql.Open: %w", err)
-	}
-
-	// Ping to validate the connection
-	if err := ckdb.Ping(); err != nil {
-		ckdb.Close()
-		return nil, fmt.Errorf("checkout.Open: ping: %w", err)
 	}
 
 	// Verify vvar checkout exists
@@ -246,18 +271,61 @@ func Open(r *repo.Repo, dir string, opts OpenOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Open: vvar checkout not found")
 	}
 
+	sparse, err := readCone(ckdb)
+	if err != nil {
+		ckdb.Close()
+		return nil, fmt.Errorf("checkout.Open: %w", err)
+	}
+
+	if sparse != nil {
+		if err := ensureSparsePending(ckdb); err != nil {
+			ckdb.Close()
+			return nil, err
+		}
+	}
 	c := &Checkout{
-		db:   ckdb,
-		repo: r,
-		env:  env,
-		obs:  obs,
-		dir:  filepath.Dir(dbPath),
+		db:     ckdb,
+		dbPath: dbPath,
+		repo:   r,
+		env:    env,
+		obs:    obs,
+		dir:    filepath.Dir(dbPath),
+		cone:   sparse,
 	}
 	if err := c.ValidateFingerprint(); err != nil {
 		ckdb.Close()
 		return nil, fmt.Errorf("checkout.Open: %w", err)
 	}
+	if err := c.migrateSparseRows(); err != nil {
+		c.db.Close()
+		return nil, fmt.Errorf("checkout.Open: migrate sparse records: %w", err)
+	}
 	return c, nil
+}
+
+// openCheckoutDB finds the checkout database, first completing a marker move
+// a crash interrupted, and opens it.
+func openCheckoutDB(storage simio.Storage, dir string, searchParents bool) (*sql.DB, string, error) {
+	dbPath, err := FindCheckoutDB(storage, dir, searchParents)
+	var pair *markerPairError
+	if errors.As(err, &pair) {
+		if err := recoverMarkerPair(pair); err != nil {
+			return nil, "", err
+		}
+		dbPath, err = FindCheckoutDB(storage, dir, searchParents)
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	ckdb, err := db.OpenSQL(dbPath, db.OpenConfig{}, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("sql.Open: %w", err)
+	}
+	if err := ckdb.Ping(); err != nil {
+		ckdb.Close()
+		return nil, "", fmt.Errorf("ping: %w", err)
+	}
+	return ckdb, dbPath, nil
 }
 
 // Close closes the checkout database. Does NOT close the repo.
@@ -378,12 +446,12 @@ func FindCheckoutDB(storage simio.Storage, dir string, searchParents bool) (stri
 
 	currentDir := dir
 	for depth := 0; depth <= maxParentSearchDepth; depth++ {
-		// Try each DB name
-		for _, name := range DBNames() {
-			dbPath := filepath.Join(currentDir, name)
-			if _, err := storage.Stat(dbPath); err == nil {
-				return dbPath, nil
-			}
+		marker, err := checkoutMarker(storage, currentDir)
+		if err != nil {
+			return "", fmt.Errorf("checkout.FindCheckoutDB: %w", err)
+		}
+		if marker != "" {
+			return marker, nil
 		}
 
 		if !searchParents {
@@ -399,7 +467,7 @@ func FindCheckoutDB(storage simio.Storage, dir string, searchParents bool) (stri
 		currentDir = parentDir
 	}
 
-	return "", fmt.Errorf("checkout.FindCheckoutDB: no checkout DB found in %s", dir)
+	return "", fmt.Errorf("checkout.FindCheckoutDB: no checkout DB found in %s: %w", dir, os.ErrNotExist)
 }
 
 // PreferredDBName returns the preferred checkout DB name based on the OS.
@@ -411,10 +479,40 @@ func PreferredDBName() string {
 	return ".fslckout"
 }
 
-// DBNames returns all possible checkout DB names, with the preferred name first.
+const sparseDBName = ".libfossil-checkout"
+
+func checkoutMarker(storage simio.Storage, dir string) (string, error) {
+	var found string
+	for _, name := range DBNames() {
+		candidate := filepath.Join(dir, name)
+		stat := storage.Stat
+		if local, ok := storage.(interface {
+			Lstat(string) (os.FileInfo, error)
+		}); ok {
+			stat = local.Lstat
+		}
+		_, err := stat(candidate)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("inspect checkout marker %s: %w", candidate, err)
+		}
+		if found != "" {
+			if pair := linkedMarkerPair(found, candidate); pair != nil {
+				return "", pair
+			}
+			return "", fmt.Errorf("multiple checkout markers in %s: %s and %s", dir, found, candidate)
+		}
+		found = candidate
+	}
+	return found, nil
+}
+
+// DBNames returns all possible checkout DB names, with the preferred native name first.
 func DBNames() []string {
 	if runtime.GOOS == "windows" {
-		return []string{"_FOSSIL_", ".fslckout"}
+		return []string{"_FOSSIL_", ".fslckout", sparseDBName}
 	}
-	return []string{".fslckout", "_FOSSIL_"}
+	return []string{".fslckout", "_FOSSIL_", sparseDBName}
 }

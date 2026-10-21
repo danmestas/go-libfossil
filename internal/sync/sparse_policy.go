@@ -37,10 +37,12 @@ func (h *handler) servesPartialMirror() (bool, error) {
 }
 
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
-// shared by covered and uncovered names is kept under either name.
+// shared by covered and uncovered names is kept under either name. A clone
+// walks its round (walk); a pull's inventory classifies the store (refs).
 type sparseKeep struct {
 	refs    *content.ConeReferences
 	indexed *content.ConeSuccessorQuery
+	walk    *coneWalk
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
@@ -74,19 +76,42 @@ func (h *handler) ensureSparseKeep() error {
 		h.keep = &sparseKeep{refs: refs}
 		return nil
 	}
+	if h.walkClone {
+		h.keep = &sparseKeep{walk: newConeWalk(h)}
+		return nil
+	}
 	var err error
 	h.keep, err = newSparseKeep(ctx, h.repo.DB(), h.cone)
 	return err
 }
 
+func (k *sparseKeep) classified() int {
+	switch {
+	case k == nil:
+		return 0
+	case k.walk != nil:
+		return k.walk.classified
+	}
+	return k.refs.Artifacts()
+}
+
+// keeps answers a pull's inventory and a gimme. A clone's walk serves a
+// gimme densely: the requester named the artifact (§6.4).
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
-	if k == nil {
+	if k == nil || k.walk != nil {
 		return true
 	}
 	if k.indexed != nil {
 		return k.indexed.Next(rid, rid) == rid
 	}
 	return !k.refs.Outside(rid)
+}
+
+func (k *sparseKeep) sourceKept(rid int) bool {
+	if k != nil && k.walk != nil {
+		return k.walk.sourceKept(rid)
+	}
+	return k.keeps(libfossil.FslID(rid))
 }
 
 // filterSparseReceived filters only artifacts this transfer newly acquired.

@@ -27,7 +27,8 @@ func TestPreparedSparseServicePrivateGimmeMatchesDense(t *testing.T) {
 		{name: "in-cone/private-cap", caps: "gjorzx", path: "src/secret", dated: true, wantNote: true},
 		{name: "in-cone/shunned", caps: "gjorz", path: "src/secret", dated: true, shunned: true, wantNote: true},
 		{name: "in-cone/undated", caps: "gjorz", path: "src/secret"},
-		{name: "outside-cone", caps: "gjorz", path: "zzz/secret", dated: true},
+		// §6.4: a gimme names its artifact, so the cone does not filter it.
+		{name: "outside-cone", caps: "gjorz", path: "zzz/secret", dated: true, wantNote: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

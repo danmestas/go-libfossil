@@ -95,8 +95,7 @@ func (k *sparseKeep) classified() int {
 	return k.refs.Artifacts()
 }
 
-// keeps answers a pull's inventory and a gimme. A clone's walk serves a
-// gimme densely: the requester named the artifact (§6.4).
+// keeps filters a pull's inventory; a clone's walk never asks.
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
 	if k == nil || k.walk != nil {
 		return true

@@ -6,11 +6,12 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// cloneResume names a check-in row whose walk outgrew a round, and the last
-// rid of that walk already sent.
+// cloneResume is the walk state a cookie echoes: the row the round starts at
+// (aware), and for a check-in whose walk outgrew a round, the last rid of that
+// walk already sent (set).
 type cloneResume struct {
-	row, last int
-	set       bool
+	row, last  int
+	aware, set bool
 }
 
 func cloneResumeFromCards(cards []xfer.Card) cloneResume {
@@ -22,8 +23,11 @@ func cloneResumeFromCards(cards []xfer.Card) cloneResume {
 		}
 		if fields, ok := cloneCapFields(c.Value); ok {
 			resume = cloneResume{}
+			if len(fields) >= 2 {
+				resume = cloneResume{row: fields[1], aware: true}
+			}
 			if len(fields) == 3 {
-				resume = cloneResume{row: fields[1], last: fields[2], set: true}
+				resume.last, resume.set = fields[2], true
 			}
 		}
 	}
@@ -39,15 +43,19 @@ func hasPullCard(cards []xfer.Card) bool {
 	return false
 }
 
-// emitCloneResume hands a part-walked check-in to the next round, or clears
-// the progress the request carried once that check-in is done.
+// emitCloneResume sends a sparse walk's single cookie: the snapshot bound
+// with the row the next round starts at, and a part-walked check-in's
+// progress. A client echoing the cookie verbatim carries both back.
 func (h *handler) emitCloneResume(round *cloneBatch) {
-	if !round.pending.set && !round.resume.set {
+	if h.keep == nil || h.keep.walk == nil {
 		return
 	}
 	value := fmt.Sprintf("%s%d", cloneCapPrefix, h.cloneSnapMax)
-	if round.pending.set {
+	switch {
+	case round.pending.set:
 		value = fmt.Sprintf("%s:%d:%d", value, round.pending.row, round.pending.last)
+	case round.nextRID > 0:
+		value = fmt.Sprintf("%s:%d", value, round.nextRID)
 	}
 	h.resp = append(h.resp, &xfer.CookieCard{Value: value})
 }
@@ -109,11 +117,26 @@ func (h *handler) cloneWalkItems(round *cloneBatch, row int, items []int, last i
 			}
 		}
 		if !sent {
-			round.nextRID = row
-			round.pending = cloneResume{row: row, last: last, set: true}
-			return false, nil
+			return false, h.cloneWalkFull(round, row, last)
 		}
 		last = item
 	}
 	return true, nil
+}
+
+// cloneWalkFull ends a round inside row's walk. A request that started at row
+// without echoing the walk's state comes from a client that drops it: it
+// would return here forever, so the cursor steps past row and what the walk
+// still owed reaches it as transit phantoms its next pull names (§6.4).
+func (h *handler) cloneWalkFull(round *cloneBatch, row, last int) error {
+	if row < round.entry {
+		panic("sync.cloneWalkFull: walk row below the round's cursor")
+	}
+	if row == round.entry && round.resume.row != row {
+		round.nextRID = row + 1
+		return nil
+	}
+	round.nextRID = row
+	round.pending = cloneResume{row: row, last: last, aware: true, set: true}
+	return nil
 }

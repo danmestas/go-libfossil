@@ -107,15 +107,16 @@ func parseCloneCap(v string) (int, bool) {
 	return fields[0], true
 }
 
-// cloneCapFields splits a clone-cap cookie: the snapshot bound, then, while a
-// sparse walk is part way through a check-in, that row and the last rid of
-// its walk already sent ("lf-clone-cap:MAX:ROW:LAST").
+// cloneCapFields splits a clone-cap cookie: the snapshot bound, then from a
+// sparse walk the row the next round starts at and, while that row is a
+// check-in part way through its walk, the last rid of the walk already sent
+// ("lf-clone-cap:MAX", "lf-clone-cap:MAX:ROW", "lf-clone-cap:MAX:ROW:LAST").
 func cloneCapFields(v string) ([]int, bool) {
 	if !strings.HasPrefix(v, cloneCapPrefix) {
 		return nil, false
 	}
 	parts := strings.Split(v[len(cloneCapPrefix):], ":")
-	if len(parts) != 1 && len(parts) != 3 {
+	if len(parts) > 3 {
 		return nil, false
 	}
 	fields := make([]int, len(parts))
@@ -1279,12 +1280,8 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if !ok {
 		return nil // blob not found — not fatal, skip.
 	}
-	if err := h.ensureSparseKeep(); err != nil {
-		return err
-	}
-	if !h.keep.keeps(rid) {
-		return nil
-	}
+	// §6.4: a gimme names its artifact, so a cone request is answered
+	// densely; the requester never names what its own cone elides.
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1644,7 +1641,10 @@ func (h *handler) emitCloneBatch() error {
 			return fmt.Errorf("handler: capture clone snapshot: %w", err)
 		}
 		h.cloneSnapMax = maxRid
-		h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		// A sparse walk sends its one cookie with the round's progress.
+		if h.keep == nil || h.keep.walk == nil {
+			h.resp = append(h.resp, &xfer.CookieCard{Value: fmt.Sprintf("%s%d", cloneCapPrefix, maxRid)})
+		}
 	}
 	// cloneSeq is the rid of the next blob to send and is inclusive, matching
 	// §8.2's "iterate from supplied RID through current maximum" and
@@ -1704,13 +1704,15 @@ type cloneBatch struct {
 	// nextRID is the cursor reported back to the client: the rid of the first
 	// blob this batch did not send, or 0 once the snapshot is exhausted.
 	nextRID int
+	// entry is the cursor the request named.
+	entry int
 	// resume is the walk progress the request's cookie carried; pending is
 	// the progress this reply hands on (§6.2).
 	resume, pending cloneResume
 }
 
 func (h *handler) newCloneBatch() *cloneBatch {
-	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}}
+	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}, entry: h.cloneSeq}
 	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
 	// The budget is consulted before each artifact and never suppresses the
 	// first one, so this yields exactly one artifact per round.
@@ -1721,7 +1723,7 @@ func (h *handler) newCloneBatch() *cloneBatch {
 	// card cannot name the cursor that owes it; truncation stays dense-only.
 	r.truncate = h.buggify != nil && h.buggify.Check("clone.emitCloneBatch.truncate", 0.10) &&
 		(h.keep == nil || h.keep.walk == nil)
-	if h.cloneResume.set && h.cloneResume.row == h.cloneSeq {
+	if h.cloneResume.aware && h.cloneResume.row == h.cloneSeq {
 		r.resume = h.cloneResume
 	}
 	return r

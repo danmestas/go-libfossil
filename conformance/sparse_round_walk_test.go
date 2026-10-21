@@ -1,7 +1,9 @@
 package conformance
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -119,4 +121,45 @@ func scNoTransit(r *repo.Repo) error {
 		return fmt.Errorf("clone rounds left %d transit phantoms", n)
 	}
 	return nil
+}
+
+// scCapOnlyPeer echoes only the snapshot bound of a clone-cap cookie, as a
+// client predating the sparse walk's progress fields might.
+type scCapOnlyPeer struct{ *scSyncPeer }
+
+func (p scCapOnlyPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	cards := make([]xfer.Card, 0, len(req.Cards))
+	for _, card := range req.Cards {
+		if c, ok := card.(*xfer.CookieCard); ok && strings.HasPrefix(c.Value, "lf-clone-cap:") {
+			fields := strings.SplitN(c.Value, ":", 3)
+			card = &xfer.CookieCard{Value: fields[0] + ":" + fields[1]}
+		}
+		cards = append(cards, card)
+	}
+	return p.scSyncPeer.Exchange(ctx, &xfer.Message{Cards: cards})
+}
+
+// A client that drops the walk's progress still converges: the round that
+// returns to a part-walked check-in steps past it, and its next pull fetches
+// what the walk still owed by name.
+func scProtocolResumeDropped(t *testing.T) error {
+	origin := newSCSyncRepo(t, scSyncFiles())
+	files := scSyncFiles()
+	for i := 0; i < 4; i++ {
+		files[fmt.Sprintf("src/n%d", i)] = fmt.Sprintf("new %d\n", i)
+	}
+	origin.commit(t, files, origin.c1)
+	peer := scCapOnlyPeer{&scSyncPeer{r: origin.r, opts: sync.HandleOpts{Buggify: scOneArtifactRounds{}}}}
+	r, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"), peer,
+		sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil), PullPhantoms: true})
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for i := 0; i < 4; i++ {
+		if err := scSyncHolding(r, fmt.Sprintf("new %d\n", i), true); err != nil {
+			return err
+		}
+	}
+	return scSyncHolding(r, "outside\n", false)
 }

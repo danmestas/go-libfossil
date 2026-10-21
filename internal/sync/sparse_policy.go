@@ -4,14 +4,37 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
+
+// SettingPartialMirror is the boolean repository setting that lets a sparse
+// store serve clones its cone does not cover (§5.3).
+const SettingPartialMirror = "partial-mirror"
+
+// servesPartialMirror reads the per-call override, then the repository
+// setting as fossil reads a boolean one, absent meaning off.
+func (h *handler) servesPartialMirror() (bool, error) {
+	if h.partialMirror {
+		return true, nil
+	}
+	var value string
+	err := h.repo.DB().QueryRow("SELECT value FROM config WHERE name=?", SettingPartialMirror).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("handler: read %s: %w", SettingPartialMirror, err)
+	}
+	return repo.SettingBoolean(value, false), nil
+}
 
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
 // shared by covered and uncovered names is kept under either name.

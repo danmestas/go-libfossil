@@ -23,6 +23,7 @@ type RepoConeCmd struct {
 	Set     RepoConeSetCmd     `cmd:"" help:"Replace the cone"`
 	Dense   RepoConeDenseCmd   `cmd:"" help:"Drop the cone and materialize every file"`
 	Test    RepoConeTestCmd    `cmd:"" help:"Classify paths against the cone and name the deciding member"`
+	Store   RepoConeStoreCmd   `cmd:"" help:"Show or replace the repository's store cone, fetching what widening covers"`
 	Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
 }
 
@@ -38,10 +39,14 @@ func (c *RepoConeShowCmd) Run(g *Globals) (err error) {
 	}
 	defer closeWith(done, &err)
 
-	cone := co.Cone()
+	printCone(co.Cone())
+	return nil
+}
+
+func printCone(cone *libfossil.Cone) {
 	if cone == nil {
 		fmt.Println("dense")
-		return nil
+		return
 	}
 	for _, m := range cone.Include() {
 		fmt.Println(m)
@@ -49,6 +54,56 @@ func (c *RepoConeShowCmd) Run(g *Globals) (err error) {
 	for _, m := range cone.Exclude() {
 		fmt.Println("!" + m)
 	}
+}
+
+// RepoConeStoreCmd shows or replaces the repository's store cone, the policy
+// form of demand fetch (draft-fossil-sparse-cone-00 §6.4): artifacts the new
+// cone covers that the old one elided are pulled from --remote, else the saved
+// last-sync-url. With such artifacts and no peer it refuses and changes nothing.
+type RepoConeStoreCmd struct {
+	RecoveryFlags
+	Paths []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
+	Not   []string `help:"Exclusion members (repeatable)"`
+	Dense bool     `help:"Drop the store cone, fetching everything it elided"`
+}
+
+func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
+	members := len(c.Paths) > 0 || len(c.Not) > 0
+	if c.Dense && members {
+		return fmt.Errorf("--dense takes no cone members")
+	}
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+	if !c.Dense && !members {
+		cone, err := r.StoreCone()
+		if err != nil {
+			return err
+		}
+		printCone(cone)
+		return nil
+	}
+	next, err := coneFlags(c.Paths, c.Not)
+	if err != nil {
+		return err
+	}
+	required, err := c.requiredContent(r)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cloneContext(context.Background(), c.Timeout)
+	defer cancel()
+	result, err := r.SetStoreConeContext(ctx, next, required)
+	if err != nil {
+		return err
+	}
+	fetched := 0
+	if result != nil {
+		fetched = result.FilesRecvd
+	}
+	fmt.Printf("fetched %d artifact(s)\n", fetched)
 	return nil
 }
 

@@ -116,7 +116,8 @@ type HandleFunc func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfe
 
 // HandleOpts configures optional behavior for HandleSync.
 type HandleOpts struct {
-	// PartialMirror permits clone requests beyond this store's cone.
+	// PartialMirror permits clone requests beyond this store's cone, as the
+	// SettingPartialMirror repository setting does for every caller.
 	PartialMirror bool
 	Buggify       BuggifyChecker // nil in production.
 	Observer      Observer       // nil defaults to no-op.
@@ -720,7 +721,11 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 	if !h.cloneMode || h.fatal {
 		return nil
 	}
-	if !h.partialMirror {
+	mirror, err := h.servesPartialMirror()
+	if err != nil {
+		return err
+	}
+	if !mirror {
 		have, err := content.StoreCone(h.repo.DB())
 		if err != nil {
 			return err
@@ -1685,7 +1690,7 @@ func (h *handler) emitCloneBatch() error {
 		if err != nil {
 			return err
 		}
-		if shunned || !h.keep.keeps(libfossil.FslID(rid)) {
+		if shunned {
 			continue
 		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
@@ -1696,6 +1701,13 @@ func (h *handler) emitCloneBatch() error {
 		if bytesSent >= budget {
 			nextRID = rid
 			break
+		}
+		// §6.2: a cone-excluded row is charged as a dense round would charge
+		// it, at no less than its expanded size, so the walk stops no later
+		// than a dense batch over the same rows would.
+		if !h.keep.keeps(libfossil.FslID(rid)) {
+			bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+			continue
 		}
 
 		// §7.2/#141: emit the artifact source-first. A row stored as a delta

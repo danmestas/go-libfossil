@@ -208,6 +208,35 @@ func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 	}
 }
 
+func TestSparseMergePayloadRetainsPublicPhantomVisibility(t *testing.T) {
+	f := newSparseRepo(t, false)
+	data := []byte("published history awaiting its bytes\n")
+	f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": string(data)}), f.c1)
+	rid, uuid, _, err := blob.StoreUnderPolicy(f.repo.DB(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.DB().Exec("UPDATE blob SET size=-1, content=NULL WHERE rid=?", int64(rid)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.repo.DB().Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", int64(rid)); err != nil {
+		t.Fatal(err)
+	}
+	co := f.open(t, sparseCone(t), f.c1)
+	gotRID, gotUUID, err := co.storeMergePayload(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRID != rid || gotUUID != uuid || content.IsPrivate(f.repo.DB(), int64(rid)) {
+		t.Fatalf("filling public-history phantom changed identity or visibility: %d %s", gotRID, gotUUID)
+	}
+	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
+	if err := co.Revert(RevertOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
+}
+
 func TestSparseMergePayloadRetainsPublicVisibility(t *testing.T) {
 	f := newSparseRepo(t, false)
 	co := f.open(t, sparseCone(t), f.c1)

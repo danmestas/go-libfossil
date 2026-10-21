@@ -690,7 +690,7 @@ func (c *Checkout) storeMergePayload(data []byte) (rid libfossil.FslID, uuid str
 		if err != nil {
 			return err
 		}
-		if outcome != blob.Found {
+		if outcome == blob.Inserted {
 			return content.MakePrivate(tx, int64(rid))
 		}
 		return nil

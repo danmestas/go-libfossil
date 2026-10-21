@@ -206,14 +206,20 @@ func fCardsToEntries(fCards []deck.FileCard) []FileEntry {
 // full-tree set without reading payloads a sparse store may deliberately elide.
 // Checkin validates each carried artifact against the store's coverage policy.
 //
-// parentRID == 0 returns supplied unchanged.
-func MergeParentFiles(r *repo.Repo, parentRID libfossil.FslID, supplied []File) ([]File, error) {
+// parentRID == 0 returns supplied unchanged. ctx bounds the required-content
+// check that explains a parent whose tree a sparse store does not hold.
+func MergeParentFiles(
+	ctx context.Context, r *repo.Repo, parentRID libfossil.FslID, supplied []File,
+) ([]File, error) {
+	if ctx == nil {
+		panic("manifest.MergeParentFiles: nil context")
+	}
 	if parentRID == 0 {
 		return supplied, nil
 	}
 	parentFiles, err := ListFiles(r, parentRID)
 	if err != nil {
-		required := RequireParentContent(context.Background(), r.DB(), []libfossil.FslID{parentRID})
+		required := RequireParentContent(ctx, r.DB(), []libfossil.FslID{parentRID})
 		if required != nil {
 			err = required
 		}

@@ -85,7 +85,7 @@ func (r *Repo) commit(ctx context.Context, opts CommitOpts) (int64, string, erro
 		}
 	}
 	if opts.ParentID > 0 && !opts.PartialManifest {
-		merged, err := manifest.MergeParentFiles(r.inner, fsltype.FslID(opts.ParentID), files)
+		merged, err := manifest.MergeParentFiles(ctx, r.inner, fsltype.FslID(opts.ParentID), files)
 		if err != nil {
 			return 0, "", fmt.Errorf("libfossil: commit: %w", err)
 		}

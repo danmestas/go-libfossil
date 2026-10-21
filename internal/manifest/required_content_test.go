@@ -115,7 +115,8 @@ func TestMergeParentFilesCarriesElidedPayload(t *testing.T) {
 	}
 	outsideUUID := parent.F[1].UUID
 	elideWriterNode(t, r, outsideUUID)
-	files, err := MergeParentFiles(r, parentRID, []File{{Name: "inside/a", Content: []byte("edited")}})
+	files, err := MergeParentFiles(context.Background(), r, parentRID,
+		[]File{{Name: "inside/a", Content: []byte("edited")}})
 	if err != nil {
 		t.Fatal(err)
 	}

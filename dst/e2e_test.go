@@ -168,14 +168,14 @@ func TestE2EBidirectional(t *testing.T) {
 	leaf0Repo := sim.Leaf("leaf-0").Repo()
 	leafData := []byte("from leaf-0 for bidirectional")
 	var leafUUID string
-	leaf0Repo.WithTx(func(tx *db.Tx) error {
+	seedTx(t, leaf0Repo, func(tx *db.Tx) error {
 		rid, u, err := blob.Store(tx, leafData)
 		if err != nil {
 			return err
 		}
 		leafUUID = u
-		tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
-		return nil
+		_, err = tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", rid)
+		return err
 	})
 
 	// Run enough steps.

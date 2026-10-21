@@ -236,6 +236,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blob-integrity violation that was never in the database. Each check now
   suspends injection for its own reads with the new
   `simio.SuspendBuggify`, which restores it with its random stream intact.
+  Scenario fixtures are written the same way and fail the test if they do
+  not go in; before, a store that injection failed during setup left an
+  empty UUID, and the assertion that read it panicked.
 
 - `verify.Verify` audits leaves by repo-state §§7.2–7.3's same-branch
   rule and branch-tag recheck schedule instead of assuming every check-in

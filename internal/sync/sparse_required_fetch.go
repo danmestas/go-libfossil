@@ -324,7 +324,34 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 	if len(roots) > maxRequiredArtifacts {
 		return nil, nil, fmt.Errorf("sparse required content: too many roots")
 	}
-	wanted, structural := make(map[string]bool), make(map[string]bool)
+	wanted := make(map[string]bool)
+	structural, err := walkStructural(roots, func(frame requiredFrame) (*deck.Deck, error) {
+		return f.structuralDeck(frame, wanted)
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make([]string, 0, len(wanted))
+	for uuid := range wanted {
+		names = append(names, uuid)
+	}
+	sort.Strings(names)
+	return names, structural, nil
+}
+
+// walkStructural visits the S/B closure of roots once per (artifact,
+// baseline) pair and returns the artifacts it reached. parse resolves and
+// parses one frame; it is called at most once per pair, so a tree whose S
+// cards name the same node many times costs one parse, not one per
+// reference -- the visit and byte limits bound what is held, and this bounds
+// the work.
+func walkStructural(
+	roots []string, parse func(requiredFrame) (*deck.Deck, error),
+) (map[string]bool, error) {
+	if parse == nil {
+		panic("sync.walkStructural: nil parse")
+	}
+	structural := make(map[string]bool)
 	active := make(map[string]bool)
 	visited := make(map[requiredFrame]bool)
 	stack := make([]requiredFrame, 0, len(roots))
@@ -334,7 +361,7 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 	const maxVisits = 1 << 20
 	for visits := 0; len(stack) > 0; visits++ {
 		if visits >= maxVisits {
-			return nil, nil, fmt.Errorf("sparse required content: structural visit limit exceeded")
+			return nil, fmt.Errorf("sparse required content: structural visit limit exceeded")
 		}
 		frame := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -343,14 +370,17 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 			continue
 		}
 		if active[frame.uuid] || frame.depth > maxRequiredDepth {
-			return nil, nil, fmt.Errorf("sparse required content: cyclic or excessive S/B depth")
-		}
-		d, err := f.structuralDeck(frame, wanted)
-		if err != nil {
-			return nil, nil, err
+			return nil, fmt.Errorf("sparse required content: cyclic or excessive S/B depth")
 		}
 		key := requiredFrame{uuid: frame.uuid, baseline: frame.baseline}
-		if d == nil || visited[key] {
+		if visited[key] {
+			continue
+		}
+		d, err := parse(frame)
+		if err != nil {
+			return nil, err
+		}
+		if d == nil {
 			continue
 		}
 		visited[key] = true
@@ -362,7 +392,7 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 			stack = append(stack, requiredFrame{uuid: d.B, kind: deck.Checkin, baseline: true})
 		}
 		if len(d.S) > maxVisits-len(stack) {
-			return nil, nil, fmt.Errorf("sparse required content: structural stack limit exceeded")
+			return nil, fmt.Errorf("sparse required content: structural stack limit exceeded")
 		}
 		for i := len(d.S) - 1; i >= 0; i-- {
 			stack = append(stack, requiredFrame{
@@ -370,12 +400,7 @@ func (f *requiredFetch) closure(roots []string) ([]string, map[string]bool, erro
 			})
 		}
 	}
-	names := make([]string, 0, len(wanted))
-	for uuid := range wanted {
-		names = append(names, uuid)
-	}
-	sort.Strings(names)
-	return names, structural, nil
+	return structural, nil
 }
 
 func (f *requiredFetch) payloads(roots []string) ([]string, map[string]bool, error) {

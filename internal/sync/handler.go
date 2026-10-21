@@ -1685,7 +1685,7 @@ func (h *handler) emitCloneBatch() error {
 		if err != nil {
 			return err
 		}
-		if shunned || !h.keep.keeps(libfossil.FslID(rid)) {
+		if shunned {
 			continue
 		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
@@ -1696,6 +1696,13 @@ func (h *handler) emitCloneBatch() error {
 		if bytesSent >= budget {
 			nextRID = rid
 			break
+		}
+		// §6.2: a cone-excluded row is charged as a dense round would charge
+		// it, at no less than its expanded size, so the walk stops no later
+		// than a dense batch over the same rows would.
+		if !h.keep.keeps(libfossil.FslID(rid)) {
+			bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+			continue
 		}
 
 		// §7.2/#141: emit the artifact source-first. A row stored as a delta

@@ -3,22 +3,27 @@ package conformance
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+// The round-walk case bounds the clone candidate walk; it does not bound the
+// whole-store keep-set discovery that precedes it on the ordinary path.
 func scProtocolBoundsCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.8.depth-wire-bound", Req: "SC-8-2"}, scProtocolDepthBound},
 		{Case{ID: "sparsecone.8.visited-wire-bound", Req: "SC-8-2"}, scProtocolVisitedBound},
+		{Case{ID: "sparsecone.6.2.round-walk-bound", Req: "SC-6.2-1"}, scProtocolRoundWalk},
 	}
 }
 
@@ -184,4 +189,75 @@ func scProtocolSharedRoots(origin *scRepo, node string, roots int) error {
 		}
 	}
 	return nil
+}
+
+// The excluded run outweighs one dense clone batch, so a bounded first round
+// stops inside it, sends nothing in cone, and names a cursor that later rounds
+// resume from until the clone converges on the late in-cone artifact.
+func scProtocolRoundWalk(t *testing.T) error {
+	origin := newSCSyncRepo(t, map[string]string{"src/initial": "initial\n"})
+	const piece = 1 << 20
+	noise := rand.New(rand.NewPCG(6, 2))
+	var outside []deck.FileCard
+	for i := 0; i < sync.DefaultCloneBatchBytes/piece+2; i++ {
+		data := make([]byte, piece)
+		for j := range data {
+			data[j] = byte(noise.Uint32())
+		}
+		_, uuid, err := blob.Store(origin.r.DB(), data)
+		if err != nil {
+			return err
+		}
+		outside = append(outside, deck.FileCard{Name: fmt.Sprintf("zzz/%04d", i), UUID: uuid})
+	}
+	finalRID, wanted, err := blob.Store(origin.r.DB(), []byte("final in-cone content\n"))
+	if err != nil {
+		return err
+	}
+	data, err := (&deck.Deck{C: "late in-cone artifact", D: time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC), U: deck.User("u"), F: append([]deck.FileCard{{Name: "src/final", UUID: wanted}}, outside...)}).Marshal()
+	if err != nil {
+		return err
+	}
+	if _, _, err := blob.Store(origin.r.DB(), data); err != nil {
+		return err
+	}
+	peer := &scSyncPeer{r: origin.r}
+	first, err := peer.Exchange(context.Background(), &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "cone", Values: []string{"src"}},
+		&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+	}})
+	if err != nil {
+		return err
+	}
+	if err := scProtocolBoundedRound(first, wanted, int(finalRID)); err != nil {
+		return err
+	}
+	cloned, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"), peer,
+		sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil), PullPhantoms: true})
+	if err != nil {
+		return err
+	}
+	defer cloned.Close()
+	if err := scSyncHolding(cloned, "final in-cone content\n", true); err != nil {
+		return err
+	}
+	if _, held, err := content.CheckAvailableByUUID(cloned.DB(), outside[0].UUID); err != nil || held {
+		return fmt.Errorf("excluded artifact held=%v error=%v", held, err)
+	}
+	return nil
+}
+
+func scProtocolBoundedRound(m *xfer.Message, wanted string, finalRID int) error {
+	if _, sent := scSyncPayloads(m)[wanted]; sent {
+		return fmt.Errorf("first round walked past one dense batch to the late in-cone artifact")
+	}
+	for _, card := range m.Cards {
+		if c, ok := card.(*xfer.CloneSeqNoCard); ok {
+			if c.SeqNo <= 0 || c.SeqNo > finalRID {
+				return fmt.Errorf("first round cursor = %d, want inside the excluded run", c.SeqNo)
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("first round carried no clone_seqno")
 }

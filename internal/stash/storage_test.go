@@ -4,18 +4,72 @@ package stash_test
 
 import (
 	"database/sql"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	libdb "github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/checkout"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/stash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 	"github.com/danmestas/go-libfossil/simio"
 )
+
+func TestStashOutsideConeRequiresWidening(t *testing.T) {
+	s := newSimCheckout(t, later)
+	s.write(t, "a.txt", "saved outside edit\n")
+	if err := stash.Save(s.co, s.ckout, s.repoDB, s.env, s.dir, "before narrowing"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ckout.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sparse, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.co.SetCone(sparse); err != nil {
+		t.Fatal(err)
+	}
+	openMetadata := func() *sql.DB {
+		t.Helper()
+		name, err := checkout.FindCheckoutDB(simio.OSStorage{}, s.dir, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata, err := libdb.OpenSQL(name, libdb.OpenConfig{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { metadata.Close() })
+		return metadata
+	}
+	metadata := openMetadata()
+	if _, err := stash.Apply(metadata, s.repoDB, s.env, s.dir, 1); !errors.Is(err, checkout.ErrOutsideCone) {
+		t.Fatalf("outside stash apply = %v", err)
+	}
+	if _, err := s.env.Storage.Stat(filepath.Join(s.dir, "a.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused stash materialized outside file: %v", err)
+	}
+	if err := metadata.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	metadata = openMetadata()
+	if _, err := stash.Apply(metadata, s.repoDB, s.env, s.dir, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, exists := s.read(t, "a.txt"); !exists || got != "saved outside edit\n" {
+		t.Fatalf("widening lost stash bytes: %q, exists=%v", got, exists)
+	}
+}
 
 // simCheckout is a checkout whose files live in a MemStorage and whose
 // clock is simulated; only the databases are on disk.

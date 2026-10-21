@@ -193,6 +193,20 @@ func (c *Checkout) outsideCone(op string, paths []string) error {
 		op, strings.Join(quoted, ", "), more, ErrOutsideCone, c.cone)
 }
 
+// CheckSparsePaths validates paths for operations that hold a checkout SQL
+// handle rather than a Checkout, before they read or write working files.
+func CheckSparsePaths(ckdb *sql.DB, op string, paths []string) error {
+	if ckdb == nil || op == "" {
+		panic("checkout.CheckSparsePaths: database and operation must be set")
+	}
+	sparse, err := readCone(ckdb)
+	if err != nil {
+		return err
+	}
+	c := Checkout{cone: sparse}
+	return c.refuseUncovered(op, paths...)
+}
+
 // refuseUncovered refuses op when any of paths lies outside the cone.
 func (c *Checkout) refuseUncovered(op string, paths ...string) error {
 	var outside []string

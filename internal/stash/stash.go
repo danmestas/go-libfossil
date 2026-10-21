@@ -392,6 +392,13 @@ func Apply(
 	if len(files) == 0 {
 		return nil, fmt.Errorf("stash.Apply: stash %d not found", stashID)
 	}
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.name
+	}
+	if err := checkout.CheckSparsePaths(ckout, "StashApply", paths); err != nil {
+		return nil, fmt.Errorf("stash.Apply: %w", err)
+	}
 
 	tx, err := ckout.Begin()
 	if err != nil {

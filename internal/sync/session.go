@@ -57,7 +57,11 @@ type CkinLockReq struct {
 
 // SyncResult reports what happened during a sync.
 type SyncResult struct {
-	Elided                        int // artifacts deliberately absent under the store cone
+	Elided int // artifacts deliberately absent under the store cone
+	// ConeServed counts the replies whose peer acknowledged applying the
+	// store cone (pragma cone-served, sparse-cone §6.3). The other rounds of
+	// a sparse store were served densely and filtered locally.
+	ConeServed                    int
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int

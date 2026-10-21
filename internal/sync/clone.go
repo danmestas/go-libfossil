@@ -662,6 +662,10 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		cs.cookie = c.Value
 	case *xfer.MessageCard:
 		cs.result.Messages = append(cs.result.Messages, c.Message)
+	case *xfer.PragmaCard:
+		if c.Name == coneServedPragma {
+			cs.result.ConeServed++ // sparse-cone §6.3, reported only
+		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {
 			cs.smConfig.stage(c.Content)

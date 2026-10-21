@@ -175,8 +175,10 @@ func scCompactPartialTree(t *testing.T) error {
 	if _, err := r.DB().Exec("INSERT INTO mlink(mid,fid,fnid) SELECT 999,?,fnid FROM filename WHERE name='zzz/stale-compact'", inside); err != nil {
 		return err
 	}
-	if n, err := content.CompactStore(context.Background(), r.DB()); err != nil || n != 2 {
-		return fmt.Errorf("partial compact = %d, %v; want 2, nil", n, err)
+	// Only the outside blob is dropped: Section 5.4 retains every held
+	// manifest and sub-manifest node, the outside interior included.
+	if n, err := content.CompactStore(context.Background(), r.DB()); err != nil || n != 1 {
+		return fmt.Errorf("partial compact = %d, %v; want 1, nil", n, err)
 	}
 	return scCompactPartialRebuild(t, r, s, [3]libfossil.FslID{inside, outside, missing},
 		[3]string{outsideName, missingName, outNode}, outLeaf)
@@ -223,15 +225,18 @@ func scCompactPartialProof(r *repo.Repo, inside, outside, missing libfossil.FslI
 	if _, err := content.Expand(r.DB(), leaf); err != nil {
 		return err
 	}
-	a, err := content.LoadAbsences(r.DB())
-	if err != nil {
-		return err
-	}
 	var node libfossil.FslID
 	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", outNode).Scan(&node); err != nil {
 		return err
 	}
-	for _, rid := range []libfossil.FslID{outside, missing, node} {
+	if _, err := content.Expand(r.DB(), node); err != nil {
+		return fmt.Errorf("outside interior node not retained: %w", err)
+	}
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		return err
+	}
+	for _, rid := range []libfossil.FslID{outside, missing} {
 		if a.Class(rid) != content.Elided {
 			return expectf("partial compact artifact %d is not elided", rid)
 		}

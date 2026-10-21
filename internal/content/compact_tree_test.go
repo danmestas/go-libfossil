@@ -39,10 +39,12 @@ func TestCompactStoreHealthyPartialTree(t *testing.T) {
 	if err := SetStoreCone(d, mustCone(t, []string{"src"}, nil)); err != nil {
 		t.Fatal(err)
 	}
-	if n, err := CompactStore(context.Background(), d); err != nil || n != 2 {
-		t.Fatalf("partial-tree compact = %d, %v; want 2, nil", n, err)
+	// Only the outside blob goes: sparse-cone §5.4 keeps every held node,
+	// the outside interior included.
+	if n, err := CompactStore(context.Background(), d); err != nil || n != 1 {
+		t.Fatalf("partial-tree compact = %d, %v; want 1, nil", n, err)
 	}
-	for _, rid := range []libfossil.FslID{in, inLeaf, outLeaf, spine} {
+	for _, rid := range []libfossil.FslID{in, inLeaf, outLeaf, outInterior, spine} {
 		if _, err := Expand(d, rid); err != nil {
 			t.Fatalf("required/provenance artifact %d lost: %v", rid, err)
 		}
@@ -51,7 +53,7 @@ func TestCompactStoreHealthyPartialTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rid := range []libfossil.FslID{out, outInterior, phantom} {
+	for _, rid := range []libfossil.FslID{out, phantom} {
 		if got := a.Class(rid); got != Elided {
 			t.Errorf("Class(%d) = %v, want Elided", rid, got)
 		}

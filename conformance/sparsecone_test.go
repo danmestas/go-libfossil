@@ -2,6 +2,7 @@ package conformance
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -23,6 +24,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/verify"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -58,7 +60,8 @@ func sparseconeCases() []scCase {
 	var all []scCase
 	for _, group := range [][]scCase{
 		scSpecCases(), scWorktreeCases(), scCommitCases(), scZitReplayCases(),
-		scStoreCases(), scCompactCases(), scSyncCases(), scCanonicalCases(), scProtocolBoundsCases(),
+		scStoreCases(), scCompactCases(), scSyncCases(), scConeServedCases(),
+		scCanonicalCases(), scProtocolBoundsCases(),
 		scWorktreeCompleteCases(), scRecoveryCases(), scWidenSparseCases(), scRCardCases(), scRevertStashCases(),
 	} {
 		all = append(all, group...)
@@ -234,6 +237,7 @@ func scErrIs(what string, err, want error) error {
 func scSpecCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.2.covers", Req: "SC-2-1"}, scCovers},
+		{Case{ID: "sparsecone.3.2.empty-refused", Req: "SC-3.2-4"}, scEmptyRefused},
 		{Case{ID: "sparsecone.3.1.version", Req: "SC-3.1-3"}, scVersion},
 		{Case{ID: "sparsecone.3.2.validate", Req: "SC-3.2-1"}, scValidate},
 		{Case{ID: "sparsecone.3.2.minimal", Req: "SC-3.2-2"}, scMinimal},
@@ -271,6 +275,32 @@ func scCovers(t *testing.T) error {
 	// The absent cone is dense: every file materializes.
 	f := newSCRepo(t, false)
 	return scSameList("a dense checkout materializes", scOnDisk(t, f.open(t, nil, f.c1).Dir()), keysOf(scFiles))
+}
+
+// Section 3.2: a cone with no inclusion member is refused, with or without
+// exclusions, when built locally and when a request carries one.
+func scEmptyRefused(t *testing.T) error {
+	for _, exclude := range [][]string{nil, {"src/private"}} {
+		if _, err := cone.New(nil, exclude); err == nil {
+			return expectf("a cone with no inclusion and exclusions %q was built", exclude)
+		}
+	}
+	origin := newSCSyncRepo(t, scSyncFiles())
+	peer := &scSyncPeer{r: origin.r}
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "cone-not", Values: []string{"src"}},
+		&xfer.CloneCard{Version: 3, SeqNo: 1},
+	}}
+	resp, err := peer.Exchange(context.Background(), req)
+	if err != nil {
+		return err
+	}
+	for _, card := range resp.Cards {
+		if e, ok := card.(*xfer.ErrorCard); ok && strings.HasPrefix(e.Message, "sparse cone:") {
+			return nil
+		}
+	}
+	return expectf("a request whose cone has no inclusion was served")
 }
 
 func keysOf(m map[string]string) []string {

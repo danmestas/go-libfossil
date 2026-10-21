@@ -81,14 +81,20 @@ func TestSparseReceiveProvenanceAfterRebuild(t *testing.T) {
 			if res, err := Sync(context.Background(), r, transport, SyncOpts{Pull: true}); err != nil || len(res.Errors) != 0 {
 				t.Fatalf("initial pull: %v, %v", res, err)
 			}
+			// A cone-ignorant server sends every node; sparse-cone §6.3 keeps
+			// each one received, so only blobs are reclaimable there.
+			reclaimable := []string{outside, nextOutside}
 			if ignorant {
-				for _, uuid := range []string{outLeaf, nextOutLeaf, missingChild, missingParent} {
+				for _, uuid := range []string{outLeaf, nextOutLeaf, outNode, nextOutNode, missingChild, missingParent} {
 					if _, ok := content.AvailableByUUID(r.DB(), uuid); !ok {
 						t.Fatalf("lost raw provenance node %s", uuid)
 					}
 				}
 			}
-			for _, uuid := range []string{outside, outNode, nextOutside, nextOutNode} {
+			if !ignorant {
+				reclaimable = append(reclaimable, outNode, nextOutNode)
+			}
+			for _, uuid := range reclaimable {
 				if _, ok := content.AvailableByUUID(r.DB(), uuid); ok {
 					t.Fatalf("retained reclaimable outside artifact %s", uuid)
 				}
@@ -126,11 +132,9 @@ func TestSparseReceiveProvenanceAfterRebuild(t *testing.T) {
 				if a.Count(content.Transit) != 0 {
 					t.Fatalf("post-rebuild transit phantoms=%d", a.Count(content.Transit))
 				}
-				elided := []string{outNode, nextOutNode}
-				if ignorant {
-					elided = append(elided, outside, nextOutside, missing)
-				} else {
-					elided = append(elided, missingParent)
+				elided := []string{outside, nextOutside, missing}
+				if !ignorant {
+					elided = []string{outNode, nextOutNode, missingParent}
 				}
 				for _, uuid := range elided {
 					var rid libfossil.FslID

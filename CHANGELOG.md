@@ -57,8 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pull what the widening covers from the peer, the saved last-sync-url by
   default, refusing with the cone unchanged when there is no peer.
   `Repo.CompactStore` and `repo cone compact` drop the held blobs the store
-  cone elides, as zit's `pack --drop-elided` does; sub-manifest nodes stay
-  held, as zit holds every structural artifact. Widening a checkout cone
+  cone elides, as zit's `pack --drop-elided` does; every manifest and
+  sub-manifest node stays held, interiors included, as sparse-cone §5.4
+  requires, and so does every node a sparse sync receives (§6.3). A server
+  answering a cone request acknowledges the reply with `pragma cone-served`
+  (§6.3), and `SyncResult` and `CloneResult` report `ConeServed`, the
+  acknowledged replies, beside `Elided`. Widening a checkout cone
   over a sparse store fetches the payloads the widening covers from the
   peer and materializes them; with no peer the widening is refused and
   nothing changes. The private checkout marker moves crash-safely: the move

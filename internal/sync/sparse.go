@@ -10,6 +10,10 @@ import (
 
 // The draft defines request pragmas, but no capability advertisement spelling.
 // Unknown pragmas remain ignored by peers that predate sparse transfer.
+// coneServedPragma acknowledges a reply that applied the request's whole cone
+// (draft-fossil-sparse-cone-00 §6.3). It travels only from server to client.
+const coneServedPragma = "cone-served"
+
 func conePragmas(c *cone.Cone) []xfer.Card {
 	if c == nil {
 		return nil

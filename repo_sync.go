@@ -41,6 +41,11 @@ type SyncResult struct {
 	BytesSent    int64
 	BytesRecvd   int64
 	Errors       []string
+	// Elided counts the artifacts left absent under the store cone, and
+	// ConeServed the replies whose peer acknowledged applying it (pragma
+	// cone-served, draft-fossil-sparse-cone-00 §6.3); the rest of a sparse
+	// store's rounds were served densely and filtered locally.
+	Elided, ConeServed int
 }
 
 // HandleOpts configures server-side sync handling.
@@ -254,6 +259,8 @@ func convertSyncResult(r *internalsync.SyncResult) *SyncResult {
 		BytesSent:    r.BytesSent,
 		BytesRecvd:   r.BytesRecvd,
 		Errors:       r.Errors,
+		Elided:       r.Elided,
+		ConeServed:   r.ConeServed,
 	}
 }
 

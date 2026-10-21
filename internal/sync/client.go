@@ -873,6 +873,10 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.uvPushOK = true
 	case c.Name == "uv-pull-only":
 		s.uvPullOnly = true
+	case c.Name == coneServedPragma:
+		// Sparse-cone §6.3: the peer applied this request's cone. Every
+		// reply is filtered locally regardless; this only reports the mode.
+		s.result.ConeServed++
 	case c.Name == sendSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
 		// for the session: a reply without the pragma does not unsay it.

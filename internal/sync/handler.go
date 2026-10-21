@@ -966,6 +966,12 @@ func (h *handler) emitCapabilityPragmas() {
 	}
 	h.capabilitySent = true
 	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
+	// Sparse-cone §6.3: this server applies a request's whole cone or
+	// refuses it (requestCone, handleClone), so a cone request's reply is
+	// acknowledged here. A refusal resets the reply and discards it.
+	if h.cone != nil {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
+	}
 }
 
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds

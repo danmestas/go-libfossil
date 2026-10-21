@@ -73,31 +73,14 @@ func LoadConeReferences(ctx context.Context, q db.Querier, c *cone.Cone) (*ConeR
 	return facts.Classify(ctx, c)
 }
 
-// RetainProvenance removes raw proof dependencies from a proposed drop set.
-// Leaves and nonterminal paths stay held: only an interior whose direct children
-// are held leaves can disappear without severing root-to-phantom range proofs.
-// This conservative rule does not depend on disposable crosslink indexes.
+// RetainProvenance removes every held sub-manifest node from a proposed drop
+// set. Sparse-cone Sections 5.4 and 6.3 keep manifests and sub-manifest nodes,
+// in cone or not: a leaf's F cards are what classify the blobs it names as
+// elided rather than transit phantoms, and an interior is the range proof that
+// reaches the leaf. Only blobs are ever dropped. Check-ins never enter a drop
+// set, since no S card names them.
 func (p *ConeReferences) RetainProvenance(ctx context.Context, drop map[libfossil.FslID]bool) error {
-	keep := map[libfossil.FslID]bool{}
-	for rid, node := range p.nodes {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if len(node.F) > 0 {
-			keep[rid] = true
-		}
-		if drop[rid] {
-			for _, child := range node.S {
-				childRID := p.held[child.UUID]
-				keep[childRID] = true
-				childNode := p.nodes[childRID]
-				if childNode == nil || len(childNode.F) == 0 {
-					keep[rid] = true
-				}
-			}
-		}
-	}
-	for rid := range keep {
+	for rid := range p.nodes {
 		if err := ctx.Err(); err != nil {
 			return err
 		}

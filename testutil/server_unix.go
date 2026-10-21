@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"syscall"
 	"testing"
+	"time"
 )
 
 // StartServer runs `bin args...` as a long-lived server and stops it when the
@@ -35,6 +36,23 @@ func StartServer(t *testing.T, bin string, args ...string) *exec.Cmd {
 		// ESRCH just means the group is already gone.
 		_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		_ = cmd.Wait()
+		awaitGroupGone(pgid)
 	})
 	return cmd
 }
+
+// awaitGroupGone waits, for at most groupGoneTimeout, until no process is left
+// in group pgid. Wait reaps only the leader; a per-connection child the signal
+// has not reached yet can still be mid-write on a loaded machine, and
+// RemoveAll then finds a file it did not list.
+func awaitGroupGone(pgid int) {
+	deadline := time.Now().Add(groupGoneTimeout)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-pgid, 0); err == syscall.ESRCH {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+const groupGoneTimeout = 5 * time.Second

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   members. A cone with a horizon serializes as version 3, byte for byte as
   zit writes it, so its digest matches zit's; an implementation that
   predates horizons refuses it. Internal only for now.
+- The held set of a horizon (draft-fossil-horizon-00 §3.1): the check-ins
+  whose content a horizon keeps, computed from the check-in graph the
+  repository holds and stored nowhere. Under `descendants` it is C and
+  every check-in descended from it through any parent, merges included;
+  under `leaves` it adds each open leaf's ancestry back to where it meets
+  C's. An open leaf is fossil's: a leaf with no closed tag. The walk is
+  bounded and fails with an error rather than run unbounded. Internal only
+  for now.
 
 ### Changed
 

@@ -66,8 +66,9 @@ var (
 
 // Cone is a normalized cone. It is immutable; amendments return a new Cone.
 type Cone struct {
-	include []string // sorted, validated, never empty
+	include []string // sorted, validated, empty only with a horizon
 	exclude []string // sorted, validated, each strictly inside an inclusion
+	horizon *Horizon // nil when the cone has no horizon member
 }
 
 // entry is one member during normalization.
@@ -80,7 +81,13 @@ type entry struct {
 // and drops members whose nearest covering member has the same polarity, so
 // input order never affects the result (§3.2, §3.3).
 func New(include, exclude []string) (*Cone, error) {
-	if len(include) == 0 || len(include)+len(exclude) > MaxMembers {
+	return build(include, exclude, nil)
+}
+
+// build is New with an optional horizon, the one thing that makes an empty
+// inclusion list legal.
+func build(include, exclude []string, h *Horizon) (*Cone, error) {
+	if (len(include) == 0 && h == nil) || len(include)+len(exclude) > MaxMembers {
 		return nil, fmt.Errorf("%w: %d inclusions, %d exclusions", ErrBounds, len(include), len(exclude))
 	}
 	entries := make([]entry, 0, len(include)+len(exclude))
@@ -97,9 +104,10 @@ func New(include, exclude []string) (*Cone, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(c.include) == 0 {
+	if len(c.include) == 0 && h == nil {
 		panic("cone.New: normalization kept no inclusion")
 	}
+	c.horizon = h
 	return c, nil
 }
 
@@ -143,9 +151,6 @@ func normalize(sorted []entry) (*Cone, error) {
 		} else {
 			c.include = append(c.include, e.path)
 		}
-	}
-	if len(c.include) == 0 {
-		return nil, fmt.Errorf("%w: no inclusion", ErrBounds)
 	}
 	return c, nil
 }
@@ -200,6 +205,9 @@ func (d Decision) Excluded() bool {
 // polarity. Naming the member is what makes a verdict legible: under longest
 // match it is often neither the first member listed nor the obvious one.
 func (c *Cone) Decide(path string) Decision {
+	if c.pathDense() {
+		return Decision{Covered: true}
+	}
 	member, excludes := c.longestCovering(path, true)
 	if member == "" {
 		return Decision{}
@@ -220,6 +228,9 @@ func (c *Cone) IntersectsSubtree(dir string) bool {
 	if dir == "" {
 		panic("cone.IntersectsSubtree: empty dir")
 	}
+	if c.pathDense() {
+		return true
+	}
 	if c.Covers(dir) {
 		return true
 	}
@@ -239,6 +250,9 @@ func (c *Cone) IntersectsSubtree(dir string) bool {
 // remove coverage and are ignored, which keeps the answer conservative: a
 // true answer costs a descent, never a wrong file set.
 func (c *Cone) MayCover(first, limit string) bool {
+	if c.pathDense() {
+		return true
+	}
 	for _, m := range c.include {
 		if limit != "" && limit <= m {
 			continue

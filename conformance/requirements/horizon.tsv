@@ -1,11 +1,8 @@
 # Requirements of draft-fossil-horizon-00, written from the draft text.
-# Nothing of the horizon is implemented yet: every row carries a scope note
-# naming the Appendix A step that will cover it. The one row with a case is
-# HZ-3.3-2, whose second half binds any implementation predating the
-# document: go-libfossil's cone reader refuses every serialized version but
-# the two it writes, so a cone carrying a horizon member is refused rather
-# than misread. Skipped, with reasons: 1.2 and 1.3 (design statements that
-# the normative sections restate), 3.4 except its two SHOULDs, 5.9 except
+# Only the horizon member of the cone (§3.3) is implemented so far: its two
+# rows have cases and no scope note. Every other row carries a scope note
+# naming the Appendix A step that will cover it. Skipped, with reasons:
+# 1.2 and 1.3 (design statements that the normative sections restate), 3.4 except its two SHOULDs, 5.9 except
 # its SHOULD, 7 and Appendix B (informative), 9 (IANA).
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
 # draft	draft-fossil-horizon-00.txt	f808dbd0db372f372a876ce6db17f76ebc73c5ecde7ab20353bef827234d5f59
@@ -15,8 +12,8 @@ HZ-3.1-2	3.1	A client that expects to merge across live branches offline should 
 HZ-3.1-3	3.1	The held set is a function of C, the rule and the check-in graph, recomputed by clone and origin from what each holds, and stored by no party.	not yet implemented: the horizon member, Appendix A step 2
 HZ-3.2-1	3.2	A horizon is store-adjacent local state: not an artifact, not synchronized, affecting no artifact's bytes or name; its loss reclassifies every elided artifact as a transit phantom and the store heals toward dense.	not yet implemented: the horizon member, Appendix A step 2
 HZ-3.2-2	3.2	With both a horizon and a path cone, the blobs kept are the intersection of the two keep sets; the structural set is governed by the horizon alone, and path cones never elide structure.	not yet implemented: the content horizon, Appendix A step 2
-HZ-3.3-1	3.3	A horizon serializes into the canonical cone form as one member of a distinct kind carrying C's hash and the rule name, canonically, so the cone's digest stays a valid memoization key.	not yet implemented: the horizon member, Appendix A step 2
-HZ-3.3-2	3.3	A cone with a horizon member is marked with a version distinct from a cone without one, so that an implementation predating this document refuses rather than misreads it.	the horizon member's serialization is not implemented (Appendix A step 2); go-libfossil refuses every serialized cone version but 1 and 2
+HZ-3.3-1	3.3	A horizon serializes into the canonical cone form as one member of a distinct kind carrying C's hash and the rule name, canonically, so the cone's digest stays a valid memoization key.
+HZ-3.3-2	3.3	A cone with a horizon member is marked with a version distinct from a cone without one, so that an implementation predating this document refuses rather than misreads it.
 HZ-3.4-1	3.4	An origin that offers a default C should also report what each rule would hold.	not yet implemented: the horizon pragmas, Appendix A step 3
 HZ-3.4-2	3.4	Clients should not express a horizon as a count or a date at the protocol layer.	not yet implemented: the horizon pragmas, Appendix A step 3
 HZ-4.1-1	4.1	A content-horizon clone holds every structural artifact of every age but clusters, every blob an F card of a check-in in the held set names, and elided phantoms for every other blob; it holds, mints and requests no cluster.	not yet implemented: the content horizon, Appendix A step 2

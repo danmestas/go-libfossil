@@ -329,7 +329,7 @@ func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 func TestSparseMergePayloadRetainsPublicPhantomVisibility(t *testing.T) {
 	f := newSparseRepo(t, false)
 	data := []byte("published history awaiting its bytes\n")
-	f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": string(data)}), f.c1)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": string(data)}), f.c1)
 	rid, uuid, _, err := blob.StoreUnderPolicy(f.repo.DB(), data)
 	if err != nil {
 		t.Fatal(err)
@@ -351,6 +351,14 @@ func TestSparseMergePayloadRetainsPublicPhantomVisibility(t *testing.T) {
 	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
 	if err := co.Revert(RevertOpts{}); err != nil {
 		t.Fatal(err)
+	}
+	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
+	if _, err := co.db.Exec(`CREATE TRIGGER reject_public_merge BEFORE INSERT ON sparse_pending
+	 BEGIN SELECT RAISE(ABORT, 'injected public phantom merge failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Merge(MergeOpts{Version: remote}); err == nil || !strings.Contains(err.Error(), "injected public phantom merge failure") {
+		t.Fatalf("merge failure = %v, want injected public phantom failure", err)
 	}
 	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
 }

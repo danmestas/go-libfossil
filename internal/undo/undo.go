@@ -102,6 +102,9 @@ func SaveTx(tx *sql.Tx, files []File) error {
 		" SELECT 'undo_checkout', value FROM vvar WHERE name='checkout'"); err != nil {
 		return fmt.Errorf("copy checkout: %w", err)
 	}
+	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_sparse_cone',coalesce((SELECT value FROM vvar WHERE name='sparse-cone'),''))"); err != nil {
+		return fmt.Errorf("copy sparse cone: %w", err)
+	}
 	if _, err := tx.Exec("REPLACE INTO vvar(name,value) VALUES('undo_available','1')"); err != nil {
 		return fmt.Errorf("set undo_available: %w", err)
 	}

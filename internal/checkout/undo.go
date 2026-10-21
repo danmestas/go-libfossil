@@ -57,9 +57,6 @@ func (c *Checkout) swapUndo(redo bool) ([]undo.Change, error) {
 // checkUndoCone leaves older, wider snapshots intact until they can be
 // restored without materializing or managing an excluded path.
 func (c *Checkout) checkUndoCone(redo bool) error {
-	if c.cone == nil {
-		return nil
-	}
 	want, op := "1", "Undo"
 	if redo {
 		want, op = "2", "Redo"
@@ -84,7 +81,21 @@ func (c *Checkout) checkUndoCone(redo bool) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	return c.refuseUncovered(op, paths...)
+	if err := c.refuseUncovered(op, paths...); err != nil {
+		return err
+	}
+	saved, err := getVVar(c.db, "undo_sparse_cone")
+	if err != nil {
+		return err
+	}
+	current, err := getVVar(c.db, coneVVar)
+	if err != nil {
+		return err
+	}
+	if saved != current {
+		return fmt.Errorf("saved undo image belongs to a different sparse cone; restore its cone before %s", op)
+	}
+	return nil
 }
 
 // versionHash returns the hash of check-in rid.

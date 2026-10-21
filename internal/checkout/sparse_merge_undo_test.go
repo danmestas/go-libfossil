@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +18,43 @@ import (
 	syncproto "github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
+
+func TestSparseRevertUndoAfterWideningRefused(t *testing.T) {
+	f := newSparseRepo(t, false)
+	merged := maps(sparseFiles, map[string]string{"tools/t.c": "retained merge\n"})
+	remote := f.commit(t, merged, f.c1)
+	original := sparseCone(t)
+	co := f.open(t, original, f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Revert(RevertOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err == nil || !strings.Contains(err.Error(), "undo image") {
+		t.Fatalf("undo of sparse revert after widening = %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(co.Dir(), "tools/t.c")); err != nil || string(got) != sparseFiles["tools/t.c"] {
+		t.Fatalf("refused undo changed baseline bytes: %q, %v", got, err)
+	}
+	if _, err := co.SetCone(original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	rid, _, err := co.Commit(CommitOpts{Message: "restored merge", User: "test", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, rid, merged)
+}
 
 func TestSparseDenseUndoRequiresWidening(t *testing.T) {
 	f := newSparseRepo(t, false)

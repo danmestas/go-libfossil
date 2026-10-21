@@ -19,8 +19,8 @@ import (
 )
 
 // These flat-manifest protocol cases exercise real clone/pull exchanges and
-// explicit internal demand fetch. They do not cover per-round tree budgets,
-// capability advertisement, rebuild-safe filtering, or public peer discovery.
+// demand fetch, internal and public through a saved peer. They do not cover
+// per-round tree budgets, capability advertisement, or rebuild-safe filtering.
 func scSyncCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.6.1.wire-members", Req: "SC-6.1-1"}, scSyncMembers},
@@ -35,6 +35,8 @@ func scSyncCases() []scCase {
 		{Case{ID: "sparsecone.6.3.ignored-clone-pull", Req: "SC-6.3-1"}, scSyncIgnored},
 		{Case{ID: "sparsecone.6.4.explicit-peer", Req: "SC-6.4-1"}, scSyncWiden},
 		{Case{ID: "sparsecone.6.4.no-peer", Req: "SC-6.4-2"}, scSyncNoPeer},
+		{Case{ID: "sparsecone.6.4.saved-peer-policy", Req: "SC-6.4-1"}, scDemandSavedPeer},
+		{Case{ID: "sparsecone.6.4.public-refusal", Req: "SC-6.4-2"}, scDemandPublicRefusal},
 	}
 }
 

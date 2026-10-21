@@ -139,3 +139,27 @@ func checkRequiredState(r *repo.Repo, parents []fsltype.FslID, before string) er
 	}
 	return nil
 }
+
+// SetStoreConeContext is the policy form of demand fetch
+// (draft-fossil-sparse-cone-00 §6.4): it replaces the store cone and, when
+// that makes elided artifacts wanted again, pulls them from Peer through an
+// ordinary cone-scoped synchronization. With artifacts to fetch and no Peer it
+// refuses, naming the elided count and the missing peer, and leaves the cone
+// unchanged. A transfer that fails after the cone is replaced keeps the wider
+// policy, so the next ordinary pull heals it. Narrowing needs no peer.
+func (r *Repo) SetStoreConeContext(
+	ctx context.Context, next *Cone, required RequiredContentOpts,
+) (*SyncResult, error) {
+	if err := required.validate(ctx); err != nil {
+		return nil, err
+	}
+	var peer internalsync.Transport
+	if required.Peer != nil {
+		peer = &transportAdapter{pub: required.Peer}
+	}
+	res, err := internalsync.FetchCone(ctx, r.inner, peer, unwrapCone(next), required.internalSync())
+	if err != nil {
+		return convertSyncResult(res), fmt.Errorf("libfossil: set store cone: %w", err)
+	}
+	return convertSyncResult(res), nil
+}

@@ -72,8 +72,8 @@ SC-6.2-2	6.2	A cone-aware server does not serve a delta whose base is outside th
 SC-6.2-3	6.2	A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.
 SC-6.3-1	6.3	Against a cone-ignorant server the requester filters locally: it stores in-cone artifacts, records elided phantoms for the remainder and reports the counts.	ignored-pragma clone and pull filtering and counts are tested; provenance-bearing outside nodes remain held
 SC-6.3-2	6.3	A cone-aware server should advertise the capability.	capability advertisement is not implemented
-SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.	internal explicit-peer policy fetch is tested; public operations and saved-peer integration remain pending
-SC-6.4-2	6.4	With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.	internal explicit-peer refusal and cancellation are tested; public operations and saved-peer integration remain pending
+SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.
+SC-6.4-2	6.4	With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.
 SC-7-1	7	Derived caches are cone-independent: their keys do not incorporate the cone.
 SC-8-1	8	The member count and member length of a cone are bounded with the same limits applied to F-card filenames.
 SC-8-2	8	The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.

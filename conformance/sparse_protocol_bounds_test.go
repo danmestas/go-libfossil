@@ -10,15 +10,15 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// Depth rejection does not cover the visited-node cap or cold raw-reference
-// preprocessing. This case cannot close the per-round traversal requirement.
 func scProtocolBoundsCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.8.depth-wire-bound", Req: "SC-8-2"}, scProtocolDepthBound},
+		{Case{ID: "sparsecone.8.visited-wire-bound", Req: "SC-8-2"}, scProtocolVisitedBound},
 	}
 }
 
@@ -124,6 +124,63 @@ func scProtocolDepthBound(t *testing.T) error {
 		}
 		if depth == 17 && (err == nil || !strings.Contains(err.Error(), "tree traversal bound exceeded")) {
 			return fmt.Errorf("depth 17 error = %v, want tree traversal bound exceeded", err)
+		}
+	}
+	return nil
+}
+
+// One interior node of 1024 children shared by many check-ins: each root costs
+// 1025 visits, so 1023 roots stay under the 1<<20 visited-node bound and 1024
+// roots cross it. Depth stays at two, so only the visited bound can refuse.
+func scProtocolVisitedBound(t *testing.T) error {
+	for _, roots := range []int{1023, 1024} {
+		origin := newSCSyncRepo(t, map[string]string{"src/kept": "covered\n"})
+		children := make([]deck.SubmanifestCard, 0, 1024)
+		for i := 0; i < 1024; i++ {
+			name := "src/a"
+			if i > 0 {
+				name = fmt.Sprintf("src/a%04d", i)
+			}
+			children = append(children, deck.SubmanifestCard{Name: name, UUID: hash.SHA1([]byte(name))})
+		}
+		data, err := (&deck.Deck{S: children}).Marshal()
+		if err != nil {
+			return err
+		}
+		_, node, err := blob.Store(origin.r.DB(), data)
+		if err != nil {
+			return err
+		}
+		if err := scProtocolSharedRoots(origin, node, roots); err != nil {
+			return err
+		}
+		peer := &scSyncPeer{r: origin.r}
+		_, err = peer.Exchange(context.Background(), &xfer.Message{Cards: []xfer.Card{
+			&xfer.PragmaCard{Name: "cone", Values: []string{"src"}},
+			&xfer.PragmaCard{Name: "send-submanifests"},
+			&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true},
+		}})
+		if roots == 1023 && err != nil {
+			return fmt.Errorf("%d shared roots refused: %w", roots, err)
+		}
+		if roots == 1024 && (err == nil || !strings.Contains(err.Error(), "tree traversal bound exceeded")) {
+			return fmt.Errorf("%d shared roots error = %v, want tree traversal bound exceeded", roots, err)
+		}
+	}
+	return nil
+}
+
+func scProtocolSharedRoots(origin *scRepo, node string, roots int) error {
+	when := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < roots; i++ {
+		root := &deck.Deck{C: fmt.Sprintf("shared tree %d", i), D: when.Add(time.Duration(i) * time.Second),
+			U: deck.User("u"), S: []deck.SubmanifestCard{{Name: "src/a", UUID: node}}}
+		data, err := root.Marshal()
+		if err != nil {
+			return err
+		}
+		if _, _, err := blob.Store(origin.r.DB(), data); err != nil {
+			return err
 		}
 	}
 	return nil

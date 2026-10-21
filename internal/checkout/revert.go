@@ -165,14 +165,16 @@ const (
 //   - a pending rename is undone: the file under the new name is removed and
 //     the committed content is restored under the old one;
 //   - anything else gets its committed content back.
-func planRevert(r vfile.Row, inVersion map[string]bool) revertAction {
+func planRevert(r vfile.Row, inVersion map[string]string) revertAction {
 	if inVersion == nil {
 		panic("checkout.planRevert: nil inVersion")
 	}
 	if r.IsAdded() {
 		return revertUnmanage
 	}
-	if !inVersion[r.Pathname] && !inVersion[r.RenamedFrom()] {
+	_, held := inVersion[r.Pathname]
+	_, heldBefore := inVersion[r.RenamedFrom()]
+	if !held && !heldBefore {
 		return revertRemoveMergeAdded
 	}
 	if r.RenamedFrom() != "" {
@@ -186,6 +188,7 @@ type revertStep struct {
 	row        vfile.Row
 	action     revertAction
 	recordOnly bool
+	perm       string // the restored name's permission in the version
 }
 
 // planRevertSteps plans the revert of targets, chosen from rows (every row
@@ -195,7 +198,7 @@ type revertStep struct {
 // (a new add) is dropped, its file overwritten. Fossil leaves a swap's rows
 // renamed and drops a chain's displaced row; here every committed file ends
 // under its committed name.
-func planRevertSteps(rows, targets []vfile.Row, inVersion map[string]bool) []revertStep {
+func planRevertSteps(rows, targets []vfile.Row, inVersion map[string]string) []revertStep {
 	byPath := make(map[string]vfile.Row, len(rows))
 	for _, r := range rows {
 		byPath[r.Pathname] = r
@@ -242,10 +245,17 @@ func planRevertSteps(rows, targets []vfile.Row, inVersion map[string]bool) []rev
 // in one transaction; should a step fail, the transaction rolls back and the
 // saved files are put back, as fossil's undo_rollback does.
 func (c *Checkout) revertRows(
-	rows, targets []vfile.Row, inVersion map[string]bool, clearMerge bool,
+	rows, targets []vfile.Row, inVersion map[string]string, clearMerge bool,
 	callback func(string, RevertChange) error,
 ) (err error) {
 	steps := planRevertSteps(rows, targets, inVersion)
+	for i := range steps {
+		name := steps[i].row.Pathname
+		if steps[i].action == revertUndoRename {
+			name = steps[i].row.RenamedFrom()
+		}
+		steps[i].perm = inVersion[name]
+	}
 	for i := range steps {
 		steps[i].recordOnly = !c.covers(steps[i].row.Pathname)
 	}
@@ -357,7 +367,7 @@ func (c *Checkout) applyRevert(
 				name, change = s.row.RenamedFrom(), RevertRename
 			}
 			if !s.recordOnly {
-				if err := c.restoreCommitted(tx, s.row.ID, name, paths[i], s.row.RID); err != nil {
+				if err := c.restoreCommitted(tx, s.row.ID, name, paths[i], s.row.RID, s.perm); err != nil {
 					return err
 				}
 			}
@@ -446,35 +456,29 @@ func (c *Checkout) VersionPerms() (map[string]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("checkout.VersionPerms: %w", err)
 	}
+	perms, err := c.versionPaths(vid)
+	if err != nil {
+		return nil, fmt.Errorf("checkout.VersionPerms: %w", err)
+	}
+	return perms, nil
+}
+
+// versionPaths returns the pathnames in checked-out version vid's manifest,
+// each with its F-card permission ("", "x" or "l"); empty when nothing is
+// checked out yet.
+func (c *Checkout) versionPaths(vid libfossil.FslID) (map[string]string, error) {
 	perms := make(map[string]string)
 	if vid <= 0 {
 		return perms, nil
 	}
 	files, err := manifest.ListFiles(c.repo, vid)
 	if err != nil {
-		return nil, fmt.Errorf("checkout.VersionPerms: list version files: %w", err)
+		return nil, fmt.Errorf("list version files: %w", err)
 	}
 	for _, f := range files {
 		perms[f.Name] = f.Perm
 	}
 	return perms, nil
-}
-
-// versionPaths returns the set of pathnames in checked-out version vid's
-// manifest; empty when nothing is checked out yet.
-func (c *Checkout) versionPaths(vid libfossil.FslID) (map[string]bool, error) {
-	paths := make(map[string]bool)
-	if vid <= 0 {
-		return paths, nil
-	}
-	files, err := manifest.ListFiles(c.repo, vid)
-	if err != nil {
-		return nil, fmt.Errorf("list version files: %w", err)
-	}
-	for _, f := range files {
-		paths[f.Name] = true
-	}
-	return paths, nil
 }
 
 // removeRegularFile deletes fullPath if a file is there, a symlink seen as
@@ -502,10 +506,14 @@ func (c *Checkout) removeRegularFile(fullPath string) error {
 }
 
 // restoreCommitted writes the committed content of blob rid back to fullPath,
-// with the row's executable and symlink bits, as fossil's revert does
-// (vfile.Disk.Write: a symlink is made a symlink again, and nothing is
-// written through one), and marks row id unchanged and unmerged, within tx.
-func (c *Checkout) restoreCommitted(tx *sql.Tx, id int64, pathname, fullPath string, rid int64) error {
+// with the executable and symlink bits of perm, the file's permission in the
+// version, as fossil's revert does (vfile.Disk.Write: a symlink is made a
+// symlink again, and nothing is written through one), and marks row id
+// unchanged and unmerged with those bits, within tx. A pending merge may
+// have set the row's bits otherwise; the version's win.
+func (c *Checkout) restoreCommitted(
+	tx *sql.Tx, id int64, pathname, fullPath string, rid int64, perm string,
+) error {
 	if rid <= 0 {
 		panic("checkout.restoreCommitted: rid must be positive")
 	}
@@ -517,18 +525,12 @@ func (c *Checkout) restoreCommitted(tx *sql.Tx, id int64, pathname, fullPath str
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: expand blob for %s: %w", pathname, err)
 	}
-	var isexe, islink int64
-	err = tx.QueryRow(
-		"SELECT CAST(isexe AS INTEGER), CAST(coalesce(islink, 0) AS INTEGER) FROM vfile WHERE id = ?", id,
-	).Scan(&isexe, &islink)
-	if err != nil {
-		return fmt.Errorf("checkout.Revert: query vfile metadata for %s: %w", pathname, err)
-	}
+	isexe, islink := perm == "x", perm == "l"
 	disk, err := c.newDiskView()
 	if err != nil {
 		return fmt.Errorf("checkout.Revert: %w", err)
 	}
-	if err := disk.Write(fullPath, data, isexe != 0, islink != 0); err != nil {
+	if err := disk.Write(fullPath, data, isexe, islink); err != nil {
 		return fmt.Errorf("checkout.Revert: %w", err)
 	}
 	mtime, err := disk.MTime(fullPath)
@@ -539,8 +541,8 @@ func (c *Checkout) restoreCommitted(tx *sql.Tx, id int64, pathname, fullPath str
 	// content outlives the revert, and the mtime is the restored file's
 	// (fossil resets them the same way).
 	if _, err := tx.Exec(
-		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL, mtime = ? WHERE id = ?",
-		mtime, id,
+		"UPDATE vfile SET chnged = 0, deleted = 0, mrid = rid, mhash = NULL, isexe = ?, islink = ?, mtime = ? WHERE id = ?",
+		isexe, islink, mtime, id,
 	); err != nil {
 		return fmt.Errorf("checkout.Revert: update vfile for %s: %w", pathname, err)
 	}

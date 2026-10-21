@@ -220,6 +220,55 @@ func TestUpdateContextFinalizationFailureRestoresFiles(t *testing.T) {
 	}
 }
 
+func TestUpdateCancellationRemovesRenamedDestination(t *testing.T) {
+	r, a, b, _ := forkRepo(t,
+		[]manifest.File{{Name: "old.txt", Content: []byte("a\nb\nc\n")}},
+		[]manifest.File{{Name: "new.txt", OldName: "old.txt", Content: []byte("A\nb\nc\n")}},
+		nil)
+	co := editsCheckout(t, r, a)
+	writeWorking(t, co, "old.txt", "a\nb\nC\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := co.UpdateContext(ctx, UpdateOpts{
+		TargetRID: b,
+		Callback:  func(string, UpdateChange) error { cancel(); return nil },
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled renamed update = %v", err)
+	}
+	if data, _ := readWorking(t, co, "old.txt"); data != "a\nb\nC\n" {
+		t.Fatalf("rollback lost old path edits: %q", data)
+	}
+	if _, err := os.Stat(filepath.Join(co.Dir(), "new.txt")); !os.IsNotExist(err) {
+		t.Fatalf("rollback retained renamed destination: %v", err)
+	}
+}
+
+func TestUpdateFinalizationFailureRestoresMode(t *testing.T) {
+	r, a, b, _ := forkRepo(t,
+		[]manifest.File{{Name: "run.sh", Content: []byte("echo\n")}},
+		[]manifest.File{{Name: "run.sh", Content: []byte("echo\n"), Perm: "x"}},
+		nil)
+	co := editsCheckout(t, r, a)
+	name := filepath.Join(co.Dir(), "run.sh")
+	before, err := os.Stat(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec(`CREATE TRIGGER reject_update BEFORE INSERT ON vvar
+		WHEN NEW.name='checkout' BEGIN SELECT RAISE(ABORT, 'injected update failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = co.UpdateContext(context.Background(), UpdateOpts{TargetRID: b})
+	if err == nil || !strings.Contains(err.Error(), "injected update failure") {
+		t.Fatalf("update error = %v, want injected finalization failure", err)
+	}
+	after, err := os.Stat(name)
+	if err != nil || before.Mode() != after.Mode() {
+		t.Fatalf("failed finalization changed mode: %v -> %v: %v", before, after, err)
+	}
+}
+
 func TestUpdateContextCanceledBeforeMutation(t *testing.T) {
 	f := newSparseRepo(t, false)
 	remote := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "incoming\n"}), f.c1)

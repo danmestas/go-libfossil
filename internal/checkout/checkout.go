@@ -452,7 +452,7 @@ func FindCheckoutDB(storage simio.Storage, dir string, searchParents bool) (stri
 		currentDir = parentDir
 	}
 
-	return "", fmt.Errorf("checkout.FindCheckoutDB: no checkout DB found in %s", dir)
+	return "", fmt.Errorf("checkout.FindCheckoutDB: no checkout DB found in %s: %w", dir, os.ErrNotExist)
 }
 
 // PreferredDBName returns the preferred checkout DB name based on the OS.

@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -125,7 +126,10 @@ func (c *RepoStatusCmd) Run(g *Globals) error {
 // checkout or a dense one.
 func checkoutCone(r *libfossil.Repo, dir string) (*libfossil.Cone, error) {
 	if _, err := checkoutDBPath(dir); err != nil {
-		return nil, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	co, err := r.OpenCheckout(dir, libfossil.CheckoutOpenOpts{})
 	if err != nil {

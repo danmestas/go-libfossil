@@ -2,6 +2,7 @@ package cli
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -59,8 +60,12 @@ func findRepo() (string, error) {
 		return "", err
 	}
 	for {
-		if ckout, err := checkoutDBPath(dir); err == nil {
+		ckout, err := checkoutDBPath(dir)
+		if err == nil {
 			return repoFromCheckout(ckout)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
 		}
 
 		matches, _ := filepath.Glob(filepath.Join(dir, "*.fossil"))

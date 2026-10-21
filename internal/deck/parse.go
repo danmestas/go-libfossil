@@ -129,15 +129,16 @@ func (s *manifestScanner) parseW(d *Deck) error {
 	}
 	var size uint64
 	for i := 0; i < len(sizeTok) && sizeTok[i] >= '0' && sizeTok[i] <= '9'; i++ {
-		next := size*10 + uint64(sizeTok[i]-'0')
-		if next < size {
+		digit := uint64(sizeTok[i] - '0')
+		if size > (^uint64(0)-digit)/10 {
 			return fmt.Errorf("size overflow on W-card")
 		}
-		size = next
+		size = size*10 + digit
 	}
 	// fossil requires the body and its terminating LF to leave at least one
 	// more byte before the end, so a W card is never the artifact's last card.
-	if size+1 >= uint64(len(s.buf)-s.pos) {
+	remaining := len(s.buf) - s.pos
+	if remaining < 2 || size >= uint64(remaining-1) {
 		return fmt.Errorf("not enough content after W-card")
 	}
 	n := int(size)

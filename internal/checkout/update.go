@@ -71,11 +71,13 @@ import (
 //
 // Panics if c is nil (TigerStyle precondition).
 func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
-	if c == nil {
-		panic("checkout.Update: nil *Checkout")
-	}
+	return c.UpdateContext(context.Background(), opts)
+}
 
-	target, current, err := c.updateTarget(opts.TargetRID)
+// UpdateContext performs a local update with cancellation before finalization.
+// It never fetches missing repository content.
+func (c *Checkout) UpdateContext(ctx context.Context, opts UpdateOpts) (UpdateResult, error) {
+	target, steps, files, err := c.prepareUpdate(ctx, opts)
 	if err != nil {
 		return UpdateResult{}, err
 	}
@@ -83,7 +85,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		return UpdateResult{}, nil // nothing to update, or already there
 	}
 
-	ctx := c.obs.ExtractStarted(context.Background(), ExtractStart{
+	ctx = c.obs.ExtractStarted(ctx, ExtractStart{
 		Operation: "update",
 		TargetRID: target,
 	})
@@ -100,7 +102,7 @@ func (c *Checkout) Update(opts UpdateOpts) (UpdateResult, error) {
 		})
 	}()
 
-	steps, err := c.planUpdate(current, target, opts.DryRun)
+	err = c.requireUpdateFiles(ctx, files)
 	if err == nil && !opts.DryRun {
 		err = c.checkUpdateTargets(steps)
 	}
@@ -135,7 +137,7 @@ func (c *Checkout) runUpdate(
 		return UpdateResult{}, errors.Join(err, c.rollBackUpdate(saved))
 	}
 	if err := c.finalizeUpdate(target, steps, fresh, saved); err != nil {
-		return UpdateResult{}, err
+		return UpdateResult{}, errors.Join(err, c.rollBackUpdate(saved))
 	}
 	if opts.SetMTime {
 		if err := c.setFileMTimes(target); err != nil {
@@ -267,22 +269,16 @@ func (c *Checkout) updateTarget(
 }
 
 // planUpdate scans the checkout, as fossil's update does first, and decides
-// each file of the current version vid and the target. It refuses a target
-// whose content is not all here before anything is written. A dry run keeps
-// the scan's findings to itself.
-func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updateStep, error) {
-	files, rids, err := c.resolveFiles(target, nil)
+// each file of the current version vid and the target. Scan findings stay
+// in the plan so readiness checks and failed updates do not alter metadata.
+func (c *Checkout) planUpdate(vid, target libfossil.FslID) ([]updateStep, error) {
+	files, rids, err := c.updateFiles(target)
 	if err != nil {
 		return nil, err
 	}
 	var scanned []scanWrite
 	if vid > 0 {
 		if scanned, err = c.scanVersion(vid); err != nil {
-			return nil, err
-		}
-	}
-	if !dryRun {
-		if err := c.storeScan(scanned); err != nil {
 			return nil, err
 		}
 	}
@@ -414,6 +410,9 @@ func (c *Checkout) applyUpdate(
 	}
 	var res UpdateResult
 	for _, s := range steps {
+		if err := ctx.Err(); err != nil {
+			return UpdateResult{}, err
+		}
 		if s.action == updateOutOfCone {
 			res.OutOfCone++
 			continue
@@ -436,6 +435,11 @@ func (c *Checkout) applyUpdate(
 			}
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return UpdateResult{}, err
+	}
+	// Once mode-only changes begin, finish metadata rather than return a late
+	// cancellation: native undo does not retain executable-bit-only changes.
 	if !opts.DryRun {
 		if err := c.setUpdatedModes(steps); err != nil {
 			return UpdateResult{}, fmt.Errorf("checkout.Update: %w", err)

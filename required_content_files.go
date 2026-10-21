@@ -73,6 +73,22 @@ func (o RequiredContentOpts) commitFiles(ctx context.Context, r *repo.Repo, opts
 	return o.recoverFiles(ctx, r, names)
 }
 
+func (o RequiredContentOpts) checkinFiles(
+	ctx context.Context, c *Checkout, opts CheckoutCommitOpts,
+) error {
+	files, err := c.inner.CommitCarriedFiles(ctx, opts.Files)
+	if err != nil {
+		return err
+	}
+	// The selector names exactly what the checkout writer consumes, including
+	// when its materialized coverage exceeds the repository's retention cone.
+	names, err := requiredFileNames(ctx, c.inner.Repo(), files, func(string) bool { return true })
+	if err != nil {
+		return err
+	}
+	return o.recoverFiles(ctx, c.inner.Repo(), names)
+}
+
 func (o RequiredContentOpts) recoverFiles(
 	ctx context.Context, r *repo.Repo, names []string,
 ) error {

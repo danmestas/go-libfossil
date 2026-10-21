@@ -31,7 +31,10 @@ func (c *Checkout) CheckinContext(
 			return 0, "", err
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := required.checkinFiles(ctx, c, opts); err != nil {
+		return 0, "", err
+	}
+	if err := c.checkRequiredState(state); err != nil {
 		return 0, "", err
 	}
 	return c.checkin(ctx, opts)

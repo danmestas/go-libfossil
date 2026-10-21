@@ -137,6 +137,10 @@ func HandleSync(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Mes
 // HandleSyncWithOpts processes an incoming xfer request with optional
 // fault injection. Used by DST harness; production callers use HandleSync.
 func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts) (*xfer.Message, error) {
+	return handleSyncWithFacts(ctx, r, req, opts, nil, false)
+}
+
+func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts, facts *content.ConeReferenceFacts, ignoreSparse bool) (*xfer.Message, error) {
 	if r == nil {
 		panic("sync.HandleSync: r must not be nil")
 	}
@@ -149,7 +153,7 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx, preparedFacts: facts, ignoreSparse: ignoreSparse}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -197,6 +201,8 @@ type handler struct {
 	ctx             context.Context
 	cone            *cone.Cone
 	keep            *sparseKeep
+	preparedFacts   *content.ConeReferenceFacts
+	ignoreSparse    bool
 	partialMirror   bool
 	repo            *repo.Repo
 	buggify         BuggifyChecker

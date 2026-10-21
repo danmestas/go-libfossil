@@ -2,8 +2,6 @@ package sync
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -16,38 +14,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
-
-// The prototype owns a separate read-only pool and its pinned connection. A
-// borrowed repository-pool connection could exhaust MaxOpenConns(1), and pool
-// queries of data_version could silently move between SQLite connections.
-// This is deliberately test-only until a prepared service's lifecycle is set.
-type sparseObserver struct {
-	pool *sql.DB
-	conn *sql.Conn
-}
-
-func newSparseObserver(ctx context.Context, path string) (*sparseObserver, error) {
-	pool, err := db.OpenSQL(path, db.OpenConfig{}, map[string]string{"mode": "ro"})
-	if err != nil {
-		return nil, err
-	}
-	pool.SetMaxOpenConns(1)
-	conn, err := pool.Conn(ctx)
-	if err != nil {
-		return nil, errors.Join(err, pool.Close())
-	}
-	return &sparseObserver{pool: pool, conn: conn}, nil
-}
-
-func (o *sparseObserver) version(ctx context.Context) (int64, error) {
-	var version int64
-	err := o.conn.QueryRowContext(ctx, "PRAGMA data_version").Scan(&version)
-	return version, err
-}
-
-func (o *sparseObserver) Close() error {
-	return errors.Join(o.conn.Close(), o.pool.Close())
-}
 
 func TestSparseObserverOwnsConnection(t *testing.T) {
 	r := setupSyncTestRepo(t)

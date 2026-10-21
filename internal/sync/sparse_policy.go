@@ -31,12 +31,20 @@ func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep
 }
 
 func (h *handler) ensureSparseKeep() error {
-	if h.cone == nil || h.keep != nil {
+	if h.ignoreSparse || h.cone == nil || h.keep != nil {
 		return nil
 	}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if h.preparedFacts != nil {
+		refs, err := h.preparedFacts.Classify(ctx, h.cone)
+		if err != nil {
+			return err
+		}
+		h.keep = &sparseKeep{refs: refs}
+		return nil
 	}
 	var err error
 	h.keep, err = newSparseKeep(ctx, h.repo.DB(), h.cone)

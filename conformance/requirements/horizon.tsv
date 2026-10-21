@@ -1,16 +1,17 @@
 # Requirements of draft-fossil-horizon-00, written from the draft text.
-# Only the horizon member of the cone (§3.3) is implemented so far: its two
-# rows have cases and no scope note. Every other row carries a scope note
-# naming the Appendix A step that will cover it. Skipped, with reasons:
-# 1.2 and 1.3 (design statements that the normative sections restate),
-# 3.4 except its two SHOULDs, 5.9 except its SHOULD, 7 and Appendix B
-# (informative), 9 (IANA).
+# Implemented so far: the horizon member of the cone (§3.3), whose two rows
+# have cases and no scope note, and the §3.1 held-set computation
+# (internal/horizon), with cases for HZ-3.1-1 and HZ-3.1-3. Every other row
+# carries a scope note naming the Appendix A step that will cover it.
+# Skipped, with reasons: 1.2 and 1.3 (design statements that the normative
+# sections restate), 3.4 except its two SHOULDs, 5.9 except its SHOULD, 7
+# and Appendix B (informative), 9 (IANA).
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
 # draft	draft-fossil-horizon-00.txt	f808dbd0db372f372a876ce6db17f76ebc73c5ecde7ab20353bef827234d5f59
 HZ-1.1-1	1.1	An implementation may provide the content horizon alone; the structural horizon presupposes the content horizon.	not yet implemented: the content horizon, Appendix A step 2
-HZ-3.1-1	3.1	A horizon names one check-in C by its full artifact hash and one of two held-set rules: descendants (the default), the descendants of C; or leaves, those plus every check-in from each open leaf back to its nearest common ancestor with C, inclusive.	not yet implemented: the horizon member, Appendix A step 2
+HZ-3.1-1	3.1	A horizon names one check-in C by its full artifact hash and one of two held-set rules: descendants (the default), the descendants of C; or leaves, those plus every check-in from each open leaf back to its nearest common ancestor with C, inclusive.	the held set under both rules is covered (internal/horizon); naming C by its hash in a horizon member is not implemented: Appendix A step 2
 HZ-3.1-2	3.1	A client that expects to merge across live branches offline should choose the leaves rule knowingly.	not yet implemented: the horizon member, Appendix A step 2
-HZ-3.1-3	3.1	The held set is a function of C, the rule and the check-in graph, recomputed by clone and origin from what each holds, and stored by no party.	not yet implemented: the horizon member, Appendix A step 2
+HZ-3.1-3	3.1	The held set is a function of C, the rule and the check-in graph, recomputed by clone and origin from what each holds, and stored by no party.	covered for a dense clone and its origin recomputing equal sets before and after a check-in arrives; a horizon clone recomputing over held manifests alone awaits the content horizon, Appendix A step 2
 HZ-3.2-1	3.2	A horizon is store-adjacent local state: not an artifact, not synchronized, affecting no artifact's bytes or name; its loss reclassifies every elided artifact as a transit phantom and the store heals toward dense.	not yet implemented: the horizon member, Appendix A step 2
 HZ-3.2-2	3.2	With both a horizon and a path cone, the blobs kept are the intersection of the two keep sets; the structural set is governed by the horizon alone, and path cones never elide structure.	not yet implemented: the content horizon, Appendix A step 2
 HZ-3.3-1	3.3	A horizon serializes into the canonical cone form as one member of a distinct kind carrying C's hash and the rule name, canonically, so the cone's digest stays a valid memoization key.

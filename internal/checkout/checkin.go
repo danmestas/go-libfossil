@@ -681,7 +681,7 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 		return in, err
 	}
 
-	selected, err := c.selectedFiles(in.entries)
+	selected, err := c.selectedFiles(in.entries, c.checkinQueue)
 	if err != nil {
 		return in, err
 	}
@@ -707,13 +707,13 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 // every tracked file under it when it names a directory, and "." selects
 // everything. It returns nil when every file is selected, and refuses a name
 // that selects nothing, as fossil does ("knows nothing about").
-func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry) (map[string]bool, error) {
-	if len(c.checkinQueue) == 0 {
+func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry, queue map[string]bool) (map[string]bool, error) {
+	if len(queue) == 0 {
 		return nil, nil
 	}
-	selected := make(map[string]bool, len(c.checkinQueue))
+	selected := make(map[string]bool, len(queue))
 	var unknown []string
-	for queued := range c.checkinQueue {
+	for queued := range queue {
 		name := path.Clean(filepath.ToSlash(queued))
 		if name == "." {
 			return nil, nil

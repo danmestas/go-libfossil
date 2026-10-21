@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -106,6 +107,63 @@ func TestCommitContextFinalizesPublishedCheckin(t *testing.T) {
 	gotRID, gotUUID, err := co.Version()
 	if err != nil || gotRID != rid || gotUUID != uuid || rid == f.c1 {
 		t.Fatalf("checkout version = %d %s, want published %d %s: %v", gotRID, gotUUID, rid, uuid, err)
+	}
+}
+
+func TestCommitCarriedFilesSelectionWithoutMutation(t *testing.T) {
+	f := newSparseRepo(t, true)
+	co := f.open(t, sparseCone(t), f.c1)
+	files, err := manifest.ListFiles(f.repo, f.c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range files {
+		if file.Name == "src/b.c" {
+			if _, err := f.repo.DB().Exec("UPDATE blob SET size=-1,content=NULL WHERE uuid=?", file.UUID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := co.Enqueue(EnqueueOpts{Paths: []string{"src/b.c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(co.Dir(), "src/a.c"), []byte("unscanned edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, err := co.RecoverySnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{"explicit", []string{"src/a.c"}, "src/b.c,src/vendor/keep/k.c"},
+		{"queue", nil, "src/a.c,src/vendor/keep/k.c"},
+		{"directory", []string{"src"}, ""},
+		{"all", []string{"."}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files, err := co.CommitCarriedFiles(context.Background(), tc.paths)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, file := range files {
+				if file.UUID == "" {
+					t.Fatalf("carried file lacks immutable identity: %+v", file)
+				}
+				names = append(names, file.Name)
+			}
+			if got := strings.Join(names, ","); got != tc.want {
+				t.Fatalf("carried files = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	after, err := co.RecoverySnapshot()
+	if err != nil || after != before {
+		t.Fatalf("carried-file readiness mutated checkout: %q != %q: %v", before, after, err)
 	}
 }
 

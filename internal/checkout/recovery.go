@@ -31,6 +31,49 @@ func (c *Checkout) RequireCommitContent(ctx context.Context) error {
 	return manifest.RequireParentContent(ctx, c.repo.DB(), append([]libfossil.FslID{parent}, parents...))
 }
 
+// CommitCarriedFiles returns covered baseline files excluded by a commit's
+// selection. Explicit paths override the existing queue without changing it.
+// It does not scan working files or fetch payloads; the caller intersects these
+// immutable identities with repository coverage before recovering missing bytes.
+func (c *Checkout) CommitCarriedFiles(ctx context.Context, paths []string) ([]manifest.FileEntry, error) {
+	if err := c.RequireCommitContent(ctx); err != nil {
+		return nil, err
+	}
+	parent, _, err := c.Version()
+	if err != nil {
+		return nil, err
+	}
+	entries, _, _, err := c.collectVFileEntries(parent)
+	if err != nil {
+		return nil, err
+	}
+	queue := c.checkinQueue
+	if len(paths) > 0 {
+		queue = make(map[string]bool, len(paths))
+		for _, name := range paths {
+			queue[name] = true
+		}
+	}
+	selected, err := c.selectedFiles(entries, queue)
+	if err != nil || selected == nil {
+		return nil, err
+	}
+	files, err := c.commitBaseline(parent)
+	if err != nil {
+		return nil, err
+	}
+	carried := make([]manifest.FileEntry, 0, len(files))
+	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !selected[file.Name] && c.covers(file.Name) {
+			carried = append(carried, file)
+		}
+	}
+	return carried, nil
+}
+
 // RecoverySnapshot identifies checkout metadata and the in-memory selection
 // across an unlocked recovery exchange. Working files are deliberately not
 // scanned: a retry must read their fresh bytes rather than cache a file list.

@@ -34,7 +34,7 @@ SC-3.4-1	3.4	Members are literal path prefixes; glob and pattern members are not
 SC-3.4-2	3.4	A member names a directory subtree or a single file with equal standing.
 SC-3.4-3	3.4	A metacharacter in a member is a literal character of the path: it is never expanded, and the member may be refused.
 SC-3.5-1	3.5	Amending a cone by wholesale replacement and by member addition or removal are equivalent, and the incremental form should be offered.
-SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of demand fetch).	over a dense store widening materializes from the store; demand fetch over a sparse store is Appendix A step 4
+SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of demand fetch).
 SC-3.5-3	3.5	Narrowing dematerializes and leaves reclamation to explicit compaction.
 SC-4-1	4	The sparse worktree is available to any conforming repository, with flat or tree-structured manifests.
 SC-4.1-1	4.1	A checkout operation given a cone materializes exactly the covered files.

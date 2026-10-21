@@ -94,8 +94,8 @@ func TestConeReferenceBudgetBeforeDeltaAllocation(t *testing.T) {
 	}
 }
 
-// SQLite permits TEXT in a BLOB-affinity column. length(TEXT) stops at NUL,
-// so only a BLOB cast proves the bytes a subsequent payload read allocates.
+// SQLite permits TEXT in a BLOB-affinity column. length(TEXT) stops at NUL;
+// reject that storage class before either prefix or payload reads.
 func TestConeReferenceBudgetCountsStoredBytesNotText(t *testing.T) {
 	d := setupTestDB(t)
 	rid, _, err := blob.Store(d, []byte("original"))
@@ -109,7 +109,7 @@ func TestConeReferenceBudgetCountsStoredBytesNotText(t *testing.T) {
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 4096,
 		InflatedBytes: 32 << 20, ExpandedBytes: 4096, Cards: 10}
 	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
-	if err == nil || work.PayloadReads != 0 || work.InflateBytes != 0 {
+	if err == nil || work.PrefixReads != 0 || work.PayloadReads != 0 || work.InflateBytes != 0 {
 		t.Fatalf("TEXT bypassed byte preflight: work=%+v err=%v", work, err)
 	}
 }
@@ -121,7 +121,8 @@ func TestConeReferenceBudgetBeforeExpansion(t *testing.T) {
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 1, InflatedBytes: 1024, ExpandedBytes: 1024, Cards: 10}
 	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
-	if err == nil || work.PayloadReads != 0 || work.InflateBytes != 0 || work.Visits != 0 {
+	if err == nil || work.PrefixReads != 0 || work.PayloadReads != 0 ||
+		work.InflateBytes != 0 || work.Visits != 0 {
 		t.Fatalf("preflight must reject before content read/allocation: work=%+v err=%v", work, err)
 	}
 	budget.StoredBytes = 1024

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/zlib"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +27,8 @@ type ReferenceBudget struct {
 }
 
 type ReferenceWork struct {
+	PrefixReads  int
+	PrefixBytes  int64
 	PayloadReads int
 	InflateBytes int64
 	ExpandBytes  int64
@@ -46,10 +47,10 @@ type referenceBlob struct {
 	unreadable  bool
 }
 
-// LoadConeReferenceFactsBounded rejects total stored/declared expansion sizes
-// before reading any content payload. Inflation uses a fixed, precharged
-// buffer and verifies EOF; a lying zlib prefix cannot grow that allocation.
-// Delta output length is checked before Apply can allocate its target.
+// LoadConeReferenceFactsBounded proves total stored bytes before prefix reads,
+// which SQLite may materialize internally. It then proves declared inflation
+// before full driver payload reads. Inflation uses a fixed, precharged buffer
+// and verifies EOF. Delta output size is checked before Apply can allocate.
 func LoadConeReferenceFactsBounded(
 	ctx context.Context, q db.Querier, budget ReferenceBudget,
 ) (*ConeReferenceFacts, ReferenceWork, error) {
@@ -62,6 +63,9 @@ func loadConeReferenceFactsBounded(
 	var work ReferenceWork
 	blobs, names, err := referencePreflight(ctx, q, budget)
 	if err != nil {
+		return nil, work, err
+	}
+	if err := referencePrefixes(ctx, q, blobs, budget, &work); err != nil {
 		return nil, work, err
 	}
 	facts := &ConeReferenceFacts{names: names, held: map[string]libfossil.FslID{},
@@ -78,10 +82,10 @@ func loadConeReferenceFactsBounded(
 			return nil, work, fmt.Errorf("sparse preparation: invalid compressed prefix")
 		}
 		var packed []byte
-		// Count bytes even if SQLite holds TEXT in this BLOB-affinity column.
+		// Non-BLOB storage classes are unknown, never an allocation proof.
 		// The same-snapshot predicate guards accidental unbound use too.
-		err := q.QueryRow(`SELECT CAST(content AS BLOB) FROM blob
-			WHERE rid=? AND length(CAST(content AS BLOB))=?`, b.rid, b.stored).Scan(&packed)
+		err := q.QueryRow(`SELECT content FROM blob WHERE rid=?
+			AND typeof(content)='blob' AND length(content)=?`, b.rid, b.stored).Scan(&packed)
 		if err != nil {
 			return nil, work, err
 		}
@@ -100,6 +104,10 @@ func loadConeReferenceFactsBounded(
 	}
 	return facts, work, nil
 }
+
+const referenceMetadataSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,
+	CASE WHEN typeof(b.content)='blob' THEN length(b.content) ELSE -1 END,
+	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`
 
 func referencePreflight(
 	ctx context.Context, q db.Querier, budget ReferenceBudget,
@@ -123,21 +131,17 @@ func referencePreflight(
 	}
 	blobs := make([]referenceBlob, 0, int(count))
 	names := make(map[libfossil.FslID]string, int(count))
-	rows, err := q.Query(`SELECT b.rid,substr(b.uuid,1,65),b.size,
-		coalesce(length(CAST(b.content AS BLOB)),0),
-		substr(CAST(b.content AS BLOB),1,6),coalesce(d.srcid,0)
-		FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`)
+	rows, err := q.Query(referenceMetadataSQL)
 	if err != nil {
 		return nil, nil, err
 	}
-	var stored, inflated, expanded int64
+	var stored, expanded int64
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, errors.Join(err, rows.Close())
 		}
 		var b referenceBlob
-		var prefix []byte
-		if err := rows.Scan(&b.rid, &b.uuid, &b.size, &b.stored, &prefix, &b.source); err != nil {
+		if err := rows.Scan(&b.rid, &b.uuid, &b.size, &b.stored, &b.source); err != nil {
 			return nil, nil, errors.Join(err, rows.Close())
 		}
 		if len(names) >= budget.Artifacts || len(b.uuid) > 64 {
@@ -147,21 +151,14 @@ func referencePreflight(
 		if b.size < 0 {
 			continue
 		}
-		// Invalid zlib headers cannot justify an inflated-size reservation.
-		// Ordinary discovery retains them as unknown without reading payloads.
-		b.unreadable = len(prefix) != 6
-		if !b.unreadable {
-			b.unreadable = prefix[4]&15 != 8 || prefix[4]>>4 > 7 ||
-				(binary.BigEndian.Uint16(prefix[4:])%31 != 0)
+		b.unreadable = b.stored < 0
+		if b.unreadable {
+			b.stored = 0
 		}
-		if !b.unreadable {
-			b.inflated = int64(binary.BigEndian.Uint32(prefix[:4]))
-		}
-		if b.stored > budget.StoredBytes-stored || b.inflated > budget.InflatedBytes-inflated || b.size > budget.ExpandedBytes-expanded {
+		if b.stored > budget.StoredBytes-stored || b.size > budget.ExpandedBytes-expanded {
 			return nil, nil, errors.Join(fmt.Errorf("sparse preparation: byte budget exceeded"), rows.Close())
 		}
 		stored += b.stored
-		inflated += b.inflated
 		expanded += b.size
 		blobs = append(blobs, b)
 	}

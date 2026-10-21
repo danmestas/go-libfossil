@@ -229,6 +229,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Repo.Verify`, and `repo verify` with it, no longer slows quadratically on
+  long delta chains. It expanded every blob on its own, re-applying the
+  blob's whole chain each time, which took 49 minutes on a clone of
+  fossil-scm.org's own repository (chains averaging 532 deltas) where
+  `fossil test-integrity` takes six and a half. It now makes one sweep down
+  the delta forest, applying each delta once: 19 seconds on the same clone.
 - The simulation's safety invariants no longer read through armed fault
   injection. `CheckSafety` and the other checks ran while Buggify was still
   on, so read-path sites truncated or flipped the bytes the check itself

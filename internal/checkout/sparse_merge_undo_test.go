@@ -18,6 +18,70 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+func TestSparseDenseUndoRequiresWidening(t *testing.T) {
+	f := newSparseRepo(t, false)
+	co := f.open(t, nil, f.c1)
+	file := filepath.Join(co.Dir(), "tools/t.c")
+	if err := os.WriteFile(file, []byte("saved dense edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Revert(RevertOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.SetCone(sparseCone(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); !errors.Is(err, ErrOutsideCone) {
+		t.Fatalf("dense undo under narrow cone = %v", err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused undo materialized outside file: %v", err)
+	}
+	var count int
+	if err := co.db.QueryRow("SELECT count(*) FROM vfile").Scan(&count); err != nil || count != len(sparseCovered) {
+		t.Fatalf("refused undo changed managed rows: %d, %v", count, err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(file); err != nil || string(got) != "saved dense edit\n" {
+		t.Fatalf("widening lost saved undo bytes: %q, %v", got, err)
+	}
+}
+
+func TestSparseDenseRedoRequiresWidening(t *testing.T) {
+	f := newSparseRepo(t, false)
+	target := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "redo target\n"}), f.c1)
+	co := f.open(t, nil, f.c1)
+	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.SetCone(sparseCone(t)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Redo(); !errors.Is(err, ErrOutsideCone) {
+		t.Fatalf("dense redo under narrow cone = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(co.Dir(), "tools/t.c")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refused redo materialized outside file: %v", err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Redo(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(co.Dir(), "tools/t.c")); err != nil || string(got) != "redo target\n" {
+		t.Fatalf("widening lost redo target: %q, %v", got, err)
+	}
+}
+
 func TestSparsePendingUndoAfterUpdate(t *testing.T) {
 	f := newSparseRepo(t, false)
 	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)

@@ -44,11 +44,47 @@ func (c *Checkout) Redo() ([]undo.Change, error) {
 // swapUndo is undo.Swap on the checkout, its files seen as fossil's RepoFILE
 // sees them.
 func (c *Checkout) swapUndo(redo bool) ([]undo.Change, error) {
+	if err := c.checkUndoCone(redo); err != nil {
+		return nil, err
+	}
 	disk, err := c.newDiskView()
 	if err != nil {
 		return nil, err
 	}
 	return undo.Swap(c.db, disk, c.dir, redo, c.versionHash)
+}
+
+// checkUndoCone leaves older, wider snapshots intact until they can be
+// restored without materializing or managing an excluded path.
+func (c *Checkout) checkUndoCone(redo bool) error {
+	if c.cone == nil {
+		return nil
+	}
+	want, op := "1", "Undo"
+	if redo {
+		want, op = "2", "Redo"
+	}
+	available, err := getVVar(c.db, "undo_available")
+	if err != nil || available != want {
+		return err
+	}
+	rows, err := c.db.Query("SELECT pathname FROM undo_vfile UNION SELECT pathname FROM undo ORDER BY pathname")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var paths []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		paths = append(paths, name)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return c.refuseUncovered(op, paths...)
 }
 
 // versionHash returns the hash of check-in rid.

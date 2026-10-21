@@ -43,7 +43,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dense path's private and shun notices and the same cards; it refuses to
   prepare beyond fixed stored, inflated and card budgets, and serves
   densely after any foreign commit until rebuilt. The server-side walk
-  keeps the depth and visit bounds of single-name lookup (§8).
+  keeps the depth and visit bounds of single-name lookup (§8), and a
+  cone-scoped clone round stops where a dense round would, charging the
+  rows it skips, and resumes from the cursor. A server serves a store it
+  holds sparsely only when its new `partial-mirror` setting
+  (`SettingPartialMirror`, `repo config set partial-mirror on`) says so;
+  otherwise it refuses, as §5.3 requires. `Repo.SetStoreConeContext` and
+  `repo cone store [PATH... | --not | --dense]` replace the store cone and
+  pull what the widening covers from the peer, the saved last-sync-url by
+  default, refusing with the cone unchanged when there is no peer.
+  `Repo.CompactStore` and `repo cone compact` drop the held blobs the store
+  cone elides, as zit's `pack --drop-elided` does; sub-manifest nodes stay
+  held, as zit holds every structural artifact.
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds

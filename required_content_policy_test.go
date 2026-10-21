@@ -3,11 +3,36 @@ package libfossil
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/checkout"
 	"github.com/danmestas/go-libfossil/internal/content"
 )
+
+// An unlocked exchange cannot silently replay a queue selected before another
+// operation changed it. The local retry must reject that stale snapshot.
+func TestCheckinContextRefusesChangedQueue(t *testing.T) {
+	f := newRequiredPublicFixture(t, "sha3")
+	co := requiredPublicCheckout(t, f)
+	changed := false
+	peer := TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
+		if !changed {
+			changed = true
+			if err := co.inner.Enqueue(checkout.EnqueueOpts{Paths: []string{"f0000"}}); err != nil {
+				return nil, err
+			}
+		}
+		return f.source.HandleSync(ctx, payload)
+	})
+	_, _, err := co.CheckinContext(context.Background(), CheckoutCommitOpts{
+		User: "test", AllowEmpty: true,
+	}, RequiredContentOpts{Peer: peer})
+	if !changed || err == nil || !strings.Contains(err.Error(), "snapshot") {
+		t.Fatalf("changed queue was not rejected: changed=%v err=%v", changed, err)
+	}
+}
 
 // Lasting coverage must affect a later ordinary pull of a newly-created path,
 // not just the exact payloads fetched while editing the worktree cone.

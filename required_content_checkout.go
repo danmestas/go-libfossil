@@ -17,12 +17,12 @@ func (c *Checkout) CheckinContext(
 	if err := required.validate(ctx); err != nil {
 		return 0, "", err
 	}
-	parent, state, err := c.requiredState()
+	_, state, err := c.requiredState()
 	if err != nil {
 		return 0, "", err
 	}
 	r := c.inner.Repo()
-	err = manifest.RequireParentContent(ctx, r.DB(), []fsltype.FslID{parent})
+	err = c.inner.RequireCommitContent(ctx)
 	if err != nil {
 		if err := required.recover(ctx, r, err); err != nil {
 			return 0, "", err
@@ -34,7 +34,7 @@ func (c *Checkout) CheckinContext(
 	if err := ctx.Err(); err != nil {
 		return 0, "", err
 	}
-	return c.Checkin(opts)
+	return c.checkin(ctx, opts)
 }
 
 // SetConeContext recovers only structure needed to enumerate next and payloads
@@ -110,6 +110,11 @@ func (c *Checkout) requiredState() (fsltype.FslID, string, error) {
 	if cone := c.Cone(); cone != nil {
 		state += "\ncheckout-cone=" + cone.Digest()
 	}
+	snapshot, err := c.inner.RecoverySnapshot()
+	if err != nil {
+		return 0, "", err
+	}
+	state += "\ncheckout-snapshot=" + snapshot
 	return parent, fmt.Sprintf("%d:%s\n%s", parent, uuid, state), nil
 }
 

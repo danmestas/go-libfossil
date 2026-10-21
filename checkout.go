@@ -336,6 +336,12 @@ func (c *Checkout) Revert(opts RevertOpts) error {
 // pending merge.
 // Returns the RID and UUID of the new checkin manifest.
 func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err error) {
+	return c.checkin(context.Background(), opts)
+}
+
+func (c *Checkout) checkin(
+	ctx context.Context, opts CheckoutCommitOpts,
+) (rid int64, uuid string, err error) {
 	if len(opts.Files) > 0 {
 		if err := c.inner.Enqueue(checkout.EnqueueOpts{Paths: opts.Files}); err != nil {
 			return 0, "", fmt.Errorf("libfossil: checkin: %w", err)
@@ -347,7 +353,7 @@ func (c *Checkout) Checkin(opts CheckoutCommitOpts) (rid int64, uuid string, err
 			}
 		}()
 	}
-	innerRID, uuid, err := c.inner.Commit(checkout.CommitOpts{
+	innerRID, uuid, err := c.inner.CommitContext(ctx, checkout.CommitOpts{
 		Message: opts.Message,
 		User:    opts.User,
 		Branch:  opts.Branch,

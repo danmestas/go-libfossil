@@ -228,12 +228,15 @@ func TestRequiredContentNoPeerPreservesCheckout(t *testing.T) {
 			if err := os.WriteFile(name, []byte("pending edit"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			metadata, err := co.inner.RecoverySnapshot()
+			if err != nil {
+				t.Fatal(err)
+			}
 			before := requiredCheckoutBytes(t, co.Dir())
 			var count, after int
 			if err := f.target.inner.DB().QueryRow("SELECT count(*) FROM blob").Scan(&count); err != nil {
 				t.Fatal(err)
 			}
-			var err error
 			if operation == "checkin" {
 				_, _, err = co.CheckinContext(context.Background(), CheckoutCommitOpts{User: "test"},
 					RequiredContentOpts{})
@@ -242,6 +245,10 @@ func TestRequiredContentNoPeerPreservesCheckout(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), "no configured peer") {
 				t.Fatalf("no-peer refusal: %v", err)
+			}
+			currentMetadata, snapshotErr := co.inner.RecoverySnapshot()
+			if snapshotErr != nil || currentMetadata != metadata {
+				t.Fatalf("no-peer refusal changed logical checkout state: %v", snapshotErr)
 			}
 			current := requiredCheckoutBytes(t, co.Dir())
 			if !reflect.DeepEqual(before, current) {
@@ -274,7 +281,7 @@ func requiredCheckoutBytes(t *testing.T, dir string) map[string]string {
 			return nil
 		}
 		// SQLite read locks update the shared-memory WAL index, not durable state.
-		if entry.Name() == ".fslckout-shm" {
+		if entry.Name() == ".fslckout-shm" || entry.Name() == ".libfossil-checkout-shm" {
 			return nil
 		}
 		if len(files) >= 1024 {

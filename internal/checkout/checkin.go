@@ -582,16 +582,28 @@ func (c *Checkout) finalizeCommit(
 // Commit creates a new checkin from staged files in the checkout.
 // Returns the new manifest RID and UUID.
 func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
-	if c == nil {
-		panic("checkout.Commit: nil *Checkout")
-	}
+	return c.CommitContext(context.Background(), opts)
+}
 
+// CommitContext is Commit with cancellation carried through publication.
+// It remains local-only: missing parent structure is returned to the caller.
+func (c *Checkout) CommitContext(ctx context.Context, opts CommitOpts) (libfossil.FslID, string, error) {
+	if c == nil || ctx == nil {
+		panic("checkout.CommitContext: checkout and context must be set")
+	}
+	if err := c.RequireCommitContent(ctx); err != nil {
+		return 0, "", err
+	}
 	in, err := c.gatherCommit(opts)
 	if err != nil {
 		return 0, "", err
 	}
 
-	ctx := c.obs.CommitStarted(context.Background(), CommitStart{
+	parents := append([]libfossil.FslID{in.parent}, in.mergeParents...)
+	if err := manifest.RequireParentContent(ctx, c.repo.DB(), parents); err != nil {
+		return 0, "", err
+	}
+	ctx = c.obs.CommitStarted(ctx, CommitStart{
 		FilesEnqueued: in.enqueued,
 		Branch:        opts.Branch,
 		User:          opts.User,
@@ -613,12 +625,16 @@ func (c *Checkout) Commit(opts CommitOpts) (libfossil.FslID, string, error) {
 		return 0, "", result.Err
 	}
 
-	newRID, newUUID, err := manifest.Checkin(c.repo, c.checkinOptions(opts, in, commitFiles))
+	newRID, newUUID, err := manifest.CheckinContext(ctx, c.repo, c.checkinOptions(opts, in, commitFiles))
 	if err != nil {
 		result.Err = fmt.Errorf("checkout.Commit: checkin: %w", err)
 		return 0, "", result.Err
 	}
 
+	if err := ctx.Err(); err != nil {
+		result.Err = err
+		return 0, "", err
+	}
 	if err := c.finalizeCommit(in, newRID, newUUID); err != nil {
 		result.Err = err
 		return 0, "", err

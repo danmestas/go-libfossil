@@ -66,7 +66,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stash saves with a merge pending, as fossil does: the merge parent stays
   recorded, pop leaves it in place, and the next commit carries both
   parents; a pop that would overwrite a file the stash does not hold is
-  refused before anything is written. It used to refuse the save.
+  refused before anything is written. It used to refuse the save. Pop
+  merges a stashed change onto a file that changed since, as fossil's
+  does: three-way with fossil's conflict markers and `-baseline`,
+  `-original` and `-merge` files, a binary conflict left empty, and
+  "WARNING: N merge conflicts" with the stash still dropped; it used to
+  overwrite the file with the stashed bytes. Stash and revert restore a
+  file's executable bit from the checked-in version, not from a merge.
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds

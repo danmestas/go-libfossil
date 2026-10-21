@@ -74,19 +74,15 @@ func scRecordOnlyConflict(t *testing.T) error {
 	ours := f.commit(t, files("ours\n"), f.c1)
 	theirs := f.commit(t, files("theirs\n"), f.c1)
 	co := f.open(t, scDefault(t), ours)
-	if _, err := co.Merge(checkout.MergeOpts{Version: theirs}); err != nil {
-		return err
+	if _, err := co.Merge(checkout.MergeOpts{Version: theirs}); !errors.Is(err, checkout.ErrOutsideCone) {
+		return fmt.Errorf("outside both-changed merge = %v, want widening refusal", err)
 	}
 	if got := scOnDisk(t, co.Dir()); !slices.Equal(got, scDefaultCovered) {
 		return fmt.Errorf("outside conflict materialized a file: %q", got)
 	}
 	conflicts, err := co.Conflicts()
-	if err != nil || !slices.Equal(conflicts, []string{"docs/d.txt"}) {
-		return fmt.Errorf("record-only conflicts = %q: %v", conflicts, err)
-	}
-	_, _, err = co.Commit(checkout.CommitOpts{Message: "unresolved", User: "u", Time: f.when.Add(time.Hour)})
-	if !errors.Is(err, checkout.ErrUnresolvedConflicts) {
-		return fmt.Errorf("record-only conflict commit: %v, want unresolved-conflict refusal", err)
+	if err != nil || len(conflicts) != 0 {
+		return fmt.Errorf("refused merge left conflicts = %q: %v", conflicts, err)
 	}
 	wider, err := co.Cone().With([]string{"docs"}, nil)
 	if err != nil {
@@ -94,6 +90,17 @@ func scRecordOnlyConflict(t *testing.T) error {
 	}
 	if _, err := co.SetCone(wider); err != nil {
 		return fmt.Errorf("widen to resolve record-only conflict: %w", err)
+	}
+	if _, err := co.Merge(checkout.MergeOpts{Version: theirs}); err != nil {
+		return err
+	}
+	conflicts, err = co.Conflicts()
+	if err != nil || !slices.Equal(conflicts, []string{"docs/d.txt"}) {
+		return fmt.Errorf("in-cone conflicts = %q: %v", conflicts, err)
+	}
+	_, _, err = co.Commit(checkout.CommitOpts{Message: "unresolved", User: "u", Time: f.when.Add(time.Hour)})
+	if !errors.Is(err, checkout.ErrUnresolvedConflicts) {
+		return fmt.Errorf("widened conflict commit = %v", err)
 	}
 	scWrite(t, co.Dir(), "docs/d.txt", "resolved\n")
 	rid, _, err := co.Commit(checkout.CommitOpts{Message: "resolved", User: "u", Time: f.when.Add(2 * time.Hour)})

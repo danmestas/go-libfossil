@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -129,5 +132,50 @@ func TestConeReferenceBudgetBeforeExpansion(t *testing.T) {
 	facts, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
 	if err != nil || facts == nil || work.PayloadReads != 1 || work.Visits != 1 {
 		t.Fatalf("valid bounded preparation: work=%+v err=%v", work, err)
+	}
+}
+
+// Ordinary file content is never parsed as a deck, so its lines are not
+// charged to the card budget; the byte budgets still bound it.
+func TestConeReferenceBudgetCardsChargeOnlyDecks(t *testing.T) {
+	d := setupTestDB(t)
+	text := bytes.Repeat([]byte("x\n"), 2<<20)
+	rid, uuid, err := blob.Store(d, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := ReferenceBudget{Artifacts: 1 << 18, StoredBytes: 64 << 20,
+		InflatedBytes: 128 << 20, ExpandedBytes: 128 << 20, Cards: 1 << 20}
+	facts, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	if err != nil {
+		t.Fatalf("multi-line file refused by the card budget: %v", err)
+	}
+	if facts.held[uuid] != rid {
+		t.Fatal("multi-line file not held")
+	}
+}
+
+func TestConeReferenceBudgetCardsRefuseLargeDeck(t *testing.T) {
+	d := setupTestDB(t)
+	files := make([]deck.FileCard, 0, 11)
+	for i := 0; i < 11; i++ {
+		files = append(files, deck.FileCard{Name: fmt.Sprintf("src/%02d", i),
+			UUID: "da39a3ee5e6b4b0d3255bfef95601890afd80709"})
+	}
+	data, err := (&deck.Deck{C: "cards", D: time.Unix(0, 0).UTC(), U: deck.User("u"), F: files}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := blob.Store(d, data); err != nil {
+		t.Fatal(err)
+	}
+	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 1 << 20,
+		InflatedBytes: 1 << 20, ExpandedBytes: 1 << 20, Cards: 10}
+	if _, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget); err == nil {
+		t.Fatal("deck over the card budget prepared")
+	}
+	budget.Cards = 20
+	if _, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget); err != nil {
+		t.Fatalf("deck within the card budget refused: %v", err)
 	}
 }

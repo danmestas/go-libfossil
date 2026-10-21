@@ -253,13 +253,16 @@ func referenceMaterialize(
 }
 
 func referenceRecord(facts *ConeReferenceFacts, b *referenceBlob, aliases *int, max int) error {
+	facts.held[b.uuid] = b.rid
+	if !deck.HasValidZ(b.data) {
+		return nil // Ordinary file bytes are never parsed; byte budgets bound them.
+	}
 	// Bound parser card allocations before Parse, including non-F cards.
 	cards := bytes.Count(b.data, []byte{'\n'})
 	if cards > max-*aliases {
 		return fmt.Errorf("sparse preparation: card budget exceeded")
 	}
 	*aliases += cards
-	facts.held[b.uuid] = b.rid
 	d, err := deck.Parse(b.data)
 	if err != nil {
 		return nil // Ordinary file bytes do not provide reference facts.

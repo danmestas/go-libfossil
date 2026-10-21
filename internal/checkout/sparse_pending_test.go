@@ -188,3 +188,63 @@ func TestSparsePartialCommitOfPendingMergeRefused(t *testing.T) {
 		t.Fatalf("partial commit of a merge = %v, want %v", err, errPartialMergeCommit)
 	}
 }
+
+// A record-only change outside the cone obeys the commit queue as a change
+// on disk does: a partial commit leaves it pending, and the next full commit
+// records it. Without a pending merge (a checkout an earlier update left
+// with the outcome but no vmerge row) the partial commit is allowed.
+func TestSparsePartialCommitLeavesRecordOnlyChangePending(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("DELETE FROM vmerge"); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, co, "src/b.c", "edited\n")
+	writeFile(t, co, "src/a.c", "also edited\n")
+	if err := co.Enqueue(EnqueueOpts{Paths: []string{"src/b.c"}}); err != nil {
+		t.Fatal(err)
+	}
+	partial, _, err := co.Commit(CommitOpts{Message: "partial", User: "test", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, partial, maps(sparseFiles, map[string]string{"src/b.c": "edited\n"}))
+	var pending int
+	if err := co.db.QueryRow("SELECT count(*) FROM sparse_pending WHERE vid=? AND pathname='tools/t.c'", int64(partial)).Scan(&pending); err != nil || pending != 1 {
+		t.Fatalf("pending outcome after partial commit = %d: %v", pending, err)
+	}
+	full, _, err := co.Commit(CommitOpts{Message: "full", User: "test", Time: f.time.Add(2 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, full, maps(sparseFiles, map[string]string{
+		"src/b.c": "edited\n", "src/a.c": "also edited\n", "tools/t.c": "merged\n",
+	}))
+	if err := co.db.QueryRow("SELECT count(*) FROM sparse_pending").Scan(&pending); err != nil || pending != 0 {
+		t.Fatalf("pending outcomes after full commit = %d: %v", pending, err)
+	}
+}
+
+// A partial commit whose selection is only unchanged files is refused as
+// having nothing to commit, though a record-only change is pending.
+func TestSparsePartialCommitIgnoresUnselectedRecordOnlyChange(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("DELETE FROM vmerge"); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Enqueue(EnqueueOpts{Paths: []string{"src/b.c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := co.Commit(CommitOpts{Message: "partial", User: "test", Time: f.time.Add(time.Hour)}); !errors.Is(err, ErrNothingToCommit) {
+		t.Fatalf("partial commit of unchanged files = %v, want %v", err, ErrNothingToCommit)
+	}
+}

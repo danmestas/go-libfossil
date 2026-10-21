@@ -124,18 +124,15 @@ func (c *Checkout) collectVFileEntries(vid libfossil.FslID) (
 
 // buildCommitFiles constructs the complete file list for a new checkin by
 // starting from the parent manifest, applying vfile changes (modified/deleted),
-// and loading unchanged file content from the repo.
-func (c *Checkout) buildCommitFiles(
-	parentRID libfossil.FslID,
-	vfEntries map[string]vfileCommitEntry,
-	changedFiles []string,
-	deletedFiles []string,
-	shouldInclude func(string) bool,
-) ([]manifest.File, error) {
+// and loading unchanged file content from the repo. Record-only changes
+// outside a sparse cone are applied only by a full commit.
+func (c *Checkout) buildCommitFiles(in commitInputs) ([]manifest.File, error) {
+	parentRID, vfEntries, shouldInclude := in.parent, in.entries, in.include
+	changedFiles, deletedFiles := in.changed, in.deleted
 	var parentFiles []manifest.FileEntry
 	if parentRID != 0 {
 		var err error
-		parentFiles, err = c.commitBaseline(parentRID)
+		parentFiles, err = c.commitBaseline(parentRID, !in.partial)
 		if err != nil {
 			return nil, fmt.Errorf("checkout.Commit: list parent files: %w", err)
 		}
@@ -571,8 +568,15 @@ func (c *Checkout) finalizeCommit(
 		return fmt.Errorf("checkout.Commit: clear vmerge: %w", err)
 	}
 	if c.cone != nil {
-		if _, err := c.db.Exec("DELETE FROM sparse_pending"); err != nil {
-			return err
+		// A partial commit carries the parent's entries outside the cone, so
+		// their pending changes stay pending against the new version.
+		if in.partial {
+			_, err = c.db.Exec("UPDATE sparse_pending SET vid = ? WHERE vid = ?", int64(newRID), int64(in.parent))
+		} else {
+			_, err = c.db.Exec("DELETE FROM sparse_pending")
+		}
+		if err != nil {
+			return fmt.Errorf("checkout.Commit: carry pending outcomes: %w", err)
 		}
 	}
 	c.checkinQueue = nil
@@ -612,10 +616,7 @@ func (c *Checkout) CommitContext(ctx context.Context, opts CommitOpts) (libfossi
 	var result CommitEnd
 	defer func() { c.obs.CommitCompleted(ctx, result) }()
 
-	commitFiles, err := c.buildCommitFiles(
-		in.parent, in.entries, in.changed,
-		in.deleted, in.include,
-	)
+	commitFiles, err := c.buildCommitFiles(in)
 	if err != nil {
 		result.Err = err
 		return 0, "", err
@@ -653,6 +654,7 @@ type commitInputs struct {
 	deleted      []string
 	mergeParents []libfossil.FslID
 	include      func(name string) bool // the checkin queue's filter
+	partial      bool                   // the queue selects some files, not all
 	enqueued     int
 }
 
@@ -685,21 +687,21 @@ func (c *Checkout) gatherCommit(opts CommitOpts) (commitInputs, error) {
 	if err != nil {
 		return in, err
 	}
-	queueActive := selected != nil
-	if queueActive && len(in.mergeParents) > 0 {
+	in.partial = selected != nil
+	if in.partial && len(in.mergeParents) > 0 {
 		return in, errPartialMergeCommit
 	}
 	in.include = func(name string) bool {
-		if !queueActive {
+		if !in.partial {
 			return true
 		}
 		return selected[name]
 	}
 	in.enqueued = len(in.changed)
-	if queueActive {
+	if in.partial {
 		in.enqueued = len(selected)
 	}
-	return in, c.checkCommittable(opts, in, queueActive)
+	return in, c.checkCommittable(opts, in)
 }
 
 // selectedFiles resolves the checkin queue the way fossil's commit resolves
@@ -746,13 +748,13 @@ func (c *Checkout) selectedFiles(entries map[string]vfileCommitEntry, queue map[
 // to record (unless opts.AllowEmpty) and one that includes a file still
 // holding conflict markers (unless opts.AllowConflict). A pending merge is
 // something to record even when no file changed.
-func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs, queueActive bool) error {
+func (c *Checkout) checkCommittable(opts CommitOpts, in commitInputs) error {
 	if !opts.AllowEmpty && len(in.mergeParents) == 0 {
 		changed, err := c.hasSelectedChange(in)
 		if err != nil {
 			return err
 		}
-		if !changed && queueActive {
+		if !changed && in.partial {
 			return fmt.Errorf("%w: none of the selected files have changed", ErrNothingToCommit)
 		}
 		if !changed {
@@ -803,14 +805,17 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 }
 
 // hasSelectedChange reports whether a selected file is changed, added,
-// removed or renamed, or has had its executable bit changed on disk.
+// removed or renamed, or has had its executable bit changed on disk. A
+// record-only change outside a sparse cone counts for a full commit only.
 func (c *Checkout) hasSelectedChange(in commitInputs) (bool, error) {
-	pending, err := c.pendingRows(in.parent)
-	if err != nil {
-		return false, err
-	}
-	if len(pending) > 0 {
-		return true, nil
+	if !in.partial {
+		pending, err := c.pendingRows(in.parent)
+		if err != nil {
+			return false, err
+		}
+		if len(pending) > 0 {
+			return true, nil
+		}
 	}
 	for _, name := range in.changed {
 		if in.include(name) {
@@ -851,6 +856,9 @@ func (c *Checkout) checkNoConflicts(in commitInputs) error {
 			conflicted = append(conflicted, name)
 		}
 	}
+	if in.partial {
+		return conflictsErr(conflicted)
+	}
 	rows, err := c.coneRows(in.parent, false)
 	if err != nil {
 		return err
@@ -867,6 +875,11 @@ func (c *Checkout) checkNoConflicts(in commitInputs) error {
 			conflicted = append(conflicted, row.Pathname)
 		}
 	}
+	return conflictsErr(conflicted)
+}
+
+// conflictsErr refuses a commit of the conflicted files, if any.
+func conflictsErr(conflicted []string) error {
 	if len(conflicted) > 0 {
 		return fmt.Errorf("%w: %s", ErrUnresolvedConflicts, strings.Join(conflicted, ", "))
 	}

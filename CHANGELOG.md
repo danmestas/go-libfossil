@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Checking out verifies the manifest's R card as fossil does, warning
   through the new `ExtractOpts.Warn` (`repo open` prints a WARNING line)
   and succeeding, skipped over a sparse store or with `repo-cksum` off.
+  Stash saves with a merge pending, as fossil does: the merge parent stays
+  recorded, pop leaves it in place, and the next commit carries both
+  parents; a pop that would overwrite a file the stash does not hold is
+  refused before anything is written. It used to refuse the save.
 - Sparse checkouts (draft-fossil-sparse-cone-00 §3 and §4). A cone is a
   set of paths, each a directory subtree or a single file, included or
   excluded; the longest member covering a path decides. `NewCone` builds

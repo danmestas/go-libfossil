@@ -65,7 +65,7 @@ func (c *Checkout) CommitCarriedFiles(ctx context.Context, paths []string) ([]ma
 	if err != nil || selected == nil {
 		return nil, err
 	}
-	files, err := c.commitBaseline(parent)
+	files, err := c.commitBaseline(parent, false)
 	if err != nil {
 		return nil, err
 	}

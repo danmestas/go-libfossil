@@ -122,12 +122,13 @@ func (c *Checkout) coneRows(vid libfossil.FslID, managed bool) ([]vfile.Row, err
 	return kept, nil
 }
 
-// commitBaseline carries the baseline's uncovered entries, including pending
-// record-only merge changes. The managed file set is synthesized separately
-// from disk; uncovered pending content is addressed by mrid, never a path.
-func (c *Checkout) commitBaseline(vid libfossil.FslID) ([]manifest.FileEntry, error) {
+// commitBaseline carries the baseline's uncovered entries, with the pending
+// record-only changes applied when pending is set. The managed file set is
+// synthesized separately from disk; uncovered pending content is addressed
+// by mrid, never a path.
+func (c *Checkout) commitBaseline(vid libfossil.FslID, pending bool) ([]manifest.FileEntry, error) {
 	files, err := manifest.ListFiles(c.repo, vid)
-	if err != nil || c.cone == nil {
+	if err != nil || c.cone == nil || !pending {
 		return files, err
 	}
 	rows, err := c.coneRows(vid, false)

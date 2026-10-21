@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/danmestas/go-libfossil/db"
-	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/merge"
@@ -681,23 +679,6 @@ func (c *Checkout) applyMerge(plan mergePlan) error {
 	return c.recordForks(plan)
 }
 
-// storeMergePayload keeps new uncommitted bytes out of public sync inventory.
-// Existing public content retains its visibility; undo retains private payloads.
-func (c *Checkout) storeMergePayload(data []byte) (rid libfossil.FslID, uuid string, err error) {
-	err = c.repo.DB().WithTx(func(tx *db.Tx) error {
-		var outcome blob.Outcome
-		rid, uuid, outcome, err = blob.StoreUnderPolicy(tx, data)
-		if err != nil {
-			return err
-		}
-		if outcome == blob.Inserted {
-			return content.MakePrivate(tx, int64(rid))
-		}
-		return nil
-	})
-	return rid, uuid, err
-}
-
 func (c *Checkout) applyMergeTx(tx *sql.Tx, plan mergePlan) error {
 	for _, s := range plan.steps {
 		if err := c.applyMergeStep(tx, plan.vid, s); err != nil {
@@ -743,23 +724,11 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 		_, err := tx.Exec("UPDATE vfile SET isexe=? WHERE id=?", s.exe, s.row.ID)
 		return err
 	case MergeMerged, MergeConflict:
-		if s.recordOnly {
-			rid, uuid, err := c.storeMergePayload(s.content)
-			if err != nil {
-				return err
-			}
-			if _, err := tx.Exec("UPDATE vfile SET mrid=?, mhash=? WHERE id=?", int64(rid), uuid, s.row.ID); err != nil {
-				return err
-			}
-		}
 		// What a scan would make of content that now differs from the
 		// baseline; a scan corrects it should the merge have changed nothing.
 		next, err := nextChangedState(s.row.Chnged, scanFacts{hasBaseline: true}, alwaysDiffers)
 		if err != nil {
 			return err
-		}
-		if s.recordOnly {
-			next = 2 // mrid owns the synthesized bytes, even after materialization
 		}
 		if _, err := tx.Exec("UPDATE vfile SET mtime=0, chnged=?, isexe=? WHERE id=?",
 			next, s.exe, s.row.ID); err != nil {

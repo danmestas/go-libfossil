@@ -705,9 +705,6 @@ func (c *Checkout) finalizeUpdate(
 		if _, err := tx.Exec("DELETE FROM sparse_pending"); err != nil {
 			return fmt.Errorf("checkout.Update: clear pending outcomes: %w", err)
 		}
-		if _, err := tx.Exec("DELETE FROM vmerge"); err != nil {
-			return fmt.Errorf("checkout.Update: clear pending merge: %w", err)
-		}
 		for _, step := range steps {
 			if step.pending != nil {
 				if err := step.pending.save(tx); err != nil {

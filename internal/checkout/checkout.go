@@ -118,12 +118,15 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		return nil, fmt.Errorf("checkout.Create: no SQLite driver registered")
 	}
 
-	marker, err := checkoutMarker(env.Storage, dir)
-	if err != nil {
-		return nil, fmt.Errorf("checkout.Create: %w", err)
-	}
-	if marker != "" {
-		return nil, fmt.Errorf("checkout.Create: checkout marker already exists: %s", marker)
+	// SQLite uses the real path even when working files use simulated storage.
+	for _, storage := range []simio.Storage{env.Storage, simio.OSStorage{}} {
+		marker, err := checkoutMarker(storage, dir)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Create: %w", err)
+		}
+		if marker != "" {
+			return nil, fmt.Errorf("checkout.Create: checkout marker already exists: %s", marker)
+		}
 	}
 	name := PreferredDBName()
 	if opts.Cone != nil {

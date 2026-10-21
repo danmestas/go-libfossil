@@ -11,6 +11,38 @@ import (
 	"github.com/danmestas/go-libfossil/simio"
 )
 
+func TestCreateMemoryStorageRefusesDiskMarker(t *testing.T) {
+	r, cleanup := newTestRepoWithCheckin(t)
+	defer cleanup()
+	dir := t.TempDir()
+	c, err := Create(r, dir, CreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := setVVar(c.db, "undo_available", "sentinel"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	other, err := Create(r, dir, CreateOpts{Env: &simio.Env{Storage: simio.NewMemStorage()}})
+	if err == nil {
+		other.Close()
+		t.Fatal("memory working storage concealed an existing SQLite checkout")
+	}
+	if !strings.Contains(err.Error(), "checkout marker already exists") {
+		t.Fatalf("collision = %v", err)
+	}
+	reopened, err := Open(r, dir, OpenOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got, err := getVVar(reopened.db, "undo_available"); err != nil || got != "sentinel" {
+		t.Fatalf("existing metadata overwritten: %q, %v", got, err)
+	}
+}
+
 func TestSparseCreatePrivateMarker(t *testing.T) {
 	r, cleanup := newTestRepoWithCheckin(t)
 	defer cleanup()

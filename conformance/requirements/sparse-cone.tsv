@@ -38,7 +38,7 @@ SC-3.5-2	3.5	Widening fetches what the cone newly covers (the policy form of dem
 SC-3.5-3	3.5	Narrowing dematerializes and leaves reclamation to explicit compaction.
 SC-4-1	4	The sparse worktree is available to any conforming repository, with flat or tree-structured manifests.
 SC-4.1-1	4.1	A checkout operation given a cone materializes exactly the covered files.
-SC-4.1-2	4.1	The managed-file record covers only in-cone files.	the strict three-physical-row fixture passes on the private-marker implementation; marker transitions, legacy unstamped undo refusal and cone-stamped undo images are reviewed; durable crash recovery of the marker remains unverified
+SC-4.1-2	4.1	The managed-file record covers only in-cone files.
 SC-4.1-3	4.1	Status, untracked-file listing and bulk tracking operate within the cone; an uncovered on-disk path is neither reported as untracked nor eligible for tracking.
 SC-4.1-4	4.1	A request to track a path outside the cone is refused, and the refusal names the cone as the reason; a diagnostic that reports a missing file or alleges damage does not conform.
 SC-4.1-5	4.1	All file-set enumeration flows through the shared enumeration interface with the cone applied there as a range predicate, never filtered at individual call sites.

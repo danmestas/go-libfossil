@@ -463,10 +463,7 @@ func scWorktreeCases() []scCase {
 			f := newSCRepo(t, false)
 			return scSameList("materialized", scOnDisk(t, f.open(t, scDefault(t), f.c1).Dir()), scDefaultCovered)
 		}},
-		{Case{ID: "sparsecone.4.1.record", Req: "SC-4.1-2",
-			Deviation: "vfile keeps a row for every file of the checked-out version, so fossil " +
-				"reading the checkout cannot commit the uncovered files away; the rows outside " +
-				"the cone are the baseline record, never scanned, materialized or tracked"}, scRecord},
+		{Case{ID: "sparsecone.4.1.record", Req: "SC-4.1-2"}, scRecord},
 		{Case{ID: "sparsecone.4.1.status", Req: "SC-4.1-3"}, scStatus},
 		{Case{ID: "sparsecone.4.1.refuse", Req: "SC-4.1-4"}, scRefuse},
 		{Case{ID: "sparsecone.4.1.seam", Req: "SC-4.1-5"}, scSeam},

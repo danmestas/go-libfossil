@@ -84,6 +84,13 @@ func (c *Checkout) checkUndoCone(redo bool) error {
 	if err := c.refuseUncovered(op, paths...); err != nil {
 		return err
 	}
+	var stamped, sparseImage bool
+	if err := c.db.QueryRow("SELECT EXISTS(SELECT 1 FROM vvar WHERE name='undo_sparse_cone'), EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='undo_sparse_pending')").Scan(&stamped, &sparseImage); err != nil {
+		return err
+	}
+	if !stamped && (sparseImage || c.cone != nil) {
+		return fmt.Errorf("legacy sparse undo image has no materialization cone; refusing %s", op)
+	}
 	saved, err := getVVar(c.db, "undo_sparse_cone")
 	if err != nil {
 		return err

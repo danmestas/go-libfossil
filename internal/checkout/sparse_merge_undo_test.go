@@ -19,6 +19,56 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
+func TestLegacyDenseUndoWithoutConeStamp(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "updated\n"}), f.c1)
+	co := f.open(t, nil, f.c1)
+	if _, err := co.Update(UpdateOpts{TargetRID: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("DELETE FROM vvar WHERE name='undo_sparse_cone'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(co.Dir(), "src/a.c")); err != nil || string(data) != sparseFiles["src/a.c"] {
+		t.Fatalf("legacy dense undo bytes: %q, %v", data, err)
+	}
+}
+
+func TestLegacySparseUndoAfterWideningRefused(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "legacy pending\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Revert(RevertOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("DELETE FROM vvar WHERE name='undo_sparse_cone'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.SetCone(nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := co.RecoverySnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Undo(); err == nil || !strings.Contains(err.Error(), "legacy sparse undo image") {
+		t.Fatalf("unstamped legacy undo = %v", err)
+	}
+	after, err := co.RecoverySnapshot()
+	if err != nil || before != after {
+		t.Fatalf("legacy refusal changed checkout metadata: %q != %q: %v", before, after, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(co.Dir(), "tools/t.c")); err != nil || string(data) != sparseFiles["tools/t.c"] {
+		t.Fatalf("legacy refusal changed outside bytes: %q, %v", data, err)
+	}
+}
+
 func TestSparseRevertUndoAfterWideningRefused(t *testing.T) {
 	f := newSparseRepo(t, false)
 	merged := maps(sparseFiles, map[string]string{"tools/t.c": "retained merge\n"})

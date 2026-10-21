@@ -198,16 +198,22 @@ func checkFossilReadsCrash(t *testing.T, bin, dir string) {
 	cmd := exec.Command(bin, "ls")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "USER=test")
-	out, err := cmd.CombinedOutput()
+	// The listing is stdout alone: in the "linked" state both marker names
+	// are one file, and SQLite on Linux warns about that on stderr
+	// ("SQLITE_WARNING(28): file ... has multiple links") while fossil reads
+	// the record all the same.
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	_, nativeErr := os.Lstat(filepath.Join(dir, PreferredDBName()))
 	if nativeErr != nil {
-		if err == nil || !strings.Contains(string(out), "not within an open check") {
-			t.Fatalf("fossil read a directory with no native marker: %v\n%s", err, out)
+		if err == nil || !strings.Contains(stderr.String(), "not within an open check") {
+			t.Fatalf("fossil read a directory with no native marker: %v\n%s%s", err, out, stderr.String())
 		}
 		return
 	}
 	if err != nil {
-		t.Fatalf("fossil ls over the native marker: %v\n%s", err, out)
+		t.Fatalf("fossil ls over the native marker: %v\n%s%s", err, out, stderr.String())
 	}
 	listed := strings.Fields(string(out))
 	sort.Strings(listed)

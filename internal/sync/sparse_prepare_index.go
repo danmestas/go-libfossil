@@ -39,9 +39,10 @@ func (s *preparedSparseService) prepareIndex(ctx context.Context, bound *repo.Re
 	if _, err := s.facts.Classify(ctx, validationCone); err != nil {
 		return err
 	}
-	rows, err := bound.DB().Query(`SELECT b.rid FROM blob b WHERE b.size>=0
-		AND NOT EXISTS(SELECT 1 FROM private p WHERE p.rid=b.rid)
-		AND NOT EXISTS(SELECT 1 FROM shun s WHERE s.uuid=b.uuid) ORDER BY b.rid`)
+	// The index answers cone membership only, as the dense keep-set does.
+	// Private and shunned artifacts stay in it: the handler's live gates
+	// withhold their payloads and still send a gimme its §8.6 private notice.
+	rows, err := bound.DB().Query(`SELECT rid FROM blob WHERE size>=0 ORDER BY rid`)
 	if err != nil {
 		return err
 	}

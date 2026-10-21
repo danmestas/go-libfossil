@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `86d4b67372` (branch `horizon-rfc`) | `56bf5c0553` | `e1e92af6fa1c2acf…` |
+| `draft-fossil-horizon-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `de33f5b033` | `f808dbd0db372f37…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -56,9 +56,11 @@ now requires the complete canonical structural affected range and verified
 partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
-the corrected canonical-writing contract. The horizon copy stays at `86d4b67372` (2026-10-18); the branch has
-since added §6.2.6 (the horizon cursor) and the classification-memoization
-SHOULDs of §6.2, which are not yet read into the horizon table. The same
+the corrected canonical-writing contract. The horizon copy moves from
+`86d4b67372` (2026-10-18) to `e6ee276c89` with it; the normative changes
+between them are all in §6: §6.1 lets any request carry the cursor, §6.2
+adds the classification-memoization SHOULDs, and §6.2.6 (the horizon
+cursor) is new. Every other section is word-for-word unchanged. The same
 branch adds the pragma names these two drafts define (`cone`, `cone-not`,
 and the `horizon` family) to the sync draft's §9 list of extension pragmas;
 the sync draft here follows trunk, so that addition is pending.

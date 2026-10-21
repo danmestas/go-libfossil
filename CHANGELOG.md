@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
+  `e6ee276c89`, the same check-in as the sparse-cone draft. Its only
+  normative changes are in §6: any request may carry the new
+  `horizon-cursor` pragma (§6.1, §6.2.6), and an origin should keep its
+  classification and the structural graph it reads per store prefix
+  (§6.2). The requirement table reads them as five new rows, so the
+  horizon draft now has 50 requirements; none is implemented yet.
+
 ## [0.14.0] - 2026-10-21
 
 ### Added

@@ -39,7 +39,7 @@ func TestConeReferenceBudgetVerifiedDelta(t *testing.T) {
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 1 << 20,
 		InflatedBytes: 1 << 20, ExpandedBytes: 1 << 20, Cards: 100}
-	facts, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	facts, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err != nil || facts == nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestConeReferenceBudgetRejectsLyingInflationPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 4096, InflatedBytes: 1024, ExpandedBytes: 1024, Cards: 10}
-	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	_, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err == nil || work.InflateBytes != 1 || work.ExpandBytes != 0 || work.Visits != 0 {
 		t.Fatalf("lying prefix must not allocate actual expansion: work=%+v err=%v", work, err)
 	}
@@ -91,7 +91,7 @@ func TestConeReferenceBudgetBeforeDeltaAllocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 4096, InflatedBytes: 4096, ExpandedBytes: 1024, Cards: 10}
-	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	_, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err == nil || work.ExpandBytes != 0 {
 		t.Fatalf("delta allocated before output bound: work=%+v err=%v", work, err)
 	}
@@ -111,7 +111,7 @@ func TestConeReferenceBudgetCountsStoredBytesNotText(t *testing.T) {
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 4096,
 		InflatedBytes: 32 << 20, ExpandedBytes: 4096, Cards: 10}
-	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	_, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err == nil || work.PrefixReads != 0 || work.PayloadReads != 0 || work.InflateBytes != 0 {
 		t.Fatalf("TEXT bypassed byte preflight: work=%+v err=%v", work, err)
 	}
@@ -123,13 +123,13 @@ func TestConeReferenceBudgetBeforeExpansion(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 1, InflatedBytes: 1024, ExpandedBytes: 1024, Cards: 10}
-	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	_, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err == nil || work.PrefixReads != 0 || work.PayloadReads != 0 ||
 		work.InflateBytes != 0 || work.Visits != 0 {
 		t.Fatalf("preflight must reject before content read/allocation: work=%+v err=%v", work, err)
 	}
 	budget.StoredBytes = 1024
-	facts, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	facts, work, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err != nil || facts == nil || work.PayloadReads != 1 || work.Visits != 1 {
 		t.Fatalf("valid bounded preparation: work=%+v err=%v", work, err)
 	}
@@ -146,7 +146,7 @@ func TestConeReferenceBudgetCardsChargeOnlyDecks(t *testing.T) {
 	}
 	budget := ReferenceBudget{Artifacts: 1 << 18, StoredBytes: 64 << 20,
 		InflatedBytes: 128 << 20, ExpandedBytes: 128 << 20, Cards: 1 << 20}
-	facts, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	facts, _, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false)
 	if err != nil {
 		t.Fatalf("multi-line file refused by the card budget: %v", err)
 	}
@@ -171,11 +171,11 @@ func TestConeReferenceBudgetCardsRefuseLargeDeck(t *testing.T) {
 	}
 	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 1 << 20,
 		InflatedBytes: 1 << 20, ExpandedBytes: 1 << 20, Cards: 10}
-	if _, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget); err == nil {
+	if _, _, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false); err == nil {
 		t.Fatal("deck over the card budget prepared")
 	}
 	budget.Cards = 20
-	if _, _, err := LoadConeReferenceFactsBounded(context.Background(), d, budget); err != nil {
+	if _, _, err := loadConeReferenceFactsBounded(context.Background(), d, budget, false); err != nil {
 		t.Fatalf("deck within the card budget refused: %v", err)
 	}
 }

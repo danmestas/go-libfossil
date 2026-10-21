@@ -14,8 +14,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// ReferenceBudget bounds explicit preparation, not ordinary serving. Byte
-// budgets count payload buffers, not Go allocator overhead or parser objects.
+// ReferenceBudget bounds a whole-store reference load. Byte budgets count payload buffers, not Go allocator overhead or parser objects.
 // The artifact/card caps separately bound that overhead. The caller must hold
 // a stable database snapshot through preflight and materialization.
 type ReferenceBudget struct {
@@ -47,16 +46,10 @@ type referenceBlob struct {
 	unreadable  bool
 }
 
-// LoadConeReferenceFactsBounded proves total stored bytes before prefix reads,
+// loadConeReferenceFactsBounded proves total stored bytes before prefix reads,
 // which SQLite may materialize internally. It then proves declared inflation
 // before full driver payload reads. Inflation uses a fixed, precharged buffer
 // and verifies EOF. Delta output size is checked before Apply can allocate.
-func LoadConeReferenceFactsBounded(
-	ctx context.Context, q db.Querier, budget ReferenceBudget,
-) (*ConeReferenceFacts, ReferenceWork, error) {
-	return loadConeReferenceFactsBounded(ctx, q, budget, false)
-}
-
 func loadConeReferenceFactsBounded(
 	ctx context.Context, q db.Querier, budget ReferenceBudget, retainUnreadable bool,
 ) (*ConeReferenceFacts, ReferenceWork, error) {

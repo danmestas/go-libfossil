@@ -631,10 +631,8 @@ func (c *Checkout) CommitContext(ctx context.Context, opts CommitOpts) (libfossi
 		return 0, "", result.Err
 	}
 
-	if err := ctx.Err(); err != nil {
-		result.Err = err
-		return 0, "", err
-	}
+	// Publication is the cancellation boundary: finish local metadata once the
+	// repository has committed rather than report cancellation for a live commit.
 	if err := c.finalizeCommit(in, newRID, newUUID); err != nil {
 		result.Err = err
 		return 0, "", err

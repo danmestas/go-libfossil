@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
@@ -59,6 +60,52 @@ func TestCommitContextCanceledBeforeMutation(t *testing.T) {
 	after, err := co.RecoverySnapshot()
 	if err != nil || before != after {
 		t.Fatalf("cancellation mutated checkout snapshot: %q != %q: %v", before, after, err)
+	}
+}
+
+type publicationCancelContext struct {
+	context.Context
+	published func() bool
+}
+
+func (c publicationCancelContext) Err() error {
+	if c.published() {
+		return context.Canceled
+	}
+	return c.Context.Err()
+}
+
+func TestCommitContextFinalizesPublishedCheckin(t *testing.T) {
+	f := newSparseRepo(t, false)
+	co := f.open(t, sparseCone(t), f.c1)
+	if err := os.WriteFile(filepath.Join(co.Dir(), "src/a.c"), []byte("published edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := db.OpenSQL(f.repo.Path(), db.OpenConfig{}, map[string]string{"mode": "ro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	checkins := func() int {
+		t.Helper()
+		var count int
+		if err := reader.QueryRow("SELECT count(*) FROM event WHERE type='ci'").Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	before := checkins()
+	ctx := publicationCancelContext{Context: context.Background(), published: func() bool { return checkins() > before }}
+	rid, uuid, err := co.CommitContext(ctx, CommitOpts{Message: "publication boundary", User: "test"})
+	if err != nil {
+		t.Fatalf("published checkin did not finalize: %v", err)
+	}
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatal("fixture did not cancel after publication")
+	}
+	gotRID, gotUUID, err := co.Version()
+	if err != nil || gotRID != rid || gotUUID != uuid || rid == f.c1 {
+		t.Fatalf("checkout version = %d %s, want published %d %s: %v", gotRID, gotUUID, rid, uuid, err)
 	}
 }
 

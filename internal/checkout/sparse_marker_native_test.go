@@ -12,13 +12,11 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/testutil"
 )
 
 func TestSparseMarkerNativeRefusal(t *testing.T) {
-	binary, err := exec.LookPath("fossil")
-	if err != nil {
-		t.Skip("native fossil unavailable")
-	}
+	binary := testutil.RequireFossilBin(t)
 	f := newSparseRepo(t, false)
 	c := f.open(t, nil, f.c1)
 	sparse, err := cone.New([]string{"src"}, nil)

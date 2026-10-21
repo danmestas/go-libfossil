@@ -11,6 +11,33 @@ import (
 	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
+func TestUpdateRequiredFilesRetainsTargetOnStructuralRefusal(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "incoming\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := f.repo.DB().Exec(
+		"UPDATE blob SET size=-1,content=NULL WHERE rid=?", remote,
+	); err != nil {
+		t.Fatal(err)
+	}
+	before, err := co.RecoverySnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := co.UpdateRequiredFiles(context.Background(), UpdateOpts{TargetRID: remote})
+	var required *manifest.RequiredContentError
+	if !errors.As(err, &required) {
+		t.Fatalf("readiness error = %v, want structural required content", err)
+	}
+	if target != remote {
+		t.Fatalf("refused target = %d, want resolved target %d", target, remote)
+	}
+	after, err := co.RecoverySnapshot()
+	if err != nil || before != after {
+		t.Fatalf("structural refusal mutated checkout: %q != %q: %v", before, after, err)
+	}
+}
+
 func TestUpdateRequiredFilesDoesNotMutate(t *testing.T) {
 	f := newSparseRepo(t, true)
 	remote := f.commit(t, maps(sparseFiles, map[string]string{

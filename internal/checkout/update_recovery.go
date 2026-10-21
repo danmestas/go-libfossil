@@ -15,7 +15,8 @@ import (
 // UpdateRequiredFiles resolves the update target and returns the covered target
 // payloads plus any base payloads needed for a local merge. Planning scans live
 // working files without storing scan results; no working bytes survive recovery.
-// The caller binds target and RecoverySnapshot before an unlocked exchange.
+// Once resolved, target is retained even on structural refusal so the caller
+// can bind it and RecoverySnapshot before an unlocked exchange.
 func (c *Checkout) UpdateRequiredFiles(
 	ctx context.Context, opts UpdateOpts,
 ) (libfossil.FslID, []manifest.FileEntry, error) {
@@ -41,15 +42,15 @@ func (c *Checkout) prepareUpdate(
 	}
 	parents, err := c.mergeParents(current)
 	if err != nil {
-		return 0, nil, nil, err
+		return target, nil, nil, err
 	}
 	parents = append(parents, current, target)
 	if err := manifest.RequireParentContent(ctx, c.repo.DB(), parents); err != nil {
-		return 0, nil, nil, err
+		return target, nil, nil, err
 	}
 	steps, err := c.planUpdate(current, target)
 	if err != nil {
-		return 0, nil, nil, err
+		return target, nil, nil, err
 	}
 	files, err := c.updateFileNeeds(ctx, target, steps)
 	return target, steps, files, err

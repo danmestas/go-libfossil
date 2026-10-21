@@ -51,7 +51,7 @@ SC-4.3-2	4.3	A commit over a sparse store omits the R card.
 SC-4.3-3	4.3	Verifiers do not treat an absent R card as damage.
 SC-4.3-4	4.3	A verifier checking a present R card during a sparse materialization computes the aggregate over the dense enumeration, reading out-of-cone content from the store.
 SC-4.3-5	4.3	A verifier over a sparse store skips R verification rather than report disagreement.
-SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.	record-only merge and conflict, update keeping the pending merge, partial-commit queue handling, mode-only revert and undo after cone changes are reviewed against fossil; revert of a record-only change has no conformance case and stash apply on a sparse checkout is untested
+SC-4.4-1	4.4	Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.
 SC-4.4-2	4.4	The count of out-of-cone changes applied should be reported.
 SC-4.4-3	4.4	Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.
 SC-5-1	5	A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A cone can carry a horizon (draft-fossil-horizon-00 §3): a check-in
+  named by its full hash, the held-set rule (`descendants` or `leaves`) and
+  the depth of the cut (`content` or `structural`), with or without path
+  members. A cone with a horizon serializes as version 3, byte for byte as
+  zit writes it, so its digest matches zit's; an implementation that
+  predates horizons refuses it. Internal only for now.
+
 ### Changed
 
 - The horizon draft is re-pinned to zit's `horizon-rfc` check-in

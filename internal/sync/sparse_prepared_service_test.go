@@ -109,9 +109,8 @@ func TestPreparedSparseServiceInvalidation(t *testing.T) {
 			if err != nil || applied {
 				t.Fatalf("invalidated response: applied=%v err=%v", applied, err)
 			}
-			// Match the existing dense clone path: it skips private rows but
-			// does not currently skip shun rows. Shun still invalidates facts.
-			wantOutside := kind != "private"
+			// Invalidating the cone proof must not bypass ordinary visibility.
+			wantOutside := kind != "private" && kind != "shun"
 			if preparedHasFile(resp, outside) != wantOutside {
 				t.Fatalf("dense fallback outside=%v want=%v", preparedHasFile(resp, outside), wantOutside)
 			}

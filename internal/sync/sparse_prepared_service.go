@@ -60,6 +60,10 @@ func prepareSparseService(
 	if err != nil {
 		return nil, err
 	}
+	// A protocol fatal can roll back with a nil Go error, after a gimme has
+	// expanded an uncommitted RID. Never share RID-keyed cache state across
+	// this service's transactions, including dense mutation fallbacks.
+	opts.ContentCache = nil
 	s := &preparedSparseService{repo: r, opts: opts, observer: observer, pinned: observer.conn}
 	err = r.WithBoundTx(func(bound *repo.Repo) error {
 		var err error
@@ -91,12 +95,21 @@ func (s *preparedSparseService) handle(
 	if req == nil {
 		panic("sync.preparedSparseService.handle: nil request")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
 	var resp *xfer.Message
 	s.lastWork = content.SuccessorWork{}
 	applied := false
 	err := s.repo.WithBoundTx(func(bound *repo.Repo) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		c, coneErr := requestCone(req.Cards)
 		usable := !s.closed && coneErr == nil && c != nil
 		if usable {
@@ -108,7 +121,13 @@ func (s *preparedSparseService) handle(
 		}
 		if usable {
 			version, err := s.observer.version(ctx)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			usable = err == nil && version == s.version
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		var proof *sparsePreparedProof
 		if usable {

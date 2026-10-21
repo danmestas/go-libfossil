@@ -229,6 +229,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo verify` runs the full verifier (blob hashes, delta chains, phantom
+  records, derived tables) and prints what the store lacks by class:
+  transit phantoms apart from artifacts the store cone elides, which are
+  healthy (sparse-cone §5.2). It used to hash the held blobs only and print
+  a fixed line, so neither damage outside the blobs nor elision showed.
+
 - `repo clone` remembers its source as `last-sync-url`, as `fossil clone`
   does, keeping a user name and never a password. Nothing in go-libfossil
   wrote the setting, so the default peer for `repo cone store`, widening

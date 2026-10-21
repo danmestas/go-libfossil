@@ -131,11 +131,12 @@ func scConeServedNotSent(t *testing.T) error {
 }
 
 // Section 6.2: a cone request's pull inventory may be announced densely or
-// filtered to the cone, and the requester relies on neither. The peer here
-// adds an announcement of an out-of-cone blob to every pull reply, as a
-// server announcing densely would, once the check-in naming the blob is held.
-// The blob is never asked for and stays elided. An announcement that arrives
-// with its check-in cannot be classified yet; see SC-6.2-4's scope note.
+// filtered to the cone, and the requester relies on neither for correctness.
+// The peer here adds an out-of-cone announcement to every pull reply, as a
+// server announcing densely would. Announced with its check-in, the blob is
+// still unclassified, so it is requested and filtered on arrival: it costs
+// its payload but is never held. Announced after the check-in that classifies
+// it, it is never requested.
 type scDenseAnnouncer struct {
 	*scSyncPeer
 	uuid string
@@ -154,23 +155,38 @@ func scDenseInventory(t *testing.T) error {
 	origin := newSCSyncRepo(t, scSyncFiles())
 	peer := &scSyncPeer{r: origin.r}
 	r, _ := scSyncClone(t, peer, sync.CloneOpts{StoreCone: scCone(t, []string{"src"}, nil)})
+	pull := func(p sync.Transport) error {
+		res, err := sync.Sync(context.Background(), r, p, sync.SyncOpts{Pull: true})
+		if err == nil && len(res.Errors) != 0 {
+			err = fmt.Errorf("pull errors %q", res.Errors)
+		}
+		return err
+	}
 	files := scSyncFiles()
-	files["zzz/announced"] = "announced outside\n"
-	origin.commit(t, files, origin.c1)
-	outside := hash.SHA1([]byte("announced outside\n"))
-	if _, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true}); err != nil {
+	files["zzz/with"] = "announced with its check-in\n"
+	tip := origin.commit(t, files, origin.c1)
+	with := hash.SHA1([]byte(files["zzz/with"]))
+	if err := pull(scDenseAnnouncer{scSyncPeer: peer, uuid: with}); err != nil {
+		return err
+	}
+	if err := scSyncHolding(r, files["zzz/with"], false); err != nil {
+		return err
+	}
+	files["zzz/after"] = "announced after its check-in\n"
+	origin.commit(t, files, tip)
+	after := hash.SHA1([]byte(files["zzz/after"]))
+	if err := pull(peer); err != nil {
 		return err
 	}
 	peer.requests = nil
-	dense := scDenseAnnouncer{scSyncPeer: peer, uuid: outside}
-	if _, err := sync.Sync(context.Background(), r, dense, sync.SyncOpts{Pull: true}); err != nil {
+	if err := pull(scDenseAnnouncer{scSyncPeer: peer, uuid: after}); err != nil {
 		return err
 	}
 	if len(peer.requests) == 0 {
 		return fmt.Errorf("pull sent no request")
 	}
-	if err := scSyncNoGimme(peer.requests, outside); err != nil {
+	if err := scSyncNoGimme(peer.requests, after); err != nil {
 		return err
 	}
-	return scSyncHolding(r, "announced outside\n", false)
+	return scSyncHolding(r, files["zzz/after"], false)
 }

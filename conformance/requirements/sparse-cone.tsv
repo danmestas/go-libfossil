@@ -2,8 +2,8 @@
 # Cases cover cone specification, sparse worktrees, store classification,
 # internal synchronization and explicit compaction. Scope notes preserve
 # incomplete behavior: incomplete file history, bounded request preprocessing
-# and public wiring. The text is horizon-rfc a5741263ab, which carries zit
-# #257-#260; the e03d91943e57 sparse canonical-writing correction is
+# and public wiring. The text is horizon-rfc e6ee276c89, which carries zit
+# #257-#260 and #262; the e03d91943e57 sparse canonical-writing correction is
 # exercised by the Appendix A.6 MAX, final-merge and parent-basis vectors.
 # Store cases include deliberately elided fixtures; sync cases exercise real
 # loopback wire exchanges, and compaction cases exercise rebuild and healing.
@@ -15,7 +15,7 @@
 # (src/cone.zig, byte-identical here and checked against zit in
 # testdata/zit-cones) and its exact-member removal.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-sparse-cone-00.txt	95bd4ec66d218974a4ac5ea763da013684493aaaa9406d380eb6e398d3f68240
+# draft	draft-fossil-sparse-cone-00.txt	2ecfc54f4b830938f825b8055286823c37d9af1f9e4a6fbcd132ed32241e00f2
 SC-2-1	2	A member covers a path when it equals the path or is a prefix of it ending at a '/' boundary; a cone has at least one inclusion member, and the absent cone covers everything (dense operation).
 SC-3.1-1	3.1	A worktree cone is checkout-local state recorded with the checkout's other local records; it is not an artifact, does not synchronize, and affects no artifact's bytes or name.
 SC-3.1-2	3.1	A cone may be widened or narrowed at any time.
@@ -71,7 +71,7 @@ SC-6.1-2	6.1	For check-in content a cone-scoped request asks for spines, in-cone
 SC-6.2-1	6.2	A cone-aware server walks each check-in's tree descending only nodes whose key range intersects the cone, emits the spine, the in-cone nodes and blobs, and bounds the per-round walk as a dense clone bounds its batches.
 SC-6.2-2	6.2	A cone-aware server does not serve a delta whose base is outside the keep set it computed for the request; it serves that artifact in full form.
 SC-6.2-3	6.2	A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.
-SC-6.2-4	6.2	The per-round bound governs the tree walk only; a cone request's pull inventory may be announced densely or filtered to the cone, and the requester relies on neither, never spontaneously requesting an out-of-cone announcement.	only once the check-in naming the blob is held: an out-of-cone blob announced in the same reply as its check-in is still unclassified, so it is requested as a transit phantom and filtered on arrival, costing its payload; the draft says a dense inventory costs nothing beyond the announcement; the draft is asked to settle this in zit #262
+SC-6.2-4	6.2	The per-round bound governs the tree walk only; a cone request's pull inventory may be announced densely or filtered to the cone, and the requester relies on neither for correctness: an out-of-cone blob announced with its check-in is requested as a transit phantom and elided on arrival, and one announced after the check-in that classifies it is never requested.
 SC-6.3-1	6.3	Against a cone-ignorant server the requester filters locally: it stores in-cone blobs and every manifest and sub-manifest node received, records elided phantoms for the out-of-cone blobs and reports the counts.
 SC-6.3-2	6.3	A cone-aware server should acknowledge each reply that applied the request's whole cone with pragma cone-served, in the reply's leading pragma run, never in a reply that refused the request, served densely or ignored a member; the requester counts acknowledged replies.
 SC-6.4-1	6.4	An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.

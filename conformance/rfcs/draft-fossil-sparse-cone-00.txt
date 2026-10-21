@@ -640,10 +640,18 @@ Internet-Draft             Fossil Sparse Cones              October 2026
    A server MAY omit out-of-cone artifacts from that inventory, for
    example with a classification of its holdings that it reuses across
    requests, and MAY announce it densely.  A requester MUST NOT rely on
-   either: an out-of-cone announcement names an artifact it does not
-   spontaneously request (Section 5.2), so a dense inventory costs it
-   nothing beyond the announcement.  This document defines no inventory
-   pagination.
+   either for correctness.  The two differ in cost.  Elision is
+   classified from the F cards of held manifests (Section 5.1), and an
+   igot card carries no artifact type.  A dense inventory that announces
+   a new check-in together with the out-of-cone blobs it names therefore
+   reaches a requester that cannot yet classify those blobs: they are
+   transit phantoms (Section 5.2), requested alongside the check-in, and
+   elided by the filtering of Section 6.3 when they arrive.  A dense
+   inventory thus costs a requester at most the out-of-cone blobs of
+   check-ins announced in the same inventory; an out-of-cone name
+   announced after the check-in that classifies it costs only the
+   announcement.  A server that filters its inventory to the cone avoids
+   that cost.  This document defines no inventory pagination.
 
    A stored artifact may be held as a delta against a base, and a dense
    reply serves such a container verbatim because a dense recipient
@@ -658,14 +666,6 @@ Internet-Draft             Fossil Sparse Cones              October 2026
    that a retained delta names as its source as a transit phantom
    whatever its cone classification, so that a server predating this
    rule costs bandwidth and never a stuck artifact.
-
-
-
-
-
-
-
-
 
 
 
@@ -929,16 +929,16 @@ Internet-Draft             Fossil Sparse Cones              October 2026
       densely or filtered to the cone, and requesters rely on neither.
       Clarification.
 
+   *  Section 6.2: a dense inventory can cost a requester the out-of-
+      cone blobs of check-ins announced in the same inventory, since
+      those names are transit phantoms until classified; the former
+      "costs it nothing beyond the announcement" held only for names
+      already classified.  Clarification.
+
 Author's Address
 
    Dan Mestas
    Email: dan5446@gmail.com
-
-
-
-
-
-
 
 
 

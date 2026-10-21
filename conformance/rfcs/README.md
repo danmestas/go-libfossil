@@ -26,7 +26,7 @@ changed and no section number moved.
 | `draft-fossil-sync-protocol-00.txt` | `68a3f76cb7` | `62e9495f35` | `2195d9a18fe6bfaa…` |
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
-| `draft-fossil-sparse-cone-00.txt` | `a5741263ab` (branch `horizon-rfc`) | `5159d54653` | `95bd4ec66d218974…` |
+| `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
 | `draft-fossil-horizon-00.txt` | `86d4b67372` (branch `horizon-rfc`) | `56bf5c0553` | `e1e92af6fa1c2acf…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
@@ -47,9 +47,9 @@ with two leading `#` lines that the suite drops.
 
 The sparse-cone and horizon drafts follow zit's `horizon-rfc` branch, where
 the horizon draft lives; that branch merges trunk. The sparse-cone copy at
-`a5741263ab` carries the corrections of zit #257 to #260 (the
+`e6ee276c89` carries the corrections of zit #257 to #260 and #262 (the
 cone-served acknowledgement, the empty-cone refusal, structural retention
-on compaction and local filtering, and the pull-inventory clarification)
+on compaction and local filtering, and the pull-inventory clarifications)
 and retains the branch's §3.1
 members-of-other-kinds and §6.2 outside-delta-base corrections. Its §4.2
 now requires the complete canonical structural affected range and verified

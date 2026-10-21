@@ -220,6 +220,7 @@ func (c *Checkout) applyRecordOnlyMerge(tx *sql.Tx, vid libfossil.FslID, s merge
 		row.Deleted = 1
 	case MergeMode:
 		row.IsExe = boolInt(s.exe)
+		row.Chnged = 2
 	case MergeConflict:
 		unresolved = 1
 		row.Chnged = 2

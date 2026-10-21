@@ -2,8 +2,6 @@ package content
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -17,7 +15,8 @@ import (
 //
 // Preparation reads and inflates the whole store. Classify avoids that I/O,
 // but still examines all parsed references and walks all check-in roots; it
-// is not a bounded-per-round serving index.
+// is not a bounded-per-round serving index. Retained decks are classification
+// projections, not complete artifacts suitable for marshaling.
 type ConeReferenceFacts struct {
 	names      map[libfossil.FslID]string
 	held       map[string]libfossil.FslID
@@ -34,64 +33,15 @@ type coneReferenceRecord struct {
 }
 
 func LoadConeReferenceFacts(ctx context.Context, q db.Querier) (*ConeReferenceFacts, error) {
-	if ctx == nil || q == nil {
-		panic("content.LoadConeReferenceFacts: nil context or querier")
-	}
-	facts := &ConeReferenceFacts{
-		names: map[libfossil.FslID]string{}, held: map[string]libfossil.FslID{},
-		nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{},
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	rows, err := q.Query("SELECT rid,uuid FROM blob")
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		if err := ctx.Err(); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		var rid libfossil.FslID
-		var uuid string
-		if err := rows.Scan(&rid, &uuid); err != nil {
-			return nil, errors.Join(err, rows.Close())
-		}
-		facts.names[rid] = uuid
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return nil, err
-	}
-	err = ExpandAll(q, func(rid libfossil.FslID, uuid string, data []byte, expandErr error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if expandErr != nil {
-			facts.unreadable = append(facts.unreadable, uuid)
-			return nil
-		}
-		facts.held[uuid] = rid
-		d, err := deck.Parse(data)
-		if err != nil {
-			return nil
-		}
-		if len(facts.byUUID)+len(facts.roots) >= coneReferenceNodes {
-			return fmt.Errorf("sparse cone: artifact traversal bound exceeded")
-		}
-		facts.records = append(facts.records, coneReferenceRecord{uuid: uuid, deck: d})
-		if d.Type == deck.Submanifest {
-			facts.byUUID[uuid] = d
-			facts.nodes[rid] = d
-		}
-		if d.Type == deck.Checkin {
-			facts.roots = append(facts.roots, d)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return facts, nil
+	// Ordinary discovery needs the same pre-allocation guards as explicit
+	// preparation. Counting only check-ins/trees does not bound wiki, forum,
+	// cluster or file storage. Oversized snapshots fail rather than allocate
+	// first and discover their budget after parsing.
+	facts, _, err := loadConeReferenceFactsBounded(ctx, q, ReferenceBudget{
+		Artifacts: coneReferenceNodes, StoredBytes: 64 << 20,
+		InflatedBytes: 128 << 20, ExpandedBytes: 128 << 20, Cards: 1 << 20,
+	}, true)
+	return facts, err
 }
 
 // Classify creates request-local membership; neither the facts nor previous

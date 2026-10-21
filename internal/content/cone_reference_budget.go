@@ -43,6 +43,7 @@ type referenceBlob struct {
 	payload     []byte
 	data        []byte
 	children    []int
+	unreadable  bool
 }
 
 // LoadConeReferenceFactsBounded rejects total stored/declared expansion sizes
@@ -51,6 +52,12 @@ type referenceBlob struct {
 // Delta output length is checked before Apply can allocate its target.
 func LoadConeReferenceFactsBounded(
 	ctx context.Context, q db.Querier, budget ReferenceBudget,
+) (*ConeReferenceFacts, ReferenceWork, error) {
+	return loadConeReferenceFactsBounded(ctx, q, budget, false)
+}
+
+func loadConeReferenceFactsBounded(
+	ctx context.Context, q db.Querier, budget ReferenceBudget, retainUnreadable bool,
 ) (*ConeReferenceFacts, ReferenceWork, error) {
 	var work ReferenceWork
 	blobs, names, err := referencePreflight(ctx, q, budget)
@@ -64,6 +71,12 @@ func LoadConeReferenceFactsBounded(
 		if err := ctx.Err(); err != nil {
 			return nil, work, err
 		}
+		if b.unreadable {
+			if retainUnreadable {
+				continue
+			}
+			return nil, work, fmt.Errorf("sparse preparation: invalid compressed prefix")
+		}
 		var packed []byte
 		// length() was checked in the same transaction before this driver
 		// allocation; the predicate also guards accidental unbound use.
@@ -75,7 +88,10 @@ func LoadConeReferenceFactsBounded(
 		work.InflateBytes += b.inflated
 		b.payload, err = referenceInflate(packed, int(b.inflated))
 		if err != nil {
-			return nil, work, err
+			if !retainUnreadable {
+				return nil, work, err
+			}
+			b.unreadable = true
 		}
 	}
 	if err := referenceMaterialize(ctx, blobs, facts, budget, &work); err != nil {
@@ -107,7 +123,7 @@ func referencePreflight(
 	blobs := make([]referenceBlob, 0, int(count))
 	names := make(map[libfossil.FslID]string, int(count))
 	rows, err := q.Query(`SELECT b.rid,substr(b.uuid,1,65),b.size,
-		coalesce(length(b.content),0),substr(b.content,1,4),coalesce(d.srcid,0)
+		coalesce(length(b.content),0),substr(b.content,1,6),coalesce(d.srcid,0)
 		FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`)
 	if err != nil {
 		return nil, nil, err
@@ -129,10 +145,16 @@ func referencePreflight(
 		if b.size < 0 {
 			continue
 		}
-		if len(prefix) != 4 || b.stored < 5 {
-			return nil, nil, errors.Join(fmt.Errorf("sparse preparation: invalid compressed prefix"), rows.Close())
+		// Invalid zlib headers cannot justify an inflated-size reservation.
+		// Ordinary discovery retains them as unknown without reading payloads.
+		b.unreadable = len(prefix) != 6
+		if !b.unreadable {
+			b.unreadable = prefix[4]&15 != 8 || prefix[4]>>4 > 7 ||
+				(binary.BigEndian.Uint16(prefix[4:])%31 != 0)
 		}
-		b.inflated = int64(binary.BigEndian.Uint32(prefix))
+		if !b.unreadable {
+			b.inflated = int64(binary.BigEndian.Uint32(prefix[:4]))
+		}
 		if b.stored > budget.StoredBytes-stored || b.inflated > budget.InflatedBytes-inflated || b.size > budget.ExpandedBytes-expanded {
 			return nil, nil, errors.Join(fmt.Errorf("sparse preparation: byte budget exceeded"), rows.Close())
 		}
@@ -194,7 +216,7 @@ func referenceMaterialize(
 		work.Visits++
 		b := &blobs[queue[at]]
 		data := b.payload
-		if b.source != 0 {
+		if b.source != 0 && !b.unreadable {
 			base := blobs[index[b.source]].data
 			size, err := delta.OutputSize(b.payload)
 			if err != nil || size != uint64(b.size) || size > uint64(budget.ExpandedBytes-work.ExpandBytes) {
@@ -211,7 +233,7 @@ func referenceMaterialize(
 				}
 			}
 		}
-		if int64(len(data)) != b.size || bindToUUID(b.rid, b.uuid, data) != nil {
+		if b.unreadable || int64(len(data)) != b.size || bindToUUID(b.rid, b.uuid, data) != nil {
 			data = nil
 		}
 		b.data = data
@@ -243,6 +265,7 @@ func referenceRecord(facts *ConeReferenceFacts, b *referenceBlob, aliases *int, 
 	if err != nil {
 		return nil // Ordinary file bytes do not provide reference facts.
 	}
+	d = referenceDeck(d)
 	facts.records = append(facts.records, coneReferenceRecord{uuid: b.uuid, deck: d})
 	if d.Type == deck.Submanifest {
 		facts.byUUID[b.uuid] = d

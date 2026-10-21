@@ -139,8 +139,10 @@ func preparedHasFile(resp *xfer.Message, uuid string) bool {
 }
 
 type preparedSparseTransport struct {
-	service *preparedSparseService
-	applied int
+	service       *preparedSparseService
+	applied       int
+	maxCandidates int
+	maxWork       content.SuccessorWork
 }
 
 func (p *preparedSparseTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
@@ -158,6 +160,10 @@ func (p *preparedSparseTransport) Exchange(ctx context.Context, req *xfer.Messag
 	}
 	if applied {
 		p.applied++
+		if p.service.lastWork.Candidates > p.maxCandidates {
+			p.maxCandidates = p.service.lastWork.Candidates
+			p.maxWork = p.service.lastWork
+		}
 	}
 	wire, err = resp.Encode()
 	if err != nil {
@@ -207,6 +213,13 @@ func TestPreparedSparseServiceCloneExcludedRun(t *testing.T) {
 			defer cloned.Close()
 			if transport.applied == 0 {
 				t.Fatal("real client never selected prepared path")
+			}
+			t.Logf("indexed clone work over 2051 excluded rows: %+v", transport.maxWork)
+			if transport.maxWork.PathComparisons > 64 || transport.maxWork.IndexVisits > 128 {
+				t.Fatalf("indexed work exceeded deterministic logarithmic budget: %+v", transport.maxWork)
+			}
+			if transport.maxCandidates != 2 {
+				t.Fatalf("indexed clone examined %d candidates, want exactly final file + manifest", transport.maxCandidates)
 			}
 			var rid libfossil.FslID
 			if err := cloned.DB().QueryRow("SELECT rid FROM blob WHERE uuid=? AND size>=0", final).Scan(&rid); err != nil {

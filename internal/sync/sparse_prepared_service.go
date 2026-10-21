@@ -13,10 +13,13 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// preparedSparseService is an internal lifecycle prototype, not a bounded-work
-// server. Preparation inflates the whole store; warm membership classification
-// still examines all parsed references, and pull inventories still scan the
-// blob table. No public listener uses it and no capability is advertised.
+// preparedSparseService is an internal indexed-clone prototype. Bounded,
+// off-path preparation reads the store and builds a cone-independent successor
+// index. Warm clone selection does not scan excluded gaps. Selected content
+// reconstruction still uses the dense pipeline's existing allocation behavior;
+// indexing alone does not bound that work. Ordinary pull still scans the blob
+// inventory. This is not a bounded-work general sync server. No public listener
+// uses it and no capability is advertised.
 //
 // The caller owns the root repository and must keep it open. Its path must
 // still name the opened database, and must not be replaced during preparation:
@@ -33,6 +36,9 @@ type preparedSparseService struct {
 	identity os.FileInfo
 	version  int64
 	facts    *content.ConeReferenceFacts
+	index    *content.ConeSuccessors
+	lastWork content.SuccessorWork
+	prepWork content.ReferenceWork
 	closed   bool
 }
 
@@ -65,8 +71,7 @@ func prepareSparseService(
 		if err != nil {
 			return err
 		}
-		s.facts, err = content.LoadConeReferenceFacts(ctx, bound.DB())
-		return err
+		return s.prepareIndex(ctx, bound)
 	})
 	if err != nil {
 		return nil, errors.Join(err, observer.Close())
@@ -89,6 +94,7 @@ func (s *preparedSparseService) handle(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var resp *xfer.Message
+	s.lastWork = content.SuccessorWork{}
 	applied := false
 	err := s.repo.WithBoundTx(func(bound *repo.Repo) error {
 		c, coneErr := requestCone(req.Cards)
@@ -104,12 +110,15 @@ func (s *preparedSparseService) handle(
 			version, err := s.observer.version(ctx)
 			usable = err == nil && version == s.version
 		}
-		var facts *content.ConeReferenceFacts
+		var proof *sparsePreparedProof
 		if usable {
-			facts = s.facts
+			proof = &sparsePreparedProof{facts: s.facts, index: s.index}
 		}
 		var err error
-		resp, err = handleSyncWithFacts(ctx, bound, req, s.opts, facts, !usable)
+		resp, err = handleSyncWithFacts(ctx, bound, req, s.opts, proof, !usable)
+		if proof != nil {
+			s.lastWork = proof.work
+		}
 		applied = usable && err == nil
 		return err
 	})
@@ -141,6 +150,7 @@ func (s *preparedSparseService) Close() error {
 	}
 	s.closed = true
 	s.facts = nil
+	s.index = nil
 	return s.observer.Close()
 }
 

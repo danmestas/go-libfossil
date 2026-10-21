@@ -16,7 +16,8 @@ import (
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
 // shared by covered and uncovered names is kept under either name.
 type sparseKeep struct {
-	refs *content.ConeReferences
+	refs    *content.ConeReferences
+	indexed *content.ConeSuccessorQuery
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
@@ -38,6 +39,10 @@ func (h *handler) ensureSparseKeep() error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if h.preparedIndex != nil {
+		h.keep = &sparseKeep{indexed: h.preparedIndex.Query(h.cone)}
+		return nil
+	}
 	if h.preparedFacts != nil {
 		refs, err := h.preparedFacts.Classify(ctx, h.cone)
 		if err != nil {
@@ -52,7 +57,13 @@ func (h *handler) ensureSparseKeep() error {
 }
 
 func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
-	return k == nil || !k.refs.Outside(rid)
+	if k == nil {
+		return true
+	}
+	if k.indexed != nil {
+		return k.indexed.Next(rid, rid) == rid
+	}
+	return !k.refs.Outside(rid)
 }
 
 // filterSparseReceived filters only artifacts this transfer newly acquired.

@@ -140,7 +140,7 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	return handleSyncWithFacts(ctx, r, req, opts, nil, false)
 }
 
-func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts, facts *content.ConeReferenceFacts, ignoreSparse bool) (*xfer.Message, error) {
+func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts, proof *sparsePreparedProof, ignoreSparse bool) (*xfer.Message, error) {
 	if r == nil {
 		panic("sync.HandleSync: r must not be nil")
 	}
@@ -153,7 +153,15 @@ func handleSyncWithFacts(ctx context.Context, r *repo.Repo, req *xfer.Message, o
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx, preparedFacts: facts, ignoreSparse: ignoreSparse}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx, ignoreSparse: ignoreSparse}
+	if proof != nil {
+		h.preparedFacts, h.preparedIndex = proof.facts, proof.index
+		defer func() {
+			if h.keep != nil && h.keep.indexed != nil {
+				proof.work = h.keep.indexed.Work
+			}
+		}()
+	}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -202,6 +210,7 @@ type handler struct {
 	cone            *cone.Cone
 	keep            *sparseKeep
 	preparedFacts   *content.ConeReferenceFacts
+	preparedIndex   *content.ConeSuccessors
 	ignoreSparse    bool
 	partialMirror   bool
 	repo            *repo.Repo
@@ -1622,10 +1631,7 @@ func (h *handler) emitCloneBatch() error {
 	if cursorAtEntry <= 0 {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
-	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
-		h.cloneSeq, h.cloneSnapMax,
-	)
+	rows, err := h.cloneCandidates()
 	if err != nil {
 		return fmt.Errorf("handler: clone batch: %w", err)
 	}

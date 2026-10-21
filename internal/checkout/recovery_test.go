@@ -139,7 +139,7 @@ func TestCommitCarriedFilesSelectionWithoutMutation(t *testing.T) {
 		paths []string
 		want  string
 	}{
-		{"explicit", []string{"src/a.c"}, "src/b.c,src/vendor/keep/k.c"},
+		{"explicit", []string{"src/a.c"}, "src/vendor/keep/k.c"},
 		{"queue", nil, "src/a.c,src/vendor/keep/k.c"},
 		{"directory", []string{"src"}, ""},
 		{"all", []string{"."}, ""},

@@ -28,13 +28,14 @@ func (c *Checkout) RequireCommitContent(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return manifest.RequireParentContent(ctx, c.repo.DB(), append([]libfossil.FslID{parent}, parents...))
+	parents = append([]libfossil.FslID{parent}, parents...)
+	return manifest.RequireParentContent(ctx, c.repo.DB(), parents)
 }
 
 // CommitCarriedFiles returns covered baseline files excluded by a commit's
-// selection. Explicit paths override the existing queue without changing it.
-// It does not scan working files or fetch payloads; the caller intersects these
-// immutable identities with repository coverage before recovering missing bytes.
+// selection. Explicit paths extend the existing queue as Enqueue would, without
+// changing it. It does not scan working files or fetch payloads; these immutable
+// identities name the carried payloads the writer will read.
 func (c *Checkout) CommitCarriedFiles(ctx context.Context, paths []string) ([]manifest.FileEntry, error) {
 	if err := c.RequireCommitContent(ctx); err != nil {
 		return nil, err
@@ -49,7 +50,10 @@ func (c *Checkout) CommitCarriedFiles(ctx context.Context, paths []string) ([]ma
 	}
 	queue := c.checkinQueue
 	if len(paths) > 0 {
-		queue = make(map[string]bool, len(paths))
+		queue = make(map[string]bool, len(c.checkinQueue)+len(paths))
+		for name, selected := range c.checkinQueue {
+			queue[name] = selected
+		}
 		for _, name := range paths {
 			queue[name] = true
 		}

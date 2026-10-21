@@ -229,6 +229,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A sparse store that will not serve a clone now refuses it as fossil
+  refuses an unauthorized clone: the push card naming the repository, then
+  the error. fossil 2.28's clone client read the bare error as an empty,
+  finished clone, exited 0 and left a repository with no project code. It
+  now aborts with the refusal and leaves nothing, and go-libfossil's client
+  re-asks once and stops at the second refusal, as fossil's does.
+
 - The simulation's safety invariants no longer read through armed fault
   injection. `CheckSafety` and the other checks ran while Buggify was still
   on, so read-path sites truncated or flipped the bytes the check itself

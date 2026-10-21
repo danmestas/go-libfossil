@@ -741,7 +741,7 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 			return err
 		}
 		if !coneContains(have, h.cone) {
-			h.fail("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
+			h.refuseClone("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
 			return nil
 		}
 	}
@@ -833,7 +833,7 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 // card's SEQNO names.
 func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	if !auth.CanClone(h.caps) {
-		h.refuseClone()
+		h.refuseClone("not authorized to clone")
 		return
 	}
 	// §4.1, §8.1: page_xfer sends a version 3 clone's reply uncompressed,
@@ -865,10 +865,14 @@ func (h *handler) handleCloneCard(c *xfer.CloneCard) {
 	}
 }
 
-// refuseClone answers a clone from a requester without Clone as page_xfer
-// does (§8.2, §10.1): the reply so far is reset, the push card naming the
-// repository goes ahead of the error, and no later card is processed.
-func (h *handler) refuseClone() {
+// refuseClone answers a clone it will not serve as page_xfer answers one from
+// a requester without Clone (§8.2, §10.1): the reply so far is reset, the
+// push card naming the repository goes ahead of the error, and no later card
+// is processed. A sparse store that does not cover the request refuses the
+// same way (sparse-cone §5.3). fossil's clone client needs the push card: a
+// first round without one reads as an empty, finished clone, and it exits 0
+// with no project code, where with the codes it reads the error as fatal.
+func (h *handler) refuseClone(msg string) {
 	h.resetContent()
 	serverCode := h.serverCode
 	if serverCode == "" {
@@ -876,7 +880,7 @@ func (h *handler) refuseClone() {
 	}
 	h.resp = append(h.resp,
 		&xfer.PushCard{ServerCode: serverCode, ProjectCode: h.projectCode},
-		&xfer.ErrorCard{Message: "not authorized to clone"})
+		&xfer.ErrorCard{Message: msg})
 	h.broke = true
 }
 

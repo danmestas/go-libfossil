@@ -344,8 +344,13 @@ func TestSparseServerFlatClone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(dense.Cards) != 1 || len(findCards[*xfer.ErrorCard](dense)) != 1 {
+	// The refusal is page_xfer's: the push card naming the repository, then
+	// the error, then the closing comment, and no content.
+	if len(findCards[*xfer.ErrorCard](dense)) != 1 || len(findCards[*xfer.FileCard](dense)) != 0 {
 		t.Fatalf("sparse origin did not refuse dense clone: %v", dense.Cards)
+	}
+	if _, ok := dense.Cards[0].(*xfer.PushCard); !ok {
+		t.Fatalf("refusal does not lead with the push card: %v", dense.Cards)
 	}
 }
 

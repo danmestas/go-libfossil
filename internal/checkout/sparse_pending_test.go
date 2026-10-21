@@ -103,7 +103,7 @@ func TestSparseUpdatePreservesPendingOutcome(t *testing.T) {
 	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
 		t.Fatal(err)
 	}
-	for table, want := range map[string]int{"sparse_pending": 1, "vmerge": 0} {
+	for table, want := range map[string]int{"sparse_pending": 1, "vmerge": 1} {
 		var count int
 		if err := co.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != want {
 			t.Fatalf("update %s rows: %d, want %d: %v", table, count, want, err)
@@ -114,4 +114,77 @@ func TestSparseUpdatePreservesPendingOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertCheckinContent(t, f.repo, rid, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n", "src/a.c": "target\n"}))
+}
+
+// An update keeps a pending merge, as fossil's does: the sparse checkout
+// keeps the vmerge rows the dense one keeps, and the next commit records the
+// merge parent.
+func TestSparseUpdateKeepsPendingMerge(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"src/b.c": "theirs\n"}), f.c1)
+	target := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "target\n"}), f.c1)
+	remoteUUID, err := blobUUID(f.repo.DB(), remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmerges := map[bool]int{}
+	for _, sparse := range []bool{false, true} {
+		c := sparseCone(t)
+		if !sparse {
+			c = nil
+		}
+		co := f.open(t, c, f.c1)
+		if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
+			t.Fatal(err)
+		}
+		var n int
+		if err := co.db.QueryRow("SELECT count(*) FROM vmerge").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		vmerges[sparse] = n
+		msg := "merged dense"
+		if sparse {
+			msg = "merged sparse"
+		}
+		rid, _, err := co.Commit(CommitOpts{Message: msg, User: "test", Time: f.time.Add(time.Hour)})
+		if err != nil {
+			t.Fatalf("sparse=%v: %v", sparse, err)
+		}
+		d, err := manifest.GetManifest(f.repo, rid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(d.P) != 2 || d.P[1] != remoteUUID {
+			t.Fatalf("sparse=%v: P card %q, want the merge parent %s", sparse, d.P, remoteUUID)
+		}
+		assertCheckinContent(t, f.repo, rid, maps(sparseFiles, map[string]string{"src/a.c": "target\n", "src/b.c": "theirs\n"}))
+	}
+	if vmerges[true] != vmerges[false] || vmerges[false] == 0 {
+		t.Fatalf("vmerge rows after update: sparse %d, dense %d", vmerges[true], vmerges[false])
+	}
+}
+
+// A partial commit while a merge is pending is refused, as fossil's is,
+// after an update as before one.
+func TestSparsePartialCommitOfPendingMergeRefused(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)
+	target := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "target\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, co, "src/b.c", "edited\n")
+	if err := co.Enqueue(EnqueueOpts{Paths: []string{"src/b.c"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := co.Commit(CommitOpts{Message: "partial", User: "test", Time: f.time.Add(time.Hour)}); !errors.Is(err, errPartialMergeCommit) {
+		t.Fatalf("partial commit of a merge = %v, want %v", err, errPartialMergeCommit)
+	}
 }

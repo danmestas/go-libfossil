@@ -78,9 +78,10 @@ func loadConeReferenceFactsBounded(
 			return nil, work, fmt.Errorf("sparse preparation: invalid compressed prefix")
 		}
 		var packed []byte
-		// length() was checked in the same transaction before this driver
-		// allocation; the predicate also guards accidental unbound use.
-		err := q.QueryRow("SELECT content FROM blob WHERE rid=? AND length(content)=?", b.rid, b.stored).Scan(&packed)
+		// Count bytes even if SQLite holds TEXT in this BLOB-affinity column.
+		// The same-snapshot predicate guards accidental unbound use too.
+		err := q.QueryRow(`SELECT CAST(content AS BLOB) FROM blob
+			WHERE rid=? AND length(CAST(content AS BLOB))=?`, b.rid, b.stored).Scan(&packed)
 		if err != nil {
 			return nil, work, err
 		}
@@ -123,7 +124,8 @@ func referencePreflight(
 	blobs := make([]referenceBlob, 0, int(count))
 	names := make(map[libfossil.FslID]string, int(count))
 	rows, err := q.Query(`SELECT b.rid,substr(b.uuid,1,65),b.size,
-		coalesce(length(b.content),0),substr(b.content,1,6),coalesce(d.srcid,0)
+		coalesce(length(CAST(b.content AS BLOB)),0),
+		substr(CAST(b.content AS BLOB),1,6),coalesce(d.srcid,0)
 		FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`)
 	if err != nil {
 		return nil, nil, err

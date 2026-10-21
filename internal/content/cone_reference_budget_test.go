@@ -94,6 +94,26 @@ func TestConeReferenceBudgetBeforeDeltaAllocation(t *testing.T) {
 	}
 }
 
+// SQLite permits TEXT in a BLOB-affinity column. length(TEXT) stops at NUL,
+// so only a BLOB cast proves the bytes a subsequent payload read allocates.
+func TestConeReferenceBudgetCountsStoredBytesNotText(t *testing.T) {
+	d := setupTestDB(t)
+	rid, _, err := blob.Store(d, []byte("original"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	packed := append([]byte{1, 1, 1, 1, 0x78, 0x9c, 0}, bytes.Repeat([]byte{'x'}, 1<<20)...)
+	if _, err := d.Exec("UPDATE blob SET content=CAST(? AS TEXT),size=1 WHERE rid=?", packed, rid); err != nil {
+		t.Fatal(err)
+	}
+	budget := ReferenceBudget{Artifacts: 10, StoredBytes: 4096,
+		InflatedBytes: 32 << 20, ExpandedBytes: 4096, Cards: 10}
+	_, work, err := LoadConeReferenceFactsBounded(context.Background(), d, budget)
+	if err == nil || work.PayloadReads != 0 || work.InflateBytes != 0 {
+		t.Fatalf("TEXT bypassed byte preflight: work=%+v err=%v", work, err)
+	}
+}
+
 func TestConeReferenceBudgetBeforeExpansion(t *testing.T) {
 	d := setupTestDB(t)
 	if _, _, err := blob.Store(d, []byte("bounded raw facts")); err != nil {

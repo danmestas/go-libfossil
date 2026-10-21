@@ -18,9 +18,10 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// These flat-manifest protocol cases exercise real clone/pull exchanges and
-// explicit internal demand fetch. They do not cover per-round tree budgets,
-// capability advertisement, rebuild-safe filtering, or public peer discovery.
+// These flat- and tree-manifest protocol cases exercise real clone/pull
+// exchanges and explicit internal demand fetch. They do not cover per-round
+// tree budgets, capability advertisement, rebuild-safe filtering, or public
+// peer discovery.
 func scSyncCases() []scCase {
 	return []scCase{
 		{Case{ID: "sparsecone.6.1.wire-members", Req: "SC-6.1-1"}, scSyncMembers},
@@ -32,6 +33,8 @@ func scSyncCases() []scCase {
 		{Case{ID: "sparsecone.6.2.full-delta", Req: "SC-6.2-2"}, scSyncDelta},
 		{Case{ID: "sparsecone.6.1.aware-clone-pull", Req: "SC-6.1-2"}, scSyncAware},
 		{Case{ID: "sparsecone.6.3.ignored-clone-pull", Req: "SC-6.3-1"}, scSyncIgnored},
+		{Case{ID: "sparsecone.6.1.aware-tree-clone-pull", Req: "SC-6.1-2"}, scSyncTreeAware},
+		{Case{ID: "sparsecone.6.3.ignored-tree-clone-pull", Req: "SC-6.3-1"}, scSyncTreeIgnored},
 		{Case{ID: "sparsecone.6.4.explicit-peer", Req: "SC-6.4-1"}, scSyncWiden},
 		{Case{ID: "sparsecone.6.4.no-peer", Req: "SC-6.4-2"}, scSyncNoPeer},
 	}

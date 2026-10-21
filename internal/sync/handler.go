@@ -1273,6 +1273,12 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		h.resp = append(h.resp, sha3Refusal())
 		return nil
 	}
+	// Preserve send_file's private notice/SHA3 refusal ordering, then withhold
+	// shunned payloads before any submanifest or content expansion.
+	shunned, err := shun.IsShunned(h.repo.DB(), c.UUID)
+	if err != nil || shunned {
+		return err
+	}
 	if barred, err := h.submanifestBarred(rid); err != nil || barred {
 		return err
 	}
@@ -1675,7 +1681,11 @@ func (h *handler) emitCloneBatch() error {
 			continue
 		}
 
-		if !h.keep.keeps(libfossil.FslID(rid)) {
+		shunned, err := shun.IsShunned(h.repo.DB(), uuid)
+		if err != nil {
+			return err
+		}
+		if shunned || !h.keep.keeps(libfossil.FslID(rid)) {
 			continue
 		}
 		isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
@@ -1806,6 +1816,13 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	}
 	if err != nil {
 		return cloneBlobRow{}, false, fmt.Errorf("handler: clone blob info rid %d: %w", rid, err)
+	}
+	shunned, err := shun.IsShunned(h.repo.DB(), row.uuid)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if shunned {
+		return cloneBlobRow{}, false, nil
 	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil

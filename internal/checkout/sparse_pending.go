@@ -234,6 +234,90 @@ func (c *Checkout) applyRecordOnlyMerge(tx *sql.Tx, vid libfossil.FslID, s merge
 	return err
 }
 
+// planPendingUpdate carries uncovered edits by hash, without treating a
+// pending merge's ancestry as local content. Both-changed needs a wider cone.
+func (c *Checkout) planPendingUpdate(vid, target libfossil.FslID, steps []updateStep) error {
+	if c.cone == nil {
+		return nil
+	}
+	pending, err := c.snapshotPending()
+	if err != nil || len(pending) == 0 {
+		return err
+	}
+	files, err := manifest.ListFiles(c.repo, vid)
+	if err != nil {
+		return err
+	}
+	type state struct {
+		uuid, perm string
+		exists     bool
+	}
+	baseline := make(map[string]state, len(files))
+	for _, file := range files {
+		baseline[file.Name] = state{file.UUID, file.Perm, true}
+	}
+	byName := make(map[string]sparseOutcome, len(pending))
+	for _, outcome := range pending {
+		if outcome.vid == int64(vid) {
+			byName[outcome.row.Pathname] = outcome
+		}
+	}
+	for i := range steps {
+		step := &steps[i]
+		outcome, ok := byName[step.name]
+		if !ok {
+			continue
+		}
+		if outcome.unresolved != 0 {
+			return c.outsideCone("Update", []string{step.name})
+		}
+		base := baseline[step.name]
+		local := state{}
+		if !outcome.row.IsRemoved() {
+			local.exists = true
+			local.uuid, err = blobUUID(c.repo.DB(), libfossil.FslID(outcome.row.MRID))
+			if err != nil {
+				return err
+			}
+			if outcome.row.IsExe != 0 {
+				local.perm = "x"
+			}
+			if outcome.row.IsLink != 0 {
+				local.perm = "l"
+			}
+		}
+		remote := state{}
+		if step.target != nil {
+			remote.exists = true
+			remote.uuid, err = blobUUID(c.repo.DB(), libfossil.FslID(step.target.rid))
+			if err != nil {
+				return err
+			}
+			if step.target.exe {
+				remote.perm = "x"
+			}
+			if step.target.link {
+				remote.perm = "l"
+			}
+		}
+		if local == base || local == remote {
+			continue
+		}
+		if remote != base {
+			return c.outsideCone("Update", []string{step.name})
+		}
+		outcome.vid = int64(target)
+		outcome.row.RID = 0
+		if step.target != nil {
+			outcome.row.RID = step.target.rid
+		}
+		outcome.row.Chnged = 1
+		outcome.pivot, outcome.remote, outcome.unresolved = 0, 0, 0
+		step.pending = &outcome
+	}
+	return nil
+}
+
 func boolInt(value bool) int64 {
 	if value {
 		return 1

@@ -791,6 +791,13 @@ func (c *Checkout) hasModeDrift(in commitInputs) (bool, error) {
 // hasSelectedChange reports whether a selected file is changed, added,
 // removed or renamed, or has had its executable bit changed on disk.
 func (c *Checkout) hasSelectedChange(in commitInputs) (bool, error) {
+	pending, err := c.pendingRows(in.parent)
+	if err != nil {
+		return false, err
+	}
+	if len(pending) > 0 {
+		return true, nil
+	}
 	for _, name := range in.changed {
 		if in.include(name) {
 			return true, nil

@@ -176,11 +176,12 @@ type writtenFile struct {
 
 // updateStep is one file's part in an update.
 type updateStep struct {
-	name   string            // the file's name in the checkout
-	tname  string            // its name in the target: name, or where the target renamed it
-	row    *vfile.Row        // the current version's row, nil when it has none
-	target *updateTargetFile // nil when the target does not have the file
-	action updateAction
+	name    string            // the file's name in the checkout
+	tname   string            // its name in the target: name, or where the target renamed it
+	row     *vfile.Row        // the current version's row, nil when it has none
+	target  *updateTargetFile // nil when the target does not have the file
+	action  updateAction
+	pending *sparseOutcome
 }
 
 // classifyUpdate is fossil's update loop deciding one file, in its order.
@@ -346,16 +347,15 @@ func (c *Checkout) planUpdate(vid, target libfossil.FslID, dryRun bool) ([]updat
 			action: classifyUpdate(nil, tgt, false, unmanaged, false),
 		})
 	}
+	if err := c.planPendingUpdate(vid, target, steps); err != nil {
+		return nil, err
+	}
 	return steps, nil
 }
 
-// outOfConeStep is the step of a file outside a sparse checkout's cone. It
-// has no local change and is never on disk, so the update only moves its
-// record to the target's copy, which reloading vfile does: it is not
-// checked, written, backed up as NAME-original, chmodded, or read for undo
-// and rolled back, since only steps that write are
-// (draft-fossil-sparse-cone-00 §4.4). A change the target makes to it is
-// counted.
+// outOfConeStep counts target changes without filesystem access. Pending
+// outside edits are carried separately by planPendingUpdate; clearing merge
+// ancestry does not discard their content (draft-fossil-sparse-cone-00 §4.4).
 func outOfConeStep(name string, row *vfile.Row, tgt *updateTargetFile) updateStep {
 	action := updateNothing
 	if (row == nil) != (tgt == nil) || (row != nil && tgt != nil && row.RID != tgt.rid) {
@@ -703,6 +703,13 @@ func (c *Checkout) finalizeUpdate(
 		}
 		if _, err := tx.Exec("DELETE FROM vmerge"); err != nil {
 			return fmt.Errorf("checkout.Update: clear pending merge: %w", err)
+		}
+		for _, step := range steps {
+			if step.pending != nil {
+				if err := step.pending.save(tx); err != nil {
+					return fmt.Errorf("checkout.Update: carry pending outcome: %w", err)
+				}
+			}
 		}
 	}
 	if err := c.moveUpdateRows(tx, target, steps); err != nil {

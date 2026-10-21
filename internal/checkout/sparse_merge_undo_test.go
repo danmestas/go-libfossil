@@ -120,6 +120,36 @@ func TestSparseDenseRedoRequiresWidening(t *testing.T) {
 	}
 }
 
+func TestSparseUpdateRetainsPrivateOutcome(t *testing.T) {
+	f := newSparseRepo(t, false)
+	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "remote\n"}), f.c1)
+	target := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "target\n"}), f.c1)
+	co := f.open(t, sparseCone(t), f.c1)
+	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
+		t.Fatal(err)
+	}
+	rid, uuid, err := co.storeMergePayload([]byte("retained private result\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.db.Exec("UPDATE sparse_pending SET mrid=? WHERE pathname='tools/t.c'", int64(rid)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
+		t.Fatal(err)
+	}
+	if !content.IsPrivate(f.repo.DB(), int64(rid)) {
+		t.Fatal("update published retained uncommitted bytes")
+	}
+	assertSparsePayloadSyncVisibility(t, f.repo, uuid, false)
+	committed, _, err := co.Commit(CommitOpts{Message: "carried private result", User: "test", Time: f.time.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCheckinContent(t, f.repo, committed, maps(sparseFiles, map[string]string{"src/a.c": "target\n", "tools/t.c": "retained private result\n"}))
+	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
+}
+
 func TestSparsePendingUndoAfterUpdate(t *testing.T) {
 	f := newSparseRepo(t, false)
 	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)

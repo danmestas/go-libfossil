@@ -133,6 +133,9 @@ func Create(r *repo.Repo, dir string, opts CreateOpts) (*Checkout, error) {
 		name = sparseDBName
 	}
 	dbPath := filepath.Join(dir, name)
+	if err := checkMarkerTarget(dbPath); err != nil {
+		return nil, fmt.Errorf("checkout.Create: %w", err)
+	}
 
 	// Create parent directory if needed
 	if err := env.Storage.MkdirAll(dir, 0o755); err != nil {

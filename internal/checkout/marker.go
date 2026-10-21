@@ -66,10 +66,15 @@ func syncMarkerDirectory(dir string) error {
 }
 
 func checkMarkerTarget(target string) error {
-	if _, err := os.Lstat(target); err == nil {
-		return fmt.Errorf("checkout marker already exists: %s", target)
-	} else if !os.IsNotExist(err) {
-		return err
+	// Opening SQLite can overwrite or remove sidecars even when its main file
+	// does not exist. Lstat also refuses dangling links and filesystem aliases.
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		name := target + suffix
+		if _, err := os.Lstat(name); err == nil {
+			return fmt.Errorf("checkout marker already exists: %s", name)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	return nil
 }

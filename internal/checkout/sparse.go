@@ -271,6 +271,15 @@ func (c *Checkout) SetCone(next *cone.Cone) (ConeChange, error) {
 	if c == nil {
 		panic("checkout.SetCone: nil *Checkout")
 	}
+	marker := PreferredDBName()
+	if next != nil {
+		marker = sparseDBName
+	}
+	if target := filepath.Join(filepath.Dir(c.dbPath), marker); target != c.dbPath {
+		if err := checkMarkerTarget(target); err != nil {
+			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
+		}
+	}
 	vid, _, err := c.Version()
 	if err != nil {
 		return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
@@ -278,11 +287,6 @@ func (c *Checkout) SetCone(next *cone.Cone) (ConeChange, error) {
 	var plan conePlan
 	if vid > 0 {
 		if plan, err = c.planConeChange(vid, next); err != nil {
-			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
-		}
-	}
-	if next == nil && filepath.Base(c.dbPath) != PreferredDBName() {
-		if err := checkMarkerTarget(filepath.Join(filepath.Dir(c.dbPath), PreferredDBName())); err != nil {
 			return ConeChange{}, fmt.Errorf("checkout.SetCone: %w", err)
 		}
 	}

@@ -878,8 +878,8 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		// for the session: a reply without the pragma does not unsay it.
 		s.peerReadsTrees = true
 	case c.Name == avoidSubmanifestsPragma:
-		// draft-fossil-submanifests-00 §7.2: no S cards in commits made in
-		// this session, which the session's caller makes.
+		// draft-fossil-submanifests-00 §7.2: record the exchange-local
+		// avoidance hint. Sync makes no commit; this does not bind a later one.
 		s.result.AvoidSubmanifests = true
 	case c.Name == "avoid-delta-manifests":
 		// §9.5: a hint for the commit that asked for the lock, to write a

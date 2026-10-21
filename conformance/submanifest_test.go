@@ -60,7 +60,7 @@ func submanifestCases() []smCase {
 	var all []smCase
 	for _, group := range [][]smCase{
 		smCardCases(), smTypeCases(), smWalkCases(), smStateCases(),
-		smTransferCases(), smVectorCases(), smWriterCases(),
+		smTransferCases(), smVectorCases(), smWriterCases(), smSparseCanonicalCases(), smGuardCases(),
 	} {
 		all = append(all, group...)
 	}
@@ -396,13 +396,6 @@ func smWalkCases() []smCase {
 		smFault("submanifest.5.1.not-a-submanifest", "SM-5.1-4", func(f *smFixture) ([]deck.SubmanifestCard, error) {
 			c, err := f.file("a")
 			return []deck.SubmanifestCard{{Name: "a", UUID: c.UUID}}, err
-		}),
-		// A reference cycle cannot be built from content-addressed
-		// artifacts; what stops any path from looping is shown here by the
-		// depth bound, and the repeated-artifact check itself by
-		// internal/manifest's TestTreeWalkRefusesRepeatedArtifact.
-		smFault("submanifest.5.1.no-unbounded-path", "SM-5.1-5", func(f *smFixture) ([]deck.SubmanifestCard, error) {
-			return smChain(f, 17)
 		}),
 		smFault("submanifest.5.1.depth-17", "SM-5.1-6", func(f *smFixture) ([]deck.SubmanifestCard, error) {
 			return smChain(f, 17)

@@ -12,8 +12,17 @@
 # history replay and the current check-in without a checkout (6.3), an
 # invalid stored pin (8.1), and the provisional phase retired, its flag-day
 # rule moved to 8.1, which the enable warning states.
+# The e03d91943e57 revision adds sparse canonical-writing obligations in
+# 6.2 and 6.4 and required MAX, final-merge and parent-basis vectors in A.6.
+# SM-7.2-3 applicability: Repo.Commit and Checkout.Checkin are local operations;
+# Sync transfers existing artifacts and has no pending-commit callback. This
+# client commits before or after transfer, never during the exchange; section
+# 7.2 explicitly excludes commit-first/push-after clients from that conditional.
+# Receipt, ungated transfer, unchanged settings and exchange isolation remain
+# executable obligations. Any future commit-in-exchange path must add tests
+# enforcing the unchanged in-session emission conditional before it is shipped.
 # Format: <id>\t<section>\t<requirement>[\t<scope note>]
-# draft	draft-fossil-submanifests-00.txt	9326a7f95bc3387585a4d6a3d7dc1cdcda4b18ca7684566124dcfc65e85d09aa
+# draft	draft-fossil-submanifests-00.txt	99ea094690fe13866a92edb07885a4a87b7ce2d04a26a93eb43ac2a94ac6daee
 SM-3.1-1	3.1	A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.
 SM-3.2-1	3.2	An S card carries exactly a filename and a hash; a third token, or a missing hash, is rejected.
 SM-3.3-1	3.3	The S card filename is escape-decoded; the S card hash is never decoded.
@@ -36,7 +45,7 @@ SM-5.1-1	5.1	The walk enumerates a tree depth first and in order, emitting each 
 SM-5.1-2	5.1	Each S card's decoded filename, and each emitted filename, compares strictly greater than the last filename emitted; an enumeration that does not ascend across sibling slices fails.
 SM-5.1-3	5.1	The enumeration fails when a referenced sub-manifest is absent.
 SM-5.1-4	5.1	The enumeration fails when a referenced artifact is not of type SUBMANIFEST.
-SM-5.1-5	5.1	The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.	a cycle cannot be built from content-addressed artifacts: the case shows the depth bound ending a path, and internal/manifest's TestTreeWalkRefusesRepeatedArtifact the check itself
+SM-5.1-5	5.1	The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.
 SM-5.1-6	5.1	The enumeration fails when a sub-manifest lies deeper than 16 sub-manifests, counting the leaf; a depth of 16 is accepted.
 SM-5.1-7	5.1	A leaf's first emitted filename is byte-identical to the filename of the S card that reached it.
 SM-5.1-8	5.1	An interior sub-manifest's first S card filename is byte-identical to the filename of the S card that reached it.
@@ -56,6 +65,8 @@ SM-6.2-4	6.2	A final group shorter than MIN merges into its predecessor when the
 SM-6.2-5	6.2	A scan yielding one group, or as many groups as nodes, ends the construction with the manifest carrying that height's nodes; otherwise interior sub-manifests form the next height, never a node of height 16.
 SM-6.2-6	6.2	S card filenames and a leaf's filename and old-name tokens take the canonical encoding: exactly space, newline and backslash escaped, every other byte raw.
 SM-6.2-7	6.2	Sub-manifests are stored before the manifest that references them, and an unchanged subtree is shared by content addressing.
+SM-6.2-8	6.2	Sparse writers produce the full canonical construction, including MAX-cut shifts, MIN and final-small-group merges, renames and propagation at every height; necessary absent nodes are fetched or cause explicit refusal without a partial check-in.
+SM-6.2-9	6.2	Opaque reuse requires partition verification under the requested k or trusted local derivation tied to the immutable parent identity, construction rules and k; a different or unknown parent k requires validation or reconstruction even when filenames are unchanged.
 SM-6.3-1	6.3	A supporting server answers reqconfig /config, the scalar marker, with submanifest-k, enable-submanifests and submanifest-auto-retune when the requester holds Read permission.
 SM-6.3-2	6.3	A receiver validates the adopted state and applies all three settings or none: an invalid value, or enable-submanifests on without a submanifest-k from 1 to 12, leaves the repository's values unchanged, and card order does not affect the result.
 SM-6.3-3	6.3	A client supporting this specification requests the three settings with reqconfig /config in the clone's cleanup round, after clone authorization succeeds, and a pull does not request them.
@@ -69,7 +80,7 @@ SM-7.1-1	7.1	Storing a structural artifact whose S references are absent creates
 SM-7.1-2	7.1	Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.
 SM-7.2-1	7.2	A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer that has not sent pragma send-submanifests, whatever version it announces, with an explicit error and never by converting, downgrading or silently omitting it; a server decides from the request it answers, a client from the replies of its session.
 SM-7.2-2	7.2	A server whose enable-submanifests setting is false sends pragma avoid-submanifests in every reply, clone replies included, in the leading pragma run after server-version.
-SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in a commit created during that session; a commit created outside a session follows the client's own setting, and the pragma does not gate receipt.	covered internally only for the in-session commit: the internal sync session reports the pragma (SyncResult.AvoidSubmanifests) and manifest.Checkin honours it (CheckinOpts.AvoidSubmanifests); the public API commits only outside a session
+SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in a commit created during that session; a commit created outside a session follows the client's own setting, and the pragma does not gate receipt.
 SM-7.2-4	7.2	A peer that reads sub-manifests sends pragma send-submanifests: a client in every request, right after client-version, and a server in every reply, clone replies included, right after server-version, whatever the enable-submanifests setting and the avoid-submanifests pragma; the version it announces is the fossil release whose protocol it speaks.
 SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
 SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.
@@ -81,8 +92,9 @@ SM-9.1-1	9.1	SUBMANIFEST is determined by the post-pass reassignment, not while 
 SM-9.2-1	9.2	A sweep that discovers crosslink work by the absence of derived rows excludes SUBMANIFEST artifacts or records a completion marker for them, so it never reselects them.
 SM-9.3-1	9.3	Every consumer of a check-in's file set (checkout, diff, crosslink, rebuild, annotate, commit) obtains it through one shared enumeration interface.
 SM-9.4-1	9.4	When a tree manifest's processing is deferred, enough is recorded to rediscover it when the missing sub-manifest arrives, and the dephantomization path traverses that record.
-SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.	the visit bound (2^20) is asserted by construction, not by a case that reaches it
+SM-10-1	10	The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.
 SM-A-1	A.2, A.3	The Appendix A.2 and A.3 artifacts parse, determine their types, recompute their names, walk to the four-file enumeration, and the R card verifies over it.
 SM-A-2	A.4	The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.
 SM-A-3	A.5	The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.
 SM-A-4	A.5	The writer vectors of A.5: the A.4 set reproduced at k = 3, the height-0 merge and three-level vectors reproduced, flat output for N = 1 and a MIN-suppressed boundary, no selection over one name with a first enable failing atomically, and an injected persistence failure leaving no setting applied.
+SM-A-5	A.6	The SHA3 MAX-propagation, final-small-group-merge and different/unknown-parent-basis vectors compare successful results and every transitive node byte with full construction; absent S payloads require fetching or atomic explicit refusal, and dense runs require canonical success.

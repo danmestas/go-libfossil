@@ -25,32 +25,35 @@ changed and no section number moved.
 | `draft-fossil-repo-state-00.txt` | `68a3f76cb7` | `140fdf2d3b` | `137f0a573498bf27…` |
 | `draft-fossil-sync-protocol-00.txt` | `68a3f76cb7` | `62e9495f35` | `2195d9a18fe6bfaa…` |
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
-| `draft-fossil-submanifests-00.txt` | `62a7d1bb3f` | `5379bc614e` | `9326a7f95bc33875…` |
-| `draft-fossil-sparse-cone-00.txt` | `d497c2432f` (branch `horizon-rfc`) | `05f8b59810` | `2494753225ec3b88…` |
+| `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
+| `draft-fossil-sparse-cone-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `f24ad5485f` | `41e70bcc6a6c2b6c…` |
 | `draft-fossil-horizon-00.txt` | `86d4b67372` (branch `horizon-rfc`) | `56bf5c0553` | `e1e92af6fa1c2acf…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
 (2026-10-17).
 
-The sub-manifest draft (`draft-fossil-submanifests-00`) is a single
-revision. Its copy is the revision dated 19 October 2026, whose Appendix C lists the
-corrections it applies to the 27 July 2026 text. Its Appendix A vectors are
-byte vectors: `../testdata/submanifest/` holds zit's copies of them, as
-authored for zit, taken at check-in `3f86ff4261` and unchanged at
-`62a7d1bb3f` (`src/rfc_vectors/`), each with two leading `#` lines that
-keep it from reading as a live artifact on disk; the suite drops those
-lines.
+The sub-manifest draft (`draft-fossil-submanifests-00`) includes the sparse
+canonical-rewrite correction merged into `horizon-rfc` at the exact check-in
+above (2026-10-20). Sections 6.2 and 6.4 require canonical construction under
+the requested k, including MAX-cut shifts, final-small-group merges and
+propagation at every height. Opaque reuse requires verified compatible
+partition evidence, not the mutable setting; missing necessary nodes must
+be fetched or cause explicit refusal without a partial check-in. Appendix
+A.6 supplies the required MAX, final-merge and different/unknown-k cases.
+The earlier Appendix A byte vectors in `../testdata/submanifest/` remain
+unchanged: they are zit's `src/rfc_vectors/` copies from `3f86ff4261`, each
+with two leading `#` lines that the suite drops.
 
 The sparse-cone and horizon drafts follow zit's `horizon-rfc` branch, where
-the horizon draft lives; that branch merges trunk. The sparse-cone copy is
-the 19 October 2026 revision at `d497c2432f`, the branch's merge of
-`68a3f76cb7`; the text is byte-identical to the one at `0acb5e185c`, the
-merge of `62a7d1bb3f` it replaces. Trunk's copy is the same text less the two corrections the
-horizon work added (§3.1 members of other kinds, §6.2 delta bases outside
-the keep set), which the branch's Appendix B lists; the copy here
-keeps them because the cone serialization and the horizon table depend on
-them. The horizon copy stays at `86d4b67372` (2026-10-18); the branch has
+the horizon draft lives; that branch merges trunk. The sparse-cone copy at
+`e03d91943e57afa20c3fdeab159a23a8a5eab66c` retains the branch's §3.1
+members-of-other-kinds and §6.2 outside-delta-base corrections. Its §4.2
+now requires the complete canonical structural affected range and verified
+partition basis, with fetch or explicit refusal when necessary nodes are
+absent. Section 5.1 permits outside payloads to be absent but does not
+require discarding already-held or demand-fetched payloads; §5.3 follows
+the corrected canonical-writing contract. The horizon copy stays at `86d4b67372` (2026-10-18); the branch has
 since added §6.2.6 (the horizon cursor) and the classification-memoization
 SHOULDs of §6.2, which are not yet read into the horizon table. The same
 branch adds the pragma names these two drafts define (`cone`, `cone-not`,

@@ -17,12 +17,13 @@ var ErrConeTestElided = errors.New("a path is elided by the sparse cone")
 // files, that the checkout materializes and tracks. An exclusion carves a
 // part out of an inclusion; the longest member covering a path decides.
 type RepoConeCmd struct {
-	Show   RepoConeShowCmd   `cmd:"" default:"withargs" help:"List the cone's members (\"dense\" when there is none)"`
-	Add    RepoConeAddCmd    `cmd:"" help:"Widen the cone, or with --not carve paths out of it"`
-	Remove RepoConeRemoveCmd `cmd:"" help:"Remove members of either polarity"`
-	Set    RepoConeSetCmd    `cmd:"" help:"Replace the cone"`
-	Dense  RepoConeDenseCmd  `cmd:"" help:"Drop the cone and materialize every file"`
-	Test   RepoConeTestCmd   `cmd:"" help:"Classify paths against the cone and name the deciding member"`
+	Show    RepoConeShowCmd    `cmd:"" default:"withargs" help:"List the cone's members (\"dense\" when there is none)"`
+	Add     RepoConeAddCmd     `cmd:"" help:"Widen the cone, or with --not carve paths out of it"`
+	Remove  RepoConeRemoveCmd  `cmd:"" help:"Remove members of either polarity"`
+	Set     RepoConeSetCmd     `cmd:"" help:"Replace the cone"`
+	Dense   RepoConeDenseCmd   `cmd:"" help:"Drop the cone and materialize every file"`
+	Test    RepoConeTestCmd    `cmd:"" help:"Classify paths against the cone and name the deciding member"`
+	Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
 }
 
 // RepoConeShowCmd lists the inclusions, then the exclusions marked '!'.
@@ -147,6 +148,30 @@ func amendCone(
 	for _, name := range change.Dematerialized {
 		fmt.Printf("REMOVED  %s\n", name)
 	}
+	return nil
+}
+
+// RepoConeCompactCmd is the narrow-then-compact deletion, zit's
+// `pack --drop-elided`: it acts on the store cone, not a checkout's, and a
+// later widening fetches the dropped blobs from a peer.
+type RepoConeCompactCmd struct{}
+
+func (c *RepoConeCompactCmd) Run(g *Globals) (err error) {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+
+	n, err := r.CompactStore(context.Background())
+	if err != nil {
+		return err
+	}
+	noun := "artifacts"
+	if n == 1 {
+		noun = "artifact"
+	}
+	fmt.Printf("compacted %d %s\n", n, noun)
 	return nil
 }
 

@@ -1,6 +1,8 @@
 package libfossil
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -29,4 +31,32 @@ func (r *Repo) SetStoreCone(c *Cone) error {
 		return fmt.Errorf("libfossil: set store cone: %w", err)
 	}
 	return nil
+}
+
+// ErrNoStoreCone is returned by CompactStore on a dense store: with no cone
+// on record nothing is elided, and compaction never guesses a policy.
+var ErrNoStoreCone = errors.New("libfossil: the store has no cone")
+
+// CompactStore is the narrow-then-compact deletion (§5.4), the only one the
+// sparse draft defines: it turns held blobs that only out-of-cone F cards name
+// into elided phantoms and returns how many it dropped. Structural artifacts,
+// sub-manifest nodes whose cards prove an elision, unsent or private content
+// and the delta bases of retained artifacts stay held. A later widening
+// fetches the dropped blobs again; it is not reversible locally.
+func (r *Repo) CompactStore(ctx context.Context) (int, error) {
+	if ctx == nil {
+		panic("libfossil.Repo.CompactStore: nil context")
+	}
+	c, err := content.StoreCone(r.inner.DB())
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: compact store: %w", err)
+	}
+	if c == nil {
+		return 0, ErrNoStoreCone
+	}
+	n, err := content.CompactStore(ctx, r.inner.DB())
+	if err != nil {
+		return 0, fmt.Errorf("libfossil: compact store: %w", err)
+	}
+	return n, nil
 }

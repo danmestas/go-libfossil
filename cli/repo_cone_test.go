@@ -110,3 +110,64 @@ func TestRepoConeCmd(t *testing.T) {
 		t.Fatalf("cone after dense = %q, %v", out, err)
 	}
 }
+
+// repo cone compact refuses a dense store, as zit's pack --drop-elided does,
+// and after narrowing drops the blob only an out-of-cone name references.
+func TestRepoConeCompactCmd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "r.fossil")
+	r, err := libfossil.Create(path, libfossil.CreateOpts{User: "u"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []libfossil.FileToCommit
+	for _, name := range []string{"src/a.c", "tools/t.c"} {
+		files = append(files, libfossil.FileToCommit{Name: name, Content: []byte(name + "\n")})
+	}
+	if _, _, err := r.Commit(libfossil.CommitOpts{Comment: "c", User: "u", Time: time.Now(), Files: files}); err != nil {
+		t.Fatal(err)
+	}
+	// Unsent content has no peer to restore it; pretend it was pushed.
+	if _, err := r.DB().Exec("DELETE FROM unsent"); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	run := func(args ...string) (string, error) {
+		var c submanifestsTestCLI
+		parser, err := kong.New(&c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var runErr error
+		out := captureStdout(t, func() error {
+			ctx, err := parser.Parse(append([]string{"-R", path, "repo", "cone"}, args...))
+			if err != nil {
+				runErr = err
+				return nil
+			}
+			runErr = ctx.Run(&c.Globals)
+			return nil
+		})
+		return out, runErr
+	}
+	if out, err := run("compact"); !errors.Is(err, libfossil.ErrNoStoreCone) || out != "" {
+		t.Fatalf("dense compact = %q, %v", out, err)
+	}
+	r, err = libfossil.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	narrow, err := libfossil.NewCone([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetStoreCone(narrow); err != nil {
+		t.Fatal(err)
+	}
+	r.Close()
+	if out, err := run("compact"); err != nil || out != "compacted 1 artifact\n" {
+		t.Fatalf("compact = %q, %v", out, err)
+	}
+	if out, err := run("compact"); err != nil || out != "compacted 0 artifacts\n" {
+		t.Fatalf("repeat compact = %q, %v", out, err)
+	}
+}

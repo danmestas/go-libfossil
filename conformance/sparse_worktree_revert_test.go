@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/checkout"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/stash"
 	"github.com/danmestas/go-libfossil/simio"
@@ -21,9 +22,10 @@ import (
 // §4.4 for revert and stash: a record-only change -- what a merge applies to
 // an out-of-cone file over a dense store -- is reverted by name and by revert
 // with no names exactly as fossil reverts the same change in a dense
-// checkout. Stash keeps to the cone: it refuses a pending merge as the dense
-// checkout does, round-trips an in-cone edit as fossil does, and refuses to
-// apply an out-of-cone file, naming the cone.
+// checkout. Stash keeps to the cone: it stashes the in-cone files of a
+// pending merge and leaves the merge and its record-only changes pending,
+// round-trips an in-cone edit as fossil does, and refuses to apply an
+// out-of-cone file, naming the cone.
 
 func scRevertStashCases() []scCase {
 	return []scCase{
@@ -212,8 +214,12 @@ func scStashDB(t *testing.T, co *checkout.Checkout) *sql.DB {
 	return ckdb
 }
 
+// scStashRecordOnly stashes a pending merge. Dense, it is fossil's stash:
+// the merge stays pending, and the file the merge added is reverted away, so
+// the pop fails as fossil's does. Sparse, the merged in-cone file round-trips
+// while the record-only changes stay pending, unmaterialized, and the commit
+// after the pop carries the whole merge.
 func scStashRecordOnly(t *testing.T) error {
-	var refusals []string
 	for _, c := range []bool{false, true} {
 		f := newSCRepo(t, false)
 		mid := f.commit(t, scRecordOnlyRemote(), f.c1)
@@ -227,13 +233,29 @@ func scStashRecordOnly(t *testing.T) error {
 		}
 		before := scOnDisk(t, co.Dir())
 		ckdb := scStashDB(t, co)
-		err := stash.Save(co, ckdb, f.r.DB().SqlDB(), simio.RealEnv(), co.Dir(), "record-only")
-		if err == nil {
-			return expectf("stash of a pending merge succeeded (sparse=%v)", c)
+		repoDB := f.r.DB().SqlDB()
+		if err := stash.Save(co, ckdb, repoDB, simio.RealEnv(), co.Dir(), "record-only"); err != nil {
+			return err
 		}
-		refusals = append(refusals, err.Error())
+		var merges int
+		if err := ckdb.QueryRow("SELECT count(*) FROM vmerge").Scan(&merges); err != nil {
+			return err
+		}
+		if merges == 0 {
+			return expectf("stash dropped the pending merge (sparse=%v)", c)
+		}
+		_, err := stash.Pop(ckdb, repoDB, simio.RealEnv(), co.Dir())
+		if !c {
+			if err == nil || !strings.Contains(err.Error(), "no such file") {
+				return expectf("dense pop of a merge-added file = %v, want fossil's missing-file failure", err)
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
 		if got := scOnDisk(t, co.Dir()); !slices.Equal(got, before) {
-			return expectf("refused stash changed the disk: %q -> %q", before, got)
+			return expectf("stash round trip changed the disk: %q -> %q", before, got)
 		}
 		rid, _, err := co.Commit(checkout.CommitOpts{Message: "merge", User: "u", Time: f.when.Add(time.Hour)})
 		if err != nil {
@@ -243,12 +265,16 @@ func scStashRecordOnly(t *testing.T) error {
 		if err != nil {
 			return err
 		}
-		if err := scSameContent("merge after a refused stash", got, scRecordOnlyRemote()); err != nil {
+		if err := scSameContent("merge after a stash round trip", got, scRecordOnlyRemote()); err != nil {
 			return err
 		}
-	}
-	if refusals[0] != refusals[1] {
-		return expectf("sparse stash refusal %q differs from dense %q", refusals[1], refusals[0])
+		d, err := manifest.GetManifest(f.r, rid)
+		if err != nil {
+			return err
+		}
+		if len(d.P) != 2 {
+			return expectf("commit after a stash round trip has parents %q, want the merge", d.P)
+		}
 	}
 	return nil
 }

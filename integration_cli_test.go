@@ -72,6 +72,8 @@ type handSetVFile struct{}
 
 func (handSetVFile) ScanChanges(checkout.ScanFlags) error { return nil }
 
+func (handSetVFile) VersionPaths() (map[string]bool, error) { return nil, nil }
+
 // TestIntegrationStash verifies the stash save/pop round-trip with a real repo.
 func TestIntegrationStash(t *testing.T) {
 	if testing.Short() {

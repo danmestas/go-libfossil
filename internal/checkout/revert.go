@@ -435,6 +435,19 @@ func (c *Checkout) removeTrackedFile(name string) error {
 	return c.removeRegularFile(fullPath)
 }
 
+// VersionPaths returns the names the checked-out version's manifest holds,
+// covered by the cone or not.
+func (c *Checkout) VersionPaths() (map[string]bool, error) {
+	if c == nil {
+		panic("checkout.VersionPaths: nil *Checkout")
+	}
+	vid, _, err := c.Version()
+	if err != nil {
+		return nil, fmt.Errorf("checkout.VersionPaths: %w", err)
+	}
+	return c.versionPaths(vid)
+}
+
 // versionPaths returns the set of pathnames in checked-out version vid's
 // manifest; empty when nothing is checked out yet.
 func (c *Checkout) versionPaths(vid libfossil.FslID) (map[string]bool, error) {

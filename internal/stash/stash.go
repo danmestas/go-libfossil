@@ -85,14 +85,21 @@ func nextStashID(tx *sql.Tx) (int64, error) {
 }
 
 // Scanner brings a checkout's vfile up to date with its working files, as
-// fossil's vfile_check_signature does. A *checkout.Checkout is one.
+// fossil's vfile_check_signature does, and lists the names its checked-out
+// version holds. A *checkout.Checkout is one.
 type Scanner interface {
 	ScanChanges(flags checkout.ScanFlags) error
+	VersionPaths() (map[string]bool, error)
 }
 
 // Save stashes all changed files in the checkout, then reverts the working directory.
 // It scans the checkout with scanner first, as fossil's stash_create does, so
 // an edit no scan has recorded yet is stashed too.
+//
+// A pending merge is stashed as fossil stashes it: each changed file against
+// the content last written for it (mrid), and only the stashed files are
+// reverted, so vmerge is kept and the merge stays pending. A file the merge
+// added is not in the checked-out version, so its revert deletes it.
 func Save(
 	scanner Scanner, ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, comment string,
 ) error {
@@ -116,6 +123,10 @@ func Save(
 	}
 	if err := EnsureTables(ckout); err != nil {
 		return err
+	}
+	inVersion, err := mergeVersionPaths(scanner, ckout)
+	if err != nil {
+		return fmt.Errorf("stash.Save: %w", err)
 	}
 
 	tx, err := ckout.Begin()
@@ -155,18 +166,31 @@ func Save(
 	if err != nil {
 		return fmt.Errorf("stash.Save: %w", err)
 	}
-	if err := storeAndRevertFiles(tx, repoDB, disk, dir, stashID, files); err != nil {
+	if err := storeAndRevertFiles(tx, repoDB, disk, dir, stashID, files, inVersion); err != nil {
 		return err
 	}
 
 	return tx.Commit()
 }
 
+// mergeVersionPaths returns the names the checked-out version holds while a
+// merge is pending, or nil when none is: only a merge puts rows in vfile
+// that the version does not hold.
+func mergeVersionPaths(scanner Scanner, ckout *sql.DB) (map[string]bool, error) {
+	var merging bool
+	if err := ckout.QueryRow("SELECT EXISTS(SELECT 1 FROM vmerge)").Scan(&merging); err != nil {
+		return nil, fmt.Errorf("query vmerge: %w", err)
+	}
+	if !merging {
+		return nil, nil
+	}
+	return scanner.VersionPaths()
+}
+
 // snapshotChangedFiles returns the checked-out version's changed rows,
-// as vfile.Classify judges them. A pending merge, a permission change or a
-// rename is refused: Save records and restores files by current name against
-// their committed content with default permissions, which would drop the
-// merge, the mode change or the rename.
+// as vfile.Classify judges them. A permission change or a rename is refused:
+// Save records and restores files by current name with default permissions,
+// which would drop the mode change or the rename.
 func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 	if tx == nil {
 		panic("stash.snapshotChangedFiles: nil tx")
@@ -175,16 +199,6 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 	vid, err := checkoutVersion(tx)
 	if err != nil {
 		return nil, fmt.Errorf("stash.Save: %w", err)
-	}
-	// A merge leaves a vmerge record even for files whose rows look like
-	// plain edits (a clean three-way merge); stashing them would leave the
-	// record naming a merge whose content is no longer in the checkout.
-	var merging bool
-	if err := tx.QueryRow("SELECT EXISTS(SELECT 1 FROM vmerge)").Scan(&merging); err != nil {
-		return nil, fmt.Errorf("stash.Save: query vmerge: %w", err)
-	}
-	if merging {
-		return nil, fmt.Errorf("stash.Save: a merge is pending; commit or revert it first")
 	}
 	rows, err := vfile.Load(tx, vid)
 	if err != nil {
@@ -195,10 +209,6 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 	for _, r := range rows {
 		if vfile.Classify(r, false) == vfile.ChangeNone {
 			continue
-		}
-		if r.PendingMerge() {
-			return nil, fmt.Errorf(
-				"stash.Save: %s has a pending merge; commit or revert it first", r.Pathname)
 		}
 		if r.ModeChanged() {
 			return nil, fmt.Errorf(
@@ -216,9 +226,11 @@ func snapshotChangedFiles(tx *sql.Tx) ([]vfile.Row, error) {
 
 // storeAndRevertFiles records each changed file in the stash, then reverts
 // it to its committed version. Files are read and written through disk, as
-// fossil's stash and revert see them with RepoFILE.
+// fossil's stash and revert see them with RepoFILE. inVersion, set while a
+// merge is pending, names the files the checked-out version holds.
 func storeAndRevertFiles(
 	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, dir string, stashID int64, files []vfile.Row,
+	inVersion map[string]bool,
 ) error {
 	if stashID <= 0 {
 		panic("stash.storeAndRevertFiles: stashID must be positive")
@@ -240,7 +252,8 @@ func storeAndRevertFiles(
 			nullStr(rec.baselineHash), f.Pathname, f.Pathname, rec.delta); err != nil {
 			return fmt.Errorf("stash.Save: insert stashfile %s: %w", f.Pathname, err)
 		}
-		if err := revertStashedFile(tx, repoDB, disk, fullPath, f); err != nil {
+		merged := inVersion != nil && !inVersion[f.Pathname]
+		if err := revertStashedFile(tx, repoDB, disk, fullPath, f, merged); err != nil {
 			return err
 		}
 	}
@@ -258,6 +271,8 @@ type stashed struct {
 // fossil's stash_add_file_or_dir reads it: an added file's content with no
 // baseline, a removed file's baseline hash with an empty delta, or a
 // modified file's baseline hash with a delta from baseline to its content.
+// The baseline is the content last written for the file (mrid), which a
+// pending merge makes the merged-in artifact.
 // A symlink's content is its target's name, and it is recorded as a link
 // whatever vfile says, as fossil records file_islink.
 func stashRecord(
@@ -276,17 +291,17 @@ func stashRecord(
 	}
 
 	if err := repoDB.QueryRow(
-		"SELECT uuid FROM blob WHERE rid=?", f.RID,
+		"SELECT uuid FROM blob WHERE rid=?", f.MRID,
 	).Scan(&rec.baselineHash); err != nil {
-		return stashed{}, fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.RID, err)
+		return stashed{}, fmt.Errorf("stash.Save: get uuid for rid=%d: %w", f.MRID, err)
 	}
 	if f.IsRemoved() {
 		rec.delta = []byte{}
 		return rec, nil
 	}
-	baseline, err := content.Expand(repoDB, libfossil.FslID(f.RID))
+	baseline, err := content.Expand(repoDB, libfossil.FslID(f.MRID))
 	if err != nil {
-		return stashed{}, fmt.Errorf("stash.Save: expand rid=%d: %w", f.RID, err)
+		return stashed{}, fmt.Errorf("stash.Save: expand rid=%d: %w", f.MRID, err)
 	}
 	working, err := disk.Read(fullPath, info)
 	if err != nil {
@@ -299,14 +314,14 @@ func stashRecord(
 }
 
 // revertStashedFile undoes f's change as fossil's revert does: an added
-// file is removed from disk and vfile; a removed or modified file gets its
-// committed content back, with the row's executable and symlink bits
-// (vfile.Disk.Write), and its row is marked unchanged, with the mtime it
-// was written with.
+// file, or one a pending merge added (merged), is removed from disk and
+// vfile; a removed or modified file gets its committed content back, with
+// the row's executable and symlink bits (vfile.Disk.Write), and its row is
+// marked unchanged and no longer merged, with the mtime it was written with.
 func revertStashedFile(
-	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, fullPath string, f vfile.Row,
+	tx *sql.Tx, repoDB *sql.DB, disk vfile.Disk, fullPath string, f vfile.Row, merged bool,
 ) error {
-	if f.IsAdded() {
+	if f.IsAdded() || merged {
 		if err := disk.Remove(fullPath); err != nil {
 			return fmt.Errorf("stash.Save: remove added %s: %w", f.Pathname, err)
 		}
@@ -325,7 +340,7 @@ func revertStashedFile(
 		return fmt.Errorf("stash.Save: %w", err)
 	}
 	if _, err := tx.Exec(
-		"UPDATE vfile SET deleted=0, chnged=0, mtime=? WHERE id=?", mtime, f.ID,
+		"UPDATE vfile SET deleted=0, chnged=0, mrid=rid, mhash=NULL, mtime=? WHERE id=?", mtime, f.ID,
 	); err != nil {
 		return fmt.Errorf("stash.Save: update vfile %s: %w", f.Pathname, err)
 	}
@@ -367,6 +382,10 @@ type stashedFile struct {
 // A modified file that cannot be merged because a symlink is involved is
 // left as it is and returned in conflicts, as fossil's stash_apply reports
 // "Cannot merge symlink" and counts a conflict (see applyStashedFile).
+//
+// A modified file missing from disk fails the whole apply before anything
+// is written, as fossil's fails ("no such file") and rolls back: so does a
+// file a pending merge added, which Save deleted.
 func Apply(
 	ckout *sql.DB, repoDB *sql.DB, env *simio.Env, dir string, stashID int64,
 ) (conflicts []string, err error) {
@@ -413,6 +432,9 @@ func Apply(
 	if err != nil {
 		return nil, fmt.Errorf("stash.Apply: %w", err)
 	}
+	if err := requireModifiedOnDisk(disk, dir, files); err != nil {
+		return nil, fmt.Errorf("stash.Apply: %w", err)
+	}
 	for _, f := range files {
 		merged, err := applyStashedFile(tx, repoDB, disk, vid, filepath.Join(dir, f.name), f)
 		if err != nil {
@@ -426,6 +448,25 @@ func Apply(
 		return nil, fmt.Errorf("stash.Apply: commit: %w", err)
 	}
 	return conflicts, nil
+}
+
+// requireModifiedOnDisk fails when a stashed modified file is missing from
+// disk.
+func requireModifiedOnDisk(disk vfile.Disk, dir string, files []stashedFile) error {
+	for _, f := range files {
+		if f.isAdded || f.isRemoved {
+			continue
+		}
+		fullPath := filepath.Join(dir, f.name)
+		info, err := disk.Stat(fullPath)
+		if err != nil {
+			return err
+		}
+		if info == nil {
+			return fmt.Errorf("no such file: %s", fullPath)
+		}
+	}
+	return nil
 }
 
 // loadStashedFiles reads stash stashID's files up front, so no cursor is

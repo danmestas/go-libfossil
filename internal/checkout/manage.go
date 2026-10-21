@@ -3,6 +3,9 @@ package checkout
 import (
 	"database/sql"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
@@ -25,10 +28,14 @@ func (c *Checkout) Manage(opts ManageOpts) (*ManageCounts, error) {
 		return nil, fmt.Errorf("checkout.Manage: %w", err)
 	}
 
-	if err := c.refuseUncovered("Manage", opts.Paths...); err != nil {
+	paths, err := c.expandManagePaths(opts.Paths)
+	if err != nil {
 		return counts, err
 	}
-	for _, path := range opts.Paths {
+	if err := c.refuseUncovered("Manage", paths...); err != nil {
+		return counts, err
+	}
+	for _, path := range paths {
 		tracked, err := c.isTracked(vid, path)
 		if err != nil {
 			return counts, err
@@ -194,4 +201,54 @@ func (c *Checkout) unmanageFile(
 	}
 
 	return nil
+}
+
+// expandManagePaths replaces each named directory with the files beneath it,
+// as fossil's add does: through the checkout's bounded, cone-aware walk,
+// skipping any path with a component that starts with "." (fossil's default
+// without --dotfiles). A named file is kept as given, dotfile or not.
+func (c *Checkout) expandManagePaths(paths []string) ([]string, error) {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		full, err := c.safePath(path)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Manage: path traversal in %s: %w", path, err)
+		}
+		info, statErr := c.env.Storage.Stat(full)
+		if statErr != nil || !info.IsDir() {
+			// An uncovered path is refused as such before its absence on
+			// disk, which a sparse checkout makes ordinary.
+			if err := c.refuseUncovered("Manage", path); err != nil {
+				return nil, err
+			}
+			if statErr != nil {
+				return nil, fmt.Errorf("checkout.Manage: stat %s: %w", path, statErr)
+			}
+			out = append(out, path)
+			continue
+		}
+		files, err := c.walkDir(full)
+		if err != nil {
+			return nil, fmt.Errorf("checkout.Manage: %w", err)
+		}
+		names := make([]string, 0, len(files))
+		for rel := range files {
+			name := filepath.ToSlash(rel)
+			if !hasDotComponent(name) {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		out = append(out, names...)
+	}
+	return out, nil
+}
+
+func hasDotComponent(name string) bool {
+	for _, part := range strings.Split(name, "/") {
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
 }

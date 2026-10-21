@@ -229,6 +229,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Adding a directory (`Checkout.Add`, `repo add DIR`, `repo add .`) adds
+  the files beneath it, as fossil's add does, skipping dotfiles found on
+  the way; a dotfile named explicitly is still added. The directory itself
+  used to be stored as a file, and the next commit failed reading it.
+  `ignore-glob` is not consulted yet.
+
 - `repo verify` runs the full verifier (blob hashes, delta chains, phantom
   records, derived tables) and prints what the store lacks by class:
   transit phantoms apart from artifacts the store cone elides, which are

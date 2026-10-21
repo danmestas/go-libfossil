@@ -96,6 +96,9 @@ func TestLegacyMigrationCrashRecovers(t *testing.T) {
 // refuses the directory or reads the dense record it holds.
 func TestMarkerTransitionCrashRecovers(t *testing.T) {
 	bin := testutil.FossilBinary()
+	if bin != "" {
+		testutil.IsolateFossilHome(t)
+	}
 	for _, narrowing := range []bool{true, false} {
 		for _, step := range []string{"closed", "linked", "unlinked"} {
 			name := "widen/" + step
@@ -194,7 +197,7 @@ func checkFossilReadsCrash(t *testing.T, bin, dir string) {
 	t.Helper()
 	cmd := exec.Command(bin, "ls")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "HOME="+t.TempDir(), "USER=test")
+	cmd.Env = append(os.Environ(), "USER=test")
 	out, err := cmd.CombinedOutput()
 	_, nativeErr := os.Lstat(filepath.Join(dir, PreferredDBName()))
 	if nativeErr != nil {

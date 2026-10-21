@@ -76,6 +76,13 @@ func (o RequiredContentOpts) commitFiles(ctx context.Context, r *repo.Repo, opts
 func (o RequiredContentOpts) checkinFiles(
 	ctx context.Context, c *Checkout, opts CheckoutCommitOpts,
 ) error {
+	parent, _, err := c.inner.Version()
+	if err != nil {
+		return err
+	}
+	if parent == 0 {
+		return ctx.Err()
+	}
 	files, err := c.inner.CommitCarriedFiles(ctx, opts.Files)
 	if err != nil {
 		return err

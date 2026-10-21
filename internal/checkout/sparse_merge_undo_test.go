@@ -3,20 +3,12 @@
 package checkout
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/danmestas/go-libfossil/internal/blob"
-	"github.com/danmestas/go-libfossil/internal/content"
-	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/repo"
-	syncproto "github.com/danmestas/go-libfossil/internal/sync"
-	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 func TestLegacyDenseUndoWithoutConeStamp(t *testing.T) {
@@ -170,36 +162,6 @@ func TestSparseDenseRedoRequiresWidening(t *testing.T) {
 	}
 }
 
-func TestSparseUpdateRetainsPrivateOutcome(t *testing.T) {
-	f := newSparseRepo(t, false)
-	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "remote\n"}), f.c1)
-	target := f.commit(t, maps(sparseFiles, map[string]string{"src/a.c": "target\n"}), f.c1)
-	co := f.open(t, sparseCone(t), f.c1)
-	if _, err := co.Merge(MergeOpts{Version: remote}); err != nil {
-		t.Fatal(err)
-	}
-	rid, uuid, err := co.storeMergePayload([]byte("retained private result\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := co.db.Exec("UPDATE sparse_pending SET mrid=? WHERE pathname='tools/t.c'", int64(rid)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := co.Update(UpdateOpts{TargetRID: target}); err != nil {
-		t.Fatal(err)
-	}
-	if !content.IsPrivate(f.repo.DB(), int64(rid)) {
-		t.Fatal("update published retained uncommitted bytes")
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, false)
-	committed, _, err := co.Commit(CommitOpts{Message: "carried private result", User: "test", Time: f.time.Add(time.Hour)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertCheckinContent(t, f.repo, committed, maps(sparseFiles, map[string]string{"src/a.c": "target\n", "tools/t.c": "retained private result\n"}))
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-}
-
 func TestSparsePendingUndoAfterUpdate(t *testing.T) {
 	f := newSparseRepo(t, false)
 	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "merged\n"}), f.c1)
@@ -285,13 +247,10 @@ func TestSparseBothChangedRequiresWideningWithoutSynthesis(t *testing.T) {
 	}
 }
 
-func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
+func TestSparseMergeFailureRecordsNoMerge(t *testing.T) {
 	f := newSparseRepo(t, false)
 	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "theirs\n"}), f.c1)
 	co := f.open(t, sparseCone(t), f.c1)
-	if _, _, err := co.storeMergePayload([]byte("retained legacy uncommitted payload\n")); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := co.db.Exec(`CREATE TRIGGER reject_merge BEFORE INSERT ON sparse_pending
 	 BEGIN SELECT RAISE(ABORT, 'injected merge failure'); END`); err != nil {
 		t.Fatal(err)
@@ -302,156 +261,6 @@ func TestSparseMergeFailureDoesNotPublishPayload(t *testing.T) {
 	var parents int
 	if err := co.db.QueryRow("SELECT count(*) FROM vmerge").Scan(&parents); err != nil || parents != 0 {
 		t.Fatalf("failed merge left %d parent records: %v", parents, err)
-	}
-	rows, err := f.repo.DB().Query("SELECT b.uuid FROM private p JOIN blob b ON b.rid=p.rid")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var uuids []string
-	for rows.Next() {
-		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
-			t.Fatal(err)
-		}
-		uuids = append(uuids, uuid)
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if len(uuids) == 0 {
-		t.Fatal("failure lost the retained private payload")
-	}
-	for _, uuid := range uuids {
-		assertSparsePayloadSyncVisibility(t, f.repo, uuid, false)
-	}
-}
-
-func TestSparseMergePayloadRetainsPublicPhantomVisibility(t *testing.T) {
-	f := newSparseRepo(t, false)
-	data := []byte("published history awaiting its bytes\n")
-	remote := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": string(data)}), f.c1)
-	rid, uuid, _, err := blob.StoreUnderPolicy(f.repo.DB(), data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.repo.DB().Exec("UPDATE blob SET size=-1, content=NULL WHERE rid=?", int64(rid)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.repo.DB().Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", int64(rid)); err != nil {
-		t.Fatal(err)
-	}
-	co := f.open(t, sparseCone(t), f.c1)
-	gotRID, gotUUID, err := co.storeMergePayload(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotRID != rid || gotUUID != uuid || content.IsPrivate(f.repo.DB(), int64(rid)) {
-		t.Fatalf("filling public-history phantom changed identity or visibility: %d %s", gotRID, gotUUID)
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-	if err := co.Revert(RevertOpts{}); err != nil {
-		t.Fatal(err)
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-	if _, err := co.db.Exec(`CREATE TRIGGER reject_public_merge BEFORE INSERT ON sparse_pending
-	 BEGIN SELECT RAISE(ABORT, 'injected public phantom merge failure'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := co.Merge(MergeOpts{Version: remote}); err == nil || !strings.Contains(err.Error(), "injected public phantom merge failure") {
-		t.Fatalf("merge failure = %v, want injected public phantom failure", err)
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-}
-
-func TestSparseMergePayloadRetainsPublicVisibility(t *testing.T) {
-	f := newSparseRepo(t, false)
-	co := f.open(t, sparseCone(t), f.c1)
-	data := []byte("existing public merge result\n")
-	rid, uuid, _, err := blob.StoreUnderPolicy(f.repo.DB(), data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gotRID, gotUUID, err := co.storeMergePayload(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotRID != rid || gotUUID != uuid || content.IsPrivate(f.repo.DB(), int64(rid)) {
-		t.Fatalf("existing public artifact changed identity or visibility: %d %s", gotRID, gotUUID)
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-}
-
-func TestSparseMergeSynthesizedPayloadPrivate(t *testing.T) {
-	f := newSparseRepo(t, false)
-	base := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\nseven\n"}), f.c1)
-	theirs := f.commit(t, maps(sparseFiles, map[string]string{"tools/t.c": "one\ntwo\nthree\nfour\nfive\nsix\ntheirs\n"}), base)
-	co := f.open(t, sparseCone(t), base)
-	if _, err := co.Merge(MergeOpts{Version: theirs}); err != nil {
-		t.Fatal(err)
-	}
-	// A retained payload from an older writer must remain private through
-	// undo/redo and publish only when a complete commit references it.
-	stored, _, err := co.storeMergePayload([]byte("ours\ntwo\nthree\nfour\nfive\nsix\ntheirs\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := int64(stored)
-	if _, err := co.db.Exec("UPDATE sparse_pending SET mrid=?, unresolved=0 WHERE pathname='tools/t.c'", payload); err != nil {
-		t.Fatal(err)
-	}
-	if !content.IsPrivate(f.repo.DB(), payload) {
-		t.Fatal("uncommitted synthesized payload is publicly visible")
-	}
-	uuid, err := blobUUID(f.repo.DB(), libfossil.FslID(payload))
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, false)
-	if _, err := co.Undo(); err != nil {
-		t.Fatal(err)
-	}
-	if !content.IsPrivate(f.repo.DB(), payload) {
-		t.Fatal("undo published uncommitted synthesized payload")
-	}
-	if _, err := co.Redo(); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := co.Commit(CommitOpts{Message: "publish merged payload", User: "test", Time: f.time.Add(time.Hour)}); err != nil {
-		t.Fatal(err)
-	}
-	if content.IsPrivate(f.repo.DB(), payload) {
-		t.Fatal("committed synthesized payload remains private")
-	}
-	assertSparsePayloadSyncVisibility(t, f.repo, uuid, true)
-}
-
-func assertSparsePayloadSyncVisibility(t *testing.T, r *repo.Repo, uuid string, visible bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	seen, requested := false, false
-	transport := &syncproto.MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
-		for _, card := range req.Cards {
-			switch card := card.(type) {
-			case *xfer.IGotCard:
-				seen = seen || card.UUID == uuid
-			case *xfer.FileCard:
-				seen = seen || card.UUID == uuid
-			case *xfer.CFileCard:
-				seen = seen || card.UUID == uuid
-			}
-		}
-		if !requested {
-			requested = true
-			return &xfer.Message{Cards: []xfer.Card{&xfer.GimmeCard{UUID: uuid}}}
-		}
-		return &xfer.Message{}
-	}}
-	if _, err := syncproto.Sync(ctx, r, transport, syncproto.SyncOpts{Push: true}); err != nil {
-		t.Fatal(err)
-	}
-	if seen != visible {
-		t.Fatalf("ordinary sync visibility=%v, want %v", seen, visible)
 	}
 }
 

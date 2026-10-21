@@ -229,6 +229,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo status` reports the checkout's changes against the version it has
+  checked out, through `Checkout.Status`, with fossil's labels. Run from
+  inside a checkout with the default `--dir .`, it reported every tracked
+  file MISSING: the walk skipped its own root, named ".", as a hidden
+  directory. It also compared the disk with tip, so a checkout of an older
+  version read as edited, and it listed untracked files, which `fossil
+  status` leaves to `fossil extras`.
+
 - A sparse store that will not serve a clone now refuses it as fossil
   refuses an unauthorized clone: the push card naming the repository, then
   the error. fossil 2.28's clone client read the bare error as an empty,

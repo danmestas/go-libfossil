@@ -18,7 +18,7 @@ import (
 // sends it back, announcing nothing, and is announced only what lies above
 // it; go-libfossil does the same against `zit serve`.
 func TestZitHorizonCursorInterop(t *testing.T) {
-	bin := zitBinary(t)
+	bin := zitHorizonBinary(t)
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.Mkdir(home, 0o755); err != nil {

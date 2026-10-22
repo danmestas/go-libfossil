@@ -124,6 +124,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Merges use the base fossil uses. go-libfossil chose the merge base by a
+  bidirectional breadth-first search, the common ancestor nearest in
+  edges; fossil's `pivot_find` takes the most recent by check-in time,
+  with the check-out's pending merges as further candidates. On criss-cross
+  and skewed histories the two differ, and `Checkout.Merge` and
+  `Repo.Merge` merged against a different base than `fossil merge` and
+  produced different results. Both now follow fossil exactly, checked
+  against fossil 2.28 on 114 merge-base queries and a byte-for-byte merge.
+  `CheckoutMergeOpts.Baseline` overrides the base as fossil's
+  `--baseline` does. Merges still do not follow renames, which fossil does.
 - A sparse store of a real-sized repository classifies its absent
   artifacts. v0.14.0 read, inflated and expanded every blob in the store,
   file content included, to find the manifests among them, under a

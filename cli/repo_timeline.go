@@ -38,6 +38,11 @@ func (c *RepoTimelineCmd) Run(g *Globals) error {
 			user = "?"
 		}
 		fmt.Printf("%s  %s  %s  %s\n", uuid, e.Time.Format("2006-01-02 15:04"), user, e.Comment)
+		// A parent the origin labelled below a structural horizon is the
+		// horizon itself, not a missing parent (draft-fossil-horizon-00 §5.4).
+		for _, p := range e.HorizonParents {
+			fmt.Printf("  parent: %s (horizon)\n", p)
+		}
 	}
 	return nil
 }

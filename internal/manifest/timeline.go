@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -95,6 +96,10 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 		args = append(args, opts.Limit)
 	}
 
+	labels, err := content.BelowLabels(r.DB())
+	if err != nil {
+		return nil, fmt.Errorf("manifest.Timeline: %w", err)
+	}
 	rows, err := r.DB().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.Timeline: %w", err)
@@ -137,6 +142,7 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 		// leaving Parents empty for every other kind is correct, not a gap.
 		if entry.Kind == libfossil.EventKindCheckin {
 			entry.Parents = parentUUIDs(r, entry.RID)
+			entry.HorizonParents = horizonParents(labels, entry.Parents)
 		}
 		entries = append(entries, entry)
 	}

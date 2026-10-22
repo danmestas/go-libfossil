@@ -141,13 +141,14 @@ func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error) {
 	result := make([]LogEntry, len(entries))
 	for i, e := range entries {
 		result[i] = LogEntry{
-			RID:     int64(e.RID),
-			UUID:    e.UUID,
-			Comment: e.Comment,
-			User:    e.User,
-			Time:    e.Time,
-			Kind:    e.Kind,
-			Parents: e.Parents,
+			RID:            int64(e.RID),
+			UUID:           e.UUID,
+			Comment:        e.Comment,
+			User:           e.User,
+			Time:           e.Time,
+			Kind:           e.Kind,
+			Parents:        e.Parents,
+			HorizonParents: e.HorizonParents,
 		}
 	}
 	return result, nil
@@ -181,13 +182,14 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 	for i, e := range entries {
 		result[i] = TimelineEntry{
 			LogEntry: LogEntry{
-				RID:     int64(e.RID),
-				UUID:    e.UUID,
-				Comment: e.Comment,
-				User:    e.User,
-				Time:    e.Time,
-				Kind:    e.Kind,
-				Parents: e.Parents,
+				RID:            int64(e.RID),
+				UUID:           e.UUID,
+				Comment:        e.Comment,
+				User:           e.User,
+				Time:           e.Time,
+				Kind:           e.Kind,
+				Parents:        e.Parents,
+				HorizonParents: e.HorizonParents,
 			},
 			Cursor: e.Cursor,
 		}

@@ -2,16 +2,21 @@ package conformance
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/verify"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -168,4 +173,74 @@ func hzZitSameState(t *testing.T, bin, home, a, b string, k []string) error {
 		return expectf("derived state differs from dense:\nstructural:\n%s\ndense:\n%s", got, want)
 	}
 	return nil
+}
+
+// TestZitHorizonStructuralPaths composes the structural horizon with a path
+// cone over sub-manifest trees, both ways: an origin keeps K's trees but may
+// withhold the nodes outside the cone (zit since 2b635ea5ce does), so the
+// client must take those as elided rather than wait on them. go-libfossil
+// clones from zit serve, and zit from go-libfossil, at C = c3 under cone
+// src, and each derives K's tag state as the dense origin does.
+func TestZitHorizonStructuralPaths(t *testing.T) {
+	bin := zitHorizonBinary(t)
+	f := newSCRepo(t, true)
+	if _, err := f.r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	files := maps.Clone(scFiles)
+	checkins := []libfossil.FslID{f.c1}
+	for i := 2; i <= 4; i++ {
+		files["src/a.c"] = fmt.Sprintf("a %d\n", i)
+		files["tools/t.c"] = fmt.Sprintf("tools %d\n", i)
+		checkins = append(checkins, f.commit(t, files, checkins[len(checkins)-1]))
+	}
+	c3 := hzUUID(t, f.r, checkins[2])
+	k := []libfossil.FslID{checkins[2], checkins[3]}
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(xferHandler(t, f.r, func(*xfer.Message) {}))
+	defer server.Close()
+
+	zs := filepath.Join(dir, "zstructural")
+	if out, err := zitCommand(bin, home, dir, "clone", server.URL, zs, "--no-open", "--once",
+		"--cone=src", "--horizon="+c3, "--structural"); err != nil || strings.Contains(out, "content horizon instead") {
+		t.Fatalf("zit's structural clone under cone src from go-libfossil: %v\n%s", err, out)
+	}
+	zitRun(t, bin, home, zs, "verify")
+
+	zd := filepath.Join(dir, "zdense")
+	zitRun(t, bin, home, dir, "clone", server.URL, zd, "--no-open", "--once")
+	h, err := cone.NewHorizon(c3, cone.RuleDescendants, cone.DepthStructural)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := cone.NewWithHorizon([]string{"src"}, nil, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, cloned, err := sync.Clone(context.Background(), filepath.Join(dir, "structural.fossil"),
+		&sync.HTTPTransport{URL: zitServe(t, bin, home, zd)}, sync.CloneOpts{StoreCone: sc, PullPhantoms: true})
+	if err != nil {
+		t.Fatalf("go-libfossil's structural clone under cone src from zit: %v", err)
+	}
+	defer r.Close()
+	if cloned.HorizonFallback || cloned.StructuralServed == 0 {
+		t.Fatalf("clone fell back %v, structural in %d of %d rounds",
+			cloned.HorizonFallback, cloned.StructuralServed, cloned.Rounds)
+	}
+	report, err := verify.Verify(r)
+	if err != nil || !report.OK() || report.Phantoms != 0 {
+		t.Fatalf("verify: %v ok=%v transit=%d issues=%v", err, report.OK(), report.Phantoms, report.Issues)
+	}
+	for _, rid := range k {
+		u := hzUUID(t, f.r, rid)
+		want, _ := hzTagState(f.r.DB(), u)
+		got, err := hzTagState(r.DB(), u)
+		if err != nil || !slices.Equal(got, want) {
+			t.Fatalf("check-in %.10s carries %v, dense %v (%v)", u, got, want, err)
+		}
+	}
 }

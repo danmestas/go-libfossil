@@ -268,8 +268,9 @@ func (a *Absences) classify(
 // §5.1, §5.3) to the phantoms that are neither shunned nor a held delta's
 // base. The store requests what a P, F, S or B card of a held artifact names,
 // or an attachment carries (§4.5); of those, a parent the origin labelled
-// below the horizon, and a baseline or node no tree of K reaches, are elided,
-// and an unlabelled parent stays transit, since it may only be late. Every
+// below the horizon, a baseline or node no tree of K reaches, and a node the
+// path members exclude (§7) are elided, and an unlabelled parent stays
+// transit, since it may only be late. Every
 // other phantom -- the target of a tag or a cherry-pick, a manifest dropped
 // after it was linked -- is a manifest below the horizon that nothing in K
 // reaches, and is elided. A name an origin announces is still requested
@@ -302,7 +303,9 @@ func (a *Absences) classifyStructural(
 			a.below[rid] = true
 		case parents[rid]:
 		case refs.tree[uuid] || baselines[rid]:
-			if !cut.reach[uuid] && !refs.file(rid) {
+			// A node of K's trees that path members exclude is elided too:
+			// an origin may withhold it, as a path cone's origin does.
+			if !cut.reach[uuid] && !refs.file(rid) || refs.tree[uuid] && refs.Outside(rid) {
 				a.class[rid] = Elided
 			}
 		case refs.file(rid) || attached[rid]:

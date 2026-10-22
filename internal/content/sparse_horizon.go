@@ -45,17 +45,25 @@ func horizonTrees(
 	if err != nil || !placed {
 		return horizonCut{}, false, err
 	}
-	budget := limits.treeMax
-	if scaled := int64(len(k)+1) * limits.treePerCheckin; scaled/limits.treePerCheckin == int64(len(k)+1) && scaled < budget {
-		budget = scaled
-	}
-	walk := treeWalk{ctx: ctx, q: q, budget: budget, work: work,
-		cache: NewCache(treeCacheBytes), files: map[string]bool{}, visited: map[string]bool{}}
+	walk := newTreeWalk(ctx, q, k, limits, work)
 	above, err := walk.named(k)
 	if err != nil {
 		return horizonCut{}, false, err
 	}
 	return horizonCut{k: k, above: above, reach: walk.visited}, true, nil
+}
+
+// newTreeWalk is a walk of held set k's trees under the byte budget k
+// scales, charging work.
+func newTreeWalk(
+	ctx context.Context, q db.Querier, k []libfossil.FslID, limits referenceLimits, work *ReferenceWork,
+) *treeWalk {
+	budget := limits.treeMax
+	if scaled := int64(len(k)+1) * limits.treePerCheckin; scaled/limits.treePerCheckin == int64(len(k)+1) && scaled < budget {
+		budget = scaled
+	}
+	return &treeWalk{ctx: ctx, q: q, budget: budget, work: work,
+		cache: NewCache(treeCacheBytes), files: map[string]bool{}, visited: map[string]bool{}}
 }
 
 // HorizonReach returns the held set of h and the manifests, baselines and

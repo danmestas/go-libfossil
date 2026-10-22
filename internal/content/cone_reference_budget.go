@@ -81,6 +81,24 @@ type referenceReader struct {
 func loadConeReferenceFactsBounded(
 	ctx context.Context, q db.Querier, budget ReferenceBudget, retainUnreadable bool,
 ) (*ConeReferenceFacts, ReferenceWork, error) {
+	s, work, err := loadReferenceState(ctx, q, budget, retainUnreadable)
+	if err != nil {
+		return nil, work, err
+	}
+	return s.facts, work, nil
+}
+
+// referenceState is a load's facts with the crosslink facts it decided by,
+// which is what extending them needs (see extendReferenceState).
+type referenceState struct {
+	facts  *ConeReferenceFacts
+	tables *referenceTables
+	seen   map[[2]int64]bool // the (filename, file) pairs addLinkedFiles recorded
+}
+
+func loadReferenceState(
+	ctx context.Context, q db.Querier, budget ReferenceBudget, retainUnreadable bool,
+) (*referenceState, ReferenceWork, error) {
 	r, err := referencePreflight(ctx, q, budget)
 	if err != nil {
 		return nil, ReferenceWork{}, err
@@ -108,10 +126,11 @@ func loadConeReferenceFactsBounded(
 		}
 		answer = nil
 	}
-	if err := r.facts.addLinked(ctx, q, answer); err != nil {
+	s := &referenceState{facts: r.facts, tables: tables, seen: map[[2]int64]bool{}}
+	if err := r.facts.addLinked(ctx, q, answer, nil, s.seen); err != nil {
 		return nil, r.work, err
 	}
-	return r.facts, r.work, nil
+	return s, r.work, nil
 }
 
 const referenceMetadataSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,

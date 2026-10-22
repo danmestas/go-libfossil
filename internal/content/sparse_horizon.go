@@ -33,19 +33,8 @@ func horizonAbove(
 	if ctx == nil || q == nil || work == nil {
 		panic("content.horizonAbove: nil context, querier or work")
 	}
-	var c libfossil.FslID
-	err = q.QueryRow("SELECT rid FROM blob WHERE uuid=?", h.Hash()).Scan(&c)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, fmt.Errorf("content.horizonAbove: C: %w", err)
-	}
-	k, err := horizon.HeldSet(ctx, q, c, h.Rule())
-	if errors.Is(err, horizon.ErrNotHeld) {
-		return nil, false, nil
-	}
-	if err != nil {
+	k, placed, err := horizon.Place(ctx, q, h)
+	if err != nil || !placed {
 		return nil, false, err
 	}
 	budget := limits.treeMax

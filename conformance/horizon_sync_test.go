@@ -24,9 +24,10 @@ import (
 )
 
 // The content horizon's synchronization against a horizon-ignorant peer
-// (draft-fossil-horizon-00 §6.3): no horizon pragma exists yet, so every
-// peer serves densely and the client classifies locally. The peers are
-// go-libfossil's handler and fossil(1) through `fossil http`.
+// (draft-fossil-horizon-00 §6.3): the peer serves densely and the client
+// classifies locally. The peers are go-libfossil's handler, with the
+// horizon pragma stripped from what it reads, and fossil(1) through
+// `fossil http`.
 
 var (
 	horizonSyncClonePull = Case{ID: "horizon.6.3.clone-pull", Req: "HZ-6.3-1"}
@@ -122,12 +123,13 @@ func (p *hzFossilPeer) Exchange(_ context.Context, req *xfer.Message) (*xfer.Mes
 	return resp, nil
 }
 
-// newHZPeer serves origin densely: through go-libfossil's handler, or
-// through fossil(1), which is nil when the binary is absent and not required.
+// newHZPeer serves origin densely: through go-libfossil's handler, which
+// never sees the request's cone, or through fossil(1), which is nil when the
+// binary is absent and not required.
 func newHZPeer(t *testing.T, origin *repo.Repo, fossil bool) hzPeer {
 	t.Helper()
 	if !fossil {
-		return &scSyncPeer{r: origin}
+		return &scSyncPeer{r: origin, ignore: true}
 	}
 	ref := newFossilReference(t)
 	if ref == nil {
@@ -361,7 +363,7 @@ func hzSyncTransit(t *testing.T, withhold bool) error {
 	if err != nil {
 		return err
 	}
-	peer := &hzDeltaPeer{scSyncPeer: &scSyncPeer{r: origin.r},
+	peer := &hzDeltaPeer{scSyncPeer: &scSyncPeer{r: origin.r, ignore: true},
 		target: childUUID, base: baseUUID, delta: d, full: []byte(base), withhold: withhold}
 	sc := hzStoreCone(t, hzUUID(t, origin.r, c), cone.RuleDescendants, cone.DepthContent)
 	r, result, err := sync.Clone(context.Background(),
@@ -483,7 +485,12 @@ func hzSyncDemand(t *testing.T) error {
 		return err
 	}
 	defer co.Close()
-	target := gofossil.UpdateOpts{TargetRID: int64(g.c1)}
+	// The clone numbers its rows in the order they arrived, not the origin's.
+	c1, ok := blob.Exists(pub.Inner().DB(), hzUUID(t, g.f.r, g.c1))
+	if !ok {
+		return expectf("the clone does not name c1")
+	}
+	target := gofossil.UpdateOpts{TargetRID: int64(c1)}
 	if _, err := co.UpdateContext(context.Background(), target, gofossil.RequiredContentOpts{}); err == nil {
 		return expectf("an update below the horizon with no peer succeeded")
 	}
@@ -606,10 +613,10 @@ func hzUnion(a, b map[string]bool) map[string]bool {
 // A pull that meets a new cluster requests it (an igot names it) but not
 // the artifacts only it names, while a dense clone of the same origin
 // does. A clustered check-in a new one names by its P card is requested,
-// and so is the blob its F card names. The
-// peer is fossil(1), which announces unclustered artifacts alone:
-// go-libfossil's handler announces every artifact by igot, which a horizon
-// clone requests (§4.5).
+// and so is the blob its F card names. The peer is fossil(1), which
+// announces unclustered artifacts alone: go-libfossil's handler, serving
+// densely, announces every artifact by igot, which a horizon clone
+// requests (§4.5).
 func hzSyncClusters(t *testing.T) error {
 	g := newHZSyncGraph(t)
 	peer := newHZPeer(t, g.f.r, true)

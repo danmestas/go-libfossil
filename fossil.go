@@ -93,6 +93,10 @@ type CloneResult struct {
 	// cone-served, draft-fossil-sparse-cone-00 §6.3). Both are zero for a
 	// dense clone.
 	Elided, ConeServed int
+	// HorizonServed counts the replies whose server served the store's
+	// content horizon (pragma horizon-served, draft-fossil-horizon-00
+	// §6.2.5); the other rounds were classified locally.
+	HorizonServed int
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -122,6 +126,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		Messages:        iResult.Messages,
 		Elided:          iResult.Elided,
 		ConeServed:      iResult.ConeServed,
+		HorizonServed:   iResult.HorizonServed,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
 }

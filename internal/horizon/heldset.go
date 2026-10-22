@@ -4,6 +4,7 @@ package horizon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"maps"
@@ -62,6 +63,28 @@ const heldCheckinSQL = `(EXISTS(SELECT 1 FROM event WHERE objid=%[1]s AND type='
 // check-ins the repository holds.
 func HeldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.HorizonRule) ([]libfossil.FslID, error) {
 	return heldSet(ctx, q, c, rule, heldSetNodes)
+}
+
+// Place returns the held set of h, naming C by its hash. placed is false
+// when the repository does not hold C as a check-in: such a horizon names no
+// held set, and each caller decides what that means for it.
+func Place(ctx context.Context, q db.Querier, h cone.Horizon) (k []libfossil.FslID, placed bool, err error) {
+	if ctx == nil || q == nil {
+		panic("horizon.Place: nil context or querier")
+	}
+	var c libfossil.FslID
+	err = q.QueryRow("SELECT rid FROM blob WHERE uuid=?", h.Hash()).Scan(&c)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("horizon: C: %w", err)
+	}
+	k, err = HeldSet(ctx, q, c, h.Rule())
+	if errors.Is(err, ErrNotHeld) {
+		return nil, false, nil
+	}
+	return k, err == nil, err
 }
 
 func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.HorizonRule, limit int) ([]libfossil.FslID, error) {

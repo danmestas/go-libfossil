@@ -878,6 +878,8 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		// Sparse-cone §6.3: the peer applied this request's cone. Every
 		// reply is filtered locally regardless; this only reports the mode.
 		s.result.ConeServed++
+	case c.Name == horizonServedPragma && servesContentHorizon(c):
+		s.result.HorizonServed++
 	case c.Name == sendSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
 		// for the session: a reply without the pragma does not unsay it.

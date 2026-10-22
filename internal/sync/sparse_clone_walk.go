@@ -62,13 +62,14 @@ func (h *handler) emitCloneResume(round *cloneBatch) {
 
 // cloneSparseRow is §6.2 for one row: content and sub-manifest nodes wait
 // for the check-in walk that reaches them in the cone, and are charged here
-// as an excluded row is; every other artifact goes out at its row, followed
-// by what its walk reaches, each checked against the round's budget.
+// as an excluded row is, as is a cluster under a horizon; every other
+// artifact goes out at its row, followed by what its walk reaches, each
+// checked against the round's budget.
 func (h *handler) cloneSparseRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
 	w := h.keep.walk
 	kind, d := w.classify(rid)
 	already := round.sent[rid]
-	if kind == sparseContent || kind == sparseNode {
+	if !w.atRow(kind) {
 		if !already {
 			round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
 		}
@@ -85,7 +86,7 @@ func (h *handler) cloneSparseRow(round *cloneBatch, rid int, uuid string, fullSi
 	if d == nil {
 		return true, nil
 	}
-	items, err := w.items(d)
+	items, err := w.items(rid, d)
 	if err != nil {
 		return false, err
 	}

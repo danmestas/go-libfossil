@@ -22,13 +22,15 @@ import (
 // horizon member of the cone (§3.3): its canonical serialization and the
 // version byte that makes a reader predating it refuse the cone rather than
 // read it as path members; the §3.1 held set, computed by
-// internal/horizon; and the content horizon over a store
-// (horizon_content_test.go) and its synchronization against a
-// horizon-ignorant peer (horizon_sync_test.go).
+// internal/horizon; the content horizon over a store
+// (horizon_content_test.go), its synchronization against a
+// horizon-ignorant peer (horizon_sync_test.go), and the horizon pragmas
+// with the origin that serves them (horizon_serve_test.go).
 
 func horizonSuiteCases() []Case {
 	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules,
-		horizonHeldSetRecomputed, horizonHeldSetClosed}, append(horizonContentCases(), horizonSyncCases()...)...)
+		horizonHeldSetRecomputed, horizonHeldSetClosed},
+		append(horizonContentCases(), append(horizonSyncCases(), horizonServeCases()...)...)...)
 }
 
 var (

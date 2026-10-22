@@ -666,6 +666,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		if c.Name == coneServedPragma {
 			cs.result.ConeServed++ // sparse-cone §6.3, reported only
 		}
+		if c.Name == horizonServedPragma && servesContentHorizon(c) {
+			cs.result.HorizonServed++ // horizon §6.2.5, reported only
+		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {
 			cs.smConfig.stage(c.Content)

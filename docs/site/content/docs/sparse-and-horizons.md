@@ -177,6 +177,32 @@ n, err := repo.CompactStore(ctx)
 
 `SetStoreCone` moves no content. Widening makes the newly covered elided artifacts wanted again, and the next pull fetches them. `SetStoreConeContext` does the pull itself through an ordinary cone-scoped sync. With artifacts to fetch and no `Peer`, it refuses, names the count, and leaves the cone unchanged. If the transfer fails after the cone is replaced, the wider policy stays and the next pull heals it. While a cone is set, a commit carries no R card.
 
+### Deepen, merge across, and verify the seed
+
+```go
+// Move the horizon down far enough to reach a check-in, which may lie
+// below it. C moves to that check-in when it is an ancestor of C, else to
+// a common ancestor of the two, asked of the origin when the store cannot
+// see one. The rule, the depth and the path members stay.
+sr, err = repo.DeepenHorizon(ctx, target, libfossil.RequiredContentOpts{Peer: t})
+
+// Merge. With a Peer, a merge whose base lies below a structural horizon
+// asks the origin for the base and deepens to it first. Without one it
+// fails with an error matching libfossil.ErrBelowHorizon.
+mr, err := co.MergeContext(ctx, libfossil.CheckoutMergeOpts{Version: rid},
+    libfossil.RequiredContentOpts{Peer: t})
+
+// Check the seed against the history it summarizes. This fetches every
+// manifest below C and leaves a content-horizon store.
+v, err := repo.VerifySeed(ctx, libfossil.RequiredContentOpts{Peer: t})
+```
+
+Deepening a structural store discards its seed before it fetches the new one, so the old seed cannot shadow the new one. If the transfer fails, the old horizon and seed are put back.
+
+A merge never runs against a base the store does not hold. A bisection whose good end lies below the horizon is refused the same way, naming the horizon and the deepen.
+
+An origin checks each pushed check-in that creates a branch: if the branch it cancels is not the one this origin derives for the parent, the clone's seed was stale, and the whole push is refused with `stale seed: ...`. Pull, push a control artifact that cancels the parent's real branch tag on the check-in, and push again.
+
 ## Command line
 
 ### Open a sparse checkout
@@ -244,6 +270,18 @@ libfossil -R repo.fossil repo cone compact
 - `--no-horizon`: drop the horizon, keeping the path members, and fetch what it elided.
 - `--dense`: drop the store cone, fetching everything it elided.
 - `compact`: drop held blobs the store cone elides (irreversible locally).
+
+```
+libfossil -R repo.fossil repo cone deepen <check-in>   # full hash, or a name
+libfossil -R repo.fossil repo merge <version> -d DIR
+libfossil -R repo.fossil repo verify --seed
+```
+
+- `cone deepen`: move the horizon down to reach the check-in, fetching what the deeper horizon keeps.
+- `merge`: a merge whose base lies below a structural horizon asks the remote for the base and deepens to it. An ordinary merge contacts no peer.
+- `verify --seed`: verify the structural seed by fetching the history below the horizon. The store stays a content-horizon store.
+
+These take the same `--remote`, `--sync-user`, `--sync-pass`, `--sync-private` and `--timeout` flags.
 
 `store` takes the same `--remote`, `--sync-user`, `--sync-pass`, `--sync-private` and `--timeout` flags as above.
 

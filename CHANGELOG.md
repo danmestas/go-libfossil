@@ -20,8 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds, not which paths a checkout writes. `libfossil repo clone` takes
   `--horizon <full hash>`, `--leaves`, `--cone` and `--cone-not`, and
   `libfossil repo cone store` takes `--horizon`, `--leaves` and
-  `--no-horizon` and shows the horizon. The structural horizon is not
-  exposed.
+  `--no-horizon` and shows the horizon; both take `--structural`.
 - A cone can carry a horizon (draft-fossil-horizon-00 §3): a check-in
   named by its full hash, the held-set rule (`descendants` or `leaves`) and
   the depth of the cut (`content` or `structural`), with or without path
@@ -46,8 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   store requests nothing below the horizon, records below-horizon blobs it
   is sent as elided instead of storing them, holds and requests no
   cluster, and fetches a below-horizon blob an operation needs on demand.
-  Moving C earlier and pulling fetches what the deeper horizon keeps. A
-  structural horizon is refused for now. Against a stock Fossil origin a
+  Moving C earlier and pulling fetches what the deeper horizon keeps.
+  Against a stock Fossil origin a
   new check-in announced only inside a cluster is not learned until a later
   check-in names it; the draft now has the clone request a horizon-ignorant
   origin's cluster members as transit (zit#266), which lands with the
@@ -78,8 +77,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once. Syncs over the HTTP transport key the cursor by the URL without
   its password; other transports keep none and announce in full. Clone
   replies carry no cursor yet. Interoperates with zit in both directions.
-- The structural horizon's seed (draft-fossil-horizon-00 §5.2), without
-  its wire yet. An origin mints a control artifact whose T cards apply the
+- The structural horizon (draft-fossil-horizon-00 §5, Appendix A step 5).
+  A store at structural depth also elides the manifests and sub-manifest
+  nodes below the horizon, keeps the boundary labels its origin sends so a
+  labelled parent is elided rather than wanted, and holds the seed. Its
+  requests carry `pragma horizon-structural` and `pragma horizon-seed`; an
+  origin restricts manifests and nodes to the held set and what they
+  reach, labels every boundary hash, mints and sends the seed when the
+  client's is not current, refuses a seed offered to it, and answers
+  `horizon-served structural` only when the client will hold a current
+  seed. A client that is not served structurally, or whose seed fails its
+  check, falls back to the content horizon and reports it. Every check-in
+  in the held set derives the branch, tag and closed state it has densely.
+  `Horizon.Structural`, `StructuralServed` and `HorizonFallback` expose it,
+  and `repo info`, `repo verify` and the commands that would cross the
+  horizon (`co`, `diff`, `annotate` below C) name it. Interoperates with
+  zit at `9bf7ebfe0f` in both directions.
+- The structural horizon's seed (draft-fossil-horizon-00 §5.2). An origin mints a control artifact whose T cards apply the
   tags in force at every entry of the held set (C, and each check-in of K
   whose primary parent lies outside it), dated at the latest tag event it
   summarizes rounded up to a whole second, so it is byte-identical to the

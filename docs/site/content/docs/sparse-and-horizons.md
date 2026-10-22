@@ -56,12 +56,12 @@ A check-in is childless when no other check-in names it as a parent, open or clo
 
 The leaves rule has a cost you should check before using it. An old branch that was never merged forks from C's ancestry near the root, and the rule then holds every descendant of that fork. On fossil-scm.org's repository it held 20,907 of 21,008 check-ins at every depth tested. Use it when the repository keeps few old unmerged branches.
 
-The descendants rule saves much more. On the same repository, a structural horizon placed 10, 100, 426 and 1000 check-ins back cut expanded transfer by 97, 86, 56 and 41 percent. The structural depth is not available yet (see Limits). The content horizon available today keeps all structure and elides only blobs.
+The descendants rule saves much more. On the same repository, a structural horizon placed 10, 100, 426 and 1000 check-ins back cut expanded transfer by 97, 86, 56 and 41 percent. A content horizon keeps all structure and elides only blobs; a structural horizon also leaves out the manifests below C.
 
 ### Depth
 
 - **content** (available): which blobs are held. Every check-in's structure is still held.
-- **structural** (not exposed): also cuts the check-ins below C. It needs a seed, a control artifact the origin mints so a clone can derive tag and branch state without C's ancestry.
+- **structural** (`Horizon.Structural`, `--structural`): also cuts the check-ins below C. It needs a seed, a control artifact the origin mints so a clone can derive tag and branch state without C's ancestry.
 
 ### Moving the horizon
 
@@ -258,7 +258,7 @@ libfossil -R repo.fossil repo cone compact
 ## Limits
 
 - **Compaction is irreversible locally.** `CompactStore` and `repo cone compact` delete held blobs. Widening later fetches them again, which needs a peer that still has them. Structural artifacts, sub-manifest nodes, unsent or private content and the delta bases of retained artifacts are kept.
-- **The structural horizon is not exposed.** The library refuses it. Only the content horizon is available.
+- **The structural horizon needs an origin that serves it.** Against a peer that does not answer `horizon-served structural` (stock fossil, or a server without a current seed) the clone falls back to the content horizon and reports `HorizonFallback`.
 - **Seed signing is not implemented.** The structural horizon relies on a seed that an origin may sign. go-libfossil implements no signing, so a clone without a known key for its origin accepts an unsigned seed.
 - **Clone replies carry no horizon cursor.** The cursor (`pragma horizon-cursor`) lets a pull skip re-announcing what both sides hold. A pull sends it, but a clone does not yet.
 - **A horizon is not a checkout cone.** Give a checkout a horizon and you get `ErrHorizonCheckout`.

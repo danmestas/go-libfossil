@@ -5,11 +5,14 @@ import (
 	"errors"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	gofossil "github.com/danmestas/go-libfossil"
 
+	"github.com/danmestas/go-libfossil/internal/branch"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -18,6 +21,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/merge"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -27,7 +31,7 @@ import (
 
 func horizonDeepenCases() []Case {
 	return []Case{horizonMergeBaseQuery, horizonMergeBaseBound, horizonDeepen, horizonDeepenPoint, horizonDeepenFailed,
-		horizonMergeCrossing, horizonMergeDeepen}
+		horizonMergeCrossing, horizonMergeDeepen, horizonPushCheck}
 }
 
 var (
@@ -38,6 +42,7 @@ var (
 	horizonDeepenFailed   = Case{ID: "horizon.5.8.deepen-failed", Req: "HZ-5.8-1"}
 	horizonMergeCrossing  = Case{ID: "horizon.5.5.merge-crossing", Req: "HZ-5.5-1"}
 	horizonMergeDeepen    = Case{ID: "horizon.5.5.merge-deepen", Req: "HZ-5.5-2"}
+	horizonPushCheck      = Case{ID: "horizon.5.7.push-check", Req: "HZ-5.7-2"}
 )
 
 func TestHorizonDeepen(t *testing.T) {
@@ -48,6 +53,7 @@ func TestHorizonDeepen(t *testing.T) {
 	check(t, horizonDeepenFailed, func() error { return hzDeepenFailed(t) })
 	check(t, horizonMergeCrossing, func() error { return hzMergeCrossing(t) })
 	check(t, horizonMergeDeepen, func() error { return hzMergeDeepen(t) })
+	check(t, horizonPushCheck, func() error { return hzPushCheck(t) })
 }
 
 // hzMergeBaseQuery: a structural clone asks its origin for the merge base of
@@ -338,6 +344,59 @@ func hzMergeDeepen(t *testing.T) error {
 	}
 	if h, ok := sc.Horizon(); !ok || h.Checkin != f.x.c1 || !h.Structural {
 		return expectf("store horizon after the merge %+v %v, want c1 structural", h, ok)
+	}
+	return nil
+}
+
+// hzPushCheck: the origin moves c4 to branch moved after a structural clone
+// took its seed. The clone, re-seeded by nothing yet, creates a branch from
+// c4 cancelling sym-trunk; the origin refuses the push, naming the stale seed
+// and moved, and stores nothing. After a pull re-seeds the clone, the clone
+// writes the control artifact cancelling sym-moved on its check-in and
+// pushes again, and the origin admits both and derives the check-in on the
+// new branch alone.
+func hzPushCheck(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	x.s.tag(t, x.s.c4, "branch", tag.TagPropagating, "moved")
+	x.s.tag(t, x.s.c4, "sym-moved", tag.TagPropagating, "")
+	x.s.tag(t, x.s.c4, "sym-trunk", tag.TagCancel, "")
+	c4, err := hzRID(r, x.c4)
+	if err != nil {
+		return err
+	}
+	when := x.s.f.when.Add(24 * time.Hour)
+	nb, _, err := branch.Create(r, branch.CreateOpts{Name: "nb", Parent: c4, User: "u", Time: when})
+	if err != nil {
+		return err
+	}
+	nbUUID := hzUUID(t, r, nb)
+	res, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true})
+	if !hzRefusedStale(err, res, "'moved'") || !hzRefusedStale(err, res, "'trunk'") {
+		return expectf("push of a stale cancellation: %v %+v", err, res)
+	}
+	if names, err := hzHeldNames(x.s.f.r); err != nil || names[nbUUID] {
+		return expectf("the origin holds the refused check-in (%v)", err)
+	}
+	if res, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Pull: true}); err != nil || res.HorizonFallback {
+		return expectf("re-sync: %v %+v", err, res)
+	}
+	if _, err := tag.AddTag(r, tag.TagOpts{TargetRID: nb, TagName: "sym-moved", TagType: tag.TagCancel,
+		User: "u", Time: when.Add(time.Hour)}); err != nil {
+		return err
+	}
+	res, err = sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true})
+	if err != nil || len(res.Errors) != 0 {
+		return expectf("push with the correction: %v %q", err, res.Errors)
+	}
+	got, err := hzTagState(x.s.f.r.DB(), nbUUID)
+	if err != nil || !slices.Contains(got, "branch/2=nb") || slices.ContainsFunc(got, func(s string) bool {
+		return strings.HasPrefix(s, "sym-moved") || strings.HasPrefix(s, "sym-trunk")
+	}) {
+		return expectf("the origin derives the corrected check-in as %v (%v)", got, err)
 	}
 	return nil
 }

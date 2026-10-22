@@ -265,6 +265,7 @@ type handler struct {
 	seedOffered     string                    // the seed a structural request names as held (horizon §6.2.3)
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  [2]string                 // the request's horizon-mergebase query (horizon §6.2.4); zero when none
+	received        []string                  // the artifacts this request stored, in card order
 	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
@@ -510,7 +511,20 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 	if err := h.emitInventory(ctx); err != nil {
 		return err
 	}
-	return h.crosslinkReceived(ctx)
+	if err := h.crosslinkReceived(ctx); err != nil {
+		return err
+	}
+	// Horizon §5.7: a push whose cancellation contradicts this origin's
+	// derivation is refused whole, so it stores nothing.
+	refusal, err := h.staleCancel()
+	if err != nil {
+		return err
+	}
+	if refusal != "" {
+		h.fail(refusal)
+		return errPassAborted
+	}
+	return nil
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -1438,6 +1452,7 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		return nil
 	}
 	h.filesRecvd++
+	h.received = append(h.received, uuid)
 	return nil
 }
 

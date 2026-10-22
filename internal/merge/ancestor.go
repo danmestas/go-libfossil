@@ -146,8 +146,10 @@ func (w *pivotWalk) seed(q PivotQuery) error {
 		if rid <= 0 {
 			panic("merge.FindPivot: rids must be positive")
 		}
+		// coalesce keeps a driver from reading the DATETIME column as a
+		// time; a ci event always has an mtime.
 		var mtime float64
-		err := w.db.QueryRow("SELECT mtime FROM event WHERE objid=? AND type='ci' LIMIT 1", rid).Scan(&mtime)
+		err := w.db.QueryRow("SELECT coalesce(mtime, 0.0) FROM event WHERE objid=? AND type='ci' LIMIT 1", rid).Scan(&mtime)
 		if errors.Is(err, sql.ErrNoRows) {
 			w.unheld = true
 			continue

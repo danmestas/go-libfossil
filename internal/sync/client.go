@@ -1730,7 +1730,7 @@ func (s *session) loadDBPhantoms() error {
 		// A structural store elides a name nothing it holds requests, but
 		// one its origin announces this session is kept there (horizon
 		// §4.5, §5.1) and is asked for.
-		announced := s.structural.active && s.remoteHas[uuid]
+		announced := s.structural.active && s.remoteHas[uuid] && elided != nil && elided.Unnamed(rid)
 		if elided != nil && elided.Class(rid) == content.Elided && !announced {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)

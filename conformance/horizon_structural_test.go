@@ -33,7 +33,8 @@ func horizonStructuralCases() []Case {
 	return []Case{horizonStructHoldings, horizonStructIgnorant, horizonStructLabels, horizonStructClassify,
 		horizonStructReseed, horizonStructRequest, horizonStructRestrict, horizonStructLabelOrder,
 		horizonStructSeedWire, horizonStructSeedRefused, horizonStructAdvertise, horizonStructServed,
-		horizonStructFallback, horizonStructCommit, horizonStructLeaves, horizonStructVerify, horizonStructCrossing}
+		horizonStructFallback, horizonStructCommit, horizonStructLeaves, horizonStructVerify, horizonStructCrossing,
+		horizonStructPush}
 }
 
 var (
@@ -54,6 +55,7 @@ var (
 	horizonStructLeaves      = Case{ID: "horizon.3.1.structural-leaves", Req: "HZ-3.1-4"}
 	horizonStructVerify      = Case{ID: "horizon.5.4.verify-below", Req: "HZ-5.4-1"}
 	horizonStructCrossing    = Case{ID: "horizon.5.5.crossing", Req: "HZ-5.5-1"}
+	horizonStructPush        = Case{ID: "horizon.5.1.structural-served-push", Req: "HZ-5.1-1"}
 )
 
 func TestHorizonStructural(t *testing.T) {
@@ -74,6 +76,48 @@ func TestHorizonStructural(t *testing.T) {
 	check(t, horizonStructLeaves, func() error { return hzStructHoldings(t) })
 	check(t, horizonStructVerify, func() error { return hzStructVerify(t) })
 	check(t, horizonStructCrossing, func() error { return hzStructCrossing(t) })
+	check(t, horizonStructPush, func() error { return hzStructPush(t) })
+}
+
+// hzStructPush: a structural store serving a push asks for what the pusher
+// announces, though nothing it holds names it yet, and derives the new
+// check-in as the dense pusher does.
+func hzStructPush(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	if _, err := r.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	dense, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "dense.fossil"), x.peer(), sync.CloneOpts{})
+	if err != nil {
+		return err
+	}
+	defer dense.Close()
+	c4, err := hzRID(dense, x.c4)
+	if err != nil {
+		return err
+	}
+	c5, _, err := manifest.Checkin(dense, manifest.CheckinOpts{
+		Files: []manifest.File{{Name: "c5", Content: []byte("c5\n")}}, Comment: "c5", User: "u", Parent: c4,
+		Time: x.s.f.when.Add(24 * time.Hour),
+	})
+	if err != nil {
+		return err
+	}
+	pushed, err := sync.Sync(context.Background(), dense, &scSyncPeer{r: r}, sync.SyncOpts{Push: true})
+	if err != nil || len(pushed.Errors) != 0 {
+		return expectf("push to the structural store: %v %q", err, pushed.Errors)
+	}
+	u := hzUUID(t, dense, c5)
+	want, _ := hzTagState(dense.DB(), u)
+	got, err := hzTagState(r.DB(), u)
+	if err != nil || len(want) == 0 || !slices.Equal(got, want) {
+		return expectf("pushed %.10s derives %v at the structural store, %v at the pusher (%v)", u, got, want, err)
+	}
+	return nil
 }
 
 // hzStructVerify: verification reports the manifests below the horizon as

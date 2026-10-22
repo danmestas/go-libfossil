@@ -129,8 +129,9 @@ type Absences struct {
 	work   ReferenceWork // what classification read, for tests to bound
 	// below are the elided phantoms a structural horizon proves to be
 	// manifests below it: labelled boundary hashes and the targets only a
-	// tag or cherry-pick names (draft-fossil-horizon-00 §5.4).
-	below map[libfossil.FslID]bool
+	// tag or cherry-pick names (draft-fossil-horizon-00 §5.4); unnamed are
+	// those of them nothing the store holds names at all.
+	below, unnamed map[libfossil.FslID]bool
 }
 
 // LoadAbsences classifies the store's phantoms. Shunned names win; raw F/S
@@ -282,7 +283,11 @@ func (a *Absences) classifyStructural(
 	if err != nil {
 		return err
 	}
-	a.below = map[libfossil.FslID]bool{}
+	a.below, a.unnamed = map[libfossil.FslID]bool{}, map[libfossil.FslID]bool{}
+	named, err := ridSet(q, "SELECT rid FROM tagxref UNION SELECT parentid FROM cherrypick UNION SELECT objid FROM event")
+	if err != nil {
+		return err
+	}
 	parents, err := ridSet(q, "SELECT pid FROM plink")
 	if err != nil {
 		return err
@@ -312,6 +317,7 @@ func (a *Absences) classifyStructural(
 		default:
 			a.class[rid] = Elided
 			a.below[rid] = true
+			a.unnamed[rid] = !named[rid] && !refs.Required(rid)
 		}
 	}
 	return nil
@@ -455,6 +461,12 @@ func (a *Absences) BelowHorizon() int { return len(a.below) }
 
 // Below reports rid as a check-in below a structural horizon.
 func (a *Absences) Below(rid libfossil.FslID) bool { return a.below[rid] }
+
+// Unnamed reports a phantom a structural horizon elides only because
+// nothing the store holds names it, such as one a peer announced. A
+// synchronization that heard the name announced asks for it: an origin
+// announces only what it keeps, and a pusher what it is sending.
+func (a *Absences) Unnamed(rid libfossil.FslID) bool { return a.unnamed[rid] }
 
 // Cone is the store cone the classification used, nil for a dense store.
 func (a *Absences) Cone() *cone.Cone { return a.cone }

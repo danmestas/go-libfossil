@@ -1275,7 +1275,11 @@ func (h *handler) requestPhantoms() error {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return fmt.Errorf("handler: listing phantoms: %w", err)
 		}
-		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided) {
+		// A structural store asks for a name the pusher announced though
+		// nothing it holds names it yet (horizon §5.1): a new check-in.
+		_, heard := h.remoteHas[uuid]
+		announced := heard && elided != nil && elided.Unnamed(rid)
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})

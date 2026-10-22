@@ -74,7 +74,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer re-announces everything either side holds. A reply to a push-only
   request announces nothing, gimmes are answered whatever the cursor, and
   an artifact arriving that a held one already cited voids older cursors
-  once. Syncs and clones over the HTTP transport key the cursor by the URL
+  once. An origin keeps its classification per store, extended as
+  artifacts arrive and recomputed only when an arrival was already cited
+  (§6.2), so a pull after a one-artifact push on fossil-scm.org's
+  repository is answered in about 0.25 s instead of 2.7 to 4.5 s. Syncs
+  and clones over the HTTP transport key the cursor by the URL
   without its password; other transports keep none and announce in full.
   A horizon clone's replies carry the cursor and the clone records it, so
   its first exchange afterwards announces nothing it already shares.

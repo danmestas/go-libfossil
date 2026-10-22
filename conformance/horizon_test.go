@@ -31,7 +31,7 @@ import (
 func horizonSuiteCases() []Case {
 	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules,
 		horizonHeldSetRecomputed, horizonHeldSetClosed}, slices.Concat(horizonContentCases(), horizonSyncCases(),
-		horizonServeCases(), horizonCursorCases(), horizonSeedCases(), horizonStructuralCases(), horizonDeepenCases())...)
+		horizonServeCases(), horizonCLICases(), horizonCursorCases(), horizonSeedCases(), horizonStructuralCases(), horizonDeepenCases())...)
 }
 
 var (

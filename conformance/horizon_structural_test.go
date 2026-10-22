@@ -6,15 +6,20 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/danmestas/go-libfossil/internal/branch"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/verify"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -28,7 +33,7 @@ func horizonStructuralCases() []Case {
 	return []Case{horizonStructHoldings, horizonStructIgnorant, horizonStructLabels, horizonStructClassify,
 		horizonStructReseed, horizonStructRequest, horizonStructRestrict, horizonStructLabelOrder,
 		horizonStructSeedWire, horizonStructSeedRefused, horizonStructAdvertise, horizonStructServed,
-		horizonStructFallback}
+		horizonStructFallback, horizonStructCommit, horizonStructLeaves, horizonStructVerify, horizonStructCrossing}
 }
 
 var (
@@ -45,6 +50,10 @@ var (
 	horizonStructAdvertise   = Case{ID: "horizon.6.2.3.advertise", Req: "HZ-6.2-6"}
 	horizonStructServed      = Case{ID: "horizon.6.2.5.structural-served", Req: "HZ-6.2-8"}
 	horizonStructFallback    = Case{ID: "horizon.6.3.structural-fallback", Req: "HZ-6.3-1"}
+	horizonStructCommit      = Case{ID: "horizon.5.7.ordinary-commit", Req: "HZ-5.7-1"}
+	horizonStructLeaves      = Case{ID: "horizon.3.1.structural-leaves", Req: "HZ-3.1-4"}
+	horizonStructVerify      = Case{ID: "horizon.5.4.verify-below", Req: "HZ-5.4-1"}
+	horizonStructCrossing    = Case{ID: "horizon.5.5.crossing", Req: "HZ-5.5-1"}
 )
 
 func TestHorizonStructural(t *testing.T) {
@@ -61,6 +70,137 @@ func TestHorizonStructural(t *testing.T) {
 	check(t, horizonStructAdvertise, func() error { return hzStructAdvertise(t) })
 	check(t, horizonStructServed, func() error { return hzStructServed(t) })
 	check(t, horizonStructFallback, func() error { return hzStructFallback(t) })
+	check(t, horizonStructCommit, func() error { return hzStructCommit(t) })
+	check(t, horizonStructLeaves, func() error { return hzStructHoldings(t) })
+	check(t, horizonStructVerify, func() error { return hzStructVerify(t) })
+	check(t, horizonStructCrossing, func() error { return hzStructCrossing(t) })
+}
+
+// hzStructVerify: verification reports the manifests below the horizon as
+// elided and as the horizon, apart from damage and from transit phantoms.
+func hzStructVerify(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	report, err := verify.Verify(r)
+	if err != nil {
+		return err
+	}
+	if !report.OK() || report.Phantoms != 0 || report.Elided != 3 || report.BelowHorizon != 3 {
+		return expectf("verify ok=%v phantoms=%d elided=%d below=%d issues=%v; want ok, 0, 3 and 3",
+			report.OK(), report.Phantoms, report.Elided, report.BelowHorizon, report.Issues)
+	}
+	return nil
+}
+
+// hzStructCrossing: a check-in below the horizon is detected as such, with
+// the horizon named, where one only late is not: what an operation needing
+// its tree reports instead of a missing artifact. The command-line
+// diagnostics of checkout, diff and annotate are tested in package cli.
+func hzStructCrossing(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	for uuid, want := range map[string]bool{x.c1: true, x.c2: true, x.feat1: true, x.c3: false} {
+		rid, err := hzRID(r, uuid)
+		if err != nil {
+			return err
+		}
+		h, below, err := content.BelowHorizon(context.Background(), r.DB(), rid)
+		if err != nil {
+			return err
+		}
+		if below != want || below && h.Hash() != x.c3 {
+			return expectf("%.10s below the horizon %v (%s), want %v", uuid, below, h.Hash(), want)
+		}
+	}
+	if _, err := r.DB().Exec("DELETE FROM horizonbelow WHERE uuid=?", x.c2); err != nil {
+		return err
+	}
+	rid, err := hzRID(r, x.c2)
+	if err != nil {
+		return err
+	}
+	if _, below, err := content.BelowHorizon(context.Background(), r.DB(), rid); err != nil || below {
+		return expectf("an unlabelled parent, which may be late, read as below the horizon (%v)", err)
+	}
+	return nil
+}
+
+// hzStructCommit: with the seed applied, a commit from a structural store is
+// an ordinary commit. On an existing branch it writes no T card; creating a
+// branch it writes the repository-state T cards, the cancellation of the
+// parent branch's symbolic tag included, card for card as a dense store
+// writes them. Pushed, both derive at the origin as the clone derived them.
+func hzStructCommit(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	c4, err := hzRID(r, x.c4)
+	if err != nil {
+		return err
+	}
+	when := x.s.f.when.Add(24 * time.Hour)
+	onTrunk, _, err := manifest.Checkin(r, manifest.CheckinOpts{
+		Files: []manifest.File{{Name: "c5", Content: []byte("c5\n")}}, Comment: "c5", User: "u", Parent: c4, Time: when,
+	})
+	if err != nil {
+		return err
+	}
+	if d := hzDeckOf(t, r, onTrunk); len(d.T) != 0 {
+		return expectf("a commit on an existing branch wrote T cards %v", d.T)
+	}
+	if got, err := hzTagState(r.DB(), hzUUID(t, r, onTrunk)); err != nil || !slices.Contains(got, "branch/2=trunk") {
+		return expectf("the commit on trunk carries %v (%v)", got, err)
+	}
+	opts := branch.CreateOpts{Name: "nb", Parent: c4, User: "u", Time: when.Add(time.Hour)}
+	created, _, err := branch.Create(r, opts)
+	if err != nil {
+		return err
+	}
+	opts.Parent = x.s.c4
+	dense, _, err := branch.Create(x.s.f.r, opts)
+	if err != nil {
+		return err
+	}
+	got, want := hzDeckOf(t, r, created).T, hzDeckOf(t, x.s.f.r, dense).T
+	if !slices.Equal(got, want) || !slices.ContainsFunc(got, func(c deck.TagCard) bool {
+		return c.Type == deck.TagCancel && c.Name == "sym-trunk"
+	}) {
+		return expectf("branch creation wrote %v, dense %v; want them equal, cancelling sym-trunk", got, want)
+	}
+	pushed, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true, Pull: true})
+	if err != nil || len(pushed.Errors) != 0 {
+		return expectf("push: %v %q", err, pushed.Errors)
+	}
+	for _, rid := range []libfossil.FslID{onTrunk, created} {
+		u := hzUUID(t, r, rid)
+		mine, _ := hzTagState(r.DB(), u)
+		theirs, err := hzTagState(x.s.f.r.DB(), u)
+		if err != nil || !slices.Equal(mine, theirs) {
+			return expectf("pushed %.10s derives %v at the origin, %v here (%v)", u, theirs, mine, err)
+		}
+	}
+	return nil
+}
+
+func hzDeckOf(t *testing.T, r *repo.Repo, rid libfossil.FslID) *deck.Deck {
+	t.Helper()
+	data, err := content.Expand(r.DB(), rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := deck.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 // hzStruct is hzSeed's artifacts by name, for reading transcripts.

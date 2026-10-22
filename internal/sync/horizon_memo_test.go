@@ -33,7 +33,7 @@ type memoWorld struct {
 	when     time.Time
 	checkins []string                     // every check-in made, pushed or not
 	trees    map[string]map[string]string // each check-in's tree, name -> blob
-	form     map[string]string            // "full", "delta" over a baseline, or "tree"
+	form     map[string]string            // "full", "delta" over a baseline, "tree" or "docs"
 	baseline map[string]string            // a delta manifest's baseline
 	pending  map[string][]byte            // made and not yet pushed
 	version  int
@@ -92,7 +92,7 @@ func (w *memoWorld) commit() {
 	}
 	w.when = w.when.Add(time.Hour)
 	d := &deck.Deck{Type: deck.Checkin, C: fmt.Sprintf("c%d", len(w.checkins)), D: w.when, U: deck.User("u"), P: parents}
-	form := []string{"full", "delta", "tree"}[w.rng.Intn(3)]
+	form := []string{"full", "delta", "tree", "docs"}[w.rng.Intn(4)]
 	base := ""
 	if len(parents) > 0 {
 		switch w.form[parents[0]] {
@@ -111,6 +111,17 @@ func (w *memoWorld) commit() {
 	case "delta":
 		d.B = base
 		d.F = fileCards(tree, func(name string) bool { return w.trees[base][name] != tree[name] })
+	case "docs":
+		// The doc/ node named last: its slot runs to the end of the tree and
+		// may reach src, so a doc/ node another tree's slot bounded at lib/
+		// withheld is kept, older than the tree that keeps it (§6.2.6).
+		for name := range tree {
+			if !strings.HasPrefix(name, "doc/") {
+				delete(tree, name)
+			}
+		}
+		node := &deck.Deck{F: fileCards(tree, func(name string) bool { return strings.HasPrefix(name, "doc/") })}
+		d.S = []deck.SubmanifestCard{{Name: node.F[0].Name, UUID: w.marshal(node)}}
 	case "tree":
 		for _, dir := range []string{"doc/", "lib/", "src/"} {
 			node := &deck.Deck{F: fileCards(tree, func(name string) bool { return strings.HasPrefix(name, dir) })}
@@ -254,6 +265,14 @@ func sameKeep(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone.Cone) {
 			t.Fatalf("%s rid=%d: fresh keeps=%v, memo keeps=%v", c, rid, fresh.keeps(rid), memo.keeps(rid))
 		}
 	}
+	if !fresh.slots.Equal(memo.slots) {
+		t.Fatalf("%s: the memo's slot walk differs from a fresh one", c)
+	}
+	for cursor := int64(0); len(rids) > 0 && cursor <= int64(rids[len(rids)-1]); cursor++ {
+		if fresh.voids(cursor) != memo.voids(cursor) {
+			t.Fatalf("%s cursor=%d: fresh voids=%v, memo voids=%v", c, cursor, fresh.voids(cursor), memo.voids(cursor))
+		}
+	}
 }
 
 // buildKeep is the keep set an origin's inventory applies for c under cl,
@@ -265,13 +284,17 @@ func buildKeep(ctx context.Context, q db.Querier, c *cone.Cone, cl classifier) (
 	}
 	h, ok := c.Horizon()
 	if !ok || h.Depth() != cone.DepthStructural {
-		return k, nil
+		return k, k.withSlots(ctx, cl, c, nil)
 	}
 	_, reach, placed, err := cl.reach(ctx, q, h)
 	if err != nil || !placed {
 		return k, err
 	}
-	return k, k.withStructure(q, &structuralServe{reach: reach})
+	s := &structuralServe{reach: reach}
+	if err := k.withStructure(q, s); err != nil {
+		return nil, err
+	}
+	return k, k.withSlots(ctx, cl, c, s)
 }
 
 func ridSetOf(q db.Querier) ([]libfossil.FslID, error) {

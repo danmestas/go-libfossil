@@ -50,6 +50,9 @@ type sparseKeep struct {
 	// unreached are the manifests and nodes a structural request does not
 	// keep (horizon §5.1, §6.2); nil for any other request.
 	unreached map[libfossil.FslID]bool
+	// slots are the nodes a horizon request with path members keeps of the
+	// trees its horizon keeps (horizon §6.2); nil for any other request.
+	slots *content.SlotKeep
 	// read is how many artifacts the classification read from the store.
 	read int
 }
@@ -84,6 +87,23 @@ func (k *sparseKeep) withStructure(q db.Querier, s *structuralServe) error {
 		}
 	}
 	return nil
+}
+
+// withSlots makes k withhold, for a horizon request that also carries path
+// members, the nodes of the trees the horizon keeps that no slot that may
+// hold an in-cone path reaches (horizon §6.2): every check-in's trees at the
+// content depth, those s reaches at the structural one.
+func (k *sparseKeep) withSlots(ctx context.Context, cl classifier, c *cone.Cone, s *structuralServe) error {
+	if _, ok := c.Horizon(); !ok || len(c.Include()) == 0 {
+		return nil
+	}
+	var reach map[string]bool
+	if s != nil {
+		reach = s.reach
+	}
+	var err error
+	k.slots, err = cl.slots(ctx, k.refs, c, reach)
+	return err
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
@@ -159,6 +179,9 @@ func (h *handler) ensureSparseKeep() error {
 	if err := keep.withStructure(h.repo.DB(), h.structural); err != nil {
 		return err
 	}
+	if err := keep.withSlots(ctx, cl, h.cone, h.structural); err != nil {
+		return err
+	}
 	h.keep = keep
 	return nil
 }
@@ -178,7 +201,20 @@ func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
 	if k == nil || k.walk != nil {
 		return true
 	}
-	return !k.refs.Outside(rid) && (k.below == nil || !k.below(rid)) && !k.clusters[rid] && !k.unreached[rid]
+	return !k.refs.Outside(rid) && (k.below == nil || !k.below(rid)) && !k.clusters[rid] && !k.unreached[rid] &&
+		!k.slots.Withholds(rid)
+}
+
+// withholds reports a node a pull's request may not have even by name
+// (horizon §6.2): one its slot walk withholds.
+func (k *sparseKeep) withholds(rid libfossil.FslID) bool {
+	return k != nil && k.walk == nil && k.slots.Withholds(rid)
+}
+
+// voids reports a cursor from before the slot walk kept some older node
+// (horizon §6.2.6).
+func (k *sparseKeep) voids(cursor int64) bool {
+	return k != nil && k.walk == nil && k.slots.Voids(cursor)
 }
 
 func (k *sparseKeep) sourceKept(rid int) bool {

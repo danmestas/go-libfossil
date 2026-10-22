@@ -43,6 +43,7 @@ type Memo struct {
 	store   *memoStore
 	cones   []*memoCone // least recently published first
 	cuts    []*memoCut
+	slots   []*memoSlots
 	lineage uint64 // the last store read in full
 }
 
@@ -120,6 +121,7 @@ type MemoView struct {
 	read  int
 	cones map[string]*memoCone
 	cuts  map[cutKey]*memoCut
+	slots map[string]*memoSlots
 }
 
 // View reads q's store prefix and returns the memo extended to it: by the
@@ -136,7 +138,8 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{}}
+	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{},
+		slots: map[string]*memoSlots{}}
 	if base != nil && base.prefix.equal(now) {
 		v.store = base
 		return v, nil
@@ -190,6 +193,13 @@ func (v *MemoView) Publish() {
 	}
 	if over := len(m.cuts) - memoCuts; over > 0 {
 		m.cuts = slices.Delete(m.cuts, 0, over)
+	}
+	for key, c := range v.slots {
+		m.slots = slices.DeleteFunc(m.slots, func(o *memoSlots) bool { return o.key == key })
+		m.slots = append(m.slots, c)
+	}
+	if over := len(m.slots) - memoCones; over > 0 {
+		m.slots = slices.Delete(m.slots, 0, over)
 	}
 }
 
@@ -391,7 +401,16 @@ func (v *MemoView) References(ctx context.Context, c *cone.Cone) (*ConeReference
 		prev = v.memo.lookupCone(key)
 	}
 	if prev != nil && prev.lineage == v.store.lineage && prev.mark == markAt(facts, prev.mark.visited) {
-		return prev.refs, nil
+		if prev.refs.facts == facts {
+			return prev.refs, nil
+		}
+		// No list grew, but the store did: an artifact appended or filled
+		// that is no record still gains a name, which the classification
+		// reads by rid. Its membership is never written once handed out.
+		same := *prev.refs
+		same.names, same.held, same.nodes, same.facts = facts.names, facts.held, facts.nodes, facts
+		v.cones[key] = &memoCone{key: key, lineage: v.store.lineage, mark: prev.mark, refs: &same}
+		return &same, nil
 	}
 	var p *ConeReferences
 	from := factsMark{}
@@ -563,4 +582,49 @@ func (v *MemoView) HorizonBelow(
 		return nil, err
 	}
 	return func(rid libfossil.FslID) bool { return p.below(cut.cut.above, rid) }, nil
+}
+
+// memoSlots is a cone's slot walk over a store lineage (see SlotKeep).
+type memoSlots struct {
+	key     string
+	lineage uint64
+	keep    *SlotKeep
+}
+
+func (m *Memo) lookupSlots(key string) *memoSlots {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.slots {
+		if s.key == key {
+			return s
+		}
+	}
+	return nil
+}
+
+// SlotKeep is p.SlotKeep over the view's store, p a classification the view
+// returned: the memo's walk of c extended by the trees the store gained
+// since, which reads only theirs (§6.2), or a fresh walk when the gain is
+// not an append of later roots.
+func (v *MemoView) SlotKeep(
+	ctx context.Context, p *ConeReferences, c *cone.Cone, reach map[string]bool,
+) (*SlotKeep, error) {
+	if v == nil || ctx == nil || p == nil || c == nil {
+		panic("content.MemoView.SlotKeep: nil view, context, references or cone")
+	}
+	key := c.Digest()
+	prev := v.slots[key]
+	if prev == nil {
+		prev = v.memo.lookupSlots(key)
+	}
+	var from *SlotKeep
+	if prev != nil && prev.lineage == v.store.lineage {
+		from = prev.keep
+	}
+	k, err := extendSlotKeep(ctx, p.facts, c, reach, from)
+	if err != nil {
+		return nil, err
+	}
+	v.slots[key] = &memoSlots{key: key, lineage: v.store.lineage, keep: k}
+	return k, nil
 }

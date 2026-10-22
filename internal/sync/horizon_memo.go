@@ -52,6 +52,9 @@ type classifier interface {
 	references(ctx context.Context, q db.Querier, c *cone.Cone) (*content.ConeReferences, error)
 	below(ctx context.Context, q db.Querier, refs *content.ConeReferences, c *cone.Cone) (func(libfossil.FslID) bool, error)
 	reach(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, map[string]bool, bool, error)
+	// slots is the walk of the trees a horizon keeps for c's path members:
+	// every held tree, or with reach those a structural horizon reaches.
+	slots(ctx context.Context, refs *content.ConeReferences, c *cone.Cone, reach map[string]bool) (*content.SlotKeep, error)
 	// read is how many artifacts classifying read from the store.
 	read(refs *content.ConeReferences) int
 }
@@ -72,6 +75,12 @@ func (freshClassifier) reach(ctx context.Context, q db.Querier, h cone.Horizon) 
 	return content.HorizonReach(ctx, q, h)
 }
 
+func (freshClassifier) slots(
+	ctx context.Context, refs *content.ConeReferences, c *cone.Cone, reach map[string]bool,
+) (*content.SlotKeep, error) {
+	return refs.SlotKeep(ctx, c, reach)
+}
+
 func (freshClassifier) read(refs *content.ConeReferences) int { return refs.Artifacts() }
 
 type memoClassifier struct{ v *content.MemoView }
@@ -88,6 +97,12 @@ func (m memoClassifier) below(
 
 func (m memoClassifier) reach(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, map[string]bool, bool, error) {
 	return m.v.HorizonReach(ctx, q, h)
+}
+
+func (m memoClassifier) slots(
+	ctx context.Context, refs *content.ConeReferences, c *cone.Cone, reach map[string]bool,
+) (*content.SlotKeep, error) {
+	return m.v.SlotKeep(ctx, refs, c, reach)
 }
 
 func (m memoClassifier) read(*content.ConeReferences) int { return m.v.Read() }

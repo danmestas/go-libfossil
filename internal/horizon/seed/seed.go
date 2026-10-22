@@ -294,10 +294,11 @@ func Held(q db.Querier) ([]byte, error) {
 //
 // Each row it writes names its target as its source, as a check-in's own
 // inline card does: the seed is no blob, and a positive source keeps a date
-// tag in force. A card whose target this store does not hold yet is skipped;
-// the sync layer calls Apply again after each round that links artifacts,
-// and a card already applied is superseded by its own row, so a repeat costs
-// a lookup per card.
+// tag in force. A card whose target this store has not linked yet is
+// skipped: held and unlinked, a row sourced from it would read as its own
+// link and keep the crosslink from ever linking it. The sync layer calls
+// Apply again after each round that links artifacts, and a card already
+// applied is superseded by its own row, so a repeat costs a lookup per card.
 //
 // verify, when the clone knows its origin's key, re-checks the held seed
 // (§5.2.4: every seed it holds); a seed that fails is discarded, the store
@@ -322,7 +323,8 @@ func Apply(tx *db.Tx, verify Verifier) (bool, error) {
 	leaves := leaf.NewPending()
 	for _, tc := range d.T {
 		var target libfossil.FslID
-		err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=? AND size>=0", tc.UUID).Scan(&target)
+		err := tx.QueryRow(`SELECT rid FROM blob WHERE uuid=? AND size>=0
+			AND EXISTS(SELECT 1 FROM event WHERE objid=blob.rid)`, tc.UUID).Scan(&target)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}

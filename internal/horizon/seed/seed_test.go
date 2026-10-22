@@ -424,6 +424,48 @@ func TestHoldBeforeEntryArrives(t *testing.T) {
 	}
 }
 
+// An entry stored but not yet linked when the seed applies is left to the
+// crosslink: the seed's rows name their target as their source, and a row
+// sourced from an unlinked artifact would read as that artifact's own link,
+// so the sweep would never link it. A sync's receive path stores before it
+// links, so this is the order a clone sees.
+func TestApplySkipsAnUnlinkedEntry(t *testing.T) {
+	w := newWorld(t)
+	k := w.k(w.c3)
+	var rest []libfossil.FslID
+	for _, rid := range k {
+		if rid != w.feat2 {
+			rest = append(rest, rid)
+		}
+	}
+	clone := w.lacking(rest)
+	name, data := w.mint(w.c3, "origin")
+	if err := hold(t, clone, name, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := content.Expand(w.r.DB(), w.feat2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := clone.WithTx(func(tx *db.Tx) error { _, _, err := blob.Store(tx, stored); return err }); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, clone, nil)
+	if _, err := manifest.Crosslink(clone); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, clone, nil)
+	feat2 := uuidOf(t, w.r.DB(), w.feat2)
+	var linked int
+	clone.DB().QueryRow("SELECT count(*) FROM event JOIN blob ON rid=objid WHERE uuid=?", feat2).Scan(&linked)
+	if linked != 1 {
+		t.Fatalf("entry %.10s stored before the seed applied was never linked", feat2)
+	}
+	if err := w.derivesDense(clone, k); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestHeldSeedIsNeverSendable(t *testing.T) {
 	w := newWorld(t)
 	k := w.k(w.c3)

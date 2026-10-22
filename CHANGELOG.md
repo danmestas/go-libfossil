@@ -91,8 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the held set derives the branch, tag and closed state it has densely.
   `Horizon.Structural`, `StructuralServed` and `HorizonFallback` expose it,
   and `repo info`, `repo verify` and the commands that would cross the
-  horizon (`co`, `diff`, `annotate` below C) name it. Interoperates with
-  zit at `9bf7ebfe0f` in both directions.
+  horizon (`co`, `diff`, `annotate` below C) name it. History renders a
+  labelled boundary parent as the horizon: `Repo.Ancestry` ends there
+  without an error, `TimelineEntry` and `LogEntry` gain `HorizonParents`,
+  and `repo timeline` prints it as `(horizon)`. Interoperates with zit at
+  `9bf7ebfe0f` in both directions.
 - The structural horizon's seed (draft-fossil-horizon-00 §5.2). An origin mints a control artifact whose T cards apply the
   tags in force at every entry of the held set (C, and each check-in of K
   whose primary parent lies outside it), dated at the latest tag event it

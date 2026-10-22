@@ -366,6 +366,33 @@ func TestSyncKeysHorizonCursorByURL(t *testing.T) {
 	}
 }
 
+// A clone over the HTTP transport records the horizon cursor under the
+// peer's URL, as a sync does (draft-fossil-horizon-00 §6.2.6): the origin
+// handed one out in its clone replies, and the clone converged against them.
+func TestCloneKeysHorizonCursorByURL(t *testing.T) {
+	f := newHorizonFixture(t)
+	server := httptest.NewServer(f.source.XferHandler())
+	defer server.Close()
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"),
+		NewHTTPTransport(server.URL), CloneOpts{StoreCone: hc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	cursor, err := target.Config("horizon-cursor:" + server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(cursor)
+	if len(fields) != 3 || fields[0] != hc.Digest() || fields[1] == "0" || fields[2] == "0" {
+		t.Fatalf("horizon cursor record after a clone = %q, want digest, origin position, own count", cursor)
+	}
+}
+
 // The structural cut is the Structural flag; the zero value is the content
 // horizon, so a Horizon built before the flag existed means what it meant.
 func TestStructuralHorizonCone(t *testing.T) {

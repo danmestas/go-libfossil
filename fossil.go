@@ -118,6 +118,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		PullPhantoms: opts.PullPhantoms,
 		StoreCone:    unwrapCone(opts.StoreCone),
 	}
+	// A transport that names its peer keys the horizon cursor, as for Sync.
+	if o, ok := t.(interface{ syncOrigin() string }); ok {
+		iOpts.Origin = o.syncOrigin()
+	}
 	inner, iResult, err := internalsync.Clone(ctx, path, adapter, iOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)

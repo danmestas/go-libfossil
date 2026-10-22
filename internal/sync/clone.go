@@ -89,7 +89,8 @@ type cloneSession struct {
 	roundPush             bool // the last reply carried a push card
 	coned                 bool // requests carry the store cone (§6.1)
 	structural            structuralClient
-	structuralDecided     bool // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
+	structuralDecided     bool  // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
+	peerCursor            int64 // the last cursor a reply handed out (horizon §6.2.6)
 	// smConfig stages the sub-manifest settings one reply's config cards
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
@@ -242,7 +243,36 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 		return cloneResult, fmt.Errorf("sync.Clone: horizon seed: %w", err)
 	}
 	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
-	return cloneResult, cs.fillPhantoms(ctx, t)
+	if err := cs.fillPhantoms(ctx, t); err != nil {
+		return cloneResult, err
+	}
+	return cloneResult, cs.recordCursor()
+}
+
+// recordCursor keeps what a converged horizon clone leaves its origin
+// knowing (horizon §6.2.6): the cursor of the last reply and the count of
+// this store's artifacts, all of which came from the origin, so the first
+// request that sends announces only what is appended after. zit records the
+// same after its clone (cmd/sync.zig).
+func (cs *cloneSession) recordCursor() error {
+	if cs.opts.Origin == "" {
+		return nil
+	}
+	c, err := content.StoreCone(cs.repo.DB())
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	if _, ok := c.Horizon(); !ok {
+		return nil
+	}
+	end, err := storePosition(cs.repo.DB())
+	if err != nil {
+		return err
+	}
+	return storeCursor(cs.repo.DB(), cs.opts.Origin, c.Digest(), cursorRecord{peer: cs.peerCursor, local: end})
 }
 
 // clearInheritedConfig drops the config rows a fresh repository is seeded
@@ -695,6 +725,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		}
 		if c.Name == coneServedPragma {
 			cs.result.ConeServed++ // sparse-cone §6.3, reported only
+		}
+		if n, ok := parseCursor(c); ok && c.Name == horizonCursorPragma {
+			cs.peerCursor = n
 		}
 		if d, ok := cs.structural.level(c); ok && c.Name == horizonServedPragma {
 			cs.result.HorizonServed++ // horizon §6.2.5

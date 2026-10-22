@@ -160,3 +160,66 @@ func (p *hzSentTransport) Exchange(ctx context.Context, req *xfer.Message) (*xfe
 	p.requests = append(p.requests, wire)
 	return p.inner.Exchange(ctx, req)
 }
+
+// TestZitHorizonCloneCursorInterop runs the cursor of a clone between
+// go-libfossil and zit both ways (draft-fossil-horizon-00 §6.2.6): zit's
+// horizon clone from go-libfossil's handler is handed the cursor in its
+// clone replies, so its first pull sends it and is announced nothing;
+// go-libfossil's horizon clone from `zit serve` records zit's, so its first
+// pull sends it and announces nothing.
+func TestZitHorizonCloneCursorInterop(t *testing.T) {
+	bin := zitHorizonBinary(t)
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := newHZSyncGraph(t)
+	c := hzUUID(t, g.f.r, g.c3)
+	origin := &hzRecorder{r: g.f.r}
+	server := httptest.NewServer(origin)
+	defer server.Close()
+
+	zhorizon := filepath.Join(dir, "zhorizon")
+	zitRun(t, bin, home, dir, "clone", "--no-open", "--horizon="+c, server.URL, zhorizon)
+	n, err := hzLastCursor(hzReplies(origin.take()))
+	if err != nil {
+		t.Fatalf("go-libfossil's clone replies to zit: %v", err)
+	}
+	if top, err := hzMaxRID(g.f.r); err != nil || n != top {
+		t.Fatalf("clone cursor %d, want the origin's position %d (%v)", n, top, err)
+	}
+	zitRun(t, bin, home, zhorizon, "pull")
+	if err := hzZitCursorPull(origin.take(), n); err != nil {
+		t.Fatalf("zit's first pull after its clone: %v", err)
+	}
+
+	zdense := filepath.Join(dir, "zdense")
+	zitRun(t, bin, home, dir, "clone", "--no-open", server.URL, zdense)
+	zitURL := zitServe(t, bin, home, zdense)
+	peer := &hzRecordingTransport{inner: &sync.HTTPTransport{URL: zitURL}}
+	r, _, err := sync.Clone(context.Background(), filepath.Join(dir, "horizon.fossil"), peer,
+		sync.CloneOpts{StoreCone: g.c, PullPhantoms: true, Origin: zitURL})
+	if err != nil {
+		t.Fatalf("go-libfossil's horizon clone from zit: %v", err)
+	}
+	defer r.Close()
+	zn, err := hzLastCursor(peer.replies)
+	if err != nil {
+		t.Fatalf("zit's clone replies to go-libfossil: %v", err)
+	}
+	sent := &hzSentTransport{inner: peer}
+	pulled, err := sync.Sync(context.Background(), r, sent, sync.SyncOpts{Pull: true, Origin: zitURL})
+	if err != nil {
+		t.Fatalf("go-libfossil's first pull from zit: %v", err)
+	}
+	if len(pulled.Errors) != 0 {
+		t.Fatalf("pull from zit: %q", pulled.Errors)
+	}
+	if err := hzRequestCursors(sent.requests, zn); err != nil {
+		t.Fatalf("go-libfossil's first pull after its clone: %v", err)
+	}
+	if got := hzAnnounced(sent.requests); len(got) != 0 {
+		t.Fatalf("go-libfossil's first pull after its clone announced %d artifacts", len(got))
+	}
+}

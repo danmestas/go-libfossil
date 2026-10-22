@@ -1798,6 +1798,26 @@ func (h *handler) emitCloneBatch() error {
 	h.emitCloneResume(round)
 	// SeqNo 0 signals completion so the client stops requesting.
 	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: round.nextRID})
+	return h.valueCloneCursor(round)
+}
+
+// valueCloneCursor values the reply's horizon-cursor with the position this
+// round served the clone sequence through (horizon §6.2.6): every rid below
+// the sequence it hands on, or the origin's whole position once it hands on
+// none, bounded by the snapshot the clone opened.
+func (h *handler) valueCloneCursor(round *cloneBatch) error {
+	if h.servedCursor == nil {
+		return nil
+	}
+	position, err := originPosition(h.repo.DB())
+	if err != nil {
+		return err
+	}
+	position = min(position, int64(h.cloneSnapMax))
+	if round.nextRID != 0 {
+		position = min(position, int64(round.nextRID)-1)
+	}
+	h.servedCursor.Values = cursorCard(max(position, 0)).Values
 	return nil
 }
 

@@ -28,11 +28,15 @@ var (
 	horizonCursorClient   = Case{ID: "horizon.6.2.6.client-cursor", Req: "HZ-6.2-12"}
 	horizonCursorGimme    = Case{ID: "horizon.6.2.6.gimme-answered", Req: "HZ-6.2-13"}
 	horizonCursorLost     = Case{ID: "horizon.6.2.6.lost-cursor", Req: "HZ-6.2-13"}
+
+	horizonCursorCloneReply  = Case{ID: "horizon.6.2.6.clone-reply-cursor", Req: "HZ-6.2-11"}
+	horizonCursorCloneRecord = Case{ID: "horizon.6.2.6.clone-records-cursor", Req: "HZ-6.2-12"}
 )
 
 func horizonCursorCases() []Case {
 	return []Case{horizonCursorOrigin, horizonCursorPushOnly, horizonCursorRekept,
-		horizonCursorClient, horizonCursorGimme, horizonCursorLost}
+		horizonCursorClient, horizonCursorGimme, horizonCursorLost,
+		horizonCursorCloneReply, horizonCursorCloneRecord}
 }
 
 func TestHorizonCursor(t *testing.T) {
@@ -42,6 +46,8 @@ func TestHorizonCursor(t *testing.T) {
 	check(t, horizonCursorClient, func() error { return hzCursorClient(t) })
 	check(t, horizonCursorGimme, func() error { return hzCursorGimme(t) })
 	check(t, horizonCursorLost, func() error { return hzCursorLost(t) })
+	check(t, horizonCursorCloneReply, func() error { return hzCursorCloneReply(t) })
+	check(t, horizonCursorCloneRecord, func() error { return hzCursorCloneRecord(t) })
 }
 
 // hzNoCursor asks hzAsk for a request that carries no cursor.
@@ -538,4 +544,129 @@ func hzCursorLost(t *testing.T) error {
 		return expectf("a client without a cursor announced none of its older holding")
 	}
 	return nil
+}
+
+// hzSmallBatches makes a clone origin send one artifact per round.
+type hzSmallBatches struct{}
+
+func (hzSmallBatches) Check(site string, _ float64) bool {
+	return site == "handler.emitCloneBatch.smallBatch"
+}
+
+// hzCloneAt clones g's origin under sc as the peer named origin, through
+// peer, which records the exchange.
+func hzCloneAt(t *testing.T, peer *scSyncPeer, sc *cone.Cone, origin string) (*repo.Repo, error) {
+	t.Helper()
+	r, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "horizon.fossil"),
+		peer, sync.CloneOpts{StoreCone: sc, Origin: origin})
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { r.Close() })
+	return r, nil
+}
+
+// An origin that classified a clone request emits the cursor in every
+// reply, right after horizon-served: the position through which that
+// reply served the clone sequence, so a round that stops short names a
+// position below the sequence it hands on, and the last reply names the
+// origin's own position.
+func hzCursorCloneReply(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	peer := &scSyncPeer{r: g.f.r, opts: sync.HandleOpts{Buggify: hzSmallBatches{}}}
+	if _, err := hzCloneAt(t, peer, g.c, "origin"); err != nil {
+		return err
+	}
+	top, err := hzMaxRID(g.f.r)
+	if err != nil {
+		return err
+	}
+	rounds := 0
+	for i, reply := range peer.replies {
+		seqno := -1
+		for _, card := range reply.Cards {
+			if c, ok := card.(*xfer.CloneSeqNoCard); ok {
+				seqno = c.SeqNo
+			}
+		}
+		if seqno < 0 {
+			continue // the operation-less cleanup round serves nothing
+		}
+		rounds++
+		n, err := hzCursorOf(reply)
+		if err != nil {
+			return expectf("clone reply %d: %v", i, err)
+		}
+		if err := hzCursorFollowsServed(reply); err != nil {
+			return expectf("clone reply %d: %v", i, err)
+		}
+		if seqno > 0 && n >= int64(seqno) {
+			return expectf("clone reply %d: cursor %d covers the next sequence %d", i, n, seqno)
+		}
+		if seqno == 0 && n != top {
+			return expectf("last clone reply: cursor %d, want the origin's position %d", n, top)
+		}
+	}
+	if rounds < 3 {
+		return expectf("fixture: the clone took %d rounds, want several", rounds)
+	}
+	return nil
+}
+
+// A client whose clone converged records the last reply's cursor and its
+// own count per origin, so its first pull sends the cursor and announces
+// nothing, and its first exchange that sends announces only what it
+// appended since.
+func hzCursorCloneRecord(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	peer := &scSyncPeer{r: g.f.r}
+	r, err := hzCloneAt(t, peer, g.c, "origin")
+	if err != nil {
+		return err
+	}
+	n, err := hzLastCursor(peer.replies)
+	if err != nil {
+		return err
+	}
+	peer.requests, peer.replies = nil, nil
+	if _, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true, Origin: "origin"}); err != nil {
+		return err
+	}
+	if err := hzRequestCursors(peer.requests, n); err != nil {
+		return err
+	}
+	if got := hzRequestIGots(peer.requests); len(got) != 0 {
+		return expectf("the first pull after a clone announced %d artifacts", len(got))
+	}
+	local := &scRepo{r: r, when: hzLater}
+	m, err := hzRID(r, hzUUID(t, g.f.r, g.m))
+	if err != nil {
+		return err
+	}
+	mine := hzCommit(t, local, "mine", []libfossil.FslID{m}, nil)
+	appended := hzFiles(t, r, mine)
+	appended[hzUUID(t, r, mine)] = true
+	peer.requests, peer.replies = nil, nil
+	if _, err := sync.Sync(context.Background(), r, peer,
+		sync.SyncOpts{Pull: true, Push: true, Origin: "origin"}); err != nil {
+		return err
+	}
+	if err := hzRequestCursors(peer.requests, n); err != nil {
+		return err
+	}
+	if err := hzSameNames("the first sync that sends after a clone announced",
+		hzRequestIGots(peer.requests), appended); err != nil {
+		return err
+	}
+	// A clone addressed to no origin keeps nothing.
+	bare := &scSyncPeer{r: g.f.r}
+	other, err := hzCloneAt(t, bare, g.c, "")
+	if err != nil {
+		return err
+	}
+	bare.requests = nil
+	if _, err := sync.Sync(context.Background(), other, bare, sync.SyncOpts{Pull: true, Origin: "origin"}); err != nil {
+		return err
+	}
+	return hzRequestCursors(bare.requests, hzNoCursor)
 }

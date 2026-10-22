@@ -437,11 +437,10 @@ func hzSeedProvenance(t *testing.T, s *hzSeed) error {
 // TestHorizonSeedZit has zit 0.6.4 mint a seed for the same repository and
 // compares it with go-libfossil's: go-libfossil serves hzSeed, zit clones it
 // densely and serves that clone, and a second zit clone at C's structural
-// horizon receives the seed. zit writes D to the second and names its login
-// zit-serve; go-libfossil writes D to the millisecond. The T and U lines
-// must be byte-identical and D must name the same instant; each
-// implementation must then derive from the other's seed what it derives
-// from its own.
+// horizon receives the seed. Every tag event in hzSeed is on a whole second,
+// so with zit's login the two seeds must be the same bytes and so the same
+// name; each implementation must then derive from the other's seed what it
+// derives from its own.
 func TestHorizonSeedZit(t *testing.T) {
 	bin := zitBinary(t)
 	s := newHZSeed(t)
@@ -462,34 +461,12 @@ func TestHorizonSeedZit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zit held no seed: %v", err)
 	}
-	_, goSeed, err := s.mint("zit-serve")
+	goName, goSeed, err := s.mint("zit-serve")
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := func(data []byte, prefix string) []string {
-		var out []string
-		for _, l := range strings.Split(string(data), "\n") {
-			if strings.HasPrefix(l, prefix) {
-				out = append(out, l)
-			}
-		}
-		return out
-	}
-	for _, card := range []string{"T ", "U "} {
-		if z, g := lines(zitSeed, card), lines(goSeed, card); !slices.Equal(z, g) {
-			t.Errorf("%scards differ:\nzit %q\ngo  %q", card, z, g)
-		}
-	}
-	zd, err := deck.Parse(zitSeed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gd, err := deck.Parse(goSeed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !zd.D.Equal(gd.D) {
-		t.Errorf("D cards differ: zit %v, go %v", zd.D, gd.D)
+	if string(goSeed) != string(zitSeed) || goName != hash.SHA3(zitSeed) {
+		t.Errorf("seeds differ:\nzit %s\n%s\ngo  %s\n%s", hash.SHA3(zitSeed), zitSeed, goName, goSeed)
 	}
 	// zit derives from go-libfossil's seed what it derives from its own:
 	// feat2's branch and closed leaf, and the branch list. Without a seed

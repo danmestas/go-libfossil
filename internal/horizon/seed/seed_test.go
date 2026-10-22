@@ -312,8 +312,9 @@ func TestMintCardsCarryDenseState(t *testing.T) {
 		"T *branch " + feat2 + " feat\n",
 		"T *closed " + feat2 + "\n",
 		"T *sym-feat " + feat2 + "\n",
-		// The latest event is closed's, at .250: D is the next whole second.
-		"D 2026-01-13T00:00:01.000\n",
+		// The latest event is closed's, at .250: D is the next whole second,
+		// written without a fraction, as zit writes it.
+		"D 2026-01-13T00:00:01\n",
 		"U origin\n",
 	} {
 		if !strings.Contains(text, line) {
@@ -348,7 +349,7 @@ func TestMintDateIsTheLatestEvent(t *testing.T) {
 	// c4 holds only inherited rows; the latest of them is hue's, a whole
 	// second, which D keeps.
 	_, data := w.mint(w.c4, "origin")
-	if want := "D 2026-01-11T00:00:00.000\n"; !strings.Contains(string(data), want) {
+	if want := "D 2026-01-11T00:00:00\n"; !strings.Contains(string(data), want) {
 		t.Errorf("seed at c4 lacks %q:\n%s", want, data)
 	}
 	// Minting twice over unchanged state yields the same seed.
@@ -360,7 +361,7 @@ func TestMintDateIsTheLatestEvent(t *testing.T) {
 	// A later tag event the seed summarizes moves D past it.
 	w.tag(w.c3, "sym-v2", tag.TagSingleton, "", w.at(20))
 	_, data = w.mint(w.c3, "origin")
-	if want := "D 2026-01-21T00:00:00.000\n"; !strings.Contains(string(data), want) {
+	if want := "D 2026-01-21T00:00:00\n"; !strings.Contains(string(data), want) {
 		t.Errorf("re-minted seed lacks %q:\n%s", want, data)
 	}
 }

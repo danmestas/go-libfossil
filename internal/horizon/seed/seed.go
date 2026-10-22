@@ -15,7 +15,9 @@ package seed
 
 import (
 	"bytes"
+	"crypto/md5"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,15 +146,21 @@ func Mint(q db.Querier, c libfossil.FslID, k []libfossil.FslID, login string) (s
 		return "", nil, ErrNothingToSeed
 	}
 	const second = 1000
-	d := &deck.Deck{
-		Type: deck.Control,
-		D:    time.UnixMilli((latest + second - 1) / second * second).UTC(),
-		T:    cards,
-		U:    deck.User(login),
-	}
-	data, err := d.Marshal()
+	date := time.UnixMilli((latest + second - 1) / second * second).UTC()
+	// deck.Marshal writes D to the millisecond; the seed's D is written to
+	// the second, as zit writes it, so a seed minted over whole-second tag
+	// events is byte-identical to zit's. The cards after D are Marshal's,
+	// its Z card replaced by one over the body with D in front.
+	tail, err := (&deck.Deck{Type: deck.Control, T: cards, U: deck.User(login)}).Marshal()
 	if err != nil {
 		return "", nil, fmt.Errorf("seed.Mint: %w", err)
+	}
+	z := bytes.LastIndex(tail, []byte("Z "))
+	body := "D " + date.Format("2006-01-02T15:04:05") + "\n" + string(tail[:z])
+	sum := md5.Sum([]byte(body))
+	data := []byte(body + "Z " + hex.EncodeToString(sum[:]) + "\n")
+	if d, err := parse(data); err != nil || !d.D.Equal(date) {
+		panic(fmt.Sprintf("seed.Mint: postcondition: minted seed does not parse back (%v)", err))
 	}
 	return hash.SHA3(data), data, nil
 }

@@ -19,10 +19,12 @@ import (
 // check-ins they answer is an induction over the whole store (answerable).
 // The extension is that load's decisions for fresh alone, which equal a full
 // load's while the decisions for the rest stand. exact is false when one
-// may not: the store gained the non-artifact record or saw its first tree; a
-// new check-in's mlink rows name an old version the record calls no
-// artifact; a fresh artifact is the store's first tree; or a linked
+// may not: the store lost the non-artifact record or saw its first tree; a
+// version the record calls no artifact and new mlink rows name was read raw
+// to some effect; a fresh artifact is the store's first tree; or a linked
 // check-in proves unreadable, which sends a full load to its third round.
+// The non-artifact record appearing is taken the same way: what it names
+// was read raw, and reading file content raw adds nothing.
 // An arrival a held P, B or S card cited changes old decisions too; the
 // caller recomputes in full on one before it gets here (§6.2).
 func extendReferenceState(
@@ -36,14 +38,19 @@ func extendReferenceState(
 		return s, err == nil, err
 	}
 	added, err := loadReferenceTablesFor(ctx, q, ids)
-	if err != nil || added.present != s.tables.present || added.trees != s.tables.trees {
+	if err != nil || added.trees != s.tables.trees || s.tables.present && !added.present {
 		return nil, false, err
 	}
 	in := make(map[libfossil.FslID]bool, len(fresh))
 	for _, rid := range fresh {
 		in[rid] = true
 	}
-	renamed, err := oldFilesNamed(ctx, q, s.tables, ids, in)
+	// The record appearing is every version it names being named anew.
+	named := ids
+	if !s.tables.present {
+		named = ""
+	}
+	renamed, err := oldFilesNamed(ctx, q, added.present, s.tables.files, named, in)
 	if err != nil || readRaw(s.facts, renamed) {
 		return nil, false, err
 	}
@@ -58,7 +65,7 @@ func extendReferenceState(
 	f.records, f.roots = slices.Clone(old.records), slices.Clone(old.roots)
 	f.unreadable, f.spine, f.files = slices.Clone(old.unreadable), slices.Clone(old.spine), slices.Clone(old.files)
 	tables := &referenceTables{files: maps.Clone(s.tables.files), linked: maps.Clone(s.tables.linked),
-		present: s.tables.present, trees: s.tables.trees}
+		present: added.present, trees: s.tables.trees}
 	maps.Copy(tables.files, added.files)
 	for _, rid := range renamed {
 		tables.files[rid] = true
@@ -102,27 +109,33 @@ func treeRecords(records []coneReferenceRecord) bool {
 	return false
 }
 
-// oldFilesNamed lists the artifacts outside fresh that the non-artifact
-// record holds and that only the mlink rows of the check-ins in ids name: a
-// load now takes them for file content, where s's load read them raw.
+// oldFilesNamed lists the artifacts outside fresh and files that the
+// non-artifact record holds and that the mlink rows of the check-ins in ids
+// name, or any mlink row when ids is empty: a load now takes them for file
+// content, where the load being extended read them raw.
 func oldFilesNamed(
-	ctx context.Context, q db.Querier, t *referenceTables, ids string, fresh map[libfossil.FslID]bool,
+	ctx context.Context, q db.Querier, present bool, files map[libfossil.FslID]bool, ids string,
+	fresh map[libfossil.FslID]bool,
 ) ([]libfossil.FslID, error) {
-	if !t.present {
+	if !present {
 		return nil, nil
 	}
+	query, args := "SELECT rid FROM "+nonArtifactTable+" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)", []any(nil)
+	if ids != "" {
+		query = "SELECT rid FROM " + nonArtifactTable + ` WHERE rid IN
+			(SELECT fid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1))
+			UNION SELECT pid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))`
+		args = []any{ids}
+	}
 	var renamed []libfossil.FslID
-	err := referenceRows(ctx, q, "SELECT rid FROM "+nonArtifactTable+` WHERE rid IN
-		(SELECT fid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1))
-		UNION SELECT pid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))`,
-		func(scan func(...any) error) error {
-			var rid libfossil.FslID
-			err := scan(&rid)
-			if !t.files[rid] && !fresh[rid] {
-				renamed = append(renamed, rid)
-			}
-			return err
-		}, ids)
+	err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
+		var rid libfossil.FslID
+		err := scan(&rid)
+		if !files[rid] && !fresh[rid] {
+			renamed = append(renamed, rid)
+		}
+		return err
+	}, args...)
 	return renamed, err
 }
 

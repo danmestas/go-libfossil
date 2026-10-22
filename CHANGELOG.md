@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed under descendants. The walk is bounded and fails with an error
   rather than run unbounded. Internal only for now.
 
+### Fixed
+
+- A sparse store of a real-sized repository classifies its absent
+  artifacts. v0.14.0 read, inflated and expanded every blob in the store,
+  file content included, to find the manifests among them, under a
+  whole-store budget of 64 MiB stored and 128 MiB expanded; a path-cone
+  store of fossil-scm.org's own repository (67,894 artifacts, 8.4 GB
+  expanded) failed at once with "byte budget exceeded", so its pull,
+  verify and compaction failed too. Classification now never reads file
+  content, answers completely linked check-ins from the crosslink tables,
+  and parses raw cards only for what crosslinking does not record: roots,
+  partly linked check-ins, sub-manifest trees and artifacts of other kinds.
+  The same store classifies in about 2 s at a 65 MiB peak. One answer
+  narrows: a cherry-pick source the repository has never held no longer
+  counts as required content. fossil records no row and no phantom for it
+  and never fetches it, so compaction no longer refuses over it.
+
 ### Changed
 
 - The horizon draft is re-pinned to zit's `horizon-rfc` check-in

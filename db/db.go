@@ -304,6 +304,12 @@ func (d *DB) Path() string {
 	return d.path
 }
 
+// Bound reports whether d is a DB WithBoundTx handed its callback, whose
+// statements run in a transaction that d does not own.
+func (d *DB) Bound() bool {
+	return d.root != nil
+}
+
 func (d *DB) Driver() string {
 	return d.driver
 }

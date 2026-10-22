@@ -2,8 +2,10 @@ package content
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -37,6 +39,9 @@ type linkedCheckin struct {
 type referenceTables struct {
 	files  map[libfossil.FslID]bool // Examined, no artifact, named by mlink.
 	linked map[libfossil.FslID]linkedCheckin
+	// present is whether the store has the non-artifact record, and trees
+	// whether it has seen a tree, which makes it answer nothing.
+	present, trees bool
 }
 
 const linkedCheckinSQL = `SELECT e.objid, p.pid, coalesce(p.baseid,0)
@@ -45,33 +50,39 @@ const linkedCheckinSQL = `SELECT e.objid, p.pid, coalesce(p.baseid,0)
 	WHERE e.type='ci' AND NOT EXISTS(SELECT 1 FROM orphan o WHERE o.rid=e.objid)`
 
 func loadReferenceTables(ctx context.Context, q db.Querier) (*referenceTables, error) {
+	return loadReferenceTablesFor(ctx, q, "")
+}
+
+// loadReferenceTablesFor is loadReferenceTables for the rids of the JSON
+// array ids alone, or for every rid when ids is empty.
+func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*referenceTables, error) {
 	t := &referenceTables{
 		files: map[libfossil.FslID]bool{}, linked: map[libfossil.FslID]linkedCheckin{},
 	}
-	var present, trees bool
 	if err := q.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master
 		WHERE type='table' AND name=?), EXISTS(SELECT 1 FROM config WHERE name=?)`,
-		nonArtifactTable, seenSubmanifestSetting).Scan(&present, &trees); err != nil {
+		nonArtifactTable, seenSubmanifestSetting).Scan(&t.present, &t.trees); err != nil {
 		return nil, fmt.Errorf("sparse preparation: %s: %w", nonArtifactTable, err)
 	}
-	if present {
-		err := referenceRows(ctx, q, "SELECT rid FROM "+nonArtifactTable+
-			" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)",
-			func(scan func(...any) error) error {
-				var rid libfossil.FslID
-				err := scan(&rid)
-				t.files[rid] = true
-				return err
-			})
+	if t.present {
+		query, args := restrictTo("SELECT rid FROM "+nonArtifactTable+
+			" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)%s", "rid", ids)
+		err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
+			var rid libfossil.FslID
+			err := scan(&rid)
+			t.files[rid] = true
+			return err
+		}, args...)
 		if err != nil {
 			return nil, err
 		}
 	}
-	if trees {
+	if t.trees {
 		return t, nil
 	}
 	duplicate := map[libfossil.FslID]bool{}
-	err := referenceRows(ctx, q, linkedCheckinSQL, func(scan func(...any) error) error {
+	query, args := restrictTo(linkedCheckinSQL+"%s", "e.objid", ids)
+	err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
 		var rid libfossil.FslID
 		var c linkedCheckin
 		err := scan(&rid, &c.primary, &c.baseline)
@@ -80,7 +91,7 @@ func loadReferenceTables(ctx context.Context, q db.Querier) (*referenceTables, e
 		}
 		t.linked[rid] = c
 		return err
-	})
+	}, args...)
 	for rid := range duplicate {
 		delete(t.linked, rid)
 	}
@@ -89,9 +100,9 @@ func loadReferenceTables(ctx context.Context, q db.Querier) (*referenceTables, e
 
 // referenceRows scans every row of query; each row runs ctx's check first.
 func referenceRows(
-	ctx context.Context, q db.Querier, query string, row func(scan func(...any) error) error,
+	ctx context.Context, q db.Querier, query string, row func(scan func(...any) error) error, args ...any,
 ) error {
-	rows, err := q.Query(query)
+	rows, err := q.Query(query, args...)
 	if err != nil {
 		return fmt.Errorf("sparse preparation: %w", err)
 	}
@@ -174,27 +185,50 @@ func covered(rid libfossil.FslID, baseline func(libfossil.FslID) (libfossil.FslI
 // linkedSpineSQL lists each linked check-in's references: P, B, Q targets
 // and T targets. An absent parent or tag target still has a row, against a
 // phantom, as an absent cherrypick target has none, exactly as the raw
-// cards name it only by hash.
-var linkedSpineSQL = []string{
-	"SELECT cid, pid FROM plink",
-	"SELECT cid, baseid FROM plink WHERE baseid IS NOT NULL",
-	"SELECT childid, parentid FROM cherrypick",
-	"SELECT srcid, rid FROM tagxref WHERE srcid>0",
+// cards name it only by hash. Each query's %s is where the source column is
+// restricted, or nothing.
+var linkedSpineSQL = []struct{ query, src string }{
+	{"SELECT cid, pid FROM plink%s", "cid"},
+	{"SELECT cid, baseid FROM plink WHERE baseid IS NOT NULL%s", "cid"},
+	{"SELECT childid, parentid FROM cherrypick%s", "childid"},
+	{"SELECT srcid, rid FROM tagxref WHERE srcid>0%s", "srcid"},
+}
+
+// restrictTo spells query with src limited to the rids of the JSON array
+// bound as ?1, or unrestricted when ids is empty, with the arguments that go
+// with it.
+func restrictTo(query, src, ids string) (string, []any) {
+	if ids == "" {
+		return fmt.Sprintf(query, ""), nil
+	}
+	join := " WHERE "
+	if strings.Contains(query, " WHERE ") {
+		join = " AND "
+	}
+	return fmt.Sprintf(query, join+src+" IN (SELECT value FROM json_each(?1))"), []any{ids}
 }
 
 // addLinked records for the linked check-ins what their raw cards would:
 // each check-in itself, its references, and every (name, file) pair of its
-// tree, from the mlink rows the induction in answerable relies on.
+// tree, from the mlink rows the induction in answerable relies on. only,
+// when set, are the rids the tables are read for, a superset of linked; seen
+// holds the pairs already recorded, and gains these.
 func (facts *ConeReferenceFacts) addLinked(
-	ctx context.Context, q db.Querier, linked map[libfossil.FslID]bool,
+	ctx context.Context, q db.Querier, linked map[libfossil.FslID]bool, only []libfossil.FslID,
+	seen map[[2]int64]bool,
 ) error {
 	if len(linked) == 0 {
 		return nil
 	}
+	ids, err := ridsJSON(only)
+	if err != nil {
+		return err
+	}
 	for rid := range linked {
 		facts.spine = append(facts.spine, facts.names[rid])
 	}
-	for _, query := range linkedSpineSQL {
+	for _, spine := range linkedSpineSQL {
+		query, args := restrictTo(spine.query, spine.src, ids)
 		err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
 			var src, dst libfossil.FslID
 			err := scan(&src, &dst)
@@ -202,30 +236,35 @@ func (facts *ConeReferenceFacts) addLinked(
 				facts.spine = append(facts.spine, uuid)
 			}
 			return err
-		})
+		}, args...)
 		if err != nil {
 			return err
 		}
 	}
-	return facts.addLinkedFiles(ctx, q, linked)
+	return facts.addLinkedFiles(ctx, q, linked, ids, seen)
 }
 
 func (facts *ConeReferenceFacts) addLinkedFiles(
-	ctx context.Context, q db.Querier, linked map[libfossil.FslID]bool,
+	ctx context.Context, q db.Querier, linked map[libfossil.FslID]bool, ids string, seen map[[2]int64]bool,
 ) error {
 	names := map[int64]string{}
-	err := referenceRows(ctx, q, "SELECT fnid, name FROM filename", func(scan func(...any) error) error {
+	query, args := "SELECT fnid, name FROM filename", []any(nil)
+	if ids != "" {
+		query += " WHERE fnid IN (SELECT fnid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))"
+		args = []any{ids}
+	}
+	err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
 		var fnid int64
 		var name string
 		err := scan(&fnid, &name)
 		names[fnid] = name
 		return err
-	})
+	}, args...)
 	if err != nil {
 		return err
 	}
-	seen := map[[2]int64]bool{}
-	return referenceRows(ctx, q, "SELECT mid, fnid, fid FROM mlink WHERE fid>0",
+	query, args = restrictTo("SELECT mid, fnid, fid FROM mlink WHERE fid>0%s", "mid", ids)
+	return referenceRows(ctx, q, query,
 		func(scan func(...any) error) error {
 			var mid libfossil.FslID
 			var key [2]int64
@@ -236,11 +275,24 @@ func (facts *ConeReferenceFacts) addLinkedFiles(
 			if !linked[mid] || seen[key] || uuid == "" {
 				return nil
 			}
-			if len(facts.files) >= coneReferenceNodes {
+			if len(seen) >= coneReferenceNodes {
 				return fmt.Errorf("sparse preparation: linked file budget exceeded")
 			}
 			seen[key] = true
 			facts.files = append(facts.files, deck.FileCard{Name: names[key[0]], UUID: uuid})
 			return nil
-		})
+		}, args...)
+}
+
+// ridsJSON spells rids as a JSON array for json_each, "" for none. A rid is
+// an integer, so the spelling carries nothing a query could misread.
+func ridsJSON(rids []libfossil.FslID) (string, error) {
+	if len(rids) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(rids)
+	if err != nil {
+		return "", fmt.Errorf("sparse preparation: %w", err)
+	}
+	return string(data), nil
 }

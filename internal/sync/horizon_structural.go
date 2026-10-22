@@ -48,7 +48,7 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 		return nil
 	}
 	q := h.repo.DB()
-	k, reach, placed, err := content.HorizonReach(ctx, q, hz)
+	k, reach, placed, err := h.structuralReach(ctx, hz)
 	if err != nil {
 		return err
 	}
@@ -79,6 +79,31 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 	h.structural = &structuralServe{reach: reach, boundary: boundary, seedName: name, seedData: data,
 		sendSeed: !strings.EqualFold(offered, name)}
 	return nil
+}
+
+// structuralReach places hz ahead of the request's transaction. Through the
+// memo it reads in a transaction of its own, which writes nothing, so the
+// view is of one committed snapshot and is published at once.
+func (h *handler) structuralReach(ctx context.Context, hz cone.Horizon) ([]libfossil.FslID, map[string]bool, bool, error) {
+	if h.memo == nil {
+		return freshClassifier{}.reach(ctx, h.repo.DB(), hz)
+	}
+	var k []libfossil.FslID
+	var reach map[string]bool
+	var placed bool
+	err := h.repo.DB().WithTx(func(tx *db.Tx) error {
+		v, err := h.memo.View(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if k, reach, placed, err = v.HorizonReach(ctx, tx, hz); err != nil {
+			return err
+		}
+		h.structuralRead = v.Read()
+		v.Publish()
+		return nil
+	})
+	return k, reach, placed, err
 }
 
 // boundaryOf names the boundary hashes of K (§5.3): every check-in a P card

@@ -5,6 +5,7 @@ package horizon
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -94,9 +95,6 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.Hor
 	if c <= 0 {
 		panic("horizon.HeldSet: c must be positive")
 	}
-	if rule != cone.RuleDescendants && rule != cone.RuleLeaves {
-		panic("horizon.HeldSet: unknown rule")
-	}
 	if limit <= 0 {
 		panic("horizon.HeldSet: limit must be positive")
 	}
@@ -111,8 +109,163 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.Hor
 	if held == 0 {
 		return nil, fmt.Errorf("%w: rid=%d", ErrNotHeld, c)
 	}
-	g, err := loadGraph(q, limit)
+	g, err := loadGraph(ctx, q, limit)
 	if err != nil {
+		return nil, err
+	}
+	return g.heldSet(ctx, c, rule, limit)
+}
+
+// Graph is the check-in graph a held set is computed over: the held
+// check-ins and the plink edges between two of them, as of the store prefix
+// it was read at (draft-fossil-horizon-00 §6.2). A Graph is never changed
+// once built, so requests may share one.
+type Graph struct {
+	children map[libfossil.FslID][]libfossil.FslID
+	parents  map[libfossil.FslID][]libfossil.FslID
+	checkins []libfossil.FslID // the held check-ins, ascending
+	held     map[libfossil.FslID]bool
+	edges    int
+}
+
+// LoadGraph reads the store's check-in graph.
+func LoadGraph(ctx context.Context, q db.Querier) (*Graph, error) {
+	if ctx == nil || q == nil {
+		panic("horizon.LoadGraph: nil context or querier")
+	}
+	return loadGraph(ctx, q, heldSetNodes)
+}
+
+// loadGraph reads every held check-in and every plink edge between two of
+// them, failing once either exceeds limit.
+func loadGraph(ctx context.Context, q db.Querier, limit int) (*Graph, error) {
+	g := &Graph{children: map[libfossil.FslID][]libfossil.FslID{}, parents: map[libfossil.FslID][]libfossil.FslID{},
+		held: map[libfossil.FslID]bool{}}
+	checkins, err := heldCheckins(q, `SELECT objid FROM event WHERE type='ci'
+		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=objid) ORDER BY objid LIMIT ?1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	g.addCheckins(checkins)
+	err = g.addEdges(ctx, q, `SELECT pid, cid FROM plink WHERE `+
+		fmt.Sprintf(heldCheckinSQL, "plink.pid")+` AND `+fmt.Sprintf(heldCheckinSQL, "plink.cid")+
+		` LIMIT ?1`, limit, nil)
+	if err != nil {
+		return nil, err
+	}
+	return g, nil
+}
+
+// Extend returns g with what the artifacts rids have changed: those that are
+// now held check-ins, and every plink edge between two held check-ins that
+// names one of them. rids are the artifacts appended since g was read and
+// any it held as phantoms that were filled; g itself is unchanged. An edge
+// between two check-ins g already held is never new: plink records a
+// check-in's parents when it is crosslinked, which is when it is appended or
+// filled.
+func (g *Graph) Extend(ctx context.Context, q db.Querier, rids []libfossil.FslID) (*Graph, error) {
+	if g == nil || ctx == nil || q == nil {
+		panic("horizon.Graph.Extend: nil graph, context or querier")
+	}
+	if len(rids) == 0 {
+		return g, nil
+	}
+	ids, err := json.Marshal(rids)
+	if err != nil {
+		return nil, fmt.Errorf("horizon: extending the graph: %w", err)
+	}
+	out := &Graph{children: maps.Clone(g.children), parents: maps.Clone(g.parents),
+		held: maps.Clone(g.held), checkins: g.checkins, edges: g.edges}
+	added, err := heldCheckins(q, `SELECT objid FROM event WHERE type='ci'
+		AND objid IN (SELECT value FROM json_each(?2))
+		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=objid) ORDER BY objid LIMIT ?1`,
+		heldSetNodes-len(g.checkins), string(ids))
+	if err != nil {
+		return nil, err
+	}
+	out.addCheckins(added)
+	seen := map[[2]libfossil.FslID]bool{}
+	err = out.addEdges(ctx, q, `SELECT pid, cid FROM plink
+		WHERE (cid IN (SELECT value FROM json_each(?2)) OR pid IN (SELECT value FROM json_each(?2)))
+		AND `+fmt.Sprintf(heldCheckinSQL, "plink.pid")+` AND `+fmt.Sprintf(heldCheckinSQL, "plink.cid")+
+		` LIMIT ?1`, heldSetNodes-g.edges, seen, string(ids))
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// addCheckins merges held check-ins, ascending, into g.
+func (g *Graph) addCheckins(rids []libfossil.FslID) {
+	fresh := make([]libfossil.FslID, 0, len(rids))
+	for _, rid := range rids {
+		if !g.held[rid] {
+			g.held[rid] = true
+			fresh = append(fresh, rid)
+		}
+	}
+	if len(fresh) > 0 {
+		g.checkins = slices.Concat(g.checkins, fresh)
+		slices.Sort(g.checkins)
+	}
+}
+
+// addEdges reads the edges query names, failing once more than limit have
+// been read. A slice g may share with the graph it extends is copied before
+// it grows. seen, when set, drops an edge read twice.
+func (g *Graph) addEdges(ctx context.Context, q db.Querier, query string, limit int,
+	seen map[[2]libfossil.FslID]bool, args ...any) error {
+	rows, err := q.Query(query, append([]any{limit + 1}, args...)...)
+	if err != nil {
+		return fmt.Errorf("horizon: reading plink: %w", err)
+	}
+	defer rows.Close()
+	read := 0
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		var pid, cid libfossil.FslID
+		if err := rows.Scan(&pid, &cid); err != nil {
+			return fmt.Errorf("horizon: reading plink: %w", err)
+		}
+		read++
+		if read > limit {
+			return fmt.Errorf("%w: more than %d plink edges", ErrBound, heldSetNodes)
+		}
+		if seen != nil {
+			if seen[[2]libfossil.FslID{pid, cid}] {
+				continue
+			}
+			seen[[2]libfossil.FslID{pid, cid}] = true
+		}
+		g.edges++
+		g.children[pid] = append(slices.Clip(g.children[pid]), cid)
+		g.parents[cid] = append(slices.Clip(g.parents[cid]), pid)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("horizon: reading plink: %w", err)
+	}
+	return nil
+}
+
+// HeldSet returns the held set K of check-in c under rule over g, as the
+// package's HeldSet does over the store g was read from.
+func (g *Graph) HeldSet(ctx context.Context, c libfossil.FslID, rule cone.HorizonRule) ([]libfossil.FslID, error) {
+	if g == nil || ctx == nil {
+		panic("horizon.Graph.HeldSet: nil graph or context")
+	}
+	if !g.held[c] {
+		return nil, fmt.Errorf("%w: rid=%d", ErrNotHeld, c)
+	}
+	return g.heldSet(ctx, c, rule, heldSetNodes)
+}
+
+func (g *Graph) heldSet(ctx context.Context, c libfossil.FslID, rule cone.HorizonRule, limit int) ([]libfossil.FslID, error) {
+	if rule != cone.RuleDescendants && rule != cone.RuleLeaves {
+		panic("horizon.HeldSet: unknown rule")
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	w := walk{ctx: ctx, limit: limit}
@@ -121,7 +274,7 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.Hor
 		return nil, err
 	}
 	if rule == cone.RuleLeaves {
-		if err := addLeafMeetings(q, &w, g, c, k, limit); err != nil {
+		if err := addLeafMeetings(&w, g, c, k); err != nil {
 			return nil, err
 		}
 	}
@@ -133,59 +286,18 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.Hor
 	return out, nil
 }
 
-// graph is the check-in graph as adjacency both ways.
-type graph struct {
-	children map[libfossil.FslID][]libfossil.FslID
-	parents  map[libfossil.FslID][]libfossil.FslID
-}
-
-// loadGraph reads every plink edge between two held check-ins in one query,
-// failing once more than limit edges have been read.
-func loadGraph(q db.Querier, limit int) (graph, error) {
-	g := graph{children: map[libfossil.FslID][]libfossil.FslID{}, parents: map[libfossil.FslID][]libfossil.FslID{}}
-	rows, err := q.Query(`SELECT pid, cid FROM plink WHERE `+
-		fmt.Sprintf(heldCheckinSQL, "plink.pid")+` AND `+fmt.Sprintf(heldCheckinSQL, "plink.cid")+
-		` LIMIT ?`, limit+1)
-	if err != nil {
-		return graph{}, fmt.Errorf("horizon: reading plink: %w", err)
-	}
-	defer rows.Close()
-	edges := 0
-	for rows.Next() {
-		var pid, cid libfossil.FslID
-		if err := rows.Scan(&pid, &cid); err != nil {
-			return graph{}, fmt.Errorf("horizon: reading plink: %w", err)
-		}
-		edges++
-		if edges > limit {
-			return graph{}, fmt.Errorf("%w: more than %d plink edges", ErrBound, limit)
-		}
-		g.children[pid] = append(g.children[pid], cid)
-		g.parents[cid] = append(g.parents[cid], pid)
-	}
-	if err := rows.Err(); err != nil {
-		return graph{}, fmt.Errorf("horizon: reading plink: %w", err)
-	}
-	return g, nil
-}
-
 // addLeafMeetings extends k, holding C and its descendants, by the leaves
 // rule: the descendants of every check-in where a childless check-in's
 // ancestry meets C's. k stays closed under descendants, because each
 // meeting point is added with everything descended from it.
-func addLeafMeetings(q db.Querier, w *walk, g graph, c libfossil.FslID,
-	k map[libfossil.FslID]bool, limit int) error {
+func addLeafMeetings(w *walk, g *Graph, c libfossil.FslID, k map[libfossil.FslID]bool) error {
 	descendants := maps.Clone(k)
 	ancestors := map[libfossil.FslID]bool{}
 	if err := w.run(c, g.parents, ancestors, nil); err != nil {
 		return err
 	}
-	checkins, err := heldCheckins(q, limit)
-	if err != nil {
-		return err
-	}
 	var meetings []libfossil.FslID
-	for _, leaf := range checkins {
+	for _, leaf := range g.checkins {
 		if len(g.children[leaf]) > 0 || descendants[leaf] || ancestors[leaf] {
 			continue
 		}
@@ -209,11 +321,10 @@ func addLeafMeetings(q db.Querier, w *walk, g graph, c libfossil.FslID,
 	return nil
 }
 
-// heldCheckins lists the check-ins the repository holds, ascending by rid.
-func heldCheckins(q db.Querier, limit int) ([]libfossil.FslID, error) {
-	rows, err := q.Query(`SELECT objid FROM event WHERE type='ci'
-		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=objid)
-		ORDER BY objid LIMIT ?`, limit+1)
+// heldCheckins lists the held check-ins query names, ascending by rid; its
+// first argument is the limit, and more than limit rows fail.
+func heldCheckins(q db.Querier, query string, limit int, args ...any) ([]libfossil.FslID, error) {
+	rows, err := q.Query(query, append([]any{limit + 1}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("horizon: reading check-ins: %w", err)
 	}
@@ -225,7 +336,7 @@ func heldCheckins(q db.Querier, limit int) ([]libfossil.FslID, error) {
 			return nil, fmt.Errorf("horizon: reading check-ins: %w", err)
 		}
 		if len(checkins) == limit {
-			return nil, fmt.Errorf("%w: more than %d check-ins", ErrBound, limit)
+			return nil, fmt.Errorf("%w: more than %d check-ins", ErrBound, heldSetNodes)
 		}
 		checkins = append(checkins, rid)
 	}

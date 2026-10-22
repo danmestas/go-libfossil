@@ -30,7 +30,8 @@ import (
 func horizonSuiteCases() []Case {
 	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules,
 		horizonHeldSetRecomputed, horizonHeldSetClosed},
-		append(horizonContentCases(), append(horizonSyncCases(), horizonServeCases()...)...)...)
+		append(horizonContentCases(), append(horizonSyncCases(),
+			append(horizonServeCases(), horizonCursorCases()...)...)...)...)
 }
 
 var (

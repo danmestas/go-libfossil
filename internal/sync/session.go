@@ -47,6 +47,10 @@ type SyncOpts struct {
 	Observer     Observer       // nil defaults to no-op
 	CkinLock     *CkinLockReq   // nil = no lock requested
 	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
+	// Origin names the peer this session addresses, keying the horizon
+	// cursor a horizon store keeps per origin (draft-fossil-horizon-00
+	// §6.2.6). Empty keeps no cursor: every request announces in full.
+	Origin string
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -81,9 +85,17 @@ type SyncResult struct {
 
 // session holds the mutable state of a running sync.
 type session struct {
-	ctx               context.Context
-	sparseReceived    map[string]bool
-	horizon           bool // the store cone has a horizon: no cluster is asked for
+	ctx            context.Context
+	sparseReceived map[string]bool
+	horizon        bool // the store cone has a horizon: no cluster is asked for
+	// The horizon cursor (draft-fossil-horizon-00 §6.2.6), kept per origin
+	// under coneDigest: cursor is the record this session started from,
+	// startPosition this store's position then, and peerCursor the last
+	// cursor a reply handed out. coneDigest is empty when none is kept.
+	coneDigest        string
+	cursor            cursorRecord
+	startPosition     int64
+	peerCursor        int64
 	repo              *repo.Repo
 	env               *simio.Env
 	opts              SyncOpts
@@ -230,6 +242,9 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 	if c, err := content.StoreCone(r.DB()); err == nil && c != nil {
 		s.sparseReceived = map[string]bool{}
 		_, s.horizon = c.Horizon()
+		if s.horizon && opts.Origin != "" {
+			s.coneDigest = c.Digest()
+		}
 	}
 
 	return s
@@ -298,6 +313,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	s.ctx = ctx
 	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
+	}
+	if err := s.loadCursor(); err != nil {
+		return &s.result, err
 	}
 
 	ctx = obs.Started(ctx, SessionStart{
@@ -392,6 +410,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		if err != nil {
 			return &s.result, fmt.Errorf("sync: sparse receive filtering: %w", err)
 		}
+	}
+	if err := s.recordCursor(); err != nil {
+		return &s.result, err
 	}
 
 	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)

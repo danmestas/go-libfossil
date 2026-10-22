@@ -96,6 +96,12 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 		}
 		cards = append(cards, sparse...)
 	}
+	// Horizon §6.2.6: the origin's cursor goes on every request to it, after
+	// the horizon pragma, where zit sends it (sync.zig, the request's
+	// horizon_cursor card): a push's reply announces too.
+	if s.cursor.peer > 0 {
+		cards = append(cards, cursorCard(s.cursor.peer))
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -294,8 +300,12 @@ func (s *session) uvRequestCards() ([]xfer.Card, error) {
 // sendUnclustered queries the unclustered table and produces igot cards
 // for artifacts the remote doesn't already have, excluding phantoms.
 func (s *session) sendUnclustered() ([]xfer.Card, error) {
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(`
-		SELECT b.uuid FROM unclustered u JOIN blob b ON b.rid=u.rid
+		SELECT b.rid, b.uuid FROM unclustered u JOIN blob b ON b.rid=u.rid
 		WHERE b.size >= 0
 		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=u.rid)
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)
@@ -308,11 +318,12 @@ func (s *session) sendUnclustered() ([]xfer.Card, error) {
 
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid})
@@ -320,12 +331,70 @@ func (s *session) sendUnclustered() ([]xfer.Card, error) {
 	return cards, rows.Err()
 }
 
+// announceFloor is the rid at or below which this session announces
+// nothing to the origin it addresses, and silent when it announces nothing
+// at all (horizon §6.2.6, zit's announce_from and cursor_pull in sync.zig):
+// under a cursor a pull-only request names nothing, since the origin skips
+// what it served; a request that sends names only what this store appended
+// after the recorded count. Without a record it is 0.
+func (s *session) announceFloor() (floor int64, silent bool) {
+	if s.opts.Pull && !s.opts.Push && s.cursor.peer > 0 {
+		return 0, true
+	}
+	return s.cursor.local, false
+}
+
+// loadCursor reads the record kept for this session's origin, and this
+// store's position as the session starts.
+func (s *session) loadCursor() error {
+	if s.coneDigest == "" {
+		return nil
+	}
+	var err error
+	if s.cursor, err = loadCursor(s.repo.DB(), s.opts.Origin, s.coneDigest); err != nil {
+		return err
+	}
+	s.startPosition, err = storePosition(s.repo.DB())
+	return err
+}
+
+// recordCursor keeps what a converged session leaves the origin knowing: the
+// cursor of its last reply (the old one when none came), and the count of
+// this store's artifacts the origin holds. A session that pushed announced
+// all it holds; a pull sends nothing, so it advances the count only over
+// what it received, and only when nothing of this store's came before it.
+// zit records the same after its pull, push and sync (cmd/sync.zig).
+func (s *session) recordCursor() error {
+	if s.coneDigest == "" || len(s.result.Errors) != 0 {
+		return nil
+	}
+	end, err := storePosition(s.repo.DB())
+	if err != nil {
+		return err
+	}
+	rec := cursorRecord{peer: s.cursor.peer, local: s.cursor.local}
+	if s.peerCursor > 0 {
+		rec.peer = s.peerCursor
+	}
+	switch {
+	case s.opts.Push && !s.pushStopped:
+		rec.local = end
+	case s.cursor.found && s.cursor.local == s.startPosition:
+		rec.local = end
+	}
+	return storeCursor(s.repo.DB(), s.opts.Origin, s.coneDigest, rec)
+}
+
 // sendAllClusters produces igot cards for cluster artifacts that have already
 // been clustered (not in unclustered) and are not phantoms. Sent on round 2+
 // when pushing and the remote has requested blobs (nGimmeRcvd > 0).
 func (s *session) sendAllClusters() ([]xfer.Card, error) {
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(`
-		SELECT b.uuid FROM tagxref tx JOIN blob b ON tx.rid=b.rid
+		SELECT b.rid, b.uuid FROM tagxref tx JOIN blob b ON tx.rid=b.rid
 		WHERE tx.tagid=7
 		AND NOT EXISTS(SELECT 1 FROM unclustered WHERE rid=b.rid)
 		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=b.rid)
@@ -340,11 +409,12 @@ func (s *session) sendAllClusters() ([]xfer.Card, error) {
 
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid})
@@ -362,8 +432,12 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 		return nil, nil
 	}
 
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid, b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sendPrivate: %w", err)
@@ -371,11 +445,12 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 	defer rows.Close()
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
@@ -693,6 +768,11 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
 	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	for _, rid := range s.dephantomized {
+		if err := noteRekept(s.repo.DB(), rid); err != nil {
+			return err
+		}
+	}
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {
@@ -882,6 +962,10 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		s.result.ConeServed++
 	case c.Name == horizonServedPragma && servesContentHorizon(c):
 		s.result.HorizonServed++
+	case c.Name == horizonCursorPragma:
+		if n, ok := parseCursor(c); ok {
+			s.peerCursor = n
+		}
 	case c.Name == sendSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
 		// for the session: a reply without the pragma does not unsay it.
@@ -979,8 +1063,11 @@ func (s *session) converged(t replyTally) (bool, error) {
 
 	// If we sent igot cards but the server didn't gimme anything,
 	// clear the unsent table — those artifacts have been announced
-	// and the server either has them or doesn't want them.
-	if s.igotSentThisRound > 0 && t.filesSent == 0 {
+	// and the server either has them or doesn't want them. A pull the
+	// horizon cursor silenced (§6.2.6) stands where such a round stood: the
+	// recorded count, not this table, carries what a later push announces.
+	_, silent := s.announceFloor()
+	if (s.igotSentThisRound > 0 || silent) && t.filesSent == 0 {
 		if _, err := s.repo.DB().Exec("DELETE FROM unsent"); err != nil {
 			return false, fmt.Errorf("sync: delete unsent: %w", err)
 		}
@@ -1088,6 +1175,9 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	// inside the storage transaction instead, so it must not run a second.
 	if linker == nil && dephantomizedRid > 0 {
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
+		if rerr := noteRekept(r.DB(), dephantomizedRid); rerr != nil {
+			return errors.Join(err, rerr)
+		}
 	}
 	return err
 }

@@ -34,7 +34,7 @@ func horizonStructuralCases() []Case {
 		horizonStructReseed, horizonStructRequest, horizonStructRestrict, horizonStructLabelOrder,
 		horizonStructSeedWire, horizonStructSeedRefused, horizonStructAdvertise, horizonStructServed,
 		horizonStructFallback, horizonStructCommit, horizonStructLeaves, horizonStructVerify, horizonStructCrossing,
-		horizonStructPush}
+		horizonStructPush, horizonStructHistory}
 }
 
 var (
@@ -55,6 +55,7 @@ var (
 	horizonStructLeaves      = Case{ID: "horizon.3.1.structural-leaves", Req: "HZ-3.1-4"}
 	horizonStructVerify      = Case{ID: "horizon.5.4.verify-below", Req: "HZ-5.4-1"}
 	horizonStructCrossing    = Case{ID: "horizon.5.5.crossing", Req: "HZ-5.5-1"}
+	horizonStructHistory     = Case{ID: "horizon.5.4.history-boundary", Req: "HZ-5.4-1"}
 	horizonStructPush        = Case{ID: "horizon.5.1.structural-served-push", Req: "HZ-5.1-1"}
 )
 
@@ -77,6 +78,50 @@ func TestHorizonStructural(t *testing.T) {
 	check(t, horizonStructVerify, func() error { return hzStructVerify(t) })
 	check(t, horizonStructCrossing, func() error { return hzStructCrossing(t) })
 	check(t, horizonStructPush, func() error { return hzStructPush(t) })
+	check(t, horizonStructHistory, func() error { return hzStructHistory(t) })
+}
+
+// hzStructHistory: the history views render a boundary parent as the horizon:
+// the timeline marks exactly the parents below K, and the ancestry walk ends
+// at the horizon without an error.
+func hzStructHistory(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	entries, err := manifest.Timeline(r, manifest.TimelineOpts{Type: libfossil.EventKindCheckin})
+	if err != nil {
+		return err
+	}
+	marked := 0
+	for _, e := range entries {
+		var want []string
+		for _, p := range e.Parents {
+			if x.below()[p] {
+				want = append(want, p)
+			}
+		}
+		if !slices.Equal(e.HorizonParents, want) {
+			return expectf("check-in %s: horizon parents %v, want %v", e.UUID, e.HorizonParents, want)
+		}
+		marked += len(want)
+	}
+	if marked == 0 {
+		return expectf("no parent rendered as the horizon in %d check-ins", len(entries))
+	}
+	var rid libfossil.FslID
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", x.c4).Scan(&rid); err != nil {
+		return err
+	}
+	walk, err := manifest.Log(r, manifest.LogOpts{Start: rid})
+	if err != nil {
+		return expectf("ancestry from c4 ended in an error: %v", err)
+	}
+	if len(walk) != 2 || walk[0].UUID != x.c4 || walk[1].UUID != x.c3 || !slices.Equal(walk[1].HorizonParents, []string{x.c2}) {
+		return expectf("ancestry from c4 = %d entries, want c4, c3 ending at the horizon %s", len(walk), x.c2)
+	}
+	return nil
 }
 
 // hzStructPush: a structural store serving a push asks for what the pusher

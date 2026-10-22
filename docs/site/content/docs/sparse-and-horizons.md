@@ -50,9 +50,11 @@ The held set is computed from the check-in graph the repository holds. It is sto
 ### Rules
 
 - **descendants** (the default): C and every check-in descended from it, through any parent, merges included.
-- **leaves**: the descendants, plus the ancestry of every childless check-in back to its nearest common ancestor with C.
+- **leaves**: the descendants, plus, for every childless check-in that does not descend from C, every descendant of each check-in where its ancestry meets C's.
 
-The leaves rule has a cost you should check before using it. Childless is read from the parent cards alone, open or closed. On a repository that keeps its old branches, every old branch tip is a leaf, so the rule holds nearly everything. On fossil-scm.org's repository it held 20,907 of 21,008 check-ins at every depth tested. Use it when you want branch tips to stay readable and the repository has few old branches.
+A check-in is childless when no other check-in names it as a parent, open or closed. A branch tip merged into another branch has a child, so it is not childless. Under the leaves rule, any two childless check-ins have their merge base in the held set, so merging branches that are still being extended never crosses the horizon. Both rules give a set that includes every child of every check-in in it.
+
+The leaves rule has a cost you should check before using it. An old branch that was never merged forks from C's ancestry near the root, and the rule then holds every descendant of that fork. On fossil-scm.org's repository it held 20,907 of 21,008 check-ins at every depth tested. Use it when the repository keeps few old unmerged branches.
 
 The descendants rule saves much more. On the same repository, a structural horizon placed 10, 100, 426 and 1000 check-ins back cut expanded transfer by 97, 86, 56 and 41 percent. The structural depth is not available yet (see Limits). The content horizon available today keeps all structure and elides only blobs.
 

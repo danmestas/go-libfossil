@@ -19,20 +19,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose content a horizon keeps, computed from the check-in graph the
   repository holds and stored nowhere. Under `descendants` it is C and
   every check-in descended from it through any parent, merges included;
-  under `leaves` it adds each open leaf's ancestry back to where it meets
-  C's. An open leaf is fossil's: a leaf with no closed tag. The walk is
-  bounded and fails with an error rather than run unbounded. Internal only
-  for now.
+  under `leaves` it adds every descendant of each check-in where a
+  childless check-in's ancestry meets C's. Childless is a property of the
+  P cards alone, open or closed: a branch tip merged elsewhere has a child
+  and adds nothing, unlike fossil's same-branch leaf. Both rules give a set
+  closed under descendants. The walk is bounded and fails with an error
+  rather than run unbounded. Internal only for now.
 
 ### Changed
 
 - The horizon draft is re-pinned to zit's `horizon-rfc` check-in
-  `e6ee276c89`, the same check-in as the sparse-cone draft. Its only
-  normative changes are in §6: any request may carry the new
-  `horizon-cursor` pragma (§6.1, §6.2.6), and an origin should keep its
-  classification and the structural graph it reads per store prefix
-  (§6.2). The requirement table reads them as five new rows, so the
-  horizon draft now has 50 requirements; none is implemented yet.
+  `bbd1435674`, the revision its author calls ready to implement against.
+  Since the last pin it adds the `horizon-cursor` pragma and the origin's
+  classification-memoization SHOULDs (§6.1, §6.2, §6.2.6), restates the
+  leaves rule over P cards with K closed under descendants (§3.1, §3.4),
+  has the seed carry T cards for every entry of K (§5.2.1), and confines
+  the cursor's announcements to replies to requests that pull (§6.2.6).
+  The requirement table reads these as six new rows and updated ones: 51
+  requirements, of which the cone's horizon member and the held set are
+  implemented.
 
 ## [0.14.0] - 2026-10-21
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -40,30 +41,25 @@ const heldCheckinSQL = `(EXISTS(SELECT 1 FROM event WHERE objid=%[1]s AND type='
 	AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=%[1]s))`
 
 // HeldSet returns the held set K of Section 3.1 for check-in c under rule,
-// ascending by rid. K is computed from the plink and leaf tables as they
-// stand, and nothing is stored (Section 3.1: no party stores K).
+// ascending by rid. K is computed from the plink table as it stands, and
+// nothing is stored (Section 3.1: no party stores K).
 //
-// Edges follow every P card, the primary parent and merge parents alike,
-// as zit's walk does (src/sparse.zig, ClassifyState.extend pass 2, at
-// horizon-rfc e6ee276c89). Under the descendants rule, a check-in naming a
-// member of K as a merge parent is in K.
+// Both rules are stated over P cards alone, the primary parent and merge
+// parents alike, and both yield a set closed under descendants: every child
+// of a check-in in K is in K, so leaves and branch tips derive exactly.
+// Under the descendants rule K is C and every check-in descended from it.
 //
-// Under the leaves rule, "the nearest common ancestor of L and C" and "every
-// check-in on a path from L back to" it are read as zit's walkParents
-// reads them: A is C and all of C's ancestors; L's ancestry is walked
-// through every parent, each check-in reached is held, and a check-in in
-// A is held but not walked past. So when several common ancestors are
-// equally near -- L reaching two parents of a merge C by separate paths --
-// every one the walk meets is held, and a leaf whose ancestry never meets
-// A is held back to its roots. A leaf already in K or A adds nothing.
-//
-// Two departures from zit, both toward the draft's text. "Open leaf" is
-// fossil's: a row of the leaf table (internal/leaf) with no active closed
-// tag. zit takes every check-in with no held child and includes closed
-// ones; fossil's table also keeps a branch tip merged into another branch
-// as a leaf, so such a branch below C is held back to its fork, and two
-// open leaves always have their merge base in K. And phantom parents are
-// never held: K is drawn from the check-ins the repository holds.
+// Under the leaves rule K adds, for every childless check-in L (one no held
+// check-in names in a P card, open or closed: not fossil's same-branch
+// leaf) that does not descend from C, every descendant of each check-in
+// where L's ancestry meets C's. The meeting points are found as zit finds
+// them (src/sparse.zig, ClassifyState.extend, at horizon-rfc bbd1435674):
+// L's ancestry is walked through every parent, a check-in that is C or one
+// of C's ancestors is reached but not walked past, and every such check-in
+// reached is a meeting point. L is skipped only when it descends from C,
+// not when an earlier meeting point already put it in K: it still has its
+// own meeting points. Phantom parents are never held: K is drawn from the
+// check-ins the repository holds.
 func HeldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.HorizonRule) ([]libfossil.FslID, error) {
 	return heldSet(ctx, q, c, rule, heldSetNodes)
 }
@@ -102,21 +98,8 @@ func heldSet(ctx context.Context, q db.Querier, c libfossil.FslID, rule cone.Hor
 		return nil, err
 	}
 	if rule == cone.RuleLeaves {
-		ancestors := map[libfossil.FslID]bool{}
-		if err := w.run(c, g.parents, ancestors, nil); err != nil {
+		if err := addLeafMeetings(q, &w, g, c, k, limit); err != nil {
 			return nil, err
-		}
-		leaves, err := openLeaves(q, limit)
-		if err != nil {
-			return nil, err
-		}
-		for _, leaf := range leaves {
-			if k[leaf] || ancestors[leaf] {
-				continue
-			}
-			if err := w.run(leaf, g.parents, k, ancestors); err != nil {
-				return nil, err
-			}
 		}
 	}
 	out := make([]libfossil.FslID, 0, len(k))
@@ -163,33 +146,70 @@ func loadGraph(q db.Querier, limit int) (graph, error) {
 	return g, nil
 }
 
-// openLeaves lists the open leaves the repository holds, as fossil's leaves
-// command does by default: leaf rows without an active closed tag.
-func openLeaves(q db.Querier, limit int) ([]libfossil.FslID, error) {
-	rows, err := q.Query(`SELECT l.rid FROM leaf l
-		WHERE `+fmt.Sprintf(heldCheckinSQL, "l.rid")+`
-		  AND NOT EXISTS(SELECT 1 FROM tagxref x JOIN tag t ON t.tagid = x.tagid
-		                  WHERE t.tagname = 'closed' AND x.rid = l.rid AND x.tagtype > 0)
-		ORDER BY l.rid LIMIT ?`, limit+1)
+// addLeafMeetings extends k, holding C and its descendants, by the leaves
+// rule: the descendants of every check-in where a childless check-in's
+// ancestry meets C's. k stays closed under descendants, because each
+// meeting point is added with everything descended from it.
+func addLeafMeetings(q db.Querier, w *walk, g graph, c libfossil.FslID,
+	k map[libfossil.FslID]bool, limit int) error {
+	descendants := maps.Clone(k)
+	ancestors := map[libfossil.FslID]bool{}
+	if err := w.run(c, g.parents, ancestors, nil); err != nil {
+		return err
+	}
+	checkins, err := heldCheckins(q, limit)
 	if err != nil {
-		return nil, fmt.Errorf("horizon: reading leaves: %w", err)
+		return err
+	}
+	var meetings []libfossil.FslID
+	for _, leaf := range checkins {
+		if len(g.children[leaf]) > 0 || descendants[leaf] || ancestors[leaf] {
+			continue
+		}
+		seen := map[libfossil.FslID]bool{}
+		if err := w.run(leaf, g.parents, seen, ancestors); err != nil {
+			return err
+		}
+		for rid := range seen {
+			if ancestors[rid] {
+				meetings = append(meetings, rid)
+			}
+		}
+	}
+	// Sorted so the walk, and the budget it spends, are deterministic.
+	slices.Sort(meetings)
+	for _, m := range meetings {
+		if err := w.run(m, g.children, k, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// heldCheckins lists the check-ins the repository holds, ascending by rid.
+func heldCheckins(q db.Querier, limit int) ([]libfossil.FslID, error) {
+	rows, err := q.Query(`SELECT objid FROM event WHERE type='ci'
+		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=objid)
+		ORDER BY objid LIMIT ?`, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("horizon: reading check-ins: %w", err)
 	}
 	defer rows.Close()
-	var leaves []libfossil.FslID
+	var checkins []libfossil.FslID
 	for rows.Next() {
 		var rid libfossil.FslID
 		if err := rows.Scan(&rid); err != nil {
-			return nil, fmt.Errorf("horizon: reading leaves: %w", err)
+			return nil, fmt.Errorf("horizon: reading check-ins: %w", err)
 		}
-		if len(leaves) == limit {
-			return nil, fmt.Errorf("%w: more than %d open leaves", ErrBound, limit)
+		if len(checkins) == limit {
+			return nil, fmt.Errorf("%w: more than %d check-ins", ErrBound, limit)
 		}
-		leaves = append(leaves, rid)
+		checkins = append(checkins, rid)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("horizon: reading leaves: %w", err)
+		return nil, fmt.Errorf("horizon: reading check-ins: %w", err)
 	}
-	return leaves, nil
+	return checkins, nil
 }
 
 // walk carries one visited-node budget across every walk of a computation.

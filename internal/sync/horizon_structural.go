@@ -40,6 +40,9 @@ type structuralServe struct {
 // seed, is answered and advertised as the content horizon (§6.2.3): its
 // cone is cut at the content depth, so the keep set holds every manifest.
 func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) error {
+	if ctx == nil || h.cone == nil {
+		panic("handler.prepareStructural: nil context or cone")
+	}
 	hz, ok := h.cone.Horizon()
 	if !ok || hz.Depth() != cone.DepthStructural {
 		return nil
@@ -81,6 +84,9 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 // boundaryOf names the boundary hashes of K (§5.3): every check-in a P card
 // of a check-in in K names that is not itself in K, sorted.
 func boundaryOf(q db.Querier, k []libfossil.FslID) ([]string, error) {
+	if q == nil || len(k) == 0 {
+		panic("sync.boundaryOf: nil querier or empty held set")
+	}
 	ids, err := json.Marshal(k)
 	if err != nil {
 		return nil, fmt.Errorf("handler: horizon boundary: %w", err)
@@ -113,6 +119,9 @@ func boundaryOf(q db.Querier, k []libfossil.FslID) ([]string, error) {
 // (§6.2.3). A requester who may not read is answered at the content level:
 // the seed and labels are derived state of the history it may not read.
 func (h *handler) emitHorizonServed() {
+	if !h.horizonScoped() {
+		panic("handler.emitHorizonServed: the request carries no horizon")
+	}
 	if h.structural != nil && !h.canRead() {
 		h.structural = nil
 		h.cone = withDepth(h.cone, cone.DepthContent)
@@ -217,6 +226,9 @@ func (c *structuralClient) pragma(q db.Querier, p *xfer.PragmaCard) (handled boo
 // not verify is dropped and the store falls back to the content horizon at
 // the end of the reply (§5.2.4).
 func (c *structuralClient) takeSeed(r *repo.Repo, uuid, deltaSrc string, payload []byte) (bool, error) {
+	if r == nil {
+		panic("sync.structuralClient.takeSeed: nil repo")
+	}
 	if !c.active || c.expect == "" || deltaSrc != "" || !strings.EqualFold(uuid, c.expect) {
 		return false, nil
 	}
@@ -292,6 +304,9 @@ func (c *structuralClient) apply(r *repo.Repo) (bool, error) {
 // at the content depth, which drops the boundary labels, so the manifests
 // below the horizon are wanted again.
 func (c *structuralClient) fallBack(r *repo.Repo) error {
+	if r == nil {
+		panic("sync.structuralClient.fallBack: nil repo")
+	}
 	c.active = false
 	return r.WithTx(func(tx *db.Tx) error {
 		if err := seed.Discard(tx); err != nil {

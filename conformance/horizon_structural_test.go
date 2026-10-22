@@ -219,7 +219,16 @@ func hzStructCommit(t *testing.T) error {
 	}) {
 		return expectf("branch creation wrote %v, dense %v; want them equal, cancelling sym-trunk", got, want)
 	}
-	pushed, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true, Pull: true})
+	// A push alone carries no horizon pragma, so no reply says how it is
+	// served: the store stays structural.
+	pushed, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true})
+	if err != nil || len(pushed.Errors) != 0 || pushed.HorizonFallback {
+		return expectf("push: %v %q, fell back %v", err, pushed.Errors, pushed.HorizonFallback)
+	}
+	if d, err := hzStructDepth(r); err != nil || d != cone.DepthStructural {
+		return expectf("after a push the stored depth is %v (%v)", d, err)
+	}
+	pushed, err = sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Push: true, Pull: true})
 	if err != nil || len(pushed.Errors) != 0 {
 		return expectf("push: %v %q", err, pushed.Errors)
 	}

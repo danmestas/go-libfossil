@@ -748,9 +748,10 @@ func (s *session) processReply(ctx context.Context,
 		s.result.Errors = append(s.result.Errors, "error: "+content.Error())
 		cardErr = nil
 	}
-	// Horizon §6.2.5: the first reply decides whether a structural store
-	// stays structural, before the phantoms it learned of are classified.
-	if s.result.Rounds == 0 {
+	// Horizon §6.2.5: the first reply to a request carrying the horizon, a
+	// pull's, decides whether a structural store stays structural, before
+	// the phantoms it learned of are classified. A push alone asks nothing.
+	if s.result.Rounds == 0 && s.opts.Pull {
 		fell, err := s.structural.endFirstReply(s.repo)
 		if err != nil {
 			return false, cardErr, err

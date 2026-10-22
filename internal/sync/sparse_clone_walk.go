@@ -69,7 +69,7 @@ func (h *handler) cloneSparseRow(round *cloneBatch, rid int, uuid string, fullSi
 	w := h.keep.walk
 	kind, d := w.classify(rid)
 	already := round.sent[rid]
-	if !w.atRow(kind) {
+	if !w.atRow(kind) || w.unreached(kind, uuid) {
 		if !already {
 			round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
 		}

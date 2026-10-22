@@ -135,20 +135,22 @@ func (g *hzGraph) checkins() []libfossil.FslID {
 	return []libfossil.FslID{g.c1, g.c2, g.c3, g.c4, g.m, g.feat, g.side1, g.side2}
 }
 
-// The content horizon stands alone; the structural horizon is refused.
+// The content horizon stands alone, and the structural horizon builds on it.
 func hzContentAlone(t *testing.T) error {
 	g := newHZGraph(t)
 	s, files := newHZStore(t, g.f, g.checkins()...)
 	c := hzUUID(t, g.f.r, g.c3)
-	if err := content.SetStoreCone(s.clone.DB(),
-		hzStoreCone(t, c, cone.RuleDescendants, cone.DepthStructural)); err == nil {
-		return expectf("a structural horizon was accepted")
-	}
-	if sc, err := content.StoreCone(s.clone.DB()); err != nil || sc != nil {
-		return expectf("after refusing a structural horizon the store cone is %v, %v", sc, err)
-	}
-	hzSet(t, s.clone, c, cone.RuleDescendants)
 	want := hzMinus(files, hzFiles(t, g.f.r, g.c3, g.c4, g.m, g.side1, g.side2))
+	hzSet(t, s.clone, c, cone.RuleDescendants)
+	if err := scSameList("elided", scClassed(scAbsences(t, s.clone), content.Elided), want); err != nil {
+		return err
+	}
+	// The structural horizon presupposes the content horizon: over the same
+	// store it elides the same blobs, cutting manifests besides.
+	if err := content.SetStoreCone(s.clone.DB(),
+		hzStoreCone(t, c, cone.RuleDescendants, cone.DepthStructural)); err != nil {
+		return err
+	}
 	return scSameList("elided", scClassed(scAbsences(t, s.clone), content.Elided), want)
 }
 

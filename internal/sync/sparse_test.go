@@ -24,7 +24,7 @@ func TestConePragmasEscaping(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cards := conePragmas(c)
+	cards := conePragmas(c, "")
 	got := make([]string, 0, len(cards))
 	for _, card := range cards {
 		p := card.(*xfer.PragmaCard)
@@ -159,7 +159,7 @@ func TestSparseServerExpandsExcludedDeltaBase(t *testing.T) {
 		t.Fatal(err)
 	}
 	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
-	cards = append(cards, conePragmas(c)...)
+	cards = append(cards, conePragmas(c, "")...)
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestSparseServerTreeClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
-	cards = append(cards, conePragmas(c)...)
+	cards = append(cards, conePragmas(c, "")...)
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
 	if err != nil {
 		t.Fatal(err)
@@ -313,7 +313,7 @@ func TestSparseServerFlatClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	cards := []xfer.Card{versionPragma("client-version"), sendSubmanifests(), &xfer.CloneCard{Version: 3, SeqNo: 1}}
-	cards = append(cards, conePragmas(c)...)
+	cards = append(cards, conePragmas(c, "")...)
 	resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: cards})
 	if err != nil {
 		t.Fatal(err)

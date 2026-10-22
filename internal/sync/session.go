@@ -7,6 +7,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
@@ -51,6 +52,9 @@ type SyncOpts struct {
 	// cursor a horizon store keeps per origin (draft-fossil-horizon-00
 	// §6.2.6). Empty keeps no cursor: every request announces in full.
 	Origin string
+	// SeedVerifier checks a structural horizon's seed against the origin's
+	// key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned seed.
+	SeedVerifier seed.Verifier
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -67,9 +71,16 @@ type SyncResult struct {
 	// a sparse store were served densely and filtered locally.
 	ConeServed int
 	// HorizonServed counts the replies whose origin served the store's
-	// content horizon (pragma horizon-served content, horizon §6.2.5). The
+	// horizon at either level (pragma horizon-served, horizon §6.2.5). The
 	// other rounds were served densely and classified locally (§6.3).
-	HorizonServed                 int
+	HorizonServed int
+	// StructuralServed counts the replies that served the structural level.
+	// HorizonFallback reports a structural store that fell back to the
+	// content horizon for good: its origin did not serve the structural
+	// level with a seed in the first reply, or the seed failed its
+	// provenance (§5.1, §5.2.4, §6.3).
+	StructuralServed              int
+	HorizonFallback               bool
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int
@@ -88,6 +99,12 @@ type session struct {
 	ctx            context.Context
 	sparseReceived map[string]bool
 	horizon        bool // the store cone has a horizon: no cluster is asked for
+	structural     structuralClient
+	// reloadPhantoms makes the next phantom load ask for every wanted
+	// phantom, announced or not: a structural store that fell back wants the
+	// manifests below its horizon, which an origin announced while they were
+	// still elided (horizon §6.3).
+	reloadPhantoms bool
 	// The horizon cursor (draft-fossil-horizon-00 §6.2.6), kept per origin
 	// under coneDigest: cursor is the record this session started from,
 	// startPosition this store's position then, and peerCursor the last
@@ -311,6 +328,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}
 	s := newSession(r, opts)
 	s.ctx = ctx
+	if s.structural, err = newStructuralClient(r.DB(), opts.SeedVerifier); err != nil {
+		return &s.result, fmt.Errorf("sync: %w", err)
+	}
 	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
 	}
@@ -411,6 +431,12 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 			return &s.result, fmt.Errorf("sync: sparse receive filtering: %w", err)
 		}
 	}
+	// Horizon §5.2.3: the seed applies to what the closing crosslink linked.
+	fell, err := s.structural.apply(s.repo)
+	if err != nil {
+		return &s.result, fmt.Errorf("sync: horizon seed: %w", err)
+	}
+	s.result.HorizonFallback = s.result.HorizonFallback || fell
 	if err := s.recordCursor(); err != nil {
 		return &s.result, err
 	}

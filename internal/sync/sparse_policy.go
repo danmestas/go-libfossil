@@ -47,6 +47,41 @@ type sparseKeep struct {
 	below    func(libfossil.FslID) bool // nil without a horizon the store can place
 	clusters map[libfossil.FslID]bool   // nil without a horizon
 	walk     *coneWalk
+	// unreached are the manifests and nodes a structural request does not
+	// keep (horizon §5.1, §6.2); nil for any other request.
+	unreached map[libfossil.FslID]bool
+}
+
+// withStructure makes k keep, of the store's manifests and nodes, only those
+// a structural request's held set reaches (horizon §6.2).
+func (k *sparseKeep) withStructure(q db.Querier, s *structuralServe) error {
+	if s == nil {
+		return nil
+	}
+	rows, err := q.Query("SELECT objid, uuid FROM event JOIN blob ON blob.rid=event.objid WHERE type='ci'")
+	if err != nil {
+		return fmt.Errorf("sparse keep: check-ins: %w", err)
+	}
+	k.unreached = map[libfossil.FslID]bool{}
+	for rows.Next() {
+		var rid libfossil.FslID
+		var uuid string
+		if err := rows.Scan(&rid, &uuid); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if !s.reach[uuid] {
+			k.unreached[rid] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("sparse keep: check-ins: %w", err)
+	}
+	for rid, uuid := range k.refs.Nodes() {
+		if !s.reach[uuid] {
+			k.unreached[rid] = true
+		}
+	}
+	return nil
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
@@ -106,9 +141,15 @@ func (h *handler) ensureSparseKeep() error {
 		h.keep = &sparseKeep{walk: w}
 		return nil
 	}
-	var err error
-	h.keep, err = newSparseKeep(ctx, h.repo.DB(), h.cone)
-	return err
+	keep, err := newSparseKeep(ctx, h.repo.DB(), h.cone)
+	if err != nil {
+		return err
+	}
+	if err := keep.withStructure(h.repo.DB(), h.structural); err != nil {
+		return err
+	}
+	h.keep = keep
+	return nil
 }
 
 func (k *sparseKeep) classified() int {
@@ -126,7 +167,7 @@ func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
 	if k == nil || k.walk != nil {
 		return true
 	}
-	return !k.refs.Outside(rid) && (k.below == nil || !k.below(rid)) && !k.clusters[rid]
+	return !k.refs.Outside(rid) && (k.below == nil || !k.below(rid)) && !k.clusters[rid] && !k.unreached[rid]
 }
 
 func (k *sparseKeep) sourceKept(rid int) bool {
@@ -304,6 +345,11 @@ func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
 	if !ok {
 		return false, nil
 	}
+	// A structural store holds no manifest below its horizon, which a
+	// content-horizon clone keeps.
+	if own.Depth() == cone.DepthStructural && want.Depth() != cone.DepthStructural {
+		return false, nil
+	}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -361,5 +407,19 @@ func localConePragmas(q db.Querier) ([]xfer.Card, error) {
 	if err != nil {
 		return nil, err
 	}
-	return conePragmas(c), nil
+	offer := ""
+	if h, ok := horizonOf(c); ok && h.Depth() == cone.DepthStructural {
+		if offer, err = seedOffer(q); err != nil {
+			return nil, err
+		}
+	}
+	return conePragmas(c, offer), nil
+}
+
+// horizonOf is c's horizon, ok false for a dense store or a cone without one.
+func horizonOf(c *cone.Cone) (cone.Horizon, bool) {
+	if c == nil {
+		return cone.Horizon{}, false
+	}
+	return c.Horizon()
 }

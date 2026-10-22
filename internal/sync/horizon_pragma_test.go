@@ -37,9 +37,10 @@ func pragmaLines(t *testing.T, cards []xfer.Card) []string {
 	return lines
 }
 
-// draft-fossil-horizon-00 §6.1: one horizon pragma after the path-cone
-// pragmas, spelled as zit spells it, and never horizon-structural: this
-// client asks for the content horizon whatever depth its store records.
+// draft-fossil-horizon-00 §6.1, §6.2.3: one horizon pragma after the
+// path-cone pragmas, spelled as zit spells it; a structural horizon adds
+// horizon-structural and the offered seed, and the origin reads the depth
+// back.
 func TestHorizonPragmaWire(t *testing.T) {
 	for _, tc := range []struct {
 		depth   cone.HorizonDepth
@@ -47,11 +48,12 @@ func TestHorizonPragmaWire(t *testing.T) {
 		want    []string
 	}{
 		{cone.DepthContent, nil, []string{"pragma horizon " + testHorizonHash + " leaves"}},
-		{cone.DepthStructural, nil, []string{"pragma horizon " + testHorizonHash + " leaves"}},
+		{cone.DepthStructural, nil, []string{"pragma horizon " + testHorizonHash + " leaves",
+			"pragma horizon-structural", "pragma horizon-seed -"}},
 		{cone.DepthContent, []string{"src"}, []string{"pragma cone src", "pragma horizon " + testHorizonHash + " leaves"}},
 	} {
 		c := testHorizonCone(t, tc.depth, tc.include...)
-		cards := conePragmas(c)
+		cards := conePragmas(c, noSeed)
 		if got := pragmaLines(t, cards); strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
 			t.Fatalf("pragmas = %q, want %q", got, tc.want)
 		}
@@ -60,7 +62,7 @@ func TestHorizonPragmaWire(t *testing.T) {
 			t.Fatal(err)
 		}
 		h, ok := round.Horizon()
-		if !ok || h.Hash() != testHorizonHash || h.Rule() != cone.RuleLeaves || h.Depth() != cone.DepthContent {
+		if !ok || h.Hash() != testHorizonHash || h.Rule() != cone.RuleLeaves || h.Depth() != tc.depth {
 			t.Fatalf("request horizon = %v, %v", h, ok)
 		}
 		if strings.Join(round.Include(), ",") != strings.Join(tc.include, ",") {

@@ -261,6 +261,8 @@ type handler struct {
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
 	cursor          int64                     // the request's horizon cursor (horizon §6.2.6); 0 bounds nothing
+	structural      *structuralServe          // a structural request this origin serves (horizon §6.2); nil otherwise
+	seedOffered     string                    // the seed a structural request names as held (horizon §6.2.3)
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	receipt         *db.Receipt               // what this request stores is recorded under
 
@@ -462,6 +464,11 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	if coneErr != nil {
 		h.fail(coneErr.Error())
 		return h.reply(), nil
+	}
+	if h.cone != nil {
+		if err := h.prepareStructural(ctx, req.Cards); err != nil {
+			return nil, err
+		}
 	}
 	if !hasClientVersion(req.Cards) {
 		h.emitCapabilityPragmas()
@@ -992,19 +999,12 @@ func (h *handler) emitCapabilityPragmas() {
 	// Sparse-cone §6.3: this server applies a request's whole cone or
 	// refuses it (requestCone, handleClone), so a cone request's reply is
 	// acknowledged here, and a horizon request's says the level it is served
-	// at (horizon §6.2.5), the content horizon only. A refusal resets the
-	// reply and discards both.
+	// at (horizon §6.2.5). A refusal resets the reply and discards both.
 	if h.cone != nil && len(h.cone.Include()) > 0 {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
 	}
 	if h.horizonScoped() {
-		h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonServedPragma,
-			Values: []string{cone.DepthContent.String()}})
-		// Horizon §6.2.6: the position this reply is served through follows,
-		// as zit places it; the inventory values it, and reply drops it
-		// from a reply that announced nothing.
-		h.servedCursor = &xfer.PragmaCard{Name: horizonCursorPragma}
-		h.resp = append(h.resp, h.servedCursor)
+		h.emitHorizonServed()
 	}
 }
 
@@ -1349,6 +1349,11 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		})
 		return nil
 	}
+	// Horizon §5.1: a structural request keeps no manifest or node below
+	// its horizon, so one asked for is not sent, as zit skips it.
+	if h.structural.withholds(c.UUID, data) {
+		return nil
+	}
 	if isPriv {
 		// BUGGIFY: 5% chance skip the PrivateCard prefix — client should
 		// treat the file as public; next sync round corrects the status.
@@ -1390,7 +1395,10 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if err != nil {
 		return err
 	}
-	if shunned {
+	// Horizon §5.2.3: an origin refuses a seed offered to it. The request's
+	// horizon-seed names the client's seed, so a file bearing that name is
+	// dropped unstored, as a shunned one is.
+	if shunned || h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
 		h.nextIsPrivate = false
 		return nil
 	}

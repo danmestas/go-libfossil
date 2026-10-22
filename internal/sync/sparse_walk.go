@@ -46,7 +46,8 @@ type coneWalk struct {
 	h          *handler
 	cone       *cone.Cone
 	horizon    bool
-	held       map[int]bool // the held set; nil when there is no horizon or the store cannot place C
+	held       map[int]bool    // the held set; nil when there is no horizon or the store cannot place C
+	reach      map[string]bool // a structural request's kept manifests and nodes (§5.1); nil otherwise
 	kinds      map[int]sparseKind
 	decks      map[int]*deck.Deck
 	reached    map[int]bool
@@ -60,8 +61,12 @@ func newConeWalk(ctx context.Context, h *handler) *coneWalk {
 		panic("sync.newConeWalk: nil context, handler or cone")
 	}
 	_, horizon := h.cone.Horizon()
-	return &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, kinds: map[int]sparseKind{},
+	w := &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, kinds: map[int]sparseKind{},
 		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{}}
+	if h.structural != nil {
+		w.reach = h.structural.reach
+	}
+	return w
 }
 
 // placeHorizon computes the held set over the store, bounded as every
@@ -135,13 +140,26 @@ func deckKind(d *deck.Deck) sparseKind {
 	return sparseStructural
 }
 
+// unreached reports a manifest or node a structural request does not keep:
+// one no tree of the held set reaches (horizon §5.1).
+func (w *coneWalk) unreached(kind sparseKind, uuid string) bool {
+	return w.reach != nil && (kind == sparseCheckin || kind == sparseNode) && !w.reach[uuid]
+}
+
 // sourceKept is the §6.2 keep-set test for a served delta's base.
 func (w *coneWalk) sourceKept(rid int) bool {
 	if w.reached[rid] {
 		return true
 	}
 	kind, _ := w.classify(rid)
-	return w.atRow(kind)
+	if !w.atRow(kind) {
+		return false
+	}
+	if w.reach == nil || kind != sparseCheckin && kind != sparseNode {
+		return true
+	}
+	info, ok, err := w.h.loadCloneBlob(rid)
+	return err == nil && ok && !w.unreached(kind, info.uuid)
 }
 
 // servable resolves uuid to a row this clone session sends: held, inside

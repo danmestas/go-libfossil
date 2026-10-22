@@ -36,7 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Moving C earlier and pulling fetches what the deeper horizon keeps. A
   structural horizon is refused for now. Against a stock Fossil origin a
   new check-in announced only inside a cluster is not learned until a later
-  check-in names it, a gap in the draft reported as zit#266.
+  check-in names it; the draft now has the clone request a horizon-ignorant
+  origin's cluster members as transit (zit#266), which lands with the
+  horizon pragmas.
 
 ### Fixed
 
@@ -58,7 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The horizon draft is re-pinned to zit's `horizon-rfc` check-in
-  `bbd1435674`, the revision its author calls ready to implement against.
+  `9bf7ebfe0f`: `bbd1435674`, the revision its author calls ready to
+  implement against, plus the zit#266 correction to §4.5, under which a
+  clone requests the phantoms a horizon-ignorant origin's clusters name.
   Since the last pin it adds the `horizon-cursor` pragma and the origin's
   classification-memoization SHOULDs (§6.1, §6.2, §6.2.6), restates the
   leaves rule over P cards with K closed under descendants (§3.1, §3.4),

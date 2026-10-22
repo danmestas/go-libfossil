@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -28,6 +29,10 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    libfossil.EventKind
 	Parents []string
+	// HorizonParents is the subset of Parents the store's origin labelled
+	// below its structural horizon (draft-fossil-horizon-00 §5.4): the
+	// horizon, not a missing parent.
+	HorizonParents []string
 }
 
 // maxAncestryDepth bounds the first-parent walk in Log so that a cyclic or
@@ -46,6 +51,10 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		return nil, fmt.Errorf("manifest.Log: invalid start rid %d", opts.Start)
 	}
 	var entries []LogEntry
+	labels, err := content.BelowLabels(r.DB())
+	if err != nil {
+		return nil, fmt.Errorf("manifest.Log: %w", err)
+	}
 	current := opts.Start
 	for depth := 0; ; depth++ {
 		if depth >= maxAncestryDepth {
@@ -63,7 +72,7 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		var uuid string
 		var user, comment sql.NullString
 		var mtimeScanned any
-		err := r.DB().QueryRow(
+		err = r.DB().QueryRow(
 			"SELECT b.uuid, e.user, e.comment, e.mtime FROM blob b JOIN event e ON e.objid=b.rid WHERE b.rid=?",
 			current,
 		).Scan(&uuid, &user, &comment, &mtimeScanned)
@@ -76,20 +85,39 @@ func Log(r *repo.Repo, opts LogOpts) ([]LogEntry, error) {
 		if !ok {
 			return nil, fmt.Errorf("manifest.Log: rid=%d: unexpected mtime type %T", current, mtimeScanned)
 		}
+		parents := parentUUIDs(r, current)
 		entries = append(entries, LogEntry{
 			RID: current, UUID: uuid, Comment: comment.String,
 			User: user.String, Time: libfossil.JulianToTime(mtime),
-			Kind: libfossil.EventKindCheckin, Parents: parentUUIDs(r, current),
+			Kind: libfossil.EventKindCheckin, Parents: parents,
+			HorizonParents: horizonParents(labels, parents),
 		})
 		var parentRid int64
+		var parentUUID string
 		if err := r.DB().QueryRow(
-			"SELECT pid FROM plink WHERE cid=? AND isprim=1", current,
-		).Scan(&parentRid); err != nil {
+			"SELECT p.pid, b.uuid FROM plink p JOIN blob b ON b.rid=p.pid WHERE p.cid=? AND p.isprim=1", current,
+		).Scan(&parentRid, &parentUUID); err != nil {
+			break
+		}
+		if labels[parentUUID] {
+			// The horizon ends the walk; it is not a missing parent.
 			break
 		}
 		current = libfossil.FslID(parentRid)
 	}
 	return entries, nil
+}
+
+// horizonParents is the members of parents that labels names as below the
+// horizon.
+func horizonParents(labels map[string]bool, parents []string) []string {
+	var out []string
+	for _, p := range parents {
+		if labels[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // parentUUIDs returns the UUIDs of cid's parents (primary parent first),

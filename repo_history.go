@@ -66,6 +66,11 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    EventKind
 	Parents []string
+	// HorizonParents is the subset of Parents that the store's origin
+	// labelled below its structural horizon: each is the horizon, not a
+	// missing parent and not damage (draft-fossil-horizon-00 §5.4). Ancestry
+	// ends at such a parent without an error.
+	HorizonParents []string
 }
 
 // TimelineEntry represents a single event as returned by Timeline. It

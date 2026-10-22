@@ -400,7 +400,7 @@ func (rv resolver) resolve(name string) (int64, error) {
 		return ridLiteral(h, rest, rv.ciOnly)
 	}
 	if rest, ok := strings.CutPrefix(name, "tag:"); ok {
-		return newestWithSymTag(h, rest, rv.ciOnly)
+		return rv.symTag(rest)
 	}
 	if rest, ok := strings.CutPrefix(name, "root:"); ok {
 		return rv.startOfBranchBy(rest, branchOrigin)
@@ -419,7 +419,7 @@ func (rv resolver) resolve(name string) (int64, error) {
 	if rid, matched, err := hashPrefix(h, name, rv.ciOnly); err != nil || matched {
 		return rid, err
 	}
-	if rid, err := newestWithSymTag(h, name, rv.ciOnly); err != nil || rid != 0 {
+	if rid, err := rv.symTag(name); err != nil || rid != 0 {
 		return rid, err
 	}
 	if trimmed, ok := trimTrailingPunct(name); ok {

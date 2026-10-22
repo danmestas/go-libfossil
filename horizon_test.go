@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
 const horizonTestHash = "0123456789abcdef0123456789abcdef01234567"
@@ -421,5 +423,155 @@ func TestCloneIntoStructuralStore(t *testing.T) {
 	}
 	if sres.StructuralServed == 0 || sres.HorizonFallback {
 		t.Fatalf("pull: StructuralServed = %d, HorizonFallback = %v", sres.StructuralServed, sres.HorizonFallback)
+	}
+}
+
+// DeepenHorizon moves a store's horizon to the check-in named and fetches
+// what the deeper horizon keeps, keeping the depth (draft-fossil-horizon-00
+// §5.8). It needs a peer and a horizon to deepen.
+func TestDeepenHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if _, err := target.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{}); err == nil {
+		t.Fatal("deepening without a peer succeeded")
+	}
+	res, err := target.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{Peer: f.peer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StructuralServed == 0 || res.HorizonFallback {
+		t.Fatalf("deepen: StructuralServed = %d, HorizonFallback = %v", res.StructuralServed, res.HorizonFallback)
+	}
+	got, err := target.StoreCone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := got.Horizon(); !ok || h.Checkin != f.c1 || !h.Structural {
+		t.Fatalf("store cone horizon = %+v, %v; want %s structural", h, ok, f.c1)
+	}
+	if _, held, err := content.CheckAvailableByUUID(target.inner.DB(), f.c1); err != nil || !held {
+		t.Fatalf("the deepened-to manifest is not held (%v)", err)
+	}
+	if !holdsBlob(t, target, "old a\n") {
+		t.Fatal("the deepen fetched no blob the deeper horizon keeps")
+	}
+	dense, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "d.fossil"), f.peer, CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dense.Close()
+	if _, err := dense.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{Peer: f.peer}); err == nil {
+		t.Fatal("deepening a store with no horizon succeeded")
+	}
+}
+
+// A branch merge whose base lies below the store's structural horizon is
+// refused naming the horizon, before any commit (draft-fossil-horizon-00
+// §5.5): f, feat's first check-in, forks below the horizon at c2; feat's tip
+// merges c2 in and trunk's tip merges f, so the base of the two tips is f.
+func TestBranchMergeRefusesBaseBelowHorizon(t *testing.T) {
+	source, err := Create(filepath.Join(t.TempDir(), "source.fossil"), CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if err := source.SetHashPolicy("sha1"); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(a string, parents ...int64) (int64, string) {
+		rid, uuid, err := source.Commit(CommitOpts{User: "test", ParentID: parents[0], MergeParents: parents[1:],
+			Files: []FileToCommit{{Name: "a", Content: []byte(a)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rid, uuid
+	}
+	r1, _ := commit("one\n", 0)
+	rf, _ := commit("one\nfork\n", r1)
+	for _, tc := range []struct {
+		name string
+		typ  int
+	}{{"branch", tag.TagPropagating}, {"sym-feat", tag.TagPropagating}, {"sym-trunk", tag.TagCancel}} {
+		value := ""
+		if tc.name == "branch" {
+			value = "feat"
+		}
+		if _, err := tag.AddTag(source.inner, tag.TagOpts{TargetRID: fsltype.FslID(rf), TagName: tc.name,
+			TagType: tc.typ, Value: value, User: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r2, c2 := commit("zero\none\n", r1)
+	ra, _ := commit("zero\none\nA\n", r2)
+	commit("zero\none\nfork\n", rf, r2)
+	commit("zero\none\nA\nfork\n", ra, rf)
+	peer := TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
+		return source.HandleSync(ctx, payload)
+	})
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "s.fossil"), peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil || res.HorizonFallback {
+		t.Fatalf("structural clone: %v %+v", err, res)
+	}
+	defer clone.Close()
+	_, _, err = clone.Merge("feat", "trunk", "merge feat", "test")
+	if !errors.Is(err, ErrBelowHorizon) || !strings.Contains(err.Error(), "below the structural horizon at "+c2) {
+		t.Fatalf("branch merge across the horizon: %v, want ErrBelowHorizon naming %s", err, c2)
+	}
+}
+
+// A symbolic name on a check-in below a structural horizon resolves to that
+// check-in through the repository and a checkout alike, because the tag's
+// control artifact is held (draft-fossil-horizon-00 §5.5).
+func TestResolveNameBelowHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	r1, err := f.source.ResolveVersion(f.c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.source.Tag(TagOpts{Name: "old", TargetID: r1, User: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "s.fossil"), f.peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	co, err := clone.CreateCheckout(t.TempDir(), CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	for name, resolve := range map[string]func(string) (int64, error){
+		"repo": clone.ResolveVersion, "checkout": co.ResolveVersion,
+	} {
+		rid, err := resolve("old")
+		if err != nil {
+			t.Fatalf("%s: old does not resolve: %v", name, err)
+		}
+		if uuid, err := clone.UUIDFromRID(rid); err != nil || uuid != f.c1 {
+			t.Fatalf("%s: old resolves to %s (%v), want %s", name, uuid, err, f.c1)
+		}
+	}
+	if _, err := clone.ResolveVersion("missing"); !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("an unknown name: %v, want ErrVersionNotFound", err)
 	}
 }

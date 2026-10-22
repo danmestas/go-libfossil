@@ -4,6 +4,7 @@
 package bisect
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/path"
 )
@@ -85,6 +87,9 @@ func (s *Session) Next() (libfossil.FslID, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := s.belowHorizon(good); err != nil {
+		return 0, err
+	}
 
 	skip := s.parseSkipSet()
 
@@ -120,6 +125,22 @@ func (s *Session) Next() (libfossil.FslID, error) {
 	}
 
 	return p[mid].RID, nil
+}
+
+// belowHorizon refuses a good end below the store's structural horizon
+// (draft-fossil-horizon-00 §5.5): the bisection's path runs through history
+// the store does not hold, so it deepens to the good end before it begins.
+func (s *Session) belowHorizon(good libfossil.FslID) error {
+	h, below, err := content.BelowHorizon(context.Background(), s.db, good)
+	if err != nil || !below {
+		return err
+	}
+	var uuid string
+	if err := s.db.QueryRow("SELECT uuid FROM blob WHERE rid=?", good).Scan(&uuid); err != nil {
+		return fmt.Errorf("bisect: good end: %w", err)
+	}
+	return fmt.Errorf("bisect: the good end %s is below the structural horizon at %s: %w is not held here; "+
+		"deepen the horizon to it (repo cone deepen %s) before bisecting", uuid, h.Hash(), content.ErrBelowHorizon, uuid)
 }
 
 // Status returns information about the current bisect session.

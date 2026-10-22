@@ -177,9 +177,17 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 		return 0, "", fmt.Errorf("libfossil: merge: branches %q and %q point to same checkin (rid=%d)", srcBranch, dstBranch, srcTip)
 	}
 
-	ancestor, err := r.FindCommonAncestor(srcTip, dstTip)
-	if err != nil {
+	ancestor, err := merge.FindCommonAncestor(r.inner, fsltype.FslID(srcTip), fsltype.FslID(dstTip))
+	if err != nil && !errors.Is(err, merge.ErrNoCommonAncestor) {
 		return 0, "", fmt.Errorf("libfossil: merge: %w", err)
+	}
+	// draft-fossil-horizon-00 §5.5: never merge against a base the store
+	// does not hold, and name the horizon when that is why.
+	if cerr := content.MergeBaseCrossing(r.inner.DB(), fsltype.FslID(dstTip), fsltype.FslID(srcTip), ancestor); cerr != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w", cerr)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: find common ancestor: %w", err)
 	}
 
 	srcFiles, err := loadFileset(r, srcTip)
@@ -190,7 +198,7 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: dst fileset: %w", err)
 	}
-	baseFiles, err := loadFileset(r, ancestor)
+	baseFiles, err := loadFileset(r, int64(ancestor))
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: ancestor fileset: %w", err)
 	}

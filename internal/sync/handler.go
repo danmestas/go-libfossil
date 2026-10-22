@@ -264,6 +264,8 @@ type handler struct {
 	structural      *structuralServe          // a structural request this origin serves (horizon §6.2); nil otherwise
 	seedOffered     string                    // the seed a structural request names as held (horizon §6.2.3)
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
+	mergeBaseQuery  [2]string                 // the request's horizon-mergebase query (horizon §6.2.4); zero when none
+	received        []string                  // the artifacts this request stored, in card order
 	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
@@ -506,10 +508,23 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
-	if err := h.emitInventory(); err != nil {
+	if err := h.emitInventory(ctx); err != nil {
 		return err
 	}
-	return h.crosslinkReceived(ctx)
+	if err := h.crosslinkReceived(ctx); err != nil {
+		return err
+	}
+	// Horizon §5.7: a push whose cancellation contradicts this origin's
+	// derivation is refused whole, so it stores nothing.
+	refusal, err := h.staleCancel()
+	if err != nil {
+		return err
+	}
+	if refusal != "" {
+		h.fail(refusal)
+		return errPassAborted
+	}
+	return nil
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -716,7 +731,7 @@ func countedErrors(cards []xfer.Card) int {
 // emitInventory sends what follows the card loop: the phantom gimmes of a
 // push and the igot inventory of a pull. A clone's batch and the cluster
 // igots of req-clusters go out in place instead, at their cards.
-func (h *handler) emitInventory() error {
+func (h *handler) emitInventory(ctx context.Context) error {
 	// An accepted push asks for the server's phantoms, ahead of the pull's
 	// inventory as page_xfer's request_phantoms runs ahead of
 	// send_unclustered (§6.4, §8.5).
@@ -725,8 +740,12 @@ func (h *handler) emitInventory() error {
 			return err
 		}
 	}
-	// If pull was requested, emit igot for all non-phantom blobs.
+	// If pull was requested, emit igot for all non-phantom blobs. Horizon
+	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it.
 	if h.pullOK {
+		if err := h.answerMergeBase(ctx); err != nil {
+			return err
+		}
 		if err := h.emitIGots(); err != nil {
 			return err
 		}
@@ -976,6 +995,10 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 	case c.Name == horizonCursorPragma:
 		if n, ok := parseCursor(c); ok {
 			h.cursor = n
+		}
+	case c.Name == horizonMergeBasePragma:
+		if q, ok := mergeBaseQuery(c); ok {
+			h.mergeBaseQuery = q
 		}
 	case c.Name == "send-private":
 		if auth.CanSyncPrivate(h.caps) {
@@ -1429,6 +1452,7 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		return nil
 	}
 	h.filesRecvd++
+	h.received = append(h.received, uuid)
 	return nil
 }
 

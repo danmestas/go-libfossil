@@ -103,6 +103,11 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 	if s.cursor.peer > 0 {
 		cards = append(cards, cursorCard(s.cursor.peer))
 	}
+	// Horizon §6.2.4: asked once, after the cursor, as zit asks it; the
+	// answer rides the first reply.
+	if s.opts.Pull && cycle == 0 && s.opts.MergeBaseOf != [2]string{} {
+		cards = append(cards, &xfer.PragmaCard{Name: horizonMergeBasePragma, Values: s.opts.MergeBaseOf[:]})
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -995,6 +1000,10 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 	case c.Name == horizonCursorPragma:
 		if n, ok := parseCursor(c); ok {
 			s.peerCursor = n
+		}
+	case c.Name == horizonMergeBasePragma:
+		if base, ok := mergeBaseAnswer(c, s.opts.MergeBaseOf); ok && s.opts.MergeBaseOf != [2]string{} {
+			s.result.MergeBaseAnswered, s.result.MergeBase = true, base
 		}
 	case c.Name == sendSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched

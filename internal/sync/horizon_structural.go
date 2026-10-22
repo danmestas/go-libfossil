@@ -48,7 +48,11 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 		return nil
 	}
 	q := h.repo.DB()
-	k, reach, placed, err := content.HorizonReach(ctx, q, hz)
+	cl, err := h.classifier(ctx, q, false)
+	if err != nil {
+		return err
+	}
+	k, reach, placed, err := cl.reach(ctx, q, hz)
 	if err != nil {
 		return err
 	}

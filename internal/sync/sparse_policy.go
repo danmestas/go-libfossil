@@ -50,6 +50,8 @@ type sparseKeep struct {
 	// unreached are the manifests and nodes a structural request does not
 	// keep (horizon §5.1, §6.2); nil for any other request.
 	unreached map[libfossil.FslID]bool
+	// read is how many artifacts the classification read from the store.
+	read int
 }
 
 // withStructure makes k keep, of the store's manifests and nodes, only those
@@ -85,18 +87,23 @@ func (k *sparseKeep) withStructure(q db.Querier, s *structuralServe) error {
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
+	return newSparseKeepWith(ctx, q, c, freshClassifier{})
+}
+
+// newSparseKeepWith is the keep set of c as cl classifies the store.
+func newSparseKeepWith(ctx context.Context, q db.Querier, c *cone.Cone, cl classifier) (*sparseKeep, error) {
 	if c == nil {
 		return nil, nil
 	}
-	refs, err := content.LoadConeReferences(ctx, q, c)
+	refs, err := cl.references(ctx, q, c)
 	if err != nil {
 		return nil, err
 	}
-	k := &sparseKeep{refs: refs}
+	k := &sparseKeep{refs: refs, read: cl.read(refs)}
 	if _, ok := c.Horizon(); !ok {
 		return k, nil
 	}
-	if k.below, err = refs.HorizonBelow(ctx, q, c); err != nil {
+	if k.below, err = cl.below(ctx, q, refs, c); err != nil {
 		return nil, err
 	}
 	if k.clusters, err = clusterRIDs(ctx, q); err != nil {
@@ -141,7 +148,11 @@ func (h *handler) ensureSparseKeep() error {
 		h.keep = &sparseKeep{walk: w}
 		return nil
 	}
-	keep, err := newSparseKeep(ctx, h.repo.DB(), h.cone)
+	cl, err := h.classifier(ctx, h.repo.DB(), true)
+	if err != nil {
+		return err
+	}
+	keep, err := newSparseKeepWith(ctx, h.repo.DB(), h.cone, cl)
 	if err != nil {
 		return err
 	}
@@ -159,7 +170,7 @@ func (k *sparseKeep) classified() int {
 	case k.walk != nil:
 		return k.walk.classified
 	}
-	return k.refs.Artifacts()
+	return k.read
 }
 
 // keeps filters a pull's inventory; a clone's walk never asks.

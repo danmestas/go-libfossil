@@ -171,7 +171,8 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx,
+		memo: originMemo(r.DB())}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -188,6 +189,9 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	resp, err := h.process(ctx, req)
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
+	}
+	if err == nil {
+		h.publishView()
 	}
 
 	obs.HandleCompleted(ctx, HandleEnd{
@@ -267,6 +271,8 @@ type handler struct {
 	mergeBaseQuery  [2]string                 // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
 	receipt         *db.Receipt               // what this request stores is recorded under
+	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
+	view            *content.MemoView         // what the inventory classified over, published once the request commits
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)

@@ -79,6 +79,7 @@ type SyncResult struct {
 type session struct {
 	ctx               context.Context
 	sparseReceived    map[string]bool
+	horizon           bool // the store cone has a horizon: no cluster is asked for
 	repo              *repo.Repo
 	env               *simio.Env
 	opts              SyncOpts
@@ -224,6 +225,7 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 	s.smGate = gate
 	if c, err := content.StoreCone(r.DB()); err == nil && c != nil {
 		s.sparseReceived = map[string]bool{}
+		_, s.horizon = c.Horizon()
 	}
 
 	return s

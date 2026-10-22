@@ -179,8 +179,9 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, clusterCards...)
 	}
 
-	// Request cluster catalog on round 2 when pulling.
-	if cycle == 1 && s.opts.Pull {
+	// Request cluster catalog on round 2 when pulling. A horizon store acts
+	// on no cluster (draft-fossil-horizon-00 §4.5), so it asks for none.
+	if cycle == 1 && s.opts.Pull && !s.horizon {
 		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
 	}
 

@@ -383,3 +383,114 @@ func TestSetStoreConeRefusesStructuralHorizon(t *testing.T) {
 		t.Fatalf("after the refusal the store cone is %v, %v; want dense", got, err)
 	}
 }
+
+// The predicate a sync applies to what it received is the classification's:
+// it places exactly the blobs LoadAbsences elides below the horizon, and it
+// is nil for a cone without one, which elides nothing by age.
+func TestHorizonBelowMatchesClassification(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		t.Run(string(mode), func(t *testing.T) {
+			f := newHZFixture(t, mode)
+			c := f.c2
+			if mode == hzDelta {
+				c = f.c3
+			}
+			f.setHorizon(t, f.uuidOf(t, c), cone.RuleDescendants)
+			sc, err := content.StoreCone(f.r.DB())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			refs, err := content.LoadConeReferences(ctx, f.r.DB(), sc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			below, err := refs.HorizonBelow(ctx, f.r.DB(), sc)
+			if err != nil || below == nil {
+				t.Fatalf("HorizonBelow = %v, %v", below != nil, err)
+			}
+			for key, rid := range f.blob {
+				want := key == "old1" || key == "gone"
+				if got := below(rid); got != want {
+					t.Errorf("%s below = %v, want %v", key, got, want)
+				}
+			}
+			for _, rid := range []libfossil.FslID{f.c1, f.c2, f.c3} {
+				if below(rid) {
+					t.Errorf("check-in rid=%d placed below the horizon", rid)
+				}
+			}
+			paths, err := cone.New([]string{"src"}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if none, err := refs.HorizonBelow(ctx, f.r.DB(), paths); err != nil || none != nil {
+				t.Fatalf("a path cone's HorizonBelow = %v, %v; want nil", none != nil, err)
+			}
+		})
+	}
+}
+
+// A cluster a horizon store was sent is not held: its phantom, which the
+// cluster tag marks, is elided under a horizon and transit without one,
+// and a held delta's base stays transit whatever it is.
+func TestHorizonElidesClusterPhantom(t *testing.T) {
+	f := newHZFixture(t, hzFull)
+	d := &deck.Deck{Type: deck.Cluster, M: []string{f.uuid["old1"]}}
+	data, err := d.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cluster := hzPhantomCluster(t, f.r, data)
+	classOf := func() content.Absence {
+		t.Helper()
+		a, err := content.LoadAbsences(f.r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Class(cluster)
+	}
+	if got := classOf(); got != content.Transit {
+		t.Fatalf("dense store: cluster phantom %v, want transit", got)
+	}
+	paths, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SetStoreCone(f.r.DB(), paths); err != nil {
+		t.Fatal(err)
+	}
+	if got := classOf(); got != content.Transit {
+		t.Fatalf("path cone: cluster phantom %v, want transit", got)
+	}
+	f.setHorizon(t, strings.Repeat("ab", 20), cone.RuleDescendants)
+	if got := classOf(); got != content.Elided {
+		t.Fatalf("horizon: cluster phantom %v, want elided", got)
+	}
+	target := append(data, "derived\n"...)
+	dd, err := delta.Create(data, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blob.StoreDeltaRaw(f.r.DB(), hash.SHA1(target), dd, cluster, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := classOf(); got != content.Transit {
+		t.Fatalf("horizon: a held delta's cluster base %v, want transit", got)
+	}
+}
+
+// hzPhantomCluster records data as a cluster this store was sent and did
+// not keep: a phantom carrying the cluster tag.
+func hzPhantomCluster(t *testing.T, r *repo.Repo, data []byte) libfossil.FslID {
+	t.Helper()
+	rid, err := blob.StorePhantom(r.DB(), hash.SHA1(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.DB().Exec(`INSERT INTO tagxref(tagid, tagtype, srcid, origid, value, mtime, rid)
+		VALUES(7, 1, ?, ?, NULL, 0, ?)`, rid, rid, rid); err != nil {
+		t.Fatal(err)
+	}
+	return rid
+}

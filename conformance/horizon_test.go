@@ -23,11 +23,12 @@ import (
 // version byte that makes a reader predating it refuse the cone rather than
 // read it as path members; the §3.1 held set, computed by
 // internal/horizon; and the content horizon over a store
-// (horizon_content_test.go).
+// (horizon_content_test.go) and its synchronization against a
+// horizon-ignorant peer (horizon_sync_test.go).
 
 func horizonSuiteCases() []Case {
 	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules,
-		horizonHeldSetRecomputed, horizonHeldSetClosed}, horizonContentCases()...)
+		horizonHeldSetRecomputed, horizonHeldSetClosed}, append(horizonContentCases(), horizonSyncCases()...)...)
 }
 
 var (

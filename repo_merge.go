@@ -156,6 +156,11 @@ func (r *Repo) BranchOpenLeaf(name string) (rid int64, open bool, err error) {
 //   - Present on only one side (new file): kept as-is.
 //   - In ancestor, missing on one side, unchanged on the other: agreed deletion.
 //   - In ancestor, missing on one side, modified on the other: modify/delete conflict.
+//
+// Files are matched across the three versions following renames, as fossil's
+// merge matches them: a file srcBranch renamed and dstBranch did not takes
+// srcBranch's name, and the commit records the rename; a file dstBranch
+// renamed keeps its name.
 func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string, error) {
 	if srcBranch == "" || dstBranch == "" {
 		return 0, "", fmt.Errorf("libfossil: merge: src and dst branches are required")
@@ -209,26 +214,47 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 		return 0, "", fmt.Errorf("libfossil: merge: ancestor fileset: %w", err)
 	}
 
-	allNames := make(map[string]struct{}, len(srcFiles)+len(dstFiles))
-	for n := range srcFiles {
-		allNames[n] = struct{}{}
+	// Files are matched across the versions following renames, as fossil's
+	// merge matches them; dst is the checkout's version.
+	dstNames := make([]merge.LocalFile, 0, len(dstFiles))
+	for _, n := range sortedFileNames(dstFiles) {
+		dstNames = append(dstNames, merge.LocalFile{Name: n})
 	}
-	for n := range dstFiles {
-		allNames[n] = struct{}{}
+	matches, err := merge.FollowRenames(context.Background(), r.inner, merge.RenameQuery{
+		V: fsltype.FslID(dstTip), P: ancestor, M: fsltype.FslID(srcTip), Local: dstNames,
+		Pivot: sortedFileNames(baseFiles), Merged: sortedFileNames(srcFiles),
+	})
+	if err != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w", err)
 	}
 
 	strat := &merge.ThreeWayText{}
 	var conflictFiles []string
 	var merged []FileToCommit
 
-	for name := range allNames {
-		local, localOK := dstFiles[name]
-		remote, remoteOK := srcFiles[name]
-		base, baseOK := baseFiles[name]
+	for _, m := range matches {
+		var name string
+		var local mergeFileEntry
+		localOK := m.Local >= 0
+		if localOK {
+			name = dstNames[m.Local].Name
+			local = dstFiles[name]
+		}
+		remote, remoteOK := srcFiles[m.Merged]
+		base, baseOK := baseFiles[m.Pivot]
+		if !localOK {
+			name = m.Merged
+		}
+		// Renamed on src only: the result takes src's name (fnp=fn,
+		// fnm!=fnp in merge_cmd), and the commit records the rename.
+		oldName := ""
+		if localOK && remoteOK && baseOK && m.Pivot == name && m.Merged != name {
+			name, oldName = m.Merged, name
+		}
 
 		switch {
 		case !localOK && !remoteOK:
-			// Shouldn't happen (not in union).
+			// In the base alone: deleted on both sides.
 			continue
 
 		case localOK && !remoteOK:
@@ -273,7 +299,7 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 			if perm == "" {
 				perm = remote.perm
 			}
-			merged = append(merged, FileToCommit{Name: name, Content: res.Content, Perm: perm})
+			merged = append(merged, FileToCommit{Name: name, Content: res.Content, Perm: perm, OldName: oldName})
 		}
 	}
 
@@ -284,13 +310,26 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Name < merged[j].Name })
 
+	// merged is the whole tree: a file dst has and the merge drops stays
+	// dropped.
 	return r.Commit(CommitOpts{
-		Files:        merged,
-		Comment:      message,
-		User:         user,
-		ParentID:     dstTip,
-		MergeParents: []int64{srcTip},
+		Files:           merged,
+		Comment:         message,
+		User:            user,
+		ParentID:        dstTip,
+		MergeParents:    []int64{srcTip},
+		PartialManifest: true,
 	})
+}
+
+// sortedFileNames is a fileset's names, sorted.
+func sortedFileNames(files map[string]mergeFileEntry) []string {
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // mergeFileEntry caches the expanded bytes and perm of one file in a fileset.

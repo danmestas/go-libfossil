@@ -152,6 +152,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sweep's cache, and each manifest was parsed three times, as child, as
   parent and as a baseline; both are now done once. Every derived table is
   identical before and after.
+- A sparse or horizon store of a real-sized repository rebuilds. A
+  check-in deferred during the sweep loaded the store's references while
+  mlink was half refilled and the non-artifact record not yet written, so
+  nothing could be answered from the tables and every blob was read raw:
+  a path-cone store of fossil-scm.org's repository failed with "byte
+  budget exceeded". Deferred check-ins are now linked after the sweep; the
+  same store rebuilds in under a minute with every absent artifact
+  classified as before.
 - `Repo.Merge` no longer brings back files the merge deleted: it carried
   the target's file list forward and restored them. It now commits the
   merged tree, recording renames through the new `FileToCommit.OldName`.

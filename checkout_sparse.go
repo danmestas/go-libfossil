@@ -62,7 +62,11 @@ const (
 	// the zero value.
 	HorizonDescendants HorizonRule = iota
 	// HorizonLeaves holds the descendants plus every open leaf's ancestry back
-	// to its nearest common ancestor with the check-in.
+	// to its nearest common ancestor with the check-in. Choose it knowingly
+	// (§3.1): it is what lets a client merge across live branches offline, and
+	// it holds every descendant of where each childless check-in's history
+	// meets the check-in's. On a repository with old unmerged branches that is
+	// nearly the whole history: 20,907 of 21,008 check-ins of fossil-scm.org's.
 	HorizonLeaves
 )
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	libfossil "github.com/danmestas/go-libfossil"
 )
@@ -75,7 +76,7 @@ type RepoConeStoreCmd struct {
 	Not        []string `help:"Exclusion members (repeatable)"`
 	Dense      bool     `help:"Drop the store cone, fetching everything it elided"`
 	Horizon    string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps"`
-	Leaves     bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in"`
+	Leaves     bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
 	Structural bool     `help:"With --horizon, also elide the manifests below the check-in; the next pull fetches the origin's seed"`
 	NoHorizon  bool     `help:"Drop the horizon, keeping the path members, and fetch what it elided"`
 }
@@ -92,6 +93,9 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 		return fmt.Errorf("--leaves needs --horizon")
 	case c.Structural && c.Horizon == "":
 		return fmt.Errorf("--structural needs --horizon")
+	}
+	if c.Leaves {
+		warnLeavesCost()
 	}
 	r, err := g.OpenRepo()
 	if err != nil {
@@ -221,6 +225,15 @@ func structuralSuffix(h libfossil.Horizon) string {
 		return " structural"
 	}
 	return ""
+}
+
+// warnLeavesCost states the cost of the leaves rule on stderr (draft-fossil-
+// horizon-00 §3.1): it holds every descendant of where each childless
+// check-in's history meets C's, so a client picks it knowingly.
+func warnLeavesCost() {
+	fmt.Fprintln(os.Stderr, "warning: --leaves holds every descendant of where each childless check-in's "+
+		"history meets the horizon's; on a repository with old unmerged branches that is nearly the whole "+
+		"history (20,907 of 21,008 check-ins of fossil-scm.org's repository)")
 }
 
 func horizonRule(leaves bool) libfossil.HorizonRule {

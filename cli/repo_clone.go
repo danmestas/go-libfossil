@@ -19,7 +19,7 @@ type RepoCloneCmd struct {
 	Invite     string        `help:"Invite token (from fossil invite)"`
 	Timeout    time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
 	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash"`
-	Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in"`
+	Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
 	Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
 	Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
 	ConeNot    []string      `name:"cone-not" help:"Carve this path out of a --cone (repeatable)"`
@@ -62,6 +62,10 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	storeCone, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Leaves, c.Structural)
 	if err != nil {
 		return err
+	}
+
+	if c.Leaves {
+		warnLeavesCost()
 	}
 
 	ctx, cancel := cloneContext(context.Background(), c.Timeout)

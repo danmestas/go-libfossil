@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -171,5 +172,64 @@ func TestRepoConeStoreHorizonFlagErrors(t *testing.T) {
 	}
 	if got, want := storeConeOutput(t, path), "horizon "+c2+" descendants\n"; got != want {
 		t.Fatalf("store cone = %q, want %q", got, want)
+	}
+}
+
+// captureStderr runs run with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, run func() error) string {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	previous := os.Stderr
+	os.Stderr = file
+	defer func() { os.Stderr = previous }()
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
+
+// §3.1: the leaves rule is chosen knowingly, so --leaves states its cost once
+// on stderr, and the descendants rule says nothing.
+func TestHorizonLeavesWarning(t *testing.T) {
+	url, _, c2, _ := horizonSource(t)
+	clone := func(leaves bool) string {
+		path := filepath.Join(t.TempDir(), "h.fossil")
+		return captureStderr(t, func() error {
+			captured := requiredHTTPStdout(t, func() error {
+				return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2, Leaves: leaves}).Run(&Globals{})
+			})
+			_ = captured
+			return nil
+		})
+	}
+	got := clone(true)
+	if strings.Count(got, "warning:") != 1 || !strings.Contains(got, "--leaves") ||
+		!strings.Contains(got, "nearly the whole history") {
+		t.Fatalf("clone --leaves stderr = %q", got)
+	}
+	if got := clone(false); got != "" {
+		t.Fatalf("clone without --leaves wrote %q to stderr", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2}).Run(&Globals{})
+	})
+	got = captureStderr(t, func() error {
+		requiredHTTPStdout(t, func() error {
+			return (&RepoConeStoreCmd{Horizon: c2, Leaves: true}).Run(&Globals{Repo: path})
+		})
+		return nil
+	})
+	if strings.Count(got, "warning:") != 1 || !strings.Contains(got, "nearly the whole history") {
+		t.Fatalf("cone store --leaves stderr = %q", got)
 	}
 }

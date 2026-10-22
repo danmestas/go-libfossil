@@ -9,12 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Content horizons in the public API and CLI. A horizon is part of a
+  store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
+  builds one, with or without path members, and `Cone.Horizon` and
+  `Cone.WithHorizon` read and change it. `Repo.SetStoreCone` and
+  `Repo.SetStoreConeContext` set, deepen or drop it, deepening fetching
+  what the older horizon keeps, and the new `CloneOpts.StoreCone` clones
+  straight into a cone or horizon store. A checkout cone refuses a horizon
+  with `ErrHorizonCheckout`, since a horizon governs what the repository
+  holds, not which paths a checkout writes. `libfossil repo clone` takes
+  `--horizon <full hash>`, `--leaves`, `--cone` and `--cone-not`, and
+  `libfossil repo cone store` takes `--horizon`, `--leaves` and
+  `--no-horizon` and shows the horizon. The structural horizon is not
+  exposed.
 - A cone can carry a horizon (draft-fossil-horizon-00 §3): a check-in
   named by its full hash, the held-set rule (`descendants` or `leaves`) and
   the depth of the cut (`content` or `structural`), with or without path
   members. A cone with a horizon serializes as version 3, byte for byte as
   zit writes it, so its digest matches zit's; an implementation that
-  predates horizons refuses it. Internal only for now.
+  predates horizons refuses it.
 - The held set of a horizon (draft-fossil-horizon-00 §3.1): the check-ins
   whose content a horizon keeps, computed from the check-in graph the
   repository holds and stored nowhere. Under `descendants` it is C and
@@ -24,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P cards alone, open or closed: a branch tip merged elsewhere has a child
   and adds nothing, unlike fossil's same-branch leaf. Both rules give a set
   closed under descendants. The walk is bounded and fails with an error
-  rather than run unbounded. Internal only for now.
+  rather than run unbounded.
 - A store cone can carry a content horizon (draft-fossil-horizon-00 §4,
   §6.3). A blob is elided when no check-in in the held set names it
   anywhere in its tree, and with path members too a blob is kept only in

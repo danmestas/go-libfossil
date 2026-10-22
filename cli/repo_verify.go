@@ -27,8 +27,14 @@ func (c *RepoVerifyCmd) Run(g *Globals) error {
 	for _, issue := range report.Issues {
 		fmt.Printf("ERROR %s %s\n", issue.UUID, issue.Message)
 	}
-	fmt.Printf("%d artifacts checked, %d transit phantoms, %d elided\n",
+	fmt.Printf("%d artifacts checked, %d transit phantoms, %d elided",
 		report.BlobsChecked, report.Phantoms, report.Elided)
+	// Horizon §5.4: the manifests below a structural horizon are elided,
+	// reported apart from damage, and named as the horizon.
+	if report.BelowHorizon > 0 {
+		fmt.Printf(", %d check-in(s) below the horizon", report.BelowHorizon)
+	}
+	fmt.Println()
 	if !report.OK() {
 		return fmt.Errorf("verification failed: %d issues", len(report.Issues))
 	}

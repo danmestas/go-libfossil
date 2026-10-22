@@ -1,11 +1,14 @@
 package content
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 )
 
@@ -67,6 +70,37 @@ func LabelBelow(q db.Querier, names []string) error {
 		}
 	}
 	return nil
+}
+
+// BelowHorizon reports rid as a check-in a structural store does not hold
+// because it lies below the store's horizon (draft-fossil-horizon-00 §5.5),
+// with that horizon. An operation that needs the check-in's tree names the
+// horizon in its diagnostic rather than reporting a missing artifact.
+func BelowHorizon(ctx context.Context, q db.Querier, rid libfossil.FslID) (cone.Horizon, bool, error) {
+	if ctx == nil || q == nil {
+		panic("content.BelowHorizon: nil context or querier")
+	}
+	c, err := StoreCone(q)
+	if err != nil {
+		return cone.Horizon{}, false, err
+	}
+	h := horizonOf(c)
+	if h.Depth() != cone.DepthStructural || h.Hash() == "" {
+		return cone.Horizon{}, false, nil
+	}
+	var size int64
+	err = q.QueryRow("SELECT size FROM blob WHERE rid=?", rid).Scan(&size)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && size >= 0 {
+		return cone.Horizon{}, false, nil
+	}
+	if err != nil {
+		return cone.Horizon{}, false, fmt.Errorf("content.BelowHorizon: %w", err)
+	}
+	a, err := LoadAbsencesContext(ctx, q)
+	if err != nil {
+		return cone.Horizon{}, false, err
+	}
+	return h, a.Below(rid), nil
 }
 
 // BelowLabels returns the boundary labels the store holds.

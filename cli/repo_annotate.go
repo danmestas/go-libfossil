@@ -19,7 +19,7 @@ func (c *RepoAnnotateCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	startRID, err := resolveRID(r, c.Version)
+	startRID, err := resolveCheckin(r, c.Version)
 	if err != nil {
 		return err
 	}

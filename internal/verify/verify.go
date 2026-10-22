@@ -54,7 +54,11 @@ type Report struct {
 	// Issue, so a store complete within its cone verifies OK, and it is
 	// counted apart from damage and from Phantoms so that neither hides the
 	// other. It is zero for a dense store.
-	Elided        int
+	Elided int
+	// BelowHorizon counts, among Elided, the check-ins below a structural
+	// horizon (draft-fossil-horizon-00 §5.4): its boundary and the manifests
+	// only a tag names. They are the horizon, not missing parents.
+	BelowHorizon  int
 	TablesRebuilt []string
 	Duration      time.Duration
 }
@@ -124,5 +128,6 @@ func countAbsences(r *repo.Repo, report *Report) error {
 	}
 	report.Phantoms = a.Count(content.Transit)
 	report.Elided = a.Count(content.Elided)
+	report.BelowHorizon = a.BelowHorizon()
 	return nil
 }

@@ -127,6 +127,10 @@ type Absences struct {
 	class  map[libfossil.FslID]Absence
 	counts [Elided + 1]int
 	work   ReferenceWork // what classification read, for tests to bound
+	// below are the elided phantoms a structural horizon proves to be
+	// manifests below it: labelled boundary hashes and the targets only a
+	// tag or cherry-pick names (draft-fossil-horizon-00 §5.4).
+	below map[libfossil.FslID]bool
 }
 
 // LoadAbsences classifies the store's phantoms. Shunned names win; raw F/S
@@ -277,6 +281,7 @@ func (a *Absences) classifyStructural(
 	if err != nil {
 		return err
 	}
+	a.below = map[libfossil.FslID]bool{}
 	parents, err := ridSet(q, "SELECT pid FROM plink")
 	if err != nil {
 		return err
@@ -294,6 +299,7 @@ func (a *Absences) classifyStructural(
 		switch {
 		case labels[uuid]:
 			a.class[rid] = Elided
+			a.below[rid] = true
 		case parents[rid]:
 		case refs.tree[uuid] || baselines[rid]:
 			if !cut.reach[uuid] && !refs.file(rid) {
@@ -302,6 +308,7 @@ func (a *Absences) classifyStructural(
 		case refs.file(rid) || attached[rid]:
 		default:
 			a.class[rid] = Elided
+			a.below[rid] = true
 		}
 	}
 	return nil
@@ -437,6 +444,14 @@ func (a *Absences) elide(q db.Querier, candidates map[libfossil.FslID]bool) erro
 	}
 	return nil
 }
+
+// BelowHorizon counts the elided phantoms that are check-ins below a
+// structural horizon (draft-fossil-horizon-00 §5.4): its boundary hashes and
+// the manifests only a tag or cherry-pick names.
+func (a *Absences) BelowHorizon() int { return len(a.below) }
+
+// Below reports rid as a check-in below a structural horizon.
+func (a *Absences) Below(rid libfossil.FslID) bool { return a.below[rid] }
 
 // Cone is the store cone the classification used, nil for a dense store.
 func (a *Absences) Cone() *cone.Cone { return a.cone }

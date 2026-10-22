@@ -363,3 +363,63 @@ func TestSyncKeysHorizonCursorByURL(t *testing.T) {
 		t.Fatalf("%d config rows carry the URL's password", leaked)
 	}
 }
+
+// The structural cut is the Structural flag; the zero value is the content
+// horizon, so a Horizon built before the flag existed means what it meant.
+func TestStructuralHorizonCone(t *testing.T) {
+	c, err := NewHorizonCone([]string{"src"}, nil, Horizon{Checkin: horizonTestHash, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, ok := c.Horizon()
+	if !ok || !h.Structural || h.Checkin != horizonTestHash {
+		t.Fatalf("Horizon() = %+v, %v", h, ok)
+	}
+	if got, want := c.String(), "horizon "+horizonTestHash+" descendants structural, src"; got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+	content, err := c.WithHorizon(&Horizon{Checkin: horizonTestHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := content.Horizon(); h.Structural {
+		t.Fatal("a Horizon without Structural is structural")
+	}
+}
+
+// A clone into a structural store holds no manifest below the horizon, says
+// how its rounds were served, and keeps the depth as its policy.
+func TestCloneIntoStructuralStore(t *testing.T) {
+	f := newHorizonFixture(t)
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if res.StructuralServed == 0 || res.HorizonFallback {
+		t.Fatalf("StructuralServed = %d, HorizonFallback = %v", res.StructuralServed, res.HorizonFallback)
+	}
+	_, held, err := content.CheckAvailableByUUID(target.inner.DB(), f.c1)
+	if err != nil || held {
+		t.Fatalf("the manifest below the horizon is held (%v)", err)
+	}
+	got, err := target.StoreCone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := got.Horizon(); !ok || !h.Structural {
+		t.Fatalf("store cone horizon = %+v, %v", h, ok)
+	}
+	sres, err := target.Sync(context.Background(), f.peer, SyncOpts{Pull: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sres.StructuralServed == 0 || sres.HorizonFallback {
+		t.Fatalf("pull: StructuralServed = %d, HorizonFallback = %v", sres.StructuralServed, sres.HorizonFallback)
+	}
+}

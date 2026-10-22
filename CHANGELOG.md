@@ -66,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   name, as transit, and classifies what arrives, so a new check-in stock
   Fossil announces only inside a cluster still arrives (zit#266).
   Interoperates with zit at `bbd1435674` in both directions.
+- The horizon cursor (draft-fossil-horizon-00 §6.2.6). An origin that
+  served a request at a horizon answers `pragma horizon-cursor <n>`, its
+  position in its own artifact sequence; a client that converged records
+  it per origin and cone, and sends it back. The origin then announces
+  only what lies above it, and the client sends no igot on a pull and only
+  what it appended since on a push, so a pull from a large horizon store no
+  longer re-announces everything either side holds. A reply to a push-only
+  request announces nothing, gimmes are answered whatever the cursor, and
+  an artifact arriving that a held one already cited voids older cursors
+  once. Syncs over the HTTP transport key the cursor by the URL without
+  its password; other transports keep none and announce in full. Clone
+  replies carry no cursor yet. Interoperates with zit in both directions.
 
 ### Fixed
 

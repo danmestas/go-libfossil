@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -259,6 +260,8 @@ type handler struct {
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
+	cursor          int64                     // the request's horizon cursor (horizon §6.2.6); 0 bounds nothing
+	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	receipt         *db.Receipt               // what this request stores is recorded under
 
 	// Auth state
@@ -604,9 +607,16 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 	return nil
 }
 
-// reply is the message the handler answers with.
+// reply is the message the handler answers with. A horizon-cursor no
+// inventory valued is dropped: only a reply to a pull hands one out.
 func (h *handler) reply() *xfer.Message {
-	return &xfer.Message{Cards: h.resp, Uncompressed: h.uncompressed}
+	cards := h.resp
+	if h.servedCursor != nil && len(h.servedCursor.Values) == 0 {
+		cards = slices.DeleteFunc(slices.Clone(cards), func(c xfer.Card) bool {
+			return c == xfer.Card(h.servedCursor)
+		})
+	}
+	return &xfer.Message{Cards: cards, Uncompressed: h.uncompressed}
 }
 
 // loadCodes reads the repository's project and server codes. A login's
@@ -956,6 +966,10 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		// fossil drops CLIENT-ID's check-in locks for any requester, with no
 		// Write or ownership test (§9.4).
 		releaseCkinLocks(h.repo.DB(), c.Values[0])
+	case c.Name == horizonCursorPragma:
+		if n, ok := parseCursor(c); ok {
+			h.cursor = n
+		}
 	case c.Name == "send-private":
 		if auth.CanSyncPrivate(h.caps) {
 			h.syncPrivate = true
@@ -986,6 +1000,11 @@ func (h *handler) emitCapabilityPragmas() {
 	if h.horizonScoped() {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonServedPragma,
 			Values: []string{cone.DepthContent.String()}})
+		// Horizon §6.2.6: the position this reply is served through follows,
+		// as zit places it; the inventory values it, and reply drops it
+		// from a reply that announced nothing.
+		h.servedCursor = &xfer.PragmaCard{Name: horizonCursorPragma}
+		h.resp = append(h.resp, h.servedCursor)
 	}
 }
 
@@ -1480,6 +1499,14 @@ func (h *handler) emitIGots() error {
 	if err := h.ensureSparseKeep(); err != nil {
 		return err
 	}
+	position, err := originPosition(h.repo.DB())
+	if err != nil {
+		return err
+	}
+	floor, err := h.announceFloor(position)
+	if err != nil {
+		return err
+	}
 	// Sparse inventories advertise only the request's keep-set; announcing an
 	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
@@ -1493,13 +1520,16 @@ func (h *handler) emitIGots() error {
 	defer rows.Close()
 
 	var uuids []string
+	var rids []libfossil.FslID
 	for rows.Next() {
 		var rid libfossil.FslID
 		var uuid string
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
 		}
-		if !h.keep.keeps(rid) {
+		// Horizon §6.2.6: what lies at or below the cursor was announced or
+		// sent already, in any reply, classified or not.
+		if int64(rid) <= floor || !h.keep.keeps(rid) {
 			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
@@ -1510,6 +1540,7 @@ func (h *handler) emitIGots() error {
 			continue
 		}
 		uuids = append(uuids, uuid)
+		rids = append(rids, rid)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -1517,6 +1548,10 @@ func (h *handler) emitIGots() error {
 
 	// BUGGIFY: 10% chance truncate igot list to test multi-round convergence.
 	if h.buggify != nil && h.buggify.Check("handler.emitIGots.truncate", 0.10) && len(uuids) > 1 {
+		// The cursor stops short of the first name left unannounced.
+		for _, rid := range rids[len(uuids)/2:] {
+			position = min(position, int64(rid)-1)
+		}
 		uuids = uuids[:len(uuids)/2]
 	}
 
@@ -1525,11 +1560,37 @@ func (h *handler) emitIGots() error {
 	}
 
 	if h.syncPrivate {
-		if err := h.emitPrivateIGots(); err != nil {
+		unsent, err := h.emitPrivateIGots(floor)
+		if err != nil {
 			return err
 		}
+		if unsent > 0 {
+			position = min(position, int64(unsent)-1)
+		}
+	}
+	if h.servedCursor != nil {
+		h.servedCursor.Values = cursorCard(max(position, 0)).Values
 	}
 	return nil
+}
+
+// announceFloor is the rid at or below which this reply announces nothing:
+// the request's cursor, or 0 when it carried none, one beyond position this
+// origin cannot have handed out, or one from before the origin's last
+// reclassification, which is answered as if it carried none (horizon
+// §6.2.6). That reply's cursor moves the client past it.
+func (h *handler) announceFloor(position int64) (int64, error) {
+	if h.cursor == 0 || h.cursor > position {
+		return 0, nil
+	}
+	at, err := rekeptAt(h.repo.DB())
+	if err != nil {
+		return 0, err
+	}
+	if h.cursor < at {
+		return 0, nil
+	}
+	return h.cursor, nil
 }
 
 // emitPrivateIGots emits igot cards with IsPrivate=true for all blobs in
@@ -1540,26 +1601,30 @@ func (h *handler) emitIGots() error {
 // (src/xfer.c) selects from the private table with no shun filter, unlike
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
-func (h *handler) emitPrivateIGots() error {
+//
+// Nothing at or below floor is announced (horizon §6.2.6). It returns the
+// lowest rid a truncation left unannounced, 0 when none.
+func (h *handler) emitPrivateIGots(floor int64) (libfossil.FslID, error) {
 	if err := h.ensureSparseKeep(); err != nil {
-		return err
+		return 0, err
 	}
 	rows, err := h.repo.DB().Query(
 		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
-		return fmt.Errorf("handler: listing private blobs: %w", err)
+		return 0, fmt.Errorf("handler: listing private blobs: %w", err)
 	}
 	defer rows.Close()
 
 	var uuids []string
+	var rids []libfossil.FslID
 	for rows.Next() {
 		var rid libfossil.FslID
 		var uuid string
 		if err := rows.Scan(&rid, &uuid); err != nil {
-			return err
+			return 0, err
 		}
-		if !h.keep.keeps(rid) {
+		if int64(rid) <= floor || !h.keep.keeps(rid) {
 			continue
 		}
 		// Skip if the client already has this blob as private.
@@ -1569,20 +1634,27 @@ func (h *handler) emitPrivateIGots() error {
 			continue
 		}
 		uuids = append(uuids, uuid)
+		rids = append(rids, rid)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 
 	// BUGGIFY: 10% chance truncate private igot list to test multi-round convergence.
+	var unsent libfossil.FslID
 	if h.buggify != nil && h.buggify.Check("handler.emitPrivateIGots.truncate", 0.10) && len(uuids) > 1 {
+		for _, rid := range rids[len(uuids)/2:] {
+			if unsent == 0 || rid < unsent {
+				unsent = rid
+			}
+		}
 		uuids = uuids[:len(uuids)/2]
 	}
 
 	for _, uuid := range uuids {
 		h.resp = append(h.resp, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
 	}
-	return nil
+	return unsent, nil
 }
 
 // sendAllClusters emits igot cards for all cluster artifacts that are

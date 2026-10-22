@@ -42,7 +42,7 @@ func (p *scSyncPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Mes
 	if p.ignore {
 		cards := make([]xfer.Card, 0, len(req.Cards))
 		for _, card := range req.Cards {
-			if c, ok := card.(*xfer.PragmaCard); ok && (c.Name == "cone" || c.Name == "cone-not") {
+			if c, ok := card.(*xfer.PragmaCard); ok && (c.Name == "cone" || c.Name == "cone-not" || c.Name == "horizon") {
 				continue
 			}
 			cards = append(cards, card)

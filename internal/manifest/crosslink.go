@@ -2324,10 +2324,13 @@ func crosslinkForumReply(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, froot, fp
 
 // CrosslinkCluster processes a cluster artifact: applies the cluster singleton
 // tag (tagid=7), removes clustered blobs from unclustered, and creates phantoms
-// for any referenced UUIDs not yet in the blob table. A store whose cone
-// carries a horizon applies the tag alone: it acts on no cluster, since one
-// names blobs of every age (draft-fossil-horizon-00 §4.5), and the tag is how
-// it recognizes the cluster's phantom once it drops the content.
+// for any referenced UUIDs not yet in the blob table. A horizon store does so
+// too: it is stored a cluster only by an origin that does not serve its
+// horizon, which may name a new check-in nowhere else, so the names are
+// requested as transit and classified as they arrive
+// (draft-fossil-horizon-00 §4.5). The tag is also how such a store recognizes
+// the cluster's phantom once it drops the content. A cluster an origin
+// serving the horizon sends is never stored (sync's servedCluster).
 func CrosslinkCluster(q db.Querier, rid libfossil.FslID, d *deck.Deck) error {
 	if q == nil {
 		panic("manifest.CrosslinkCluster: q must not be nil")
@@ -2346,16 +2349,6 @@ func CrosslinkCluster(q db.Querier, rid libfossil.FslID, d *deck.Deck) error {
 	); err != nil {
 		return fmt.Errorf("manifest.CrosslinkCluster tag: %w", err)
 	}
-	c, err := content.StoreCone(q)
-	if err != nil {
-		return fmt.Errorf("manifest.CrosslinkCluster: %w", err)
-	}
-	if c != nil {
-		if _, horizon := c.Horizon(); horizon {
-			return nil
-		}
-	}
-
 	// Process each M-card UUID.
 	for _, uuid := range d.M {
 		memberRID, exists := blob.Exists(q, uuid)

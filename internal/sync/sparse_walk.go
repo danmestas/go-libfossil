@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon"
 )
 
 // The §8 bounds of single-name lookup, charged across one request.
@@ -22,9 +23,10 @@ type sparseKind uint8
 
 const (
 	sparseContent    sparseKind = iota // bytes no artifact parses from
-	sparseNode                         // sub-manifest node: sent only by a walk
+	sparseNode                         // sub-manifest node: sent by a walk, or at its row under a horizon
 	sparseStructural                   // held densely (§5.1)
 	sparseCheckin
+	sparseCluster // held densely, but never sent under a horizon (horizon §4.5)
 )
 
 // coneWalk is §6.2 keep-set discovery for one clone round. A row is read
@@ -33,10 +35,18 @@ const (
 // check-in sends what its primary parent's tree does not already hold; the
 // parent is a row of the same clone, so by induction every in-cone node and
 // blob of every check-in is sent once its own check-in is.
+//
+// Under a content horizon (draft-fossil-horizon-00 §6.2) only a check-in in
+// the held set walks its tree, and its parent counts as sent only when it is
+// in the held set too: the blobs sent are those above the horizon. Every
+// node and every other structural artifact but a cluster goes out at its
+// row, as §4.1 holds them at every age.
 type coneWalk struct {
 	ctx        context.Context
 	h          *handler
 	cone       *cone.Cone
+	horizon    bool
+	held       map[int]bool // the held set; nil when there is no horizon or the store cannot place C
 	kinds      map[int]sparseKind
 	decks      map[int]*deck.Deck
 	reached    map[int]bool
@@ -49,8 +59,47 @@ func newConeWalk(ctx context.Context, h *handler) *coneWalk {
 	if ctx == nil || h == nil || h.cone == nil {
 		panic("sync.newConeWalk: nil context, handler or cone")
 	}
-	return &coneWalk{ctx: ctx, h: h, cone: h.cone, kinds: map[int]sparseKind{},
+	_, horizon := h.cone.Horizon()
+	return &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, kinds: map[int]sparseKind{},
 		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{}}
+}
+
+// placeHorizon computes the held set over the store, bounded as every
+// server-side graph walk is (§8). A C the store cannot place proves no blob
+// below the horizon, so every check-in then walks its tree, as a request
+// without one would.
+func (w *coneWalk) placeHorizon() error {
+	h, ok := w.cone.Horizon()
+	if !ok {
+		return nil
+	}
+	k, placed, err := horizon.Place(w.ctx, w.h.repo.DB(), h)
+	if err != nil || !placed {
+		return err
+	}
+	w.held = make(map[int]bool, len(k))
+	for _, rid := range k {
+		w.held[int(rid)] = true
+	}
+	return nil
+}
+
+// inHeld reports a check-in whose tree the request keeps.
+func (w *coneWalk) inHeld(rid int) bool {
+	return w.held == nil || w.held[rid]
+}
+
+// atRow reports a kind sent at its own row rather than by a walk.
+func (w *coneWalk) atRow(kind sparseKind) bool {
+	switch kind {
+	case sparseStructural, sparseCheckin:
+		return true
+	case sparseNode:
+		return w.horizon
+	case sparseCluster:
+		return !w.horizon
+	}
+	return false
 }
 
 // classify parses rid once per request. Unreadable bytes stay structural:
@@ -80,6 +129,8 @@ func deckKind(d *deck.Deck) sparseKind {
 		return sparseNode
 	case deck.Checkin:
 		return sparseCheckin
+	case deck.Cluster:
+		return sparseCluster
 	}
 	return sparseStructural
 }
@@ -90,7 +141,7 @@ func (w *coneWalk) sourceKept(rid int) bool {
 		return true
 	}
 	kind, _ := w.classify(rid)
-	return kind == sparseStructural || kind == sparseCheckin
+	return w.atRow(kind)
 }
 
 // servable resolves uuid to a row this clone session sends: held, inside
@@ -114,14 +165,15 @@ func (w *coneWalk) servable(uuid string) (int, bool, error) {
 	return rid, !info.priv || w.h.syncPrivate, nil
 }
 
-// items returns, ascending, the rows the artifact d at a structural row
+// items returns, ascending, the rows the artifact d at structural row rid
 // brings with it: an attachment's source, or a check-in's new in-cone tree.
-func (w *coneWalk) items(d *deck.Deck) ([]int, error) {
+func (w *coneWalk) items(rid int, d *deck.Deck) ([]int, error) {
 	out := map[int]bool{}
 	var err error
 	switch {
 	case d.A != nil && d.A.Source != "":
 		err = w.add(d.A.Source, out)
+	case d.Type == deck.Checkin && !w.inHeld(rid):
 	case d.Type == deck.Checkin && len(d.S) > 0:
 		prior := coneTreeLevel{}
 		if parent, perr := w.parent(d); perr != nil {
@@ -137,9 +189,9 @@ func (w *coneWalk) items(d *deck.Deck) ([]int, error) {
 		return nil, err
 	}
 	rids := make([]int, 0, len(out))
-	for rid := range out {
-		w.reached[rid] = true
-		rids = append(rids, rid)
+	for item := range out {
+		w.reached[item] = true
+		rids = append(rids, item)
 	}
 	sort.Ints(rids)
 	return rids, nil
@@ -153,24 +205,29 @@ func (w *coneWalk) add(uuid string, out map[int]bool) error {
 	return err
 }
 
-// parent is the primary parent check-in when this clone sends it, else nil:
-// then nothing is known to be sent already and the whole cone goes out.
+// parent is the primary parent check-in when this clone sends its tree,
+// else nil: then nothing is known to be sent already and the whole cone
+// goes out.
 func (w *coneWalk) parent(d *deck.Deck) (*deck.Deck, error) {
 	if len(d.P) == 0 {
 		return nil, nil
 	}
-	return w.checkin(d.P[0])
-}
-
-func (w *coneWalk) checkin(uuid string) (*deck.Deck, error) {
-	rid, ok, err := w.servable(uuid)
-	if err != nil || !ok {
+	p, rid, err := w.checkin(d.P[0])
+	if err != nil || p == nil || !w.inHeld(rid) {
 		return nil, err
 	}
-	if kind, d := w.classify(rid); kind == sparseCheckin {
-		return d, nil
+	return p, nil
+}
+
+func (w *coneWalk) checkin(uuid string) (*deck.Deck, int, error) {
+	rid, ok, err := w.servable(uuid)
+	if err != nil || !ok {
+		return nil, 0, err
 	}
-	return nil, nil
+	if kind, d := w.classify(rid); kind == sparseCheckin {
+		return d, rid, nil
+	}
+	return nil, 0, nil
 }
 
 // flat sends the in-cone files of d's full file list that its parent's full
@@ -203,7 +260,7 @@ func (w *coneWalk) fileList(d *deck.Deck) ([]deck.FileCard, error) {
 	if d.B == "" {
 		return d.F, nil
 	}
-	base, err := w.checkin(d.B)
+	base, _, err := w.checkin(d.B)
 	if err != nil || base == nil {
 		return d.F, err
 	}

@@ -26,6 +26,7 @@ type CloneOpts struct {
 type CloneResult struct {
 	Elided          int // artifacts deliberately absent under the store cone
 	ConeServed      int // replies acknowledging the store cone (sparse-cone §6.3); the rest were filtered locally
+	HorizonServed   int // replies serving the content horizon (horizon §6.2.5); the rest were classified locally
 	Rounds          int
 	BlobsRecvd      int
 	ArtifactsLinked int // Manifests crosslinked into event table

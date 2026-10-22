@@ -61,7 +61,11 @@ type SyncResult struct {
 	// ConeServed counts the replies whose peer acknowledged applying the
 	// store cone (pragma cone-served, sparse-cone §6.3). The other rounds of
 	// a sparse store were served densely and filtered locally.
-	ConeServed                    int
+	ConeServed int
+	// HorizonServed counts the replies whose origin served the store's
+	// content horizon (pragma horizon-served content, horizon §6.2.5). The
+	// other rounds were served densely and classified locally (§6.3).
+	HorizonServed                 int
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int

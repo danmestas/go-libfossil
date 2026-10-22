@@ -666,6 +666,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		if c.Name == coneServedPragma {
 			cs.result.ConeServed++ // sparse-cone §6.3, reported only
 		}
+		if c.Name == horizonServedPragma && servesContentHorizon(c) {
+			cs.result.HorizonServed++ // horizon §6.2.5, reported only
+		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {
 			cs.smConfig.stage(c.Content)
@@ -805,6 +808,9 @@ func (cs *cloneSession) receiveContent(
 	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
 		return nil
 	}
+	if servedCluster(cs.servedHorizon(), deltaSrc, content) {
+		return nil
+	}
 	return cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
 }
 
@@ -862,4 +868,14 @@ func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
 	orig := cs.repo
 	cs.repo = bound
 	return func() { cs.repo = orig }
+}
+
+// servedHorizon reports a horizon clone whose origin has said it serves the
+// clone's horizon (horizon-served content) in a reply of this session.
+func (cs *cloneSession) servedHorizon() bool {
+	if cs.opts.StoreCone == nil || cs.result.HorizonServed == 0 {
+		return false
+	}
+	_, ok := cs.opts.StoreCone.Horizon()
+	return ok
 }

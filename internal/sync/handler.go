@@ -740,7 +740,11 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 		if err != nil {
 			return err
 		}
-		if !coneContains(have, h.cone) {
+		covered, err := h.coversRequest(have)
+		if err != nil {
+			return err
+		}
+		if !covered {
 			h.refuseClone("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
 			return nil
 		}
@@ -936,11 +940,12 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		if h.canRead() && (h.pullOK || h.pushOK) {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
-	case c.Name == "req-clusters":
+	case c.Name == "req-clusters" && !h.horizonScoped():
 		// Answered in place, as page_xfer answers it, so a later reset
 		// discards the igots (§10.1). Like fossil, any requester gets them:
 		// they name public artifacts and carry no content, which a gimme
-		// still needs Read to fetch.
+		// still needs Read to fetch. A horizon-scoped request is sent no
+		// cluster (draft-fossil-horizon-00 §6.2), so it gets nothing.
 		return h.sendAllClusters()
 	case c.Name == "ci-lock" && len(c.Values) == 2 && hash.IsValidHash(c.Values[0]):
 		// fossil takes the pragma only with exactly HASH and CLIENT-ID, HASH
@@ -972,10 +977,25 @@ func (h *handler) emitCapabilityPragmas() {
 	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
 	// Sparse-cone §6.3: this server applies a request's whole cone or
 	// refuses it (requestCone, handleClone), so a cone request's reply is
-	// acknowledged here. A refusal resets the reply and discards it.
-	if h.cone != nil {
+	// acknowledged here, and a horizon request's says the level it is served
+	// at (horizon §6.2.5), the content horizon only. A refusal resets the
+	// reply and discards both.
+	if h.cone != nil && len(h.cone.Include()) > 0 {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
 	}
+	if h.horizonScoped() {
+		h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonServedPragma,
+			Values: []string{cone.DepthContent.String()}})
+	}
+}
+
+// horizonScoped reports a request that carried a horizon pragma.
+func (h *handler) horizonScoped() bool {
+	if h.cone == nil {
+		return false
+	}
+	_, ok := h.cone.Horizon()
+	return ok
 }
 
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds

@@ -46,6 +46,10 @@ type SyncResult struct {
 	// cone-served, draft-fossil-sparse-cone-00 §6.3); the rest of a sparse
 	// store's rounds were served densely and filtered locally.
 	Elided, ConeServed int
+	// HorizonServed counts the replies whose peer served the store's
+	// content horizon (pragma horizon-served, draft-fossil-horizon-00
+	// §6.2.5); the other rounds were classified locally.
+	HorizonServed int
 }
 
 // HandleOpts configures server-side sync handling.
@@ -250,17 +254,18 @@ func convertSyncResult(r *internalsync.SyncResult) *SyncResult {
 		return nil
 	}
 	return &SyncResult{
-		Rounds:       r.Rounds,
-		FilesSent:    r.FilesSent,
-		FilesRecvd:   r.FilesRecvd,
-		UVFilesSent:  r.UVFilesSent,
-		UVFilesRecvd: r.UVFilesRecvd,
-		UVGimmesSent: r.UVGimmesSent,
-		BytesSent:    r.BytesSent,
-		BytesRecvd:   r.BytesRecvd,
-		Errors:       r.Errors,
-		Elided:       r.Elided,
-		ConeServed:   r.ConeServed,
+		Rounds:        r.Rounds,
+		FilesSent:     r.FilesSent,
+		FilesRecvd:    r.FilesRecvd,
+		UVFilesSent:   r.UVFilesSent,
+		UVFilesRecvd:  r.UVFilesRecvd,
+		UVGimmesSent:  r.UVGimmesSent,
+		BytesSent:     r.BytesSent,
+		BytesRecvd:    r.BytesRecvd,
+		Errors:        r.Errors,
+		Elided:        r.Elided,
+		ConeServed:    r.ConeServed,
+		HorizonServed: r.HorizonServed,
 	}
 }
 

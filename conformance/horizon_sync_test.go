@@ -24,9 +24,10 @@ import (
 )
 
 // The content horizon's synchronization against a horizon-ignorant peer
-// (draft-fossil-horizon-00 §6.3): no horizon pragma exists yet, so every
-// peer serves densely and the client classifies locally. The peers are
-// go-libfossil's handler and fossil(1) through `fossil http`.
+// (draft-fossil-horizon-00 §6.3): the peer serves densely and the client
+// classifies locally. The peers are go-libfossil's handler, with the
+// horizon pragma stripped from what it reads, and fossil(1) through
+// `fossil http`.
 
 var (
 	horizonSyncClonePull = Case{ID: "horizon.6.3.clone-pull", Req: "HZ-6.3-1"}
@@ -122,12 +123,13 @@ func (p *hzFossilPeer) Exchange(_ context.Context, req *xfer.Message) (*xfer.Mes
 	return resp, nil
 }
 
-// newHZPeer serves origin densely: through go-libfossil's handler, or
-// through fossil(1), which is nil when the binary is absent and not required.
+// newHZPeer serves origin densely: through go-libfossil's handler, which
+// never sees the request's cone, or through fossil(1), which is nil when the
+// binary is absent and not required.
 func newHZPeer(t *testing.T, origin *repo.Repo, fossil bool) hzPeer {
 	t.Helper()
 	if !fossil {
-		return &scSyncPeer{r: origin}
+		return &scSyncPeer{r: origin, ignore: true}
 	}
 	ref := newFossilReference(t)
 	if ref == nil {
@@ -361,7 +363,7 @@ func hzSyncTransit(t *testing.T, withhold bool) error {
 	if err != nil {
 		return err
 	}
-	peer := &hzDeltaPeer{scSyncPeer: &scSyncPeer{r: origin.r},
+	peer := &hzDeltaPeer{scSyncPeer: &scSyncPeer{r: origin.r, ignore: true},
 		target: childUUID, base: baseUUID, delta: d, full: []byte(base), withhold: withhold}
 	sc := hzStoreCone(t, hzUUID(t, origin.r, c), cone.RuleDescendants, cone.DepthContent)
 	r, result, err := sync.Clone(context.Background(),
@@ -483,7 +485,12 @@ func hzSyncDemand(t *testing.T) error {
 		return err
 	}
 	defer co.Close()
-	target := gofossil.UpdateOpts{TargetRID: int64(g.c1)}
+	// The clone numbers its rows in the order they arrived, not the origin's.
+	c1, ok := blob.Exists(pub.Inner().DB(), hzUUID(t, g.f.r, g.c1))
+	if !ok {
+		return expectf("the clone does not name c1")
+	}
+	target := gofossil.UpdateOpts{TargetRID: int64(c1)}
 	if _, err := co.UpdateContext(context.Background(), target, gofossil.RequiredContentOpts{}); err == nil {
 		return expectf("an update below the horizon with no peer succeeded")
 	}
@@ -558,8 +565,9 @@ func hzReqClusters(requests []*xfer.Message) bool {
 	return false
 }
 
-// A horizon clone holds no cluster it is sent, so a later sync neither
-// requests one back nor asks for the catalog, and it mints none.
+// A horizon clone holds no cluster it is sent, so a later sync never
+// requests one back, and it mints none. Asking a horizon-ignorant peer for
+// the catalog is allowed (§4.5); a cluster it names stays elided.
 func hzSyncNoCluster(t *testing.T, fossil bool) error {
 	g := newHZSyncGraph(t)
 	_, clusters := hzClustered(t, g.f.r, "old", content.ClusterThreshold)
@@ -579,9 +587,6 @@ func hzSyncNoCluster(t *testing.T, fossil bool) error {
 		if _, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true, Push: true}); err != nil {
 			return err
 		}
-	}
-	if hzReqClusters(peer.sent()) {
-		return expectf("a horizon clone asked for the cluster catalog")
 	}
 	if err := hzNoGimme(peer.sent()[before:], clusters); err != nil {
 		return err
@@ -603,13 +608,47 @@ func hzUnion(a, b map[string]bool) map[string]bool {
 	return out
 }
 
-// A pull that meets a new cluster requests it (an igot names it) but not
-// the artifacts only it names, while a dense clone of the same origin
-// does. A clustered check-in a new one names by its P card is requested,
-// and so is the blob its F card names. The
-// peer is fossil(1), which announces unclustered artifacts alone:
-// go-libfossil's handler announces every artifact by igot, which a horizon
-// clone requests (§4.5).
+// hzUnclustered stores n blobs no artifact references and leaves them
+// unclustered, for a peer to cluster as it serves.
+func hzUnclustered(t *testing.T, origin *repo.Repo, tag string, n int) {
+	t.Helper()
+	err := origin.WithTx(func(tx *db.Tx) error {
+		for i := range n {
+			if _, _, err := blob.Store(tx, fmt.Appendf(nil, "%s unreferenced %d\n", tag, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// hzClusterNames is every cluster r has crosslinked, held or not.
+func hzClusterNames(r *repo.Repo) (map[string]bool, error) {
+	rows, err := r.DB().Query("SELECT b.uuid FROM tagxref x JOIN blob b ON b.rid=x.rid WHERE x.tagid=7")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var uuid string
+		if err := rows.Scan(&uuid); err != nil {
+			return nil, err
+		}
+		out[uuid] = true
+	}
+	return out, rows.Err()
+}
+
+// Against a horizon-ignorant origin a horizon store requests the phantoms
+// a received cluster names, as transit, and classifies what arrives
+// (§4.5). fossil(1) folds 100 or more unclustered artifacts into a cluster
+// as it answers a pull and announces only the cluster, so a new leaf is
+// named nowhere else: it must arrive, with the blob it names, while the
+// cluster is not held and the blobs below the horizon stay elided.
 func hzSyncClusters(t *testing.T) error {
 	g := newHZSyncGraph(t)
 	peer := newHZPeer(t, g.f.r, true)
@@ -620,49 +659,36 @@ func hzSyncClusters(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	dense, _, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "dense.fossil"),
-		peer, sync.CloneOpts{})
+	parent := hzCommit(t, g.f, "c5", []libfossil.FslID{g.m}, nil)
+	hzUnclustered(t, g.f.r, "new", content.ClusterThreshold)
+	leaf := hzCommit(t, g.f, "c6", []libfossil.FslID{parent}, nil)
+	leafUUID := hzUUID(t, g.f.r, leaf)
+	named := map[string]bool{hzUUID(t, g.f.r, parent): true, leafUUID: true,
+		scUUIDOf(t, g.f.r, parent, "c5"): true, scUUIDOf(t, g.f.r, leaf, "c6"): true}
+	before := len(peer.received())
+	for range 2 {
+		pulled, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true})
+		if err != nil {
+			return err
+		}
+		if len(pulled.Errors) != 0 {
+			return expectf("pull errors %q", pulled.Errors)
+		}
+	}
+	if hzAnnounced(peer.received()[before:])[leafUUID] {
+		return expectf("fixture: fossil announced the leaf itself, not only its cluster")
+	}
+	if err := hzHeld(r, named, true); err != nil {
+		return err
+	}
+	clusters, err := hzClusterNames(r)
 	if err != nil {
 		return err
 	}
-	defer dense.Close()
-	parent := hzCommit(t, g.f, "c5", []libfossil.FslID{g.m}, nil)
-	members, clusters := hzClustered(t, g.f.r, "new", content.ClusterThreshold)
-	tip := hzCommit(t, g.f, "c6", []libfossil.FslID{parent}, nil)
-	named := map[string]bool{hzUUID(t, g.f.r, parent): true,
-		scUUIDOf(t, g.f.r, parent, "c5"): true, scUUIDOf(t, g.f.r, tip, "c6"): true}
-	before := len(peer.sent())
-	if _, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true}); err != nil {
-		return err
-	}
-	if err := hzNoGimme(peer.sent()[before:], members); err != nil {
-		return err
-	}
-	for uuid := range members {
-		if _, known := blob.Exists(r.DB(), uuid); known {
-			return expectf("a cluster-only member %s became a phantom", uuid)
-		}
+	if len(clusters) == 0 {
+		return expectf("fixture: the pull met no cluster")
 	}
 	if err := hzHeld(r, clusters, false); err != nil {
-		return err
-	}
-	stable := len(peer.sent())
-	if _, err := sync.Sync(context.Background(), dense, peer, sync.SyncOpts{Pull: true}); err != nil {
-		return err
-	}
-	if err := hzNoGimme(peer.sent()[stable:], members); err == nil {
-		return expectf("fixture: a dense clone did not request the cluster's members")
-	}
-	stable = len(peer.sent())
-	if _, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true}); err != nil {
-		return err
-	}
-	if err := hzNoGimme(peer.sent()[stable:], hzUnion(members, clusters)); err != nil {
-		return err
-	}
-	// The blob c5 names is learned when c5 is crosslinked, after the
-	// round that brought it: the second pull asks for it.
-	if err := hzHeld(r, named, true); err != nil {
 		return err
 	}
 	return hzElided(r, hzUnion(g.below, clusters))

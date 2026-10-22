@@ -442,18 +442,11 @@ func addMlink(
 // loadCheckinManifest expands, parses, and builds the file views for the
 // check-in manifest stored at rid.
 func loadCheckinManifest(q db.Querier, cache *content.Cache, rid libfossil.FslID) (*deck.Deck, *manifestFiles, error) {
-	data, err := expandManifestBytes(q, cache, rid)
+	d, err := parseManifestAt(q, cache, rid)
 	if err != nil {
-		return nil, nil, fmt.Errorf("expand manifest rid=%d: %w", rid, err)
+		return nil, nil, err
 	}
-	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("manifest rid=%d is empty", rid)
-	}
-	d, err := deck.Parse(data)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse manifest rid=%d: %w", rid, err)
-	}
-	mf, err := loadManifestFiles(q, cache, d)
+	mf, err := manifestFilesAt(q, cache, rid, d)
 	if err != nil {
 		return nil, nil, fmt.Errorf("files of rid=%d: %w", rid, err)
 	}
@@ -597,6 +590,8 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 		// path; this keeps the cascade path from inventing rows.
 		return nil
 	}
+	rememberCheckin(cache, rid, d)
+	rememberFiles(cache, rid, childFiles)
 
 	primaryMid, _ := resolveParentMids(tx, d)
 	if err := addMlink(tx, cache, primaryMid, rid, d, childFiles, true, 0); err != nil {

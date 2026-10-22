@@ -22,6 +22,11 @@ type Cache struct {
 	maxEntries int
 	hits       int64
 	misses     int64
+	// derived holds the few most recent values callers computed from cached
+	// content; derivedOrder is its insertion order, for eviction.
+	derived      map[any]any
+	derivedOrder []any
+	derivedHits  int64
 }
 
 type cacheEntry struct {
@@ -31,11 +36,14 @@ type cacheEntry struct {
 
 // CacheStats reports cache hit/miss statistics and current memory usage.
 type CacheStats struct {
-	Hits    int64
-	Misses  int64
-	Size    int64
-	MaxSize int64
-	Entries int
+	Hits   int64
+	Misses int64
+	// DerivedHits counts Derived lookups that found a value: reads that
+	// reused work done on cached content rather than expanding it again.
+	DerivedHits int64
+	Size        int64
+	MaxSize     int64
+	Entries     int
 }
 
 // maxCacheEntries is a fixed hard bound on cache metadata. It is deliberately
@@ -215,6 +223,56 @@ func (c *Cache) evictOldest() {
 	c.curSize -= entrySize(e.data)
 }
 
+// maxDerived bounds the derived-value memo. A sweep reads each check-in
+// beside its parent and baseline, so a handful of recent values is the whole
+// working set; the values (parsed manifests) are large, so the bound is small.
+const maxDerived = 32
+
+// Derived returns the value SetDerived last stored under key, if it is still
+// held. It lets a caller that parses or indexes cached content keep the result
+// next to the bytes rather than redo the work for each neighbour that reads
+// the same artifact. The value is shared: callers must treat it as read-only.
+// A nil Cache holds nothing.
+func (c *Cache) Derived(key any) (any, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	v, ok := c.derived[key]
+	if ok {
+		c.derivedHits++
+	}
+	return v, ok
+}
+
+// SetDerived stores v under key, evicting the oldest value past maxDerived.
+// key must be comparable. Because Invalidate and Clear drop every derived
+// value, v may be computed from content that is immutable only while cached.
+func (c *Cache) SetDerived(key, v any) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.derived == nil {
+		c.derived = make(map[any]any, maxDerived)
+	}
+	if _, held := c.derived[key]; !held {
+		if len(c.derivedOrder) == maxDerived {
+			delete(c.derived, c.derivedOrder[0])
+			c.derivedOrder = append(c.derivedOrder[:0], c.derivedOrder[1:]...)
+		}
+		c.derivedOrder = append(c.derivedOrder, key)
+	}
+	c.derived[key] = v
+}
+
+func (c *Cache) dropDerivedLocked() {
+	c.derived = nil
+	c.derivedOrder = c.derivedOrder[:0]
+}
+
 // Invalidate removes a single rid from the cache.
 func (c *Cache) Invalidate(rid libfossil.FslID) {
 	if c == nil {
@@ -222,6 +280,7 @@ func (c *Cache) Invalidate(rid libfossil.FslID) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.dropDerivedLocked()
 	if elem, ok := c.items[rid]; ok {
 		e := elem.Value.(*cacheEntry)
 		c.curSize -= entrySize(e.data)
@@ -240,6 +299,7 @@ func (c *Cache) Clear() {
 	c.items = make(map[libfossil.FslID]*list.Element)
 	c.order.Init()
 	c.curSize = 0
+	c.dropDerivedLocked()
 }
 
 // Stats returns a snapshot of cache statistics.
@@ -250,10 +310,11 @@ func (c *Cache) Stats() CacheStats {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return CacheStats{
-		Hits:    c.hits,
-		Misses:  c.misses,
-		Size:    c.curSize,
-		MaxSize: c.maxSize,
-		Entries: c.order.Len(),
+		Hits:        c.hits,
+		Misses:      c.misses,
+		DerivedHits: c.derivedHits,
+		Size:        c.curSize,
+		MaxSize:     c.maxSize,
+		Entries:     c.order.Len(),
 	}
 }

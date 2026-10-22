@@ -624,11 +624,10 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			default:
 			}
 		}
-		data, err := st.cache.Expand(tx, c.rid)
-		if err != nil {
+		d, err := parseManifestAt(tx, st.cache, c.rid)
+		if err != nil && errors.Is(err, errExpandManifest) {
 			continue // not expandable, skip
 		}
-		d, err := deck.Parse(data)
 		if err != nil {
 			// Expanded fine, holds no artifact: ordinary file content. That
 			// verdict is a property of immutable bytes, so record it and never

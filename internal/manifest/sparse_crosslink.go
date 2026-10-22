@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"context"
+	"errors"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -38,21 +39,20 @@ func belowStructural(c *cone.Cone) bool {
 func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 	c, _ := content.StoreCone(tx)
 	for _, uuid := range checkinSources(d) {
-		rid, ok := content.AvailableByUUID(tx, uuid)
+		rid, ok := g.avail.ByUUID(tx, uuid)
 		if !ok {
 			if c != nil && !belowStructural(c) {
 				return uuid
 			}
 			continue
 		}
-		data, err := g.cache.Expand(tx, rid)
-		if err != nil {
+		parent, err := parseManifestAt(tx, g.cache, rid)
+		if err != nil && errors.Is(err, errExpandManifest) {
 			if c != nil {
 				return uuid
 			}
 			continue
 		}
-		parent, err := deck.Parse(data)
 		if err != nil || parent.Type != deck.Checkin {
 			if c != nil {
 				return uuid

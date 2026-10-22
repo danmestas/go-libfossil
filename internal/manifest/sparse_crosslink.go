@@ -66,6 +66,10 @@ func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 	return ""
 }
 
+// loadConeReferences is content.LoadConeReferences; tests swap it to observe
+// the store's state at the moment whole-store references are loaded.
+var loadConeReferences = content.LoadConeReferences
+
 // Partial derivation publishes only spine metadata. The orphan row remains the
 // completion marker; no mlink transition is represented by a partial row set.
 func crosslinkPartialCheckin(
@@ -77,7 +81,7 @@ func crosslinkPartialCheckin(
 		return false, err
 	}
 	if g.coneReferences == nil {
-		g.coneReferences, err = content.LoadConeReferences(ctx, tx, c)
+		g.coneReferences, err = loadConeReferences(ctx, tx, c)
 		if err != nil {
 			return false, err
 		}

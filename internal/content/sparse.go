@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -57,21 +58,27 @@ func StoreCone(q db.Querier) (*cone.Cone, error) {
 // SetStoreCone replaces the store cone; nil makes the store dense. Neither
 // direction moves content: narrowing deletes nothing (§5.4), and widening
 // only makes the newly covered elided phantoms wanted again, for the next
-// synchronization to fetch. A structural horizon (draft-fossil-horizon-00
-// §5) is refused: this store implements only the content horizon, and
-// would otherwise hold a cone whose depth its classification ignores.
+// synchronization to fetch. The boundary labels of a structural horizon
+// (draft-fossil-horizon-00 §5.3) name what lies below one C, so a cone whose
+// horizon differs drops them.
 func SetStoreCone(q db.Querier, c *cone.Cone) error {
 	if q == nil {
 		panic("content.SetStoreCone: q must not be nil")
+	}
+	old, err := StoreCone(q)
+	if err != nil {
+		return err
+	}
+	if horizonOf(old) != horizonOf(c) {
+		if _, err := q.Exec("DROP TABLE IF EXISTS " + belowLabelTable); err != nil {
+			return fmt.Errorf("content.SetStoreCone: %w", err)
+		}
 	}
 	if c == nil {
 		if _, err := q.Exec("DROP TABLE IF EXISTS storecone"); err != nil {
 			return fmt.Errorf("content.SetStoreCone: %w", err)
 		}
 		return nil
-	}
-	if h, ok := c.Horizon(); ok && h.Depth() != cone.DepthContent {
-		return fmt.Errorf("content.SetStoreCone: a %v horizon is not implemented", h.Depth())
 	}
 	if _, err := q.Exec(storeConeSchema); err != nil {
 		return fmt.Errorf("content.SetStoreCone: %w", err)
@@ -218,6 +225,7 @@ func (a *Absences) classify(
 	if err != nil {
 		return err
 	}
+	pool := maps.Clone(candidates)
 	if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
 		return err
 	}
@@ -237,16 +245,88 @@ func (a *Absences) classify(
 	if !hasHorizon {
 		return nil
 	}
-	above, placed, err := horizonAbove(ctx, q, h, limits, &a.work)
+	cut, placed, err := horizonTrees(ctx, q, h, limits, &a.work)
 	if err != nil || !placed {
 		return err
 	}
 	for rid := range candidates {
-		if refs.below(above, rid) {
+		if refs.below(cut.above, rid) {
+			a.class[rid] = Elided
+		}
+	}
+	if h.Depth() != cone.DepthStructural {
+		return nil
+	}
+	return a.classifyStructural(q, pool, refs, cut)
+}
+
+// classifyStructural applies a structural horizon (draft-fossil-horizon-00
+// §5.1, §5.3) to the phantoms that are neither shunned nor a held delta's
+// base. The store requests what a P, F, S or B card of a held artifact names,
+// or an attachment carries (§4.5); of those, a parent the origin labelled
+// below the horizon, and a baseline or node no tree of K reaches, are elided,
+// and an unlabelled parent stays transit, since it may only be late. Every
+// other phantom -- the target of a tag or a cherry-pick, a manifest dropped
+// after it was linked -- is a manifest below the horizon that nothing in K
+// reaches, and is elided. A name an origin announces is still requested
+// during its synchronization; the classification is of the store at rest.
+func (a *Absences) classifyStructural(
+	q db.Querier, pool map[libfossil.FslID]bool, refs *ConeReferences, cut horizonCut,
+) error {
+	labels, err := BelowLabels(q)
+	if err != nil {
+		return err
+	}
+	parents, err := ridSet(q, "SELECT pid FROM plink")
+	if err != nil {
+		return err
+	}
+	baselines, err := ridSet(q, "SELECT baseid FROM plink WHERE baseid>0 UNION SELECT baseline FROM orphan")
+	if err != nil {
+		return err
+	}
+	attached, err := ridSet(q, "SELECT b.rid FROM attachment a JOIN blob b ON b.uuid=a.src")
+	if err != nil {
+		return err
+	}
+	for rid := range pool {
+		uuid := refs.names[rid]
+		switch {
+		case labels[uuid]:
+			a.class[rid] = Elided
+		case parents[rid]:
+		case refs.tree[uuid] || baselines[rid]:
+			if !cut.reach[uuid] && !refs.file(rid) {
+				a.class[rid] = Elided
+			}
+		case refs.file(rid) || attached[rid]:
+		default:
 			a.class[rid] = Elided
 		}
 	}
 	return nil
+}
+
+// ridSet reads one column of rids.
+func ridSet(q db.Querier, query string) (map[libfossil.FslID]bool, error) {
+	rows, err := q.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("content.LoadAbsences: %w", err)
+	}
+	out := map[libfossil.FslID]bool{}
+	for rows.Next() {
+		var rid sql.NullInt64
+		if err := rows.Scan(&rid); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		if rid.Valid {
+			out[libfossil.FslID(rid.Int64)] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("content.LoadAbsences: %w", err)
+	}
+	return out, nil
 }
 
 // An artifact may be both a file's content and a structural reference or

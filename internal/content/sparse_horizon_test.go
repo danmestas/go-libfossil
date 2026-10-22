@@ -364,26 +364,6 @@ func TestHorizonUnplacedElidesNothing(t *testing.T) {
 	}
 }
 
-// A structural horizon is not implemented: the store refuses it rather
-// than hold a cone its classification would read as a content horizon.
-func TestSetStoreConeRefusesStructuralHorizon(t *testing.T) {
-	f := newHZFixture(t, hzFull)
-	h, err := cone.NewHorizon(f.uuidOf(t, f.c2), cone.RuleDescendants, cone.DepthStructural)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sc, err := cone.NewWithHorizon(nil, nil, h)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := content.SetStoreCone(f.r.DB(), sc); err == nil {
-		t.Fatal("a structural horizon was stored")
-	}
-	if got, err := content.StoreCone(f.r.DB()); err != nil || got != nil {
-		t.Fatalf("after the refusal the store cone is %v, %v; want dense", got, err)
-	}
-}
-
 // The predicate a sync applies to what it received is the classification's:
 // it places exactly the blobs LoadAbsences elides below the horizon, and it
 // is nil for a cone without one, which elides nothing by age.

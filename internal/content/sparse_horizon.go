@@ -13,12 +13,20 @@ import (
 	"github.com/danmestas/go-libfossil/internal/horizon"
 )
 
-// horizonAbove returns the blobs above the content horizon h
-// (draft-fossil-horizon-00 §4.2): every F-card target of a check-in in the
-// held set K, read from the store's own manifests. Nothing is stored: K and
-// this set are recomputed on every classification (§3.1, §3.2). The walk
-// reads K's manifests and the baselines and nodes they reach, charging work
-// as it goes, under a byte budget scaled to K rather than to the store.
+// horizonCut is what a placed horizon keeps of the store's history: the held
+// set K, the blobs K's trees name (above, §4.2), and the manifests,
+// baselines and nodes those trees are made of (reach, §5.1), held or not.
+type horizonCut struct {
+	k     []libfossil.FslID
+	above map[string]bool
+	reach map[string]bool
+}
+
+// horizonTrees computes h's cut (draft-fossil-horizon-00 §4.2, §5.1) from
+// the store's own manifests. Nothing is stored: K and these sets are
+// recomputed on every classification (§3.1, §3.2). The walk reads K's
+// manifests and the baselines and nodes they reach, charging work as it
+// goes, under a byte budget scaled to K rather than to the store.
 //
 // placed is false when C is not a check-in the store holds. Such a horizon
 // elides nothing, as zit's classification does (src/sparse.zig,
@@ -27,15 +35,15 @@ import (
 // pull that brings C' would then ask for none of the blobs it must keep.
 // No blob can be proven below a horizon the store cannot place; the cost
 // of keeping them wanted is bandwidth, never data.
-func horizonAbove(
+func horizonTrees(
 	ctx context.Context, q db.Querier, h cone.Horizon, limits referenceLimits, work *ReferenceWork,
-) (above map[string]bool, placed bool, err error) {
+) (cut horizonCut, placed bool, err error) {
 	if ctx == nil || q == nil || work == nil {
-		panic("content.horizonAbove: nil context, querier or work")
+		panic("content.horizonTrees: nil context, querier or work")
 	}
 	k, placed, err := horizon.Place(ctx, q, h)
 	if err != nil || !placed {
-		return nil, false, err
+		return horizonCut{}, false, err
 	}
 	budget := limits.treeMax
 	if scaled := int64(len(k)+1) * limits.treePerCheckin; scaled/limits.treePerCheckin == int64(len(k)+1) && scaled < budget {
@@ -43,8 +51,26 @@ func horizonAbove(
 	}
 	walk := treeWalk{ctx: ctx, q: q, budget: budget, work: work,
 		cache: NewCache(treeCacheBytes), files: map[string]bool{}, visited: map[string]bool{}}
-	above, err = walk.named(k)
-	return above, err == nil, err
+	above, err := walk.named(k)
+	if err != nil {
+		return horizonCut{}, false, err
+	}
+	return horizonCut{k: k, above: above, reach: walk.visited}, true, nil
+}
+
+// HorizonReach returns the held set of h and the manifests, baselines and
+// nodes its trees reach, by name: what a structural horizon keeps of the
+// store's tree structure (draft-fossil-horizon-00 §5.1, §6.2). placed is
+// false when the store cannot place C.
+func HorizonReach(
+	ctx context.Context, q db.Querier, h cone.Horizon,
+) (k []libfossil.FslID, reach map[string]bool, placed bool, err error) {
+	if ctx == nil || q == nil {
+		panic("content.HorizonReach: nil context or querier")
+	}
+	var work ReferenceWork
+	cut, placed, err := horizonTrees(ctx, q, h, defaultReferenceLimits, &work)
+	return cut.k, cut.reach, placed, err
 }
 
 // HorizonBelow returns the elision predicate of c's content horizon
@@ -65,11 +91,11 @@ func (p *ConeReferences) HorizonBelow(
 		return nil, nil
 	}
 	var work ReferenceWork
-	above, placed, err := horizonAbove(ctx, q, h, defaultReferenceLimits, &work)
+	cut, placed, err := horizonTrees(ctx, q, h, defaultReferenceLimits, &work)
 	if err != nil || !placed {
 		return nil, err
 	}
-	return func(rid libfossil.FslID) bool { return p.below(above, rid) }, nil
+	return func(rid libfossil.FslID) bool { return p.below(cut.above, rid) }, nil
 }
 
 // below reports a blob some held F card names that is not above the horizon

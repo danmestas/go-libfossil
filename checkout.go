@@ -23,7 +23,8 @@ type CheckoutCreateOpts struct {
 	Observer CheckoutObserver // nil = nop
 	// Cone makes the checkout sparse: Extract, Update and Status work only on
 	// the files it covers, and Checkin carries the others from the parent
-	// unchanged. nil is dense. See Cone and Checkout.SetCone.
+	// unchanged. nil is dense. A cone with a horizon is refused with
+	// ErrHorizonCheckout. See Cone and Checkout.SetCone.
 	Cone *Cone
 }
 
@@ -162,10 +163,14 @@ type CheckoutChange struct {
 // The directory is created if it does not exist. The checkout is initialized
 // to the tip checkin.
 func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, error) {
+	coneInner, err := checkoutCone(opts.Cone)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: create checkout: %w", err)
+	}
 	inner, err := checkout.Create(r.inner, dir, checkout.CreateOpts{
 		Env:      opts.Env,
 		Observer: adaptCheckoutObserver(opts.Observer),
-		Cone:     unwrapCone(opts.Cone),
+		Cone:     coneInner,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: create checkout: %w", err)

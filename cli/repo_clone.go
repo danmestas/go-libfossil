@@ -18,6 +18,10 @@ type RepoCloneCmd struct {
 	Pass    string        `short:"p" help:"Password for clone auth"`
 	Invite  string        `help:"Invite token (from fossil invite)"`
 	Timeout time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+	Horizon string        `help:"Clone a content-horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash"`
+	Leaves  bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in"`
+	Cone    []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
+	ConeNot []string      `name:"cone-not" help:"Carve this path out of a --cone (repeatable)"`
 }
 
 // cloneContext builds the context that bounds a clone. A positive timeout caps
@@ -54,13 +58,19 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("path required")
 	}
 
+	storeCone, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Leaves)
+	if err != nil {
+		return err
+	}
+
 	ctx, cancel := cloneContext(context.Background(), c.Timeout)
 	defer cancel()
 
 	transport := libfossil.NewHTTPTransport(c.URL)
 	opts := libfossil.CloneOpts{
-		User:     c.User,
-		Password: c.Pass,
+		User:      c.User,
+		Password:  c.Pass,
+		StoreCone: storeCone,
 	}
 
 	r, result, err := libfossil.Clone(ctx, c.Path, transport, opts)
@@ -78,6 +88,9 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	fmt.Printf("  Rounds:       %d\n", result.Rounds)
 	fmt.Printf("  Blobs:        %d\n", result.BlobsRecvd)
 	fmt.Printf("  Project-code: %s\n", result.ProjectCode)
+	if storeCone != nil {
+		fmt.Printf("  Elided:       %d\n", result.Elided)
+	}
 	return nil
 }
 

@@ -112,6 +112,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		Observer:     adaptObserver(opts.Observer),
 		Buggify:      opts.Buggify,
 		PullPhantoms: opts.PullPhantoms,
+		StoreCone:    unwrapCone(opts.StoreCone),
 	}
 	inner, iResult, err := internalsync.Clone(ctx, path, adapter, iOpts)
 	if err != nil {

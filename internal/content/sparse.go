@@ -216,8 +216,10 @@ func loadAbsences(ctx context.Context, q db.Querier, limits referenceLimits) (*A
 // classify decides the candidates, the phantoms that are neither shunned
 // nor a held delta's base. Path members elide by name. A content horizon
 // (draft-fossil-horizon-00 §3.2, §4) then elides every blob no check-in in
-// its held set names, so a kept blob is in both keep sets; it never elides
-// structure, and under one path members do not either.
+// its held set names, so a kept blob is in both keep sets. It holds the
+// rest of structure at every age, but for the sub-manifest nodes path
+// members elide (§4.1): of every check-in's tree, those no in-cone slot
+// reaches.
 func (a *Absences) classify(
 	ctx context.Context, q db.Querier, candidates map[libfossil.FslID]bool, limits referenceLimits,
 ) error {
@@ -239,7 +241,7 @@ func (a *Absences) classify(
 	}
 	h, hasHorizon := a.cone.Horizon()
 	for rid := range candidates {
-		if hasHorizon && refs.structure(rid) {
+		if hasHorizon && refs.structure(rid) && !refs.Outside(rid) {
 			a.class[rid] = Transit
 		} else if refs.Outside(rid) {
 			a.class[rid] = Elided

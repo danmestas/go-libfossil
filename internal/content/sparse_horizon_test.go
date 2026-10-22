@@ -297,32 +297,64 @@ func TestHorizonIntersectsPathCone(t *testing.T) {
 	}
 }
 
-// Path members never elide structure under a horizon: a phantom
-// sub-manifest node outside the path cone and below the horizon is wanted.
-func TestHorizonPathConeKeepsStructure(t *testing.T) {
+// A path cone elides sub-manifest nodes under a content horizon as the
+// sparse store does (draft-fossil-horizon-00 §3.2, §4.1): of every
+// check-in's tree, below the horizon too, a phantom node on a path into the
+// cone is wanted and one no in-cone slot reaches is elided. Without path
+// members every node is wanted.
+func TestHorizonPathConeElidesNodes(t *testing.T) {
 	f := newHZFixture(t, hzTree)
-	var node string
-	inC2 := map[string]bool{}
-	for _, s := range hzDeck(t, f.r, f.c2).S {
-		inC2[s.UUID] = true
-	}
-	for _, s := range hzDeck(t, f.r, f.c1).S {
-		if strings.HasPrefix(s.Name, "doc/") && !inC2[s.UUID] {
-			node = s.UUID
+	inC2 := hzTreeNodes(t, f.r, f.c2)
+	own := map[string]string{}
+	for uuid, name := range hzTreeNodes(t, f.r, f.c1) {
+		if inC2[uuid] == "" {
+			own[name[:strings.IndexByte(name, '/')]] = uuid
 		}
 	}
-	if node == "" {
-		t.Fatal("c1 has no doc/ node of its own")
+	if own["doc"] == "" || own["src"] == "" {
+		t.Fatalf("c1 has no doc/ and src/ leaves of its own: %v", own)
 	}
-	rid := hzPhantomize(t, f.r, node)
+	outside, inside := hzPhantomize(t, f.r, own["doc"]), hzPhantomize(t, f.r, own["src"])
+	classes := func() (content.Absence, content.Absence) {
+		t.Helper()
+		a, err := content.LoadAbsences(f.r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Class(outside), a.Class(inside)
+	}
 	f.setHorizon(t, f.uuidOf(t, f.c2), cone.RuleDescendants, "src")
-	a, err := content.LoadAbsences(f.r.DB())
-	if err != nil {
-		t.Fatal(err)
+	if out, in := classes(); out != content.Elided || in != content.Transit {
+		t.Fatalf("below the horizon with paths: outside node %v, inside node %v; want elided, transit", out, in)
 	}
-	if got := a.Class(rid); got != content.Transit {
-		t.Fatalf("a node outside the paths and below the horizon = %v, want transit", got)
+	f.setHorizon(t, f.uuidOf(t, f.c2), cone.RuleDescendants)
+	if out, in := classes(); out != content.Transit || in != content.Transit {
+		t.Fatalf("below a horizon alone: outside node %v, inside node %v; want transit, transit", out, in)
 	}
+}
+
+// hzTreeNodes is every leaf node of rid's tree with the name its slot
+// starts at; interior nodes are left out, so a leaf can be made a phantom
+// while the slot that names it stays readable.
+func hzTreeNodes(t *testing.T, r *repo.Repo, rid libfossil.FslID) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	var walk func(cards []deck.SubmanifestCard)
+	walk = func(cards []deck.SubmanifestCard) {
+		for _, s := range cards {
+			node, ok := content.AvailableByUUID(r.DB(), s.UUID)
+			if !ok {
+				continue
+			}
+			d := hzDeck(t, r, node)
+			if len(d.S) == 0 {
+				out[s.UUID] = s.Name
+			}
+			walk(d.S)
+		}
+	}
+	walk(hzDeck(t, r, rid).S)
+	return out
 }
 
 // A phantom a held artifact is a delta against is transit whatever the

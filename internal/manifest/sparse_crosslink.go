@@ -181,6 +181,13 @@ func (r sparseReadiness) fileSet(d *deck.Deck) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
+	// Under a horizon a covered file may lie below it (draft-fossil-horizon-00
+	// §4.2), and which do is placed over the linked check-ins this readiness
+	// gates: the classification at rest tells an elided file from a transit
+	// one, and the spine published here reads no file.
+	if _, ok := r.cone.Horizon(); ok {
+		return true, nil
+	}
 	for _, f := range files {
 		if r.cone.Covers(f.Name) {
 			if _, ok := content.AvailableByUUID(r.q, f.UUID); !ok {

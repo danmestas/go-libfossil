@@ -474,10 +474,12 @@ func TestDeepenHorizon(t *testing.T) {
 	}
 }
 
-// A branch merge whose base lies below the store's structural horizon is
+// A branch merge whose base may lie below the store's structural horizon is
 // refused naming the horizon, before any commit (draft-fossil-horizon-00
 // §5.5): f, feat's first check-in, forks below the horizon at c2; feat's tip
-// merges c2 in and trunk's tip merges f, so the base of the two tips is f.
+// merges c2 in and trunk's tip merges f. fossil's base of the two tips is c2,
+// which the store holds, but f is a common ancestor too: the store's walk
+// reaches it below the horizon, where only the origin can judge it.
 func TestBranchMergeRefusesBaseBelowHorizon(t *testing.T) {
 	source, err := Create(filepath.Join(t.TempDir(), "source.fossil"), CreateOpts{User: "test"})
 	if err != nil {

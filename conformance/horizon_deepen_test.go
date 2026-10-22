@@ -249,17 +249,23 @@ func hzHeldNames(r *repo.Repo) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// hzMergeFixture is hzStruct's origin with y, a check-in merging feat1 into
-// c4, served over HTTP, and a structural clone of it at C = c3 with a
-// checkout at feat2. The merge base of feat2 and y is feat1, below the
-// horizon: the store holds y and feat2 but not their base.
+// hzMergeFixture is hzStruct's origin served over HTTP, with feat3, a child
+// of feat1 committed after everything else; w and z, which merge feat3 into
+// c4 and into feat2; and y, which merges feat1 into c4. Its client is a
+// structural clone at C = c3 with a checkout at feat2.
+//
+// fossil's merge base (pivot.c), the most recent common ancestor, of w and z
+// is feat3, below the horizon: the store holds w and z but not their base.
+// That of y and feat2 is c3, which the store holds, but feat1, a common
+// ancestor too, is below it: the store's walk crosses the horizon on the way.
 type hzMergeFixture struct {
-	x      *hzStruct
-	y      string
-	origin *hzRecorder
-	url    string
-	r      *gofossil.Repo
-	co     *gofossil.Checkout
+	x           *hzStruct
+	feat3, w, z string
+	y           string
+	origin      *hzRecorder
+	url         string
+	r           *gofossil.Repo
+	co          *gofossil.Checkout
 }
 
 func newHZMergeFixture(t *testing.T) *hzMergeFixture {
@@ -267,6 +273,10 @@ func newHZMergeFixture(t *testing.T) *hzMergeFixture {
 	x := newHZStruct(t)
 	f := &hzMergeFixture{x: x, origin: &hzRecorder{r: x.s.f.r}}
 	f.y = hzUUID(t, x.s.f.r, hzCommit(t, x.s.f, "y", []libfossil.FslID{x.s.c4, x.s.feat1}, nil))
+	feat3 := hzCommit(t, x.s.f, "feat3", []libfossil.FslID{x.s.feat1}, nil)
+	f.feat3 = hzUUID(t, x.s.f.r, feat3)
+	f.w = hzUUID(t, x.s.f.r, hzCommit(t, x.s.f, "w", []libfossil.FslID{x.s.c4, feat3}, nil))
+	f.z = hzUUID(t, x.s.f.r, hzCommit(t, x.s.f, "z", []libfossil.FslID{x.s.feat2, feat3}, nil))
 	server := httptest.NewServer(f.origin)
 	t.Cleanup(server.Close)
 	f.url = server.URL
@@ -304,48 +314,70 @@ func (f *hzMergeFixture) rid(t *testing.T, uuid string) int64 {
 }
 
 // hzMergeCrossing: a merge whose base lies below the structural horizon is
-// detected before anything changes, and the diagnostic names the horizon,
-// the base, and the remedy.
+// detected before anything changes, and the diagnostic names the horizon and
+// the remedy; so is a merge whose base the store holds when its walk to it
+// crossed the horizon, where an older-looking ancestor below it could be the
+// base. Neither names a base: the store cannot know it.
 func hzMergeCrossing(t *testing.T) error {
 	f := newHZMergeFixture(t)
-	_, err := f.co.Merge(gofossil.CheckoutMergeOpts{Version: f.rid(t, f.y)})
-	if !errors.Is(err, gofossil.ErrBelowHorizon) {
-		return expectf("merge across the horizon: %v, want ErrBelowHorizon", err)
-	}
-	for _, want := range []string{"below the structural horizon at " + f.x.c3, f.x.feat1, "deepen"} {
-		if !strings.Contains(err.Error(), want) {
-			return expectf("diagnostic %q lacks %q", err, want)
+	for _, m := range [][2]string{{f.z, f.w}, {f.x.feat2, f.y}} {
+		if err := f.co.Extract(f.rid(t, m[0]), gofossil.ExtractOpts{}); err != nil {
+			return err
 		}
-	}
-	if v, _, err := f.co.Version(); err != nil || v != f.rid(t, f.x.feat2) {
-		return expectf("the refused merge moved the checkout to %d (%v)", v, err)
-	}
-	changed, err := f.co.HasChanges()
-	if err != nil || changed {
-		return expectf("the refused merge left changes %v (%v)", changed, err)
+		_, err := f.co.Merge(gofossil.CheckoutMergeOpts{Version: f.rid(t, m[1])})
+		if !errors.Is(err, gofossil.ErrBelowHorizon) {
+			return expectf("merge of %.10s across the horizon: %v, want ErrBelowHorizon", m[1], err)
+		}
+		for _, want := range []string{"below the structural horizon at " + f.x.c3, "deepen"} {
+			if !strings.Contains(err.Error(), want) {
+				return expectf("diagnostic %q lacks %q", err, want)
+			}
+		}
+		if v, _, err := f.co.Version(); err != nil || v != f.rid(t, m[0]) {
+			return expectf("the refused merge moved the checkout to %d (%v)", v, err)
+		}
+		changed, err := f.co.HasChanges()
+		if err != nil || changed {
+			return expectf("the refused merge left changes %v (%v)", changed, err)
+		}
 	}
 	return nil
 }
 
 // hzMergeDeepen: given a peer, the merge asks the origin for the base,
 // deepens to a common ancestor of C and the base, and merges over the real
-// base it then holds.
+// base it then holds. Where the store holds the base the origin names, it
+// merges over it without deepening.
 func hzMergeDeepen(t *testing.T) error {
 	f := newHZMergeFixture(t)
-	res, err := f.co.MergeContext(context.Background(), gofossil.CheckoutMergeOpts{Version: f.rid(t, f.y)},
-		gofossil.RequiredContentOpts{Peer: gofossil.NewHTTPTransport(f.url)})
+	peer := gofossil.RequiredContentOpts{Peer: gofossil.NewHTTPTransport(f.url)}
+	res, err := f.co.MergeContext(context.Background(), gofossil.CheckoutMergeOpts{Version: f.rid(t, f.y)}, peer)
 	if err != nil {
-		return expectf("merge with a peer: %v", err)
+		return expectf("merge of y with a peer: %v", err)
 	}
-	if res.Ancestor != f.rid(t, f.x.feat1) {
-		return expectf("merged against rid %d, want feat1's", res.Ancestor)
+	if res.Ancestor != f.rid(t, f.x.c3) {
+		return expectf("merged y against rid %d, want c3's", res.Ancestor)
 	}
-	asked := 0
-	for _, e := range f.origin.take() {
-		asked += len(hzPragmas(e.request, "horizon-mergebase"))
+	if err := hzAskedMergeBase(f, [2]string{f.x.feat2, f.y}); err != nil {
+		return err
 	}
-	if asked == 0 {
-		return expectf("the merge asked the origin no merge-base query")
+	if err := hzStoredHorizon(f.r.Inner(), f.x.c3, cone.DepthStructural); err != nil {
+		return expectf("merging over a held base deepened: %v", err)
+	}
+	f = newHZMergeFixture(t)
+	peer = gofossil.RequiredContentOpts{Peer: gofossil.NewHTTPTransport(f.url)}
+	if err := f.co.Extract(f.rid(t, f.z), gofossil.ExtractOpts{}); err != nil {
+		return err
+	}
+	res, err = f.co.MergeContext(context.Background(), gofossil.CheckoutMergeOpts{Version: f.rid(t, f.w)}, peer)
+	if err != nil {
+		return expectf("merge of w with a peer: %v", err)
+	}
+	if res.Ancestor != f.rid(t, f.feat3) {
+		return expectf("merged w against rid %d, want feat3's", res.Ancestor)
+	}
+	if err := hzAskedMergeBase(f, [2]string{f.z, f.w}); err != nil {
+		return err
 	}
 	sc, err := f.r.StoreCone()
 	if err != nil {
@@ -353,6 +385,19 @@ func hzMergeDeepen(t *testing.T) error {
 	}
 	if h, ok := sc.Horizon(); !ok || h.Checkin != f.x.c1 || !h.Structural {
 		return expectf("store horizon after the merge %+v %v, want c1 structural", h, ok)
+	}
+	return nil
+}
+
+// hzAskedMergeBase is nil when the origin was asked the base of q first. A
+// deepen may ask another, for its deepen point.
+func hzAskedMergeBase(f *hzMergeFixture, q [2]string) error {
+	var asked [][]string
+	for _, e := range f.origin.take() {
+		asked = append(asked, hzPragmas(e.request, "horizon-mergebase")...)
+	}
+	if len(asked) == 0 || !slices.Equal(asked[0], q[:]) {
+		return expectf("the merge asked the origin %q, first the base of %.10s and %.10s", asked, q[0], q[1])
 	}
 	return nil
 }

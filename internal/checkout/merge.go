@@ -1,6 +1,7 @@
 package checkout
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -49,6 +50,9 @@ type MergeOpts struct {
 	Version  libfossil.FslID // the checkin to merge in; required
 	Strategy string          // strategy for every file; "" picks one per file
 	DryRun   bool            // plan the merge and report it, changing nothing
+	// Baseline, when set, is the common ancestor to diff against instead of
+	// the one Merge finds, as fossil's merge --baseline; it must be held.
+	Baseline libfossil.FslID
 }
 
 // MergeFile reports one file Merge acted on.
@@ -119,13 +123,15 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if opts.Version == vid {
 		return MergeResult{}, nil
 	}
-	pivot, err := merge.FindCommonAncestor(c.repo, vid, opts.Version)
+	base, err := c.mergeBase(vid, opts)
 	if err != nil && !errors.Is(err, merge.ErrNoCommonAncestor) {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: common ancestor: %w", err)
 	}
+	pivot := base.RID
 	// draft-fossil-horizon-00 §5.5: never merge against a base the store
-	// does not hold, and name the horizon when that is why.
-	if cerr := content.MergeBaseCrossing(c.repo.DB(), vid, opts.Version, pivot); cerr != nil {
+	// does not hold, nor one found by a walk that crossed the horizon, and
+	// name the horizon when that is why.
+	if cerr := content.MergeBaseCrossing(c.repo.DB(), opts.Version, pivot, base.Unheld); cerr != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", cerr)
 	}
 	if err != nil {
@@ -154,6 +160,36 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 		}
 	}
 	return plan.result(), nil
+}
+
+// mergeBase is the common ancestor the merge diffs against, as fossil's
+// merge_cmd chooses it (merge.c, pivot_set_primary(mid) through pid =
+// pivot_find(0)): the pivot of the merged-in version, primary, and the
+// checkout's version together with every check-in already merged into it,
+// the vmerge rows with id 0. opts.Baseline overrides it, as --baseline does.
+// Fossil's name pivot, pivot_find(1), only follows renames (add_renames),
+// which Merge does not, so it is not computed.
+func (c *Checkout) mergeBase(vid libfossil.FslID, opts MergeOpts) (merge.Pivot, error) {
+	if opts.Baseline > 0 {
+		return merge.Pivot{RID: opts.Baseline}, nil
+	}
+	secondaries := []libfossil.FslID{vid}
+	rows, err := c.db.Query("SELECT merge FROM vmerge WHERE id=0")
+	if err != nil {
+		return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+		}
+		secondaries = append(secondaries, libfossil.FslID(rid))
+	}
+	if err := rows.Err(); err != nil {
+		return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+	}
+	return merge.FindPivot(context.Background(), c.repo, merge.PivotQuery{Primary: opts.Version, Secondaries: secondaries})
 }
 
 // mergePlan is a merge worked out in full before anything is changed.

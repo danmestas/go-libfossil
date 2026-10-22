@@ -602,6 +602,12 @@ func zitStrip(msg *xfer.Message) {
 // zitStrippingHandler serves r over HTTP with send-submanifests stripped
 // from every reply, as a server that does not read trees would answer.
 func zitStrippingHandler(t *testing.T, r *repo.Repo) http.Handler {
+	return xferHandler(t, r, zitStrip)
+}
+
+// xferHandler serves r's sync endpoint over HTTP, passing every reply
+// through rewrite before it is encoded.
+func xferHandler(t *testing.T, r *repo.Repo, rewrite func(*xfer.Message)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, hr *http.Request) {
 		body, err := io.ReadAll(hr.Body)
 		if err != nil {
@@ -619,7 +625,7 @@ func zitStrippingHandler(t *testing.T, r *repo.Repo) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		zitStrip(resp)
+		rewrite(resp)
 		encode, contentType := resp.Encode, xfer.ContentTypeCompressed
 		if resp.Uncompressed {
 			encode, contentType = resp.EncodeUncompressed, xfer.ContentTypeUncompressed

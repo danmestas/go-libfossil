@@ -74,9 +74,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer re-announces everything either side holds. A reply to a push-only
   request announces nothing, gimmes are answered whatever the cursor, and
   an artifact arriving that a held one already cited voids older cursors
-  once. Syncs over the HTTP transport key the cursor by the URL without
-  its password; other transports keep none and announce in full. Clone
-  replies carry no cursor yet. Interoperates with zit in both directions.
+  once. Syncs and clones over the HTTP transport key the cursor by the URL
+  without its password; other transports keep none and announce in full.
+  A horizon clone's replies carry the cursor and the clone records it, so
+  its first exchange afterwards announces nothing it already shares.
+  Interoperates with zit in both directions.
 - The structural horizon (draft-fossil-horizon-00 §5, Appendix A step 5).
   A store at structural depth also elides the manifests and sub-manifest
   nodes below the horizon, keeps the boundary labels its origin sends so a

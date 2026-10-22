@@ -298,6 +298,6 @@ These take the same `--remote`, `--sync-user`, `--sync-pass`, `--sync-private` a
 - **Compaction is irreversible locally.** `CompactStore` and `repo cone compact` delete held blobs. Widening later fetches them again, which needs a peer that still has them. Structural artifacts, sub-manifest nodes, unsent or private content and the delta bases of retained artifacts are kept.
 - **The structural horizon needs an origin that serves it.** Against a peer that does not answer `horizon-served structural` (stock fossil, or a server without a current seed) the clone falls back to the content horizon and reports `HorizonFallback`.
 - **Seed signing is not implemented.** The structural horizon relies on a seed that an origin may sign. go-libfossil implements no signing, so a clone without a known key for its origin accepts an unsigned seed.
-- **Clone replies carry no horizon cursor.** The cursor (`pragma horizon-cursor`) lets a pull skip re-announcing what both sides hold. A pull sends it, but a clone does not yet.
+- **The horizon cursor needs a transport that names its peer.** The cursor (`pragma horizon-cursor`) lets an exchange skip re-announcing what both sides hold. The HTTP transport keys it by URL; a custom `Transport` keeps none and announces in full.
 - **A horizon is not a checkout cone.** Give a checkout a horizon and you get `ErrHorizonCheckout`.
 - **A sparse store lacks file content.** Commands that read an elided blob need a peer to fetch it, or fail.

@@ -96,6 +96,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without an error, `TimelineEntry` and `LogEntry` gain `HorizonParents`,
   and `repo timeline` prints it as `(horizon)`. Interoperates with zit at
   `9bf7ebfe0f` in both directions.
+- Crossing the horizon (draft-fossil-horizon-00 §5.5, §5.7, §5.8, §5.9,
+  §6.2.4). A merge or update whose base lies below the horizon is refused
+  with `ErrBelowHorizon`, naming the horizon, the base and the deepen that
+  reaches it; never merged against a base the store does not hold.
+  `Checkout.MergeContext` asks the origin for the base (`pragma
+  horizon-mergebase`, answered by a bounded walk), deepens to it and
+  merges. `Repo.DeepenHorizon` and `libfossil repo cone deepen` move C to
+  an ancestor and fetch what the deeper horizon keeps, discarding a
+  structural store's seed first and restoring it if the transfer fails.
+  Bisect refuses a good end below the horizon, and a symbolic name on a
+  check-in below it resolves. An origin rolls back a push whose new branch
+  cancels a branch tag its own derivation says the parent does not carry,
+  unless the push or the store holds the correction. `Repo.VerifySeed` and
+  `libfossil repo verify --seed` check a structural store's seed by
+  deepening and comparing, leaving the store at content depth.
 - The structural horizon's seed (draft-fossil-horizon-00 §5.2). An origin mints a control artifact whose T cards apply the
   tags in force at every entry of the held set (C, and each check-in of K
   whose primary parent lies outside it), dated at the latest tag event it

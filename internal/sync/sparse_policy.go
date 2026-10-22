@@ -100,7 +100,11 @@ func (k *sparseKeep) sourceKept(rid int) bool {
 // filterSparseReceived filters only artifacts this transfer newly acquired.
 // Existing holdings survive a narrower policy; only explicit compaction may
 // reclaim them. Reference discovery precedes filtering so arrival order cannot
-// discard a blob before a later manifest names it inside the cone.
+// discard a blob before a later manifest names it inside the cone. A content
+// horizon (draft-fossil-horizon-00 §6.3) also drops the blobs below it and
+// every cluster: the store classifies locally what a horizon-ignorant peer
+// sent densely. A blob no held manifest names yet is kept, as an unreferenced
+// holding, and a held delta's base is kept whatever its class (§4.2).
 func filterSparseReceived(ctx context.Context, q db.Querier, received map[string]bool, cache *content.Cache) (int, error) {
 	c, err := content.StoreCone(q)
 	if err != nil || c == nil {
@@ -110,6 +114,11 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 	if err != nil {
 		return 0, err
 	}
+	below, err := k.refs.HorizonBelow(ctx, q, c)
+	if err != nil {
+		return 0, err
+	}
+	_, horizon := c.Horizon()
 	drop := map[libfossil.FslID]bool{}
 	for uuid := range received {
 		if err := ctx.Err(); err != nil {
@@ -117,14 +126,17 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 		}
 		var rid libfossil.FslID
 		var size int64
-		err := q.QueryRow("SELECT rid,size FROM blob WHERE uuid=?", uuid).Scan(&rid, &size)
+		var cluster bool
+		err := q.QueryRow(`SELECT rid,size,EXISTS(SELECT 1 FROM tagxref WHERE tagid=7 AND rid=blob.rid)
+			FROM blob WHERE uuid=?`, uuid).Scan(&rid, &size, &cluster)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		if err != nil {
 			return 0, err
 		}
-		if size >= 0 && !k.keeps(rid) {
+		elided := !k.keeps(rid) || (below != nil && below(rid)) || (horizon && cluster)
+		if size >= 0 && elided {
 			drop[rid] = true
 		}
 	}

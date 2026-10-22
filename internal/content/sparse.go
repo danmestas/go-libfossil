@@ -127,7 +127,8 @@ type Absences struct {
 // reference. Retained delta ancestors remain transit. Crosslink references
 // supplement raw provenance for historical names, including prior rename paths.
 // A partial tree need not be crosslinked to classify its outside S children.
-// A content horizon in the cone also elides the blobs below it.
+// A content horizon in the cone also elides the blobs below it and the
+// clusters the store was sent.
 func LoadAbsences(q db.Querier) (*Absences, error) {
 	return LoadAbsencesContext(context.Background(), q)
 }
@@ -149,11 +150,16 @@ func loadAbsences(ctx context.Context, q db.Querier, limits referenceLimits) (*A
 		return nil, err
 	}
 	a := &Absences{cone: c, class: map[libfossil.FslID]Absence{}}
+	hasHorizon := false
+	if c != nil {
+		_, hasHorizon = c.Horizon()
+	}
 	rows, err := q.Query(`
 		SELECT p.rid,
 		       EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid),
 		       EXISTS(SELECT 1 FROM delta d JOIN blob h ON h.rid=d.rid
-		              WHERE d.srcid=p.rid AND h.size>=0)
+		              WHERE d.srcid=p.rid AND h.size>=0),
+		       EXISTS(SELECT 1 FROM tagxref WHERE tagid=7 AND rid=p.rid)
 		FROM phantom p JOIN blob b ON b.rid=p.rid`)
 	if err != nil {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
@@ -161,14 +167,19 @@ func loadAbsences(ctx context.Context, q db.Querier, limits referenceLimits) (*A
 	candidates := map[libfossil.FslID]bool{}
 	for rows.Next() {
 		var rid libfossil.FslID
-		var shunned, base bool
-		if err := rows.Scan(&rid, &shunned, &base); err != nil {
+		var shunned, base, cluster bool
+		if err := rows.Scan(&rid, &shunned, &base, &cluster); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 		}
 		switch {
 		case shunned:
 			a.class[rid] = Shunned
+		case cluster && hasHorizon && !base:
+			// A cluster the store was sent and did not keep (horizon §4.5):
+			// the cluster tag outlives its content, and a horizon store
+			// never asks for it back.
+			a.class[rid] = Elided
 		default:
 			a.class[rid] = Transit
 			if c != nil && !base {
@@ -231,7 +242,7 @@ func (a *Absences) classify(
 		return err
 	}
 	for rid := range candidates {
-		if refs.file(rid) && !refs.structure(rid) && !above[refs.names[rid]] {
+		if refs.below(above, rid) {
 			a.class[rid] = Elided
 		}
 	}

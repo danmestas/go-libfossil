@@ -58,6 +58,38 @@ func horizonAbove(
 	return above, err == nil, err
 }
 
+// HorizonBelow returns the elision predicate of c's content horizon
+// (draft-fossil-horizon-00 §4.2) over the artifacts p names, held or not:
+// true for a blob a held F card names that no check-in in the held set
+// names and that is no structural reference. A synchronization applies it
+// to what it received, as LoadAbsences applies it to phantoms. It is nil
+// when c has no horizon or the store cannot place C: such a horizon proves
+// no blob below it.
+func (p *ConeReferences) HorizonBelow(
+	ctx context.Context, q db.Querier, c *cone.Cone,
+) (func(libfossil.FslID) bool, error) {
+	if p == nil || ctx == nil || q == nil || c == nil {
+		panic("content.ConeReferences.HorizonBelow: nil references, context, querier or cone")
+	}
+	h, ok := c.Horizon()
+	if !ok {
+		return nil, nil
+	}
+	var work ReferenceWork
+	above, placed, err := horizonAbove(ctx, q, h, defaultReferenceLimits, &work)
+	if err != nil || !placed {
+		return nil, err
+	}
+	return func(rid libfossil.FslID) bool { return p.below(above, rid) }, nil
+}
+
+// below reports a blob some held F card names that is not above the horizon
+// and that structure, which a content horizon holds at every age, does not
+// also name.
+func (p *ConeReferences) below(above map[string]bool, rid libfossil.FslID) bool {
+	return p.file(rid) && !p.structure(rid) && !above[p.names[rid]]
+}
+
 // treeCacheBytes bounds the expansions a horizon's walk shares: K's
 // manifests are deltas of one another, as are their baselines and nodes.
 const treeCacheBytes = 32 << 20

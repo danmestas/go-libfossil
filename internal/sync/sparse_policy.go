@@ -148,7 +148,7 @@ func (h *handler) ensureSparseKeep() error {
 		h.keep = &sparseKeep{walk: w}
 		return nil
 	}
-	cl, err := h.classifier(ctx, h.repo.DB(), true)
+	cl, err := h.classifier(ctx, h.repo.DB())
 	if err != nil {
 		return err
 	}

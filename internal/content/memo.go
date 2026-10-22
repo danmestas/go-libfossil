@@ -240,11 +240,12 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 	if err != nil || !settled {
 		return nil, 0, err
 	}
-	fresh, cited, err := s.arrivals(q, filled)
+	names := maps.Clone(s.refs.facts.names)
+	fresh, cited, err := s.arrivals(q, filled, names)
 	if err != nil || cited {
 		return nil, 0, err
 	}
-	refs, exact, err := extendReferenceState(ctx, q, s.refs, fresh)
+	refs, exact, err := extendReferenceState(ctx, q, s.refs, fresh, names)
 	if err != nil || !exact {
 		return nil, 0, err
 	}
@@ -288,10 +289,12 @@ func (s *memoStore) settled(q db.Querier, filled []libfossil.FslID) (bool, error
 }
 
 // arrivals lists the rids appended past s's prefix and the phantoms filled
-// since, ascending, and reports whether one now held carries a name a held
+// since, ascending, adding the appended ones' names to names, and reports whether one now held carries a name a held
 // P, B or S card cited while it was absent (§6.2): such an arrival can bring
 // old check-ins into a held set and old trees into a reach.
-func (s *memoStore) arrivals(q db.Querier, filled []libfossil.FslID) ([]libfossil.FslID, bool, error) {
+func (s *memoStore) arrivals(
+	q db.Querier, filled []libfossil.FslID, names map[libfossil.FslID]string,
+) ([]libfossil.FslID, bool, error) {
 	ids, err := ridsJSON(filled)
 	if err != nil {
 		return nil, false, err
@@ -309,6 +312,7 @@ func (s *memoStore) arrivals(q db.Querier, filled []libfossil.FslID) ([]libfossi
 			var held bool
 			err := scan(&rid, &uuid, &held)
 			fresh = append(fresh, rid)
+			names[rid] = uuid
 			cited = cited || held && s.dangling[uuid]
 			return err
 		}, s.prefix.top, ids)

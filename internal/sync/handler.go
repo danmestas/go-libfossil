@@ -198,7 +198,7 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		CardsProcessed:   len(req.Cards),
 		FilesSent:        h.filesSent,
 		FilesReceived:    h.filesRecvd,
-		SparseClassified: h.keep.classified(),
+		SparseClassified: h.keep.classified() + h.structuralRead,
 		Err:              err,
 	})
 	return resp, err
@@ -273,6 +273,7 @@ type handler struct {
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
+	structuralRead  int                       // what placing a structural horizon read through the memo
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)

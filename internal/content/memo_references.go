@@ -12,7 +12,8 @@ import (
 
 // extendReferenceState returns s extended by the artifacts fresh names, the
 // rids appended since s was loaded and the phantoms s held that have been
-// filled, as a load of the whole store would decide them. s is unchanged.
+// filled, as a load of the whole store would decide them; names is every
+// artifact's name now. s is unchanged.
 //
 // A load reads raw only what the crosslink tables cannot answer, and which
 // check-ins they answer is an induction over the whole store (answerable).
@@ -25,7 +26,7 @@ import (
 // An arrival a held P, B or S card cited changes old decisions too; the
 // caller recomputes in full on one before it gets here (§6.2).
 func extendReferenceState(
-	ctx context.Context, q db.Querier, s *referenceState, fresh []libfossil.FslID,
+	ctx context.Context, q db.Querier, s *referenceState, fresh []libfossil.FslID, names map[libfossil.FslID]string,
 ) (out *referenceState, exact bool, err error) {
 	if ctx == nil || q == nil || s == nil {
 		panic("content.extendReferenceState: nil context, querier or state")
@@ -46,7 +47,7 @@ func extendReferenceState(
 	if err != nil || readRaw(s.facts, renamed) {
 		return nil, false, err
 	}
-	r, err := referencePreflight(ctx, q, defaultReferenceLimits.refs)
+	r, err := referencePreflightFor(ctx, q, defaultReferenceLimits.refs, names, fresh)
 	if err != nil {
 		return nil, false, err
 	}

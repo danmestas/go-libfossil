@@ -93,9 +93,9 @@ func (m memoClassifier) reach(ctx context.Context, q db.Querier, h cone.Horizon)
 func (m memoClassifier) read(*content.ConeReferences) int { return m.v.Read() }
 
 // classifier returns how this request classifies over q: through the
-// store's memo when it has one, else afresh. The view is the handler's to
-// publish when classify is set.
-func (h *handler) classifier(ctx context.Context, q db.Querier, publish bool) (classifier, error) {
+// store's memo when it has one, else afresh. The memo's view is the
+// handler's to publish.
+func (h *handler) classifier(ctx context.Context, q db.Querier) (classifier, error) {
 	if h.memo == nil {
 		return freshClassifier{}, nil
 	}
@@ -103,9 +103,7 @@ func (h *handler) classifier(ctx context.Context, q db.Querier, publish bool) (c
 	if err != nil {
 		return nil, err
 	}
-	if publish {
-		h.view = v
-	}
+	h.view = v
 	return memoClassifier{v}, nil
 }
 

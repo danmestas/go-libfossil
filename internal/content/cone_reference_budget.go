@@ -2,11 +2,13 @@ package content
 
 import (
 	"bytes"
+	"cmp"
 	"compress/zlib"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -187,6 +189,66 @@ func referencePreflight(
 	}
 	return r, errors.Join(rows.Err(), rows.Close())
 }
+
+// referencePreflightFor is referencePreflight for an extension: names is
+// every artifact's name, carried from the load being extended, and only the
+// rids listed and the held delta ancestors their reads expand are given
+// metadata, so a round can select from nothing else.
+func referencePreflightFor(
+	ctx context.Context, q db.Querier, budget ReferenceBudget, names map[libfossil.FslID]string,
+	rids []libfossil.FslID,
+) (*referenceReader, error) {
+	if ctx == nil || q == nil || names == nil {
+		panic("content.referencePreflightFor: nil context, querier or names")
+	}
+	if len(names) > budget.Artifacts {
+		return nil, fmt.Errorf("sparse preparation: artifact budget exceeded")
+	}
+	r := &referenceReader{ctx: ctx, q: q, budget: budget, index: map[libfossil.FslID]int{},
+		facts: &ConeReferenceFacts{names: names, held: map[string]libfossil.FslID{},
+			nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{}}}
+	want := rids
+	for len(want) > 0 {
+		ids, err := ridsJSON(want)
+		if err != nil {
+			return nil, err
+		}
+		want = nil
+		err = referenceRows(ctx, q, referenceMetadataForSQL, func(scan func(...any) error) error {
+			var b referenceBlob
+			if err := scan(&b.rid, &b.uuid, &b.size, &b.stored, &b.source); err != nil {
+				return err
+			}
+			if _, seen := r.index[b.rid]; seen || b.size < 0 {
+				return nil
+			}
+			if len(r.held) >= budget.Artifacts || len(b.uuid) > 64 {
+				return fmt.Errorf("sparse preparation: identity budget exceeded")
+			}
+			r.index[b.rid] = len(r.held)
+			r.held = append(r.held, b)
+			if _, seen := r.index[b.source]; b.source != 0 && !seen {
+				want = append(want, b.source)
+			}
+			return nil
+		}, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+	slices.SortFunc(r.held, func(a, b referenceBlob) int { return cmp.Compare(a.rid, b.rid) })
+	for i := range r.held {
+		r.index[r.held[i].rid] = i
+	}
+	return r, nil
+}
+
+// referenceMetadataForSQL is referenceMetadataSQL for the rids of the JSON
+// array ?1.
+const referenceMetadataForSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,
+	CASE WHEN typeof(b.content)='blob' THEN length(b.content) ELSE -1 END,
+	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid
+	WHERE b.rid IN (SELECT value FROM json_each(?1))`
 
 // read reads the held blobs member selects, and parses them, reporting
 // whether any member could not be read. Delta ancestors are expanded too,

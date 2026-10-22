@@ -93,7 +93,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the held set derives the branch, tag and closed state it has densely.
   `Horizon.Structural`, `StructuralServed` and `HorizonFallback` expose it,
   and `repo info`, `repo verify` and the commands that would cross the
-  horizon (`co`, `diff`, `annotate` below C) name it. History renders a
+  horizon (`co`, `diff`, `annotate` below C) name it. An origin labels the
+  parents of every manifest the clone holds, a baseline below C included,
+  not only those of the check-ins in the held set: a clone whose delta
+  manifest's baseline lay below C otherwise stalled requesting that
+  baseline's parent, which the origin withholds (agreed for the draft with
+  zit's author). History renders a
   labelled boundary parent as the horizon: `Repo.Ancestry` ends there
   without an error, `TimelineEntry` and `LogEntry` gain `HorizonParents`,
   and `repo timeline` prints it as `(horizon)`. Interoperates with zit at

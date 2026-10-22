@@ -70,7 +70,7 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 		h.cone = withDepth(h.cone, cone.DepthContent)
 		return nil
 	}
-	boundary, err := boundaryOf(q, k)
+	boundary, err := boundaryOf(q, k, reach)
 	if err != nil {
 		return err
 	}
@@ -106,9 +106,13 @@ func (h *handler) structuralReach(ctx context.Context, hz cone.Horizon) ([]libfo
 	return k, reach, placed, err
 }
 
-// boundaryOf names the boundary hashes of K (§5.3): every check-in a P card
-// of a check-in in K names that is not itself in K, sorted.
-func boundaryOf(q db.Querier, k []libfossil.FslID) ([]string, error) {
+// boundaryOf names the boundary hashes (§5.3): every check-in a P card of a
+// held check-in names that is not itself held, sorted. A clone holds the
+// manifests of K and those they reach (reach, by hash), so a baseline below
+// C is held too, and its parents need labels: unlabelled, the clone would
+// request them as transit and this origin, which withholds manifests below
+// C, would never send them.
+func boundaryOf(q db.Querier, k []libfossil.FslID, reach map[string]bool) ([]string, error) {
 	if q == nil || len(k) == 0 {
 		panic("sync.boundaryOf: nil querier or empty held set")
 	}
@@ -116,9 +120,20 @@ func boundaryOf(q db.Querier, k []libfossil.FslID) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("handler: horizon boundary: %w", err)
 	}
-	rows, err := q.Query(`SELECT DISTINCT b.uuid FROM plink JOIN blob b ON b.rid=plink.pid
-		WHERE plink.cid IN (SELECT value FROM json_each(?1))
-		AND plink.pid NOT IN (SELECT value FROM json_each(?1))`, string(ids))
+	hashes := make([]string, 0, len(reach))
+	for h := range reach {
+		hashes = append(hashes, h)
+	}
+	names, err := json.Marshal(hashes)
+	if err != nil {
+		return nil, fmt.Errorf("handler: horizon boundary: %w", err)
+	}
+	rows, err := q.Query(`WITH held(rid) AS (
+			SELECT value FROM json_each(?1)
+			UNION SELECT b.rid FROM blob b WHERE b.uuid IN (SELECT value FROM json_each(?2)))
+		SELECT DISTINCT b.uuid FROM plink JOIN blob b ON b.rid=plink.pid
+		WHERE plink.cid IN (SELECT rid FROM held)
+		AND plink.pid NOT IN (SELECT rid FROM held)`, string(ids), string(names))
 	if err != nil {
 		return nil, fmt.Errorf("handler: horizon boundary: %w", err)
 	}

@@ -92,7 +92,7 @@ func TestCorpusHorizonPullAfterPush(t *testing.T) {
 		start := time.Now()
 		resp, err := HandleSync(context.Background(), r, &xfer.Message{Cards: []xfer.Card{
 			&xfer.PushCard{ServerCode: "corpus", ProjectCode: pc},
-			&xfer.FileCard{UUID: hashOf(data, tip), Content: data},
+			&xfer.FileCard{UUID: corpusHash(data, tip), Content: data},
 		}})
 		if err != nil {
 			t.Fatal(err)
@@ -104,7 +104,7 @@ func TestCorpusHorizonPullAfterPush(t *testing.T) {
 		after, _ := pull(cursor)
 		t.Logf("%s horizon at %s: cold pull %s, unchanged pull %s, one-artifact push %s, pull after the push %s",
 			tc.name, c[:10], cold, warm, pushed, after)
-		tip = hashOf(data, tip)
+		tip = corpusHash(data, tip)
 	}
 }
 
@@ -139,8 +139,8 @@ func corpusCopy(dst, src string) error {
 	return out.Close()
 }
 
-// hashOf names data under the hash of like, as the store names its artifacts.
-func hashOf(data []byte, like string) string {
+// corpusHash names data under the hash of like, as the store names its artifacts.
+func corpusHash(data []byte, like string) string {
 	if len(like) == 40 {
 		return hash.SHA1(data)
 	}

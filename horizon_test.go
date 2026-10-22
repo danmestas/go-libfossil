@@ -423,3 +423,51 @@ func TestCloneIntoStructuralStore(t *testing.T) {
 		t.Fatalf("pull: StructuralServed = %d, HorizonFallback = %v", sres.StructuralServed, sres.HorizonFallback)
 	}
 }
+
+// DeepenHorizon moves a store's horizon to the check-in named and fetches
+// what the deeper horizon keeps, keeping the depth (draft-fossil-horizon-00
+// §5.8). It needs a peer and a horizon to deepen.
+func TestDeepenHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if _, err := target.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{}); err == nil {
+		t.Fatal("deepening without a peer succeeded")
+	}
+	res, err := target.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{Peer: f.peer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StructuralServed == 0 || res.HorizonFallback {
+		t.Fatalf("deepen: StructuralServed = %d, HorizonFallback = %v", res.StructuralServed, res.HorizonFallback)
+	}
+	got, err := target.StoreCone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := got.Horizon(); !ok || h.Checkin != f.c1 || !h.Structural {
+		t.Fatalf("store cone horizon = %+v, %v; want %s structural", h, ok, f.c1)
+	}
+	if _, held, err := content.CheckAvailableByUUID(target.inner.DB(), f.c1); err != nil || !held {
+		t.Fatalf("the deepened-to manifest is not held (%v)", err)
+	}
+	if !holdsBlob(t, target, "old a\n") {
+		t.Fatal("the deepen fetched no blob the deeper horizon keeps")
+	}
+	dense, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "d.fossil"), f.peer, CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dense.Close()
+	if _, err := dense.DeepenHorizon(context.Background(), f.c1, RequiredContentOpts{Peer: f.peer}); err == nil {
+		t.Fatal("deepening a store with no horizon succeeded")
+	}
+}

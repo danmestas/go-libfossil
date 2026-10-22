@@ -53,3 +53,30 @@ func TestRepoCloneStructural(t *testing.T) {
 		}
 	}
 }
+
+// `repo cone deepen` moves a structural store's horizon to a check-in below
+// it, from the saved remote, and keeps the structural depth
+// (draft-fossil-horizon-00 §5.8); the check-in below the old horizon can
+// then be checked out.
+func TestRepoConeDeepen(t *testing.T) {
+	url, c1, c2, _ := horizonSource(t)
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2, Structural: true}).Run(&Globals{})
+	})
+	out := requiredHTTPStdout(t, func() error {
+		return (&RepoConeDeepenCmd{Checkin: c1}).Run(&Globals{Repo: path})
+	})
+	if !strings.Contains(out, "horizon "+c1+" descendants structural\n") {
+		t.Fatalf("deepen output = %q", out)
+	}
+	if got, want := storeConeOutput(t, path), "horizon "+c1+" descendants structural\n"; got != want {
+		t.Fatalf("store cone = %q, want %q", got, want)
+	}
+	if !holdsBlob(t, path, "old a\n") {
+		t.Fatal("the deepen fetched no blob the deeper horizon keeps")
+	}
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCoCmd{Version: c1, Dir: t.TempDir()}).Run(&Globals{Repo: path})
+	})
+}

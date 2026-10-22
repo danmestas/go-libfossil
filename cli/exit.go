@@ -70,5 +70,5 @@ func crossesHorizon(r *libfossil.Repo, rid int64) error {
 		return err
 	}
 	return fmt.Errorf("%s is below the structural horizon at %s: its history is not held here; "+
-		"deepen the horizon to it (repo cone store --horizon %s --structural) to reach it", uuid, h.Hash(), uuid)
+		"deepen the horizon to it (repo cone deepen %s) to reach it", uuid, h.Hash(), uuid)
 }

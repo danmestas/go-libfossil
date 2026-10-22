@@ -24,6 +24,7 @@ type RepoConeCmd struct {
 	Dense   RepoConeDenseCmd   `cmd:"" help:"Drop the cone and materialize every file"`
 	Test    RepoConeTestCmd    `cmd:"" help:"Classify paths against the cone and name the deciding member"`
 	Store   RepoConeStoreCmd   `cmd:"" help:"Show or replace the repository's store cone, fetching what widening covers"`
+	Deepen  RepoConeDeepenCmd  `cmd:"" help:"Move the store's horizon down to reach a check-in, fetching the history it keeps"`
 	Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
 }
 
@@ -175,6 +176,42 @@ func (c *RepoConeStoreCmd) storeCone(r *libfossil.Repo, members bool) (*libfossi
 		return libfossil.NewHorizonCone(nil, nil, h)
 	}
 	return current.WithHorizon(&h)
+}
+
+// RepoConeDeepenCmd deepens the store's horizon (draft-fossil-horizon-00
+// §5.8) so that it reaches a check-in: C moves to that check-in when it is
+// an ancestor of C, else to a common ancestor of the two, which the remote
+// is asked for when the store cannot see one. The rule, the depth and the
+// path members stay. History comes from --remote, else the saved
+// last-sync-url.
+type RepoConeDeepenCmd struct {
+	RecoveryFlags
+	Checkin string `arg:"" help:"Check-in to reach: a full hash, which may lie below the horizon, or a name"`
+}
+
+func (c *RepoConeDeepenCmd) Run(g *Globals) (err error) {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+	required, err := c.requiredContent(r)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cloneContext(context.Background(), c.Timeout)
+	defer cancel()
+	result, err := r.DeepenHorizon(ctx, c.Checkin, required)
+	if err != nil {
+		return err
+	}
+	cone, err := r.StoreCone()
+	if err != nil {
+		return err
+	}
+	printCone(cone)
+	fmt.Printf("fetched %d artifact(s)\n", result.FilesRecvd)
+	return nil
 }
 
 // structuralSuffix marks a structural horizon where one is printed; the

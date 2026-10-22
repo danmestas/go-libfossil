@@ -392,3 +392,45 @@ func BenchmarkCache_Expand(b *testing.B) {
 		c.Expand(d, rid)
 	}
 }
+
+func TestCacheDerived(t *testing.T) {
+	var nilCache *Cache
+	nilCache.SetDerived("k", 1)
+	if _, ok := nilCache.Derived("k"); ok {
+		t.Fatal("nil cache held a derived value")
+	}
+
+	c := NewCache(1 << 20)
+	if _, ok := c.Derived("k"); ok {
+		t.Fatal("empty cache held a derived value")
+	}
+	c.SetDerived("k", 1)
+	c.SetDerived("k", 2)
+	if v, ok := c.Derived("k"); !ok || v != 2 {
+		t.Fatalf("Derived(k) = %v, %v; want 2, true", v, ok)
+	}
+	if got := c.Stats().DerivedHits; got != 1 {
+		t.Fatalf("DerivedHits = %d, want 1", got)
+	}
+
+	// Past maxDerived the oldest value goes; re-setting a held key is not new.
+	for i := 0; i < maxDerived; i++ {
+		c.SetDerived(i, i)
+	}
+	if _, ok := c.Derived("k"); ok {
+		t.Fatal("oldest derived value survived eviction")
+	}
+	if v, ok := c.Derived(maxDerived - 1); !ok || v != maxDerived-1 {
+		t.Fatalf("newest derived value lost: %v, %v", v, ok)
+	}
+
+	c.Invalidate(1)
+	if _, ok := c.Derived(maxDerived - 1); ok {
+		t.Fatal("Invalidate kept a derived value")
+	}
+	c.SetDerived("k", 3)
+	c.Clear()
+	if _, ok := c.Derived("k"); ok {
+		t.Fatal("Clear kept a derived value")
+	}
+}

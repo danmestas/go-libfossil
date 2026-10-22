@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,12 +34,14 @@ func TestCorpusCheckBlobs(t *testing.T) {
 // LIBFOSSIL_CORPUS names one.
 func TestCorpusRebuild(t *testing.T) {
 	r := openCorpusCopy(t)
+	peak := samplePeakHeap(t)
 	report, err := Rebuild(r)
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
-	t.Logf("rebuilt in %s: %d blobs checked, %d failed",
-		report.Duration.Round(time.Millisecond), report.BlobsChecked, report.BlobsFailed)
+	t.Logf("rebuilt in %s: %d blobs checked, %d failed, peak heap %d MiB",
+		report.Duration.Round(time.Millisecond), report.BlobsChecked, report.BlobsFailed,
+		peak()>>20)
 	if !report.OK() {
 		t.Errorf("issues: %d, first: %+v", len(report.Issues), report.Issues[0])
 	}
@@ -61,6 +65,30 @@ func TestCorpusVerify(t *testing.T) {
 		}
 		t.Logf("issue: %+v", issue)
 	}
+}
+
+// samplePeakHeap polls the Go heap until the test ends and returns a func
+// reporting the highest HeapInuse seen, in bytes.
+func samplePeakHeap(t *testing.T) func() uint64 {
+	t.Helper()
+	var peak atomic.Uint64
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	go func() {
+		var ms runtime.MemStats
+		for {
+			runtime.ReadMemStats(&ms)
+			if ms.HeapInuse > peak.Load() {
+				peak.Store(ms.HeapInuse)
+			}
+			select {
+			case <-done:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+	return peak.Load
 }
 
 // openCorpusCopy opens a private copy of the LIBFOSSIL_CORPUS repository, or

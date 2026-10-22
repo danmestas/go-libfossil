@@ -74,7 +74,7 @@ func afterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID, l
 	}
 	cache := cl.cache.Stats()
 	cl.stats.expansions = int(cache.Misses)
-	cl.stats.cacheHits = int(cache.Hits)
+	cl.stats.cacheHits = int(cache.Hits + cache.DerivedHits)
 	logDeferredCheckinSummary("AfterDephantomize", cl.guard, cl.stats.linked)
 	return cl.stats
 }
@@ -591,7 +591,8 @@ type cascadeStats struct {
 	commits int
 	// expansions counts content expansions actually materialized, and cacheHits
 	// those the cascade's shared cache served instead. A delta base or parent
-	// manifest several artifacts need shows up as one expansion and many hits.
+	// manifest several artifacts need shows up as one expansion and many hits;
+	// a parsed form kept beside the cached bytes counts as a hit too.
 	expansions int
 	cacheHits  int
 }

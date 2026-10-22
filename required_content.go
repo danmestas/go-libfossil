@@ -201,3 +201,43 @@ func (r *Repo) DeepenHorizon(
 	}
 	return convertSyncResult(res), nil
 }
+
+// SeedVerification reports VerifySeed: how many of the seed's T cards were
+// checked, and each tag at an entry of the held set where the seed and the
+// derivation over real artifacts disagree.
+type SeedVerification struct {
+	Checked    int
+	Mismatches []SeedMismatch
+}
+
+// SeedMismatch is one tag on which a seed and the derivation disagree at a
+// check-in. Seeded and Derived spell the tag as a T card does, sign then
+// value ("*red", "+"), and are "" where it is absent.
+type SeedMismatch struct {
+	Checkin, Tag, Seeded, Derived string
+}
+
+// VerifySeed verifies a structural store's seed by deepening
+// (draft-fossil-horizon-00 §5.9): it fetches every manifest below the
+// horizon from Peer, so the store holds the real tag artifacts and
+// primary-parent chains, discards the seed, and compares what the store now
+// derives at each entry with what the seed asserted. The price is that
+// history, and the store stays a content-horizon store at the same C, which
+// holds no seed; a failed transfer puts the structural cone and seed back.
+func (r *Repo) VerifySeed(ctx context.Context, required RequiredContentOpts) (*SeedVerification, error) {
+	if err := required.validate(ctx); err != nil {
+		return nil, err
+	}
+	if required.Peer == nil {
+		return nil, fmt.Errorf("libfossil: verify seed: no peer to fetch the history below the horizon from")
+	}
+	report, err := internalsync.VerifySeed(ctx, r.inner, &transportAdapter{pub: required.Peer}, required.internalSync())
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: verify seed: %w", err)
+	}
+	out := &SeedVerification{Checked: report.Checked}
+	for _, m := range report.Mismatches {
+		out.Mismatches = append(out.Mismatches, SeedMismatch(m))
+	}
+	return out, nil
+}

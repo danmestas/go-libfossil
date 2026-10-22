@@ -11,11 +11,14 @@ import (
 	"time"
 
 	gofossil "github.com/danmestas/go-libfossil"
+	"github.com/danmestas/go-libfossil/db"
 
 	"github.com/danmestas/go-libfossil/internal/branch"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/merge"
@@ -31,7 +34,7 @@ import (
 
 func horizonDeepenCases() []Case {
 	return []Case{horizonMergeBaseQuery, horizonMergeBaseBound, horizonDeepen, horizonDeepenPoint, horizonDeepenFailed,
-		horizonMergeCrossing, horizonMergeDeepen, horizonPushCheck}
+		horizonMergeCrossing, horizonMergeDeepen, horizonPushCheck, horizonSeedVerify}
 }
 
 var (
@@ -43,6 +46,7 @@ var (
 	horizonMergeCrossing  = Case{ID: "horizon.5.5.merge-crossing", Req: "HZ-5.5-1"}
 	horizonMergeDeepen    = Case{ID: "horizon.5.5.merge-deepen", Req: "HZ-5.5-2"}
 	horizonPushCheck      = Case{ID: "horizon.5.7.push-check", Req: "HZ-5.7-2"}
+	horizonSeedVerify     = Case{ID: "horizon.5.9.verify-seed", Req: "HZ-5.9-1"}
 )
 
 func TestHorizonDeepen(t *testing.T) {
@@ -54,6 +58,7 @@ func TestHorizonDeepen(t *testing.T) {
 	check(t, horizonMergeCrossing, func() error { return hzMergeCrossing(t) })
 	check(t, horizonMergeDeepen, func() error { return hzMergeDeepen(t) })
 	check(t, horizonPushCheck, func() error { return hzPushCheck(t) })
+	check(t, horizonSeedVerify, func() error { return hzSeedVerify(t) })
 }
 
 // hzMergeBaseQuery: a structural clone asks its origin for the merge base of
@@ -397,6 +402,64 @@ func hzPushCheck(t *testing.T) error {
 		return strings.HasPrefix(s, "sym-moved") || strings.HasPrefix(s, "sym-trunk")
 	}) {
 		return expectf("the origin derives the corrected check-in as %v (%v)", got, err)
+	}
+	return nil
+}
+
+// hzSeedVerify: verification by deepening (§5.9) holds the real tag artifacts
+// and primary-parent chains below C, derives every entry's tag state from
+// them and compares it with what the seed asserted. An honest seed verifies;
+// one whose hue was altered after delivery is reported at its entry. The
+// store is left a content-horizon store holding no seed.
+func hzSeedVerify(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	report, err := sync.VerifySeed(context.Background(), r, x.peer(), sync.SyncOpts{})
+	if err != nil || report.Checked == 0 || len(report.Mismatches) != 0 {
+		return expectf("an honest seed: %v %+v", err, report)
+	}
+	if err := hzStoredHorizon(r, x.c3, cone.DepthContent); err != nil {
+		return err
+	}
+	if held, err := seed.Held(r.DB()); err != nil || held != nil {
+		return expectf("a verified store still holds a seed (%v)", err)
+	}
+
+	x = newHZStruct(t)
+	r, _, err = x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	d, err := deck.Parse(mustHeld(t, r))
+	if err != nil {
+		return err
+	}
+	for i := range d.T {
+		if d.T[i].Name == "hue" {
+			d.T[i].Value = "green"
+		}
+	}
+	forged, err := d.Marshal()
+	if err != nil {
+		return err
+	}
+	if err := r.WithTx(func(tx *db.Tx) error { return seed.Hold(tx, hash.SHA3(forged), forged, nil) }); err != nil {
+		return err
+	}
+	report, err = sync.VerifySeed(context.Background(), r, x.peer(), sync.SyncOpts{})
+	if err != nil {
+		return err
+	}
+	if len(report.Mismatches) == 0 {
+		return expectf("an altered seed verified: %+v", report)
+	}
+	for _, m := range report.Mismatches {
+		if m.Tag != "hue" || m.Seeded != "*green" || m.Derived != "*red" {
+			return expectf("mismatch %+v, want hue seeded *green, derived *red", m)
+		}
 	}
 	return nil
 }

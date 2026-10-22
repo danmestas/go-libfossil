@@ -157,3 +157,21 @@ func TestRepoMergeDeepensAcrossHorizon(t *testing.T) {
 		t.Fatalf("the base %s's content is not held after the merge", f)
 	}
 }
+
+// `repo verify --seed` verifies the structural store's seed by deepening
+// (draft-fossil-horizon-00 §5.9): it fetches the history below the horizon
+// from the saved remote, compares, and leaves a content-horizon store.
+func TestRepoVerifySeed(t *testing.T) {
+	url, _, c2, _ := horizonSource(t)
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2, Structural: true}).Run(&Globals{})
+	})
+	out := requiredHTTPStdout(t, func() error { return (&RepoVerifyCmd{Seed: true}).Run(&Globals{Repo: path}) })
+	if !strings.Contains(out, "seed verified:") || !strings.Contains(out, "repository integrity verified") {
+		t.Fatalf("verify --seed output = %q", out)
+	}
+	if got, want := storeConeOutput(t, path), "horizon "+c2+" descendants\n"; got != want {
+		t.Fatalf("store cone after verify --seed = %q, want %q", got, want)
+	}
+}

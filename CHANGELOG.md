@@ -134,7 +134,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Repo.Merge` merged against a different base than `fossil merge` and
   produced different results. Both now follow fossil exactly, checked
   against fossil 2.28 on 114 merge-base queries and a byte-for-byte merge.
-  Merges still do not follow renames, which fossil does.
+- Merges follow renames as fossil's merge does. A file renamed on one side
+  and edited on the other used to merge as a delete and an add; fossil's
+  name pivot, `find_filename_changes` and file matching are now ported, so
+  it merges into the renamed file, and renames on both sides, rename
+  chains, swaps and rename-with-delete resolve as fossil resolves them. A
+  merged-in rename is applied to the checkout and reported:
+  `CheckoutMergeFile.RenamedTo`, and `RENAME a -> b` from `repo merge` in
+  fossil's order. Matches fossil 2.28 on 13 rename scenarios, including
+  the bytes, `fossil changes` and the committed F cards. Where fossil would
+  rename over a file the checkout keeps or over an untracked file,
+  go-libfossil refuses instead, and a rename across a sparse cone boundary
+  is refused.
+- `Repo.Merge` no longer brings back files the merge deleted: it carried
+  the target's file list forward and restored them. It now commits the
+  merged tree, recording renames through the new `FileToCommit.OldName`.
 - A sparse store of a real-sized repository classifies its absent
   artifacts. v0.14.0 read, inflated and expanded every blob in the store,
   file content included, to find the manifests among them, under a

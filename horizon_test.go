@@ -3,6 +3,8 @@ package libfossil
 import (
 	"context"
 	"errors"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -314,5 +316,50 @@ func TestRequiredStoreUnionKeepsStoreHorizon(t *testing.T) {
 	}
 	if _, err := requiredStoreUnion(checkout, pathed); err == nil {
 		t.Fatal("a horizon on the widening side was accepted")
+	}
+}
+
+// A sync over the HTTP transport keys the horizon cursor by the peer's URL,
+// so the next request to that peer can send it (draft-fossil-horizon-00
+// §6.2.6), and the key never carries the URL's password. Method: clone a
+// horizon store over HTTP, pull with a URL that carries credentials, and
+// read the cursor back under the password-free URL.
+func TestSyncKeysHorizonCursorByURL(t *testing.T) {
+	f := newHorizonFixture(t)
+	server := httptest.NewServer(f.source.XferHandler())
+	defer server.Close()
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"),
+		NewHTTPTransport(server.URL), CloneOpts{StoreCone: hc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword("anon", "s3cret")
+	if _, err := target.Sync(context.Background(), NewHTTPTransport(u.String()), SyncOpts{Pull: true}); err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.User("anon")
+	cursor, err := target.Config("horizon-cursor:" + u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cursor == "" {
+		t.Fatalf("no horizon cursor recorded for %s", u)
+	}
+	var leaked int
+	if err := target.inner.DB().QueryRow(
+		"SELECT count(*) FROM config WHERE name LIKE '%s3cret%' OR value LIKE '%s3cret%'").Scan(&leaked); err != nil {
+		t.Fatal(err)
+	}
+	if leaked != 0 {
+		t.Fatalf("%d config rows carry the URL's password", leaked)
 	}
 }

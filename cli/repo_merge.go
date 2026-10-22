@@ -62,9 +62,11 @@ var mergeLabels = map[string]string{
 	"added":    "ADDED",
 	"deleted":  "DELETE",
 	"mode":     "MODE",
+	"renamed":  "RENAME",
 }
 
-// printMergeResult reports a merge the way fossil's merge command does.
+// printMergeResult reports a merge the way fossil's merge command does:
+// renames after every other change but additions, which come last.
 func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 	if len(res.Files) == 0 {
 		fmt.Println("merge skipped: nothing to merge")
@@ -77,6 +79,8 @@ func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 			panic("cli.printMergeResult: unknown merge action " + f.Action)
 		}
 		switch f.Action {
+		case "renamed", "added":
+			// Printed below.
 		case "conflict":
 			fmt.Printf("%s %s\n***** merge conflict in %s\n", label, f.Name, f.Name)
 			conflicts++
@@ -88,6 +92,16 @@ func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 			conflicts++
 		default:
 			fmt.Printf("%s %s\n", label, f.Name)
+		}
+	}
+	for _, f := range res.Files {
+		if f.RenamedTo != "" {
+			fmt.Printf("%s %s -> %s\n", mergeLabels["renamed"], f.Name, f.RenamedTo)
+		}
+	}
+	for _, f := range res.Files {
+		if f.Action == "added" {
+			fmt.Printf("%s %s\n", mergeLabels["added"], f.Name)
 		}
 	}
 	if conflicts > 0 {

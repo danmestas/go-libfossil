@@ -141,11 +141,17 @@ type CheckoutMergeResult struct {
 //	"added"    - new in the merged-in version
 //	"deleted"  - deleted in the merged-in version, unchanged here
 //	"mode"     - only the merged-in version changed its executable bit; taken
+//	"renamed"  - only renamed: the merged-in version renamed it, this checkout did not
+//
+// Name is the file's name in the checkout before the merge. RenamedTo is
+// set when the merge also renamed it, as fossil's merge does a file the
+// merged-in version renamed and the checkout did not.
 type CheckoutMergeFile struct {
-	Name     string
-	Action   string
-	Strategy string // the strategy that merged it, when one ran
-	Reason   string // why the file was kept, for "kept"
+	Name      string
+	Action    string
+	Strategy  string // the strategy that merged it, when one ran
+	Reason    string // why the file was kept, for "kept"
+	RenamedTo string // its new name, when the merge renamed it
 }
 
 // CheckoutChange describes a single file change in the checkout.
@@ -394,8 +400,11 @@ func (c *Checkout) checkin(
 // Merge refuses, changing nothing, when the repository lacks content it
 // needs or an added file would overwrite an untracked one. A file edited
 // here but deleted in the merged-in version is kept and reported. Renames
-// are not followed. Merging the checkout's own version or one of its
-// ancestors does nothing. The common ancestor is the one fossil's merge
+// are followed as fossil's merge follows them: a change made under one name
+// is merged into the file under another, and a file the merged-in checkin
+// renamed is renamed here too (CheckoutMergeFile.RenamedTo); Merge refuses
+// to rename one onto a file the checkout keeps or an untracked file.
+// Merging the checkout's own version or one of its ancestors does nothing. The common ancestor is the one fossil's merge
 // diffs against: the most recent common ancestor of the merged-in checkin
 // and the checkout's version with every checkin already merged into it.
 func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
@@ -416,10 +425,11 @@ func (c *Checkout) merge(opts CheckoutMergeOpts, baseline int64) (CheckoutMergeR
 	out := CheckoutMergeResult{Ancestor: int64(res.Ancestor)}
 	for _, f := range res.Files {
 		out.Files = append(out.Files, CheckoutMergeFile{
-			Name:     f.Name,
-			Action:   mergeActionString(f.Action),
-			Strategy: f.Strategy,
-			Reason:   f.Reason,
+			Name:      f.Name,
+			Action:    mergeActionString(f.Action),
+			Strategy:  f.Strategy,
+			Reason:    f.Reason,
+			RenamedTo: f.RenamedTo,
 		})
 	}
 	return out, nil
@@ -454,6 +464,8 @@ func mergeActionString(a checkout.MergeAction) string {
 		return "deleted"
 	case checkout.MergeMode:
 		return "mode"
+	case checkout.MergeRenamed:
+		return "renamed"
 	default:
 		panic(fmt.Sprintf("libfossil: unknown merge action %d", a))
 	}

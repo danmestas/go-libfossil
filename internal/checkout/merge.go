@@ -43,6 +43,9 @@ const (
 	// MergeMode: only the merged-in version changed the file's executable
 	// bit, so its bit was taken.
 	MergeMode
+	// MergeRenamed: the merged-in version renamed the file and changed
+	// nothing else the merge takes, so it was only renamed.
+	MergeRenamed
 )
 
 // MergeOpts configures Merge.
@@ -55,12 +58,15 @@ type MergeOpts struct {
 	Baseline libfossil.FslID
 }
 
-// MergeFile reports one file Merge acted on.
+// MergeFile reports one file Merge acted on. Name is the file's name in
+// the checkout before the merge, or in the merged-in version for an added
+// file.
 type MergeFile struct {
-	Name     string
-	Action   MergeAction
-	Strategy string // the strategy that merged the file, when one ran
-	Reason   string // why the file was kept, for MergeKept
+	Name      string
+	Action    MergeAction
+	Strategy  string // the strategy that merged the file, when one ran
+	Reason    string // why the file was kept, for MergeKept
+	RenamedTo string // the name the merge renamed the file to, if it did
 }
 
 // MergeResult reports a merge. Files is sorted by name and is empty when
@@ -89,8 +95,15 @@ type MergeResult struct {
 // sparse checkout, uncovered changes are recorded without touching disk. Where
 // fossil relies on its undo copy, Merge keeps the checkout's file instead:
 // a file edited here but deleted in the merged-in version is kept and
-// reported, not deleted. Renames are not followed: a file renamed on one
-// side is a deletion and an addition to the other.
+// reported, not deleted.
+//
+// Renames are followed as fossil's merge follows them (merge.FollowRenames):
+// a file is matched across the versions by its name in each, so a change
+// made under one name is merged into the file under another. A file the
+// merged-in version renamed and the checkout did not is renamed, and keeps
+// whatever changes the checkout made; a file the checkout renamed keeps its
+// name. Where fossil would rename a file over one the checkout tracks and
+// keeps, or over an untracked file, Merge refuses, as it does an add.
 //
 // opts.Strategy names the strategy for every file; empty picks one per file
 // from the repository's .libfossil-merge rules and merge-strategy setting,
@@ -147,11 +160,11 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if err := c.ScanChanges(ScanENotFile); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
-	plan := mergePlan{vid: vid, pivot: pivot, mid: opts.Version}
+	plan := mergePlan{vid: vid, pivot: pivot, mid: opts.Version, baseline: opts.Baseline > 0}
 	if err := c.planMerge(&plan, opts.Strategy); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
-	if err := c.checkMergeTargets(plan.steps); err != nil {
+	if err := c.checkMergeTargets(plan); err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
 	}
 	if !opts.DryRun {
@@ -167,8 +180,7 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 // pivot_find(0)): the pivot of the merged-in version, primary, and the
 // checkout's version together with every check-in already merged into it,
 // the vmerge rows with id 0. opts.Baseline overrides it, as --baseline does.
-// Fossil's name pivot, pivot_find(1), only follows renames (add_renames),
-// which Merge does not, so it is not computed.
+// The name pivot renames are followed from is merge.FollowRenames'.
 func (c *Checkout) mergeBase(vid libfossil.FslID, opts MergeOpts) (merge.Pivot, error) {
 	if opts.Baseline > 0 {
 		return merge.Pivot{RID: opts.Baseline}, nil
@@ -195,6 +207,8 @@ func (c *Checkout) mergeBase(vid libfossil.FslID, opts MergeOpts) (merge.Pivot, 
 // mergePlan is a merge worked out in full before anything is changed.
 type mergePlan struct {
 	vid, pivot, mid libfossil.FslID
+	baseline        bool        // pivot was given, not found
+	rows            []vfile.Row // the checkout's files
 	steps           []mergeStep // sorted by name
 }
 
@@ -330,10 +344,7 @@ func (c *Checkout) planMerge(plan *mergePlan, strategyName string) error {
 	if err != nil {
 		return err
 	}
-	byName := make(map[string]*vfile.Row, len(rows))
-	for i := range rows {
-		byName[rows[i].Pathname] = &rows[i]
-	}
+	plan.rows = rows
 	ancestor, err := c.mergeSides(plan.pivot)
 	if err != nil {
 		return err
@@ -342,36 +353,83 @@ func (c *Checkout) planMerge(plan *mergePlan, strategyName string) error {
 	if err != nil {
 		return err
 	}
+	local := make([]merge.LocalFile, len(rows))
+	for i, r := range rows {
+		local[i] = merge.LocalFile{
+			Name: r.Pathname, Orig: r.RenamedFrom(),
+			Added: r.IsAdded() || r.Chnged == 3 || r.Chnged == 5,
+		}
+	}
+	matches, err := merge.FollowRenames(context.Background(), c.repo, merge.RenameQuery{
+		V: plan.vid, P: plan.pivot, M: plan.mid, Baseline: plan.baseline,
+		Local: local, Pivot: sortedNames(ancestor), Merged: sortedNames(merged),
+	})
+	if err != nil {
+		return err
+	}
 
-	for _, name := range mergeNames(byName, ancestor, merged) {
-		row, p, m := byName[name], ancestor[name], merged[name]
+	for _, match := range matches {
+		var row *vfile.Row
+		if match.Local >= 0 {
+			row = &rows[match.Local]
+		}
+		p, m := ancestor[match.Pivot], merged[match.Merged]
 		kind := classifyMerge(row, p, m)
-		if kind == mergeSkip {
+		renameTo := mergeRenameTo(row, match, p, m)
+		if kind == mergeSkip && renameTo == "" {
 			continue
 		}
-		step, err := c.planStep(name, kind, row, p, m, choose)
-		if err != nil {
+		name := match.Pivot
+		switch {
+		case row != nil:
+			name = row.Pathname
+		case m.rid > 0:
+			name = match.Merged
+		}
+		var step mergeStep
+		if kind == mergeSkip {
+			step = c.planRenameOnly(*row, p, m)
+		} else if step, err = c.planStep(name, kind, row, p, m, choose); err != nil {
 			return err
 		}
+		step.file.RenamedTo = renameTo
 		plan.steps = append(plan.steps, step)
 	}
+	sort.Slice(plan.steps, func(i, j int) bool {
+		return plan.steps[i].file.Name < plan.steps[j].file.Name
+	})
 	return nil
 }
 
-// mergeNames is every name any of the three versions has, sorted.
-func mergeNames(rows map[string]*vfile.Row, p, m map[string]mergeSide) []string {
-	seen := make(map[string]bool, len(rows)+len(m))
-	for name := range rows {
-		seen[name] = true
+// mergeRenameTo is the name the merge renames the checkout's file to, or
+// "": a file the merged-in version renamed and the checkout did not, as
+// fossil's merge picks them (fnp=fn AND fnm!=fnp, every version having it).
+func mergeRenameTo(row *vfile.Row, match merge.FileMatch, p, m mergeSide) string {
+	if row == nil || p.rid <= 0 || m.rid <= 0 {
+		return ""
 	}
-	for name := range p {
-		seen[name] = true
+	if match.Pivot != row.Pathname || match.Merged == match.Pivot {
+		return ""
 	}
-	for name := range m {
-		seen[name] = true
+	return match.Merged
+}
+
+// planRenameOnly is the step for a file the merge only renames.
+func (c *Checkout) planRenameOnly(row vfile.Row, p, m mergeSide) mergeStep {
+	return mergeStep{
+		file:       MergeFile{Name: row.Pathname, Action: MergeRenamed},
+		row:        row,
+		merged:     m,
+		exe:        mergedExe(row, p, m),
+		recordOnly: !c.covers(row.Pathname),
+		pivotRID:   p.rid,
 	}
-	names := make([]string, 0, len(seen))
-	for name := range seen {
+}
+
+// sortedNames is a version's file names, sorted.
+func sortedNames(sides map[string]mergeSide) []string {
+	names := make([]string, 0, len(sides))
+	for name := range sides {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -607,7 +665,8 @@ func (c *Checkout) readWorkingFile(row vfile.Row) (data []byte, present bool, er
 // the merge writes or deletes where something other than a regular file
 // stands, or under a parent that is not a directory. Failing on those
 // midway would leave files merged on disk with no record of the merge.
-func (c *Checkout) checkMergeTargets(steps []mergeStep) error {
+func (c *Checkout) checkMergeTargets(plan mergePlan) error {
+	steps := plan.steps
 	var unresolved []string
 	for _, s := range steps {
 		if s.recordOnly && s.file.Action == MergeConflict {
@@ -616,6 +675,9 @@ func (c *Checkout) checkMergeTargets(steps []mergeStep) error {
 	}
 	if len(unresolved) > 0 {
 		return fmt.Errorf("unresolved both-changed paths require widening and re-running the merge: %w", c.outsideCone("Merge", unresolved))
+	}
+	if err := c.checkMergeRenames(plan); err != nil {
+		return err
 	}
 	for _, s := range steps {
 		if !s.changesDisk() {
@@ -635,6 +697,53 @@ func (c *Checkout) checkMergeTargets(steps []mergeStep) error {
 			return fmt.Errorf(
 				"merge would overwrite untracked file %s; move it aside first", s.file.Name,
 			)
+		}
+	}
+	return nil
+}
+
+// checkMergeRenames refuses a rename the merge cannot carry out without
+// destroying something: onto a name the checkout tracks and keeps, or onto
+// a file on disk that no step moves or deletes first (fossil overwrites
+// either, relying on its undo copy). A rename into or out of a sparse cone
+// is refused too: the file would change between materialized and not.
+func (c *Checkout) checkMergeRenames(plan mergePlan) error {
+	vacated := map[string]bool{}
+	var outside []string
+	for _, s := range plan.steps {
+		if s.file.RenamedTo != "" || s.file.Action == MergeDeleted {
+			vacated[s.file.Name] = true
+		}
+		if s.file.RenamedTo != "" && (!c.covers(s.file.Name) || !c.covers(s.file.RenamedTo)) {
+			outside = append(outside, s.file.Name)
+		}
+	}
+	if len(outside) > 0 {
+		return fmt.Errorf("renames across the sparse cone require widening and re-running the merge: %w", c.outsideCone("Merge", outside))
+	}
+	tracked := make(map[string]vfile.Row, len(plan.rows))
+	for _, r := range plan.rows {
+		tracked[r.Pathname] = r
+	}
+	for _, s := range plan.steps {
+		to := s.file.RenamedTo
+		if to == "" || vacated[to] {
+			continue
+		}
+		if r, ok := tracked[to]; ok && !r.IsRemoved() {
+			return fmt.Errorf("merge would rename %s over %s, which this checkout tracks", s.file.Name, to)
+		}
+		if err := c.checkMergeTarget(to); err != nil {
+			return err
+		}
+		full, err := c.safePath(to)
+		if err != nil {
+			return err
+		}
+		if _, err := c.env.Storage.Stat(full); err == nil {
+			return fmt.Errorf("merge would rename %s over untracked file %s; move it aside first", s.file.Name, to)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat %s: %w", full, err)
 		}
 	}
 	return nil
@@ -698,9 +807,19 @@ func (c *Checkout) applyMerge(plan mergePlan) error {
 		panic("checkout.applyMerge: no merged-in version")
 	}
 	var names []string
+	seen := map[string]bool{}
+	touch := func(name string) {
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
 	for _, s := range plan.steps {
-		if s.changesDisk() {
-			names = append(names, s.file.Name)
+		if s.changesDisk() || s.file.RenamedTo != "" {
+			touch(s.file.Name)
+		}
+		if s.file.RenamedTo != "" {
+			touch(s.file.RenamedTo)
 		}
 	}
 	saved, err := c.readFilesUndo(names)
@@ -728,6 +847,9 @@ func (c *Checkout) applyMergeTx(tx *sql.Tx, plan mergePlan) error {
 		if err := c.applyMergeStep(tx, plan.vid, s); err != nil {
 			return fmt.Errorf("%s: %w", s.file.Name, err)
 		}
+	}
+	if err := c.applyMergeRenames(tx, plan); err != nil {
+		return err
 	}
 	mhash, err := blobUUID(c.repo.DB(), plan.mid)
 	if err != nil {
@@ -779,6 +901,8 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 			return err
 		}
 		return insertVMerge(tx, s.row.ID, s.merged.rid, s.merged.uuid)
+	case MergeRenamed:
+		return nil // applyMergeRenames
 	case MergeKept, MergeForked:
 		// Fossil records a file its merge loop reached even when the merge
 		// kept the checkout's copy (a binary file); a file no strategy saw
@@ -790,6 +914,103 @@ func (c *Checkout) applyMergeStep(tx *sql.Tx, vid libfossil.FslID, s mergeStep) 
 	default:
 		panic(fmt.Sprintf("checkout.applyMergeStep: unknown action %d", s.file.Action))
 	}
+}
+
+// applyMergeRenames renames the files the merge renames, after every other
+// step has written them under their old names, as fossil's merge does
+// after its updates, merges and deletions.
+func (c *Checkout) applyMergeRenames(tx *sql.Tx, plan mergePlan) error {
+	var renamed []mergeStep
+	for _, s := range plan.steps {
+		if s.file.RenamedTo == "" {
+			continue
+		}
+		if s.row.ID <= 0 || s.recordOnly {
+			panic("checkout.applyMergeRenames: rename of a row not in vfile: " + s.file.Name)
+		}
+		renamed = append(renamed, s)
+	}
+	if len(renamed) == 0 {
+		return nil
+	}
+	if err := c.moveRenamedFiles(renamed); err != nil {
+		return err
+	}
+	// Two passes, so a name another rename vacates is free when taken. A
+	// row still holding a new name, one removed here or deleted by the
+	// merge, is renamed aside as fossil renames it.
+	for _, s := range renamed {
+		if _, err := tx.Exec(`UPDATE vfile SET origname=coalesce(origname,pathname),
+			pathname=char(0)||id WHERE id=?`, s.row.ID); err != nil {
+			return fmt.Errorf("rename %s: %w", s.file.Name, err)
+		}
+	}
+	for _, s := range renamed {
+		to := s.file.RenamedTo
+		if _, err := tx.Exec(`UPDATE vfile SET origname=pathname,
+			pathname=pathname||' (overwritten by rename)' WHERE vid=? AND pathname=?`,
+			int64(plan.vid), to); err != nil {
+			return fmt.Errorf("rename %s: %w", s.file.Name, err)
+		}
+		if _, err := tx.Exec("UPDATE vfile SET pathname=? WHERE id=?", to, s.row.ID); err != nil {
+			return fmt.Errorf("rename %s: %w", s.file.Name, err)
+		}
+	}
+	return nil
+}
+
+// moveRenamedFiles moves each renamed step's file to its new name. Every
+// file is read before any is moved, so names swapped or chained between
+// files move as fossil's temporary copies move them. A file missing from
+// disk is not moved.
+func (c *Checkout) moveRenamedFiles(renamed []mergeStep) error {
+	type move struct {
+		s        mergeStep
+		data     []byte
+		from, to string
+		link     bool
+	}
+	disk, err := c.newDiskView()
+	if err != nil {
+		return err
+	}
+	moves := make([]move, 0, len(renamed))
+	for _, s := range renamed {
+		mv := move{s: s}
+		if mv.from, err = c.safePath(s.file.Name); err != nil {
+			return err
+		}
+		if mv.to, err = c.safePath(s.file.RenamedTo); err != nil {
+			return err
+		}
+		info, err := disk.Stat(mv.from)
+		if err != nil {
+			return err
+		}
+		if !isFileOrLink(info) {
+			continue
+		}
+		if mv.data, err = disk.Read(mv.from, info); err != nil {
+			return err
+		}
+		mv.link = vfile.IsLink(info)
+		moves = append(moves, mv)
+	}
+	for _, mv := range moves {
+		if err := disk.Remove(mv.from); err != nil {
+			return err
+		}
+	}
+	for _, mv := range moves {
+		exe := mv.s.exe
+		if mv.s.file.Action == MergeUpdated {
+			exe = mv.s.merged.exe
+		}
+		if err := disk.Write(mv.to, mv.data, exe, mv.link); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // applyMergeDiskStep is the filesystem half of a materialized merge step.

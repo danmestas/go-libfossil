@@ -26,6 +26,12 @@ type pathEdge struct {
 	up  bool
 }
 
+// NameChange is one file renamed between two check-ins: its name in the
+// first and its name in the second.
+type NameChange struct {
+	From, To string
+}
+
 // NameChanges is fossil's find_filename_changes (src/path.c) with revOK
 // set, as its update calls it: the files renamed between check-ins from and
 // to, old name to new name. The path is the one path_shortest finds over
@@ -40,20 +46,11 @@ func NameChanges(q db.Querier, from, to libfossil.FslID) (map[string]string, err
 	if from <= 0 || to <= 0 {
 		panic("path.NameChanges: rids must be positive")
 	}
+	all, err := followPath(q, from, to, true)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]string{}
-	if from == to {
-		return out, nil
-	}
-	edges, err := primaryPath(q, int64(from), int64(to))
-	if err != nil || edges == nil {
-		return out, err
-	}
-	var all []*nameChange
-	for _, e := range edges {
-		if all, err = followEdge(q, e, all); err != nil {
-			return nil, err
-		}
-	}
 	for _, ch := range all {
 		if ch.orig == 0 || ch.cur == 0 {
 			continue
@@ -71,14 +68,95 @@ func NameChanges(q db.Querier, from, to libfossil.FslID) (map[string]string, err
 	return out, nil
 }
 
-// primaryPath returns the edges from check-in from up to the nearest common
-// primary ancestor and down to to, or nil when the two share none.
-func primaryPath(q db.Querier, from, to int64) ([]pathEdge, error) {
-	fromChain, err := primaryChain(q, from)
+// FilenameChanges is fossil's find_filename_changes (src/path.c): the files
+// renamed between check-ins from and to, in the order fossil lists them,
+// the most recently followed first. Without revOK the path only goes down
+// primary links, as find_filename_changes' one-way path_shortest does, so
+// from must be a primary ancestor of to or there are no changes; with it
+// the path is NameChanges'.
+func FilenameChanges(q db.Querier, from, to libfossil.FslID, revOK bool) ([]NameChange, error) {
+	if q == nil {
+		panic("path.FilenameChanges: nil querier")
+	}
+	if from <= 0 || to <= 0 {
+		panic("path.FilenameChanges: rids must be positive")
+	}
+	all, err := followPath(q, from, to, revOK)
 	if err != nil {
 		return nil, err
 	}
-	toChain, err := primaryChain(q, to)
+	var out []NameChange
+	for i := len(all) - 1; i >= 0; i-- {
+		ch := all[i]
+		if ch.orig == 0 || ch.cur == 0 {
+			continue
+		}
+		oldName, err := filename(q, ch.orig)
+		if err != nil {
+			return nil, err
+		}
+		newName, err := filename(q, ch.cur)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, NameChange{From: oldName, To: newName})
+	}
+	return out, nil
+}
+
+// followPath follows every file renamed along the path from from to to,
+// oldest followed first.
+func followPath(q db.Querier, from, to libfossil.FslID, revOK bool) ([]*nameChange, error) {
+	if from == to {
+		return nil, nil
+	}
+	var edges []pathEdge
+	var err error
+	if revOK {
+		edges, err = primaryPath(q, int64(from), int64(to))
+	} else {
+		edges, err = primaryDescent(q, int64(from), int64(to))
+	}
+	if err != nil || edges == nil {
+		return nil, err
+	}
+	var all []*nameChange
+	for _, e := range edges {
+		if all, err = followEdge(q, e, all); err != nil {
+			return nil, err
+		}
+	}
+	return all, nil
+}
+
+// primaryDescent returns the edges down primary links from check-in from to
+// to, or nil when from is not one of to's primary ancestors.
+func primaryDescent(q db.Querier, from, to int64) ([]pathEdge, error) {
+	toChain, err := primaryChain(q, to, from)
+	if err != nil {
+		return nil, err
+	}
+	for j, rid := range toChain {
+		if rid != from {
+			continue
+		}
+		edges := make([]pathEdge, 0, j)
+		for k := j - 1; k >= 0; k-- {
+			edges = append(edges, pathEdge{mid: toChain[k]})
+		}
+		return edges, nil
+	}
+	return nil, nil
+}
+
+// primaryPath returns the edges from check-in from up to the nearest common
+// primary ancestor and down to to, or nil when the two share none.
+func primaryPath(q db.Querier, from, to int64) ([]pathEdge, error) {
+	fromChain, err := primaryChain(q, from, 0)
+	if err != nil {
+		return nil, err
+	}
+	toChain, err := primaryChain(q, to, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +181,11 @@ func primaryPath(q db.Querier, from, to int64) ([]pathEdge, error) {
 	return nil, nil
 }
 
-// primaryChain lists rid and its primary ancestors, nearest first.
-func primaryChain(q db.Querier, rid int64) ([]int64, error) {
+// primaryChain lists rid and its primary ancestors, nearest first, ending
+// at stop when it is one of them (0 for none).
+func primaryChain(q db.Querier, rid, stop int64) ([]int64, error) {
 	chain := []int64{rid}
-	for len(chain) <= maxChainLength {
+	for len(chain) <= maxChainLength && chain[len(chain)-1] != stop {
 		var parent int64
 		err := q.QueryRow(
 			"SELECT pid FROM plink WHERE cid = ? AND isprim", chain[len(chain)-1],
@@ -118,6 +197,9 @@ func primaryChain(q db.Querier, rid int64) ([]int64, error) {
 			return nil, fmt.Errorf("path: parent of %d: %w", chain[len(chain)-1], err)
 		}
 		chain = append(chain, parent)
+	}
+	if chain[len(chain)-1] == stop {
+		return chain, nil
 	}
 	return nil, fmt.Errorf("path: primary chain of %d is longer than %d", rid, maxChainLength)
 }

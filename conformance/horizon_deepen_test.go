@@ -13,6 +13,7 @@ import (
 	gofossil "github.com/danmestas/go-libfossil"
 	"github.com/danmestas/go-libfossil/db"
 
+	"github.com/danmestas/go-libfossil/internal/bisect"
 	"github.com/danmestas/go-libfossil/internal/branch"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
@@ -34,7 +35,8 @@ import (
 
 func horizonDeepenCases() []Case {
 	return []Case{horizonMergeBaseQuery, horizonMergeBaseBound, horizonDeepen, horizonDeepenPoint, horizonDeepenFailed,
-		horizonMergeCrossing, horizonMergeDeepen, horizonPushCheck, horizonSeedVerify}
+		horizonMergeCrossing, horizonMergeDeepen, horizonPushCheck, horizonSeedVerify,
+		horizonBisectCrossing}
 }
 
 var (
@@ -47,6 +49,7 @@ var (
 	horizonMergeDeepen    = Case{ID: "horizon.5.5.merge-deepen", Req: "HZ-5.5-2"}
 	horizonPushCheck      = Case{ID: "horizon.5.7.push-check", Req: "HZ-5.7-2"}
 	horizonSeedVerify     = Case{ID: "horizon.5.9.verify-seed", Req: "HZ-5.9-1"}
+	horizonBisectCrossing = Case{ID: "horizon.5.5.bisect-crossing", Req: "HZ-5.5-1"}
 )
 
 func TestHorizonDeepen(t *testing.T) {
@@ -59,6 +62,7 @@ func TestHorizonDeepen(t *testing.T) {
 	check(t, horizonMergeDeepen, func() error { return hzMergeDeepen(t) })
 	check(t, horizonPushCheck, func() error { return hzPushCheck(t) })
 	check(t, horizonSeedVerify, func() error { return hzSeedVerify(t) })
+	check(t, horizonBisectCrossing, func() error { return hzBisectCrossing(t) })
 }
 
 // hzMergeBaseQuery: a structural clone asks its origin for the merge base of
@@ -460,6 +464,46 @@ func hzSeedVerify(t *testing.T) error {
 		if m.Tag != "hue" || m.Seeded != "*green" || m.Derived != "*red" {
 			return expectf("mismatch %+v, want hue seeded *green, derived *red", m)
 		}
+	}
+	return nil
+}
+
+// hzBisectCrossing: a bisection whose good end lies below the structural
+// horizon is refused before it begins, naming the horizon and the deepen;
+// one within K runs.
+func hzBisectCrossing(t *testing.T) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	if _, err := r.DB().Exec("CREATE TABLE IF NOT EXISTS vvar(name TEXT PRIMARY KEY, value CLOB) WITHOUT ROWID"); err != nil {
+		return err
+	}
+	rid := func(uuid string) libfossil.FslID {
+		id, err := hzRID(r, uuid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	s := bisect.NewSession(r.DB().SqlDB())
+	if err := s.MarkGood(rid(x.c2)); err != nil {
+		return err
+	}
+	if err := s.MarkBad(rid(x.c4)); err != nil {
+		return err
+	}
+	_, err = s.Next()
+	if !errors.Is(err, content.ErrBelowHorizon) || !strings.Contains(err.Error(), "below the structural horizon at "+x.c3) ||
+		!strings.Contains(err.Error(), "repo cone deepen "+x.c2) {
+		return expectf("bisect from below the horizon: %v, want a diagnostic naming the horizon and the deepen", err)
+	}
+	if err := s.MarkGood(rid(x.c3)); err != nil {
+		return err
+	}
+	if _, err := s.Next(); err != nil && !errors.Is(err, bisect.ErrBisectComplete) {
+		return expectf("bisect within K: %v", err)
 	}
 	return nil
 }

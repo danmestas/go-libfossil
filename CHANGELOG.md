@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and adds nothing, unlike fossil's same-branch leaf. Both rules give a set
   closed under descendants. The walk is bounded and fails with an error
   rather than run unbounded. Internal only for now.
+- A store cone can carry a content horizon (draft-fossil-horizon-00 §4,
+  §6.3). A blob is elided when no check-in in the held set names it
+  anywhere in its tree, and with path members too a blob is kept only in
+  both keep sets; structure is never elided under a horizon, and a horizon
+  the store cannot place yet elides nothing. Against any peer, a horizon
+  store requests nothing below the horizon, records below-horizon blobs it
+  is sent as elided instead of storing them, holds and requests no
+  cluster, and fetches a below-horizon blob an operation needs on demand.
+  Moving C earlier and pulling fetches what the deeper horizon keeps. A
+  structural horizon is refused for now. Against a stock Fossil origin a
+  new check-in announced only inside a cluster is not learned until a later
+  check-in names it, a gap in the draft reported as zit#266.
 
 ### Fixed
 

@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -126,5 +127,48 @@ func TestSparseMetadataRejectsLaterNeededGap(t *testing.T) {
 	}
 	if n != 0 {
 		t.Fatal("outside first gap concealed a later needed gap")
+	}
+}
+
+// TestSparseRebuildLoadsReferencesAfterTheSweep pins the order a real-sized
+// rebuild depends on: whole-store references are answered from the crosslink
+// tables, so they must be loaded once the sweep has filled them. Loaded
+// mid-sweep they find nothing to answer from and read every blob raw, which
+// exceeds the reference budget on a real repository.
+func TestSparseRebuildLoadsReferencesAfterTheSweep(t *testing.T) {
+	f, _, _, _ := partialMetadataFixture(t)
+	if _, err := Crosslink(f.r); err != nil {
+		t.Fatal(err)
+	}
+	var nonArtifacts, loads int
+	load := loadConeReferences
+	loadConeReferences = func(ctx context.Context, q db.Querier, c *cone.Cone) (*content.ConeReferences, error) {
+		loads++
+		err := q.QueryRow("SELECT count(*) FROM " + nonArtifactTable).Scan(&nonArtifacts)
+		if err != nil {
+			t.Error(err)
+		}
+		return load(ctx, q, c)
+	}
+	t.Cleanup(func() { loadConeReferences = load })
+	if _, err := f.r.DB().Exec("DELETE FROM " + nonArtifactTable); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.r.WithTx(func(tx *db.Tx) error {
+		for _, table := range []string{"event", "plink", "mlink", "tagxref", "leaf", "orphan"} {
+			if _, err := tx.Exec("DELETE FROM " + table); err != nil {
+				return err
+			}
+		}
+		_, err := CrosslinkRebuild(tx)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if loads == 0 {
+		t.Fatal("rebuild never loaded references: the fixture no longer defers a check-in")
+	}
+	if nonArtifacts == 0 {
+		t.Fatal("references were loaded before the sweep recorded the file blobs it examined")
 	}
 }

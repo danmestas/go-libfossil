@@ -1,6 +1,7 @@
 package verify
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -45,6 +48,60 @@ func TestCorpusRebuild(t *testing.T) {
 	if !report.OK() {
 		t.Errorf("issues: %d, first: %+v", len(report.Issues), report.Issues[0])
 	}
+}
+
+// TestCorpusRebuildKeepsAbsences rebuilds a real sparse repository and checks
+// that every phantom classifies as it did before: a rebuild empties the
+// tables classification reads, and must refill them. Skipped unless
+// LIBFOSSIL_CORPUS names one.
+func TestCorpusRebuildKeepsAbsences(t *testing.T) {
+	r := openCorpusCopy(t)
+	before := corpusAbsences(t, r)
+	if _, err := Rebuild(r); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	after := corpusAbsences(t, r)
+	// A rebuild links a reference to an artifact the store never held against
+	// a new phantom, so the phantoms may grow; none may disappear or change.
+	counts := map[string]int{}
+	for rid, b := range before {
+		if a, ok := after[rid]; !ok || a != b {
+			t.Errorf("rid %d: %+v before, %+v after (held %v)", rid, b, a, ok)
+		}
+		counts[fmt.Sprintf("class=%d", b.class)]++
+	}
+	t.Logf("%d phantoms unchanged by rebuild (%d after): %v", len(before), len(after), counts)
+}
+
+type corpusAbsence struct {
+	class          content.Absence
+	below, unnamed bool
+}
+
+func corpusAbsences(t *testing.T, r *repo.Repo) map[int64]corpusAbsence {
+	t.Helper()
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		t.Fatalf("LoadAbsences: %v", err)
+	}
+	rows, err := r.DB().Query("SELECT rid FROM blob WHERE size<0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[int64]corpusAbsence{}
+	for rows.Next() {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			t.Fatal(err)
+		}
+		id := libfossil.FslID(rid)
+		out[rid] = corpusAbsence{a.Class(id), a.Below(id), a.Unnamed(id)}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // TestCorpusVerify times a whole Verify of a real repository and logs the

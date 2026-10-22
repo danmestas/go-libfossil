@@ -616,6 +616,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 	defer func() { st.guard.coneReferences = nil }()
 	batchLinked := 0
 	var batchNonArtifact []libfossil.FslID
+	var partial []libfossil.FslID // deferred check-ins, in sweep order
 	for i, c := range batch {
 		if i%crosslinkCancelCheckStride == 0 {
 			select {
@@ -653,13 +654,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 				return err
 			}
 			if deferred {
-				linked, err := crosslinkPartialCheckin(ctx, tx, c.rid, d, st.guard, st.sched)
-				if err != nil {
-					return err
-				}
-				if linked {
-					batchLinked++
-				}
+				partial = append(partial, c.rid)
 				continue
 			}
 		}
@@ -674,6 +669,23 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 	}
 	if err := recordNonArtifacts(tx, batchNonArtifact); err != nil {
 		return err
+	}
+	// A deferred check-in's partial link is judged against the whole store's
+	// references. Those are answered from the crosslink tables, which only the
+	// sweep above and recordNonArtifacts fill, so judging mid-sweep would read
+	// every blob raw and exceed the reference budget on a real repository.
+	for _, rid := range partial {
+		d, err := parseManifestAt(tx, st.cache, rid)
+		if err != nil {
+			return err
+		}
+		linked, err := crosslinkPartialCheckin(ctx, tx, rid, d, st.guard, st.sched)
+		if err != nil {
+			return err
+		}
+		if linked {
+			batchLinked++
+		}
 	}
 	st.linked += batchLinked
 	return nil

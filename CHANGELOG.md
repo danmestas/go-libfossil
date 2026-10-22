@@ -78,6 +78,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once. Syncs over the HTTP transport key the cursor by the URL without
   its password; other transports keep none and announce in full. Clone
   replies carry no cursor yet. Interoperates with zit in both directions.
+- The structural horizon's seed (draft-fossil-horizon-00 §5.2), without
+  its wire yet. An origin mints a control artifact whose T cards apply the
+  tags in force at every entry of the held set (C, and each check-in of K
+  whose primary parent lies outside it), dated at the latest tag event it
+  summarizes rounded up to a whole second, so it is byte-identical to the
+  seed zit mints. A clone holds the seed in its own table, outside the
+  artifact store, where no sync, clone or rebuild can send it, and applies
+  it to the derivation, so every check-in in K has the branch, tag and
+  closed state it has densely. Replacing or discarding a seed re-derives
+  the store. Seed signing is not implemented: go-libfossil signs no
+  artifact.
 
 ### Fixed
 

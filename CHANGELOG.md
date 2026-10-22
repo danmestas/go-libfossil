@@ -39,6 +39,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in names it; the draft now has the clone request a horizon-ignorant
   origin's cluster members as transit (zit#266), which lands with the
   horizon pragmas.
+- Horizon serving (draft-fossil-horizon-00 §6.1, §6.2, §6.2.1, §6.2.5,
+  §6.4). A horizon store's clone and pull requests carry `pragma horizon
+  <hash> <rule>`. An origin computes the held set over its own graph,
+  sends every structural artifact and only the blobs above the horizon
+  (and inside any path cone), sends a delta in full when its base is not
+  kept, sends no cluster, and answers `pragma horizon-served content`;
+  `CloneResult` and `SyncResult` gain `HorizonServed`. A server over a
+  horizon store refuses a dense clone, and a horizon request whose held
+  set is not a subset of its own, with the push card ahead of the error so
+  fossil 2.28 aborts. Against an origin that does not answer
+  `horizon-served`, a horizon clone requests the phantoms its clusters
+  name, as transit, and classifies what arrives, so a new check-in stock
+  Fossil announces only inside a cluster still arrives (zit#266).
+  Interoperates with zit at `bbd1435674` in both directions.
 
 ### Fixed
 

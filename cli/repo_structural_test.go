@@ -175,3 +175,57 @@ func TestRepoVerifySeed(t *testing.T) {
 		t.Fatalf("store cone after verify --seed = %q, want %q", got, want)
 	}
 }
+
+// A symbolic name on a check-in below the structural horizon resolves to
+// that check-in, because the tag's control artifact is held, and operating
+// on it fails naming the horizon and the deepen (draft-fossil-horizon-00
+// §5.5).
+func TestRepoNameBelowHorizon(t *testing.T) {
+	source, err := libfossil.Create(filepath.Join(t.TempDir(), "source.fossil"), libfossil.CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	if err := source.SetHashPolicy("sha1"); err != nil {
+		t.Fatal(err)
+	}
+	r1, c1, err := source.Commit(libfossil.CommitOpts{User: "test", Files: []libfossil.FileToCommit{{Name: "a", Content: []byte("old a\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, c2, err := source.Commit(libfossil.CommitOpts{User: "test", ParentID: r1, Files: []libfossil.FileToCommit{{Name: "a", Content: []byte("new a\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.Tag(libfossil.TagOpts{Name: "old", TargetID: r1, User: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	server := requiredHTTPServer(t, source, new(atomic.Int64))
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: server.URL, Path: path, Horizon: c2, Structural: true}).Run(&Globals{})
+	})
+	r, err := libfossil.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"old", "tag:old"} {
+		rid, err := r.ResolveVersion(name)
+		if err != nil {
+			r.Close()
+			t.Fatalf("%s below the horizon does not resolve: %v", name, err)
+		}
+		uuid, err := r.UUIDFromRID(rid)
+		if err != nil || uuid != c1 {
+			r.Close()
+			t.Fatalf("%s resolves to %s (%v), want %s", name, uuid, err, c1)
+		}
+	}
+	r.Close()
+	err = (&RepoCoCmd{Version: "old", Dir: t.TempDir()}).Run(&Globals{Repo: path})
+	if err == nil || !strings.Contains(err.Error(), "below the structural horizon at "+c2) ||
+		!strings.Contains(err.Error(), "repo cone deepen "+c1) {
+		t.Fatalf("co old: %v, want a diagnostic naming the horizon and the deepen", err)
+	}
+}

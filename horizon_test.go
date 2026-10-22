@@ -532,3 +532,46 @@ func TestBranchMergeRefusesBaseBelowHorizon(t *testing.T) {
 		t.Fatalf("branch merge across the horizon: %v, want ErrBelowHorizon naming %s", err, c2)
 	}
 }
+
+// A symbolic name on a check-in below a structural horizon resolves to that
+// check-in through the repository and a checkout alike, because the tag's
+// control artifact is held (draft-fossil-horizon-00 §5.5).
+func TestResolveNameBelowHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	r1, err := f.source.ResolveVersion(f.c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.source.Tag(TagOpts{Name: "old", TargetID: r1, User: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2, Structural: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "s.fossil"), f.peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	co, err := clone.CreateCheckout(t.TempDir(), CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer co.Close()
+	for name, resolve := range map[string]func(string) (int64, error){
+		"repo": clone.ResolveVersion, "checkout": co.ResolveVersion,
+	} {
+		rid, err := resolve("old")
+		if err != nil {
+			t.Fatalf("%s: old does not resolve: %v", name, err)
+		}
+		if uuid, err := clone.UUIDFromRID(rid); err != nil || uuid != f.c1 {
+			t.Fatalf("%s: old resolves to %s (%v), want %s", name, uuid, err, f.c1)
+		}
+	}
+	if _, err := clone.ResolveVersion("missing"); !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("an unknown name: %v, want ErrVersionNotFound", err)
+	}
+}

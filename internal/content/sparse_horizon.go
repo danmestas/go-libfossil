@@ -8,6 +8,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/horizon"
 )
@@ -15,7 +16,9 @@ import (
 // horizonAbove returns the blobs above the content horizon h
 // (draft-fossil-horizon-00 §4.2): every F-card target of a check-in in the
 // held set K, read from the store's own manifests. Nothing is stored: K and
-// this set are recomputed on every classification (§3.1, §3.2).
+// this set are recomputed on every classification (§3.1, §3.2). The walk
+// reads K's manifests and the baselines and nodes they reach, charging work
+// as it goes, under a byte budget scaled to K rather than to the store.
 //
 // placed is false when C is not a check-in the store holds. Such a horizon
 // elides nothing, as zit's classification does (src/sparse.zig,
@@ -25,10 +28,10 @@ import (
 // No blob can be proven below a horizon the store cannot place; the cost
 // of keeping them wanted is bandwidth, never data.
 func horizonAbove(
-	ctx context.Context, q db.Querier, facts *ConeReferenceFacts, h cone.Horizon,
+	ctx context.Context, q db.Querier, h cone.Horizon, limits referenceLimits, work *ReferenceWork,
 ) (above map[string]bool, placed bool, err error) {
-	if ctx == nil || q == nil || facts == nil {
-		panic("content.horizonAbove: nil context, querier or facts")
+	if ctx == nil || q == nil || work == nil {
+		panic("content.horizonAbove: nil context, querier or work")
 	}
 	var c libfossil.FslID
 	err = q.QueryRow("SELECT rid FROM blob WHERE uuid=?", h.Hash()).Scan(&c)
@@ -45,11 +48,21 @@ func horizonAbove(
 	if err != nil {
 		return nil, false, err
 	}
-	above, err = facts.treeFiles(ctx, k)
+	budget := limits.treeMax
+	if scaled := int64(len(k)+1) * limits.treePerCheckin; scaled/limits.treePerCheckin == int64(len(k)+1) && scaled < budget {
+		budget = scaled
+	}
+	walk := treeWalk{ctx: ctx, q: q, budget: budget, work: work,
+		cache: NewCache(treeCacheBytes), files: map[string]bool{}, visited: map[string]bool{}}
+	above, err = walk.named(k)
 	return above, err == nil, err
 }
 
-// treeFiles returns every F-card target that the check-ins roots name,
+// treeCacheBytes bounds the expansions a horizon's walk shares: K's
+// manifests are deltas of one another, as are their baselines and nodes.
+const treeCacheBytes = 32 << 20
+
+// treeWalk collects every F-card target that a set of check-ins names,
 // directly, through their B baselines, or through S sub-manifest nodes.
 // mlink cannot answer this: it records a file version only at the check-in
 // that changed it, while a check-in's tree names every file it carries.
@@ -60,48 +73,84 @@ func horizonAbove(
 // deletions and overrides are not applied: a blob its baseline names counts
 // as named, as in zit. Keeping more than the exact tree is sound, and it
 // keeps this a plain reachability walk. A tree piece the store does not
-// hold is skipped; it is itself a transit phantom, and the classification
-// after it arrives counts the blobs it names.
-func (facts *ConeReferenceFacts) treeFiles(
-	ctx context.Context, roots []libfossil.FslID,
-) (map[string]bool, error) {
-	files := map[string]bool{}
-	visited := map[string]bool{}
-	var work []string
-	push := func(uuid string) {
-		if uuid != "" && !visited[uuid] {
-			visited[uuid] = true
-			work = append(work, uuid)
-		}
+// hold or cannot read is skipped; it is itself a transit phantom, and the
+// classification after it arrives counts the blobs it names.
+type treeWalk struct {
+	ctx     context.Context
+	q       db.Querier
+	budget  int64
+	work    *ReferenceWork
+	cache   *Cache
+	files   map[string]bool
+	visited map[string]bool
+	pending []string
+}
+
+func (w *treeWalk) push(uuid string) {
+	if uuid != "" && !w.visited[uuid] {
+		w.visited[uuid] = true
+		w.pending = append(w.pending, uuid)
 	}
+}
+
+func (w *treeWalk) named(roots []libfossil.FslID) (map[string]bool, error) {
 	for _, rid := range roots {
-		push(facts.names[rid])
+		var uuid string
+		if err := w.q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+			return nil, fmt.Errorf("horizon: K member rid=%d: %w", rid, err)
+		}
+		w.push(uuid)
 	}
-	for len(work) > 0 {
-		if err := ctx.Err(); err != nil {
+	for len(w.pending) > 0 {
+		if err := w.ctx.Err(); err != nil {
 			return nil, err
 		}
-		if len(visited) > coneReferenceNodes {
+		if len(w.visited) > coneReferenceNodes {
 			return nil, fmt.Errorf("horizon: tree walk bound exceeded")
 		}
-		uuid := work[len(work)-1]
-		work = work[:len(work)-1]
-		d := facts.manifests[uuid]
-		if d == nil {
-			d = facts.byUUID[uuid]
-		}
-		if d == nil {
-			continue
+		uuid := w.pending[len(w.pending)-1]
+		w.pending = w.pending[:len(w.pending)-1]
+		d, err := w.read(uuid)
+		if err != nil {
+			return nil, err
 		}
 		for _, f := range d.F {
 			if f.UUID != "" {
-				files[f.UUID] = true
+				w.files[f.UUID] = true
 			}
 		}
-		push(d.B)
+		w.push(d.B)
 		for _, s := range d.S {
-			push(s.UUID)
+			w.push(s.UUID)
 		}
 	}
-	return files, nil
+	return w.files, nil
+}
+
+// read returns the check-in or sub-manifest uuid names, or an empty deck for
+// a piece the walk skips. Its size is charged before it is expanded.
+func (w *treeWalk) read(uuid string) (*deck.Deck, error) {
+	var rid libfossil.FslID
+	var size int64
+	err := w.q.QueryRow("SELECT rid, size FROM blob WHERE uuid=? AND size>=0", uuid).Scan(&rid, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return &deck.Deck{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("horizon: tree piece %s: %w", uuid, err)
+	}
+	if size > w.budget-w.work.TreeBytes {
+		return nil, fmt.Errorf("horizon: tree byte budget exceeded")
+	}
+	w.work.TreeReads++
+	w.work.TreeBytes += size
+	data, err := w.cache.Expand(w.q, rid)
+	if err != nil || !deck.HasValidZ(data) {
+		return &deck.Deck{}, nil
+	}
+	d, err := deck.Parse(data)
+	if err != nil || d.Type != deck.Checkin && d.Type != deck.Submanifest {
+		return &deck.Deck{}, nil
+	}
+	return d, nil
 }

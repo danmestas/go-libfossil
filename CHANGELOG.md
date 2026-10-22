@@ -146,6 +146,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rename over a file the checkout keeps or over an untracked file,
   go-libfossil refuses instead, and a rename across a sparse cone boundary
   is refused.
+- A rebuild of fossil-scm.org's own repository (67,894 artifacts) takes
+  about 50 s instead of three to six minutes. Each node of a delta chain
+  had its availability checked with its own SQL statement instead of the
+  sweep's cache, and each manifest was parsed three times, as child, as
+  parent and as a baseline; both are now done once. Every derived table is
+  identical before and after.
 - `Repo.Merge` no longer brings back files the merge deleted: it carried
   the target's file list forward and restored them. It now commits the
   merged tree, recording renames through the new `FileToCommit.OldName`.

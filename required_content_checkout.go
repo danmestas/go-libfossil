@@ -43,11 +43,15 @@ func (c *Checkout) CheckinContext(
 // SetConeContext recovers only structure needed to enumerate next and payloads
 // newly entering the checkout. Explicit widening durably extends store coverage;
 // an attempted fetch retains that intent even on failure. No-peer refusal does
-// not change policy. Planning and local checks repeat before files move.
+// not change policy. Planning and local checks repeat before files move. A
+// cone with a horizon is refused with ErrHorizonCheckout before anything moves.
 func (c *Checkout) SetConeContext(
 	ctx context.Context, next *Cone, required RequiredContentOpts,
 ) (ConeChange, error) {
 	if err := required.validate(ctx); err != nil {
+		return ConeChange{}, err
+	}
+	if _, err := checkoutCone(next); err != nil {
 		return ConeChange{}, err
 	}
 	parent, state, err := c.requiredState()

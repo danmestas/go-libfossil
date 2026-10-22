@@ -27,7 +27,7 @@ import (
 // no blob below the horizon and says horizon-served content; each client
 // holds the blobs above it and records the rest elided.
 func TestZitHorizonInterop(t *testing.T) {
-	bin := zitBinary(t)
+	bin := zitHorizonBinary(t)
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	if err := os.Mkdir(home, 0o755); err != nil {

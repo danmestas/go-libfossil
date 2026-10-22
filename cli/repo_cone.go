@@ -48,6 +48,9 @@ func printCone(cone *libfossil.Cone) {
 		fmt.Println("dense")
 		return
 	}
+	if h, ok := cone.Horizon(); ok {
+		fmt.Printf("horizon %s %s\n", h.Checkin, h.Rule)
+	}
 	for _, m := range cone.Include() {
 		fmt.Println(m)
 	}
@@ -60,24 +63,38 @@ func printCone(cone *libfossil.Cone) {
 // form of demand fetch (draft-fossil-sparse-cone-00 §6.4): artifacts the new
 // cone covers that the old one elided are pulled from --remote, else the saved
 // last-sync-url. With such artifacts and no peer it refuses and changes nothing.
+//
+// A store cone may carry a content horizon (draft-fossil-horizon-00): --horizon
+// sets it, or deepens it when the check-in is older than the current one, and
+// --no-horizon drops it. Either keeps the store's path members unless paths
+// are given, which replace them.
 type RepoConeStoreCmd struct {
 	RecoveryFlags
-	Paths []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
-	Not   []string `help:"Exclusion members (repeatable)"`
-	Dense bool     `help:"Drop the store cone, fetching everything it elided"`
+	Paths     []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
+	Not       []string `help:"Exclusion members (repeatable)"`
+	Dense     bool     `help:"Drop the store cone, fetching everything it elided"`
+	Horizon   string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps"`
+	Leaves    bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in"`
+	NoHorizon bool     `help:"Drop the horizon, keeping the path members, and fetch what it elided"`
 }
 
 func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 	members := len(c.Paths) > 0 || len(c.Not) > 0
-	if c.Dense && members {
-		return fmt.Errorf("--dense takes no cone members")
+	horizon := c.Horizon != "" || c.NoHorizon
+	switch {
+	case c.Dense && (members || horizon):
+		return fmt.Errorf("--dense takes no cone members or horizon")
+	case c.Horizon != "" && c.NoHorizon:
+		return fmt.Errorf("--horizon and --no-horizon are exclusive")
+	case c.Leaves && c.Horizon == "":
+		return fmt.Errorf("--leaves needs --horizon")
 	}
 	r, err := g.OpenRepo()
 	if err != nil {
 		return err
 	}
 	defer closeWith(r.Close, &err)
-	if !c.Dense && !members {
+	if !c.Dense && !members && !horizon {
 		cone, err := r.StoreCone()
 		if err != nil {
 			return err
@@ -85,9 +102,11 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 		printCone(cone)
 		return nil
 	}
-	next, err := coneFlags(c.Paths, c.Not)
-	if err != nil {
-		return err
+	var next *libfossil.Cone
+	if !c.Dense {
+		if next, err = c.storeCone(r, members); err != nil {
+			return err
+		}
 	}
 	required, err := c.requiredContent(r)
 	if err != nil {
@@ -105,6 +124,61 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 	}
 	fmt.Printf("fetched %d artifact(s)\n", fetched)
 	return nil
+}
+
+// storeCone is the store cone the flags ask for. Path members given replace
+// the current ones; with none, the current ones stay and only the horizon
+// changes.
+func (c *RepoConeStoreCmd) storeCone(r *libfossil.Repo, members bool) (*libfossil.Cone, error) {
+	if !members && c.Horizon == "" && c.NoHorizon {
+		current, err := r.StoreCone()
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			return nil, fmt.Errorf("the store cone is dense; there is no horizon to drop")
+		}
+		if _, ok := current.Horizon(); !ok {
+			return nil, fmt.Errorf("the store cone has no horizon to drop")
+		}
+		if len(current.Include()) == 0 {
+			return nil, fmt.Errorf("the store cone is only a horizon; --dense drops it")
+		}
+		return current.WithHorizon(nil)
+	}
+	if c.Horizon == "" {
+		return coneFlags(c.Paths, c.Not)
+	}
+	rid, err := resolveRID(r, c.Horizon)
+	if err != nil {
+		return nil, fmt.Errorf("--horizon %q: %w", c.Horizon, err)
+	}
+	checkin, err := r.UUIDFromRID(rid)
+	if err != nil {
+		return nil, err
+	}
+	h := libfossil.Horizon{Checkin: checkin, Rule: horizonRule(c.Leaves)}
+	if members {
+		if len(c.Paths) == 0 {
+			return nil, fmt.Errorf("--not needs a path to carve from")
+		}
+		return libfossil.NewHorizonCone(c.Paths, c.Not, h)
+	}
+	current, err := r.StoreCone()
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return libfossil.NewHorizonCone(nil, nil, h)
+	}
+	return current.WithHorizon(&h)
+}
+
+func horizonRule(leaves bool) libfossil.HorizonRule {
+	if leaves {
+		return libfossil.HorizonLeaves
+	}
+	return libfossil.HorizonDescendants
 }
 
 // RepoConeAddCmd adds members to the cone.
@@ -273,6 +347,25 @@ func (c *RepoConeTestCmd) Run(g *Globals) (err error) {
 		return ErrConeTestElided
 	}
 	return nil
+}
+
+// cloneConeFlags is coneFlags for a clone, which can also start a content
+// horizon store. Nothing is local yet, so the check-in must be a full hash.
+func cloneConeFlags(include, exclude []string, checkin string, leaves bool) (*libfossil.Cone, error) {
+	if checkin == "" {
+		if leaves {
+			return nil, fmt.Errorf("--leaves needs --horizon")
+		}
+		return coneFlags(include, exclude)
+	}
+	if len(include) == 0 && len(exclude) > 0 {
+		return nil, fmt.Errorf("--cone-not needs a --cone to carve from")
+	}
+	c, err := libfossil.NewHorizonCone(include, exclude, libfossil.Horizon{Checkin: checkin, Rule: horizonRule(leaves)})
+	if err != nil {
+		return nil, fmt.Errorf("--horizon needs the full check-in hash on clone: %w", err)
+	}
+	return c, nil
 }
 
 // coneFlags is the --cone and --cone-not pair of a command that can start a

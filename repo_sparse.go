@@ -35,6 +35,11 @@ func (r *Repo) StoreCone() (*Cone, error) {
 // no content. Narrowing deletes nothing (§5.4). Widening makes the newly
 // covered elided phantoms wanted again, and the next pull fetches them.
 // While a cone is set, a commit carries no R card (§4.3).
+//
+// A cone may carry a horizon (draft-fossil-horizon-00): setting one elides
+// blobs only check-ins below it name, and SetStoreCone moves no content, as
+// for any narrowing. Setting an older check-in, or nil, widens, and
+// SetStoreConeContext fetches what the deeper horizon keeps.
 func (r *Repo) SetStoreCone(c *Cone) error {
 	if err := content.SetStoreCone(r.inner.DB(), unwrapCone(c)); err != nil {
 		return fmt.Errorf("libfossil: set store cone: %w", err)

@@ -51,9 +51,40 @@ func (c *Checkout) requiredStorePolicy(next *Cone, state string) (string, error)
 	return state, c.checkRequiredState(state)
 }
 
+// A checkout cone never carries a horizon, and a checkout never changes the
+// store's: left's horizon is kept whatever the checkout widens. Widening
+// toward dense (right nil) over a horizon store leaves the horizon-only cone,
+// not a dense store.
+func requiredStoreUnion(left, right *Cone) (*Cone, error) {
+	if left == nil {
+		return nil, nil
+	}
+	if right != nil {
+		if _, ok := right.Horizon(); ok {
+			return nil, ErrHorizonCheckout
+		}
+	}
+	h, ok := left.Horizon()
+	if !ok {
+		return requiredPathUnion(left, right)
+	}
+	if right == nil || len(left.Include()) == 0 {
+		return NewHorizonCone(nil, nil, h)
+	}
+	paths, err := left.WithHorizon(nil)
+	if err != nil {
+		return nil, err
+	}
+	union, err := requiredPathUnion(paths, right)
+	if err != nil {
+		return nil, err
+	}
+	return union.WithHorizon(&h)
+}
+
 // Coverage changes only at member boundaries. Taking OR there preserves both
 // cones, including reinclusions, without letting one cone's cuts narrow another.
-func requiredStoreUnion(left, right *Cone) (*Cone, error) {
+func requiredPathUnion(left, right *Cone) (*Cone, error) {
 	if left == nil || right == nil {
 		return nil, nil
 	}

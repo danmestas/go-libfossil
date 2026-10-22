@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/checkout"
@@ -12,6 +13,22 @@ import (
 // reverting or committing such a path, or a merge that would change one. The
 // message names the path, the cone and the member that excluded it.
 var ErrOutsideCone = checkout.ErrOutsideCone
+
+// ErrHorizonCheckout is returned when a checkout is given a cone that carries a
+// horizon. A content horizon (draft-fossil-horizon-00 §3.2) is a property of
+// the repository's store, not of a checkout: set it on the store cone with
+// Repo.SetStoreCone.
+var ErrHorizonCheckout = errors.New("libfossil: a horizon is a property of the repository's store, not of a checkout")
+
+// checkoutCone refuses a cone with a horizon and unwraps one without.
+func checkoutCone(c *Cone) (*cone.Cone, error) {
+	if c != nil {
+		if _, ok := c.inner.Horizon(); ok {
+			return nil, ErrHorizonCheckout
+		}
+	}
+	return unwrapCone(c), nil
+}
 
 // Cone is a sparse checkout's cone (draft-fossil-sparse-cone-00 §3): a set of
 // repository paths, each a directory subtree or a single file, included or
@@ -34,6 +51,71 @@ func NewCone(include, exclude []string) (*Cone, error) {
 		return nil, fmt.Errorf("libfossil: cone: %w", err)
 	}
 	return &Cone{inner: inner}, nil
+}
+
+// HorizonRule is the held-set rule a horizon names (draft-fossil-horizon-00
+// §3.1).
+type HorizonRule int
+
+const (
+	// HorizonDescendants holds the check-in and every descendant of it. It is
+	// the zero value.
+	HorizonDescendants HorizonRule = iota
+	// HorizonLeaves holds the descendants plus every open leaf's ancestry back
+	// to its nearest common ancestor with the check-in.
+	HorizonLeaves
+)
+
+// String names the rule as the operator spells it.
+func (r HorizonRule) String() string {
+	return cone.HorizonRule(r).String()
+}
+
+// Horizon is the temporal member of a store cone (draft-fossil-horizon-00
+// §3.1): blobs only check-ins outside the held set name are elided. The cut is
+// always the content horizon; the structural cut is not exposed.
+type Horizon struct {
+	Checkin string // full artifact hash of the check-in, 40 or 64 hex digits
+	Rule    HorizonRule
+}
+
+// NewHorizonCone builds a cone with a horizon and optional path members. With
+// no include members the cone is horizon-only: it covers every path and only
+// the horizon narrows what is held. Checkin is normalized to lower case.
+func NewHorizonCone(include, exclude []string, h Horizon) (*Cone, error) {
+	ih, err := cone.NewHorizon(h.Checkin, cone.HorizonRule(h.Rule), cone.DepthContent)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: cone: %w", err)
+	}
+	inner, err := cone.NewWithHorizon(include, exclude, ih)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: cone: %w", err)
+	}
+	return &Cone{inner: inner}, nil
+}
+
+// Horizon returns the cone's horizon, if it has one.
+func (c *Cone) Horizon() (Horizon, bool) {
+	h, ok := c.inner.Horizon()
+	if !ok {
+		return Horizon{}, false
+	}
+	return Horizon{Checkin: h.Hash(), Rule: HorizonRule(h.Rule())}, true
+}
+
+// WithHorizon returns the cone with its horizon replaced by h, keeping the path
+// members; nil drops the horizon. Dropping the horizon of a horizon-only cone
+// is an error, since nothing is left: make the store dense with
+// Repo.SetStoreCone(nil).
+func (c *Cone) WithHorizon(h *Horizon) (*Cone, error) {
+	if h == nil {
+		inner, err := cone.New(c.inner.Include(), c.inner.Exclude())
+		if err != nil {
+			return nil, fmt.Errorf("libfossil: cone: drop horizon: %w", err)
+		}
+		return &Cone{inner: inner}, nil
+	}
+	return NewHorizonCone(c.inner.Include(), c.inner.Exclude(), *h)
 }
 
 // wrapCone is nil for nil, the dense checkout's cone.
@@ -74,7 +156,8 @@ func (c *Cone) Decide(path string) (covered bool, member string) {
 // for equal coverage, and the same value zit computes.
 func (c *Cone) Digest() string { return c.inner.Digest() }
 
-// String lists the members in sorted order, an exclusion marked with '!'.
+// String lists the members in sorted order, an exclusion marked with '!'. A
+// horizon leads, as "horizon <check-in> <rule> content".
 func (c *Cone) String() string { return c.inner.String() }
 
 // With returns the cone with more members: the incremental form of widening
@@ -113,9 +196,13 @@ func (c *Checkout) Cone() *Cone {
 // written; files it no longer covers are removed from the working directory
 // (the repository keeps them). It refuses, changing nothing, when a file
 // leaving the cone has local changes or a file entering it would overwrite an
-// untracked file.
+// untracked file. A cone with a horizon is refused with ErrHorizonCheckout.
 func (c *Checkout) SetCone(next *Cone) (ConeChange, error) {
-	res, err := c.inner.SetCone(unwrapCone(next))
+	inner, err := checkoutCone(next)
+	if err != nil {
+		return ConeChange{}, err
+	}
+	res, err := c.inner.SetCone(inner)
 	if err != nil {
 		return ConeChange{}, fmt.Errorf("libfossil: set cone: %w", err)
 	}

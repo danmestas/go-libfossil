@@ -42,7 +42,8 @@ func extendReferenceState(
 	for _, rid := range fresh {
 		in[rid] = true
 	}
-	if renamed, err := oldFilesNamed(ctx, q, s.tables, ids, in); err != nil || renamed {
+	renamed, err := oldFilesNamed(ctx, q, s.tables, ids, in)
+	if err != nil || readRaw(s.facts, renamed) {
 		return nil, false, err
 	}
 	r, err := referencePreflight(ctx, q, defaultReferenceLimits.refs)
@@ -58,6 +59,9 @@ func extendReferenceState(
 	tables := &referenceTables{files: maps.Clone(s.tables.files), linked: maps.Clone(s.tables.linked),
 		present: s.tables.present, trees: s.tables.trees}
 	maps.Copy(tables.files, added.files)
+	for _, rid := range renamed {
+		tables.files[rid] = true
+	}
 	maps.Copy(tables.linked, added.linked)
 	isLinked := func(rid libfossil.FslID) bool { _, ok := tables.linked[rid]; return ok }
 	if _, err := r.read(func(rid libfossil.FslID) bool {
@@ -97,24 +101,48 @@ func treeRecords(records []coneReferenceRecord) bool {
 	return false
 }
 
-// oldFilesNamed reports an artifact outside fresh that the non-artifact
+// oldFilesNamed lists the artifacts outside fresh that the non-artifact
 // record holds and that only the mlink rows of the check-ins in ids name: a
-// load now takes it for file content where s's load read it raw.
+// load now takes them for file content, where s's load read them raw.
 func oldFilesNamed(
 	ctx context.Context, q db.Querier, t *referenceTables, ids string, fresh map[libfossil.FslID]bool,
-) (bool, error) {
+) ([]libfossil.FslID, error) {
 	if !t.present {
-		return false, nil
+		return nil, nil
 	}
-	renamed := false
+	var renamed []libfossil.FslID
 	err := referenceRows(ctx, q, "SELECT rid FROM "+nonArtifactTable+` WHERE rid IN
 		(SELECT fid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1))
 		UNION SELECT pid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))`,
 		func(scan func(...any) error) error {
 			var rid libfossil.FslID
 			err := scan(&rid)
-			renamed = renamed || !t.files[rid] && !fresh[rid]
+			if !t.files[rid] && !fresh[rid] {
+				renamed = append(renamed, rid)
+			}
 			return err
 		}, ids)
 	return renamed, err
+}
+
+// readRaw reports whether reading one of rids raw added to facts: a record,
+// or an unreadable name. Reading file content raw adds neither, so a load
+// that skips it decides nothing differently.
+func readRaw(facts *ConeReferenceFacts, rids []libfossil.FslID) bool {
+	if len(rids) == 0 {
+		return false
+	}
+	added := map[string]bool{}
+	for _, record := range facts.records {
+		added[record.uuid] = true
+	}
+	for _, uuid := range facts.unreadable {
+		added[uuid] = true
+	}
+	for _, rid := range rids {
+		if added[facts.names[rid]] {
+			return true
+		}
+	}
+	return false
 }

@@ -71,13 +71,28 @@ type storePrefix struct {
 	topUUID  string
 	count    int64
 	phantoms map[libfossil.FslID]bool
+	// links counts the check-in and plink rows of the rids at or below top:
+	// an artifact is crosslinked when it is appended or filled, and these
+	// moving otherwise means one was linked late, which an extension by the
+	// arrivals would miss.
+	links int64
 }
+
+// linkCountSQL counts the event and plink rows of the rids at or below ?1,
+// leaving out the rids of the JSON array ?2.
+const linkCountSQL = `SELECT
+	(SELECT count(*) FROM event WHERE type='ci' AND objid<=?1
+		AND objid NOT IN (SELECT value FROM json_each(?2))) +
+	(SELECT count(*) FROM plink WHERE cid<=?1 AND cid NOT IN (SELECT value FROM json_each(?2)))`
 
 func readPrefix(q db.Querier) (storePrefix, error) {
 	p := storePrefix{phantoms: map[libfossil.FslID]bool{}}
 	err := q.QueryRow(`SELECT coalesce(max(rid),0), count(*), coalesce((SELECT uuid FROM blob
 		WHERE rid=(SELECT max(rid) FROM blob)),'') FROM blob`).Scan(&p.top, &p.count, &p.topUUID)
 	if err != nil {
+		return storePrefix{}, fmt.Errorf("classification memo: store prefix: %w", err)
+	}
+	if err := q.QueryRow(linkCountSQL, p.top, "[]").Scan(&p.links); err != nil {
 		return storePrefix{}, fmt.Errorf("classification memo: store prefix: %w", err)
 	}
 	err = referenceRows(context.Background(), q, "SELECT rid FROM phantom", func(scan func(...any) error) error {
@@ -93,7 +108,8 @@ func readPrefix(q db.Querier) (storePrefix, error) {
 }
 
 func (p storePrefix) equal(o storePrefix) bool {
-	return p.top == o.top && p.topUUID == o.topUUID && p.count == o.count && maps.Equal(p.phantoms, o.phantoms)
+	return p.top == o.top && p.topUUID == o.topUUID && p.count == o.count && p.links == o.links &&
+		maps.Equal(p.phantoms, o.phantoms)
 }
 
 // MemoView is a Memo brought up to one store as one querier sees it. It is
@@ -220,6 +236,10 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 			return nil, 0, nil // made a phantom: not an append
 		}
 	}
+	settled, err := s.settled(q, filled)
+	if err != nil || !settled {
+		return nil, 0, err
+	}
 	fresh, cited, err := s.arrivals(q, filled)
 	if err != nil || cited {
 		return nil, 0, err
@@ -243,6 +263,28 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 	dangling := maps.Clone(s.dangling)
 	maps.Copy(dangling, added)
 	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling}, len(fresh), nil
+}
+
+// settled reports whether the rids at or below s's prefix are as s read
+// them but for the phantoms filled: none was crosslinked late, and none was
+// stored as a delta of a filled phantom, which leaves it unreadable until the
+// fill and readable after.
+func (s *memoStore) settled(q db.Querier, filled []libfossil.FslID) (bool, error) {
+	ids, err := ridsJSON(filled)
+	if err != nil {
+		return false, err
+	}
+	if ids == "" {
+		ids = "[]"
+	}
+	var links int64
+	var based bool
+	err = q.QueryRow(linkCountSQL+`, EXISTS(SELECT 1 FROM delta WHERE srcid IN (SELECT value FROM json_each(?2)))`,
+		s.prefix.top, ids).Scan(&links, &based)
+	if err != nil {
+		return false, fmt.Errorf("classification memo: store prefix: %w", err)
+	}
+	return links == s.prefix.links && !based, nil
 }
 
 // arrivals lists the rids appended past s's prefix and the phantoms filled

@@ -11,6 +11,7 @@ func rsAPICases() []rsAPICase {
 		resolveCases(), resolveFormCases(), leafAPICases(), commitLeafCases(),
 		branchAPICases(), writerAPICases(), integrityAPICases(), defaultBranchCases(),
 		checkoutAPICases(), workingAPICases(), trunkAPICases(), verifyLeafCases(),
+		mergeBaseAPICases(),
 	} {
 		all = append(all, table...)
 	}

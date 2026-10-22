@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -52,7 +53,8 @@ func (e *MergeConflictError) Is(target error) bool {
 	return target == ErrMergeConflict
 }
 
-// FindCommonAncestor finds the nearest common ancestor of two checkins.
+// FindCommonAncestor finds the most recent common ancestor of two checkins,
+// the merge base fossil's merge-base command names.
 func (r *Repo) FindCommonAncestor(ridA, ridB int64) (int64, error) {
 	ancestor, err := merge.FindCommonAncestor(r.inner, fsltype.FslID(ridA), fsltype.FslID(ridB))
 	if err != nil {
@@ -177,13 +179,17 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 		return 0, "", fmt.Errorf("libfossil: merge: branches %q and %q point to same checkin (rid=%d)", srcBranch, dstBranch, srcTip)
 	}
 
-	ancestor, err := merge.FindCommonAncestor(r.inner, fsltype.FslID(srcTip), fsltype.FslID(dstTip))
+	// fossil's merge: the merged-in version is the primary (merge.c).
+	base, err := merge.FindPivot(context.Background(), r.inner, merge.PivotQuery{
+		Primary: fsltype.FslID(srcTip), Secondaries: []fsltype.FslID{fsltype.FslID(dstTip)}})
 	if err != nil && !errors.Is(err, merge.ErrNoCommonAncestor) {
 		return 0, "", fmt.Errorf("libfossil: merge: %w", err)
 	}
+	ancestor := base.RID
 	// draft-fossil-horizon-00 §5.5: never merge against a base the store
-	// does not hold, and name the horizon when that is why.
-	if cerr := content.MergeBaseCrossing(r.inner.DB(), fsltype.FslID(dstTip), fsltype.FslID(srcTip), ancestor); cerr != nil {
+	// does not hold, nor one found by a walk that crossed the horizon, and
+	// name the horizon when that is why.
+	if cerr := content.MergeBaseCrossing(r.inner.DB(), fsltype.FslID(srcTip), ancestor, base.Unheld); cerr != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: %w", cerr)
 	}
 	if err != nil {

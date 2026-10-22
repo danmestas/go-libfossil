@@ -56,11 +56,12 @@ func (h *handler) answerMergeBase(ctx context.Context) error {
 	return nil
 }
 
-// originMergeBase is the merge base of the check-ins named a and b by the
-// repository's own walk (merge.FindCommonAncestorWithin), bounded by limit:
-// the base's hash, or noMergeBase when they share no ancestor. ok is false
-// when either is not a check-in the repository holds, or the base it finds
-// is not one: a store answers only from history it holds.
+// originMergeBase is the merge base of the check-ins named a and b, the
+// pivot fossil's merge of b into a checkout of a finds (merge.FindPivot),
+// bounded by limit: the base's hash, or noMergeBase when they share no
+// ancestor. ok is false when either is not a check-in the repository holds,
+// or the walk reaches one it does not hold: a store answers only from
+// history it holds.
 func originMergeBase(ctx context.Context, r *repo.Repo, a, b string, limit int) (string, bool, error) {
 	if ctx == nil || r == nil {
 		panic("sync.originMergeBase: nil context or repo")
@@ -73,12 +74,19 @@ func originMergeBase(ctx context.Context, r *repo.Repo, a, b string, limit int) 
 	if err != nil || !okB {
 		return "", false, err
 	}
-	base, err := merge.FindCommonAncestorWithin(ctx, r, ra, rb, limit)
-	if errors.Is(err, merge.ErrNoCommonAncestor) {
-		return noMergeBase, true, nil
-	}
-	if err != nil {
-		return "", false, err
+	base := ra
+	if ra != rb {
+		p, err := merge.FindPivot(ctx, r, merge.PivotQuery{Primary: rb, Secondaries: []libfossil.FslID{ra}, Limit: limit})
+		if p.Unheld {
+			return "", false, nil
+		}
+		if errors.Is(err, merge.ErrNoCommonAncestor) {
+			return noMergeBase, true, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		base = p.RID
 	}
 	var uuid string
 	err = r.DB().QueryRow(`SELECT uuid FROM blob WHERE rid=? AND size>=0

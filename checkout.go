@@ -395,12 +395,20 @@ func (c *Checkout) checkin(
 // needs or an added file would overwrite an untracked one. A file edited
 // here but deleted in the merged-in version is kept and reported. Renames
 // are not followed. Merging the checkout's own version or one of its
-// ancestors does nothing.
+// ancestors does nothing. The common ancestor is the one fossil's merge
+// diffs against: the most recent common ancestor of the merged-in checkin
+// and the checkout's version with every checkin already merged into it.
 func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
+	return c.merge(opts, 0)
+}
+
+// merge is Merge, diffing against baseline when it is set.
+func (c *Checkout) merge(opts CheckoutMergeOpts, baseline int64) (CheckoutMergeResult, error) {
 	res, err := c.inner.Merge(checkout.MergeOpts{
 		Version:  fsltype.FslID(opts.Version),
 		Strategy: opts.Strategy,
 		DryRun:   opts.DryRun,
+		Baseline: fsltype.FslID(baseline),
 	})
 	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)

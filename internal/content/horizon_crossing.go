@@ -15,9 +15,9 @@ import (
 var ErrBelowHorizon = errors.New("history below the structural horizon")
 
 // MergeBaseError is a merge whose base lies below the structural horizon at
-// Horizon (§5.5): Base is the boundary check-in the store's walk reached,
-// "" when it reached none because both sides' ancestry leaves the store
-// before they meet. Side is the check-in being merged in.
+// Horizon (§5.5), or may: Base is the base the store's walk found when the
+// store does not hold it, "" when the walk crossed the horizon, so that only
+// the origin can name the base. Side is the check-in being merged in.
 type MergeBaseError struct {
 	Horizon, Side, Base string
 }
@@ -28,8 +28,9 @@ func (e *MergeBaseError) Error() string {
 			"deepen the horizon to it (repo cone deepen %s), or merge with a remote to ask the origin and deepen",
 			e.Side, e.Base, e.Horizon, e.Base)
 	}
-	return fmt.Sprintf("the merge base of %s lies below the structural horizon at %s: it is not held here; "+
-		"merge with a remote to ask the origin for the base and deepen to it", e.Side, e.Horizon)
+	return fmt.Sprintf("the merge base of %s may lie below the structural horizon at %s: its ancestry crosses the "+
+		"horizon, so only the origin can name it; merge with a remote to ask the origin for the base and deepen to it",
+		e.Side, e.Horizon)
 }
 
 func (e *MergeBaseError) Is(target error) bool { return target == ErrBelowHorizon }
@@ -47,18 +48,20 @@ func StructuralHorizon(q db.Querier) (cone.Horizon, bool, error) {
 	return h, h.Hash() != "" && h.Depth() == cone.DepthStructural, nil
 }
 
-// MergeBaseCrossing decides whether the merge of side into current crosses
-// the store's structural horizon (§5.5), given the common ancestor base the
-// store's own walk found, 0 for none. A base the store does not hold as a
-// check-in is a crossing; so is no base at all when both sides' ancestry
-// reaches a parent the store does not hold, since the common ancestor may
-// lie there. It returns a *MergeBaseError for a crossing and nil otherwise,
-// so a merge never runs against a base it does not hold.
-func MergeBaseCrossing(q db.Querier, current, side, base libfossil.FslID) error {
+// MergeBaseCrossing decides whether the merge of side crosses the store's
+// structural horizon (§5.5), given the base the store's own walk found, 0
+// for none, and whether that walk reached a check-in the store does not
+// hold (merge.Pivot.Unheld). A base the store does not hold is a crossing.
+// So is any walk that reached the horizon: the store holds only part of the
+// graph, and a common ancestor found in part of it need not be the one the
+// whole graph gives, so the origin must be asked. It returns a
+// *MergeBaseError for a crossing and nil otherwise, so a merge never runs
+// against a base it does not hold or one the origin would not choose.
+func MergeBaseCrossing(q db.Querier, side, base libfossil.FslID, unheld bool) error {
 	if q == nil {
 		panic("content.MergeBaseCrossing: q must not be nil")
 	}
-	if current <= 0 || side <= 0 || base < 0 {
+	if side <= 0 || base < 0 {
 		panic("content.MergeBaseCrossing: invalid rid")
 	}
 	h, structural, err := StructuralHorizon(q)
@@ -71,36 +74,19 @@ func MergeBaseCrossing(q db.Querier, current, side, base libfossil.FslID) error 
 	}
 	if base > 0 {
 		var held bool
+		var uuid string
 		if err := q.QueryRow(`SELECT size>=0 AND EXISTS(SELECT 1 FROM event WHERE objid=rid AND type='ci')
 			AND NOT EXISTS(SELECT 1 FROM phantom WHERE phantom.rid=blob.rid), uuid
-			FROM blob WHERE rid=?`, base).Scan(&held, &crossing.Base); err != nil {
+			FROM blob WHERE rid=?`, base).Scan(&held, &uuid); err != nil {
 			return fmt.Errorf("content.MergeBaseCrossing: %w", err)
 		}
-		if held {
-			return nil
+		if !held {
+			crossing.Base = uuid
+			return crossing
 		}
+	}
+	if unheld {
 		return crossing
 	}
-	for _, rid := range []libfossil.FslID{current, side} {
-		leaves, err := ancestryLeavesStore(q, rid)
-		if err != nil || !leaves {
-			return err
-		}
-	}
-	return crossing
-}
-
-// ancestryLeavesStore reports a parent the store does not hold as a check-in
-// somewhere in rid's ancestry. The recursion stops at each such parent, which
-// names no parent the store links, so it visits each held ancestor once.
-func ancestryLeavesStore(q db.Querier, rid libfossil.FslID) (bool, error) {
-	var leaves bool
-	err := q.QueryRow(`WITH RECURSIVE anc(rid) AS (
-			SELECT ?1 UNION SELECT plink.pid FROM plink JOIN anc ON plink.cid=anc.rid)
-		SELECT EXISTS(SELECT 1 FROM anc JOIN blob USING(rid) WHERE blob.size<0
-			OR NOT EXISTS(SELECT 1 FROM event WHERE objid=anc.rid AND type='ci'))`, rid).Scan(&leaves)
-	if err != nil {
-		return false, fmt.Errorf("content.MergeBaseCrossing: ancestry: %w", err)
-	}
-	return leaves, nil
+	return nil
 }

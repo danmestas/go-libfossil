@@ -85,8 +85,9 @@ func TestRepoConeDeepen(t *testing.T) {
 }
 
 // structuralMergeSource serves a history where a merge's base lies below a
-// structural horizon at c2: f forks from c1 below it, x merges c2 into f and
-// y merges f into a, c2's child. The base of x and y is f.
+// structural horizon at c2: f forks from c1 below it and g follows f, x
+// merges c2 into g and y merges g into a, c2's child. fossil's merge base of
+// x and y, their most recent common ancestor, is g.
 func structuralMergeSource(t *testing.T) (url, c2, f, x, y string) {
 	t.Helper()
 	source, err := libfossil.Create(filepath.Join(t.TempDir(), "source.fossil"), libfossil.CreateOpts{User: "test"})
@@ -106,11 +107,12 @@ func structuralMergeSource(t *testing.T) (url, c2, f, x, y string) {
 		return rid, uuid
 	}
 	r1, _ := commit("one\n", 0)
-	rf, f := commit("one\nfork\n", r1)
+	rf, _ := commit("one\nfork\n", r1)
 	r2, c2 := commit("zero\none\n", r1)
 	ra, _ := commit("zero\none\nA\n", r2)
-	_, x = commit("zero\none\nfork\n", rf, r2)
-	_, y = commit("zero\none\nA\nfork\n", ra, rf)
+	rg, f := commit("one\nfork\ng\n", rf)
+	_, x = commit("zero\none\nfork\ng\n", rg, r2)
+	_, y = commit("zero\none\nA\nfork\ng\n", ra, rg)
 	server := requiredHTTPServer(t, source, new(atomic.Int64))
 	t.Cleanup(server.Close)
 	return server.URL, c2, f, x, y
@@ -153,7 +155,7 @@ func TestRepoMergeDeepensAcrossHorizon(t *testing.T) {
 	if got := storeConeOutput(t, path); !strings.Contains(got, "structural") || strings.Contains(got, c2) {
 		t.Fatalf("store cone after the merge = %q, want a deeper structural horizon", got)
 	}
-	if !holdsBlob(t, path, "one\nfork\n") {
+	if !holdsBlob(t, path, "one\nfork\ng\n") {
 		t.Fatalf("the base %s's content is not held after the merge", f)
 	}
 }

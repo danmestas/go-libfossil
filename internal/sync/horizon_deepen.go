@@ -78,6 +78,11 @@ func deepenPoint(ctx context.Context, r *repo.Repo, peer Transport, c, target st
 	}
 	if okC && okT {
 		base, err := merge.FindCommonAncestorWithin(ctx, r, rc, rt, mergeBaseNodes)
+		if errors.Is(err, merge.ErrNoCommonAncestor) {
+			// The pivot search starts from check-ins only; a boundary
+			// target among C's own ancestors is its own deepen point.
+			base, err = boundaryAncestor(r, rc, rt)
+		}
 		switch {
 		case err == nil:
 			var uuid string
@@ -102,6 +107,25 @@ func deepenPoint(ctx context.Context, r *repo.Repo, peer Transport, c, target st
 		return "", fmt.Errorf("%w: %s and %s; the origin names none", ErrNoDeepenPoint, c, target)
 	}
 	return res.MergeBase, nil
+}
+
+// boundaryAncestor is target when the store holds no check-in for it and it
+// is among c's ancestors in the plink graph the store holds, and
+// merge.ErrNoCommonAncestor otherwise.
+func boundaryAncestor(r *repo.Repo, c, target libfossil.FslID) (libfossil.FslID, error) {
+	var found bool
+	err := r.DB().QueryRow(`WITH RECURSIVE anc(rid) AS (
+			SELECT ?1 UNION SELECT plink.pid FROM plink JOIN anc ON plink.cid=anc.rid LIMIT ?3)
+		SELECT EXISTS(SELECT 1 FROM anc WHERE rid=?2)
+			AND NOT EXISTS(SELECT 1 FROM event WHERE objid=?2 AND type='ci')`,
+		c, target, mergeBaseNodes).Scan(&found)
+	if err != nil {
+		return 0, fmt.Errorf("horizon: deepen point: %w", err)
+	}
+	if !found {
+		return 0, merge.ErrNoCommonAncestor
+	}
+	return target, nil
 }
 
 // blobRID is the rid of the artifact named uuid, held or phantom.

@@ -57,7 +57,9 @@ func StoreCone(q db.Querier) (*cone.Cone, error) {
 // SetStoreCone replaces the store cone; nil makes the store dense. Neither
 // direction moves content: narrowing deletes nothing (§5.4), and widening
 // only makes the newly covered elided phantoms wanted again, for the next
-// synchronization to fetch.
+// synchronization to fetch. A structural horizon (draft-fossil-horizon-00
+// §5) is refused: this store implements only the content horizon, and
+// would otherwise hold a cone whose depth its classification ignores.
 func SetStoreCone(q db.Querier, c *cone.Cone) error {
 	if q == nil {
 		panic("content.SetStoreCone: q must not be nil")
@@ -67,6 +69,9 @@ func SetStoreCone(q db.Querier, c *cone.Cone) error {
 			return fmt.Errorf("content.SetStoreCone: %w", err)
 		}
 		return nil
+	}
+	if h, ok := c.Horizon(); ok && h.Depth() != cone.DepthContent {
+		return fmt.Errorf("content.SetStoreCone: a %v horizon is not implemented", h.Depth())
 	}
 	if _, err := q.Exec(storeConeSchema); err != nil {
 		return fmt.Errorf("content.SetStoreCone: %w", err)
@@ -121,6 +126,7 @@ type Absences struct {
 // reference. Retained delta ancestors remain transit. Crosslink references
 // supplement raw provenance for historical names, including prior rename paths.
 // A partial tree need not be crosslinked to classify its outside S children.
+// A content horizon in the cone also elides the blobs below it.
 func LoadAbsences(q db.Querier) (*Absences, error) {
 	return LoadAbsencesContext(context.Background(), q)
 }
@@ -169,28 +175,59 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
-		refs, err := LoadConeReferences(ctx, q, c)
-		if err != nil {
+		if err := a.classify(ctx, q, candidates); err != nil {
 			return nil, err
-		}
-		if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
-			return nil, err
-		}
-		if err := a.elide(q, candidates); err != nil {
-			return nil, err
-		}
-		for rid := range candidates {
-			if refs.Outside(rid) {
-				a.class[rid] = Elided
-			} else if refs.Required(rid) {
-				a.class[rid] = Transit
-			}
 		}
 	}
 	for _, k := range a.class {
 		a.counts[k]++
 	}
 	return a, nil
+}
+
+// classify decides the candidates, the phantoms that are neither shunned
+// nor a held delta's base. Path members elide by name. A content horizon
+// (draft-fossil-horizon-00 §3.2, §4) then elides every blob no check-in in
+// its held set names, so a kept blob is in both keep sets; it never elides
+// structure, and under one path members do not either.
+func (a *Absences) classify(ctx context.Context, q db.Querier, candidates map[libfossil.FslID]bool) error {
+	facts, err := LoadConeReferenceFacts(ctx, q)
+	if err != nil {
+		return err
+	}
+	refs, err := facts.Classify(ctx, a.cone)
+	if err != nil {
+		return err
+	}
+	if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
+		return err
+	}
+	if err := a.elide(q, candidates); err != nil {
+		return err
+	}
+	h, hasHorizon := a.cone.Horizon()
+	for rid := range candidates {
+		if hasHorizon && refs.structure(rid) {
+			a.class[rid] = Transit
+		} else if refs.Outside(rid) {
+			a.class[rid] = Elided
+		} else if refs.Required(rid) {
+			a.class[rid] = Transit
+		}
+	}
+	if !hasHorizon {
+		return nil
+	}
+	above, placed, err := horizonAbove(ctx, q, facts, h)
+	if err != nil || !placed {
+		return err
+	}
+	for rid := range candidates {
+		if refs.file(rid) && !refs.structure(rid) && !above[refs.names[rid]] {
+			a.class[rid] = Elided
+		}
+	}
+	return nil
 }
 
 // An artifact may be both a file's content and a structural reference or

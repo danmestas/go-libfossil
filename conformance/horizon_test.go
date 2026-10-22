@@ -20,11 +20,13 @@ import (
 // The horizon suite tracks draft-fossil-horizon-00. So far it covers the
 // horizon member of the cone (§3.3): its canonical serialization and the
 // version byte that makes a reader predating it refuse the cone rather than
-// read it as path members; and the §3.1 held set, computed by
-// internal/horizon.
+// read it as path members; the §3.1 held set, computed by
+// internal/horizon; and the content horizon over a store
+// (horizon_content_test.go).
 
 func horizonSuiteCases() []Case {
-	return []Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules, horizonHeldSetRecomputed}
+	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules, horizonHeldSetRecomputed},
+		horizonContentCases()...)
 }
 
 var (

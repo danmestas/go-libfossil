@@ -1,4 +1,4 @@
-package horizon
+package horizon_test
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
@@ -85,7 +86,7 @@ func p(rids ...libfossil.FslID) []libfossil.FslID { return rids }
 
 func (d *dag) want(c libfossil.FslID, rule cone.HorizonRule, want ...libfossil.FslID) {
 	d.t.Helper()
-	got, err := HeldSet(context.Background(), d.r.DB(), c, rule)
+	got, err := horizon.HeldSet(context.Background(), d.r.DB(), c, rule)
 	if err != nil {
 		d.t.Fatalf("HeldSet(%d, %v): %v", c, rule, err)
 	}
@@ -229,8 +230,8 @@ func TestCNotHeld(t *testing.T) {
 	}
 	for _, rid := range []libfossil.FslID{c[1] + 1000, ph, file} {
 		for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
-			_, err := HeldSet(context.Background(), d.r.DB(), rid, rule)
-			if !errors.Is(err, ErrNotHeld) {
+			_, err := horizon.HeldSet(context.Background(), d.r.DB(), rid, rule)
+			if !errors.Is(err, horizon.ErrNotHeld) {
 				t.Errorf("HeldSet(%d, %v) error = %v, want ErrNotHeld", rid, rule, err)
 			}
 		}
@@ -253,14 +254,14 @@ func TestBoundExceeded(t *testing.T) {
 		{cone.RuleLeaves, c[4], 1 << 20}, // a sanity row: within bounds
 	}
 	for _, tc := range cases {
-		_, err := heldSet(context.Background(), d.r.DB(), tc.c, tc.rule, tc.limit)
+		_, err := horizon.HeldSetWithin(context.Background(), d.r.DB(), tc.c, tc.rule, tc.limit)
 		if tc.limit == 1<<20 {
 			if err != nil {
 				t.Errorf("rule %v limit %d: %v", tc.rule, tc.limit, err)
 			}
 			continue
 		}
-		if !errors.Is(err, ErrBound) {
+		if !errors.Is(err, horizon.ErrBound) {
 			t.Errorf("rule %v C %d limit %d: error = %v, want ErrBound", tc.rule, tc.c, tc.limit, err)
 		}
 	}
@@ -271,7 +272,7 @@ func TestCancelled(t *testing.T) {
 	c := d.chain("c1", "c2")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := HeldSet(ctx, d.r.DB(), c[0], cone.RuleLeaves); !errors.Is(err, context.Canceled) {
+	if _, err := horizon.HeldSet(ctx, d.r.DB(), c[0], cone.RuleLeaves); !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
@@ -284,12 +285,12 @@ func TestDeterministic(t *testing.T) {
 	g1 := d.commit("g1", p(c[1]), branchTags("g")...)
 	d.commit("g2", p(g1, c[2]))
 	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
-		first, err := HeldSet(context.Background(), d.r.DB(), c[2], rule)
+		first, err := horizon.HeldSet(context.Background(), d.r.DB(), c[2], rule)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for range 5 {
-			again, err := HeldSet(context.Background(), d.r.DB(), c[2], rule)
+			again, err := horizon.HeldSet(context.Background(), d.r.DB(), c[2], rule)
 			if err != nil {
 				t.Fatal(err)
 			}

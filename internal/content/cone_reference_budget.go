@@ -62,7 +62,8 @@ func loadConeReferenceFactsBounded(
 		return nil, work, err
 	}
 	facts := &ConeReferenceFacts{names: names, held: map[string]libfossil.FslID{},
-		nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{}}
+		nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{},
+		manifests: map[string]*deck.Deck{}}
 	for i := range blobs {
 		b := &blobs[i]
 		if err := ctx.Err(); err != nil {
@@ -268,6 +269,7 @@ func referenceRecord(facts *ConeReferenceFacts, b *referenceBlob, aliases *int, 
 	}
 	if d.Type == deck.Checkin {
 		facts.roots = append(facts.roots, d)
+		facts.manifests[b.uuid] = d
 	}
 	return nil
 }

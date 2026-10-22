@@ -22,6 +22,7 @@ type ConeReferenceFacts struct {
 	held       map[string]libfossil.FslID
 	nodes      map[libfossil.FslID]*deck.Deck
 	byUUID     map[string]*deck.Deck
+	manifests  map[string]*deck.Deck // check-ins, for a horizon's tree walk
 	records    []coneReferenceRecord
 	roots      []*deck.Deck
 	unreadable []string

@@ -45,6 +45,20 @@ func (p *ConeReferences) Required(rid libfossil.FslID) bool {
 	return p.inside[uuid] || p.required[uuid]
 }
 
+// structure reports a structural reference or a sub-manifest node: an
+// artifact a content horizon holds at every age.
+func (p *ConeReferences) structure(rid libfossil.FslID) bool {
+	uuid := p.names[rid]
+	return p.required[uuid] || p.tree[uuid]
+}
+
+// file reports a name some held F card gives: a blob, which a horizon may
+// place below it. A phantom no F card names is not proven to be one.
+func (p *ConeReferences) file(rid libfossil.FslID) bool {
+	uuid := p.names[rid]
+	return p.inside[uuid] || p.outside[uuid]
+}
+
 // Artifacts counts the artifact names the classification read.
 func (p *ConeReferences) Artifacts() int {
 	if p == nil {

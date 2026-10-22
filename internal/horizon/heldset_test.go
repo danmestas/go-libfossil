@@ -111,16 +111,17 @@ func TestTipHoldsOnlyItself(t *testing.T) {
 	}
 }
 
-// A branch forked below C is outside the descendants set; the leaves rule
-// holds it back to its fork, c1, which is the nearest common ancestor of
-// its leaf and C. c2, between the fork and C, is on no such path.
+// A branch forked below C is outside the descendants set. Under the leaves
+// rule its childless tip f2 meets C's ancestry at the fork c1, and K holds
+// every descendant of c1: the branch, and c2 between the fork and C, which
+// keeps K closed under descendants.
 func TestBranchForkedBelowC(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	f2 := d.commit("f2", p(f1))
 	d.want(c[2], cone.RuleDescendants, c[2], c[3])
-	d.want(c[2], cone.RuleLeaves, c[2], c[3], f1, f2, c[0])
+	d.want(c[2], cone.RuleLeaves, c[0], c[1], c[2], c[3], f1, f2)
 }
 
 func TestBranchForkedAtC(t *testing.T) {
@@ -135,15 +136,17 @@ func TestBranchForkedAtC(t *testing.T) {
 
 // A below-C branch merged into a descendant of C: the merge is a descendant,
 // the branch is only its ancestor, so the descendants rule leaves the branch
-// out. fossil's leaf rule keeps f1 an open leaf (its one child is on trunk),
-// so the leaves rule holds it back to the fork.
+// out. f1 is an open leaf by fossil's same-branch test, but the leaves rule
+// counts childless check-ins over P cards alone, and the merge m names f1:
+// the leaves rule leaves it out too, and a merge across it deepens (§3.1).
 func TestBelowCBranchMergedIntoDescendant(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
 	m := d.commit("m", p(c[3], f1))
-	d.want(c[2], cone.RuleDescendants, c[2], c[3], m)
-	d.want(c[2], cone.RuleLeaves, c[2], c[3], m, f1, c[0])
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
+		d.want(c[2], rule, c[2], c[3], m)
+	}
 }
 
 // A below-C branch that merges a descendant of C in: following merge
@@ -176,24 +179,29 @@ func TestSeveralNearestCommonAncestors(t *testing.T) {
 	d.want(cc, cone.RuleLeaves, cc, l, x2, y2, x, y)
 }
 
-func TestClosedLeafExcluded(t *testing.T) {
+// Childless is a property of the P-card graph, open or closed: a closed
+// branch's tip still pulls in the descendants of its fork from C's
+// ancestry. Here the closed f2 forks at c1, so K is all of c1's descendants.
+func TestClosedLeafIncluded(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2", "c3", "c4")
 	f1 := d.commit("f1", p(c[0]), branchTags("feat")...)
-	d.commit("f2", p(f1), closedTag)
+	f2 := d.commit("f2", p(f1), closedTag)
 	g1 := d.commit("g1", p(c[1]), branchTags("gone")...)
-	d.want(c[2], cone.RuleLeaves, c[2], c[3], g1, c[1])
+	d.want(c[2], cone.RuleLeaves, c[0], c[1], c[2], c[3], f1, f2, g1)
 }
 
-// A leaf whose ancestry never meets C's has no common ancestor with it; the
-// walk, like zit's, holds its whole ancestry rather than nothing.
-func TestUnrelatedRootHeldWhole(t *testing.T) {
+// A childless check-in whose ancestry never meets C's has no common
+// ancestor with it, so it adds no meeting point and nothing to K, as in
+// zit, whose meeting points are drawn from C's ancestry alone.
+func TestUnrelatedRootAddsNothing(t *testing.T) {
 	d := newDAG(t)
 	c := d.chain("c1", "c2")
 	u1 := d.commit("u1", nil, branchTags("other")...)
-	u2 := d.commit("u2", p(u1))
-	d.want(c[1], cone.RuleDescendants, c[1])
-	d.want(c[1], cone.RuleLeaves, c[1], u1, u2)
+	d.commit("u2", p(u1))
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
+		d.want(c[1], rule, c[1])
+	}
 }
 
 // A phantom parent is not a held check-in: no walk enters it.

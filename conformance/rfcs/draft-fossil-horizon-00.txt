@@ -83,29 +83,29 @@ Table of Contents
    3.  The Horizon Specification . . . . . . . . . . . . . . . . . .   5
      3.1.  The Horizon Reference and the Held Set  . . . . . . . . .   5
      3.2.  Location and Composition  . . . . . . . . . . . . . . . .   6
-     3.3.  Canonical Serialization . . . . . . . . . . . . . . . . .   6
-     3.4.  Choosing C  . . . . . . . . . . . . . . . . . . . . . . .   6
-   4.  The Content Horizon . . . . . . . . . . . . . . . . . . . . .   7
-     4.1.  Holdings  . . . . . . . . . . . . . . . . . . . . . . . .   7
-     4.2.  Classification  . . . . . . . . . . . . . . . . . . . . .   7
-     4.3.  Derived State . . . . . . . . . . . . . . . . . . . . . .   8
-     4.4.  Operations That Cross the Horizon . . . . . . . . . . . .   8
-     4.5.  Clusters  . . . . . . . . . . . . . . . . . . . . . . . .   8
+     3.3.  Canonical Serialization . . . . . . . . . . . . . . . . .   7
+     3.4.  Choosing C  . . . . . . . . . . . . . . . . . . . . . . .   7
+   4.  The Content Horizon . . . . . . . . . . . . . . . . . . . . .   8
+     4.1.  Holdings  . . . . . . . . . . . . . . . . . . . . . . . .   8
+     4.2.  Classification  . . . . . . . . . . . . . . . . . . . . .   8
+     4.3.  Derived State . . . . . . . . . . . . . . . . . . . . . .   9
+     4.4.  Operations That Cross the Horizon . . . . . . . . . . . .   9
+     4.5.  Clusters  . . . . . . . . . . . . . . . . . . . . . . . .   9
    5.  The Structural Horizon  . . . . . . . . . . . . . . . . . . .   9
      5.1.  Holdings  . . . . . . . . . . . . . . . . . . . . . . . .   9
-     5.2.  The Seed  . . . . . . . . . . . . . . . . . . . . . . . .   9
-       5.2.1.  What It Records . . . . . . . . . . . . . . . . . . .   9
-       5.2.2.  Identity and Supersession . . . . . . . . . . . . . .  10
-       5.2.3.  Privacy . . . . . . . . . . . . . . . . . . . . . . .  10
+     5.2.  The Seed  . . . . . . . . . . . . . . . . . . . . . . . .  10
+       5.2.1.  What It Records . . . . . . . . . . . . . . . . . . .  10
+       5.2.2.  Identity and Supersession . . . . . . . . . . . . . .  11
+       5.2.3.  Privacy . . . . . . . . . . . . . . . . . . . . . . .  11
        5.2.4.  Provenance  . . . . . . . . . . . . . . . . . . . . .  11
-     5.3.  Boundary Hashes . . . . . . . . . . . . . . . . . . . . .  11
-     5.4.  Derived State . . . . . . . . . . . . . . . . . . . . . .  11
-     5.5.  Operations That Cross the Horizon . . . . . . . . . . . .  12
-     5.6.  Re-Seeding  . . . . . . . . . . . . . . . . . . . . . . .  12
-     5.7.  Commit and Push . . . . . . . . . . . . . . . . . . . . .  13
-     5.8.  Deepen  . . . . . . . . . . . . . . . . . . . . . . . . .  13
-     5.9.  Trust . . . . . . . . . . . . . . . . . . . . . . . . . .  14
-   6.  Sync Protocol Extension . . . . . . . . . . . . . . . . . . .  14
+     5.3.  Boundary Hashes . . . . . . . . . . . . . . . . . . . . .  12
+     5.4.  Derived State . . . . . . . . . . . . . . . . . . . . . .  12
+     5.5.  Operations That Cross the Horizon . . . . . . . . . . . .  13
+     5.6.  Re-Seeding  . . . . . . . . . . . . . . . . . . . . . . .  13
+     5.7.  Commit and Push . . . . . . . . . . . . . . . . . . . . .  14
+     5.8.  Deepen  . . . . . . . . . . . . . . . . . . . . . . . . .  14
+     5.9.  Trust . . . . . . . . . . . . . . . . . . . . . . . . . .  15
+   6.  Sync Protocol Extension . . . . . . . . . . . . . . . . . . .  15
 
 
 
@@ -114,25 +114,26 @@ Mestas                    Expires 20 April 2027                 [Page 2]
 Internet-Draft               Fossil Horizons                October 2026
 
 
-     6.1.  The Horizon Pragmas . . . . . . . . . . . . . . . . . . .  14
-     6.2.  Server Behavior . . . . . . . . . . . . . . . . . . . . .  15
-       6.2.1.  Delta Inflation . . . . . . . . . . . . . . . . . . .  16
-       6.2.2.  Boundary Labels . . . . . . . . . . . . . . . . . . .  16
-       6.2.3.  The Seed  . . . . . . . . . . . . . . . . . . . . . .  16
-       6.2.4.  Merge Base  . . . . . . . . . . . . . . . . . . . . .  17
-       6.2.5.  Capability  . . . . . . . . . . . . . . . . . . . . .  17
-       6.2.6.  The Cursor  . . . . . . . . . . . . . . . . . . . . .  18
-     6.3.  Graceful Degradation  . . . . . . . . . . . . . . . . . .  19
-     6.4.  Not a Complete Origin . . . . . . . . . . . . . . . . . .  19
-   7.  Interactions  . . . . . . . . . . . . . . . . . . . . . . . .  19
-   8.  Security Considerations . . . . . . . . . . . . . . . . . . .  20
-   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  20
-   10. References  . . . . . . . . . . . . . . . . . . . . . . . . .  20
-     10.1.  Normative References . . . . . . . . . . . . . . . . . .  20
-     10.2.  Informative References . . . . . . . . . . . . . . . . .  21
-   Appendix A.  Implementation Sequencing  . . . . . . . . . . . . .  22
-   Appendix B.  Consumers  . . . . . . . . . . . . . . . . . . . . .  22
-   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  23
+     6.1.  The Horizon Pragmas . . . . . . . . . . . . . . . . . . .  15
+     6.2.  Server Behavior . . . . . . . . . . . . . . . . . . . . .  16
+       6.2.1.  Delta Inflation . . . . . . . . . . . . . . . . . . .  17
+       6.2.2.  Boundary Labels . . . . . . . . . . . . . . . . . . .  17
+       6.2.3.  The Seed  . . . . . . . . . . . . . . . . . . . . . .  17
+       6.2.4.  Merge Base  . . . . . . . . . . . . . . . . . . . . .  18
+       6.2.5.  Capability  . . . . . . . . . . . . . . . . . . . . .  18
+       6.2.6.  The Cursor  . . . . . . . . . . . . . . . . . . . . .  19
+     6.3.  Graceful Degradation  . . . . . . . . . . . . . . . . . .  20
+     6.4.  Not a Complete Origin . . . . . . . . . . . . . . . . . .  20
+   7.  Interactions  . . . . . . . . . . . . . . . . . . . . . . . .  20
+   8.  Security Considerations . . . . . . . . . . . . . . . . . . .  21
+   9.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .  22
+   10. References  . . . . . . . . . . . . . . . . . . . . . . . . .  22
+     10.1.  Normative References . . . . . . . . . . . . . . . . . .  22
+     10.2.  Informative References . . . . . . . . . . . . . . . . .  23
+   Appendix A.  Implementation Sequencing  . . . . . . . . . . . . .  23
+   Appendix B.  Consumers  . . . . . . . . . . . . . . . . . . . . .  24
+   Appendix C.  Changes in This Revision . . . . . . . . . . . . . .  24
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .  25
 
 1.  Introduction
 
@@ -153,6 +154,22 @@ Internet-Draft               Fossil Horizons                October 2026
    requires, and it is correct against a peer that does not understand
    it.
 
+
+
+
+
+
+
+
+
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 3]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    The second is structure.  Check-in manifests for all of history are
    proportional to the length of the history, and for a sufficiently
    long one they are themselves worth omitting.  Omitting them removes
@@ -162,13 +179,6 @@ Internet-Draft               Fossil Horizons                October 2026
    specified so that what stands in for the ancestry is an ordinary
    control artifact whose effect the existing derivation already knows
    how to apply.
-
-
-
-Mestas                    Expires 20 April 2027                 [Page 3]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    This document keeps the two separate.  An implementation MAY provide
    the content horizon alone.  The structural horizon presupposes the
@@ -208,6 +218,14 @@ Internet-Draft               Fossil Horizons                October 2026
 2.  Terminology
 
    Horizon:  A check-in C, named by its artifact hash, together with a
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 4]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
       held-set rule (Section 3.1).  A horizon is local policy of one
       clone; it is not an artifact and does not synchronize.
 
@@ -218,13 +236,6 @@ Internet-Draft               Fossil Horizons                October 2026
    Above, below:  A check-in is above the horizon if it is in K and
       below the horizon otherwise.  An artifact is above the horizon if
       some check-in in K references it and below otherwise.
-
-
-
-Mestas                    Expires 20 April 2027                 [Page 4]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    Content horizon:  A clone that holds every structural artifact of
       every age and elides the file-content blobs that lie below the
@@ -263,17 +274,6 @@ Internet-Draft               Fossil Horizons                October 2026
    names:
 
    descendants:  K is C and every check-in reachable from C by following
-      P cards backward, that is, every descendant of C.
-
-   leaves:  K is the descendants rule's set, plus, for every open leaf L
-      in the repository, every check-in on a path from L back to the
-      nearest common ancestor of L and C, inclusive of that ancestor.
-
-   The descendants rule is the default.  Under the leaves rule, any two
-   check-ins that are both open leaves, or both descendants of C, have
-   their merge base in K, so a merge between live branches resolves
-   without crossing the horizon (Section 5.5); its cost is every
-   manifest from each open leaf back to its fork from C's ancestry,
 
 
 
@@ -282,12 +282,40 @@ Mestas                    Expires 20 April 2027                 [Page 5]
 Internet-Draft               Fossil Horizons                October 2026
 
 
-   which on a repository that keeps old branches open is several times
-   the tip tree's content (Section 3.4).  Under the descendants rule a
-   branch forked below C is held from its fork forward only if the fork
-   is C itself, and a merge whose base is below C deepens first.  A
-   client that expects to merge across live branches offline SHOULD
-   choose the leaves rule knowingly.
+      P cards backward, that is, every descendant of C.
+
+   leaves:  K is the descendants rule's set, plus, for every childless
+      check-in L (one that no check-in names in a P card, open or
+      closed) that is not a descendant of C, every descendant of each
+      nearest common ancestor of L and C, that ancestor included.
+
+   Both rules are stated over P cards alone, and both yield a set closed
+   under descendants: every child of a check-in in K is in K.  That
+   closure is what makes leaves and branch tips derive exactly
+   (Section 5); a set that held a check-in without its children would
+   show it as a leaf.  "Childless" is a property of the P-card graph
+   alone and is not the leaf of [FossilRepoState] Section 2, which is a
+   check-in with no child on its own branch: a branch tip merged into
+   another branch and never closed is an open leaf there but has a
+   child, so it is not childless and is held only if it descends from C
+   or from one of those ancestors.  The rule is stated over P cards so
+   that an origin over its dense graph and a clone over its held
+   manifests compute the same K without the branch state that the leaf
+   test needs and a structural clone derives from K.
+
+   The descendants rule is the default.  Under the leaves rule, any two
+   check-ins that are both childless, or both descendants of C, have
+   their merge base in K, so a merge between branches still being
+   extended resolves without crossing the horizon (Section 5.5); a merge
+   whose side has a child elsewhere, such as an open branch already
+   merged, may not, and deepens as any other.  Its cost is every
+   manifest descending from where each childless check-in's ancestry
+   meets C's, which on a repository that keeps old branches open is
+   several times the tip tree's content (Section 3.4).  Under the
+   descendants rule a branch forked below C is held from its fork
+   forward only if the fork is C itself, and a merge whose base is below
+   C deepens first.  A client that expects to merge across branches
+   offline SHOULD choose the leaves rule knowingly.
 
    K is a function of C, the rule, and the repository's check-in graph.
    It changes when new check-ins arrive, and a horizon clone recomputes
@@ -302,6 +330,14 @@ Internet-Draft               Fossil Horizons                October 2026
    artifact's bytes or name.  Loss of the horizon reclassifies every
    artifact it elided as a transit phantom, and the store heals toward
    dense through ordinary synchronization; [FossilSparseCone]
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 6]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    Section 5.2's rule that policy loss costs bandwidth and never data
    applies unchanged.
 
@@ -331,26 +367,32 @@ Internet-Draft               Fossil Horizons                October 2026
    content plus the manifests of its own future.  Measured over several
    long-lived repositories, that is a few percent of the dense store.
 
+   The leaves rule makes the merge-base guarantee hold between childless
+   check-ins regardless of how C is chosen, and it is the right choice
+   for a clone that will merge across branches offline.  Its cost is
+   proportional to how far back leaves fork: a repository with a handful
+   of release branches forked years ago holds every manifest since the
+   oldest fork, and on a flat-manifest repository those manifests can
+   outweigh the tip tree's blobs several times over.  A good C under the
+   leaves rule is the nearest common ancestor of every childless check-
+   in, under which the leaves rule holds exactly what the descendants
+   rule holds, and which an origin can compute from its indexes and
+   offer to a cloning client; this places the horizon as late as
+   possible while keeping every childless check-in's whole divergence in
+   K.  An origin that offers a default C SHOULD also report what each
+   rule would hold, so the choice is made with the cost in view.
 
 
-Mestas                    Expires 20 April 2027                 [Page 6]
+
+
+
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 7]
 
 Internet-Draft               Fossil Horizons                October 2026
 
-
-   The leaves rule makes the merge-base guarantee hold for live work
-   regardless of how C is chosen, and it is the right choice for a clone
-   that will merge across branches offline.  Its cost is proportional to
-   how far back open leaves fork: a repository with a handful of open
-   release branches forked years ago holds every manifest on each of
-   them, and on a flat-manifest repository those manifests can outweigh
-   the tip tree's blobs several times over.  A good C under the leaves
-   rule is the nearest common ancestor of every open leaf, which an
-   origin can compute from its indexes and offer to a cloning client;
-   this places the horizon as late as possible while keeping every live
-   branch's whole divergence in K.  An origin that offers a default C
-   SHOULD also report what each rule would hold, so the choice is made
-   with the cost in view.
 
    A clone that wants N recent check-ins, or history from a date, names
    the check-in that expresses that and lets the rule do the rest.
@@ -386,14 +428,6 @@ Internet-Draft               Fossil Horizons                October 2026
    over the dense graph.  Both arrive at the same set because both hold
    the same manifests.
 
-
-
-
-Mestas                    Expires 20 April 2027                 [Page 7]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    Elision is the third phantom class of [FossilSparseCone] Section 5.2,
    and every rule stated there applies: an elided phantom is
    deliberately absent, synchronization MUST NOT spontaneously request
@@ -407,6 +441,14 @@ Internet-Draft               Fossil Horizons                October 2026
    cannot materialize the held artifact without it.  Section 6.2.1
    places on the origin the obligation that makes this case not arise;
    the refinement makes the clone correct when it does.
+
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 8]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
 4.3.  Derived State
 
@@ -441,15 +483,6 @@ Internet-Draft               Fossil Horizons                October 2026
    artifacts to a horizon-scoped request, because the client will not
    act on them.
 
-
-
-
-
-Mestas                    Expires 20 April 2027                 [Page 8]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
 5.  The Structural Horizon
 
 5.1.  Holdings
@@ -465,6 +498,13 @@ Internet-Draft               Fossil Horizons                October 2026
    manifests and nodes below the horizon that nothing in K reaches, and
    for their blobs.  It holds one additional artifact, the seed
    (Section 5.2), which it MUST keep from every peer.
+
+
+
+Mestas                    Expires 20 April 2027                 [Page 9]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    Control artifacts are kept at every age because they are small and
    because a tag applied below the horizon can change the state in force
@@ -497,20 +537,30 @@ Internet-Draft               Fossil Horizons                October 2026
    exactly as the dense derivation holds it.  The seed's D card is the
    time of minting and its U card is the origin's login.
 
+   C is not the only check-in of K whose tag state comes from below the
+   horizon.  A branch forked below C that later merges C in has a check-
+   in in K whose primary parent is not in K: it is a descendant of C
+   through its merge parent, but its branch, and every other tag it
+   inherits, propagate to it along its primary parent from below.  The
+   seed therefore carries, in the same way, T cards applying to each
+   such check-in the tags in force at it in the dense repository.  These
+   check-ins, with C, are the entries of K: the check-ins of K that name
+   a primary parent not in K.
+
+   With the seed applied, propagation begins at every entry with the
+   state the dense repository has there, and every check-in in K derives
+   exactly as it does densely.  The seed is the only artifact a
+   structural horizon holds that a dense repository does not, and the
+   derivation needs no code to apply it that it does not already have.
 
 
 
 
-Mestas                    Expires 20 April 2027                 [Page 9]
+
+Mestas                    Expires 20 April 2027                [Page 10]
 
 Internet-Draft               Fossil Horizons                October 2026
 
-
-   With the seed applied, propagation begins at C with the state the
-   dense repository has at C, and every check-in in K derives exactly as
-   it does densely.  The seed is the only artifact a structural horizon
-   holds that a dense repository does not, and the derivation needs no
-   code to apply it that it does not already have.
 
 5.2.2.  Identity and Supersession
 
@@ -548,20 +598,6 @@ Internet-Draft               Fossil Horizons                October 2026
    matching the seed's shape by any other route treats it as an ordinary
    control artifact.
 
-
-
-
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 10]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
 5.2.4.  Provenance
 
    An origin that holds a signing key SHOULD sign the seed using the
@@ -573,6 +609,14 @@ Internet-Draft               Fossil Horizons                October 2026
    from such an origin, falling back to the content horizon
    (Section 6.3) rather than holding derived state it cannot attribute.
    A clone with no key for its origin accepts an unsigned seed.
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 11]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    A signature proves provenance, not correctness: an origin that
    derives wrongly signs its wrong derivation.  Because a client MUST
@@ -605,18 +649,13 @@ Internet-Draft               Fossil Horizons                October 2026
 5.4.  Derived State
 
    With the seed and the boundary labels in place, the derivation runs
-   unmodified over the held artifacts.  Leaves are exact: a leaf is a
-   check-in no held check-in names as parent, and every child of a
-   check-in in K is in K.  Branch and tag state is exact for every
-   check-in in K.  The timeline is exact above C and ends at the
-   boundary hashes.  Merge ancestry is exact within K.
-
-
-
-Mestas                    Expires 20 April 2027                [Page 11]
-
-Internet-Draft               Fossil Horizons                October 2026
-
+   unmodified over the held artifacts.  Leaves are exact: the leaf test
+   of [FossilRepoState] reads a check-in's children and their branches,
+   every child of a check-in in K is in K under either rule
+   (Section 3.1), and branch state is exact for every check-in in K, so
+   the test sees exactly what it sees on a dense store.  Branch and tag
+   state is exact for every check-in in K.  The timeline is exact above
+   C and ends at the boundary hashes.  Merge ancestry is exact within K.
 
    A clone SHOULD render a boundary hash as the horizon rather than as a
    missing parent, and MUST NOT describe it as damage.  Verification
@@ -624,18 +663,30 @@ Internet-Draft               Fossil Horizons                October 2026
    damage, as [FossilSparseCone] Section 5.2 requires for every elided
    class.
 
+
+
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 12]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
 5.5.  Operations That Cross the Horizon
 
    The following operations can need history below the horizon.  For
    each, an implementation MUST detect the crossing, MUST name the
    horizon in its diagnostic, and MUST offer the remedy stated.
 
-   Merge base:  Under the leaves rule the merge base of any two live
-      branches is in K; under the descendants rule it is in K only for
-      branches forked at or after C.  When a merge's base is below the
-      horizon, the clone asks the origin for it (Section 6.2.4) and
-      deepens to it.  The merge then runs locally over real artifacts.
-      An implementation MUST NOT merge against a base it does not hold.
+   Merge base:  Under the leaves rule the merge base of any two
+      childless check-ins is in K; under the descendants rule it is in K
+      only for branches forked at or after C.  When a merge's base is
+      below the horizon, the clone asks the origin for it
+      (Section 6.2.4) and deepens to it.  The merge then runs locally
+      over real artifacts.  An implementation MUST NOT merge against a
+      base it does not hold.
 
    Symbolic names:  A tag applied to a check-in below the horizon
       resolves to that check-in's hash, because the control artifact is
@@ -669,7 +720,12 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 12]
+
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 13]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -725,7 +781,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 13]
+Mestas                    Expires 20 April 2027                [Page 14]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -781,7 +837,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 14]
+Mestas                    Expires 20 April 2027                [Page 15]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -837,7 +893,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 15]
+Mestas                    Expires 20 April 2027                [Page 16]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -893,7 +949,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 16]
+Mestas                    Expires 20 April 2027                [Page 17]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -949,7 +1005,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
 
-Mestas                    Expires 20 April 2027                [Page 17]
+Mestas                    Expires 20 April 2027                [Page 18]
 
 Internet-Draft               Fossil Horizons                October 2026
 
@@ -990,13 +1046,25 @@ Internet-Draft               Fossil Horizons                October 2026
    holds: a pull sends nothing of the client's, so it advances the count
    by what it received, and only when nothing undelivered preceded them;
    a client without a cursor announces its whole holding on its next
-   request that sends.  An origin receiving a
-   cursor MUST NOT announce an artifact at or below it in any reply,
-   classified or not, and MUST announce every kept artifact above it the
-   request did not name.  A push reply is where this matters most: the
-   request carries no horizon, so without the cursor an origin announces
-   every holding no cluster names, which on a store that has never
-   minted a cluster is its whole inventory.
+   request that sends.  An origin receiving a cursor MUST NOT announce
+   an artifact at or below it in any reply, classified or not, and MUST
+   announce every kept artifact above it the request did not name.  An
+   origin announces with igot only in reply to a request that pulls
+   ([FossilSync]), so a reply to a push-only request announces nothing,
+   cursor or not; the cursor bounds the announcement of every reply to a
+   pull or a sync.
+
+
+
+
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 19]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    The cursor is only as good as the classification it was handed out
    from.  When an artifact arrives that a held artifact already cited
@@ -1015,16 +1083,6 @@ Internet-Draft               Fossil Horizons                October 2026
    fully; an origin that cannot place it ignores it.  A client that
    suspects its holding is incomplete MAY omit the cursor to force a
    full announcement.
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 18]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
 6.3.  Graceful Degradation
 
@@ -1055,6 +1113,15 @@ Internet-Draft               Fossil Horizons                October 2026
 
    This section is informative.
 
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 20]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    Path cones: compose by intersection on blobs, as Section 3 states.  A
    path cone never elides structure, so a path-cone-plus-content-horizon
    clone still derives exactly, and a path-cone-plus-structural-horizon
@@ -1073,14 +1140,6 @@ Internet-Draft               Fossil Horizons                October 2026
    hybrid history, because it holds manifests whole.  A structural
    horizon applies to it as well, for the same reason; nothing in this
    document requires sub-manifests.
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 19]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    Derived caches: under a content horizon, nothing changes.  Under a
    structural horizon, the local log holds a different set of manifests
@@ -1111,6 +1170,14 @@ Internet-Draft               Fossil Horizons                October 2026
    number of fixed-arity cards.  The held-set computation on the origin
    is an ancestry walk; it MUST carry the same depth and visited-node
    bounds as any other server-side graph walk, and the merge-base query
+
+
+
+Mestas                    Expires 20 April 2027                [Page 21]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    MUST be bounded the same way, so that a crafted request does not
    convert an unauthenticated round into an amplification primitive.
    Delta inflation on the serve path is work proportional to the
@@ -1128,15 +1195,6 @@ Internet-Draft               Fossil Horizons                October 2026
 10.  References
 
 10.1.  Normative References
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 20]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    [FossilArtifact]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -1166,6 +1224,16 @@ Internet-Draft               Fossil Horizons                October 2026
               <https://datatracker.ietf.org/doc/html/draft-fossil-
               sparse-cone-00>.
 
+
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 22]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    [FossilSync]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
               Distributed Version Control System: Sync Protocol", Work
@@ -1183,16 +1251,6 @@ Internet-Draft               Fossil Horizons                October 2026
               May 2017, <https://www.rfc-editor.org/rfc/rfc8174>.
 
 10.2.  Informative References
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 21]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    [FossilSubManifests]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -1224,6 +1282,14 @@ Appendix A.  Implementation Sequencing
        transfers.  That share is a property of the repository, not of
        this document.
 
+
+
+
+Mestas                    Expires 20 April 2027                [Page 23]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    5.  The seed, boundary labels, re-seeding, and the structural horizon
        (Section 5), gated on the measurement.
 
@@ -1241,15 +1307,6 @@ Appendix B.  Consumers
    and involves no history, no phantoms and no derivation.  It is the
    right tool and this document does not improve on it.
 
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 22]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    A persistent worker wants to run many jobs against one repository.  A
    dense clone kept warm on the worker and synchronized forward, with
    each job given a copy-on-write copy of it, pays the clone once per
@@ -1259,6 +1316,49 @@ Internet-Draft               Fossil Horizons                October 2026
    repository and has no warm copy.  It is the consumer of this
    document: the content horizon first, the structural horizon when the
    manifests below C are what remains worth removing.
+
+Appendix C.  Changes in This Revision
+
+   This revision of draft-fossil-horizon-00, dated 21 October 2026,
+   makes the following changes to the earlier text.
+
+   *  Section 3.1, Section 3.4: the leaves rule is restated over P cards
+      alone.  K is the descendants of C and of each nearest common
+      ancestor of C and a childless check-in (one no P card names, open
+      or closed), so that K is closed under descendants under either
+      rule.  The earlier rule held each open leaf's path back to its
+      fork from C's ancestry; the check-in at the fork was then in K
+      without its child toward C, and a structural clone showed it as a
+      leaf.  It also required the open-leaf test, which needs tag state.
+      Normative change.
+
+   *  Section 5.2: the seed carries T cards for every entry of K, each
+      check-in of K whose primary parent is not in K, and not for C
+      alone.  A branch forked below C that merges C in has such a check-
+      in, and its branch state propagates to it from below the horizon;
+      seeded at C only, it derived no branch.  Normative change.
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 24]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
+   *  Section 3.1, Section 3.4, Section 5, Section 5.5: the leaves rule
+      names a check-in no P card names "childless", distinct from the
+      leaf of [FossilRepoState], which is a check-in with no child on
+      its own branch; the earlier text called both a leaf.  The merge-
+      base guarantee is stated between childless check-ins: an open
+      branch already merged into another is an open leaf but not
+      childless, and a merge across it may deepen.  Derived State no
+      longer restates the leaf test; it defers to [FossilRepoState].
+
+   *  Section 6.2.6: an origin announces only in reply to a request that
+      pulls, as Fossil does, so a push-only reply announces nothing.
+      The earlier text named the push reply as the one the cursor
+      bounded most.
 
 Author's Address
 
@@ -1297,8 +1397,4 @@ Author's Address
 
 
 
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 23]
+Mestas                    Expires 20 April 2027                [Page 25]

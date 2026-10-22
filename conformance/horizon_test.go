@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // internal/horizon.
 
 func horizonSuiteCases() []Case {
-	return []Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules, horizonHeldSetRecomputed}
+	return []Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules, horizonHeldSetRecomputed, horizonHeldSetClosed}
 }
 
 var (
@@ -32,6 +33,7 @@ var (
 	horizonUnknownVersion    = Case{ID: "horizon.3.3.unknown-version", Req: "HZ-3.3-2"}
 	horizonHeldSetRules      = Case{ID: "horizon.3.1.held-set-rules", Req: "HZ-3.1-1"}
 	horizonHeldSetRecomputed = Case{ID: "horizon.3.1.held-set-recomputed", Req: "HZ-3.1-3"}
+	horizonHeldSetClosed     = Case{ID: "horizon.3.1.held-set-closed", Req: "HZ-3.1-4"}
 )
 
 const horizonHash = "0123456789abcdef0123456789abcdef01234567"
@@ -110,6 +112,7 @@ func TestHorizon(t *testing.T) {
 	})
 	check(t, horizonHeldSetRules, func() error { return hzRules(t) })
 	check(t, horizonHeldSetRecomputed, func() error { return hzRecomputed(t) })
+	check(t, horizonHeldSetClosed, func() error { return hzClosed(t) })
 }
 
 // hzGraph is trunk c1..c4 with C = c3, a branch feat forked at c1 (below C)
@@ -169,15 +172,19 @@ func hzWant(r *repo.Repo, c libfossil.FslID, rule cone.HorizonRule, want ...libf
 }
 
 // hzRules: descendants holds C, its trunk descendants (the merge m among
-// them) and the branch forked at C; leaves adds the below-C branch feat,
-// still an open leaf after its merge, back to c1, its nearest common
-// ancestor with C. c2 is on no leaf's path and stays out under both.
+// them) and the branch forked at C. The leaves rule is stated over P cards:
+// the below-C branch feat is an open leaf by fossil's same-branch test, but
+// the merge m names it, so it is not childless and adds nothing. The
+// branch open, forked at c2 and never merged, is childless: its ancestry
+// meets C's at c2, and K gains every descendant of c2, c2 included, which
+// keeps K closed under descendants. feat, forked at c1, stays out.
 func hzRules(t *testing.T) error {
 	g := newHZGraph(t)
+	open := hzCommit(t, g.f, "open", []libfossil.FslID{g.c2}, hzBranch("open"))
 	if err := hzWant(g.f.r, g.c3, cone.RuleDescendants, g.c3, g.c4, g.m, g.side1, g.side2); err != nil {
 		return err
 	}
-	return hzWant(g.f.r, g.c3, cone.RuleLeaves, g.c3, g.c4, g.m, g.side1, g.side2, g.feat, g.c1)
+	return hzWant(g.f.r, g.c3, cone.RuleLeaves, g.c2, g.c3, g.c4, g.m, g.side1, g.side2, open)
 }
 
 // hzUUIDs names a held set by artifact hash, so sets computed in two
@@ -253,4 +260,40 @@ func hzRecomputed(t *testing.T) error {
 		return expectf("held set %v after the new check-in %s arrived, %v before", after, tip, before)
 	}
 	return nil
+}
+
+// hzClosed: under both rules and from every check-in as C, K is closed
+// under descendants: no plink child of a check-in in K is outside it. The
+// graph has a merged below-C branch, a branch forked at C and, added here,
+// a closed childless branch forked at c2, so the leaves rule's meeting
+// points are exercised as well as the descendants walk.
+func hzClosed(t *testing.T) error {
+	g := newHZGraph(t)
+	hzCommit(t, g.f, "gone", []libfossil.FslID{g.c2}, append(hzBranch("gone"), deck.TagCard{Type: deck.TagSingleton, Name: "closed", UUID: "*"}))
+	for _, c := range []libfossil.FslID{g.c1, g.c2, g.c3, g.c4, g.feat, g.side1} {
+		for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
+			k, err := horizon.HeldSet(context.Background(), g.f.r.DB(), c, rule)
+			if err != nil {
+				return err
+			}
+			var outside int
+			err = g.f.r.DB().QueryRow(fmt.Sprintf(`SELECT count(*) FROM plink
+				WHERE pid IN (%[1]s) AND cid NOT IN (%[1]s)`, hzRidList(k))).Scan(&outside)
+			if err != nil {
+				return err
+			}
+			if outside != 0 {
+				return expectf("%v held set from rid %d = %v has %d children outside it", rule, c, k, outside)
+			}
+		}
+	}
+	return nil
+}
+
+func hzRidList(rids []libfossil.FslID) string {
+	parts := make([]string, len(rids))
+	for i, rid := range rids {
+		parts[i] = fmt.Sprint(rid)
+	}
+	return strings.Join(parts, ",")
 }

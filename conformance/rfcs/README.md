@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `de33f5b033` | `f808dbd0db372f37…` |
+| `draft-fossil-horizon-00.txt` | `bbd1435674` (branch `horizon-rfc`) | `05edfa9e5e` | `2e1002e1137ba99f…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -56,11 +56,15 @@ now requires the complete canonical structural affected range and verified
 partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
-the corrected canonical-writing contract. The horizon copy moves from
-`86d4b67372` (2026-10-18) to `e6ee276c89` with it; the normative changes
-between them are all in §6: §6.1 lets any request carry the cursor, §6.2
-adds the classification-memoization SHOULDs, and §6.2.6 (the horizon
-cursor) is new. Every other section is word-for-word unchanged. The same
+the corrected canonical-writing contract. The horizon copy is pinned at
+`bbd1435674`, the revision zit's author called ready to implement against
+(2026-10-21); the sparse-cone text there is byte-identical to the copy at
+`e6ee276c89`. Its Appendix C lists every change to the earlier text: the
+leaves rule restated over P cards alone, with K closed under descendants
+under both rules (§3.1, §3.4); the seed carrying T cards for every entry
+of K, not C alone (§5.2.1); the cursor's announcements made only in reply
+to a request that pulls (§6.2.6); and, from the revision before, the
+cursor itself and the classification-memoization SHOULDs (§6.1, §6.2). The same
 branch adds the pragma names these two drafts define (`cone`, `cone-not`,
 and the `horizon` family) to the sync draft's §9 list of extension pragmas;
 the sync draft here follows trunk, so that addition is pending.

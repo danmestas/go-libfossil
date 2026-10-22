@@ -21,6 +21,18 @@ func checkinSources(d *deck.Deck) []string {
 	return sources
 }
 
+// belowStructural reports a store cone with a structural horizon
+// (draft-fossil-horizon-00 §5.1), which holds no manifest below it: a source
+// it lacks may never arrive, so a check-in is linked against its phantom as
+// a dense store links it, rather than wait.
+func belowStructural(c *cone.Cone) bool {
+	if c == nil {
+		return false
+	}
+	h, ok := c.Horizon()
+	return ok && h.Depth() == cone.DepthStructural
+}
+
 // Parent spines may have metadata without complete file sets. Mlinks must wait
 // on the actual tree dependency, not mistake an event row for full derivation.
 func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
@@ -28,7 +40,7 @@ func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 	for _, uuid := range checkinSources(d) {
 		rid, ok := content.AvailableByUUID(tx, uuid)
 		if !ok {
-			if c != nil {
+			if c != nil && !belowStructural(c) {
 				return uuid
 			}
 			continue
@@ -101,6 +113,9 @@ func SparseCheckinReady(ctx context.Context, q db.Querier, cache *content.Cache,
 	}
 	for _, uuid := range checkinSources(d) {
 		parent, ok := content.AvailableByUUID(q, uuid)
+		if !ok && belowStructural(c) {
+			continue
+		}
 		if !ok {
 			return false, nil
 		}

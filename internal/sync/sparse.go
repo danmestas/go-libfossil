@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -17,20 +20,29 @@ const coneServedPragma = "cone-served"
 
 // horizonPragma carries a request's horizon, `pragma horizon HASH RULE`, and
 // horizonServedPragma the level an origin serves it at, `pragma
-// horizon-served LEVEL` (draft-fossil-horizon-00 §6.1, §6.2.5). This
-// implementation serves and asks for the content level only.
+// horizon-served LEVEL` (draft-fossil-horizon-00 §6.1, §6.2.5). A structural
+// request adds horizonStructuralPragma and offers its held seed with
+// horizonSeedPragma, `pragma horizon-seed HASH|-`; a reply names a seed it
+// sends with the same pragma, and each boundary hash with horizonBelowPragma,
+// `pragma horizon-below HASH` (§6.2.2, §6.2.3).
 const (
-	horizonPragma       = "horizon"
-	horizonServedPragma = "horizon-served"
+	horizonPragma           = "horizon"
+	horizonServedPragma     = "horizon-served"
+	horizonStructuralPragma = "horizon-structural"
+	horizonSeedPragma       = "horizon-seed"
+	horizonBelowPragma      = "horizon-below"
 )
 
-// conePragmas spells c for a request: its path members, then its horizon.
-// The horizon goes without horizon-structural whatever depth c records.
-func conePragmas(c *cone.Cone) []xfer.Card {
+// noSeed is the horizon-seed value of a client holding no seed.
+const noSeed = "-"
+
+// conePragmas spells c for a request: its path members, then its horizon,
+// and for a structural horizon horizon-structural and the offered seed.
+func conePragmas(c *cone.Cone, offer string) []xfer.Card {
 	if c == nil {
 		return nil
 	}
-	cards := make([]xfer.Card, 0, len(c.Include())+len(c.Exclude())+1)
+	cards := make([]xfer.Card, 0, len(c.Include())+len(c.Exclude())+3)
 	for _, m := range c.Include() {
 		cards = append(cards, &xfer.PragmaCard{Name: "cone", Values: []string{deck.FossilEncode(m)}})
 	}
@@ -39,19 +51,42 @@ func conePragmas(c *cone.Cone) []xfer.Card {
 	}
 	if h, ok := c.Horizon(); ok {
 		cards = append(cards, &xfer.PragmaCard{Name: horizonPragma, Values: []string{h.Hash(), h.Rule().String()}})
+		if h.Depth() == cone.DepthStructural {
+			if offer == "" {
+				panic("sync.conePragmas: a structural horizon needs a seed offer")
+			}
+			cards = append(cards, &xfer.PragmaCard{Name: horizonStructuralPragma},
+				&xfer.PragmaCard{Name: horizonSeedPragma, Values: []string{offer}})
+		}
 	}
 	return cards
 }
 
+// seedOffer is the horizon-seed value naming the seed q holds (§6.2.3): the
+// SHA3-256 name of its bytes, or noSeed.
+func seedOffer(q db.Querier) (string, error) {
+	held, err := seed.Held(q)
+	if err != nil || held == nil {
+		return noSeed, err
+	}
+	return hash.SHA3(held), nil
+}
+
 // requestCone reads a request's cone: its path members and its horizon, at
-// the content depth. A malformed horizon pragma is ignored, as zit ignores
-// one, and the last well-formed one stands.
+// the structural depth when the request carries horizon-structural, in
+// either order. A malformed horizon pragma is ignored, as zit ignores one,
+// and the last well-formed one stands.
 func requestCone(cards []xfer.Card) (*cone.Cone, error) {
 	var include, exclude []string
 	var horizon *cone.Horizon
+	structural := false
 	for _, card := range cards {
 		p, ok := card.(*xfer.PragmaCard)
 		if !ok {
+			continue
+		}
+		if p.Name == horizonStructuralPragma {
+			structural = true
 			continue
 		}
 		if p.Name == horizonPragma {
@@ -82,6 +117,13 @@ func requestCone(cards []xfer.Card) (*cone.Cone, error) {
 	var c *cone.Cone
 	var err error
 	if horizon != nil {
+		if structural {
+			h, herr := cone.NewHorizon(horizon.Hash(), horizon.Rule(), cone.DepthStructural)
+			if herr != nil {
+				panic("sync.requestCone: a valid horizon failed to rebuild: " + herr.Error())
+			}
+			horizon = &h
+		}
 		c, err = cone.NewWithHorizon(include, exclude, *horizon)
 	} else {
 		c, err = cone.New(include, exclude)
@@ -104,12 +146,44 @@ func requestHorizon(p *xfer.PragmaCard) (cone.Horizon, bool) {
 	return h, err == nil
 }
 
-// servesContentHorizon reports a horizon-served pragma at the content level,
-// the only one this client asks for. Another level is not taken up: the
-// client never enters the structural horizon (§6.2.5), and every reply is
-// classified locally regardless, so this only reports the mode.
-func servesContentHorizon(p *xfer.PragmaCard) bool {
-	return len(p.Values) >= 1 && p.Values[0] == cone.DepthContent.String()
+// servedLevel reads a horizon-served pragma's level (§6.2.5); ok is false
+// for a level this implementation does not know.
+func servedLevel(p *xfer.PragmaCard) (cone.HorizonDepth, bool) {
+	if len(p.Values) < 1 {
+		return 0, false
+	}
+	d, err := cone.ParseHorizonDepth(p.Values[0])
+	return d, err == nil
+}
+
+// requestSeedOffer is the seed a structural request says its client holds
+// (§6.2.3), "" when it names none: the last well-formed horizon-seed wins.
+func requestSeedOffer(cards []xfer.Card) string {
+	offer := ""
+	for _, card := range cards {
+		p, ok := card.(*xfer.PragmaCard)
+		if ok && p.Name == horizonSeedPragma && len(p.Values) == 1 && hash.IsValidHash(p.Values[0]) {
+			offer = p.Values[0]
+		}
+	}
+	return offer
+}
+
+// withDepth is c with its horizon cut at depth d.
+func withDepth(c *cone.Cone, d cone.HorizonDepth) *cone.Cone {
+	h, ok := c.Horizon()
+	if !ok {
+		panic("sync.withDepth: the cone has no horizon")
+	}
+	nh, err := cone.NewHorizon(h.Hash(), h.Rule(), d)
+	if err != nil {
+		panic("sync.withDepth: " + err.Error())
+	}
+	out, err := cone.NewWithHorizon(c.Include(), c.Exclude(), nh)
+	if err != nil {
+		panic("sync.withDepth: " + err.Error())
+	}
+	return out
 }
 
 // servedCluster reports a cluster artifact sent to a horizon store by an

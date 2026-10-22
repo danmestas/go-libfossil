@@ -23,7 +23,7 @@ func (c *RepoCoCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	rid, err := resolveRID(r, c.Version)
+	rid, err := resolveCheckin(r, c.Version)
 	if err != nil {
 		return err
 	}

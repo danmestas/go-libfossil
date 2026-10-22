@@ -11,6 +11,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -721,6 +722,7 @@ func (s *session) processReply(ctx context.Context,
 	var t replyTally
 	s.pass = newReceivePass()
 	defer func() { s.pass = nil }()
+	s.structural.beginReply()
 	for _, card := range msg.Cards {
 		stop, err := s.handleReplyCard(ctx, card, &t)
 		if err != nil {
@@ -746,9 +748,28 @@ func (s *session) processReply(ctx context.Context,
 		s.result.Errors = append(s.result.Errors, "error: "+content.Error())
 		cardErr = nil
 	}
+	// Horizon §6.2.5: the first reply to a request carrying the horizon, a
+	// pull's, decides whether a structural store stays structural, before
+	// the phantoms it learned of are classified. A push alone asks nothing.
+	if s.result.Rounds == 0 && s.opts.Pull {
+		fell, err := s.structural.endFirstReply(s.repo)
+		if err != nil {
+			return false, cardErr, err
+		}
+		s.result.HorizonFallback = s.result.HorizonFallback || fell
+		t.fellBack = fell
+		s.reloadPhantoms = s.reloadPhantoms || fell
+	}
 	if err := s.closeReply(ctx, &t); err != nil {
 		return false, cardErr, err
 	}
+	fell, err := s.structural.endReply(s.repo)
+	if err != nil {
+		return false, cardErr, err
+	}
+	s.result.HorizonFallback = s.result.HorizonFallback || fell
+	t.fellBack = t.fellBack || fell
+	s.reloadPhantoms = s.reloadPhantoms || fell
 	if cardErr != nil {
 		return false, cardErr, nil
 	}
@@ -815,10 +836,11 @@ func (s *session) malformedFile(compressed bool) bool {
 
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
-	filesRecvd   int // file and cfile cards received
-	filesSent    int // files queued for the next request on the server's gimme
-	newPhantoms  int // phantoms an igot created
-	privateIGots int // igot HASH 1 answers queued for the server's gimme
+	filesRecvd   int  // file and cfile cards received
+	filesSent    int  // files queued for the next request on the server's gimme
+	newPhantoms  int  // phantoms an igot created
+	privateIGots int  // igot HASH 1 answers queued for the server's gimme
+	fellBack     bool // a structural store fell back, making the manifests below its horizon wanted
 }
 
 // handleReplyCard acts on one reply card. It reports stop when the card ends
@@ -882,6 +904,9 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 	case *xfer.PragmaCard:
 		if c.Name == "link" {
 			return false, s.handleLink(c)
+		}
+		if handled, err := s.structural.pragma(s.repo.DB(), c); handled || err != nil {
+			return false, err
 		}
 		s.handleReplyPragma(c)
 	case *xfer.UVIGotCard, *xfer.UVFileCard, *xfer.UVGimmeCard:
@@ -960,8 +985,13 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		// Sparse-cone §6.3: the peer applied this request's cone. Every
 		// reply is filtered locally regardless; this only reports the mode.
 		s.result.ConeServed++
-	case c.Name == horizonServedPragma && servesContentHorizon(c):
-		s.result.HorizonServed++
+	case c.Name == horizonServedPragma:
+		if d, ok := s.structural.level(c); ok {
+			s.result.HorizonServed++
+			if d == cone.DepthStructural {
+				s.result.StructuralServed++
+			}
+		}
 	case c.Name == horizonCursorPragma:
 		if n, ok := parseCursor(c); ok {
 			s.peerCursor = n
@@ -1049,6 +1079,11 @@ func (s *session) converged(t replyTally) (bool, error) {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Errorf("sync: check phantoms: %w", err)
 		}
+	}
+	// Horizon §6.3: a fallback made the manifests below the horizon wanted,
+	// which only another round can ask for.
+	if t.fellBack && s.opts.Pull {
+		return false, nil
 	}
 	// §3.7 (b): files are queued for the next request.
 	if t.filesSent > 0 || len(s.pendingSend) > 0 {
@@ -1693,16 +1728,24 @@ func (s *session) loadDBPhantoms() error {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
 		}
-		if elided != nil && elided.Class(rid) == content.Elided {
+		// A structural store elides a name nothing it holds requests, but
+		// one its origin announces this session is kept there (horizon
+		// §4.5, §5.1) and is asked for.
+		announced := s.structural.active && s.remoteHas[uuid] && elided != nil && elided.Unnamed(rid)
+		if elided != nil && elided.Class(rid) == content.Elided && !announced {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)
 			continue
 		}
-		if !s.remoteHas[uuid] {
+		if !s.remoteHas[uuid] || s.reloadPhantoms {
 			s.phantoms[uuid] = true
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	s.reloadPhantoms = false
+	return nil
 }
 
 // elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
@@ -1744,6 +1787,9 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// server-push receive paths.
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
+	}
+	if taken, err := s.structural.takeSeed(s.repo, uuid, deltaSrc, payload); taken || err != nil {
+		return false, err
 	}
 	if servedCluster(s.servedHorizon(), deltaSrc, payload) {
 		return false, nil

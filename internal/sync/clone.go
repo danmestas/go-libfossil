@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -86,6 +88,8 @@ type cloneSession struct {
 	roundFrom             int  // the clone sequence the last request named
 	roundPush             bool // the last reply carried a push card
 	coned                 bool // requests carry the store cone (§6.1)
+	structural            structuralClient
+	structuralDecided     bool // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
 	// smConfig stages the sub-manifest settings one reply's config cards
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
@@ -148,6 +152,11 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
 		return
 	}
+	structural, structuralErr := newStructuralClient(r.DB(), opts.SeedVerifier)
+	if structuralErr != nil {
+		err = fmt.Errorf("sync.Clone: %w", structuralErr)
+		return
+	}
 
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
@@ -171,6 +180,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		phantoms:              make(map[string]bool),
 		availableDeltaSources: make(map[string]struct{}),
 		seqno:                 1,
+		structural:            structural,
 	}
 	if opts.StoreCone != nil {
 		cs.sparseReceived = map[string]bool{}
@@ -226,6 +236,12 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 			return cloneResult, err
 		}
 	}
+	// Horizon §5.2.3: the seed applies to what the linker's finalize linked.
+	fell, err := cs.structural.apply(cs.repo)
+	if err != nil {
+		return cloneResult, fmt.Errorf("sync.Clone: horizon seed: %w", err)
+	}
+	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
 	return cloneResult, cs.fillPhantoms(ctx, t)
 }
 
@@ -273,15 +289,19 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 		return nil
 	}
 	res, err := Sync(ctx, cs.repo, t, SyncOpts{
-		Pull:        true,
-		ProjectCode: cs.projectCode,
-		ServerCode:  cs.serverCode,
-		User:        cs.opts.User,
-		Password:    cs.opts.Password,
-		Env:         cs.env,
-		Buggify:     cs.opts.Buggify,
-		Observer:    cs.opts.Observer,
+		Pull:         true,
+		ProjectCode:  cs.projectCode,
+		ServerCode:   cs.serverCode,
+		User:         cs.opts.User,
+		Password:     cs.opts.Password,
+		Env:          cs.env,
+		Buggify:      cs.opts.Buggify,
+		Observer:     cs.opts.Observer,
+		SeedVerifier: cs.opts.SeedVerifier,
 	})
+	if res != nil {
+		cs.result.HorizonFallback = cs.result.HorizonFallback || res.HorizonFallback
+	}
 	if res != nil {
 		cs.result.Rounds += res.Rounds
 		cs.result.BlobsRecvd += res.FilesRecvd
@@ -564,11 +584,15 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		defer cs.bindRepo(bound)()
 		filesRecvd = 0
 		cs.smConfig = stagedSubmanifestConfig{}
+		cs.structural.beginReply()
 		cardErr := cs.processCards(ctx, cycle, msg, &filesRecvd)
 		if failsRound(cardErr) {
 			return nil, cardErr // §10.1: the round, prefix included, rolls back
 		}
 		cs.applySubmanifestConfig()
+		if err := cs.decideStructural(msg); err != nil {
+			return nil, err
+		}
 		return cardErr, nil
 	})
 	if err != nil {
@@ -642,6 +666,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		cs.roundPush = true
 		return false, cs.recordCodes(c)
 	case *xfer.FileCard:
+		if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
+			return false, err
+		}
 		if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
 			return false, err
 		}
@@ -663,11 +690,17 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 	case *xfer.MessageCard:
 		cs.result.Messages = append(cs.result.Messages, c.Message)
 	case *xfer.PragmaCard:
+		if handled, err := cs.structural.pragma(cs.repo.DB(), c); handled || err != nil {
+			return false, err
+		}
 		if c.Name == coneServedPragma {
 			cs.result.ConeServed++ // sparse-cone §6.3, reported only
 		}
-		if c.Name == horizonServedPragma && servesContentHorizon(c) {
-			cs.result.HorizonServed++ // horizon §6.2.5, reported only
+		if d, ok := cs.structural.level(c); ok && c.Name == horizonServedPragma {
+			cs.result.HorizonServed++ // horizon §6.2.5
+			if d == cone.DepthStructural {
+				cs.result.StructuralServed++
+			}
 		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {
@@ -690,6 +723,9 @@ func (cs *cloneSession) applySubmanifestConfig() {
 // shunned cfile even in a clone, though not a shunned file card (xfer.c:162,
 // !cloneFlag), so a shunned one is skipped and not counted.
 func (cs *cloneSession) receiveCFile(ctx context.Context, c *xfer.CFileCard) (bool, error) {
+	if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
+		return false, err
+	}
 	shunned, err := shun.IsShunned(cs.repo.DB(), c.UUID)
 	if err != nil || shunned {
 		return false, err
@@ -857,6 +893,30 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 		}
 	}
 	return nil
+}
+
+// decideStructural settles a structural clone's depth at the first reply
+// that carries the clone sequence, the first that answers the clone rather
+// than an authentication challenge (horizon §6.2.5), and applies the held
+// seed to what each later reply linked.
+func (cs *cloneSession) decideStructural(msg *xfer.Message) error {
+	if !cs.structuralDecided && slices.ContainsFunc(msg.Cards, func(c xfer.Card) bool {
+		_, ok := c.(*xfer.CloneSeqNoCard)
+		return ok
+	}) {
+		cs.structuralDecided = true
+		fell, err := cs.structural.endFirstReply(cs.repo)
+		if err != nil {
+			return err
+		}
+		cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	}
+	if !cs.structuralDecided {
+		return nil
+	}
+	fell, err := cs.structural.endReply(cs.repo)
+	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	return err
 }
 
 // bindRepo points the clone session at bound, the repository bound to the

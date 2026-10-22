@@ -72,18 +72,27 @@ func (r HorizonRule) String() string {
 }
 
 // Horizon is the temporal member of a store cone (draft-fossil-horizon-00
-// §3.1): blobs only check-ins outside the held set name are elided. The cut is
-// always the content horizon; the structural cut is not exposed.
+// §3.1): blobs only check-ins outside the held set name are elided. The zero
+// value of Structural is the content horizon (§4), which keeps every manifest.
 type Horizon struct {
 	Checkin string // full artifact hash of the check-in, 40 or 64 hex digits
 	Rule    HorizonRule
+	// Structural takes the structural cut (§5): the manifests below the
+	// check-in are elided too, and a seed the origin mints stands in for the
+	// branch and tag state they carried. A clone or pull whose origin does
+	// not serve it falls back to the content horizon and reports so.
+	Structural bool
 }
 
 // NewHorizonCone builds a cone with a horizon and optional path members. With
 // no include members the cone is horizon-only: it covers every path and only
 // the horizon narrows what is held. Checkin is normalized to lower case.
 func NewHorizonCone(include, exclude []string, h Horizon) (*Cone, error) {
-	ih, err := cone.NewHorizon(h.Checkin, cone.HorizonRule(h.Rule), cone.DepthContent)
+	depth := cone.DepthContent
+	if h.Structural {
+		depth = cone.DepthStructural
+	}
+	ih, err := cone.NewHorizon(h.Checkin, cone.HorizonRule(h.Rule), depth)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: cone: %w", err)
 	}
@@ -100,7 +109,7 @@ func (c *Cone) Horizon() (Horizon, bool) {
 	if !ok {
 		return Horizon{}, false
 	}
-	return Horizon{Checkin: h.Hash(), Rule: HorizonRule(h.Rule())}, true
+	return Horizon{Checkin: h.Hash(), Rule: HorizonRule(h.Rule()), Structural: h.Depth() == cone.DepthStructural}, true
 }
 
 // WithHorizon returns the cone with its horizon replaced by h, keeping the path

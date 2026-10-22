@@ -94,9 +94,13 @@ type CloneResult struct {
 	// dense clone.
 	Elided, ConeServed int
 	// HorizonServed counts the replies whose server served the store's
-	// content horizon (pragma horizon-served, draft-fossil-horizon-00
-	// §6.2.5); the other rounds were classified locally.
-	HorizonServed int
+	// horizon (pragma horizon-served, draft-fossil-horizon-00 §6.2.5); the
+	// other rounds were classified locally. StructuralServed counts those
+	// served at the structural level, and HorizonFallback reports a
+	// structural clone that kept the content horizon instead (§6.3).
+	HorizonServed    int
+	StructuralServed int
+	HorizonFallback  bool
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -119,15 +123,17 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
 	}
 	result := &CloneResult{
-		Rounds:          iResult.Rounds,
-		BlobsRecvd:      iResult.BlobsRecvd,
-		ArtifactsLinked: iResult.ArtifactsLinked,
-		ProjectCode:     iResult.ProjectCode,
-		ServerCode:      iResult.ServerCode,
-		Messages:        iResult.Messages,
-		Elided:          iResult.Elided,
-		ConeServed:      iResult.ConeServed,
-		HorizonServed:   iResult.HorizonServed,
+		Rounds:           iResult.Rounds,
+		BlobsRecvd:       iResult.BlobsRecvd,
+		ArtifactsLinked:  iResult.ArtifactsLinked,
+		ProjectCode:      iResult.ProjectCode,
+		ServerCode:       iResult.ServerCode,
+		Messages:         iResult.Messages,
+		Elided:           iResult.Elided,
+		ConeServed:       iResult.ConeServed,
+		HorizonServed:    iResult.HorizonServed,
+		StructuralServed: iResult.StructuralServed,
+		HorizonFallback:  iResult.HorizonFallback,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
 }

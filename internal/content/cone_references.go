@@ -61,6 +61,15 @@ func (p *ConeReferences) file(rid libfossil.FslID) bool {
 	return p.inside[uuid] || p.outside[uuid]
 }
 
+// Nodes returns the held sub-manifest nodes by rid, with their names.
+func (p *ConeReferences) Nodes() map[libfossil.FslID]string {
+	out := make(map[libfossil.FslID]string, len(p.nodes))
+	for rid := range p.nodes {
+		out[rid] = p.names[rid]
+	}
+	return out
+}
+
 // Artifacts counts the artifact names the classification read.
 func (p *ConeReferences) Artifacts() int {
 	if p == nil {

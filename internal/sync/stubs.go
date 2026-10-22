@@ -2,6 +2,7 @@ package sync
 
 import (
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -20,17 +21,28 @@ type CloneOpts struct {
 	// departs from Section 8.2 of the sync draft, which sends no clone,
 	// pull or push card after clone_seqno 0, so it is off by default.
 	PullPhantoms bool
+	// SeedVerifier checks the seed of a structural horizon against the
+	// origin's key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned
+	// seed, as a clone knowing no key does.
+	SeedVerifier seed.Verifier
 }
 
 // CloneResult reports what happened during a clone.
 type CloneResult struct {
-	Elided          int // artifacts deliberately absent under the store cone
-	ConeServed      int // replies acknowledging the store cone (sparse-cone §6.3); the rest were filtered locally
-	HorizonServed   int // replies serving the content horizon (horizon §6.2.5); the rest were classified locally
-	Rounds          int
-	BlobsRecvd      int
-	ArtifactsLinked int // Manifests crosslinked into event table
-	ProjectCode     string
-	ServerCode      string
-	Messages        []string // Informational messages from server
+	Elided        int // artifacts deliberately absent under the store cone
+	ConeServed    int // replies acknowledging the store cone (sparse-cone §6.3); the rest were filtered locally
+	HorizonServed int // replies serving the store's horizon at either level (horizon §6.2.5); the rest were classified locally
+	// StructuralServed counts the replies that served the structural level,
+	// and HorizonFallback reports a structural clone that kept the content
+	// horizon instead: its origin did not serve the structural level with a
+	// seed in the first reply, or the seed failed its provenance (§5.1,
+	// §5.2.4, §6.3).
+	StructuralServed int
+	HorizonFallback  bool
+	Rounds           int
+	BlobsRecvd       int
+	ArtifactsLinked  int // Manifests crosslinked into event table
+	ProjectCode      string
+	ServerCode       string
+	Messages         []string // Informational messages from server
 }

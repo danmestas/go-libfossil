@@ -25,6 +25,10 @@ type CloneOpts struct {
 	// origin's key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned
 	// seed, as a clone knowing no key does.
 	SeedVerifier seed.Verifier
+	// Origin names the peer the clone addresses, keying the horizon cursor
+	// a converged horizon clone records (draft-fossil-horizon-00 §6.2.6) as
+	// SyncOpts.Origin keys a sync's. Empty keeps none.
+	Origin string
 }
 
 // CloneResult reports what happened during a clone.

@@ -83,6 +83,14 @@ type CloneOpts struct {
 	// after clone_seqno 0, so it is off by default: like fossil(1)'s clone,
 	// Clone then succeeds with those artifacts left as phantoms.
 	PullPhantoms bool
+	// StoreCone, when non-nil, clones straight into a sparse store: only the
+	// artifacts the cone covers are fetched, and the cone becomes the store's
+	// policy. With a horizon (NewHorizonCone) it clones a content-horizon
+	// store, eliding the blobs below the horizon; CloneResult.HorizonServed
+	// counts the replies whose server cut at the horizon, the others being
+	// classified locally. A server that will not serve a sparse clone
+	// refuses it (SettingPartialMirror).
+	StoreCone *Cone
 }
 
 // transportAdapter bridges the public byte-level Transport to the internal

@@ -13,9 +13,8 @@ import (
 // Charge those reads separately from later full driver-payload reads.
 func referencePrefixes(
 	ctx context.Context, q db.Querier, blobs []referenceBlob,
-	budget ReferenceBudget, work *ReferenceWork,
+	budget ReferenceBudget, work *ReferenceWork, inflated *int64,
 ) error {
-	var inflated int64
 	for i := range blobs {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -44,10 +43,10 @@ func referencePrefixes(
 			continue
 		}
 		b.inflated = int64(binary.BigEndian.Uint32(prefix[:4]))
-		if b.inflated > budget.InflatedBytes-inflated {
+		if b.inflated > budget.InflatedBytes-*inflated {
 			return fmt.Errorf("sparse preparation: inflation budget exceeded")
 		}
-		inflated += b.inflated
+		*inflated += b.inflated
 	}
 	return nil
 }

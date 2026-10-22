@@ -119,6 +119,7 @@ type Absences struct {
 	cone   *cone.Cone
 	class  map[libfossil.FslID]Absence
 	counts [Elided + 1]int
+	work   ReferenceWork // what classification read, for tests to bound
 }
 
 // LoadAbsences classifies the store's phantoms. Shunned names win; raw F/S
@@ -133,6 +134,10 @@ func LoadAbsences(q db.Querier) (*Absences, error) {
 
 // LoadAbsencesContext carries cancellation through raw provenance discovery.
 func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
+	return loadAbsences(ctx, q, defaultReferenceLimits)
+}
+
+func loadAbsences(ctx context.Context, q db.Querier, limits referenceLimits) (*Absences, error) {
 	if ctx == nil || q == nil {
 		panic("content.LoadAbsencesContext: nil context or querier")
 	}
@@ -175,7 +180,7 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
-		if err := a.classify(ctx, q, candidates); err != nil {
+		if err := a.classify(ctx, q, candidates, limits); err != nil {
 			return nil, err
 		}
 	}
@@ -190,8 +195,11 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 // (draft-fossil-horizon-00 §3.2, §4) then elides every blob no check-in in
 // its held set names, so a kept blob is in both keep sets; it never elides
 // structure, and under one path members do not either.
-func (a *Absences) classify(ctx context.Context, q db.Querier, candidates map[libfossil.FslID]bool) error {
-	facts, err := LoadConeReferenceFacts(ctx, q)
+func (a *Absences) classify(
+	ctx context.Context, q db.Querier, candidates map[libfossil.FslID]bool, limits referenceLimits,
+) error {
+	facts, work, err := loadConeReferenceFactsBounded(ctx, q, limits.refs, true)
+	a.work = work
 	if err != nil {
 		return err
 	}
@@ -218,7 +226,7 @@ func (a *Absences) classify(ctx context.Context, q db.Querier, candidates map[li
 	if !hasHorizon {
 		return nil
 	}
-	above, placed, err := horizonAbove(ctx, q, facts, h)
+	above, placed, err := horizonAbove(ctx, q, h, limits, &a.work)
 	if err != nil || !placed {
 		return err
 	}

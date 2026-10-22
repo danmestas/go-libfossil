@@ -13,10 +13,12 @@ import (
 const coneReferenceDepth = 16
 const coneReferenceNodes = 1 << 20
 
-// ConeReferences is inferred from raw artifacts, not crosslink tables: a sparse
-// tree can be healthy before its elided children permit whole-tree crosslinking.
-// Unknown artifacts stay wanted. A covered alias or structural reference wins
-// over every outside reference.
+// ConeReferences is inferred from raw artifacts wherever crosslink tables cannot
+// stand in for them: a sparse tree can be healthy before its elided children
+// permit whole-tree crosslinking, so trees are always read raw, while a check-in
+// linked completely is answered by its mlink, plink, cherrypick and tagxref rows
+// (ConeReferenceFacts). Unknown artifacts stay wanted. A covered alias or
+// structural reference wins over every outside reference.
 type ConeReferences struct {
 	names                     map[libfossil.FslID]string
 	outside, inside, required map[string]bool

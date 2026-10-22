@@ -55,6 +55,10 @@ type SyncOpts struct {
 	// SeedVerifier checks a structural horizon's seed against the origin's
 	// key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned seed.
 	SeedVerifier seed.Verifier
+	// MergeBaseOf, when set, asks the origin for the merge base of the two
+	// check-ins it names by full hash (draft-fossil-horizon-00 §6.2.4), once,
+	// in the first request; it needs Pull. The answer is in the result.
+	MergeBaseOf [2]string
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -92,6 +96,11 @@ type SyncResult struct {
 	// avoid-submanifests (draft-fossil-submanifests-00 §7.2). Sync makes no
 	// commit; this observation does not bind a later local commit.
 	AvoidSubmanifests bool
+	// MergeBaseAnswered reports that the origin answered MergeBaseOf, and
+	// MergeBase is its answer: the base's hash, or "" when the two share no
+	// ancestor.
+	MergeBaseAnswered bool
+	MergeBase         string
 }
 
 // session holds the mutable state of a running sync.

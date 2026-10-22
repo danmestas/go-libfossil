@@ -120,6 +120,14 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 		return MergeResult{}, nil
 	}
 	pivot, err := merge.FindCommonAncestor(c.repo, vid, opts.Version)
+	if err != nil && !errors.Is(err, merge.ErrNoCommonAncestor) {
+		return MergeResult{}, fmt.Errorf("checkout.Merge: common ancestor: %w", err)
+	}
+	// draft-fossil-horizon-00 §5.5: never merge against a base the store
+	// does not hold, and name the horizon when that is why.
+	if cerr := content.MergeBaseCrossing(c.repo.DB(), vid, opts.Version, pivot); cerr != nil {
+		return MergeResult{}, fmt.Errorf("checkout.Merge: %w", cerr)
+	}
 	if err != nil {
 		return MergeResult{}, fmt.Errorf("checkout.Merge: common ancestor: %w", err)
 	}

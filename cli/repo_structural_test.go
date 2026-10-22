@@ -3,7 +3,10 @@ package cli
 import (
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	libfossil "github.com/danmestas/go-libfossil"
 )
 
 // A structural clone (draft-fossil-horizon-00 §5): --structural takes the
@@ -79,4 +82,78 @@ func TestRepoConeDeepen(t *testing.T) {
 	requiredHTTPStdout(t, func() error {
 		return (&RepoCoCmd{Version: c1, Dir: t.TempDir()}).Run(&Globals{Repo: path})
 	})
+}
+
+// structuralMergeSource serves a history where a merge's base lies below a
+// structural horizon at c2: f forks from c1 below it, x merges c2 into f and
+// y merges f into a, c2's child. The base of x and y is f.
+func structuralMergeSource(t *testing.T) (url, c2, f, x, y string) {
+	t.Helper()
+	source, err := libfossil.Create(filepath.Join(t.TempDir(), "source.fossil"), libfossil.CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { source.Close() })
+	if err := source.SetHashPolicy("sha1"); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(a string, parents ...int64) (int64, string) {
+		rid, uuid, err := source.Commit(libfossil.CommitOpts{User: "test", ParentID: parents[0], MergeParents: parents[1:],
+			Files: []libfossil.FileToCommit{{Name: "a", Content: []byte(a)}, {Name: "b", Content: []byte("shared b\n")}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rid, uuid
+	}
+	r1, _ := commit("one\n", 0)
+	rf, f := commit("one\nfork\n", r1)
+	r2, c2 := commit("zero\none\n", r1)
+	ra, _ := commit("zero\none\nA\n", r2)
+	_, x = commit("zero\none\nfork\n", rf, r2)
+	_, y = commit("zero\none\nA\nfork\n", ra, rf)
+	server := requiredHTTPServer(t, source, new(atomic.Int64))
+	t.Cleanup(server.Close)
+	return server.URL, c2, f, x, y
+}
+
+// `repo merge` across a structural horizon asks the saved remote for the
+// base, deepens to reach it and merges over the real base
+// (draft-fossil-horizon-00 §5.5); it never merges against a base it does
+// not hold.
+func TestRepoMergeDeepensAcrossHorizon(t *testing.T) {
+	url, c2, f, x, y := structuralMergeSource(t)
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2, Structural: true}).Run(&Globals{})
+	})
+	dir := t.TempDir()
+	r, err := libfossil.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	co, err := r.CreateCheckout(dir, libfossil.CheckoutCreateOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	xrid, err := r.ResolveVersion(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := co.Extract(xrid, libfossil.ExtractOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	co.Close()
+	r.Close()
+	out := requiredHTTPStdout(t, func() error {
+		return (&RepoMergeCmd{Version: y, Dir: dir}).Run(&Globals{Repo: path})
+	})
+	if !strings.Contains(out, "MERGE a\n") {
+		t.Fatalf("merge output = %q", out)
+	}
+	if got := storeConeOutput(t, path); !strings.Contains(got, "structural") || strings.Contains(got, c2) {
+		t.Fatalf("store cone after the merge = %q, want a deeper structural horizon", got)
+	}
+	if !holdsBlob(t, path, "one\nfork\n") {
+		t.Fatalf("the base %s's content is not held after the merge", f)
+	}
 }

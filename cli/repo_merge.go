@@ -1,13 +1,19 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	libfossil "github.com/danmestas/go-libfossil"
 )
 
-// RepoMergeCmd merges a divergent version into the current checkout.
+// RepoMergeCmd merges a divergent version into the current checkout. In a
+// store with a structural horizon, a merge whose base lies below the horizon
+// asks --remote, else the saved last-sync-url, for the base and deepens the
+// horizon to reach it before merging (draft-fossil-horizon-00 §5.5).
 type RepoMergeCmd struct {
+	RecoveryFlags
 	Version  string `arg:"" help:"Version to merge into current checkout"`
 	Strategy string `help:"Override merge strategy for all files"`
 	DryRun   bool   `help:"Show what would be merged without writing"`
@@ -15,7 +21,7 @@ type RepoMergeCmd struct {
 }
 
 func (c *RepoMergeCmd) Run(g *Globals) (err error) {
-	_, co, done, err := openWorkingCheckout(g, c.Dir)
+	r, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
@@ -25,11 +31,20 @@ func (c *RepoMergeCmd) Run(g *Globals) (err error) {
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", c.Version, err)
 	}
-	res, err := co.Merge(libfossil.CheckoutMergeOpts{
-		Version:  rid,
-		Strategy: c.Strategy,
-		DryRun:   c.DryRun,
-	})
+	opts := libfossil.CheckoutMergeOpts{Version: rid, Strategy: c.Strategy, DryRun: c.DryRun}
+	res, err := co.Merge(opts)
+	if errors.Is(err, libfossil.ErrBelowHorizon) {
+		// Only a crossing contacts a peer: an ordinary merge stays local.
+		required, rerr := c.requiredContent(r)
+		if rerr != nil {
+			return errors.Join(err, rerr)
+		}
+		if required.Peer != nil {
+			ctx, cancel := cloneContext(context.Background(), c.Timeout)
+			defer cancel()
+			res, err = co.MergeContext(ctx, opts, required)
+		}
+	}
 	if err != nil {
 		return err
 	}

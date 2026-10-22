@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
@@ -35,13 +36,14 @@ var (
 	horizonServeServed   = Case{ID: "horizon.6.2.5.served", Req: "HZ-6.2-8"}
 	horizonServeIgnored  = Case{ID: "horizon.6.3.served-absent", Req: "HZ-6.3-1"}
 	horizonServeRefuse   = Case{ID: "horizon.6.4.refuse", Req: "HZ-6.4-1"}
+	horizonServeNoChase  = Case{ID: "horizon.4.5.served-no-cluster-chase", Req: "HZ-4.5-1"}
 )
 
 func horizonServeCases() []Case {
 	return []Case{
 		horizonServeRequest, horizonServeAbove, horizonServePaths, horizonServeTree, horizonServeRounds,
 		horizonServeClusters, horizonServeInflate, horizonServeServed, horizonServeIgnored,
-		horizonServeRefuse,
+		horizonServeRefuse, horizonServeNoChase,
 	}
 }
 
@@ -56,6 +58,7 @@ func TestHorizonServe(t *testing.T) {
 	check(t, horizonServeServed, func() error { return hzServeServed(t) })
 	check(t, horizonServeIgnored, func() error { return hzServeIgnored(t) })
 	check(t, horizonServeRefuse, func() error { return hzServeRefuse(t) })
+	check(t, horizonServeNoChase, func() error { return hzServeNoChase(t) })
 }
 
 // hzPragmas returns the values of every pragma named name in m.
@@ -630,4 +633,60 @@ func hzServeRefuse(t *testing.T) error {
 		return expectf("a path store asked for a horizon-only clone: %v", err)
 	}
 	return nil
+}
+
+// hzClusterPeer adds a cluster's file card to the first reply of each
+// exchange it is armed for, as an origin ignoring §6.2's SHOULD NOT would.
+type hzClusterPeer struct {
+	*scSyncPeer
+	uuid    string
+	cluster []byte
+	armed   bool
+}
+
+func (p *hzClusterPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	resp, err := p.scSyncPeer.Exchange(ctx, req)
+	if err != nil || !p.armed {
+		return resp, err
+	}
+	p.armed = false
+	resp.Cards = append(resp.Cards, &xfer.FileCard{UUID: p.uuid, Content: p.cluster})
+	return resp, nil
+}
+
+// Against an origin that serves the horizon a store asks for no cluster
+// catalog, and a cluster such an origin sends anyway is not held, so it
+// mints no phantom for a name only the cluster gives (§4.5).
+func hzServeNoChase(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	peer, r, _, err := hzServeClone(t, g, g.c, sync.HandleOpts{})
+	if err != nil {
+		return err
+	}
+	only := strings.Repeat("cd", 20)
+	cluster, err := (&deck.Deck{Type: deck.Cluster, M: []string{only}}).Marshal()
+	if err != nil {
+		return err
+	}
+	uuid := hash.SHA1(cluster)
+	injecting := &hzClusterPeer{scSyncPeer: peer, uuid: uuid, cluster: cluster}
+	for range 2 {
+		injecting.armed = true
+		pulled, err := sync.Sync(context.Background(), r, injecting, sync.SyncOpts{Pull: true})
+		if err != nil {
+			return err
+		}
+		if pulled.HorizonServed == 0 {
+			return expectf("fixture: the pull was not served at the horizon")
+		}
+	}
+	if hzReqClusters(peer.requests) {
+		return expectf("a store served at its horizon asked for the cluster catalog")
+	}
+	for _, name := range []string{uuid, only} {
+		if _, known := blob.Exists(r.DB(), name); known {
+			return expectf("the store names %s, which only a served cluster gives", name)
+		}
+	}
+	return hzElided(r, g.below)
 }

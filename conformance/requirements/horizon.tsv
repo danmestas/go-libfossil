@@ -3,8 +3,9 @@
 # set (internal/horizon); the content horizon over a store's own manifests
 # (§3.2, §4.1-§4.3: internal/content's classification); and its client
 # synchronization against a horizon-ignorant peer (§4.4, §4.5, §6.3:
-# local classification of what a dense peer sends, no cluster held or
-# acted on, demand fetch and deepen); and the horizon pragmas with the
+# local classification of what a dense peer sends, no cluster held but
+# what a received cluster names fetched, demand fetch and deepen); and
+# the horizon pragmas with the
 # origin that serves them at the content level (§6.1, §6.2, §6.2.1,
 # §6.2.5, §6.4: go-libfossil's handler and client, and zit both ways).
 # Rows those cover partly say what they leave out; every other row
@@ -30,7 +31,7 @@ HZ-4.2-1	4.2	A blob is above the horizon when a check-in in the held set names i
 HZ-4.2-2	4.2	A phantom created because a held artifact arrived as a delta against it is a transit phantom whatever its horizon classification.
 HZ-4.3-1	4.3	Derived caches and prefix-anchored checkpoints are horizon-independent: their keys do not incorporate the horizon.
 HZ-4.4-1	4.4	An operation needing a blob below the horizon resolves the elided phantom by demand fetch, targeted, or by moving C (a deepen).
-HZ-4.5-1	4.5	A horizon clone does not hold the clusters it is sent. Against an origin whose replies carry horizon-served it does not request a phantom whose only reference is a cluster artifact; against a horizon-ignorant origin it requests the phantoms a received cluster names, as transit, and classifies what arrives. It requests phantoms named by igot cards, by the P, F and S cards of held artifacts, and by delta sources of held artifacts.	not yet implemented in full: the cluster rule now depends on horizon-served, which the horizon pragmas (Appendix A step 3) bring; until then a horizon clone requests no cluster-only phantom from any origin
+HZ-4.5-1	4.5	A horizon clone does not hold the clusters it is sent. Against an origin whose replies carry horizon-served it does not request a phantom whose only reference is a cluster artifact; against a horizon-ignorant origin it requests the phantoms a received cluster names, as transit, and classifies what arrives. It requests phantoms named by igot cards, by the P, F and S cards of held artifacts, and by delta sources of held artifacts.
 HZ-5.1-1	5.1	A structural-horizon clone holds the manifests and nodes of check-ins in the held set and everything they reach through B and S cards, every control, wiki, ticket, event, forum and attachment artifact, the blobs of the content horizon, elided phantoms for the rest, and the seed, which it keeps from every peer.	not yet implemented: the structural horizon, Appendix A step 5
 HZ-5.1-2	5.1	A clone does not enter the structural horizon against a horizon-ignorant peer.	not yet implemented: the structural horizon, Appendix A step 5
 HZ-5.2-1	5.2.1	The seed is a control artifact minted by the origin whose T cards apply to every entry of K (C, and each check-in of K whose primary parent is not in K) every tag in force there in the dense repository, each with the value the dense derivation holds; its D card is the time of minting and its U card the origin's login.	not yet implemented: the seed, Appendix A step 5

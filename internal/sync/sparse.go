@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -109,4 +110,17 @@ func requestHorizon(p *xfer.PragmaCard) (cone.Horizon, bool) {
 // classified locally regardless, so this only reports the mode.
 func servesContentHorizon(p *xfer.PragmaCard) bool {
 	return len(p.Values) >= 1 && p.Values[0] == cone.DepthContent.String()
+}
+
+// servedCluster reports a cluster artifact sent to a horizon store by an
+// origin that serves its horizon (draft-fossil-horizon-00 §4.5). The store
+// holds no cluster, and against such an origin it wants no name a cluster
+// alone gives, so the card is dropped unstored. Only a full-form card is
+// tested: a cluster's first card is an M card.
+func servedCluster(served bool, deltaSrc string, payload []byte) bool {
+	if !served || deltaSrc != "" || !bytes.HasPrefix(payload, []byte("M ")) {
+		return false
+	}
+	d, err := deck.Parse(payload)
+	return err == nil && d.Type == deck.Cluster
 }

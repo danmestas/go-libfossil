@@ -179,9 +179,11 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, clusterCards...)
 	}
 
-	// Request cluster catalog on round 2 when pulling. A horizon store acts
-	// on no cluster (draft-fossil-horizon-00 §4.5), so it asks for none.
-	if cycle == 1 && s.opts.Pull && !s.horizon {
+	// Request cluster catalog on round 2 when pulling. A horizon store whose
+	// origin serves its horizon is announced what it keeps directly and asks
+	// for none; against a horizon-ignorant origin it asks, since a new
+	// check-in may be named only by a cluster (draft-fossil-horizon-00 §4.5).
+	if cycle == 1 && s.opts.Pull && !s.servedHorizon() {
 		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
 	}
 
@@ -1653,6 +1655,9 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
 	}
+	if servedCluster(s.servedHorizon(), deltaSrc, payload) {
+		return false, nil
+	}
 	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
 		return false, err
 	}
@@ -1813,4 +1818,10 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		return fmt.Errorf("handleUVFileCard: %w", err)
 	}
 	return nil
+}
+
+// servedHorizon reports a horizon store whose origin has said it serves the
+// store's horizon (horizon-served content) in a reply of this session.
+func (s *session) servedHorizon() bool {
+	return s.horizon && s.result.HorizonServed > 0
 }

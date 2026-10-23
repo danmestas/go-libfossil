@@ -189,21 +189,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
-  `9bf7ebfe0f`: `bbd1435674`, the revision its author calls ready to
-  implement against, plus the zit#266 correction to §4.5, under which a
-  clone requests the phantoms a horizon-ignorant origin's clusters name.
-  Since the last pin it adds the `horizon-cursor` pragma and the origin's
-  classification-memoization SHOULDs (§6.1, §6.2, §6.2.6), restates the
-  leaves rule over P cards with K closed under descendants (§3.1, §3.4),
-  has the seed carry T cards for every entry of K (§5.2.1), and confines
-  the cursor's announcements to replies to requests that pull (§6.2.6).
-  The requirement table reads these as six new rows and updated ones: 51
-  requirements, of which the cone's horizon member and the held set are
-  implemented.
-- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
-  `3a2df62515`, and a path cone now elides sub-manifest nodes under either
-  horizon, as a sparse store does (§3.2, §4.1, §5.1, §6.2). Of the trees a
+- Breaking, for callers comparing values with `==`: the CLI's
+  `RepoCloneCmd` gained the `Cone` and `ConeNot` lists, so it is no longer
+  comparable. Every other change to the exported API is an addition.
+- The horizon draft is pinned at zit's `horizon-rfc` check-in
+  `24457c7dd6`, the text its author integrated after the review of this
+  implementation; the other six drafts are byte-identical to their earlier
+  pins. Changes made to the draft along the way, each reflected below:
+  the leaves rule restated over P cards with K closed under descendants,
+  the seed covering every entry of K and dated at its latest tag event
+  rounded up to a whole second, the cluster rule bound to origins that
+  serve at a horizon (zit#266), path cones eliding nodes under a horizon,
+  the cursor, the list-form merge-base query, the boundary over every held
+  manifest, and the structural store's fallback.
+- A path cone elides sub-manifest nodes under either horizon, as a sparse store does (§3.2, §4.1, §5.1, §6.2). Of the trees a
   horizon keeps, every check-in's under a content horizon and K's under a
   structural one, a store holds only the nodes on paths into the cone and
   classifies the rest as elided; before, a content horizon held every node
@@ -218,10 +217,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links a check-in whose in-cone files lie below it, and an operation that
   needs a withheld node fetches it as a sparse store does. The origin's
   classification memo also no longer reads a stale name for an artifact
-  appended without growing any of its lists. Interoperates with zit at
-  `3a2df62515` both ways, at both depths.
-- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
-  `24457c7dd6`. The merge-base query takes the list form of §6.2.4: a
+  appended without growing any of its lists. Interoperates with zit
+  both ways, at both depths.
+- The merge-base query takes the list form of §6.2.4: a
   primary and one or two secondaries, answered with the query repeated and
   Fossil's pivot over the set appended (`MergeBaseOf` is now a
   `MergeBaseQuery`); an origin answers nothing when it lacks a named

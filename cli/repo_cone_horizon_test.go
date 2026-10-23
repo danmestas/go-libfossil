@@ -233,3 +233,46 @@ func TestHorizonLeavesWarning(t *testing.T) {
 		t.Fatalf("cone store --leaves stderr = %q", got)
 	}
 }
+
+// TestRepoConeCost: the command reports what each rule would hold for a
+// horizon at a check-in (§3.4), from the local repository. The fork off the
+// first check-in is a childless leaf whose ancestry meets the horizon's at
+// that check-in, so the leaves rule holds all four check-ins where the
+// descendants rule holds two.
+func TestRepoConeCost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cost.fossil")
+	r, err := libfossil.Create(path, libfossil.CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := func(parent int64, a string) (int64, string) {
+		rid, uuid, err := r.Commit(libfossil.CommitOpts{User: "test", ParentID: parent, Files: []libfossil.FileToCommit{
+			{Name: "a", Content: []byte(a)}, {Name: "b", Content: []byte("shared b\n")},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rid, uuid
+	}
+	r1, _ := commit(0, "old a\n")
+	r2, c2 := commit(r1, "new a\n")
+	commit(r2, "newest a\n")
+	commit(r1, "feat a\n")
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := requiredHTTPStdout(t, func() error {
+		return (&RepoConeCostCmd{Checkin: c2}).Run(&Globals{Repo: path})
+	})
+	for _, line := range []string{
+		"descendants  2 check-ins, 3 blobs, 24 B expanded, ",
+		"leaves  4 check-ins, 5 blobs, 37 B expanded, ",
+	} {
+		if !strings.Contains(out, "\n"+line) {
+			t.Fatalf("output = %q, want a line starting %q", out, line)
+		}
+	}
+	if err := (&RepoConeCostCmd{Checkin: "no-such-name"}).Run(&Globals{Repo: path}); err == nil {
+		t.Fatal("an unknown check-in was accepted")
+	}
+}

@@ -5,7 +5,7 @@
   "observability": { "enabled": true },
   "assets": { "directory": "./docs/site/public" },
   "build": {
-    "command": "curl -sSL https://github.com/gohugoio/hugo/releases/download/v0.160.0/hugo_extended_0.160.0_linux-amd64.tar.gz | tar xz hugo && bash scripts/sync-version.sh && bash scripts/gen-llms-txt.sh && cd docs/site && ../../hugo --minify"
+    "command": "curl -sSL https://github.com/gohugoio/hugo/releases/download/v0.160.0/hugo_extended_0.160.0_linux-amd64.tar.gz | tar xz hugo && bash scripts/docs-build.sh \"$PWD/hugo\""
   },
   "compatibility_flags": ["nodejs_compat"]
 }

@@ -296,9 +296,10 @@ func hzMemoExtended(t *testing.T) error {
 // HZ-6.2-10: the references are read once per store, and a cone the origin
 // has never classified, at either depth and either rule, with or without
 // paths, is classified over them without reading them again. The F cards
-// of a horizon's trees are not among them: the first classification of each
-// horizon walks its held set's trees from the store, as zit's does, and
-// later ones extend that walk.
+// of a horizon's trees are not among them: the first walk to need a tree
+// reads it from the store into the memo's bounded tree cache, which later
+// horizons reuse (internal/content TestMemoTreesReadOnce), and later
+// classifications of one horizon extend its walk.
 func hzMemoGraph(t *testing.T) error {
 	o, err := newHZMemoOrigin(t, 5)
 	if err != nil {

@@ -245,6 +245,48 @@ func TestMemoUnpublishedViewDiscarded(t *testing.T) {
 	}
 }
 
+// draft-fossil-horizon-00 §6.2: the memo keeps the trees its horizons'
+// walks read, so a second horizon over the same store, under another C or
+// rule, reads from the store only the trees the first did not, and
+// classifies as a fresh read does.
+func TestMemoTreesReadOnce(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			m := newMemoRepo(t, mode)
+			tip := m.commit(0)
+			for i := 0; i < 5; i++ {
+				tip = m.commit(tip)
+			}
+			memo := content.NewMemo()
+			seen := map[string]bool{}
+			for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
+				v, err := memo.View(ctx, m.r.DB())
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, sc := range m.memoCones(c) {
+					sameClassification(t, m.r, v, sc)
+				}
+				names, reads := v.TreesRead()
+				if reads != len(names) {
+					t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
+				}
+				if len(seen) == 0 && len(names) == 0 {
+					t.Fatalf("the first horizon, at %d, read no tree", c)
+				}
+				for _, name := range names {
+					if seen[name] {
+						t.Fatalf("horizon at %d read %.10s again", c, name)
+					}
+					seen[name] = true
+				}
+				v.Publish()
+			}
+		})
+	}
+}
+
 func maxRID(t *testing.T, r *repo.Repo) libfossil.FslID {
 	t.Helper()
 	var n libfossil.FslID

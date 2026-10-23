@@ -340,8 +340,9 @@ func (o *memoReads) HandleCompleted(_ context.Context, end HandleEnd) {
 
 // draft-fossil-horizon-00 §6.2: after any sequence of commits, pushes in any
 // order and announcements, the origin's memoized classification equals a
-// fresh one, for path cones, content and structural horizons, both rules;
-// and the memo extended rather than re-read for most of the run.
+// fresh one, for path cones, content and structural horizons, both rules,
+// several horizons over each store, sharing the trees the memo keeps; and
+// the memo extended rather than re-read for most of the run.
 func TestHorizonMemoEqualsFresh(t *testing.T) {
 	// §6.2.6: some world must move a leaves-rule meeting point under a
 	// cursor, or the void it causes goes unexercised.
@@ -376,7 +377,8 @@ func TestHorizonMemoEqualsFresh(t *testing.T) {
 				if len(w.checkins) == 0 {
 					continue
 				}
-				cones := w.cones(w.checkins[w.rng.Intn(len(w.checkins))])
+				c := w.checkins[w.rng.Intn(len(w.checkins))]
+				cones := w.cones(c)
 				var names int
 				if err := w.r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&names); err != nil {
 					t.Fatal(err)
@@ -397,8 +399,15 @@ func TestHorizonMemoEqualsFresh(t *testing.T) {
 				case read > 0:
 					extended++
 				}
-				for _, c := range cones {
-					joined += sameKeep(t, w.r, v, c)
+				// Several horizons over the one store: the first check-in's
+				// and the newest's as well, which share trees with c's.
+				for _, other := range []string{w.checkins[0], w.checkins[len(w.checkins)-1]} {
+					if other != c {
+						cones = append(cones, w.cones(other)...)
+					}
+				}
+				for _, sc := range cones {
+					joined += sameKeep(t, w.r, v, sc)
 				}
 			}
 			if extended == 0 {

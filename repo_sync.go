@@ -54,6 +54,12 @@ type SyncResult struct {
 	HorizonServed    int
 	StructuralServed int
 	HorizonFallback  bool
+	// HorizonHistoryURL is the interface outside the sync protocol at which
+	// the origin says history below a horizon can be queried (pragma
+	// horizon-served URL, draft-fossil-horizon-00 §6.2.5), the last a reply
+	// named; "" when none did. An origin names it with
+	// SettingHorizonHistoryURL.
+	HorizonHistoryURL string
 }
 
 // HandleOpts configures server-side sync handling.
@@ -271,20 +277,21 @@ func convertSyncResult(r *internalsync.SyncResult) *SyncResult {
 		return nil
 	}
 	return &SyncResult{
-		Rounds:           r.Rounds,
-		FilesSent:        r.FilesSent,
-		FilesRecvd:       r.FilesRecvd,
-		UVFilesSent:      r.UVFilesSent,
-		UVFilesRecvd:     r.UVFilesRecvd,
-		UVGimmesSent:     r.UVGimmesSent,
-		BytesSent:        r.BytesSent,
-		BytesRecvd:       r.BytesRecvd,
-		Errors:           r.Errors,
-		Elided:           r.Elided,
-		ConeServed:       r.ConeServed,
-		HorizonServed:    r.HorizonServed,
-		StructuralServed: r.StructuralServed,
-		HorizonFallback:  r.HorizonFallback,
+		Rounds:            r.Rounds,
+		FilesSent:         r.FilesSent,
+		FilesRecvd:        r.FilesRecvd,
+		UVFilesSent:       r.UVFilesSent,
+		UVFilesRecvd:      r.UVFilesRecvd,
+		UVGimmesSent:      r.UVGimmesSent,
+		BytesSent:         r.BytesSent,
+		BytesRecvd:        r.BytesRecvd,
+		Errors:            r.Errors,
+		Elided:            r.Elided,
+		ConeServed:        r.ConeServed,
+		HorizonServed:     r.HorizonServed,
+		StructuralServed:  r.StructuralServed,
+		HorizonFallback:   r.HorizonFallback,
+		HorizonHistoryURL: r.HorizonHistoryURL,
 	}
 }
 

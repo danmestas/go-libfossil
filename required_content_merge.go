@@ -18,10 +18,6 @@ import (
 // remedy, a deepen (Repo.DeepenHorizon).
 var ErrBelowHorizon = content.ErrBelowHorizon
 
-// mergeBaseNodes bounds the walk that decides whether a merge's ancestry
-// crosses the horizon, as the origin bounds its merge-base walk.
-const mergeBaseNodes = 1 << 20
-
 // maxMergeBaseSecondaries is the most secondaries a merge-base query carries
 // (draft-fossil-horizon-00 §6.2.4): the checkout and one pending merge.
 const maxMergeBaseSecondaries = 2
@@ -33,8 +29,8 @@ const maxMergeBaseSecondaries = 2
 // common ancestor found need not be the nearest. It deepens the horizon to
 // the base the origin names when the store does not hold it
 // (Repo.DeepenHorizon) and merges over that base. When the origin does not
-// answer it is Merge, which refuses a merge whose own walk crossed the
-// horizon. Without a Peer, or when nothing crosses, it is Merge. A merge
+// answer, or without a Peer, it is Merge, which refuses a merge whose
+// ancestry crosses the horizon; when nothing crosses it is Merge. A merge
 // never runs against a base the store does not hold.
 //
 // The query names the merged-in version over the checkout's version and each
@@ -56,7 +52,7 @@ func (c *Checkout) MergeContext(
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
 	}
 	starts := append([]fsltype.FslID{fsltype.FslID(opts.Version)}, secondaries...)
-	crosses, err := content.AncestryCrosses(r.DB(), starts, mergeBaseNodes)
+	crosses, err := content.AncestryCrosses(r.DB(), starts, content.MergeAncestryLimit)
 	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
 	}
@@ -89,7 +85,7 @@ func (c *Checkout) MergeContext(
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: asking the origin for the merge base: %w", err)
 	}
 	if !answer.MergeBaseAnswered {
-		res, err := c.Merge(opts)
+		res, err := c.merge(opts, 0)
 		if errors.Is(err, ErrBelowHorizon) {
 			return res, fmt.Errorf("%w; the origin did not answer a merge-base query", err)
 		}

@@ -292,6 +292,11 @@ func (r *Repo) SetConfig(key, value string) error {
 			return fmt.Errorf("repo.SetConfig: hash-policy %q is not a policy ordinal (0-4)", value)
 		}
 	}
+	if key == SettingHorizonHistoryURL && value != "" {
+		if err := CheckHistoryURL(value); err != nil {
+			return fmt.Errorf("repo.SetConfig: %s: %w", key, err)
+		}
+	}
 	_, err := r.db.Exec(
 		"INSERT OR REPLACE INTO config(name, value, mtime) VALUES(?, ?, strftime('%s','now'))",
 		key, value,

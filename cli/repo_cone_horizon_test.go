@@ -276,3 +276,49 @@ func TestRepoConeCost(t *testing.T) {
 		t.Fatal("an unknown check-in was accepted")
 	}
 }
+
+// A horizon clone, and a deepen, print the history URL the origin names in
+// horizon-served (draft-fossil-horizon-00 §6.2.5); an origin naming none
+// gets no such line.
+func TestRepoCloneHistoryURL(t *testing.T) {
+	source, err := libfossil.Create(filepath.Join(t.TempDir(), "source.fossil"), libfossil.CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	var parent int64
+	var names []string
+	for _, a := range []string{"old a\n", "new a\n"} {
+		rid, uuid, err := source.Commit(libfossil.CommitOpts{User: "test", ParentID: parent,
+			Files: []libfossil.FileToCommit{{Name: "a", Content: []byte(a)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent, names = rid, append(names, uuid)
+	}
+	server := requiredHTTPServer(t, source, new(atomic.Int64))
+	defer server.Close()
+	clone := func() (string, string) {
+		path := filepath.Join(t.TempDir(), "h.fossil")
+		return path, requiredHTTPStdout(t, func() error {
+			return (&RepoCloneCmd{URL: server.URL, Path: path, Horizon: names[1]}).Run(&Globals{})
+		})
+	}
+	if _, out := clone(); strings.Contains(out, "History:") {
+		t.Fatalf("clone from an origin naming no history URL printed one:\n%s", out)
+	}
+	const url = "https://example.org/history"
+	if err := source.SetConfig(libfossil.SettingHorizonHistoryURL, url); err != nil {
+		t.Fatal(err)
+	}
+	path, out := clone()
+	if !strings.Contains(out, "  History:      "+url+"\n") {
+		t.Fatalf("clone output lacks the history URL:\n%s", out)
+	}
+	out = requiredHTTPStdout(t, func() error {
+		return (&RepoConeDeepenCmd{Checkin: names[0]}).Run(&Globals{Repo: path})
+	})
+	if !strings.Contains(out, "history: "+url+"\n") {
+		t.Fatalf("deepen output lacks the history URL:\n%s", out)
+	}
+}

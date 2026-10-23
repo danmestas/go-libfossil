@@ -101,6 +101,12 @@ type CloneResult struct {
 	HorizonServed    int
 	StructuralServed int
 	HorizonFallback  bool
+	// HorizonHistoryURL is the interface outside the sync protocol at which
+	// the origin says history below a horizon can be queried (pragma
+	// horizon-served URL, draft-fossil-horizon-00 §6.2.5), the last a reply
+	// named; "" when none did. An origin names it with
+	// SettingHorizonHistoryURL.
+	HorizonHistoryURL string
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -127,17 +133,18 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
 	}
 	result := &CloneResult{
-		Rounds:           iResult.Rounds,
-		BlobsRecvd:       iResult.BlobsRecvd,
-		ArtifactsLinked:  iResult.ArtifactsLinked,
-		ProjectCode:      iResult.ProjectCode,
-		ServerCode:       iResult.ServerCode,
-		Messages:         iResult.Messages,
-		Elided:           iResult.Elided,
-		ConeServed:       iResult.ConeServed,
-		HorizonServed:    iResult.HorizonServed,
-		StructuralServed: iResult.StructuralServed,
-		HorizonFallback:  iResult.HorizonFallback,
+		Rounds:            iResult.Rounds,
+		BlobsRecvd:        iResult.BlobsRecvd,
+		ArtifactsLinked:   iResult.ArtifactsLinked,
+		ProjectCode:       iResult.ProjectCode,
+		ServerCode:        iResult.ServerCode,
+		Messages:          iResult.Messages,
+		Elided:            iResult.Elided,
+		ConeServed:        iResult.ConeServed,
+		HorizonServed:     iResult.HorizonServed,
+		StructuralServed:  iResult.StructuralServed,
+		HorizonFallback:   iResult.HorizonFallback,
+		HorizonHistoryURL: iResult.HorizonHistoryURL,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
 }

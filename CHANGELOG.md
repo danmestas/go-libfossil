@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in full. On a copy of a 21k-check-in fossil repository, a horizon 2000
   check-ins back first classified after one 1000 back fell from about
   2.5–3.0s to 1.6s.
+- An origin can name the interface outside the sync protocol at which
+  history below a horizon can be queried (draft-fossil-horizon-00
+  §6.2.5): the new `horizon-history-url` setting
+  (`SettingHorizonHistoryURL`) is appended to every `pragma horizon-served`
+  it emits. `SetConfig` refuses a value that is not one http or https URL
+  with a host and no white space or credentials, and a value stored past
+  that check is not emitted. A horizon client records the URL a reply
+  names, from go-libfossil or any other origin, as
+  `CloneResult.HorizonHistoryURL` and `SyncResult.HorizonHistoryURL`, and
+  `libfossil repo clone`, `repo cone store` and `repo cone deepen` print it.
 - Content horizons in the public API and CLI. A horizon is part of a
   store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
   builds one, with or without path members, and `Cone.Horizon` and
@@ -160,6 +170,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An origin answering a horizon request no longer sends a cluster that the
+  request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
+  pull and sync replies already announced none, and req-clusters already
+  got nothing, but a gimme naming a cluster was answered with the cluster's
+  file card, so a horizon clone could still hold a name only a cluster
+  gives.
 - Merges use the base fossil uses. go-libfossil chose the merge base by a
   bidirectional breadth-first search, the common ancestor nearest in
   edges; fossil's `pivot_find` takes the most recent by check-in time,
@@ -218,6 +234,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in force at any check-in a seed would cover mints no seed and serves the
   content level (§5.2), and the cost report is guidance for the tool, not a
   wire obligation (§3.4).
+- Under a structural horizon, `Checkout.Merge` and `Repo.Merge` now refuse
+  a merge whenever either side's ancestry crosses the horizon, even when the
+  store's own walk finds a base it holds (draft-fossil-horizon-00 §5.5):
+  over part of the graph that base need not be the nearest, and only the
+  origin can name it. They used to merge over such a base unless the walk
+  itself crossed. The error matches `ErrBelowHorizon`, names the horizon
+  and points to `Checkout.MergeContext` with a `Peer`, which asks the
+  origin; `MergeContext` refuses the same way when the origin does not
+  answer. `libfossil repo merge` asks the remote in these cases too. A
+  merge whose ancestry stays above the horizon still merges locally.
 - Breaking, for callers comparing values with `==`: the CLI's
   `RepoCloneCmd` gained the `Cone` and `ConeNot` lists, so it is no longer
   comparable. Every other change to the exported API is an addition.

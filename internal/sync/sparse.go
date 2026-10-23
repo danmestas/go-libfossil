@@ -2,6 +2,8 @@ package sync
 
 import (
 	"bytes"
+	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -9,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -156,6 +159,31 @@ func servedLevel(p *xfer.PragmaCard) (cone.HorizonDepth, bool) {
 	return d, err == nil
 }
 
+// servedHistoryURL is the history interface a horizon-served pragma names
+// (§6.2.5), "" when it names none or one CheckHistoryURL refuses.
+func servedHistoryURL(p *xfer.PragmaCard) string {
+	if len(p.Values) != 2 || repo.CheckHistoryURL(p.Values[1]) != nil {
+		return ""
+	}
+	return p.Values[1]
+}
+
+// historyURL is the history interface this origin names in horizon-served
+// (§6.2.5): its horizon-history-url setting, or "" when that is unset or
+// was stored invalid past SetConfig's check, since a reply must not carry
+// a token its client cannot read.
+func historyURL(q db.Querier) (string, error) {
+	var value string
+	err := q.QueryRow("SELECT value FROM config WHERE name=?", repo.SettingHorizonHistoryURL).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && repo.CheckHistoryURL(value) != nil {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("handler: read %s: %w", repo.SettingHorizonHistoryURL, err)
+	}
+	return value, nil
+}
+
 // requestSeedOffer is the seed a structural request says its client holds
 // (§6.2.3), "" when it names none: the last well-formed horizon-seed wins.
 func requestSeedOffer(cards []xfer.Card) string {
@@ -192,7 +220,12 @@ func withDepth(c *cone.Cone, d cone.HorizonDepth) *cone.Cone {
 // alone gives, so the card is dropped unstored. Only a full-form card is
 // tested: a cluster's first card is an M card.
 func servedCluster(served bool, deltaSrc string, payload []byte) bool {
-	if !served || deltaSrc != "" || !bytes.HasPrefix(payload, []byte("M ")) {
+	return served && deltaSrc == "" && isCluster(payload)
+}
+
+// isCluster reports a full artifact that parses as a cluster.
+func isCluster(payload []byte) bool {
+	if !bytes.HasPrefix(payload, []byte("M ")) {
 		return false
 	}
 	d, err := deck.Parse(payload)

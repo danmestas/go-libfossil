@@ -170,7 +170,11 @@ func (h *handler) emitHorizonServed() {
 	if h.structural != nil {
 		level = cone.DepthStructural
 	}
-	h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonServedPragma, Values: []string{level.String()}})
+	served := &xfer.PragmaCard{Name: horizonServedPragma, Values: []string{level.String()}}
+	if h.historyURL != "" {
+		served.Values = append(served.Values, h.historyURL)
+	}
+	h.resp = append(h.resp, served)
 	// Horizon §6.2.6: the position this reply is served through follows,
 	// as zit places it; the inventory values it, and reply drops it from a
 	// reply that announced nothing.

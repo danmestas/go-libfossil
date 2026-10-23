@@ -197,6 +197,13 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 	if cerr := content.MergeBaseCrossing(r.inner.DB(), fsltype.FslID(srcTip), ancestor, base.Unheld); cerr != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: %w", cerr)
 	}
+	// Nor over one it found while either side's ancestry crosses the
+	// horizon: only the origin can name that base, and Merge has no peer.
+	sides := []fsltype.FslID{fsltype.FslID(srcTip), fsltype.FslID(dstTip)}
+	if cerr := content.AncestryCrossing(r.inner.DB(), sides[0], sides); cerr != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w; Repo.Merge cannot ask the origin: "+
+			"merge in a checkout with Checkout.MergeContext and a Peer", cerr)
+	}
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: find common ancestor: %w", err)
 	}

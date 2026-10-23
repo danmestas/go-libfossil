@@ -225,6 +225,7 @@ type handler struct {
 	cone            *cone.Cone
 	keep            *sparseKeep
 	partialMirror   bool
+	historyURL      string // named in a horizon reply's horizon-served (§6.2.5)
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -476,6 +477,10 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	if h.cone != nil {
 		if err := h.prepareStructural(ctx, req.Cards); err != nil {
+			return nil, err
+		}
+		var err error
+		if h.historyURL, err = historyURL(h.repo.DB()); err != nil {
 			return nil, err
 		}
 	}
@@ -1394,6 +1399,11 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	// Horizon §5.1: a structural request keeps no manifest or node below
 	// its horizon, so one asked for is not sent, as zit skips it.
 	if h.structural.withholds(c.UUID, data) {
+		return nil
+	}
+	// Horizon §4.5, §6.2: a horizon-scoped request is sent no cluster,
+	// even one it names, so a clone never learns what only a cluster names.
+	if h.horizonScoped() && isCluster(data) {
 		return nil
 	}
 	if isPriv {

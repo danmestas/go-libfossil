@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `24457c7dd6` (branch `horizon-rfc`) | `d0f95017df` | `332387c274567ed5…` |
+| `draft-fossil-horizon-00.txt` | `5d618aaeb1` (branch `horizon-rfc`) | `d1e6cab361` | `d0373036daf43204…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,9 +57,16 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`24457c7dd6` (2026-10-22). The other six drafts are byte-identical at
-`3a2df62515` and `24457c7dd6`; against the `3a2df62515` copy it replaces,
-the horizon draft's Appendix C adds one bullet per change: §3.4 notes that the leaves rule can hold
+`5d618aaeb1` (2026-10-22). The other six drafts are byte-identical at
+`3a2df62515`, `24457c7dd6` and `5d618aaeb1`. Against the `24457c7dd6` copy it
+replaces, the horizon draft adds two Appendix C bullets: §5.2 says that when
+no tag is in force at any check-in a seed would cover, the origin mints no
+seed and serves the content level, since a control artifact needs a T card
+(a normative change); and §3.4 makes the cost report guidance for the tool
+that suggests a horizon, not a wire obligation, which an origin may expose
+outside the protocol (editorial). Against the `3a2df62515` copy that the
+`24457c7dd6` copy replaced, the horizon draft's Appendix C adds one bullet
+per change: §3.4 notes that the leaves rule can hold
 effectively the whole history when childless check-ins fork near the root,
 measured on the Fossil repository (no rule change); a seed's D card is the
 latest tag event it summarizes rounded up to a whole second with no

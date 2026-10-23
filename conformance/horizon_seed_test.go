@@ -40,7 +40,7 @@ import (
 // but C's ancestry.
 
 func horizonSeedCases() []Case {
-	return []Case{horizonSeedCards, horizonSeedDate, horizonSeedPrivate, horizonSeedOrdinary, horizonSeedProvenance}
+	return []Case{horizonSeedCards, horizonSeedDate, horizonSeedPrivate, horizonSeedOrdinary, horizonSeedProvenance, horizonSeedNone}
 }
 
 var (
@@ -49,6 +49,7 @@ var (
 	horizonSeedPrivate    = Case{ID: "horizon.5.2.3.seed-private", Req: "HZ-5.2-3"}
 	horizonSeedOrdinary   = Case{ID: "horizon.5.2.3.seed-shaped-ordinary", Req: "HZ-5.2-4"}
 	horizonSeedProvenance = Case{ID: "horizon.5.2.4.seed-provenance", Req: "HZ-5.2-6"}
+	horizonSeedNone       = Case{ID: "horizon.5.2.1.no-tag-no-seed", Req: "HZ-5.2-7"}
 )
 
 type hzSeed struct {
@@ -196,6 +197,7 @@ func TestHorizonSeed(t *testing.T) {
 	s := newHZSeed(t)
 	check(t, horizonSeedCards, func() error { return hzSeedCards(t, s) })
 	check(t, horizonSeedDate, func() error { return hzSeedDate(t) })
+	check(t, horizonSeedNone, func() error { return hzSeedNone(t) })
 	check(t, horizonSeedPrivate, func() error { return hzSeedPrivate(t, s) })
 	check(t, horizonSeedOrdinary, func() error { return hzSeedOrdinary(t, s) })
 	check(t, horizonSeedProvenance, func() error { return hzSeedProvenance(t, s) })
@@ -305,6 +307,58 @@ func hzSeedDate(t *testing.T) error {
 	}
 	if held, err := deck.Parse(mustHeld(t, r)); err != nil || held.U == nil || *held.U != seedLoginGo {
 		return expectf("the served seed's U card %v (%v), want %q", held, err, seedLoginGo)
+	}
+	return nil
+}
+
+// hzSeedNone: where no tag is in force at any check-in a seed would cover, a
+// control artifact would carry no T card, so the origin mints none and
+// serves the content level: the reply advertises horizon-served content and
+// the clone holds no seed.
+func hzSeedNone(t *testing.T) error {
+	f := newSCSyncRepo(t, scSyncFiles())
+	c2 := hzCommit(t, f, "c2", []libfossil.FslID{f.c1}, nil)
+	c3 := hzCommit(t, f, "c3", []libfossil.FslID{c2}, nil)
+	// The fixture's check-ins sit on trunk; dropping the tag rows models an
+	// origin whose check-ins carry none in force.
+	if _, err := f.r.DB().Exec("DELETE FROM tagxref"); err != nil {
+		return err
+	}
+	k, err := horizon.HeldSet(context.Background(), f.r.DB(), c3, cone.RuleDescendants)
+	if err != nil {
+		return err
+	}
+	if _, _, err := seed.Mint(f.r.DB(), c3, k, seedLoginGo); !errors.Is(err, seed.ErrNothingToSeed) {
+		return expectf("Mint with no tag in force = %v, want ErrNothingToSeed", err)
+	}
+	h, err := cone.NewHorizon(hzUUID(t, f.r, c3), cone.RuleDescendants, cone.DepthStructural)
+	if err != nil {
+		return err
+	}
+	c, err := cone.NewWithHorizon(nil, nil, h)
+	if err != nil {
+		return err
+	}
+	peer := &scSyncPeer{r: f.r}
+	clone, result, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "none.fossil"),
+		peer, sync.CloneOpts{StoreCone: c, PullPhantoms: true})
+	if err != nil {
+		return err
+	}
+	t.Cleanup(func() { clone.Close() })
+	for i, reply := range peer.replies {
+		if got := hzPragmas(reply, "horizon-served"); len(got) != 1 || strings.Join(got[0], " ") != "content" {
+			return expectf("reply %d advertises horizon-served %q, want content", i, got)
+		}
+		if got := hzPragmas(reply, "horizon-seed"); len(got) != 0 {
+			return expectf("reply %d announces a seed %q", i, got)
+		}
+	}
+	if held, err := seed.Held(clone.DB()); err != nil || held != nil {
+		return expectf("clone holds a seed (%v)", err)
+	}
+	if result.StructuralServed != 0 || result.HorizonServed != result.Rounds {
+		return expectf("structural %d, served %d of %d rounds", result.StructuralServed, result.HorizonServed, result.Rounds)
 	}
 	return nil
 }

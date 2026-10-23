@@ -396,9 +396,12 @@ Internet-Draft               Fossil Horizons                October 2026
 
    its indexes and offer to a cloning client; this places the horizon as
    late as possible while keeping every childless check-in's whole
-   divergence in K.  An origin that offers a default C SHOULD also
-   report what each rule would hold, so the choice is made with the cost
-   in view.
+   divergence in K.  A tool that suggests a C SHOULD show what each rule
+   would hold (check-ins and bytes) before the choice is made, so it is
+   made with the cost in view.  This is guidance for the tool, not a
+   wire obligation: an origin MAY expose such figures through an
+   interface outside this protocol, such as the one horizon-served can
+   name (Section 6.2.5).
 
    A clone that wants N recent check-ins, or history from a date, names
    the check-in that expresses that and lets the rule do the rest.
@@ -438,9 +441,6 @@ Internet-Draft               Fossil Horizons                October 2026
    every check-in's tree is whole.  An operation that needs an elided
    node -- a commit, which writes a whole tree, or a listing outside the
    cone -- obtains it as [FossilSparseCone] Section 5.3 provides.
-
-
-
 
 
 
@@ -580,7 +580,10 @@ Internet-Draft               Fossil Horizons                October 2026
    tag with its value, the closed marker if C is closed, and every non-
    propagating tag applied to C.  Each T card carries the tag's value
    exactly as the dense derivation holds it.  The seed's D card and U
-   card are those of Section 5.2.2.
+   card are those of Section 5.2.2.  A control artifact carries at least
+   one T card, so when no tag is in force at any check-in the seed would
+   cover, the origin mints no seed and serves the request at the content
+   level (Section 6.3).
 
    C is not the only check-in of K whose tag state comes from below the
    horizon.  A branch forked below C that later merges C in has a check-
@@ -607,9 +610,6 @@ Internet-Draft               Fossil Horizons                October 2026
    seed's D card to the latest mtime among the tag events it summarizes,
    rounded up to a whole second and written with no fractional part:
    rounded down, a seed could precede an event with a sub-second time,
-   and with a fraction, two origins could write the same instant
-   differently.  A seed that summarizes no tag event takes C's own event
-   time, rounded the same way.  A clone holds one seed and replaces it
 
 
 
@@ -618,6 +618,9 @@ Mestas                    Expires 20 April 2027                [Page 11]
 Internet-Draft               Fossil Horizons                October 2026
 
 
+   and with a fraction, two origins could write the same instant
+   differently.  A seed that summarizes no tag event takes C's own event
+   time, rounded the same way.  A clone holds one seed and replaces it
    whole when a new one arrives (Section 6.2.3), so a seed never has to
    outrank an earlier seed.
 
@@ -663,9 +666,6 @@ Internet-Draft               Fossil Horizons                October 2026
    from such an origin, falling back to the content horizon
    (Section 6.3) rather than holding derived state it cannot attribute.
    A clone with no key for its origin accepts an unsigned seed.
-
-
-
 
 
 
@@ -1526,6 +1526,17 @@ Internet-Draft               Fossil Horizons                October 2026
       and Section 6.2.6 voids a cursor when an appended tree makes an
       older withheld node kept.  Normative change.
 
+   *  Section 5.2: when no tag is in force at any check-in a seed would
+      cover, the origin mints no seed and serves the content level,
+      since a control artifact needs a T card.  The earlier text did not
+      say, and an origin could mint a seed no reader parses.  Normative
+      change.
+
+   *  Section 3.4: reporting what each rule would hold is guidance for
+      the tool that suggests a horizon, not an obligation on the wire;
+      an origin may expose the figures outside this protocol.  Editorial
+      clarification.
+
    *  Section 6.2.6: an origin announces only in reply to a request that
       pulls, as Fossil does, so a push-only reply announces nothing.
       The earlier text named the push reply as the one the cursor
@@ -1551,6 +1562,14 @@ Internet-Draft               Fossil Horizons                October 2026
    *  Section 6.2.5, Section 6.3: a store at the structural horizon
       whose pull or sync replies lack horizon-served structural falls
       back to the content horizon, records it, discards its seed,
+
+
+
+Mestas                    Expires 20 April 2027                [Page 28]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
       fetches the manifests and nodes below C, and reports it, as a
       clone does.  The earlier text stated the fallback for the transfer
       that enters the horizon only.  Normative change.
@@ -1559,16 +1578,6 @@ Internet-Draft               Fossil Horizons                October 2026
       either side's ancestry crosses the horizon, not only when it finds
       no common ancestor: over a partial graph the common ancestor found
       need not be the nearest.  Normative change.
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 28]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    *  Section 5.8: the deepen point is a common ancestor of C and the
       target, computed locally or asked of the origin.  When none is
@@ -1597,15 +1606,6 @@ Author's Address
 
    Dan Mestas
    Email: dan5446@gmail.com
-
-
-
-
-
-
-
-
-
 
 
 

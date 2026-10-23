@@ -38,6 +38,9 @@ type CommitOpts struct {
 	// the diff/deletion path); a dedicated deletion API may replace this
 	// escape hatch later.
 	PartialManifest bool
+	// NoSign stores the check-in unsigned even when the repository's
+	// clearsign setting is on (SettingClearsign): fossil's commit --nosign.
+	NoSign bool
 }
 
 // FileToCommit describes a file to include in a commit. OldName, when set,
@@ -120,6 +123,7 @@ func (r *Repo) commit(ctx context.Context, opts CommitOpts) (int64, string, erro
 		Delta:        opts.Delta,
 		Time:         opts.Time,
 		Tags:         tagCards,
+		NoSign:       opts.NoSign,
 	}
 	rid, uuid, err := manifest.CheckinContext(ctx, r.inner, copts)
 	if err != nil {

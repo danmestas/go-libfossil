@@ -201,7 +201,7 @@ func frameArtifact(data []byte) ([]byte, error) {
 	if data[len(data)-1] != '\n' {
 		return nil, fmt.Errorf("artifact not terminated with a newline")
 	}
-	content := stripClearsign(data)
+	content := StripClearsign(data)
 	if len(content) < 10 || content[0] < 'A' || content[0] > 'Z' || content[1] != ' ' {
 		return nil, fmt.Errorf("line 1 not recognized")
 	}

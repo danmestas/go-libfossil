@@ -116,6 +116,9 @@ type CheckoutCommitOpts struct {
 	// AllowEmpty commits even when nothing changed, which Checkin otherwise
 	// refuses, as fossil's commit does.
 	AllowEmpty bool
+	// NoSign stores the check-in unsigned even when the repository's
+	// clearsign setting is on (SettingClearsign): fossil's commit --nosign.
+	NoSign bool
 }
 
 // CheckoutMergeOpts configures Checkout.Merge.
@@ -382,6 +385,7 @@ func (c *Checkout) checkin(
 
 		AllowConflict: opts.AllowConflict,
 		AllowEmpty:    opts.AllowEmpty,
+		NoSign:        opts.NoSign,
 	})
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: checkin: %w", err)

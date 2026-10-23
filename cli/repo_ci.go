@@ -20,6 +20,7 @@ type RepoCiCmd struct {
 	Branch        string   `help:"Branch name for this checkin"`
 	AllowConflict bool     `help:"Commit files that still hold merge conflict markers"`
 	AllowEmpty    bool     `help:"Commit even when nothing has changed"`
+	NoSign        bool     `name:"nosign" help:"Do not sign this check-in, even with the clearsign setting on"`
 	Dir           string   `short:"d" help:"Checkout directory" default:"."`
 }
 
@@ -60,6 +61,7 @@ func (c *RepoCiCmd) Run(g *Globals) (err error) {
 		Files:         files,
 		AllowConflict: c.AllowConflict,
 		AllowEmpty:    c.AllowEmpty,
+		NoSign:        c.NoSign,
 	}, required)
 	if err != nil {
 		return err

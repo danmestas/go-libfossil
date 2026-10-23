@@ -94,6 +94,7 @@ type RepoBranchNewCmd struct {
 	From    string `help:"Parent version (default: tip)"`
 	Message string `short:"m" help:"Checkin comment"`
 	User    string `help:"Checkin user (default: OS username)"`
+	NoSign  bool   `name:"nosign" help:"Do not sign the branch's check-in, even with the clearsign setting on"`
 }
 
 func (c *RepoBranchNewCmd) Run(g *Globals) error {
@@ -146,6 +147,7 @@ func (c *RepoBranchNewCmd) Run(g *Globals) error {
 		Comment:  comment,
 		User:     user,
 		ParentID: parentRid,
+		NoSign:   c.NoSign,
 		Tags: []libfossil.TagSpec{
 			{Name: "branch", Value: c.Name},
 			{Name: "sym-" + c.Name},

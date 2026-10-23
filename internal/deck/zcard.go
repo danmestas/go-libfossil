@@ -8,12 +8,12 @@ import (
 
 // VerifyZ validates a control artifact's trailing Z-card checksum. The blob
 // may arrive PGP/SSH clearsigned (historical artifacts, e.g. Fossil's own
-// 2007-era check-ins); stripClearsign isolates the inner content the Z card
+// 2007-era check-ins); StripClearsign isolates the inner content the Z card
 // is computed over so the last-35-byte check lands on the Z card and not on a
 // trailing signature block. The artifact's content-addressed hash is computed
 // over the raw blob elsewhere and is unaffected by this stripping.
 func VerifyZ(data []byte) error {
-	return verifyZ(stripClearsign(data))
+	return verifyZ(StripClearsign(data))
 }
 
 // HasValidZ reports whether data, clearsign-stripped, ends in a Z card whose
@@ -21,7 +21,7 @@ func VerifyZ(data []byte) error {
 // without one can never parse as a deck; this costs one MD5 pass and no card
 // allocation.
 func HasValidZ(data []byte) bool {
-	body := stripClearsign(data)
+	body := StripClearsign(data)
 	n := len(body)
 	if n < 35 || body[n-1] != '\n' || body[n-35] != 'Z' || body[n-34] != ' ' {
 		return false

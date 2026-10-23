@@ -10,6 +10,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/clearsign"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -45,6 +46,9 @@ type CheckinOpts struct {
 	// sync session whose server sent pragma avoid-submanifests (the
 	// session's SyncResult.AvoidSubmanifests).
 	AvoidSubmanifests bool
+	// NoSign stores the manifest unsigned even when the repository's
+	// clearsign setting is on: fossil's commit --nosign.
+	NoSign bool
 }
 
 type File struct {
@@ -162,7 +166,7 @@ func checkinTx(
 	if err := preflightCheckinMlinks(tx, cache, d, storeCone); err != nil {
 		return 0, "", tree, fmt.Errorf("preflight checkin mlinks: %w", err)
 	}
-	rid, uuid, err := insertCheckinBlob(tx, d, storeCone)
+	rid, uuid, err := insertCheckinBlob(ctx, tx, d, storeCone, !opts.NoSign)
 	if err != nil {
 		return 0, "", tree, err
 	}
@@ -457,7 +461,14 @@ func checkinRCard(tx *db.Tx, fCards []deck.FileCard) (string, error) {
 	return rHash, nil
 }
 
-func insertCheckinBlob(tx *db.Tx, d *deck.Deck, storeCone *cone.Cone) (libfossil.FslID, string, error) {
+// insertCheckinBlob stores d's manifest, clear-signed when sign is set and
+// the repository's clearsign setting is on, as fossil's commit signs it
+// (src/checkin.c): the signed text is the artifact, so its name is the hash
+// of the signed bytes. A signer that fails abandons the commit, as fossil's
+// does when it cannot prompt.
+func insertCheckinBlob(
+	ctx context.Context, tx *db.Tx, d *deck.Deck, storeCone *cone.Cone, sign bool,
+) (libfossil.FslID, string, error) {
 	// Writer postcondition (AF-6.3-4): ComputeR yields lowercase hex, so this
 	// can only trip on a programmer error upstream. Over a sparse store there
 	// is no R card at all.
@@ -471,6 +482,17 @@ func insertCheckinBlob(tx *db.Tx, d *deck.Deck, storeCone *cone.Cone) (libfossil
 	manifestBytes, err := d.Marshal()
 	if err != nil {
 		return 0, "", fmt.Errorf("marshal: %w", err)
+	}
+	if sign {
+		signer, err := clearsign.FromSettings(tx)
+		if err != nil {
+			return 0, "", err
+		}
+		if signer != nil {
+			if manifestBytes, err = signer.Sign(ctx, manifestBytes); err != nil {
+				return 0, "", fmt.Errorf("abandoning commit: manifest signing failed: %w", err)
+			}
+		}
 	}
 	rid, uuid, err := blob.Store(tx, manifestBytes)
 	if err != nil {

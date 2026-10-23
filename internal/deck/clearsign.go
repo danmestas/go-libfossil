@@ -26,10 +26,10 @@ var (
 
 // clearsignHeaderLen is the fixed byte length of every clearsign header marker
 // above; the armor-header scan begins just past it. All markers share this
-// length, which the assertion in stripClearsign pins.
+// length, which the assertion in StripClearsign pins.
 const clearsignHeaderLen = 34
 
-// stripClearsign returns the inner control-artifact content of a clearsigned
+// StripClearsign returns the inner control-artifact content of a clearsigned
 // blob -- the bytes between the armor header's blank-line separator and the
 // trailing signature block -- which is what the Z card is computed over and
 // what the card parser consumes. It mirrors fossil's remove_pgp_signature
@@ -38,13 +38,13 @@ const clearsignHeaderLen = 34
 // begins with a header marker. The artifact's content-addressed hash is taken
 // over the raw blob elsewhere, so this stripping never changes which UUID an
 // artifact resolves to.
-func stripClearsign(data []byte) []byte {
+func StripClearsign(data []byte) []byte {
 	header := matchPrefix(data, clearsignHeaders)
 	if header == nil {
 		return data
 	}
 	if len(header) != clearsignHeaderLen {
-		panic("deck.stripClearsign: clearsign header marker length mismatch")
+		panic("deck.StripClearsign: clearsign header marker length mismatch")
 	}
 
 	// Skip the armor headers (e.g. "Hash: SHA1") up to and including the blank

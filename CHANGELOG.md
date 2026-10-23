@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Signing, as fossil and zit sign (fossil's `clearsign` and `pgp-command`
+  settings, with PGP and SSH keys). With `clearsign` on, `Commit`,
+  `Checkout.Checkin` and `repo branch new` store each check-in's manifest
+  clear-signed by `pgp-command`: unset, fossil's `gpg --clearsign -o`; a
+  command named `ssh*` (`ssh-keygen -q -Y sign -n fossilscm -f KEY`) has its
+  detached signature wrapped in fossil's SSH envelope. A signer that fails
+  abandons the commit; `CommitOpts.NoSign`, `CheckoutCommitOpts.NoSign` and
+  `--nosign` store one check-in unsigned, and fossil's legacy `omitsign`
+  turns signing off. fossil 2.28 and zit read the signed check-ins, and a
+  check-in zit signs with the same SSH key verifies here.
+- Signed horizon seeds (draft-fossil-horizon-00 §5.2.4, HZ-5.2-5 and
+  HZ-5.2-6). An origin with `clearsign` on signs each seed it mints, keeping
+  one signature per seed so its name is stable. A clone given its origin's
+  key (`CloneOpts.SeedKey`, `repo clone --seed-key`, kept as the
+  `horizon-seed-key` setting) verifies every seed it holds, on clone, pull
+  and rebuild, and falls back to the content horizon from one unsigned or
+  signed by another key. An SSH key is verified in process; an OpenPGP
+  fingerprint by `gpg`. zit clones a signing origin and holds the signed
+  seed. `SettingClearsign`, `SettingPGPCommand` and `SettingHorizonSeedKey`
+  name the settings; `SetConfig` refuses a seed key that is neither an SSH
+  public key nor a fingerprint. An origin signs only once the requester is
+  known to read, outside the request's transaction; with its own public key
+  as `horizon-seed-key` it re-signs a kept signature that key no longer
+  verifies. A verifier that cannot run (gpg missing or timed out) fails the
+  sync and keeps the held seed. SHA-1 `ssh-rsa` signatures are refused, as
+  PROTOCOL.sshsig requires.
+
 ## [0.15.0] - 2026-10-23
 
 ### Added

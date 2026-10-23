@@ -114,6 +114,9 @@ func discardMovedSeed(r *repo.Repo, old, next *cone.Cone) ([]byte, error) {
 }
 
 // restoreSeed puts back the store cone and seed a failed move replaced.
+// The seed was held, so verified, before the move; it goes back without a
+// verifier, and the next Apply re-checks it against the clone's key
+// (draft-fossil-horizon-00 §5.2.4).
 func restoreSeed(r *repo.Repo, old *cone.Cone, held []byte) error {
 	if held == nil {
 		panic("sync.restoreSeed: no seed to restore")

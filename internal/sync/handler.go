@@ -509,6 +509,11 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}); err != nil {
 		return nil, err
 	}
+	// Outside the transaction, now the requester is known to read: a
+	// structural reply's seed is signed and its cards filled (horizon §5.2.4).
+	if err := h.finishSeedSigning(ctx); err != nil {
+		return nil, err
+	}
 	if h.fatal || h.aborted {
 		h.filesRecvd = 0 // rolled back with the request
 	}

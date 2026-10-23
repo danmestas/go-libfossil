@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/clearsign"
 )
 
 // UserOpts configures a user creation or update.
@@ -78,8 +79,15 @@ func (r *Repo) Config(key string) (string, error) {
 	return val, nil
 }
 
-// SetConfig writes a configuration value to the repo's config table.
+// SetConfig writes a configuration value to the repo's config table. A
+// SettingHorizonSeedKey value that is neither an SSH public key nor an
+// OpenPGP fingerprint is refused.
 func (r *Repo) SetConfig(key, value string) error {
+	if key == SettingHorizonSeedKey && value != "" {
+		if _, err := clearsign.ParseKey(value); err != nil {
+			return fmt.Errorf("libfossil: set config %q: %w", key, err)
+		}
+	}
 	if err := r.inner.SetConfig(key, value); err != nil {
 		return fmt.Errorf("libfossil: set config %q: %w", key, err)
 	}

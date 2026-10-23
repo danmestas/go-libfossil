@@ -208,6 +208,7 @@ type CommitOpts struct {
 	PreCommitCheck func() error // nil = no check; non-nil error aborts commit
 	AllowConflict  bool         // commit files that hold merge conflict markers
 	AllowEmpty     bool         // commit even when nothing changed
+	NoSign         bool         // store unsigned even with clearsign on
 }
 
 // RevertOpts configures reverting file changes.

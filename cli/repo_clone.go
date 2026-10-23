@@ -23,6 +23,7 @@ type RepoCloneCmd struct {
 	Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
 	Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
 	ConeNot    []string      `name:"cone-not" help:"Carve this path out of a --cone (repeatable)"`
+	SeedKey    string        `name:"seed-key" help:"The origin's public key, an SSH public key line or an OpenPGP fingerprint: with --structural, a horizon seed not signed by it is discarded and the clone falls back to the content horizon; kept as the horizon-seed-key setting"`
 }
 
 // cloneContext builds the context that bounds a clone. A positive timeout caps
@@ -76,6 +77,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		User:      c.User,
 		Password:  c.Pass,
 		StoreCone: storeCone,
+		SeedKey:   c.SeedKey,
 	}
 
 	r, result, err := libfossil.Clone(ctx, c.Path, transport, opts)

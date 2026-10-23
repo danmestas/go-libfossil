@@ -79,7 +79,13 @@ func rederive(tx *db.Tx) error {
 	if _, err := manifest.Rederive(tx); err != nil {
 		return err
 	}
-	if _, err := seed.Apply(tx, nil); err != nil {
+	// A held seed is re-verified against the clone's key (§5.2.4: every seed
+	// it holds), and discarded if it fails; the next sync falls back.
+	verify, err := seed.VerifierFor(tx)
+	if err != nil {
+		return err
+	}
+	if _, err := seed.Apply(tx, verify); err != nil {
 		return err
 	}
 	return rebuildBookkeeping(tx)

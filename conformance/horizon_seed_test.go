@@ -14,6 +14,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/clearsign"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -521,6 +522,26 @@ func hzSeedProvenance(t *testing.T, s *hzSeed) error {
 	}
 	if s.derivesDense(t, clone) == nil {
 		return expectf("the discarded seed's state survived")
+	}
+	// A verifier that could not judge the seed (gpg absent, say) is no
+	// verdict: Hold refuses without ErrProvenance, so the caller does not
+	// fall back, and Apply keeps a held seed and reports the fault.
+	cannot := func([]byte) error { return clearsign.ErrCannotVerify }
+	if err := hzHold(clone, name, data, cannot); err == nil || errors.Is(err, seed.ErrProvenance) {
+		return expectf("Hold when the key cannot be checked: %v, want an error that is not ErrProvenance", err)
+	}
+	if err := hzHold(clone, name, data, nil); err != nil {
+		return err
+	}
+	err = clone.WithTx(func(tx *db.Tx) error {
+		_, err := seed.Apply(tx, cannot)
+		return err
+	})
+	if !errors.Is(err, clearsign.ErrCannotVerify) {
+		return expectf("Apply when the key cannot be checked: %v, want ErrCannotVerify", err)
+	}
+	if held, _ := seed.Held(clone.DB()); held == nil {
+		return expectf("a seed was discarded because its key could not be checked")
 	}
 	return nil
 }

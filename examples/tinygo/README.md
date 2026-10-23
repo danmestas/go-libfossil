@@ -11,11 +11,13 @@ wasm-opt -Oz --detect-features --strip-debug --strip-producers libfossil.wasm -o
 `-stack-size=1MB`: TinyGo's default goroutine stack is too small for
 go-libfossil's deeper paths.
 
-Measured on TinyGo 0.43.0 (Go 1.27.3, LLVM 22) and Binaryen 133, for this
-program:
+Measured for this program with TinyGo 0.43.0: the first row is the
+`Build (tinygo)` CI job; the others are macOS (Go 1.27.3, LLVM 22,
+Binaryen 133).
 
 | Build | Raw | gzip -9 |
 |---|---|---|
+| TinyGo, as CI builds it (Linux release, its own wasm-opt) | 3.52 MB | 1.26 MB |
 | TinyGo, then `wasm-opt -Oz` | 3.83 MB | 1.40 MB |
 | TinyGo | 4.02 MB | 1.44 MB |
 | Standard Go, `GOOS=js GOARCH=wasm -ldflags='-s -w'` | 16.1 MB | 4.06 MB |

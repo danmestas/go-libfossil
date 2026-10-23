@@ -117,7 +117,7 @@
       <div class="hoststrip">
         <div><b>native</b> · one static binary, no cgo</div>
         <div><b>js/wasm</b> · SQLite itself in wasm</div>
-        <div><b>TinyGo</b> · whole API {{ printf "%.1f" (div hugo.Data.wasm.tinygo_oz.gzip 1000000.0) }} MB gzipped</div>
+        <div><b>TinyGo</b> · whole API {{ printf "%.1f" (div hugo.Data.wasm.tinygo_build.gzip 1000000.0) }} MB gzipped</div>
       </div>
     </figure>
     {{- end }}
@@ -138,12 +138,12 @@
 {{- $mb := 1000000.0 -}}
 <section class="gutter"><div class="inner split">
   <div class="stack"><span class="label">Size</span><h2>Small enough to ship with the page.</h2>
-    <p class="muted">The whole public API, the HTTP sync client and signing included, built with TinyGo {{ $w.tinygo }} and one <code>wasm-opt -Oz</code> pass is {{ printf "%.1f" (div $w.tinygo_oz.gzip $mb) }} MB compressed. The standard Go toolchain builds the same program about {{ printf "%.0f" (div (float $w.standard.gzip) $w.tinygo_oz.gzip) }} times larger, which is still useful for debugging. A program that leaves out sync is smaller.</p>
-    <p class="small">Measured from <code>examples/tinygo</code> (Go {{ $w.go }}); CI builds it with TinyGo on every change. Under TinyGo a sync redirect ends the request with an error instead of being followed.</p></div>
+    <p class="muted">The whole public API, the HTTP sync client and signing included, built with TinyGo {{ $w.tinygo }} is {{ printf "%.1f" (div $w.tinygo_build.gzip $mb) }} MB compressed. The standard Go toolchain builds the same program about {{ printf "%.0f" (div (float $w.standard.gzip) $w.tinygo_build.gzip) }} times larger, which is still useful for debugging. A program that leaves out sync is smaller.</p>
+    <p class="small">Measured from <code>examples/tinygo</code>: the TinyGo size is what CI builds on every change; the standard build is Go {{ $w.go }} with <code>-ldflags='-s -w'</code>. Under TinyGo a sync redirect ends the request with an error instead of being followed.</p></div>
   <div class="bars">
-    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_oz.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_oz.gzip) $w.standard.gzip)) }}%"></div></div></div>
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_build.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_build.gzip) $w.standard.gzip)) }}%"></div></div></div>
     <div class="bar"><div class="row"><span>Standard Go, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.standard.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
-    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, raw</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_oz.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_oz.raw) $w.standard.raw)) }}%"></div></div></div>
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, raw</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_build.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_build.raw) $w.standard.raw)) }}%"></div></div></div>
     <div class="bar"><div class="row"><span>Standard Go, raw</span><span class="mono">{{ printf "%.1f" (div $w.standard.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
   </div>
 </div></section>

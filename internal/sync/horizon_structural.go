@@ -91,7 +91,7 @@ func (h *handler) structuralReach(ctx context.Context, hz cone.Horizon) ([]libfo
 	var k []libfossil.FslID
 	var reach map[string]bool
 	var placed bool
-	err := h.repo.DB().WithTx(func(tx *db.Tx) error {
+	err := h.repo.DB().WithReadTx(func(tx *db.Tx) error {
 		v, err := h.memo.View(ctx, tx)
 		if err != nil {
 			return err

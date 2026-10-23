@@ -19,17 +19,20 @@ type SyncedTable struct {
 }
 
 // loadSyncedTables loads all registered synced tables into the handler cache.
+// It only reads: a repository without the sync schema has no synced table,
+// and a schema card creates the schema when it registers one. Creating it
+// here wrote on every request, outside the request's transaction.
 func (h *handler) loadSyncedTables() error {
-	if err := repo.EnsureSyncSchema(h.repo.DB()); err != nil {
-		return fmt.Errorf("handler.loadSyncedTables: ensure schema: %w", err)
+	h.syncedTables = make(map[string]*SyncedTable)
+	has, err := repo.HasSyncSchema(h.repo.DB())
+	if err != nil || !has {
+		return err
 	}
-
 	tables, err := repo.ListSyncedTables(h.repo.DB())
 	if err != nil {
 		return fmt.Errorf("handler.loadSyncedTables: list tables: %w", err)
 	}
 
-	h.syncedTables = make(map[string]*SyncedTable)
 	for _, info := range tables {
 		h.syncedTables[info.Name] = &SyncedTable{
 			Info: info,
@@ -63,6 +66,12 @@ func (h *handler) handleSchemaCard(c *xfer.SchemaCard) {
 	}
 
 	// Register table.
+	if err := repo.EnsureSyncSchema(h.repo.DB()); err != nil {
+		h.resp = append(h.resp, &xfer.ErrorCard{
+			Message: fmt.Sprintf("schema %s: register: %v", c.Table, err),
+		})
+		return
+	}
 	if err := repo.RegisterSyncedTable(h.repo.DB(), c.Table, def, c.MTime); err != nil {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("schema %s: register: %v", c.Table, err),

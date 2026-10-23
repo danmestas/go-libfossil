@@ -170,6 +170,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `repo serve` answers a clone or pull while another request holds the
+  write lock, instead of failing it with HTTP 500 "database is locked
+  (SQLITE_BUSY)" once the busy timeout ran out. Every request had run in
+  a write transaction, and a horizon request read the classification memo
+  in one too, so a horizon clone arriving while another clone was served
+  waited behind it and its client gave up after four attempts. A request
+  none of whose cards can write (clone, pull, gimme, igot without push,
+  login, reqconfig and read-only pragmas) now runs in a read transaction,
+  as does the memo read, and each request no longer creates the table-sync
+  schema on a repository that lacks it; a schema card creates it. v0.14.0
+  has the same write transaction per request.
 - An origin answering a horizon request no longer sends a cluster that the
   request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
   pull and sync replies already announced none, and req-clusters already

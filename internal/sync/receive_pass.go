@@ -362,10 +362,20 @@ func runPass(r *repo.Repo,
 	if r == nil {
 		panic("sync.runPass: r must not be nil")
 	}
-	if fn == nil {
-		panic("sync.runPass: fn must not be nil")
+	return runPassIn(r.WithBoundTx, fn)
+}
+
+// runPassIn is runPass in the transaction begin opens: r.WithBoundTx, or
+// r.WithBoundReadTx for a pass that stores nothing.
+func runPassIn(begin func(func(bound *repo.Repo) error) error,
+	fn func(bound *repo.Repo) (cardErr, err error)) (cardErr, err error) {
+	if begin == nil {
+		panic("sync.runPassIn: begin must not be nil")
 	}
-	err = r.WithBoundTx(func(bound *repo.Repo) error {
+	if fn == nil {
+		panic("sync.runPassIn: fn must not be nil")
+	}
+	err = begin(func(bound *repo.Repo) error {
 		var ferr error
 		cardErr, ferr = fn(bound)
 		if ferr == nil && abortsPass(cardErr) {

@@ -257,6 +257,18 @@ func (r *Repo) WithBoundTx(fn func(bound *Repo) error) error {
 	})
 }
 
+// WithBoundReadTx is WithBoundTx over a read transaction (db.WithReadTx): a
+// Repo bound to one snapshot of the database, taken without the write lock.
+// fn must not write.
+func (r *Repo) WithBoundReadTx(fn func(bound *Repo) error) error {
+	if fn == nil {
+		panic("repo.WithBoundReadTx: fn must not be nil")
+	}
+	return r.db.WithBoundReadTx(func(b *db.DB) error {
+		return fn(&Repo{db: b, path: r.path, receipt: r.receipt})
+	})
+}
+
 // Config reads a configuration value from the repo's config table.
 func (r *Repo) Config(key string) (string, error) {
 	var value string

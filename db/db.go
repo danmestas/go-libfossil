@@ -2,6 +2,7 @@ package db
 
 import (
 	"cmp"
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -530,6 +531,55 @@ func (d *DB) WithBoundTx(fn func(bound *DB) error) error {
 		b := &DB{path: d.path, driver: d.driver, root: d, bound: tx}
 		// Unbind on every path, so a bound DB kept past fn fails loudly
 		// rather than running on a finished transaction.
+		defer func() { b.bound = nil }()
+		return fn(b)
+	})
+}
+
+// WithReadTx runs fn in a read transaction: one snapshot of the database,
+// taken without the write lock, so it neither waits for a writer nor holds
+// one up. fn must not write; the drivers refuse or contest a write in it.
+// The transaction ends when fn returns, with nothing to commit. On a bound DB
+// it runs fn in the bound transaction, as WithTx does.
+func (d *DB) WithReadTx(fn func(tx *Tx) error) error {
+	if d == nil {
+		panic("db.WithReadTx: receiver must not be nil")
+	}
+	if fn == nil {
+		panic("db.WithReadTx: fn must not be nil")
+	}
+	if tx := d.boundTx(); tx != nil {
+		return tx.withSavepoint(fn)
+	}
+	sqlTx, err := d.conn.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("db.WithReadTx begin: %w", err)
+	}
+	tx := &Tx{tx: sqlTx, stmts: stmtCache{src: sqlTx}}
+	defer func() {
+		tx.forgetFrom(0)
+		tx.stmts.closeAll()
+		if rbErr := sqlTx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			fmt.Fprintf(os.Stderr, "db.WithReadTx: rollback failed: %v\n", rbErr)
+		}
+	}()
+	return fn(tx)
+}
+
+// WithBoundReadTx is WithBoundTx over a read transaction (see WithReadTx): a
+// DB bound to one snapshot that takes no write lock. fn must not write.
+func (d *DB) WithBoundReadTx(fn func(bound *DB) error) error {
+	if d == nil {
+		panic("db.WithBoundReadTx: receiver must not be nil")
+	}
+	if fn == nil {
+		panic("db.WithBoundReadTx: fn must not be nil")
+	}
+	if d.boundTx() != nil {
+		return d.WithTx(func(*Tx) error { return fn(d) })
+	}
+	return d.WithReadTx(func(tx *Tx) error {
+		b := &DB{path: d.path, driver: d.driver, root: d, bound: tx}
 		defer func() { b.bound = nil }()
 		return fn(b)
 	})

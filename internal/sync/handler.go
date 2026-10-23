@@ -488,8 +488,16 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		h.emitCapabilityPragmas()
 	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
-	// runs them after db_begin_write, and so does the closing crosslink.
-	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
+	// runs them after db_begin_write, and so does the closing crosslink. A
+	// request none of whose cards can write runs in a read transaction
+	// instead: it holds the write lock from no other request, and a clone
+	// round on a large repository is served for longer than a waiting
+	// request's busy timeout.
+	begin := h.repo.WithBoundTx
+	if readOnlyRequest(req.Cards) {
+		begin = h.repo.WithBoundReadTx
+	}
+	if _, err := runPassIn(begin, func(bound *repo.Repo) (error, error) {
 		defer h.bindRepo(bound)()
 		return nil, h.processInTx(ctx, req)
 	}); err != nil {
@@ -503,6 +511,32 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// readOnlyRequest reports whether no card of a request can make the handler
+// write: it neither pushes (push, file, cfile, private, an igot under push)
+// nor sends configuration, unversioned content or table rows, nor a pragma
+// whose answer writes: uv-hash and xtable-hash (which an unversioned or table
+// sync sends in place of a push card) and the check-in lock pair. Without a
+// push card an igot only records what the client holds. A read transaction
+// refuses a write the list misses, under the ncruces driver at least.
+func readOnlyRequest(cards []xfer.Card) bool {
+	for _, card := range cards {
+		switch c := card.(type) {
+		case *xfer.LoginCard, *xfer.CloneCard, *xfer.PullCard, *xfer.CookieCard,
+			*xfer.GimmeCard, *xfer.IGotCard, *xfer.ReqConfigCard,
+			*xfer.BadFileCard, *xfer.BadCommandCard, *xfer.ErrorCard,
+			*xfer.MessageCard, *xfer.CloneSeqNoCard:
+		case *xfer.PragmaCard:
+			switch c.Name {
+			case "uv-hash", "xtable-hash", "ci-lock", "ci-unlock":
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // processInTx is process's work inside the request transaction. A §8.1

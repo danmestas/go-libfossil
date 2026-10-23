@@ -201,9 +201,8 @@ func roundTripFaultIsTransient(err error) bool {
 func networkFault(err error) bool {
 	// Name resolution: a temporary failure is worth retrying, but a name
 	// that does not exist will not start existing.
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
-		return dnsErr.IsTemporary || dnsErr.IsTimeout
+	if transient, ok := dnsFault(err); ok {
+		return transient
 	}
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {

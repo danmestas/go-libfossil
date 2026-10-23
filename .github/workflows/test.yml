@@ -199,6 +199,32 @@ jobs:
           GOARCH: wasm
         run: cd db/driver/ncruces && go build ./...
 
+  build-tinygo:
+    name: Build (tinygo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install TinyGo
+        # The release's own .deb, pinned: TinyGo releases change what compiles
+        # and how large the output is, so the gate moves only on purpose.
+        run: |
+          curl -sSfL -o tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v0.43.0/tinygo_0.43.0_amd64.deb
+          sudo dpkg -i tinygo.deb
+          tinygo version
+      - name: Build examples/tinygo for wasm
+        # The whole public API, sync and signing included, must keep compiling
+        # under TinyGo: applications ship it to browsers and edge runtimes that
+        # way. A standard-library feature TinyGo lacks fails here, not in an
+        # embedder's build.
+        env:
+          GOWORK: "off"
+        run: |
+          tinygo build -target=wasm -no-debug -opt=z -stack-size=1MB -o libfossil.wasm ./examples/tinygo/
+          echo "raw $(wc -c < libfossil.wasm) bytes, gzip -9 $(gzip -9c libfossil.wasm | wc -c) bytes"
+
   test-otel:
     name: Test (observer/otel)
     runs-on: ubuntu-latest

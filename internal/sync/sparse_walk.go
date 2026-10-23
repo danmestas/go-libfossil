@@ -8,9 +8,11 @@ import (
 	"sort"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/horizon"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
 // The §8 bounds of single-name lookup, charged across one request.
@@ -18,6 +20,16 @@ const (
 	coneWalkDepth  = 16
 	coneWalkVisits = 1 << 20
 )
+
+// coneWalkCacheBytes bounds the expanded content a walk keeps for
+// classifying rows. A row's kind is decided by parsing its bytes, and without
+// a cache each row's whole delta chain is expanded again: on fossil-scm.org's
+// repository that left a cone clone's first round unfinished after 20
+// minutes. The cache is unchecked because classifying serves nothing: the
+// bytes a row is sent with are expanded and checked against its name apart,
+// and re-hashing every node rebuilt for classification cost a third of a
+// cone clone's CPU.
+const coneWalkCacheBytes = 64 << 20
 
 type sparseKind uint8
 
@@ -58,6 +70,10 @@ type coneWalk struct {
 	decks      map[int]*deck.Deck
 	reached    map[int]bool
 	path       map[string]bool
+	cache      *content.Cache // unchecked, for classifying; a walk serves one request
+	fileRows   map[int]bool   // rows the crosslink tables prove are file content; nil until read
+	keepSet    *sparseKeep    // the classification's keep set, for unreached bases; nil until read
+	keepFailed bool           // the classification failed; unreached bases are not kept
 	visits     int
 	classified int
 }
@@ -69,7 +85,8 @@ func newConeWalk(ctx context.Context, h *handler) *coneWalk {
 	_, horizon := h.cone.Horizon()
 	w := &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, paths: len(h.cone.Include()) > 0,
 		kinds: map[int]sparseKind{},
-		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{}}
+		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{},
+		cache: content.NewUncheckedCache(coneWalkCacheBytes)}
 	if h.structural != nil {
 		w.reach = h.structural.reach
 	}
@@ -121,8 +138,12 @@ func (w *coneWalk) classify(rid int) (sparseKind, *deck.Deck) {
 		return kind, w.decks[rid]
 	}
 	w.classified++
+	if w.knownFile(rid) {
+		w.kinds[rid] = sparseContent
+		return sparseContent, nil
+	}
 	kind, d := sparseStructural, (*deck.Deck)(nil)
-	data, err := w.h.cache.Expand(w.h.repo.DB(), libfossil.FslID(rid))
+	data, err := w.cache.ExpandUnchecked(w.h.repo.DB(), libfossil.FslID(rid))
 	if err == nil {
 		kind = sparseContent
 		if deck.HasValidZ(data) {
@@ -133,6 +154,59 @@ func (w *coneWalk) classify(rid int) (sparseKind, *deck.Deck) {
 	}
 	w.kinds[rid], w.decks[rid] = kind, d
 	return kind, d
+}
+
+// fileContentSQL selects the blobs the store's crosslink tables prove to be
+// file content: named by mlink as a file version and claimed by no table an
+// artifact's crosslink writes. A file whose bytes parse as an artifact was
+// crosslinked as one, so it is claimed and falls through to its bytes.
+const fileContentSQL = `SELECT fid FROM mlink WHERE fid>0
+	EXCEPT SELECT objid FROM event
+	EXCEPT SELECT cid FROM plink
+	EXCEPT SELECT srcid FROM tagxref WHERE srcid>0
+	EXCEPT SELECT rid FROM tagxref WHERE tagid=7
+	EXCEPT SELECT attachid FROM attachment
+	EXCEPT SELECT fpid FROM forumpost
+	EXCEPT SELECT tkt_rid FROM ticketchng`
+
+// knownFile reports a row the crosslink tables prove to be file content, so
+// classify need not expand it. Expanding every file version of a large file
+// (fossil-scm.org's repository carries hundreds of a 9 MB one) cost most of a
+// cone clone's CPU. A store that has seen a sub-manifest answers nothing:
+// nodes have no table to claim them. The set is read once per walk.
+func (w *coneWalk) knownFile(rid int) bool {
+	if w.fileRows == nil {
+		w.fileRows = w.loadFileRows()
+	}
+	return w.fileRows[rid]
+}
+
+// loadFileRows reads fileContentSQL, or returns an empty set when the store has
+// seen a sub-manifest or the read fails, which leaves every row to its bytes.
+func (w *coneWalk) loadFileRows() map[int]bool {
+	files := map[int]bool{}
+	q := w.h.repo.DB()
+	var trees bool
+	if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM config WHERE name=?)",
+		manifest.SeenSubmanifestSetting).Scan(&trees); err != nil || trees {
+		return files
+	}
+	rows, err := q.Query(fileContentSQL)
+	if err != nil {
+		return files
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rid int
+		if err := rows.Scan(&rid); err != nil {
+			return map[int]bool{}
+		}
+		files[rid] = true
+	}
+	if rows.Err() != nil {
+		return map[int]bool{}
+	}
+	return files
 }
 
 func deckKind(d *deck.Deck) sparseKind {
@@ -160,13 +234,45 @@ func (w *coneWalk) sourceKept(rid int) bool {
 	}
 	kind, _ := w.classify(rid)
 	if !w.atRow(kind) {
-		return false
+		return kind == sparseContent && w.contentKept(rid)
 	}
 	if w.reach == nil || kind != sparseCheckin && kind != sparseNode {
 		return true
 	}
 	info, ok, err := w.h.loadCloneBlob(rid)
 	return err == nil && ok && !w.unreached(kind, info.uuid)
+}
+
+// contentKept reports a blob the request's keep set holds although the walk
+// has not reached it yet, by the store's classification of the cone (the
+// one a pull's inventory reads, kept across requests by the origin memo).
+// The walk reaches a file version by its check-in, in rid order, while
+// fossil deltifies a version against the newer one: without this a held
+// version's base was never yet reached and every version went out in full,
+// a whole 9 MB text per version of fossil-scm.org's sqlite3.c. A base the
+// classification cannot answer for is not kept, which costs bytes, never
+// correctness (SC-6.2-2).
+func (w *coneWalk) contentKept(rid int) bool {
+	if w.keepSet == nil && !w.keepFailed {
+		keep, err := w.classifiedKeep()
+		if err != nil {
+			w.keepFailed = true
+			return false
+		}
+		w.keepSet = keep
+	}
+	return w.keepSet != nil && w.keepSet.keeps(libfossil.FslID(rid))
+}
+
+// classifiedKeep is the request's §6.2 keep set as the store's
+// classification computes it, without the walk.
+func (w *coneWalk) classifiedKeep() (*sparseKeep, error) {
+	q := w.h.repo.DB()
+	cl, err := w.h.classifier(w.ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return newSparseKeepWith(w.ctx, q, w.cone, cl)
 }
 
 // servable resolves uuid to a row this clone session sends: held, inside

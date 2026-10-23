@@ -1664,6 +1664,12 @@ func resolveParentMids(tx *db.Tx, d *deck.Deck) (primaryParentMid libfossil.FslI
 }
 
 // insertCherrypicks inserts cherrypick rows for Q-cards (cherrypick/backout).
+//
+// A source that has not arrived is reserved as a phantom, so the row exists
+// before the source does and linkLateChildren can find this check-in when the
+// source arrives. Canonical skips a missing source and relies on the rebuild
+// its clone ends with; a clone here links as artifacts arrive and has no such
+// rebuild, so it would keep the row, and the source's mlink rows, missing.
 func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	for _, cp := range d.Q {
 		target := cp.Target
@@ -1671,9 +1677,9 @@ func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		if cp.IsBackout {
 			isExclude = 1
 		}
-		var parentRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", target).Scan(&parentRid); err != nil {
-			continue // target blob missing, skip
+		parentRid, err := ridOrPhantom(tx, target)
+		if err != nil {
+			return fmt.Errorf("cherrypick source %q: %w", target, err)
 		}
 		if _, err := tx.Exec(
 			"REPLACE INTO cherrypick(parentid, childid, isExclude) VALUES(?, ?, ?)",

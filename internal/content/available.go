@@ -242,6 +242,21 @@ func NewAvailabilityCache() *AvailabilityCache {
 	}
 }
 
+// ForgetUnavailable drops every unavailable verdict and keeps the available
+// ones. It is for a caller whose store only gains content between questions,
+// a receive: an artifact that was available stays so, while one that was not
+// may have had its basis filled since.
+func (a *AvailabilityCache) ForgetUnavailable() {
+	if a == nil {
+		return
+	}
+	for rid, ok := range a.avail {
+		if !ok {
+			delete(a.avail, rid)
+		}
+	}
+}
+
 // ByUUID resolves uuid to its rid and reports whether that blob's content is
 // available, memoizing the chain walk. Semantics match AvailableByUUID.
 func (a *AvailabilityCache) ByUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {

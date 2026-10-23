@@ -177,7 +177,11 @@ func (rl *ReceiveLinker) LinkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	// A blob arrived since the previous checkin examination. Availability
 	// negatives are deliberately scoped to one accepted blob so a formerly
 	// missing UUID cannot keep a waiter deferred after this transaction fills it.
-	rl.state.guard.avail = content.NewAvailabilityCache()
+	// Positives stand for the whole receive, which only adds content: a clone
+	// whose round fails stops receiving. Walking every F card's chain afresh
+	// for each blob cost a dense clone of the Fossil repository a sixth of its
+	// CPU.
+	rl.state.guard.avail.ForgetUnavailable()
 	remaining := receiveCascadeLimit
 	if err := rl.linkStored(ctx, tx, rid, verifiedFullBytes, &remaining); err != nil {
 		return err

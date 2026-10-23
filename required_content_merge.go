@@ -8,6 +8,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/fsltype"
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 )
 
@@ -17,44 +18,86 @@ import (
 // remedy, a deepen (Repo.DeepenHorizon).
 var ErrBelowHorizon = content.ErrBelowHorizon
 
-// MergeContext is Merge with the remedy of draft-fossil-horizon-00 §5.5. When
-// the merge base lies below the store's structural horizon, or the walk that
-// finds it crosses the horizon, and Peer is given, it asks the origin for
-// the base (§6.2.4), deepens the horizon to reach it (Repo.DeepenHorizon),
-// and merges once more over the base the origin named, which the store then
-// holds. Without a Peer, or when the merge does not cross the horizon, it is
-// Merge. A merge never runs against a base the store does not hold.
+// mergeBaseNodes bounds the walk that decides whether a merge's ancestry
+// crosses the horizon, as the origin bounds its merge-base walk.
+const mergeBaseNodes = 1 << 20
+
+// maxMergeBaseSecondaries is the most secondaries a merge-base query carries
+// (draft-fossil-horizon-00 §6.2.4): the checkout and one pending merge.
+const maxMergeBaseSecondaries = 2
+
+// MergeContext is Merge with the remedy of draft-fossil-horizon-00 §5.5.
+// Under a structural horizon, when Peer is given and the ancestry of either
+// side crosses the horizon, it asks the origin for the base (§6.2.4) even
+// when the store's own walk finds one, since over part of the graph the
+// common ancestor found need not be the nearest. It deepens the horizon to
+// the base the origin names when the store does not hold it
+// (Repo.DeepenHorizon) and merges over that base. When the origin does not
+// answer it is Merge, which refuses a merge whose own walk crossed the
+// horizon. Without a Peer, or when nothing crosses, it is Merge. A merge
+// never runs against a base the store does not hold.
+//
+// The query names the merged-in version over the checkout's version and each
+// plain merge pending in it. It carries at most two such secondaries, so a
+// merge that must ask with two merges already pending is refused: asking
+// without them would name a base Fossil's merge would not choose.
 func (c *Checkout) MergeContext(
 	ctx context.Context, opts CheckoutMergeOpts, required RequiredContentOpts,
 ) (CheckoutMergeResult, error) {
 	if err := required.validate(ctx); err != nil {
 		return CheckoutMergeResult{}, err
 	}
-	res, crossing := c.Merge(opts)
-	if !errors.Is(crossing, ErrBelowHorizon) || required.Peer == nil {
-		return res, crossing
+	if required.Peer == nil {
+		return c.Merge(opts)
 	}
 	r := c.inner.Repo()
-	_, current, err := c.Version()
+	secondaries, err := c.inner.MergeSecondaries()
 	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
 	}
-	var side string
-	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", opts.Version).Scan(&side); err != nil {
+	starts := append([]fsltype.FslID{fsltype.FslID(opts.Version)}, secondaries...)
+	crosses, err := content.AncestryCrosses(r.DB(), starts, mergeBaseNodes)
+	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
+	}
+	if !crosses || opts.Version == int64(secondaries[0]) {
+		return c.Merge(opts)
+	}
+	if len(secondaries) > maxMergeBaseSecondaries {
+		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w: the merge base may lie below it, and a "+
+			"merge-base query carries the checkout and at most one pending merge (horizon §6.2.4), "+
+			"not the %d pending here; commit or undo the pending merges first",
+			ErrBelowHorizon, len(secondaries)-1)
+	}
+	q := internalsync.MergeBaseQuery{}
+	for i, rid := range starts {
+		var uuid string
+		if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+			return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
+		}
+		if i == 0 {
+			q.Primary = uuid
+		} else {
+			q.Secondaries = append(q.Secondaries, uuid)
+		}
 	}
 	peer := &transportAdapter{pub: required.Peer}
 	ask := required.internalSync()
-	ask.MergeBaseOf = [2]string{current, side}
+	ask.MergeBaseOf = q
 	answer, err := internalsync.Sync(ctx, r, peer, ask)
 	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: asking the origin for the merge base: %w", err)
 	}
 	if !answer.MergeBaseAnswered {
-		return CheckoutMergeResult{}, fmt.Errorf("%w; the origin did not answer a merge-base query", crossing)
+		res, err := c.Merge(opts)
+		if errors.Is(err, ErrBelowHorizon) {
+			return res, fmt.Errorf("%w; the origin did not answer a merge-base query", err)
+		}
+		return res, err
 	}
 	if answer.MergeBase == "" {
-		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %s shares no history with %s, the origin says", side, current)
+		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %s shares no history with %s, the origin says",
+			q.Primary, q.Secondaries[0])
 	}
 	base, held, err := heldCheckin(r.DB(), answer.MergeBase)
 	if err != nil {

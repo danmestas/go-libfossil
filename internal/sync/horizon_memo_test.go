@@ -230,7 +230,7 @@ func (w *memoWorld) pull(c *cone.Cone) int {
 // sameKeep fails unless the origin's memo keeps, for c, exactly what a
 // fresh classification of the store keeps: every artifact, and the held
 // set and reach of c's horizon.
-func sameKeep(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone.Cone) {
+func sameKeep(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone.Cone) (joined int) {
 	t.Helper()
 	ctx := context.Background()
 	q := r.DB()
@@ -269,10 +269,25 @@ func sameKeep(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone.Cone) {
 		t.Fatalf("%s: the memo's slot walk differs from a fresh one", c)
 	}
 	for cursor := int64(0); len(rids) > 0 && cursor <= int64(rids[len(rids)-1]); cursor++ {
-		if fresh.voids(cursor) != memo.voids(cursor) {
-			t.Fatalf("%s cursor=%d: fresh voids=%v, memo voids=%v", c, cursor, fresh.voids(cursor), memo.voids(cursor))
+		fv, ferr := fresh.voids(cursor)
+		mv, merr := memo.voids(cursor)
+		if ferr != nil || merr != nil {
+			t.Fatalf("%s cursor=%d: fresh voids %v, memo voids %v", c, cursor, ferr, merr)
+		}
+		if fv != mv {
+			t.Fatalf("%s cursor=%d: fresh voids=%v, memo voids=%v", c, cursor, fv, mv)
+		}
+		if fresh.joined != nil {
+			j, err := fresh.joined(cursor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if j {
+				joined++
+			}
 		}
 	}
+	return joined
 }
 
 // buildKeep is the keep set an origin's inventory applies for c under cl,
@@ -328,6 +343,18 @@ func (o *memoReads) HandleCompleted(_ context.Context, end HandleEnd) {
 // fresh one, for path cones, content and structural horizons, both rules;
 // and the memo extended rather than re-read for most of the run.
 func TestHorizonMemoEqualsFresh(t *testing.T) {
+	// §6.2.6: some world must move a leaves-rule meeting point under a
+	// cursor, or the void it causes goes unexercised.
+	joinedAfter := map[int64]int{}
+	t.Cleanup(func() {
+		total := 0
+		for _, n := range joinedAfter {
+			total += n
+		}
+		if total == 0 && !t.Failed() {
+			t.Error("no world voided a cursor by a check-in joining the held set")
+		}
+	})
 	for seed := int64(1); seed <= 8; seed++ {
 		t.Run(fmt.Sprint(seed), func(t *testing.T) {
 			ctx := context.Background()
@@ -336,7 +363,7 @@ func TestHorizonMemoEqualsFresh(t *testing.T) {
 			if memo == nil {
 				t.Fatal("an origin over a pool DB has no memo")
 			}
-			extended, full := 0, 0
+			extended, full, joined := 0, 0, 0
 			for step := 0; step < 40; step++ {
 				switch n := w.rng.Intn(10); {
 				case n < 4 || len(w.pending) == 0:
@@ -371,12 +398,13 @@ func TestHorizonMemoEqualsFresh(t *testing.T) {
 					extended++
 				}
 				for _, c := range cones {
-					sameKeep(t, w.r, v, c)
+					joined += sameKeep(t, w.r, v, c)
 				}
 			}
 			if extended == 0 {
 				t.Fatalf("the memo never extended (%d full reads)", full)
 			}
+			joinedAfter[seed] = joined
 		})
 	}
 }

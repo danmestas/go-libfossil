@@ -177,31 +177,56 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 
 // mergeBase is the common ancestor the merge diffs against, as fossil's
 // merge_cmd chooses it (merge.c, pivot_set_primary(mid) through pid =
-// pivot_find(0)): the pivot of the merged-in version, primary, and the
-// checkout's version together with every check-in already merged into it,
-// the vmerge rows with id 0. opts.Baseline overrides it, as --baseline does.
-// The name pivot renames are followed from is merge.FollowRenames'.
+// pivot_find(0)): the pivot of the merged-in version, primary, and
+// MergeSecondaries. opts.Baseline overrides it, as --baseline does. The name
+// pivot renames are followed from is merge.FollowRenames'.
 func (c *Checkout) mergeBase(vid libfossil.FslID, opts MergeOpts) (merge.Pivot, error) {
 	if opts.Baseline > 0 {
 		return merge.Pivot{RID: opts.Baseline}, nil
 	}
+	secondaries, err := c.mergeSecondaries(vid)
+	if err != nil {
+		return merge.Pivot{}, err
+	}
+	return merge.FindPivot(context.Background(), c.repo, merge.PivotQuery{Primary: opts.Version, Secondaries: secondaries})
+}
+
+// MergeSecondaries is the checkout's side of the next merge's pivot, as
+// fossil's merge_cmd sets it: the checkout's version, then every check-in
+// already merged into it, the vmerge rows with id 0. A pending cherry-pick,
+// backout or integrate is not one (draft-fossil-horizon-00 §6.2.4).
+func (c *Checkout) MergeSecondaries() ([]libfossil.FslID, error) {
+	if c == nil {
+		panic("checkout.MergeSecondaries: nil *Checkout")
+	}
+	vid, _, err := c.Version()
+	if err != nil {
+		return nil, fmt.Errorf("checkout.MergeSecondaries: %w", err)
+	}
+	if vid <= 0 {
+		return nil, fmt.Errorf("checkout.MergeSecondaries: nothing is checked out")
+	}
+	return c.mergeSecondaries(vid)
+}
+
+func (c *Checkout) mergeSecondaries(vid libfossil.FslID) ([]libfossil.FslID, error) {
 	secondaries := []libfossil.FslID{vid}
 	rows, err := c.db.Query("SELECT merge FROM vmerge WHERE id=0")
 	if err != nil {
-		return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+		return nil, fmt.Errorf("pending merges: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var rid int64
 		if err := rows.Scan(&rid); err != nil {
-			return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+			return nil, fmt.Errorf("pending merges: %w", err)
 		}
 		secondaries = append(secondaries, libfossil.FslID(rid))
 	}
 	if err := rows.Err(); err != nil {
-		return merge.Pivot{}, fmt.Errorf("pending merges: %w", err)
+		return nil, fmt.Errorf("pending merges: %w", err)
 	}
-	return merge.FindPivot(context.Background(), c.repo, merge.PivotQuery{Primary: opts.Version, Secondaries: secondaries})
+	return secondaries, nil
 }
 
 // mergePlan is a merge worked out in full before anything is changed.

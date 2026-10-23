@@ -117,10 +117,12 @@ func Entries(q db.Querier, c libfossil.FslID, k []libfossil.FslID) ([]libfossil.
 // out, as zit leaves them out (src/sync.zig composeSeed).
 //
 // The D card is the latest mtime among the rows the seed summarizes, not the
-// time of minting (§6.2.3's SHOULD, which zit follows): two mints over
-// unchanged state then yield one name. A fractional latest mtime is rounded
-// up to the next whole second, so D is never earlier than the latest event
-// (§5.2.2); zit truncates instead. The U card is login, the origin's.
+// time of minting, rounded up to a whole second and written with no fraction
+// (§5.2.2): never earlier than the latest event, and the same at every origin,
+// so two mints over unchanged state yield one name. The U card is login, the
+// origin's label for the minting implementation. With no row in force there
+// is nothing to seed: a control artifact needs a T card, so Mint returns
+// ErrNothingToSeed where zit mints a seed of no T card dated at C.
 func Mint(q db.Querier, c libfossil.FslID, k []libfossil.FslID, login string) (string, []byte, error) {
 	if q == nil {
 		panic("seed.Mint: q must not be nil")

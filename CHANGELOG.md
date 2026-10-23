@@ -220,6 +220,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classification memo also no longer reads a stale name for an artifact
   appended without growing any of its lists. Interoperates with zit at
   `3a2df62515` both ways, at both depths.
+- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
+  `24457c7dd6`. The merge-base query takes the list form of §6.2.4: a
+  primary and one or two secondaries, answered with the query repeated and
+  Fossil's pivot over the set appended (`MergeBaseOf` is now a
+  `MergeBaseQuery`); an origin answers nothing when it lacks a named
+  check-in. `Checkout.MergeContext` asks the origin whenever either side's
+  ancestry crosses the horizon (§5.5), even when its own walk finds a base,
+  naming the merged-in version over the checkout and its pending plain
+  merges, and refuses a merge that must ask with two merges already
+  pending. A seed's U card is the minting implementation's label,
+  `go-libfossil`, never a login (§5.2.2). A refused deepen names its
+  remedy, a fresh clone with an earlier horizon (§5.8). Under the leaves
+  rule a fork that moves a meeting point deeper voids every cursor handed
+  out before it (§6.2.6), so the blobs of the older check-ins that join K
+  are announced. Interoperates with zit at `24457c7dd6` both ways: the
+  list-form merge base, the structural store's fallback discarding its
+  seed, and the parents of a held baseline labelled as boundary hashes.
 
 ## [0.14.0] - 2026-10-21
 

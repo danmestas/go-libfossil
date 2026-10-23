@@ -50,7 +50,7 @@ var (
 	horizonStructSeedRefused = Case{ID: "horizon.6.2.3.seed-refused", Req: "HZ-5.2-4"}
 	horizonStructAdvertise   = Case{ID: "horizon.6.2.3.advertise", Req: "HZ-6.2-6"}
 	horizonStructServed      = Case{ID: "horizon.6.2.5.structural-served", Req: "HZ-6.2-8"}
-	horizonStructFallback    = Case{ID: "horizon.6.3.structural-fallback", Req: "HZ-6.3-1"}
+	horizonStructFallback    = Case{ID: "horizon.6.3.structural-fallback", Req: "HZ-6.3-2"}
 	horizonStructCommit      = Case{ID: "horizon.5.7.ordinary-commit", Req: "HZ-5.7-1"}
 	horizonStructLeaves      = Case{ID: "horizon.3.1.structural-leaves", Req: "HZ-3.1-4"}
 	horizonStructVerify      = Case{ID: "horizon.5.4.verify-below", Req: "HZ-5.4-1"}
@@ -753,7 +753,7 @@ func (p *hzRewritingPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfe
 // file the request names as its seed.
 func hzStructSeedRefused(t *testing.T) error {
 	x := newHZStruct(t)
-	name, data, err := x.s.mint("origin")
+	name, data, err := x.s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}
@@ -786,7 +786,7 @@ func conePragmaCards(x *hzStruct) []xfer.Card {
 // answered content, with no seed and no labels.
 func hzStructAdvertise(t *testing.T) error {
 	x := newHZStruct(t)
-	name, _, err := x.s.mint("origin")
+	name, _, err := x.s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}

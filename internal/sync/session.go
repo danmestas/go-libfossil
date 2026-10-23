@@ -55,10 +55,10 @@ type SyncOpts struct {
 	// SeedVerifier checks a structural horizon's seed against the origin's
 	// key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned seed.
 	SeedVerifier seed.Verifier
-	// MergeBaseOf, when set, asks the origin for the merge base of the two
-	// check-ins it names by full hash (draft-fossil-horizon-00 §6.2.4), once,
-	// in the first request; it needs Pull. The answer is in the result.
-	MergeBaseOf [2]string
+	// MergeBaseOf, when set, asks the origin for the merge base it names
+	// (draft-fossil-horizon-00 §6.2.4), once, in the first request; it needs
+	// Pull, and one or two secondaries. The answer is in the result.
+	MergeBaseOf MergeBaseQuery
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -325,6 +325,11 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 			panic("sync.Sync: result must not be nil on success")
 		}
 	}()
+
+	if opts.MergeBaseOf.Primary != "" && !opts.MergeBaseOf.valid() {
+		return nil, fmt.Errorf("sync: a merge-base query names full hashes and one or two secondaries (horizon §6.2.4): %q",
+			opts.MergeBaseOf.hashes())
+	}
 
 	obs := resolveObserver(opts.Observer)
 	var clock simio.Clock

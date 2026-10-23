@@ -126,8 +126,10 @@ func TestZitHorizonStructuralInterop(t *testing.T) {
 	}
 }
 
-// seedLoginGo is the U card go-libfossil's origin mints seeds with.
-const seedLoginGo = "origin"
+// seedLoginGo is the U card go-libfossil's origin mints seeds with: the
+// origin's label for the minting implementation (§5.2.2), as zit's is
+// "zit-serve".
+const seedLoginGo = "go-libfossil"
 
 // hzStructZitServed checks zit's structural requests and go-libfossil's
 // replies: every horizon request carries horizon-structural and a seed offer,

@@ -55,6 +55,9 @@ type sparseKeep struct {
 	slots *content.SlotKeep
 	// read is how many artifacts the classification read from the store.
 	read int
+	// joined reports a cursor from before the held set gained a check-in
+	// at or below it (horizon §6.2.6); nil without a horizon.
+	joined func(cursor int64) (bool, error)
 }
 
 // withStructure makes k keep, of the store's manifests and nodes, only those
@@ -129,6 +132,8 @@ func newSparseKeepWith(ctx context.Context, q db.Querier, c *cone.Cone, cl class
 	if k.clusters, err = clusterRIDs(ctx, q); err != nil {
 		return nil, err
 	}
+	h, _ := c.Horizon()
+	k.joined = func(cursor int64) (bool, error) { return cl.joinedAfter(ctx, q, h, cursor) }
 	return k, nil
 }
 
@@ -211,10 +216,20 @@ func (k *sparseKeep) withholds(rid libfossil.FslID) bool {
 	return k != nil && k.walk == nil && k.slots.Withholds(rid)
 }
 
-// voids reports a cursor from before the slot walk kept some older node
-// (horizon §6.2.6).
-func (k *sparseKeep) voids(cursor int64) bool {
-	return k != nil && k.walk == nil && k.slots.Voids(cursor)
+// voids reports a cursor from before the classification kept something
+// older (horizon §6.2.6): a node the slot walk kept, or a check-in that
+// joined the held set.
+func (k *sparseKeep) voids(cursor int64) (bool, error) {
+	if k == nil || k.walk != nil {
+		return false, nil
+	}
+	if k.slots.Voids(cursor) {
+		return true, nil
+	}
+	if k.joined == nil {
+		return false, nil
+	}
+	return k.joined(cursor)
 }
 
 func (k *sparseKeep) sourceKept(rid int) bool {

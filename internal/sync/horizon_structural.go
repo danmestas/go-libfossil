@@ -19,10 +19,10 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// seedLogin is the U card of the seeds this origin mints (§5.2.1: the
-// origin's login). A server answers as no user of its own, so the seed names
-// the role, as zit's names "zit-serve".
-const seedLogin = "origin"
+// seedLogin is the U card of the seeds this origin mints: the origin's own
+// label for the minting implementation, as zit's is "zit-serve", never a
+// user's login, since a seed is a tag application no user made (§5.2.2).
+const seedLogin = "go-libfossil"
 
 // structuralServe is what an origin computed for one structural request
 // (draft-fossil-horizon-00 §6.2): the manifests and nodes K's trees reach,

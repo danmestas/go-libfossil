@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -14,26 +15,62 @@ import (
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// horizonMergeBasePragma asks an origin for the merge base of two check-ins,
-// `pragma horizon-mergebase A B`, and carries its answer, `pragma
-// horizon-mergebase A B BASE`, BASE being - when the two share no ancestor
+// horizonMergeBasePragma asks an origin for Fossil's pivot of a primary
+// check-in over one or two secondaries, `pragma horizon-mergebase PRIMARY
+// SECONDARY...`, and carries its answer, the query's hashes repeated in the
+// order asked with the base appended, - when they share no ancestor
 // (draft-fossil-horizon-00 §6.2.4).
 const horizonMergeBasePragma = "horizon-mergebase"
 
 // noMergeBase is the answer naming no common ancestor.
 const noMergeBase = "-"
 
+// maxMergeBaseSecondaries is the most secondaries one query carries. A card
+// handler sees six tokens, so an answer repeats at most three hashes before
+// the base (§6.2.4); an origin answers no query naming more.
+const maxMergeBaseSecondaries = 2
+
 // mergeBaseNodes bounds the check-ins one merge-base answer visits (§8: the
 // bound of the origin's other graph walks, horizon.HeldSet's among them).
 const mergeBaseNodes = 1 << 20
 
-// mergeBaseQuery reads a merge-base query: two well-formed hashes, or ok
-// false, which leaves the pragma ignored like any it does not know.
-func mergeBaseQuery(p *xfer.PragmaCard) ([2]string, bool) {
-	if len(p.Values) != 2 || !hash.IsValidHash(p.Values[0]) || !hash.IsValidHash(p.Values[1]) {
-		return [2]string{}, false
+// MergeBaseQuery is one merge-base question (§6.2.4), every check-in named
+// by full hash: in a merge the primary is the check-in merged in, and the
+// secondaries the checkout's version and each plain merge pending in it.
+// The zero value asks nothing.
+type MergeBaseQuery struct {
+	Primary     string
+	Secondaries []string
+}
+
+// hashes is the query as the wire spells it, primary first.
+func (q MergeBaseQuery) hashes() []string {
+	return append([]string{q.Primary}, q.Secondaries...)
+}
+
+// valid reports whether q is a query a card can carry: a primary and one
+// or two secondaries, every one a well-formed hash.
+func (q MergeBaseQuery) valid() bool {
+	if len(q.Secondaries) == 0 || len(q.Secondaries) > maxMergeBaseSecondaries {
+		return false
 	}
-	return [2]string{p.Values[0], p.Values[1]}, true
+	for _, h := range q.hashes() {
+		if !hash.IsValidHash(h) {
+			return false
+		}
+	}
+	return true
+}
+
+// parseMergeBaseQuery reads a merge-base query, or ok false, which leaves
+// the pragma ignored like any it does not know: a malformed hash, or more
+// secondaries than an answer could repeat.
+func parseMergeBaseQuery(p *xfer.PragmaCard) (MergeBaseQuery, bool) {
+	if len(p.Values) < 2 {
+		return MergeBaseQuery{}, false
+	}
+	q := MergeBaseQuery{Primary: p.Values[0], Secondaries: slices.Clone(p.Values[1:])}
+	return q, q.valid()
 }
 
 // answerMergeBase appends the answer to the request's merge-base query, if
@@ -42,41 +79,50 @@ func mergeBaseQuery(p *xfer.PragmaCard) ([2]string, bool) {
 // base is drawn from.
 func (h *handler) answerMergeBase(ctx context.Context) error {
 	q := h.mergeBaseQuery
-	if q == [2]string{} || !h.pullOK {
+	if q.Primary == "" || !h.pullOK {
 		return nil
 	}
-	base, ok, err := originMergeBase(ctx, h.repo, q[0], q[1], mergeBaseNodes)
+	base, ok, err := originMergeBase(ctx, h.repo, q, mergeBaseNodes)
 	if errors.Is(err, merge.ErrBound) {
 		return nil // unanswered: the client reads it as "deepen by hand"
 	}
 	if err != nil || !ok {
 		return err
 	}
-	h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonMergeBasePragma, Values: []string{q[0], q[1], base}})
+	h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonMergeBasePragma, Values: append(q.hashes(), base)})
 	return nil
 }
 
-// originMergeBase is the merge base of the check-ins named a and b, the
-// pivot fossil's merge of b into a checkout of a finds (merge.FindPivot),
-// bounded by limit: the base's hash, or noMergeBase when they share no
-// ancestor. ok is false when either is not a check-in the repository holds,
-// or the walk reaches one it does not hold: a store answers only from
-// history it holds.
-func originMergeBase(ctx context.Context, r *repo.Repo, a, b string, limit int) (string, bool, error) {
+// originMergeBase is the base of q, Fossil's pivot of its primary over its
+// secondaries (merge.FindPivot), bounded by limit: the base's hash, or
+// noMergeBase when they share no ancestor. ok is false when any named
+// check-in is not one the repository holds, or the walk reaches one it does
+// not hold: a store answers only from history it holds, since - would be a
+// claim about history it cannot see.
+func originMergeBase(ctx context.Context, r *repo.Repo, q MergeBaseQuery, limit int) (string, bool, error) {
 	if ctx == nil || r == nil {
 		panic("sync.originMergeBase: nil context or repo")
 	}
-	ra, okA, err := heldCheckin(r, a)
-	if err != nil || !okA {
+	if !q.valid() {
+		panic("sync.originMergeBase: malformed query")
+	}
+	primary, ok, err := heldCheckin(r, q.Primary)
+	if err != nil || !ok {
 		return "", false, err
 	}
-	rb, okB, err := heldCheckin(r, b)
-	if err != nil || !okB {
-		return "", false, err
+	var secondaries []libfossil.FslID
+	for _, s := range q.Secondaries {
+		rid, ok, err := heldCheckin(r, s)
+		if err != nil || !ok {
+			return "", false, err
+		}
+		if rid != primary {
+			secondaries = append(secondaries, rid)
+		}
 	}
-	base := ra
-	if ra != rb {
-		p, err := merge.FindPivot(ctx, r, merge.PivotQuery{Primary: rb, Secondaries: []libfossil.FslID{ra}, Limit: limit})
+	base := primary
+	if len(secondaries) == len(q.Secondaries) {
+		p, err := merge.FindPivot(ctx, r, merge.PivotQuery{Primary: primary, Secondaries: secondaries, Limit: limit})
 		if p.Unheld {
 			return "", false, nil
 		}
@@ -116,16 +162,24 @@ func heldCheckin(r *repo.Repo, uuid string) (libfossil.FslID, bool, error) {
 
 // mergeBaseAnswer reads an answer to the query asked: the base's hash, or ""
 // when the origin names no common ancestor. ok is false for any other pragma
-// of the name, which is ignored.
-func mergeBaseAnswer(p *xfer.PragmaCard, asked [2]string) (string, bool) {
-	if len(p.Values) != 3 || !strings.EqualFold(p.Values[0], asked[0]) || !strings.EqualFold(p.Values[1], asked[1]) {
+// of the name, one whose hashes do not repeat the query in order among them,
+// which is ignored.
+func mergeBaseAnswer(p *xfer.PragmaCard, asked MergeBaseQuery) (string, bool) {
+	want := asked.hashes()
+	if len(p.Values) != len(want)+1 {
 		return "", false
 	}
-	if p.Values[2] == noMergeBase {
+	for i, h := range want {
+		if !strings.EqualFold(p.Values[i], h) {
+			return "", false
+		}
+	}
+	base := p.Values[len(want)]
+	if base == noMergeBase {
 		return "", true
 	}
-	if !hash.IsValidHash(strings.ToLower(p.Values[2])) {
+	if !hash.IsValidHash(strings.ToLower(base)) {
 		return "", false
 	}
-	return strings.ToLower(p.Values[2]), true
+	return strings.ToLower(base), true
 }

@@ -45,7 +45,7 @@ func PostXfer(ctx context.Context, client *http.Client, target, contentType, log
 	}
 	c := *client
 	c.CheckRedirect = func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
+		return errStopRedirect
 	}
 	for left := maxRedirects; ; {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target,

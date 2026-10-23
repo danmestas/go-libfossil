@@ -128,7 +128,7 @@ func linkedMarkerPair(a, b string) *markerPairError {
 	}
 	ni, nerr := os.Lstat(native)
 	pi, perr := os.Lstat(private)
-	if nerr != nil || perr != nil || !ni.Mode().IsRegular() || !os.SameFile(ni, pi) {
+	if nerr != nil || perr != nil || !ni.Mode().IsRegular() || !sameFile(ni, pi) {
 		return nil
 	}
 	return &markerPairError{native: native, private: private}

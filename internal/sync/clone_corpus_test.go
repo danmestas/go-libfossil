@@ -13,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // TestCorpusClone clones a copy of the repository LIBFOSSIL_CORPUS names over
@@ -61,7 +62,15 @@ func TestCorpusClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	horizon := corpusAncestor(t, origin, tip, 1000)
-	server := httptest.NewServer(XferHandler(origin, HandleSync))
+	// A failed request reaches the client only as an HTTP status.
+	serve := func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Message, error) {
+		resp, err := HandleSync(ctx, r, req)
+		if err != nil {
+			t.Logf("origin: %v", err)
+		}
+		return resp, err
+	}
+	server := httptest.NewServer(XferHandler(origin, serve))
 	t.Cleanup(server.Close)
 
 	for _, mode := range modes {

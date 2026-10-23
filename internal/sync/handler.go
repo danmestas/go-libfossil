@@ -283,6 +283,11 @@ type handler struct {
 	// cloneRead is Read derived from Clone before any login, as page_xfer
 	// derives it from nobody's capabilities ahead of its card loop.
 	cloneRead bool
+
+	// sources memoizes forwardableSource for the request, whose snapshot
+	// does not change under it: a round's chain walks and sentEarlier's
+	// searches ask about the same rows again and again.
+	sources map[int]forwardable
 }
 
 func (h *handler) initAuth() {
@@ -2195,6 +2200,28 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 // keeps as a source, public unless the clone takes private content, and no
 // tree the §7.2 gate withholds from this client.
 func (h *handler) forwardableSource(src int) (cloneBlobRow, bool, error) {
+	if f, ok := h.sources[src]; ok {
+		return f.info, f.ok, nil
+	}
+	info, ok, err := h.decideSource(src)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if h.sources == nil {
+		h.sources = make(map[int]forwardable)
+	}
+	h.sources[src] = forwardable{info: info, ok: ok}
+	return info, ok, nil
+}
+
+// forwardable is a memoized forwardableSource verdict.
+type forwardable struct {
+	info cloneBlobRow
+	ok   bool
+}
+
+// decideSource is forwardableSource without the memo.
+func (h *handler) decideSource(src int) (cloneBlobRow, bool, error) {
 	info, ok, err := h.loadCloneBlob(src)
 	if err != nil || !ok {
 		return cloneBlobRow{}, false, err

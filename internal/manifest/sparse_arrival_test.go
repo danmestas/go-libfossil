@@ -58,7 +58,9 @@ func TestSparseParentAndSubtreeArrivalOrders(t *testing.T) {
 			if _, err := Crosslink(f.f.r); err != nil {
 				t.Fatal(err)
 			}
-			f.assertChild(t, 0, 0, 1)
+			// The parent is absent, so the child's spine is published against
+			// its phantom while its orphan row keeps the mlinks waiting.
+			f.assertChild(t, 1, 0, 1)
 			for i := 0; i < 2; i++ {
 				j := i
 				if reverse {
@@ -69,11 +71,7 @@ func TestSparseParentAndSubtreeArrivalOrders(t *testing.T) {
 					t.Fatal(err)
 				}
 				if i == 0 {
-					events := 1
-					if reverse {
-						events = 0
-					}
-					f.assertChild(t, events, 0, 1)
+					f.assertChild(t, 1, 0, 1)
 				}
 			}
 			f.assertChild(t, 1, 1, 0)

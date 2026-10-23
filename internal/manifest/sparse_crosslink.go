@@ -116,12 +116,15 @@ func SparseCheckinReady(ctx context.Context, q db.Querier, cache *content.Cache,
 		return false, err
 	}
 	for _, uuid := range checkinSources(d) {
+		// An absent source has no file set to judge, and may never arrive:
+		// a structural horizon holds no manifest below it, and an origin can
+		// lack an artifact its own history names (fossil-scm.org's lacks
+		// five check-ins' parents). The check-in's spine is published as a
+		// dense store publishes it, against the phantom; its orphan row keeps
+		// mlink derivation waiting on the source.
 		parent, ok := content.AvailableByUUID(q, uuid)
-		if !ok && belowStructural(c) {
-			continue
-		}
 		if !ok {
-			return false, nil
+			continue
 		}
 		data, err := cache.Expand(q, parent)
 		if err != nil {

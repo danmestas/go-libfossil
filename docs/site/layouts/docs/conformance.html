@@ -1,0 +1,43 @@
+{{- /* The conformance reference: Hextra's docs page, then one table per draft
+       rendered from data/conformance.json (scripts/gen-docs.sh). */ -}}
+{{ define "main" }}
+  <div class='hx:mx-auto hx:flex hextra-max-page-width'>
+    {{ partial "sidebar.html" (dict "context" .) }}
+    {{ partial "toc.html" . }}
+    <article class="hx:w-full hx:break-words hx:flex hx:min-h-[calc(100vh-var(--navbar-height))] hx:min-w-0 hx:justify-center hx:pb-8 hx:pr-[calc(env(safe-area-inset-right)-1.5rem)]">
+      <main id="content" class="hx:w-full hx:min-w-0 hextra-max-content-width hx:px-6 hx:pt-4 hx:md:px-12">
+        {{ partial "breadcrumb.html" (dict "page" . "enable" true) }}
+        <div class="content">
+          <h1>{{ .Title }}</h1>
+          {{ .Content }}
+          {{- $conf := hugo.Data.conformance }}
+          <table class="conformance-summary">
+            <thead><tr><th>Draft</th><th>Requirements</th><th>Covered</th><th>Partial</th><th>Deviation</th><th>Failing</th><th>Gap</th><th>Cases</th></tr></thead>
+            <tbody>
+            {{- range $conf.suites }}
+              <tr><td><a href="#{{ .suite }}">{{ .title }}</a></td><td>{{ .requirements }}</td><td>{{ .covered }}</td><td>{{ .partial }}</td><td>{{ .deviation }}</td><td>{{ .failing }}</td><td>{{ .gap }}</td><td>{{ .cases }}</td></tr>
+            {{- end }}
+              <tr><td><strong>All drafts</strong></td><td><strong>{{ $conf.requirements }}</strong></td><td><strong>{{ $conf.covered }}</strong></td><td><strong>{{ $conf.partial }}</strong></td><td colspan="4"></td></tr>
+            </tbody>
+          </table>
+          {{- range $conf.suites }}
+          <h2 id="{{ .suite }}">{{ .title }}</h2>
+          <p><a href="https://github.com/danmestas/go-libfossil/blob/main/conformance/rfcs/{{ .draft }}.txt"><code>{{ .draft }}</code></a>: {{ .requirements }} requirements, {{ .covered }} covered{{ with .partial }}, {{ . }} partial{{ end }}{{ with .deviation }}, {{ . }} deviation{{ end }}{{ with .failing }}, {{ . }} failing{{ end }}{{ with .gap }}, {{ . }} without a case{{ end }}; {{ .cases }} cases.</p>
+          <div class="conformance-scroll"><table class="conformance-rows">
+            <thead><tr><th>Requirement</th><th>§</th><th>Text</th><th>Status</th><th>Cases</th></tr></thead>
+            <tbody>
+            {{- range .rows }}
+              <tr><td><code>{{ .id }}</code></td><td>{{ .section }}</td><td>{{ .text }}{{ with .notes }}<br><span class="conformance-note">{{ . }}</span>{{ end }}</td><td><span class="conformance-status conformance-{{ lower .status }}">{{ lower .status }}</span></td><td>{{ .cases }}</td></tr>
+            {{- end }}
+            </tbody>
+          </table></div>
+          {{- end }}
+        </div>
+        {{ partial "components/last-updated.html" . }}
+        {{- if (site.Params.page.displayPagination | default true) -}}
+          {{- partial "components/pager.html" . -}}
+        {{- end -}}
+      </main>
+    </article>
+  </div>
+{{ end }}

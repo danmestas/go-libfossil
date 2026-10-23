@@ -2,6 +2,7 @@
 title: Architecture
 weight: 10
 aliases: ["/docs/architecture/"]
+description: The packages of go-libfossil, the SQLite driver layer, the observer interfaces and the deterministic simulator.
 ---
 
 <svg viewBox="0 0 640 260" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:auto;margin:0 auto 1.5rem;color:currentColor;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-width:720px">

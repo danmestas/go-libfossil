@@ -1,0 +1,6 @@
+{{- /* Shortens an artifact name (40 or 64 hex digits) to 12 digits and an ellipsis; returns anything else unchanged. */ -}}
+{{- $s := . -}}
+{{- if and (ge (len $s) 40) (findRE `^[0-9a-f]+$` $s) -}}
+  {{- $s = printf "%s…" (substr $s 0 12) -}}
+{{- end -}}
+{{- return $s -}}

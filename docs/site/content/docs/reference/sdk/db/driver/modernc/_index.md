@@ -13,4 +13,4 @@ Importing this package registers a `modernc.org/sqlite` driver (driver name `"sq
 
 Use this driver when you want a static, CGo-free build with no native dependencies.
 
-See [db](../..) for the registry interface.
+See [db](/docs/reference/sdk/db/api/) for the registry interface.

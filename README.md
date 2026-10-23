@@ -21,7 +21,7 @@ Pure-Go library and CLI for [Fossil](https://fossil-scm.org) repositories. Drop-
 - **Drop-in compatible.** Repositories produced by upstream Fossil are readable, and vice versa — it's the same SQLite schema.
 - **Embeddable.** Use the full `Repo` API directly in your Go service. No subprocess calls, no temp files.
 - **Instrumented.** Sync and checkout observer interfaces make OpenTelemetry (or your own metrics) a few lines of code.
-- **Deterministically testable.** Deterministic simulation testing (DST) with [BUGGIFY](./docs/site/content/docs/testing.md#buggify) fault injection.
+- **Deterministically testable.** Deterministic simulation testing (DST) with [BUGGIFY](./docs/site/content/docs/guides/testing.md#buggify) fault injection.
 
 ## Installation
 
@@ -50,7 +50,7 @@ libfossil -R my.fossil repo annotate hello.txt
 libfossil -R my.fossil repo verify
 ```
 
-Full command list: `libfossil --help`. See [docs/migration-from-fossil.md](./docs/site/content/docs/migration-from-fossil.md) for a command-by-command comparison with upstream Fossil.
+Full command list: `libfossil --help`. See [docs/guides/migrating-from-fossil.md](./docs/site/content/docs/guides/migrating-from-fossil.md) for a command-by-command comparison with upstream Fossil.
 
 ## Library quick start
 
@@ -152,7 +152,7 @@ func main() {
 | `simio/` | Clock, Rand, Storage interfaces for deterministic testing |
 | `testutil/` | Shared test helpers |
 
-Deep dive: [docs/architecture.md](./docs/site/content/docs/architecture.md).
+Deep dive: [docs/concepts/architecture.md](./docs/site/content/docs/concepts/architecture.md).
 
 ## SQLite drivers
 
@@ -161,7 +161,7 @@ Deep dive: [docs/architecture.md](./docs/site/content/docs/architecture.md).
 | `modernc` (default) | `_ "github.com/danmestas/go-libfossil/db/driver/modernc"` | Default for any server, CLI, or desktop use |
 | `ncruces` | `_ "github.com/danmestas/go-libfossil/db/driver/ncruces"` | wasm targets (`GOOS=wasip1` or browser/OPFS) |
 
-Library embedders select exactly one driver with a blank import at link time; importing both panics. The shipped `cmd/libfossil` CLI uses `modernc` by default; `go build -tags test_ncruces ./cmd/libfossil` selects `ncruces`. See [docs/extension-points.md](./docs/site/content/docs/extension-points.md#sqlite-driver-interface) for the registration contract.
+Library embedders select exactly one driver with a blank import at link time; importing both panics. The shipped `cmd/libfossil` CLI uses `modernc` by default; `go build -tags test_ncruces ./cmd/libfossil` selects `ncruces`. See [docs/guides/extension-points.md](./docs/site/content/docs/guides/extension-points.md#sqlite-driver-interface) for the registration contract.
 
 ## Observers
 
@@ -175,7 +175,7 @@ import "github.com/danmestas/go-libfossil/observer/otel"
 obs := otel.NewSyncObserver()
 ```
 
-Both `SyncObserver` and `CheckoutObserver` are small interfaces you can implement directly. Details: [docs/extension-points.md](./docs/site/content/docs/extension-points.md#observer-interfaces).
+Both `SyncObserver` and `CheckoutObserver` are small interfaces you can implement directly. Details: [docs/guides/extension-points.md](./docs/site/content/docs/guides/extension-points.md#observer-interfaces).
 
 ## WASI / wasm
 
@@ -195,7 +195,7 @@ See [examples/wasm/](./examples/wasm/) for a runnable demo and current runtime c
 - `make test-all` — everything, including the binary build
 - `make setup-hooks` — install the pre-commit hook (~45s/commit)
 
-Test strategy — unit tests, dual-driver matrix, and deterministic simulation (DST) with BUGGIFY fault injection: [docs/testing.md](./docs/site/content/docs/testing.md).
+Test strategy — unit tests, dual-driver matrix, and deterministic simulation (DST) with BUGGIFY fault injection: [docs/guides/testing.md](./docs/site/content/docs/guides/testing.md).
 
 ## Documentation
 
@@ -207,10 +207,10 @@ Markdown sources: [`docs/site/content/`](./docs/site/content/).
 
 | Doc | Audience |
 |-----|----------|
-| [docs/architecture.md](./docs/site/content/docs/architecture.md) | Contributors learning the codebase |
-| [docs/testing.md](./docs/site/content/docs/testing.md) | Contributors writing or debugging tests |
-| [docs/extension-points.md](./docs/site/content/docs/extension-points.md) | Consumers adding observers or custom drivers |
-| [docs/migration-from-fossil.md](./docs/site/content/docs/migration-from-fossil.md) | Users coming from upstream `fossil` |
+| [docs/concepts/architecture.md](./docs/site/content/docs/concepts/architecture.md) | Contributors learning the codebase |
+| [docs/guides/testing.md](./docs/site/content/docs/guides/testing.md) | Contributors writing or debugging tests |
+| [docs/guides/extension-points.md](./docs/site/content/docs/guides/extension-points.md) | Consumers adding observers or custom drivers |
+| [docs/guides/migrating-from-fossil.md](./docs/site/content/docs/guides/migrating-from-fossil.md) | Users coming from upstream `fossil` |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Anyone submitting a PR |
 | [CHANGELOG.md](./CHANGELOG.md) | Release notes |
 

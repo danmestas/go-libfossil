@@ -1,111 +1,68 @@
 ---
-title: Quickstart
+title: "Quickstart: the CLI"
+linkTitle: Quickstart
 weight: 20
 aliases: ["/docs/quickstart/"]
 ---
 
-A five-minute tour of libfossil: clone a repo and read its history from Go.
+Create a repository, commit a file, and read the result with stock `fossil`. The `libfossil` command drives the same code as the library, and the file it writes is an ordinary Fossil repository.
 
-## Install
+## Create a repository and a checkout
 
 ```sh
-go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
-libfossil --help
+libfossil repo new notes.fossil
+mkdir work && cd work
+libfossil -R ../notes.fossil repo open .
 ```
 
-The binary is pure-Go and CGo-free — drop it on any host.
-
-## Clone a repository
-
-Clone using the Go API:
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/danmestas/go-libfossil"
-)
-
-func main() {
-    t := libfossil.NewHTTPTransport("https://example.com/repo.fossil")
-    repo, _, err := libfossil.Clone(context.Background(), "./repo.fossil", t, libfossil.CloneOpts{})
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer repo.Close()
-}
+```text
+created repository: notes.fossil
+opened checkout in . (repo: /home/ana/notes.fossil)
+empty repository -- no checkins yet
 ```
 
-## Open from Go
+`repo open` writes a `.fslckout` file in the directory. Commands run inside the checkout find the repository through it, so `-R` is only needed to open it.
 
-After cloning (above), open the same `.fossil` file from Go and read its history:
+## Commit
 
-```go
-package main
-
-import (
-    "fmt"
-    "log"
-
-    "github.com/danmestas/go-libfossil"
-)
-
-func main() {
-    repo, err := libfossil.Open("repo.fossil")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer repo.Close()
-
-    entries, err := repo.Timeline(libfossil.TimelineOpts{Limit: 10})
-    if err != nil {
-        log.Fatal(err)
-    }
-    for _, e := range entries {
-        fmt.Println(e.UUID, e.Comment)
-    }
-}
+```sh
+echo '# notes' > README.md
+libfossil repo add README.md
+libfossil repo ci -m "first notes" --user ana
 ```
 
-## Sync over HTTP
-
-```go
-package main
-
-import (
-    "context"
-    "log"
-
-    "github.com/danmestas/go-libfossil"
-)
-
-func main() {
-    repo, err := libfossil.Open("repo.fossil")
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer repo.Close()
-
-    t := libfossil.NewHTTPTransport("https://example.com/repo.fossil")
-    if _, err := repo.Sync(context.Background(), t, libfossil.SyncOpts{Pull: true}); err != nil {
-        log.Fatal(err)
-    }
-}
+```text
+ADDED    README.md
+checkin 542a963405 (rid=2)
 ```
 
-Or use the simpler `Pull` wrapper for pull-only workflows:
+The check-in name is the hash of the manifest, which includes the time, so yours differs. `--user` sets the name on the check-in; without it the OS user name is used.
 
-```go
-_, err := repo.Pull(context.Background(), "https://example.com/repo.fossil", libfossil.PullOpts{})
+## Read the history
+
+```sh
+libfossil repo timeline
 ```
 
-## Next steps
+```text
+542a963405  2026-10-23 21:00  ana  first notes
+```
 
-- [Architecture](../architecture) — how the pieces fit
-- [Production patterns](../production) — error handling, context, telemetry beyond `log.Fatal`
-- [Extension Points](../extension-points) — observers for telemetry, custom SQLite drivers
-- [Migration from Fossil](../migration-from-fossil) — command mapping from upstream
-- [SDK reference](../reference/sdk) — every package, every exported symbol
+The repository is a Fossil repository, so the `fossil` binary reads it unchanged:
+
+```sh
+fossil timeline -R ../notes.fossil
+```
+
+```text
+=== 2026-10-23 ===
+21:00:14 [542a963405] first notes (user: ana tags: trunk)
++++ no more data (1) +++
+```
+
+## Next
+
+- [Embed in Go](/docs/get-started/embed-in-go/): the same steps from a Go program.
+- [First sync](/docs/get-started/first-sync/): serve the repository and clone it.
+- [CLI reference](/docs/reference/cli/): every command and flag.
+- [Migrating from fossil](/docs/guides/migrating-from-fossil/): how the commands map to fossil's.

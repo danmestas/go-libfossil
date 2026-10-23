@@ -1,0 +1,77 @@
+/* Docs pages: Hextra, in the landing page's typography (Fraunces headings,
+   Inter text, JetBrains Mono code) with rust as the accent, in both themes.
+   The fonts load in layouts/_partials/custom/head-end.html. */
+
+:root {
+  --hx-font-sans: Inter, ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --hx-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --lf-serif: Fraunces, Georgia, "Times New Roman", serif;
+  /* Rust, darkened in the light theme so links keep 4.5:1 on white. */
+  --primary-hue: 16deg;
+  --primary-saturation: 66%;
+  --primary-lightness: 45%;
+}
+
+.dark {
+  /* The landing page's rust (#d9663b) on its umber. */
+  --primary-hue: 16deg;
+  --primary-saturation: 68%;
+  --primary-lightness: 54%;
+  --hx-color-dark: #14110d;
+}
+
+.content h1,
+.content h2,
+.content h3,
+.content h4,
+article h1 {
+  font-family: var(--lf-serif);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.content h1 { font-size: 2.4rem; line-height: 1.1; }
+.content h2 { font-size: 1.6rem; line-height: 1.2; }
+.content h3 { font-size: 1.25rem; }
+
+.content p,
+.content li { line-height: 1.7; }
+
+.content :not(pre) > code {
+  font-size: 0.86em;
+}
+
+/* The site title in the navbar, as the landing page sets its brand. */
+.lf-brand {
+  font-family: var(--lf-serif);
+  font-weight: 600;
+}
+
+/* Conformance reference tables (layouts/docs/conformance.html). */
+.conformance-scroll { overflow-x: auto; margin-top: 1rem; }
+.content table.conformance-rows { font-size: 0.85rem; display: table; width: 100%; }
+.content table.conformance-rows td { vertical-align: top; }
+.content table.conformance-rows td:nth-child(1),
+.content table.conformance-rows td:nth-child(2),
+.content table.conformance-rows td:nth-child(4),
+.content table.conformance-rows td:nth-child(5) { white-space: nowrap; }
+.content table.conformance-summary { font-size: 0.9rem; }
+.conformance-note { color: #6b6255; font-size: 0.8rem; }
+.dark .conformance-note { color: #a99c86; }
+.conformance-status {
+  font-family: var(--hx-font-mono);
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+}
+.conformance-covered { color: #4f6b3a; }
+.dark .conformance-covered { color: #9fb38a; }
+.conformance-partial,
+.conformance-deviation { color: #9a5a12; }
+.dark .conformance-partial,
+.dark .conformance-deviation { color: #e0b070; }
+.conformance-failing,
+.conformance-gap { color: #b3261e; }
+.dark .conformance-failing,
+.dark .conformance-gap { color: #f28b82; }

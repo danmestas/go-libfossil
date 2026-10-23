@@ -14,27 +14,33 @@ markup:
 
 menu:
   main:
-    - name: Docs
-      pageRef: /docs
+    - name: Get started
+      pageRef: /docs/get-started
       weight: 1
-    - name: SDK
-      pageRef: /docs/reference/sdk
+    - name: Concepts
+      pageRef: /docs/concepts
       weight: 2
-    - name: Examples
-      pageRef: /examples
+    - name: Guides
+      pageRef: /docs/guides
       weight: 3
-    - name: Search
+    - name: Reference
+      pageRef: /docs/reference
       weight: 4
-      params:
-        type: search
     - name: GitHub
       weight: 5
       url: "https://github.com/danmestas/go-libfossil"
       params:
         icon: github
+    - name: Search
+      weight: 6
+      params:
+        type: search
 
 params:
-  version: "0.4.2"
+  # version and goVersion are written by scripts/sync-version.sh from the
+  # latest release tag and go.mod; do not edit them by hand.
+  version: "0.15.0"
+  goVersion: "1.26.0"
 
   navbar:
     displayTitle: true

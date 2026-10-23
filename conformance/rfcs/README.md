@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `3a2df62515` (branch `horizon-rfc`) | `360f8c9d9b` | `037f9ad4cb1eeed0…` |
+| `draft-fossil-horizon-00.txt` | `24457c7dd6` (branch `horizon-rfc`) | `d0f95017df` | `332387c274567ed5…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,25 +57,37 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`3a2df62515` (2026-10-22). Against the `9bf7ebfe0f` copy it replaces
-(`bbd1435674`, the revision zit's author called ready to implement
-against, plus the zit#266 correction to §4.5, which binds the cluster
-prohibition to an origin that serves at a horizon and has a clone request
-what a horizon-ignorant origin's clusters name) it changes one rule: a
-path cone elides sub-manifest nodes under either horizon, as the sparse
-store of the sparse-cone draft's §5.1 does. Of the trees the horizon
-keeps, every check-in's under a content horizon, only the nodes on paths
-into the cone are held and an origin withholds the rest (§3.2, §4.1,
-§5.1, §6.2); the derivation reads no node (§4.3); §6.2 states how the
-origin's walk is bounded and kept; and §6.2.6 voids a cursor when an
-appended tree makes an older withheld node kept. The other six drafts and
-the sparse-cone text there are byte-identical at both check-ins. Its
-Appendix C lists every change to the earlier text: that rule; the leaves
-rule restated over P cards alone, with K closed under descendants
-under both rules (§3.1, §3.4); the seed carrying T cards for every entry
-of K, not C alone (§5.2.1); the cursor's announcements made only in reply
-to a request that pulls (§6.2.6); and, from the revision before, the
-cursor itself and the classification-memoization SHOULDs (§6.1, §6.2). The same
-branch adds the pragma names these two drafts define (`cone`, `cone-not`,
+`24457c7dd6` (2026-10-22). The other six drafts are byte-identical at
+`3a2df62515` and `24457c7dd6`; against the `3a2df62515` copy it replaces,
+the horizon draft's Appendix C adds one bullet per change: §3.4 notes that the leaves rule can hold
+effectively the whole history when childless check-ins fork near the root,
+measured on the Fossil repository (no rule change); a seed's D card is the
+latest tag event it summarizes rounded up to a whole second with no
+fraction (C's event time when it summarizes none), so two origins mint the
+same seed up to the U card, which is the origin's own label for the
+minting implementation and not a user's login (§5.2, §5.2.2, §6.2.3); the
+requirement that a seed's D be strictly later than the seed it replaces is
+dropped, since a clone replaces its seed whole (§5.2.2); a store at the
+structural horizon whose pull or sync replies lack horizon-served
+structural falls back to the content horizon, records it, discards its
+seed, fetches the manifests and nodes below C and reports it, as a clone
+does (§6.2.5, §6.3); a client asks the origin for the merge base whenever
+either side's ancestry crosses the horizon, not only when it finds none
+(§5.5); a deepen moves C to a common ancestor of C and the target, and
+when none is known refuses naming the remedy, never moving C to a
+non-ancestor (§5.8); the merge-base query takes a primary and one or two
+secondaries, the answer repeats them and appends Fossil's pivot over the
+set, and in a merge the secondaries are the checkout and its pending plain
+merges (§6.2.4); and a boundary hash is a P-card parent, not in K, of any
+held check-in manifest, a baseline below C included, labelled in the reply
+that introduces the manifest (§5.3, §6.2.2). The `3a2df62515` copy it
+replaced made a path cone elide sub-manifest nodes under either horizon,
+an origin withholding the rest, its walk bounded and kept, and a cursor
+voided when an appended tree makes an older withheld node kept (§3.2,
+§4.1, §4.3, §5.1, §6.2, §6.2.6); with the revisions before it, the leaves
+rule restated over P cards alone, the seed carrying T cards for every
+entry of K, the cursor's announcements made only in reply to a request
+that pulls, the cursor itself and the classification-memoization SHOULDs.
+The same branch adds the pragma names these two drafts define (`cone`, `cone-not`,
 and the `horizon` family) to the sync draft's §9 list of extension pragmas;
 the sync draft here follows trunk, so that addition is pending.

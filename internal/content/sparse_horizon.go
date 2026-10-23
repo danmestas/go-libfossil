@@ -175,6 +175,9 @@ type treeWalk struct {
 	files   map[string]bool
 	visited map[string]bool
 	pending []string
+	// memo, when set, serves pieces a memo already read and keeps those
+	// this walk reads (§6.2).
+	memo *MemoView
 }
 
 func (w *treeWalk) push(uuid string) {
@@ -201,31 +204,40 @@ func (w *treeWalk) named(roots []libfossil.FslID) (map[string]bool, error) {
 		}
 		uuid := w.pending[len(w.pending)-1]
 		w.pending = w.pending[:len(w.pending)-1]
-		d, err := w.read(uuid)
+		p, err := w.read(uuid)
 		if err != nil {
 			return nil, err
 		}
-		for _, f := range d.F {
-			if f.UUID != "" {
-				w.files[f.UUID] = true
-			}
+		for _, f := range p.files {
+			w.files[f] = true
 		}
-		w.push(d.B)
-		for _, s := range d.S {
-			w.push(s.UUID)
+		w.push(p.b)
+		for _, s := range p.s {
+			w.push(s)
 		}
 	}
 	return w.files, nil
 }
 
-// read returns the check-in or sub-manifest uuid names, or an empty deck for
-// a piece the walk skips. Its size is charged before it is expanded.
-func (w *treeWalk) read(uuid string) (*deck.Deck, error) {
+// read returns the piece of the check-in or sub-manifest uuid names, or an
+// empty piece for one the walk skips. Its size is charged before it is
+// expanded, and charged alike when the memo serves it, so a walk fails its
+// budget exactly where a fresh one does.
+func (w *treeWalk) read(uuid string) (*treePiece, error) {
+	if w.memo != nil {
+		if p := w.memo.tree(uuid); p != nil {
+			if p.size > w.budget-w.work.TreeBytes {
+				return nil, fmt.Errorf("horizon: tree byte budget exceeded")
+			}
+			w.work.TreeBytes += p.size
+			return p, nil
+		}
+	}
 	var rid libfossil.FslID
 	var size int64
 	err := w.q.QueryRow("SELECT rid, size FROM blob WHERE uuid=? AND size>=0", uuid).Scan(&rid, &size)
 	if errors.Is(err, sql.ErrNoRows) {
-		return &deck.Deck{}, nil
+		return &treePiece{}, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("horizon: tree piece %s: %w", uuid, err)
@@ -235,13 +247,20 @@ func (w *treeWalk) read(uuid string) (*deck.Deck, error) {
 	}
 	w.work.TreeReads++
 	w.work.TreeBytes += size
+	if w.memo != nil {
+		w.memo.treeReads++
+	}
 	data, err := w.cache.Expand(w.q, rid)
 	if err != nil || !deck.HasValidZ(data) {
-		return &deck.Deck{}, nil
+		return &treePiece{}, nil
 	}
 	d, err := deck.Parse(data)
 	if err != nil || d.Type != deck.Checkin && d.Type != deck.Submanifest {
-		return &deck.Deck{}, nil
+		return &treePiece{}, nil
 	}
-	return d, nil
+	p := pieceOf(rid, size, d)
+	if w.memo != nil {
+		w.memo.trees[uuid] = p
+	}
+	return p, nil
 }

@@ -231,3 +231,28 @@ func TestRepoNameBelowHorizon(t *testing.T) {
 		t.Fatalf("co old: %v, want a diagnostic naming the horizon and the deepen", err)
 	}
 }
+
+// Annotating past a structural horizon (draft-fossil-horizon-00 §5.5): a
+// line whose origin lies at or below C is printed against a marker naming
+// the horizon rather than a check-in, and one trailing note names the
+// horizon and the deepen; a file whose lines all come from above C prints
+// neither.
+func TestRepoAnnotateBelowHorizon(t *testing.T) {
+	url, _, c2, _ := horizonSource(t)
+	path := filepath.Join(t.TempDir(), "s.fossil")
+	requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: c2, Structural: true}).Run(&Globals{})
+	})
+	out := requiredHTTPStdout(t, func() error { return (&RepoAnnotateCmd{File: "b"}).Run(&Globals{Repo: path}) })
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "^"+c2[:10]+" ") || !strings.HasSuffix(lines[0], "| shared b") {
+		t.Fatalf("annotate b = %q, want its line against the horizon marker and one note", out)
+	}
+	if !strings.Contains(lines[1], c2) || !strings.Contains(lines[1], "repo cone deepen") {
+		t.Fatalf("annotate b note = %q, want the horizon and the deepen named", lines[1])
+	}
+	out = requiredHTTPStdout(t, func() error { return (&RepoAnnotateCmd{File: "a"}).Run(&Globals{Repo: path}) })
+	if strings.Count(out, "\n") != 1 || strings.Contains(out, "^") || strings.Contains(out, "horizon") {
+		t.Fatalf("annotate a = %q, want its one line from above the horizon and no note", out)
+	}
+}

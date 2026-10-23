@@ -29,6 +29,8 @@ const (
 // references, read once and extended by the artifacts appended since; and,
 // keyed by cone digest and by horizon, the classifications computed over
 // them, each keyed by the store prefix it covers and extended the same way.
+// It also keeps, bounded, the trees its horizons' walks read, so a horizon
+// under another C or rule reads only the trees no earlier walk did.
 // It recomputes in full only when an appended artifact carries a name a held
 // P, B or S card cited while it was absent, or the store changed other than
 // by appending and filling phantoms.
@@ -44,6 +46,7 @@ type Memo struct {
 	cones   []*memoCone // least recently published first
 	cuts    []*memoCut
 	slots   []*memoSlots
+	trees   treeCache
 	lineage uint64 // the last store read in full
 }
 
@@ -122,6 +125,10 @@ type MemoView struct {
 	cones map[string]*memoCone
 	cuts  map[cutKey]*memoCut
 	slots map[string]*memoSlots
+	// trees holds the tree pieces this view's walks read from the store, for
+	// the memo's tree cache on Publish; treeReads counts those reads.
+	trees     map[string]*treePiece
+	treeReads int
 }
 
 // View reads q's store prefix and returns the memo extended to it: by the
@@ -139,7 +146,7 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 		return nil, err
 	}
 	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{},
-		slots: map[string]*memoSlots{}}
+		slots: map[string]*memoSlots{}, trees: map[string]*treePiece{}}
 	if base != nil && base.prefix.equal(now) {
 		v.store = base
 		return v, nil
@@ -201,6 +208,7 @@ func (v *MemoView) Publish() {
 	if over := len(m.slots) - memoCones; over > 0 {
 		m.slots = slices.Delete(m.slots, 0, over)
 	}
+	m.trees.publish(v.store.lineage, v.trees)
 }
 
 func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineage uint64) (*memoStore, error) {
@@ -533,6 +541,7 @@ func (v *MemoView) cut(ctx context.Context, q db.Querier, h cone.Horizon) (*memo
 		return prev, nil
 	}
 	walk := newTreeWalk(ctx, q, k, defaultReferenceLimits, &ReferenceWork{})
+	walk.memo = v
 	if prev != nil && prev.placed {
 		walk.files, walk.visited = maps.Clone(prev.cut.above), maps.Clone(prev.cut.reach)
 		walk.work.TreeBytes = prev.treeBytes
@@ -544,6 +553,23 @@ func (v *MemoView) cut(ctx context.Context, q db.Querier, h cone.Horizon) (*memo
 	out.cut = horizonCut{k: k, above: above, reach: walk.visited}
 	out.treeBytes = walk.work.TreeBytes
 	return v.keepCut(out), nil
+}
+
+// tree returns the piece name names as the view's store holds it, read
+// before by this view or by a published one, or nil. A piece read under a
+// later prefix serves only when its rid is held at the view's.
+func (v *MemoView) tree(name string) *treePiece {
+	p := v.trees[name]
+	if p == nil {
+		m := v.memo
+		m.mu.Lock()
+		p = m.trees.get(v.store.lineage, name)
+		m.mu.Unlock()
+	}
+	if p == nil || p.rid > v.store.prefix.top || v.store.prefix.phantoms[p.rid] {
+		return nil
+	}
+	return p
 }
 
 func (v *MemoView) keepCut(c *memoCut) *memoCut {

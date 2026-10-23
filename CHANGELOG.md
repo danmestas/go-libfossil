@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Annotating back past a structural horizon (draft-fossil-horizon-00
+  §5.5) reports a line whose origin lies at or below the horizon as
+  originating at the horizon, rather than crediting the oldest held
+  version: `AnnotatedLine.BelowHorizon` marks it, with `UUID`, `User` and
+  `Date` describing the horizon's check-in, and `libfossil repo annotate`
+  prints such a line against `^<horizon>` and a trailing note naming the
+  horizon and `repo cone deepen`. A content horizon holds every manifest
+  and marks nothing.
+- An origin's classification memo keeps the trees its horizons' walks read
+  (draft-fossil-horizon-00 §6.2), so a second horizon over the same store,
+  under another C or rule, reads only the trees no earlier walk did. Each
+  manifest, baseline and node is kept once with its own F cards, so delta
+  manifests share their baseline's entry, and names are interned. The
+  cache is capped at 64MiB with least-recently-used eviction (fossil-scm's
+  history names about 21M F entries), and is dropped when the store is read
+  in full. On a copy of a 21k-check-in fossil repository, a horizon 2000
+  check-ins back first classified after one 1000 back fell from about
+  2.5–3.0s to 1.6s.
 - Content horizons in the public API and CLI. A horizon is part of a
   store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
   builds one, with or without path members, and `Cone.Horizon` and

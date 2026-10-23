@@ -2,6 +2,8 @@ package content
 
 import (
 	"context"
+	"maps"
+	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
 )
@@ -30,4 +32,10 @@ func LoadAbsencesWithin(
 func LoadAbsencesWork(ctx context.Context, q db.Querier) (*Absences, ReferenceWork, error) {
 	limits := defaultReferenceLimits
 	return LoadAbsencesWithin(ctx, q, limits.refs, limits.treePerCheckin)
+}
+
+// TreesRead names the trees v's horizon walks read from the store, and
+// counts the reads.
+func (v *MemoView) TreesRead() (names []string, reads int) {
+	return slices.Collect(maps.Keys(v.trees)), v.treeReads
 }

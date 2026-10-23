@@ -34,7 +34,7 @@ func horizonStructuralCases() []Case {
 		horizonStructReseed, horizonStructRequest, horizonStructRestrict, horizonStructLabelOrder,
 		horizonStructSeedWire, horizonStructSeedRefused, horizonStructAdvertise, horizonStructServed,
 		horizonStructFallback, horizonStructCommit, horizonStructLeaves, horizonStructVerify, horizonStructCrossing,
-		horizonStructPush, horizonStructHistory}
+		horizonStructPush, horizonStructHistory, horizonStructAnnotate}
 }
 
 var (

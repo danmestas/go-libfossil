@@ -8,7 +8,9 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
 
@@ -432,5 +434,74 @@ func TestCacheDerived(t *testing.T) {
 	c.Clear()
 	if _, ok := c.Derived("k"); ok {
 		t.Fatal("Clear kept a derived value")
+	}
+}
+
+// TestUncheckedCache checks the cache a received delta's basis is rebuilt
+// through: a chain through a row whose bytes are not its name, which a
+// checked cache refuses, still rebuilds, to the bytes
+// ExpandUnchecked gives, with every node of its chain kept; Holds sees what
+// is kept without counting a lookup; and neither kind of cache serves the
+// other's expansion.
+func TestUncheckedCache(t *testing.T) {
+	d := setupTestDB(t)
+	base := []byte("the basis row of a two-link chain, stored under another name\n")
+	stored, err := blob.Compress(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	misnamed := hash.SHA1([]byte("the bytes this row should hold"))
+	res, err := d.Exec("INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, 1)",
+		misnamed, len(base), stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRid, err := res.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := append(append([]byte(nil), base...), "and a line more\n"...)
+	dl, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, err := blob.StoreDeltaRaw(d, hash.SHA1(target), dl, libfossil.FslID(baseRid), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewCache(1<<20).Expand(d, rid); err == nil {
+		t.Fatal("a checked cache rebuilt a chain through a misnamed row")
+	}
+	want, err := ExpandUnchecked(d, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := NewUncheckedCache(1 << 20)
+	got, err := c.ExpandUnchecked(d, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("cached unchecked expansion = %q, want %q", got, want)
+	}
+	if !c.Holds(libfossil.FslID(baseRid)) || !c.Holds(rid) {
+		t.Fatal("the chain's nodes are not kept")
+	}
+	if s := c.Stats(); s.Hits != 0 || s.Misses != 1 {
+		t.Fatalf("Holds counted lookups: %d hits, %d misses", s.Hits, s.Misses)
+	}
+	for name, fn := range map[string]func(){
+		"Expand on an unchecked cache":       func() { c.Expand(d, rid) },
+		"ExpandUnchecked on a checked cache": func() { NewCache(1<<20).ExpandUnchecked(d, rid) },
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("%s did not panic", name)
+				}
+			}()
+			fn()
+		}()
 	}
 }

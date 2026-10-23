@@ -27,6 +27,9 @@ type Cache struct {
 	derived      map[any]any
 	derivedOrder []any
 	derivedHits  int64
+	// unchecked marks a cache made by NewUncheckedCache, which holds bytes
+	// not checked against their names and serves only ExpandUnchecked.
+	unchecked bool
 }
 
 type cacheEntry struct {
@@ -67,6 +70,15 @@ func NewCache(maxBytes int64) *Cache {
 	}
 }
 
+// NewUncheckedCache creates a cache for [Cache.ExpandUnchecked], bounded as
+// NewCache bounds one. What it holds is what each row rebuilds to, unchecked
+// against the row's name, so it serves no [Cache.Expand].
+func NewUncheckedCache(maxBytes int64) *Cache {
+	c := NewCache(maxBytes)
+	c.unchecked = true
+	return c
+}
+
 // Expand returns the expanded content for rid, serving from cache when possible.
 //
 // On a miss it walks rid's delta chain only as far back as the deepest
@@ -86,7 +98,33 @@ func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 	if rid <= 0 {
 		panic("content.Cache.Expand: rid must be > 0")
 	}
+	if c.unchecked {
+		panic("content.Cache.Expand: an unchecked cache serves only ExpandUnchecked")
+	}
+	return c.expand(q, rid, true)
+}
 
+// ExpandUnchecked is [ExpandUnchecked] through an unchecked cache: rid's
+// bytes, rebuilt from the deepest node of its chain the cache holds, with no
+// node checked against its name, and every node it rebuilds kept. Like
+// ExpandUnchecked it is for a caller that checks what it derives from the
+// bytes, and must not be used to serve content.
+func (c *Cache) ExpandUnchecked(q db.Querier, rid libfossil.FslID) ([]byte, error) {
+	if c == nil || !c.unchecked {
+		panic("content.Cache.ExpandUnchecked: needs a cache from NewUncheckedCache")
+	}
+	if q == nil {
+		panic("content.Cache.ExpandUnchecked: q must not be nil")
+	}
+	if rid <= 0 {
+		panic("content.Cache.ExpandUnchecked: rid must be > 0")
+	}
+	return c.expand(q, rid, false)
+}
+
+// expand serves rid from the cache, or rebuilds it through expandChain with
+// check as given, keeping every node it rebuilds.
+func (c *Cache) expand(q db.Querier, rid libfossil.FslID, check bool) ([]byte, error) {
 	c.mu.Lock()
 	if elem, ok := c.items[rid]; ok {
 		c.order.MoveToFront(elem)
@@ -113,7 +151,7 @@ func (c *Cache) Expand(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 		return elem.Value.(*cacheEntry).data, true
 	}
 
-	data, err := expandChain(q, rid, have, c.store, true)
+	data, err := expandChain(q, rid, have, c.store, check)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +309,18 @@ func (c *Cache) SetDerived(key, v any) {
 func (c *Cache) dropDerivedLocked() {
 	c.derived = nil
 	c.derivedOrder = c.derivedOrder[:0]
+}
+
+// Holds reports whether rid's content is cached, without counting a hit or a
+// miss or moving it in the eviction order. A nil Cache holds nothing.
+func (c *Cache) Holds(rid libfossil.FslID) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.items[rid]
+	return ok
 }
 
 // Invalidate removes a single rid from the cache.

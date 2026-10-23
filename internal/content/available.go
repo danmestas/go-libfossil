@@ -131,6 +131,15 @@ func AvailableByUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {
 	return rid, available
 }
 
+// CheckAvailable is IsAvailable that reports a database fault as an error,
+// distinct from content that is simply not there, which is (false, nil).
+func CheckAvailable(q db.Querier, rid libfossil.FslID) (bool, error) {
+	if q == nil {
+		panic("content.CheckAvailable: q must not be nil")
+	}
+	return checkAvailable(q, rid)
+}
+
 // CheckAvailableByUUID is AvailableByUUID that reports a database fault as an
 // error, distinct from content that is simply not there (an unknown uuid, a
 // phantom, or a delta on one), which is (0, false, nil).

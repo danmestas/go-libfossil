@@ -1268,7 +1268,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		// delta, and a clone's, that xfer_accept_file does not pre-verify.
 		// One whose basis is not held yet is stored dangling and checked by
 		// the pass once the basis arrives.
-		verdict, target, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
+		verdict, target, err := pass.checkDelta(r.DB(), uuid, deltaSrc, payload)
 		if err != nil {
 			return 0, fmt.Errorf("received file %s: %w", uuid, err)
 		}
@@ -1298,7 +1298,7 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker, target []byte) error {
 	verified := target != nil
-	var dangling, root libfossil.FslID // tracked once the store succeeds
+	var stored, dangling, root libfossil.FslID // tracked once the store succeeds
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		alreadyHeld, err := heldReal(tx, uuid)
 		if err != nil {
@@ -1325,8 +1325,11 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		if err := recordVisibility(tx, rid, vis); err != nil {
 			return err
 		}
+		if !alreadyHeld {
+			stored = rid
+		}
 		if linker != nil {
-			if err := linker.LinkStored(ctx, tx, rid, uuid, nil); err != nil {
+			if err := linker.LinkStored(ctx, tx, rid, uuid, target); err != nil {
 				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
 			}
 		} else if verified {
@@ -1348,6 +1351,9 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	})
 	if err == nil && dangling > 0 {
 		pass.track(dangling, root, uuid)
+	}
+	if err == nil && verified && stored > 0 {
+		pass.remember(stored, target)
 	}
 	return err
 }
@@ -1444,12 +1450,15 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 		return 0, &hashMismatchError{uuid: uuid}
 	}
 
-	var dephantomizedRid libfossil.FslID
+	var stored, dephantomizedRid libfossil.FslID
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
-		rid, filled, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob, vis,
-			linker)
+		rid, filled, wrote, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob,
+			vis, linker)
 		if err != nil {
 			return err
+		}
+		if wrote {
+			stored = rid
 		}
 		if filled {
 			dephantomizedRid = rid
@@ -1459,34 +1468,40 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	if err != nil {
 		return 0, err
 	}
+	// A row held before this store keeps its own bytes, which a delta
+	// against it is checked with.
+	if stored > 0 {
+		pass.remember(stored, fullContent)
+	}
 	return dephantomizedRid, nil
 }
 
 // storeResolvedTx is storeResolvedContent's write, inside its transaction. It
-// returns the rid holding uuid, and filled when that rid was a phantom this
-// store filled.
+// returns the rid holding uuid, filled when that rid was a phantom this store
+// filled, and wrote when this store wrote the row's content (filled or
+// inserted it).
 func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []byte,
 	storedBlob []byte, vis visibility,
-	linker *manifest.ReceiveLinker) (rid libfossil.FslID, filled bool, err error) {
+	linker *manifest.ReceiveLinker) (rid libfossil.FslID, filled, wrote bool, err error) {
 	// A received SHA3 name promotes an auto-policy repo, as in fossil.
 	if err := hash.PromoteFor(tx, uuid); err != nil {
-		return 0, false, fmt.Errorf("storeResolvedContent: hash policy: %w", err)
+		return 0, false, false, fmt.Errorf("storeResolvedContent: hash policy: %w", err)
 	}
 	rid, filled, inserted, err := writeResolved(tx, uuid, fullContent, storedBlob)
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if err := recordVisibility(tx, rid, vis); err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if linker != nil {
 		if err := linker.LinkStored(ctx, tx, rid, uuid, fullContent); err != nil {
-			return 0, false, fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
+			return 0, false, false, fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
 		}
-		return rid, filled, nil
+		return rid, filled, filled || inserted, nil
 	}
 	if !inserted {
-		return rid, filled, nil
+		return rid, filled, filled || inserted, nil
 	}
 	// Crosslink cluster artifacts: parse the content and if it's a
 	// cluster manifest, process its M-card UUIDs to create phantoms
@@ -1495,16 +1510,16 @@ func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []
 	if d, parseErr := deck.Parse(fullContent); parseErr == nil {
 		if d.Type == deck.Cluster {
 			if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
-				return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+				return 0, false, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
 			}
 		}
 		// A tree arms the §7.2 gate as it is stored, not at the session's
 		// closing sweep.
 		if err := manifest.NoteStoredArtifact(tx, rid, d); err != nil {
-			return 0, false, fmt.Errorf("received %s: %w", uuid, err)
+			return 0, false, false, fmt.Errorf("received %s: %w", uuid, err)
 		}
 	}
-	return rid, filled, nil
+	return rid, filled, filled || inserted, nil
 }
 
 // writeResolved writes verified full content under uuid: a real row already

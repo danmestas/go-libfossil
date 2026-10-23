@@ -103,6 +103,10 @@ type cloneSession struct {
 	obs Observer
 	// pass is the current round's verification pass (§7.7).
 	pass *receivePass
+	// basis is every round's pass's basis cache. A chain sent in one round
+	// is sent again, source first, with a later row of it in a later round,
+	// so a cache per round rebuilt each such chain from its root again.
+	basis *content.Cache
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -180,6 +184,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		linker:                linker,
 		phantoms:              make(map[string]bool),
 		availableDeltaSources: make(map[string]struct{}),
+		basis:                 content.NewUncheckedCache(receiveBasisBytes),
 		seqno:                 1,
 		structural:            structural,
 	}
@@ -626,7 +631,9 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		return cardErr, nil
 	})
 	if err != nil {
-		return err // the round rolled back
+		// The round rolled back, and with it the rows its pass cached.
+		cs.basis.Clear()
+		return err
 	}
 	cs.result.BlobsRecvd += filesRecvd
 	// An authentication challenge includes push codes, and a cosmetic error
@@ -661,7 +668,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 func (cs *cloneSession) processCards(ctx context.Context, cycle int, msg *xfer.Message,
 	filesRecvd *int) error {
 	cs.roundPush = false
-	cs.pass = newReceivePass() // each round is one verification pass (§7.7)
+	cs.pass = newReceivePassOver(cs.basis) // each round is one verification pass (§7.7)
 	defer func() { cs.pass = nil }()
 	for i, card := range msg.Cards {
 		if i%processResponseCancelCheckStride == 0 {
@@ -914,7 +921,7 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 			// needs requesting, and so does a delta whose own base is a
 			// phantom. Only a confirmed available source is memoized: an
 			// unavailable source can arrive later in this same clone.
-			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
+			if !cs.pass.available(cs.repo.DB(), deltaSrc) {
 				// request_phantoms never asks for a shunned name.
 				shunned, err := shun.IsShunned(cs.repo.DB(), deltaSrc)
 				if err != nil {

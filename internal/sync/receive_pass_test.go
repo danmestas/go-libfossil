@@ -255,3 +255,80 @@ func TestReceivePassLateBasisChainIsLinear(t *testing.T) {
 		t.Fatal("the chain's newest delta is not available after the pass")
 	}
 }
+
+// TestReceivePassChecksAChainFromItsBasis pins the cost of a chain of deltas
+// received basis first, each against the one before, as a clone of a real
+// repository receives a file's history: checking each delta must start from
+// its basis's bytes the pass already holds, not rebuild the basis from the
+// chain's root. Rebuilding made a dense clone of the Fossil repository
+// (chains averaging 532 deltas) quadratic, past an hour of CPU.
+func TestReceivePassChecksAChainFromItsBasis(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	const links = 50
+	err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		prev := []byte("version 0 of a file whose history is one chain\n")
+		prevUUID := hash.SHA1(prev)
+		if err := storeAll(r, pass, lateStore{uuid: prevUUID, payload: prev}); err != nil {
+			return err
+		}
+		for i := 1; i <= links; i++ {
+			next := append(append([]byte(nil), prev...), fmt.Sprintf("line %d\n", i)...)
+			d, err := delta.Create(prev, next)
+			if err != nil {
+				return err
+			}
+			nextUUID := hash.SHA1(next)
+			if err := storeAll(r, pass, lateStore{nextUUID, prevUUID, d}); err != nil {
+				return err
+			}
+			prev, prevUUID = next, nextUUID
+		}
+		if s := pass.basis.Stats(); s.Misses != 0 || s.Hits != links {
+			return fmt.Errorf("basis lookups: %d hits, %d misses; want %d hits, 0 misses",
+				s.Hits, s.Misses, links)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestReceivePassAvailable checks the pass's availability answer for a delta
+// basis: a basis whose bytes the pass holds is available without a walk, one
+// dangling in the pass is not, and any other is asked of the repository.
+func TestReceivePassAvailable(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	f := newLateBasisFixture(t)
+	err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		good, err := delta.Create([]byte(f.base), []byte(f.base+"good\n"))
+		if err != nil {
+			return err
+		}
+		if err := storeAll(r, pass, lateStore{f.claimed, f.baseUUID, good}); err != nil {
+			return err
+		}
+		other := hash.SHA1([]byte("never sent"))
+		for _, tt := range []struct {
+			uuid string
+			want bool
+		}{{f.claimed, false}, {f.baseUUID, false}, {other, false}} {
+			if got := pass.available(r.DB(), tt.uuid); got != tt.want {
+				return fmt.Errorf("available(%s) before the basis = %v, want %v",
+					tt.uuid, got, tt.want)
+			}
+		}
+		if err := storeAll(r, pass, lateStore{uuid: f.baseUUID, payload: []byte(f.base)}); err != nil {
+			return err
+		}
+		for _, uuid := range []string{f.claimed, f.baseUUID} {
+			if !pass.available(r.DB(), uuid) {
+				return fmt.Errorf("available(%s) after the basis = false", uuid)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

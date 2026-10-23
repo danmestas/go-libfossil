@@ -183,7 +183,7 @@ func TestSparseServerExpandsExcludedDeltaBase(t *testing.T) {
 
 func TestSparseCloneRefusalFatal(t *testing.T) {
 	r := setupSyncTestRepo(t)
-	cs := &cloneSession{repo: r, seqno: 1}
+	cs := &cloneSession{repo: r, seqno: 1, basis: content.NewUncheckedCache(receiveBasisBytes)}
 	refusal := &xfer.Message{Cards: []xfer.Card{
 		&xfer.ErrorCard{Message: "Sparse cone refuses clone"},
 	}}

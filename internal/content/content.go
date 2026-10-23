@@ -74,9 +74,9 @@ func ExpandUnchecked(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 // materialized. Both are nil for a plain [Expand], which then walks and
 // replays the whole chain exactly as it always has.
 //
-// check is false only for [ExpandUnchecked] (put is then nil): the result is
-// not bound to rid's name, and the BUGGIFY corruption that exists to exercise
-// that binding does not fire.
+// check is false only for [ExpandUnchecked] and [Cache.ExpandUnchecked]: no
+// node is bound to its name, and the BUGGIFY corruption that exists to
+// exercise that binding does not fire.
 //
 // The two hooks are what make repeated expansion of one chain linear rather
 // than quadratic. In a real repository content_deltify has rewritten older
@@ -105,7 +105,8 @@ func expandChain(
 	// put: a cached interior is served later as if it had been expanded in
 	// its own right, so it has to have earned the same guarantee. A plain
 	// Expand (put == nil) materializes nothing for anyone else and so still
-	// verifies exactly one blob, the one it was asked for.
+	// verifies exactly one blob, the one it was asked for. An unchecked
+	// cache (check false) is promised no guarantee and verifies nothing.
 	//
 	// base is the content the walk stopped on, carried out of the walk
 	// rather than re-read from have. Re-reading would be a second decision:
@@ -122,8 +123,10 @@ func expandChain(
 			return nil, fmt.Errorf("content.Expand load root rid=%d: %w", chain[0], err)
 		}
 		if put != nil {
-			if err := bindToName(q, chain[0], content); err != nil {
-				return nil, err
+			if check {
+				if err := bindToName(q, chain[0], content); err != nil {
+					return nil, err
+				}
 			}
 			put(chain[0], content)
 		}
@@ -155,8 +158,10 @@ func expandChain(
 			return nil, fmt.Errorf("content.Expand apply delta rid=%d: %w", chain[i], err)
 		}
 		if put != nil {
-			if err := bindToName(q, chain[i], content); err != nil {
-				return nil, err
+			if check {
+				if err := bindToName(q, chain[i], content); err != nil {
+					return nil, err
+				}
 			}
 			put(chain[i], content)
 		} else {

@@ -61,7 +61,7 @@ func TestCheckDelta(t *testing.T) {
 		{"basis does not reconstruct", other, unreadable, d, deltaMismatch},
 		{"basis not held", other, unheld, d, deltaUnverifiable},
 	} {
-		got, rebuilt, err := checkDelta(r.DB(), tt.uuid, tt.src, tt.payload)
+		got, rebuilt, err := newReceivePass().checkDelta(r.DB(), tt.uuid, tt.src, tt.payload)
 		if err != nil {
 			t.Fatalf("%s: checkDelta: %v", tt.name, err)
 		}

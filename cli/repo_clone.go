@@ -18,7 +18,7 @@ type RepoCloneCmd struct {
 	Pass       string        `short:"p" help:"Password for clone auth"`
 	Invite     string        `help:"Invite token (from fossil invite)"`
 	Timeout    time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
-	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash"`
+	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash; what each rule would hold needs a local repository ('repo cone cost') or a peer that exposes it out of band, as the origin's horizon-served URL may"`
 	Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
 	Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
 	Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`

@@ -27,6 +27,7 @@ type RepoConeCmd struct {
 	Store   RepoConeStoreCmd   `cmd:"" help:"Show or replace the repository's store cone, fetching what widening covers"`
 	Deepen  RepoConeDeepenCmd  `cmd:"" help:"Move the store's horizon down to reach a check-in, fetching the history it keeps"`
 	Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
+	Cost    RepoConeCostCmd    `cmd:"" help:"Report what each horizon rule would hold at a check-in, from this repository"`
 }
 
 // RepoConeShowCmd lists the inclusions, then the exclusions marked '!'.
@@ -75,7 +76,7 @@ type RepoConeStoreCmd struct {
 	Paths      []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
 	Not        []string `help:"Exclusion members (repeatable)"`
 	Dense      bool     `help:"Drop the store cone, fetching everything it elided"`
-	Horizon    string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps"`
+	Horizon    string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps; 'repo cone cost' shows what each rule would hold"`
 	Leaves     bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
 	Structural bool     `help:"With --horizon, also elide the manifests below the check-in; the next pull fetches the origin's seed"`
 	NoHorizon  bool     `help:"Drop the horizon, keeping the path members, and fetch what it elided"`
@@ -180,6 +181,36 @@ func (c *RepoConeStoreCmd) storeCone(r *libfossil.Repo, members bool) (*libfossi
 		return libfossil.NewHorizonCone(nil, nil, h)
 	}
 	return current.WithHorizon(&h)
+}
+
+// RepoConeCostCmd reports what a horizon at a check-in would hold under each
+// rule (draft-fossil-horizon-00 §3.4): the check-ins of the held set and the
+// bytes of the blobs they name, stored and expanded, so the rule is chosen
+// with its cost in view. It reads the local repository, which must hold the
+// history; a clone has none yet, so the figures come before it, from a peer
+// that exposes them (an origin may name such an interface through
+// horizon-served) or from a repository already held.
+type RepoConeCostCmd struct {
+	Checkin string `arg:"" help:"Check-in to place the horizon at: a name, branch or hash prefix"`
+}
+
+func (c *RepoConeCostCmd) Run(g *Globals) (err error) {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+
+	costs, err := r.HorizonCost(c.Checkin)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("horizon at %s\n", c.Checkin)
+	for _, cost := range costs {
+		fmt.Printf("%s  %d check-ins, %d blobs, %d B expanded, %d B stored\n",
+			cost.Rule, cost.Checkins, cost.Blobs, cost.ExpandedBytes, cost.StoredBytes)
+	}
+	return nil
 }
 
 // RepoConeDeepenCmd deepens the store's horizon (draft-fossil-horizon-00

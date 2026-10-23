@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -25,13 +26,93 @@ import (
 var (
 	horizonLeavesWarning = Case{ID: "horizon.3.1.leaves-warning", Req: "HZ-3.1-2"}
 	horizonNoCountOrDate = Case{ID: "horizon.3.4.no-count-or-date", Req: "HZ-3.4-2"}
+	horizonRuleCost      = Case{ID: "horizon.3.4.rule-cost", Req: "HZ-3.4-1"}
 )
 
-func horizonCLICases() []Case { return []Case{horizonLeavesWarning, horizonNoCountOrDate} }
+func horizonCLICases() []Case {
+	return []Case{horizonLeavesWarning, horizonNoCountOrDate, horizonRuleCost}
+}
 
 func TestHorizonCLI(t *testing.T) {
 	check(t, horizonLeavesWarning, func() error { return hzLeavesWarning(t) })
 	check(t, horizonNoCountOrDate, func() error { return hzNoCountOrDate(t) })
+	check(t, horizonRuleCost, func() error { return hzRuleCost(t) })
+}
+
+// hzRuleCost: a tool that lets the operator choose a horizon shows what each
+// rule would hold, in check-ins and bytes, before the choice is made (§3.4).
+// `repo cone cost` does so from the local repository, and the commands that
+// take the choice point to it. The repository is c1 -> c2 -> c3 with a
+// childless fork off c1: a horizon at c2 holds two check-ins under the
+// descendants rule and, as the fork's ancestry meets c2's at c1, all four
+// under the leaves rule. File a is 6, 6, 9 and 7 bytes in c1, c2, c3 and the
+// fork; file b is the 9 bytes of "shared b" in all.
+func hzRuleCost(t *testing.T) error {
+	path := filepath.Join(t.TempDir(), "cost.fossil")
+	r, err := gofossil.Create(path, gofossil.CreateOpts{User: "u"})
+	if err != nil {
+		return err
+	}
+	commit := func(parent int64, a string) (int64, string, error) {
+		return r.Commit(gofossil.CommitOpts{User: "u", ParentID: parent, Files: []gofossil.FileToCommit{
+			{Name: "a", Content: []byte(a)}, {Name: "b", Content: []byte("shared b\n")},
+		}})
+	}
+	r1, _, err := commit(0, "old a\n")
+	if err != nil {
+		return err
+	}
+	r2, c2, err := commit(r1, "new a\n")
+	if err != nil {
+		return err
+	}
+	if _, _, err = commit(r2, "newest a\n"); err != nil {
+		return err
+	}
+	if _, _, err = commit(r1, "feat a\n"); err != nil {
+		return err
+	}
+	if err := r.Close(); err != nil {
+		return err
+	}
+	out, err := hzStdout(t, func() error { return (&cli.RepoConeCostCmd{Checkin: c2}).Run(&cli.Globals{Repo: path}) })
+	if err != nil {
+		return err
+	}
+	for _, line := range []string{
+		"descendants  2 check-ins, 3 blobs, 24 B expanded, ",
+		"leaves  4 check-ins, 5 blobs, 37 B expanded, ",
+	} {
+		if !strings.Contains(out, "\n"+line) {
+			return expectf("cost output %q has no line starting %q", out, line)
+		}
+	}
+	for _, cmd := range []any{cli.RepoCloneCmd{}, cli.RepoConeStoreCmd{}} {
+		field, _ := reflect.TypeOf(cmd).FieldByName("Horizon")
+		if !strings.Contains(field.Tag.Get("help"), "repo cone cost") {
+			return expectf("%T --horizon help %q does not name the cost report", cmd, field.Tag.Get("help"))
+		}
+	}
+	return nil
+}
+
+// hzStdout runs fn with os.Stdout redirected and returns what it wrote.
+func hzStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	file, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	previous := os.Stdout
+	os.Stdout = file
+	runErr := fn()
+	os.Stdout = previous
+	out, err := os.ReadFile(file.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out), runErr
 }
 
 // hzStderr runs fn with os.Stderr redirected and returns what it wrote.

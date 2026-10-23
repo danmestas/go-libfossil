@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `libfossil repo cone cost <check-in>` reports what each horizon rule would
+  hold at a check-in (draft-fossil-horizon-00 §3.4): for descendants and
+  leaves, the check-ins of the held set and the bytes, expanded and
+  stored, of the blobs they name. `Repo.HorizonCost` returns the same
+  figures as `[]HorizonRuleCost`. The `--horizon` help of `repo clone` and
+  `repo cone store` points to it; a clone has no repository yet, so its
+  figures come from a local one or from a peer that exposes them.
 - Annotating back past a structural horizon (draft-fossil-horizon-00
   §5.5) reports a line whose origin lies at or below the horizon as
   originating at the horizon, rather than crediting the oldest held
@@ -207,6 +214,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The horizon draft is re-pinned to zit `5d618aaeb1`: an origin with no tag
+  in force at any check-in a seed would cover mints no seed and serves the
+  content level (§5.2), and the cost report is guidance for the tool, not a
+  wire obligation (§3.4).
 - Breaking, for callers comparing values with `==`: the CLI's
   `RepoCloneCmd` gained the `Cone` and `ConeNot` lists, so it is no longer
   comparable. Every other change to the exported API is an addition.

@@ -188,9 +188,10 @@ n, err := repo.CompactStore(ctx)
 // see one. The rule, the depth and the path members stay.
 sr, err = repo.DeepenHorizon(ctx, target, libfossil.RequiredContentOpts{Peer: t})
 
-// Merge. With a Peer, a merge whose base lies below a structural horizon
-// asks the origin for the base and deepens to it first. Without one it
-// fails with an error matching libfossil.ErrBelowHorizon.
+// Merge. With a Peer, a merge where either side's ancestry crosses a
+// structural horizon asks the origin for the base, deepening to it when it
+// lies below. Without one it fails with an error matching
+// libfossil.ErrBelowHorizon, even when the store finds a base it holds.
 mr, err := co.MergeContext(ctx, libfossil.CheckoutMergeOpts{Version: rid},
     libfossil.RequiredContentOpts{Peer: t})
 
@@ -280,7 +281,7 @@ libfossil -R repo.fossil repo verify --seed
 ```
 
 - `cone deepen`: move the horizon down to reach the check-in, fetching what the deeper horizon keeps.
-- `merge`: a merge whose base lies below a structural horizon asks the remote for the base and deepens to it. An ordinary merge contacts no peer.
+- `merge`: a merge where either side's ancestry crosses a structural horizon asks the remote for the base, and deepens to it when it lies below. A merge whose ancestry stays above the horizon contacts no peer.
 - `verify --seed`: verify the structural seed by fetching the history below the horizon. The store stays a content-horizon store.
 
 These take the same `--remote`, `--sync-user`, `--sync-pass`, `--sync-private` and `--timeout` flags.

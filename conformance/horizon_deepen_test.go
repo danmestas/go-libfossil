@@ -312,6 +312,13 @@ type hzMergeFixture struct {
 
 func newHZMergeFixture(t *testing.T) *hzMergeFixture {
 	t.Helper()
+	return newHZMergeFixtureAt(t, false)
+}
+
+// newHZMergeFixtureAt is newHZMergeFixture, its clone's horizon at c1, the
+// root check-in, when root is set, so that no ancestry crosses it.
+func newHZMergeFixtureAt(t *testing.T, root bool) *hzMergeFixture {
+	t.Helper()
 	x := newHZStruct(t)
 	f := &hzMergeFixture{x: x, origin: &hzRecorder{r: x.s.f.r}}
 	f.y = hzUUID(t, x.s.f.r, hzCommit(t, x.s.f, "y", []libfossil.FslID{x.s.c4, x.s.feat1}, nil))
@@ -325,7 +332,11 @@ func newHZMergeFixture(t *testing.T) *hzMergeFixture {
 	server := httptest.NewServer(f.origin)
 	t.Cleanup(server.Close)
 	f.url = server.URL
-	hc, err := gofossil.NewHorizonCone(nil, nil, gofossil.Horizon{Checkin: x.c3, Structural: true})
+	c := x.c3
+	if root {
+		c = x.c1
+	}
+	hc, err := gofossil.NewHorizonCone(nil, nil, gofossil.Horizon{Checkin: c, Structural: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,9 +466,11 @@ func hzAskedMergeBase(f *hzMergeFixture, primary string, secondaries ...string) 
 // ancestor. Merging d2 into a checkout of d1, the walk finds c4 without
 // reaching below C, but c4's ancestry crosses at c3: MergeContext asks the
 // origin for the pivot of d2 over d1 and merges over its answer, c4, which
-// the store holds, so nothing deepens. Without a peer there is no one to ask
-// and Merge merges over its own walk, as zit's merge does when the saved
-// remote does not answer.
+// the store holds, so nothing deepens. Without a peer there is no one to ask,
+// so Merge refuses, naming the horizon and the remedy, whenever either
+// side's ancestry crosses: when its own walk crosses (y into feat2) and when
+// the walk finds c4 but the ancestry below it crosses (d2 into d1). It
+// merges locally only when no ancestry crosses, as at a horizon at the root.
 func hzMergeMustAsk(t *testing.T) error {
 	f := newHZMergeFixture(t)
 	peer := gofossil.RequiredContentOpts{Peer: gofossil.NewHTTPTransport(f.url)}
@@ -478,12 +491,47 @@ func hzMergeMustAsk(t *testing.T) error {
 		return expectf("merging over a held base deepened: %v", err)
 	}
 	f = newHZMergeFixture(t)
+	for _, m := range [][2]string{{f.x.feat2, f.y}, {f.d1, f.d2}} {
+		if err := f.co.Extract(f.rid(t, m[0]), gofossil.ExtractOpts{}); err != nil {
+			return err
+		}
+		_, err := f.co.Merge(gofossil.CheckoutMergeOpts{Version: f.rid(t, m[1])})
+		if !errors.Is(err, gofossil.ErrBelowHorizon) {
+			return expectf("merge of %.10s into %.10s without a peer: %v, want ErrBelowHorizon", m[1], m[0], err)
+		}
+		for _, want := range []string{"structural horizon at " + f.x.c3, "MergeContext"} {
+			if !strings.Contains(err.Error(), want) {
+				return expectf("diagnostic %q lacks %q", err, want)
+			}
+		}
+		if changed, err := f.co.HasChanges(); err != nil || changed {
+			return expectf("the refused merge left changes %v (%v)", changed, err)
+		}
+	}
+	if _, _, err := f.r.Merge("feat", "trunk", "merge feat", "u"); !errors.Is(err, gofossil.ErrBelowHorizon) {
+		return expectf("branch merge across the horizon without a peer: %v, want ErrBelowHorizon", err)
+	}
+	if err := hzNoMergeBaseAsked(f); err != nil {
+		return err
+	}
+	f = newHZMergeFixtureAt(t, true)
 	if err := f.co.Extract(f.rid(t, f.d1), gofossil.ExtractOpts{}); err != nil {
 		return err
 	}
 	res, err = f.co.Merge(gofossil.CheckoutMergeOpts{Version: f.rid(t, f.d2)})
 	if err != nil || res.Ancestor != f.rid(t, f.x.c4) {
-		return expectf("merge of d2 without a peer: %v ancestor %d, want c4's", err, res.Ancestor)
+		return expectf("merge of d2 at a horizon nothing crosses: %v ancestor %d, want c4's", err, res.Ancestor)
+	}
+	return hzNoMergeBaseAsked(f)
+}
+
+// hzNoMergeBaseAsked fails when the origin was sent a merge-base query
+// since the last take.
+func hzNoMergeBaseAsked(f *hzMergeFixture) error {
+	for _, e := range f.origin.take() {
+		if got := hzPragmas(e.request, "horizon-mergebase"); len(got) != 0 {
+			return expectf("a merge without a peer asked %q", got)
+		}
 	}
 	return nil
 }
@@ -499,7 +547,7 @@ func hzMergeListForm(t *testing.T) error {
 	if err := f.co.Extract(f.rid(t, f.d1), gofossil.ExtractOpts{}); err != nil {
 		return err
 	}
-	if _, err := f.co.Merge(gofossil.CheckoutMergeOpts{Version: f.rid(t, f.d2)}); err != nil {
+	if _, err := f.co.MergeContext(context.Background(), gofossil.CheckoutMergeOpts{Version: f.rid(t, f.d2)}, peer); err != nil {
 		return err
 	}
 	f.origin.take()

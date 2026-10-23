@@ -407,8 +407,17 @@ func (c *Checkout) checkin(
 // Merging the checkout's own version or one of its ancestors does nothing. The common ancestor is the one fossil's merge
 // diffs against: the most recent common ancestor of the merged-in checkin
 // and the checkout's version with every checkin already merged into it.
+//
+// Under a structural horizon Merge refuses, with an error matching
+// ErrBelowHorizon, a merge whose base it does not hold or whose sides'
+// ancestry crosses the horizon (draft-fossil-horizon-00 §5.5): only the
+// origin can name that base, and MergeContext with a Peer asks it.
 func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
-	return c.merge(opts, 0)
+	res, err := c.merge(opts, 0)
+	if errors.Is(err, ErrBelowHorizon) {
+		return res, fmt.Errorf("%w; Checkout.MergeContext with a Peer asks the origin", err)
+	}
+	return res, err
 }
 
 // merge is Merge, diffing against baseline when it is set.

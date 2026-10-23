@@ -127,3 +127,32 @@ func AncestryCrosses(q db.Querier, starts []libfossil.FslID, limit int) (bool, e
 	}
 	return false, nil
 }
+
+// MergeAncestryLimit bounds the walk that decides whether a merge's ancestry
+// crosses the horizon, as the origin bounds its merge-base walk.
+const MergeAncestryLimit = 1 << 20
+
+// AncestryCrossing decides whether the base the store's own walk found for
+// a merge of side may stand (§5.5): not when the ancestry of any of starts,
+// the merge's sides, crosses the structural horizon, even when the walk
+// itself did not, since over part of the graph the common ancestor found
+// need not be the nearest and only the origin can name the base. It returns
+// a *MergeBaseError naming no base for such a merge, and nil otherwise.
+func AncestryCrossing(q db.Querier, side libfossil.FslID, starts []libfossil.FslID) error {
+	if side <= 0 {
+		panic("content.AncestryCrossing: invalid rid")
+	}
+	crosses, err := AncestryCrosses(q, starts, MergeAncestryLimit)
+	if err != nil || !crosses {
+		return err
+	}
+	h, _, err := StructuralHorizon(q)
+	if err != nil {
+		return err
+	}
+	crossing := &MergeBaseError{Horizon: h.Hash()}
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", side).Scan(&crossing.Side); err != nil {
+		return fmt.Errorf("content.AncestryCrossing: %w", err)
+	}
+	return crossing
+}

@@ -205,6 +205,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Under a structural horizon, `Checkout.Merge` and `Repo.Merge` now refuse
+  a merge whenever either side's ancestry crosses the horizon, even when the
+  store's own walk finds a base it holds (draft-fossil-horizon-00 §5.5):
+  over part of the graph that base need not be the nearest, and only the
+  origin can name it. They used to merge over such a base unless the walk
+  itself crossed. The error matches `ErrBelowHorizon`, names the horizon
+  and points to `Checkout.MergeContext` with a `Peer`, which asks the
+  origin; `MergeContext` refuses the same way when the origin does not
+  answer. `libfossil repo merge` asks the remote in these cases too. A
+  merge whose ancestry stays above the horizon still merges locally.
 - Breaking, for callers comparing values with `==`: the CLI's
   `RepoCloneCmd` gained the `Cone` and `ConeNot` lists, so it is no longer
   comparable. Every other change to the exported API is an addition.

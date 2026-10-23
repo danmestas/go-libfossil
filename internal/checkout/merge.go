@@ -153,6 +153,18 @@ func (c *Checkout) Merge(opts MergeOpts) (MergeResult, error) {
 	if pivot == opts.Version {
 		return MergeResult{Ancestor: pivot}, nil // already part of the checkout
 	}
+	// §5.5: a base this store's walk found stands only while no side's
+	// ancestry crosses the horizon; a base given is not walked for.
+	if opts.Baseline <= 0 {
+		secondaries, err := c.mergeSecondaries(vid)
+		if err != nil {
+			return MergeResult{}, fmt.Errorf("checkout.Merge: %w", err)
+		}
+		starts := append([]libfossil.FslID{opts.Version}, secondaries...)
+		if cerr := content.AncestryCrossing(c.repo.DB(), opts.Version, starts); cerr != nil {
+			return MergeResult{}, fmt.Errorf("checkout.Merge: %w", cerr)
+		}
+	}
 
 	// Which files are edited decides between taking the merged-in version
 	// and merging, so chnged must be current. As fossil's merge, refuse

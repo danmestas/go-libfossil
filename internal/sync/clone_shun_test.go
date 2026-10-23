@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
@@ -26,6 +27,7 @@ func TestCloneShunRules(t *testing.T) {
 	cs := &cloneSession{
 		repo: r, env: simio.RealEnv(), linker: linker, seqno: 1,
 		phantoms: map[string]bool{}, availableDeltaSources: map[string]struct{}{},
+		basis: content.NewUncheckedCache(receiveBasisBytes),
 	}
 	cs.obs = resolveObserver(nil)
 

@@ -1374,8 +1374,17 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 // with no parent manifest there is no file transition to derive -- fossil's
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
+//
+// A sparse store does not wait on a file its path members exclude: it never
+// arrives. Waiting on those cost a cone clone of fossil-scm.org's repository
+// one availability query per file of every check-in, and left it in its
+// first round after 20 minutes.
 func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 	missing := missingFileSet(tx, d, g)
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return missing
+	}
 	if len(d.P) > 0 {
 		if _, ok := g.avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
@@ -1397,6 +1406,9 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []stri
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		if f.UUID == "" { // a deleted file in a delta manifest
+			continue
+		}
+		if storeCone != nil && !storeCone.Covers(f.Name) {
 			continue
 		}
 		if _, dup := seen[f.UUID]; dup {
@@ -1664,6 +1676,12 @@ func resolveParentMids(tx *db.Tx, d *deck.Deck) (primaryParentMid libfossil.FslI
 }
 
 // insertCherrypicks inserts cherrypick rows for Q-cards (cherrypick/backout).
+//
+// A source that has not arrived is reserved as a phantom, so the row exists
+// before the source does and linkLateChildren can find this check-in when the
+// source arrives. Canonical skips a missing source and relies on the rebuild
+// its clone ends with; a clone here links as artifacts arrive and has no such
+// rebuild, so it would keep the row, and the source's mlink rows, missing.
 func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	for _, cp := range d.Q {
 		target := cp.Target
@@ -1671,9 +1689,9 @@ func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		if cp.IsBackout {
 			isExclude = 1
 		}
-		var parentRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", target).Scan(&parentRid); err != nil {
-			continue // target blob missing, skip
+		parentRid, err := ridOrPhantom(tx, target)
+		if err != nil {
+			return fmt.Errorf("cherrypick source %q: %w", target, err)
 		}
 		if _, err := tx.Exec(
 			"REPLACE INTO cherrypick(parentid, childid, isExclude) VALUES(?, ?, ?)",

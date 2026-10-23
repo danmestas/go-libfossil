@@ -170,6 +170,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Receiving a delta against an artifact already held no longer rebuilds
+  that basis from the root of its chain. Each received delta's basis was
+  expanded through its whole chain to check the delta (§7.7), and its
+  availability walked the chain again, so receiving a file's history, a
+  chain of hundreds or thousands of deltas, cost time quadratic in its
+  depth: a dense clone of the Fossil repository ran past an hour of CPU.
+  The basis is now rebuilt through a cache, kept across a clone's rounds,
+  of what each received row rebuilds to, from the deepest node of its
+  chain the cache holds, and a basis the cache holds needs no
+  availability walk. The bytes are those the unchecked rebuild gave, so
+  every verdict is unchanged. `content.NewUncheckedCache` and
+  `Cache.ExpandUnchecked` provide that cache; `Cache.Holds` and
+  `content.CheckAvailable` are new too.
+- A clone origin no longer sends again, in a later round, a delta chain an
+  earlier round sent. Each row goes out with its chain, source first, and
+  fossil stores each version of a file as a delta of the next, so the
+  oldest version's round sent a file's whole history and each later
+  version's row, reached in a later round, sent the rest of it again: a
+  dense clone of the Fossil repository carried about five copies of it,
+  each verified again by the client. The origin now stops a chain, and
+  skips a row, that a row below the cursor its round sent reaches through
+  sources the clone forwards.
+- `repo serve` answers a clone or pull while another request holds the
+  write lock, instead of failing it with HTTP 500 "database is locked
+  (SQLITE_BUSY)" once the busy timeout ran out. Every request had run in
+  a write transaction, and a horizon request read the classification memo
+  in one too, so a horizon clone arriving while another clone was served
+  waited behind it and its client gave up after four attempts. A request
+  none of whose cards can write (clone, pull, gimme, igot without push,
+  login, reqconfig and read-only pragmas) now runs in a read transaction,
+  as does the memo read, and each request no longer creates the table-sync
+  schema on a repository that lacks it; a schema card creates it. v0.14.0
+  has the same write transaction per request.
 - An origin answering a horizon request no longer sends a cluster that the
   request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
   pull and sync replies already announced none, and req-clusters already

@@ -36,7 +36,20 @@ type receivePass struct {
 	// the key. A store checks only the deltas its artifact grounds, not the
 	// whole set: a clone round can leave thousands dangling.
 	byRoot map[libfossil.FslID][]libfossil.FslID
+	// basis holds the full bytes of artifacts this pass stored, and of the
+	// chain nodes checkDelta rebuilt, unchecked against their names as
+	// checkDelta's basis is (content.NewUncheckedCache), so checking a delta
+	// against a basis the pass already holds starts from those bytes. A
+	// file's history arrives as one chain, each delta against the one
+	// before: rebuilding every basis from the chain's root made a clone
+	// quadratic in its depth. Only bytes of rows that outlive their card
+	// enter it (see remember).
+	basis *content.Cache
 }
+
+// receiveBasisBytes bounds a pass's basis cache, as the receive linker's
+// expanded-content cache is bounded.
+const receiveBasisBytes = 64 << 20
 
 // danglingDelta is a delta this pass stored before its basis was available:
 // the name it must hash to, and the rid that grounds it.
@@ -46,10 +59,35 @@ type danglingDelta struct {
 }
 
 func newReceivePass() *receivePass {
+	return newReceivePassOver(content.NewUncheckedCache(receiveBasisBytes))
+}
+
+// newReceivePassOver is newReceivePass with a basis cache the caller keeps
+// across passes. It holds only rows a committed pass stored or read, so the
+// caller must clear it when a pass rolls back.
+func newReceivePassOver(basis *content.Cache) *receivePass {
+	if basis == nil {
+		panic("sync.newReceivePassOver: basis must not be nil")
+	}
 	return &receivePass{
 		dangling: make(map[libfossil.FslID]danglingDelta),
 		byRoot:   make(map[libfossil.FslID][]libfossil.FslID),
+		basis:    basis,
 	}
+}
+
+// remember keeps rid's full bytes, which hash to its name, for checking the
+// deltas the pass receives against it. It is called only once the card that
+// stored rid has committed its savepoint: a rolled-back row's rid can be
+// handed to the next row stored.
+func (p *receivePass) remember(rid libfossil.FslID, full []byte) {
+	if rid <= 0 {
+		panic("sync.receivePass.remember: rid must be positive")
+	}
+	if full == nil {
+		panic("sync.receivePass.remember: full must not be nil")
+	}
+	p.basis.Remember(rid, full)
 }
 
 // heldReal reports whether uuid already has a real (non-phantom) row, which
@@ -233,7 +271,7 @@ func pathRows(q db.Querier, root libfossil.FslID,
 }
 
 // childRows lists the rows whose delta is against parent and that lie on a
-// path to a dangling delta, in rid order.
+// path to a dangling delta, in rid order; with a nil onPath, every one.
 func childRows(q db.Querier, parent libfossil.FslID,
 	onPath map[libfossil.FslID]bool) ([]libfossil.FslID, error) {
 	rows, err := q.Query("SELECT rid FROM delta WHERE srcid=? ORDER BY rid", parent)
@@ -247,11 +285,33 @@ func childRows(q db.Querier, parent libfossil.FslID,
 		if err := rows.Scan(&kid); err != nil {
 			return nil, fmt.Errorf("deltas on rid=%d: %w", parent, err)
 		}
-		if onPath[kid] {
+		if onPath == nil || onPath[kid] {
 			kids = append(kids, kid)
 		}
 	}
 	return kids, rows.Err()
+}
+
+// available reports whether the artifact named uuid has its bytes, as
+// content.AvailableByUUID does, without walking its chain when the pass
+// already knows: bytes the pass holds are available, and a delta dangling in
+// the pass is not. A clone asks this of every delta's basis, and the walk is
+// as deep as the chain.
+func (p *receivePass) available(q db.Querier, uuid string) bool {
+	if q == nil {
+		panic("sync.receivePass.available: q must not be nil")
+	}
+	rid, held := blob.Exists(q, uuid)
+	if !held {
+		return false
+	}
+	if p.basis.Holds(rid) {
+		return true
+	}
+	if _, dangling := p.dangling[rid]; dangling {
+		return false
+	}
+	return content.IsAvailable(q, rid)
 }
 
 // deltaVerdict is what applying a received delta to its basis showed.
@@ -283,21 +343,41 @@ const (
 //
 // A delta that does not apply is a mismatch: fossil verifies what
 // blob_delta_apply left, which is not the artifact either.
-func checkDelta(q db.Querier, uuid, deltaSrc string, payload []byte) (deltaVerdict, []byte, error) {
+//
+// The basis is rebuilt through the pass's cache (basis) from the deepest node
+// of its chain the cache holds, so a chain received basis first costs one
+// apply per delta. A basis the cache holds is available; a delta dangling in
+// this pass is not; any other basis has its chain walked for availability
+// first, as before.
+func (p *receivePass) checkDelta(q db.Querier, uuid, deltaSrc string,
+	payload []byte) (deltaVerdict, []byte, error) {
 	if q == nil {
 		panic("sync.checkDelta: q must not be nil")
 	}
 	if uuid == "" || deltaSrc == "" {
 		panic("sync.checkDelta: uuid and deltaSrc must not be empty")
 	}
-	srcRid, ok, err := content.CheckAvailableByUUID(q, deltaSrc)
-	if err != nil {
-		return deltaUnverifiable, nil, err
-	}
-	if !ok {
+	var srcRid libfossil.FslID
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", deltaSrc).Scan(&srcRid)
+	if errors.Is(err, sql.ErrNoRows) {
 		return deltaUnverifiable, nil, nil
 	}
-	src, err := content.ExpandUnchecked(q, srcRid)
+	if err != nil {
+		return deltaUnverifiable, nil, fmt.Errorf("look up %s: %w", deltaSrc, err)
+	}
+	if _, dangling := p.dangling[srcRid]; dangling {
+		return deltaUnverifiable, nil, nil
+	}
+	if !p.basis.Holds(srcRid) {
+		ok, err := content.CheckAvailable(q, srcRid)
+		if err != nil {
+			return deltaUnverifiable, nil, err
+		}
+		if !ok {
+			return deltaUnverifiable, nil, nil
+		}
+	}
+	src, err := p.basis.ExpandUnchecked(q, srcRid)
 	if err != nil {
 		return deltaMismatch, nil, nil
 	}
@@ -362,10 +442,20 @@ func runPass(r *repo.Repo,
 	if r == nil {
 		panic("sync.runPass: r must not be nil")
 	}
-	if fn == nil {
-		panic("sync.runPass: fn must not be nil")
+	return runPassIn(r.WithBoundTx, fn)
+}
+
+// runPassIn is runPass in the transaction begin opens: r.WithBoundTx, or
+// r.WithBoundReadTx for a pass that stores nothing.
+func runPassIn(begin func(func(bound *repo.Repo) error) error,
+	fn func(bound *repo.Repo) (cardErr, err error)) (cardErr, err error) {
+	if begin == nil {
+		panic("sync.runPassIn: begin must not be nil")
 	}
-	err = r.WithBoundTx(func(bound *repo.Repo) error {
+	if fn == nil {
+		panic("sync.runPassIn: fn must not be nil")
+	}
+	err = begin(func(bound *repo.Repo) error {
 		var ferr error
 		cardErr, ferr = fn(bound)
 		if ferr == nil && abortsPass(cardErr) {

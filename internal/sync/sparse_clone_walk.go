@@ -65,13 +65,14 @@ func (h *handler) emitCloneResume(round *cloneBatch) {
 // as an excluded row is, as is a cluster under a horizon; every other
 // artifact goes out at its row, followed by what its walk reaches, each
 // checked against the round's budget.
-func (h *handler) cloneSparseRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+func (h *handler) cloneSparseRow(round *cloneBatch, c cloneCandidate) (bool, error) {
+	rid, uuid, fullSize := c.rid, c.uuid, c.fullSize
 	w := h.keep.walk
 	kind, d := w.classify(rid)
 	already := round.sent[rid]
 	if !w.atRow(kind) || w.unreached(kind, uuid) {
 		if !already {
-			round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+			round.bytesSent += excludedCost(c)
 		}
 		return true, nil
 	}

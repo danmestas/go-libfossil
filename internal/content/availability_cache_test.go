@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
@@ -243,5 +244,50 @@ func TestAvailabilityCacheMustNotSpanAPurge(t *testing.T) {
 		t.Skip("a cache carried across a purge no longer reports the purged hash " +
 			"available -- the scope constraint this test guards has been made " +
 			"unnecessary; simplify the AvailabilityCache doc comment to match")
+	}
+}
+
+// TestAvailabilityCacheForgetUnavailable pins what a receive keeps between
+// stores: a delta found available stays decided without a walk, while one
+// found unavailable is asked again, so the store that fills its basis is
+// seen.
+func TestAvailabilityCacheForgetUnavailable(t *testing.T) {
+	d := setupTestDB(t)
+	base := []byte("the basis of a delta that arrives before its basis does")
+	target := []byte("the target of a delta that arrives before its basis does")
+	dl, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseUUID := hash.SHA1(base)
+	baseRid, err := blob.StorePhantom(d, baseUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rid, err := blob.StoreDeltaRaw(d, hash.SHA1(target), dl, baseRid, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ground := []byte("a full-text artifact, available from the start")
+	groundRid, _, err := blob.Store(d, ground)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cache := NewAvailabilityCache()
+	if cache.isAvailable(d, rid) || !cache.isAvailable(d, groundRid) {
+		t.Fatal("wrong first verdicts")
+	}
+	if _, _, err := blob.Store(d, base); err != nil { // fills the phantom
+		t.Fatal(err)
+	}
+	cache.ForgetUnavailable()
+	counter := &countingQuerier{inner: d}
+	if !cache.isAvailable(counter, rid) {
+		t.Fatal("the delta is still unavailable once its basis arrived")
+	}
+	counter.availSteps = 0
+	if !cache.isAvailable(counter, groundRid) || counter.availSteps != 0 {
+		t.Fatalf("an available verdict was walked again: %d steps", counter.availSteps)
 	}
 }

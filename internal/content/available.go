@@ -131,6 +131,15 @@ func AvailableByUUID(q db.Querier, uuid string) (libfossil.FslID, bool) {
 	return rid, available
 }
 
+// CheckAvailable is IsAvailable that reports a database fault as an error,
+// distinct from content that is simply not there, which is (false, nil).
+func CheckAvailable(q db.Querier, rid libfossil.FslID) (bool, error) {
+	if q == nil {
+		panic("content.CheckAvailable: q must not be nil")
+	}
+	return checkAvailable(q, rid)
+}
+
 // CheckAvailableByUUID is AvailableByUUID that reports a database fault as an
 // error, distinct from content that is simply not there (an unknown uuid, a
 // phantom, or a delta on one), which is (0, false, nil).
@@ -230,6 +239,21 @@ func NewAvailabilityCache() *AvailabilityCache {
 	return &AvailabilityCache{
 		avail: make(map[libfossil.FslID]bool),
 		rids:  make(map[string]libfossil.FslID),
+	}
+}
+
+// ForgetUnavailable drops every unavailable verdict and keeps the available
+// ones. It is for a caller whose store only gains content between questions,
+// a receive: an artifact that was available stays so, while one that was not
+// may have had its basis filled since.
+func (a *AvailabilityCache) ForgetUnavailable() {
+	if a == nil {
+		return
+	}
+	for rid, ok := range a.avail {
+		if !ok {
+			delete(a.avail, rid)
+		}
 	}
 }
 

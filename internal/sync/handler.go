@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -283,6 +284,11 @@ type handler struct {
 	// cloneRead is Read derived from Clone before any login, as page_xfer
 	// derives it from nobody's capabilities ahead of its card loop.
 	cloneRead bool
+
+	// sources memoizes forwardableSource for the request, whose snapshot
+	// does not change under it: a round's chain walks and sentEarlier's
+	// searches ask about the same rows again and again.
+	sources map[int]forwardable
 }
 
 func (h *handler) initAuth() {
@@ -488,8 +494,16 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		h.emitCapabilityPragmas()
 	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
-	// runs them after db_begin_write, and so does the closing crosslink.
-	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
+	// runs them after db_begin_write, and so does the closing crosslink. A
+	// request none of whose cards can write runs in a read transaction
+	// instead: it holds the write lock from no other request, and a clone
+	// round on a large repository is served for longer than a waiting
+	// request's busy timeout.
+	begin := h.repo.WithBoundTx
+	if readOnlyRequest(req.Cards) {
+		begin = h.repo.WithBoundReadTx
+	}
+	if _, err := runPassIn(begin, func(bound *repo.Repo) (error, error) {
 		defer h.bindRepo(bound)()
 		return nil, h.processInTx(ctx, req)
 	}); err != nil {
@@ -503,6 +517,32 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// readOnlyRequest reports whether no card of a request can make the handler
+// write: it neither pushes (push, file, cfile, private, an igot under push)
+// nor sends configuration, unversioned content or table rows, nor a pragma
+// whose answer writes: uv-hash and xtable-hash (which an unversioned or table
+// sync sends in place of a push card) and the check-in lock pair. Without a
+// push card an igot only records what the client holds. A read transaction
+// refuses a write the list misses, under the ncruces driver at least.
+func readOnlyRequest(cards []xfer.Card) bool {
+	for _, card := range cards {
+		switch c := card.(type) {
+		case *xfer.LoginCard, *xfer.CloneCard, *xfer.PullCard, *xfer.CookieCard,
+			*xfer.GimmeCard, *xfer.IGotCard, *xfer.ReqConfigCard,
+			*xfer.BadFileCard, *xfer.BadCommandCard, *xfer.ErrorCard,
+			*xfer.MessageCard, *xfer.CloneSeqNoCard:
+		case *xfer.PragmaCard:
+			switch c.Name {
+			case "uv-hash", "xtable-hash", "ci-lock", "ci-unlock":
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // processInTx is process's work inside the request transaction. A §8.1
@@ -1903,7 +1943,8 @@ func (h *handler) newCloneBatch() *cloneBatch {
 
 func (h *handler) walkCloneRows(round *cloneBatch) error {
 	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		`SELECT rid, uuid, size, substr(content, 1, 4) FROM blob
+		  WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid`,
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -1914,10 +1955,13 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 		var rid int
 		var uuid string
 		var fullSize int
-		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
+		var prefix []byte
+		if err := rows.Scan(&rid, &uuid, &fullSize, &prefix); err != nil {
 			return err
 		}
-		more, err := h.cloneRow(round, rid, uuid, fullSize)
+		more, err := h.cloneRow(round, cloneCandidate{
+			rid: rid, uuid: uuid, fullSize: fullSize, storedSize: storedSize(prefix, fullSize),
+		})
 		if err != nil {
 			return err
 		}
@@ -1928,9 +1972,39 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 	return rows.Err()
 }
 
+// excludedCost is what a round is charged for a row it walks past (§6.2,
+// SC-6.2-1): what a dense round charges to send it as stored. Charging the
+// expanded size instead made a sparse round of fossil-scm.org's repository
+// cover a hundredth of a dense round's rows, and the clone outlasted
+// MaxRounds.
+func excludedCost(c cloneCandidate) int {
+	return cloneCardOverheadBytes + c.storedSize
+}
+
+// cloneCandidate is one row a clone round may send. storedSize is the size
+// of its stored bytes once inflated: its delta when it is stored as one.
+type cloneCandidate struct {
+	rid        int
+	uuid       string
+	fullSize   int
+	storedSize int
+}
+
+// storedSize reads a blob's inflated stored size from the four-byte
+// big-endian prefix fossil's blob_compress writes ahead of the zlib stream,
+// so a row can be charged without inflating it. A content too short to
+// carry the prefix is charged its full size.
+func storedSize(prefix []byte, fullSize int) int {
+	if len(prefix) < 4 {
+		return max(fullSize, 0)
+	}
+	return int(binary.BigEndian.Uint32(prefix))
+}
+
 // cloneRow offers one candidate row to the round. It reports false once the
 // round is full, having set the cursor the client resumes from.
-func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
+	rid, uuid, fullSize := c.rid, c.uuid, c.fullSize
 	// A higher-rid delta source that a dependent's chain already pulled in
 	// this round is on the wire; skip it before it can consume budget or
 	// advance the cursor a second time. A sparse walk still owes the walk of
@@ -1938,6 +2012,12 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 	walk := h.keep != nil && h.keep.walk != nil
 	if round.sent[rid] && !walk {
 		return true, nil
+	}
+	if !walk {
+		earlier, err := h.sentEarlier(rid)
+		if err != nil || earlier {
+			return err == nil, err
+		}
 	}
 	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
 	if err != nil || shunned {
@@ -1952,13 +2032,12 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 		return false, nil
 	}
 	if walk {
-		return h.cloneSparseRow(round, rid, uuid, fullSize)
+		return h.cloneSparseRow(round, c)
 	}
 	// §6.2: a cone-excluded row is charged as a dense round would charge
-	// it, at no less than its expanded size, so the walk stops no later
-	// than a dense batch over the same rows would.
+	// it, at the size of its stored bytes (excludedCost).
 	if !h.keep.keeps(libfossil.FslID(rid)) {
-		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		round.bytesSent += excludedCost(c)
 		return true, nil
 	}
 	sent, err := h.cloneSend(round, rid, uuid, fullSize)
@@ -2121,20 +2200,9 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		if src == 0 {
 			return append(chain, m), nil // full-content tip
 		}
-		info, ok, err := h.loadCloneBlob(int(src))
+		info, forwardable, err := h.forwardableSource(int(src))
 		if err != nil {
 			return nil, err
-		}
-		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			h.keep.sourceKept(int(src)) && (!info.priv || h.syncPrivate)
-		if forwardable {
-			// Checked before sent: a withheld source is never on the wire,
-			// whatever an earlier chain recorded.
-			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerReadsTrees)
-			if err != nil {
-				return nil, err
-			}
-			forwardable = !barred
 		}
 		if !forwardable {
 			m.expanded = true
@@ -2145,6 +2213,13 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		if sent[int(src)] {
 			return chain, nil // source already on the wire this round
 		}
+		earlier, err := h.sentEarlier(int(src))
+		if err != nil {
+			return nil, err
+		}
+		if earlier {
+			return chain, nil // the client holds the source from an earlier round
+		}
 		curRID, curUUID, curUSize, curPriv = int(src), info.uuid, info.size, info.priv
 	}
 	// Walk cap hit: force the deepest artifact to full content so its delta
@@ -2152,6 +2227,129 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 	chain[len(chain)-1].srcUUID = ""
 	chain[len(chain)-1].expanded = true
 	return chain, nil
+}
+
+// forwardableSource reports whether a chain may name src as a delta source
+// this clone sends: a held row inside the snapshot bound that the store cone
+// keeps as a source, public unless the clone takes private content, and no
+// tree the §7.2 gate withholds from this client.
+func (h *handler) forwardableSource(src int) (cloneBlobRow, bool, error) {
+	if f, ok := h.sources[src]; ok {
+		return f.info, f.ok, nil
+	}
+	info, ok, err := h.decideSource(src)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if h.sources == nil {
+		h.sources = make(map[int]forwardable)
+	}
+	h.sources[src] = forwardable{info: info, ok: ok}
+	return info, ok, nil
+}
+
+// forwardable is a memoized forwardableSource verdict.
+type forwardable struct {
+	info cloneBlobRow
+	ok   bool
+}
+
+// decideSource is forwardableSource without the memo.
+func (h *handler) decideSource(src int) (cloneBlobRow, bool, error) {
+	info, ok, err := h.loadCloneBlob(src)
+	if err != nil || !ok {
+		return cloneBlobRow{}, false, err
+	}
+	if info.size < 0 || src > h.cloneSnapMax || !h.keep.sourceKept(src) ||
+		(info.priv && !h.syncPrivate) {
+		return info, false, nil
+	}
+	// Checked before sent: a withheld source is never on the wire, whatever
+	// an earlier chain recorded.
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(src), h.peerReadsTrees)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	return info, !barred, nil
+}
+
+// maxSentEarlierRows bounds the rows sentEarlier examines below one row.
+const maxSentEarlierRows = 256
+
+// sentEarlier reports whether rid went out in an earlier round of this clone.
+// Rounds take rows in rid order and send each with its delta chain, source
+// first, through every source the clone forwards; so rid went out when a row
+// below the cursor that its round sent reaches rid through forwardable
+// sources. fossil deltifies each version of a file against the next, so the
+// versions' rows come in rid order, each a delta on a later one: the oldest
+// row's round sends the whole history, and without this each later version's
+// row sent the rest of it again in its own round. A dense clone of the Fossil
+// repository carried its histories about five times over, each copy verified
+// again by the client.
+//
+// The search walks down the delta table from rid, through rows that are
+// forwardable sources themselves, examining at most maxSentEarlierRows rows,
+// far short of maxCloneChainWalk. Not finding such a row sends rid again,
+// which is only redundant. A row below the cursor that was a phantom or
+// private when its round passed it, and has since been filled or published,
+// was not sent but is taken as sent; rows below the cursor are not sent again
+// in any case.
+func (h *handler) sentEarlier(rid int) (bool, error) {
+	if h.cloneSeq <= 1 {
+		return false, nil
+	}
+	frontier := []int{rid}
+	examined := 0
+	for len(frontier) > 0 {
+		var next []int
+		for _, parent := range frontier {
+			kids, err := childRows(h.repo.DB(), libfossil.FslID(parent), nil)
+			if err != nil {
+				return false, err
+			}
+			// rid went out only as a source; asked once it is one.
+			if parent == rid && len(kids) > 0 {
+				if _, ok, err := h.forwardableSource(rid); err != nil || !ok {
+					return false, err
+				}
+			}
+			for _, kid := range kids {
+				if examined++; examined > maxSentEarlierRows {
+					return false, nil
+				}
+				sent, err := h.sentAsRow(int(kid))
+				if err != nil || sent {
+					return sent, err
+				}
+				_, ok, err := h.forwardableSource(int(kid))
+				if err != nil {
+					return false, err
+				}
+				if ok {
+					next = append(next, int(kid))
+				}
+			}
+		}
+		frontier = next
+	}
+	return false, nil
+}
+
+// sentAsRow reports whether rid is a row an earlier round of this clone sent
+// as itself: below the cursor, held, and not one cloneRow or
+// buildCloneArtifact withholds (shunned, private to a public clone, outside
+// the store cone, a refused SHA3 name or a withheld tree).
+func (h *handler) sentAsRow(rid int) (bool, error) {
+	if rid >= h.cloneSeq || rid > h.cloneSnapMax || !h.keep.keeps(libfossil.FslID(rid)) {
+		return false, nil
+	}
+	info, ok, err := h.loadCloneBlob(rid)
+	if err != nil || !ok || info.size < 0 || (info.priv && !h.syncPrivate) ||
+		sha3Barred(info.uuid, h.peerVersion) {
+		return false, err
+	}
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(rid), h.peerReadsTrees)
+	return err == nil && !barred, err
 }
 
 // buildCloneArtifact assembles the wire cards that deliver artifact rid to the

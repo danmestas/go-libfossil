@@ -381,8 +381,24 @@ func (rl *ReceiveLinker) linkInSavepoint(
 // deferCheckin reports whether checkin rid (deck d) must wait for a blob still
 // in flight -- its baseline or a file (missingCheckinRefs) -- recording its
 // baseline gap and queuing it as a waiter on each missing blob when so.
+//
+// A clone into a sparse store waits on no file: the origin's walk sends every
+// file the store keeps in the same session, nothing reads the store before
+// the clone ends, and most files never arrive. Waiting on them cost a content
+// horizon clone of fossil-scm.org's repository its first round, past 20
+// minutes. A pull still waits (missingCheckinRefs): its files come only when
+// asked for, and a check-in linked first leaves them unrequested.
 func (rl *ReceiveLinker) deferCheckin(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) (bool, error) {
-	missing := missingCheckinRefs(tx, d, rl.state.guard)
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return false, err
+	}
+	var missing []string
+	if storeCone != nil {
+		missing = missingFileSet(tx, d, rl.state.guard)
+	} else {
+		missing = missingCheckinRefs(tx, d, rl.state.guard)
+	}
 	if len(missing) == 0 {
 		return false, nil
 	}

@@ -1375,13 +1375,14 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
 //
-// A sparse store waits on no file: it holds only what its cone keeps, so most
-// files never arrive, and its completeness is SparseCheckinReady's to judge.
-// Waiting cost a clone of fossil-scm.org's repository one availability query
-// per file of every check-in, and left it in its first round after 20 minutes.
+// A sparse store does not wait on a file its path members exclude: it never
+// arrives. Waiting on those cost a cone clone of fossil-scm.org's repository
+// one availability query per file of every check-in, and left it in its
+// first round after 20 minutes.
 func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 	missing := missingFileSet(tx, d, g)
-	if c, err := content.StoreCone(tx); err != nil || c != nil {
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
 		return missing
 	}
 	if len(d.P) > 0 {
@@ -1405,6 +1406,9 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []stri
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		if f.UUID == "" { // a deleted file in a delta manifest
+			continue
+		}
+		if storeCone != nil && !storeCone.Covers(f.Name) {
 			continue
 		}
 		if _, dup := seen[f.UUID]; dup {

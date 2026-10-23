@@ -2,6 +2,7 @@ package annotate
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"time"
 
@@ -14,9 +15,16 @@ import (
 
 // Line represents an annotated line of a file, with the text and the version
 // that last changed it.
+//
+// BelowHorizon marks a line whose origin lies at or below the structural
+// horizon of the store (draft-fossil-horizon-00 §5.5): the walk reached a
+// parent the store does not hold because it lies below the horizon, so the
+// line is reported as originating at the horizon, and Version is the
+// horizon's check-in rather than the line's origin.
 type Line struct {
-	Text    string
-	Version VersionInfo
+	Text         string
+	Version      VersionInfo
+	BelowHorizon bool
 }
 
 // VersionInfo identifies the commit that last changed a line.
@@ -74,14 +82,27 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 			"annotate: %s is binary or has a line over %d bytes", opts.FilePath, lengthMask)
 	}
 
-	credit, versions := walkAncestors(r, opts, fileContent, start, startInfo, cache)
+	credit, versions, horizon, err := walkAncestors(r, opts, fileContent, start, startInfo, cache)
+	if err != nil {
+		return nil, fmt.Errorf("annotate: %w", err)
+	}
+	var horizonInfo VersionInfo
+	if horizon != 0 {
+		if horizonInfo, err = versionInfoFor(r, horizon); err != nil {
+			return nil, fmt.Errorf("annotate: version info for the horizon: %w", err)
+		}
+	}
 	result := make([]Line, len(start))
 	for i, d := range start {
-		v := credit[i]
-		if v < 0 {
-			v = len(versions) - 1 // in the oldest version the walk reached
+		switch v := credit[i]; {
+		case v >= 0:
+			result[i] = Line{Text: d.text, Version: versions[v]}
+		case horizon != 0:
+			result[i] = Line{Text: d.text, Version: horizonInfo, BelowHorizon: true}
+		default:
+			// In the oldest version the walk reached.
+			result[i] = Line{Text: d.text, Version: versions[len(versions)-1]}
 		}
-		result[i] = Line{Text: d.text, Version: versions[v]}
 	}
 	return result, nil
 }
@@ -109,10 +130,15 @@ const annotateCacheBytes = 256 << 20
 // A run of check-ins that leave the file unchanged counts as its oldest
 // check-in, which is where fossil's annotate, reading mlink, sees that
 // version of the file appear.
+//
+// horizon is the store's structural horizon C when the walk stopped at a
+// parent below it (draft-fossil-horizon-00 §5.5), 0 otherwise: a line
+// without credit then originates at or below the horizon, which the store
+// cannot tell apart.
 func walkAncestors(
 	r *repo.Repo, opts Options, startContent []byte, start []dline,
 	startInfo VersionInfo, cache *content.Cache,
-) (credit []int, versions []VersionInfo) {
+) (credit []int, versions []VersionInfo, horizon libfossil.FslID, err error) {
 	credit = make([]int, len(start))
 	for i := range credit {
 		credit[i] = -1
@@ -133,7 +159,10 @@ func walkAncestors(
 		}
 		parentContent, err := loadFileAt(r, parentRID, opts.FilePath, cache)
 		if err != nil {
-			break // the file is new here: what is left belongs to this version
+			// The file is new here, and what is left belongs to this
+			// version; or the parent lies below the horizon, and it may not.
+			horizon, err = crossedHorizon(r, parentRID)
+			return credit, versions, horizon, err
 		}
 		parentInfo, err := versionInfoFor(r, parentRID)
 		if err != nil {
@@ -150,7 +179,21 @@ func walkAncestors(
 		}
 		versions = append(versions, parentInfo)
 	}
-	return credit, versions
+	return credit, versions, 0, nil
+}
+
+// crossedHorizon is the rid of the store's structural horizon C when parent
+// is a check-in below it, 0 otherwise.
+func crossedHorizon(r *repo.Repo, parent libfossil.FslID) (libfossil.FslID, error) {
+	h, below, err := content.BelowHorizon(context.Background(), r.DB(), parent)
+	if err != nil || !below {
+		return 0, err
+	}
+	var rid libfossil.FslID
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=? AND size>=0", h.Hash()).Scan(&rid); err != nil {
+		return 0, fmt.Errorf("the horizon %s: %w", h.Hash(), err)
+	}
+	return rid, nil
 }
 
 // creditInsertions credits to version v every start line the edit script

@@ -95,11 +95,18 @@ type DiffEntry struct {
 }
 
 // AnnotatedLine is a single line of blame/annotate output.
+//
+// BelowHorizon marks a line whose origin lies at or below the store's
+// structural horizon (draft-fossil-horizon-00 §5.5), which the store does not
+// hold the history to attribute: UUID, User and Date then describe the
+// horizon's check-in, at which the line is reported as originating, and a
+// deepen (repo cone deepen) brings the history that attributes it.
 type AnnotatedLine struct {
-	Text string
-	UUID string
-	User string
-	Date time.Time
+	Text         string
+	UUID         string
+	User         string
+	Date         time.Time
+	BelowHorizon bool
 }
 
 // AnnotateOpts configures an annotate operation.
@@ -125,10 +132,11 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
 	result := make([]AnnotatedLine, len(lines))
 	for i, l := range lines {
 		result[i] = AnnotatedLine{
-			Text: l.Text,
-			UUID: l.Version.UUID,
-			User: l.Version.User,
-			Date: l.Version.Date,
+			Text:         l.Text,
+			UUID:         l.Version.UUID,
+			User:         l.Version.User,
+			Date:         l.Version.Date,
+			BelowHorizon: l.BelowHorizon,
 		}
 	}
 	return result, nil

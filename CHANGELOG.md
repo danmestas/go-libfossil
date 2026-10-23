@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Annotating back past a structural horizon (draft-fossil-horizon-00
+  §5.5) reports a line whose origin lies at or below the horizon as
+  originating at the horizon, rather than crediting the oldest held
+  version: `AnnotatedLine.BelowHorizon` marks it, with `UUID`, `User` and
+  `Date` describing the horizon's check-in, and `libfossil repo annotate`
+  prints such a line against `^<horizon>` and a trailing note naming the
+  horizon and `repo cone deepen`. A content horizon holds every manifest
+  and marks nothing.
 - Content horizons in the public API and CLI. A horizon is part of a
   store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
   builds one, with or without path members, and `Cone.Horizon` and

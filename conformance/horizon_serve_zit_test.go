@@ -176,11 +176,20 @@ func hzZitServed(exchanges []hzExchange, c string, below map[string]bool) error 
 type hzExchange struct{ request, reply *xfer.Message }
 
 // hzRecorder serves r over HTTP as go-libfossil's handler does and records
-// each exchange decoded.
+// each exchange decoded. While ignorant it serves as a horizon-ignorant peer
+// does: the horizon pragmas are dropped from each request before serving
+// (horizon §6.3), and the request is recorded as sent.
 type hzRecorder struct {
 	r         *repo.Repo
 	mu        gosync.Mutex
 	exchanges []hzExchange
+	ignorant  bool
+}
+
+func (s *hzRecorder) setIgnorant(v bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ignorant = v
 }
 
 func (s *hzRecorder) take() []hzExchange {
@@ -202,7 +211,19 @@ func (s *hzRecorder) ServeHTTP(w http.ResponseWriter, hr *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := sync.HandleSync(hr.Context(), s.r, req)
+	served := req
+	s.mu.Lock()
+	if s.ignorant {
+		served = &xfer.Message{}
+		for _, c := range req.Cards {
+			if p, ok := c.(*xfer.PragmaCard); ok && strings.HasPrefix(p.Name, "horizon") {
+				continue
+			}
+			served.Cards = append(served.Cards, c)
+		}
+	}
+	s.mu.Unlock()
+	resp, err := sync.HandleSync(hr.Context(), s.r, served)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

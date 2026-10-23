@@ -9,7 +9,8 @@
 //   - LastWriterWins: always picks the remote side
 //   - ConflictFork: creates a fork instead of merging
 //
-// [FindCommonAncestor] walks the plink DAG to locate the merge base
-// for two divergent checkins. [DetectForks] identifies open forks in
-// a repository.
+// [FindPivot] is fossil's pivot_find: it walks the plink DAG, newest
+// check-in first, to the merge base fossil's merge chooses, and
+// [FindCommonAncestor] asks it for two check-ins. [DetectForks]
+// identifies open forks in a repository.
 package merge

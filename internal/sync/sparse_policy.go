@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
@@ -38,21 +39,122 @@ func (h *handler) servesPartialMirror() (bool, error) {
 
 // sparseKeep is request-local. Unknown non-file artifacts remain dense; a file
 // shared by covered and uncovered names is kept under either name. A clone
-// walks its round (walk); a pull's inventory classifies the store (refs).
+// walks its round (walk); a pull's inventory classifies the store (refs). A
+// content horizon (draft-fossil-horizon-00 §3.2, §4.5) also drops the blobs
+// below it and every cluster: the keep set is the intersection of the two.
 type sparseKeep struct {
-	refs *content.ConeReferences
-	walk *coneWalk
+	refs     *content.ConeReferences
+	below    func(libfossil.FslID) bool // nil without a horizon the store can place
+	clusters map[libfossil.FslID]bool   // nil without a horizon
+	walk     *coneWalk
+	// unreached are the manifests and nodes a structural request does not
+	// keep (horizon §5.1, §6.2); nil for any other request.
+	unreached map[libfossil.FslID]bool
+	// slots are the nodes a horizon request with path members keeps of the
+	// trees its horizon keeps (horizon §6.2); nil for any other request.
+	slots *content.SlotKeep
+	// read is how many artifacts the classification read from the store.
+	read int
+	// joined reports a cursor from before the held set gained a check-in
+	// at or below it (horizon §6.2.6); nil without a horizon.
+	joined func(cursor int64) (bool, error)
+}
+
+// withStructure makes k keep, of the store's manifests and nodes, only those
+// a structural request's held set reaches (horizon §6.2).
+func (k *sparseKeep) withStructure(q db.Querier, s *structuralServe) error {
+	if s == nil {
+		return nil
+	}
+	rows, err := q.Query("SELECT objid, uuid FROM event JOIN blob ON blob.rid=event.objid WHERE type='ci'")
+	if err != nil {
+		return fmt.Errorf("sparse keep: check-ins: %w", err)
+	}
+	k.unreached = map[libfossil.FslID]bool{}
+	for rows.Next() {
+		var rid libfossil.FslID
+		var uuid string
+		if err := rows.Scan(&rid, &uuid); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		if !s.reach[uuid] {
+			k.unreached[rid] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("sparse keep: check-ins: %w", err)
+	}
+	for rid, uuid := range k.refs.Nodes() {
+		if !s.reach[uuid] {
+			k.unreached[rid] = true
+		}
+	}
+	return nil
+}
+
+// withSlots makes k withhold, for a horizon request that also carries path
+// members, the nodes of the trees the horizon keeps that no slot that may
+// hold an in-cone path reaches (horizon §6.2): every check-in's trees at the
+// content depth, those s reaches at the structural one.
+func (k *sparseKeep) withSlots(ctx context.Context, cl classifier, c *cone.Cone, s *structuralServe) error {
+	if _, ok := c.Horizon(); !ok || len(c.Include()) == 0 {
+		return nil
+	}
+	var reach map[string]bool
+	if s != nil {
+		reach = s.reach
+	}
+	var err error
+	k.slots, err = cl.slots(ctx, k.refs, c, reach)
+	return err
 }
 
 func newSparseKeep(ctx context.Context, q db.Querier, c *cone.Cone) (*sparseKeep, error) {
+	return newSparseKeepWith(ctx, q, c, freshClassifier{})
+}
+
+// newSparseKeepWith is the keep set of c as cl classifies the store.
+func newSparseKeepWith(ctx context.Context, q db.Querier, c *cone.Cone, cl classifier) (*sparseKeep, error) {
 	if c == nil {
 		return nil, nil
 	}
-	refs, err := content.LoadConeReferences(ctx, q, c)
+	refs, err := cl.references(ctx, q, c)
 	if err != nil {
 		return nil, err
 	}
-	return &sparseKeep{refs: refs}, nil
+	k := &sparseKeep{refs: refs, read: cl.read(refs)}
+	if _, ok := c.Horizon(); !ok {
+		return k, nil
+	}
+	if k.below, err = cl.below(ctx, q, refs, c); err != nil {
+		return nil, err
+	}
+	if k.clusters, err = clusterRIDs(ctx, q); err != nil {
+		return nil, err
+	}
+	h, _ := c.Horizon()
+	k.joined = func(cursor int64) (bool, error) { return cl.joinedAfter(ctx, q, h, cursor) }
+	return k, nil
+}
+
+// clusterRIDs names every cluster the store has crosslinked, held or not.
+func clusterRIDs(ctx context.Context, q db.Querier) (map[libfossil.FslID]bool, error) {
+	rows, err := q.Query("SELECT rid FROM tagxref WHERE tagid=7")
+	if err != nil {
+		return nil, fmt.Errorf("sparse keep: clusters: %w", err)
+	}
+	out := map[libfossil.FslID]bool{}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		var rid libfossil.FslID
+		if err := rows.Scan(&rid); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		out[rid] = true
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
 }
 
 func (h *handler) ensureSparseKeep() error {
@@ -64,12 +166,29 @@ func (h *handler) ensureSparseKeep() error {
 		ctx = context.Background()
 	}
 	if h.walkClone {
-		h.keep = &sparseKeep{walk: newConeWalk(ctx, h)}
+		w := newConeWalk(ctx, h)
+		if err := w.placeHorizon(); err != nil {
+			return err
+		}
+		h.keep = &sparseKeep{walk: w}
 		return nil
 	}
-	var err error
-	h.keep, err = newSparseKeep(ctx, h.repo.DB(), h.cone)
-	return err
+	cl, err := h.classifier(ctx, h.repo.DB())
+	if err != nil {
+		return err
+	}
+	keep, err := newSparseKeepWith(ctx, h.repo.DB(), h.cone, cl)
+	if err != nil {
+		return err
+	}
+	if err := keep.withStructure(h.repo.DB(), h.structural); err != nil {
+		return err
+	}
+	if err := keep.withSlots(ctx, cl, h.cone, h.structural); err != nil {
+		return err
+	}
+	h.keep = keep
+	return nil
 }
 
 func (k *sparseKeep) classified() int {
@@ -79,7 +198,7 @@ func (k *sparseKeep) classified() int {
 	case k.walk != nil:
 		return k.walk.classified
 	}
-	return k.refs.Artifacts()
+	return k.read
 }
 
 // keeps filters a pull's inventory; a clone's walk never asks.
@@ -87,7 +206,30 @@ func (k *sparseKeep) keeps(rid libfossil.FslID) bool {
 	if k == nil || k.walk != nil {
 		return true
 	}
-	return !k.refs.Outside(rid)
+	return !k.refs.Outside(rid) && (k.below == nil || !k.below(rid)) && !k.clusters[rid] && !k.unreached[rid] &&
+		!k.slots.Withholds(rid)
+}
+
+// withholds reports a node a pull's request may not have even by name
+// (horizon §6.2): one its slot walk withholds.
+func (k *sparseKeep) withholds(rid libfossil.FslID) bool {
+	return k != nil && k.walk == nil && k.slots.Withholds(rid)
+}
+
+// voids reports a cursor from before the classification kept something
+// older (horizon §6.2.6): a node the slot walk kept, or a check-in that
+// joined the held set.
+func (k *sparseKeep) voids(cursor int64) (bool, error) {
+	if k == nil || k.walk != nil {
+		return false, nil
+	}
+	if k.slots.Voids(cursor) {
+		return true, nil
+	}
+	if k.joined == nil {
+		return false, nil
+	}
+	return k.joined(cursor)
 }
 
 func (k *sparseKeep) sourceKept(rid int) bool {
@@ -100,7 +242,11 @@ func (k *sparseKeep) sourceKept(rid int) bool {
 // filterSparseReceived filters only artifacts this transfer newly acquired.
 // Existing holdings survive a narrower policy; only explicit compaction may
 // reclaim them. Reference discovery precedes filtering so arrival order cannot
-// discard a blob before a later manifest names it inside the cone.
+// discard a blob before a later manifest names it inside the cone. Under a
+// content horizon the store so classifies locally what a horizon-ignorant
+// peer sent densely (draft-fossil-horizon-00 §6.3). A blob no held manifest
+// names yet is kept, as an unreferenced holding, and a held delta's base is
+// kept whatever its class (§4.2).
 func filterSparseReceived(ctx context.Context, q db.Querier, received map[string]bool, cache *content.Cache) (int, error) {
 	c, err := content.StoreCone(q)
 	if err != nil || c == nil {
@@ -241,11 +387,64 @@ func rememberSparseReceived(q db.Querier, received map[string]bool, uuid string)
 	return nil
 }
 
+// coversRequest reports whether this store, under its cone have, holds all a
+// clone under the request's cone keeps (sparse-cone §5.3, horizon §6.4): the
+// request's paths lie inside the store's, and under a store horizon the
+// request names a horizon whose held set lies inside the store's own, both
+// computed over the store. A horizon the store cannot place covers nothing.
+func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
+	if !coneContains(have, h.cone) {
+		return false, nil
+	}
+	if have == nil {
+		return true, nil
+	}
+	own, ok := have.Horizon()
+	if !ok {
+		return true, nil
+	}
+	want, ok := h.cone.Horizon()
+	if !ok {
+		return false, nil
+	}
+	// A structural store holds no manifest below its horizon, which a
+	// content-horizon clone keeps.
+	if own.Depth() == cone.DepthStructural && want.Depth() != cone.DepthStructural {
+		return false, nil
+	}
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	held, placed, err := horizon.Place(ctx, h.repo.DB(), own)
+	if err != nil || !placed {
+		return false, err
+	}
+	asked, placed, err := horizon.Place(ctx, h.repo.DB(), want)
+	if err != nil || !placed {
+		return false, err
+	}
+	inside := make(map[libfossil.FslID]bool, len(held))
+	for _, rid := range held {
+		inside[rid] = true
+	}
+	for _, rid := range asked {
+		if !inside[rid] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func coneContains(have, want *cone.Cone) bool {
 	if have == nil {
 		return true
 	}
 	if want == nil {
+		return false
+	}
+	// A horizon-only request keeps every path, as a dense one does.
+	if len(want.Include()) == 0 && len(have.Include()) > 0 {
 		return false
 	}
 	// Widening beneath an excluded interval cannot be certified by the root
@@ -270,5 +469,19 @@ func localConePragmas(q db.Querier) ([]xfer.Card, error) {
 	if err != nil {
 		return nil, err
 	}
-	return conePragmas(c), nil
+	offer := ""
+	if h, ok := horizonOf(c); ok && h.Depth() == cone.DepthStructural {
+		if offer, err = seedOffer(q); err != nil {
+			return nil, err
+		}
+	}
+	return conePragmas(c, offer), nil
+}
+
+// horizonOf is c's horizon, ok false for a dense store or a cone without one.
+func horizonOf(c *cone.Cone) (cone.Horizon, bool) {
+	if c == nil {
+		return cone.Horizon{}, false
+	}
+	return c.Horizon()
 }

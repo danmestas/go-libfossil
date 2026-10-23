@@ -66,6 +66,11 @@ type LogEntry struct {
 	Time    time.Time
 	Kind    EventKind
 	Parents []string
+	// HorizonParents is the subset of Parents that the store's origin
+	// labelled below its structural horizon: each is the horizon, not a
+	// missing parent and not damage (draft-fossil-horizon-00 §5.4). Ancestry
+	// ends at such a parent without an error.
+	HorizonParents []string
 }
 
 // TimelineEntry represents a single event as returned by Timeline. It
@@ -90,11 +95,18 @@ type DiffEntry struct {
 }
 
 // AnnotatedLine is a single line of blame/annotate output.
+//
+// BelowHorizon marks a line whose origin lies at or below the store's
+// structural horizon (draft-fossil-horizon-00 §5.5), which the store does not
+// hold the history to attribute: UUID, User and Date then describe the
+// horizon's check-in, at which the line is reported as originating, and a
+// deepen (repo cone deepen) brings the history that attributes it.
 type AnnotatedLine struct {
-	Text string
-	UUID string
-	User string
-	Date time.Time
+	Text         string
+	UUID         string
+	User         string
+	Date         time.Time
+	BelowHorizon bool
 }
 
 // AnnotateOpts configures an annotate operation.
@@ -120,10 +132,11 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
 	result := make([]AnnotatedLine, len(lines))
 	for i, l := range lines {
 		result[i] = AnnotatedLine{
-			Text: l.Text,
-			UUID: l.Version.UUID,
-			User: l.Version.User,
-			Date: l.Version.Date,
+			Text:         l.Text,
+			UUID:         l.Version.UUID,
+			User:         l.Version.User,
+			Date:         l.Version.Date,
+			BelowHorizon: l.BelowHorizon,
 		}
 	}
 	return result, nil
@@ -395,7 +408,7 @@ func (rv resolver) resolve(name string) (int64, error) {
 		return ridLiteral(h, rest, rv.ciOnly)
 	}
 	if rest, ok := strings.CutPrefix(name, "tag:"); ok {
-		return newestWithSymTag(h, rest, rv.ciOnly)
+		return rv.symTag(rest)
 	}
 	if rest, ok := strings.CutPrefix(name, "root:"); ok {
 		return rv.startOfBranchBy(rest, branchOrigin)
@@ -414,7 +427,7 @@ func (rv resolver) resolve(name string) (int64, error) {
 	if rid, matched, err := hashPrefix(h, name, rv.ciOnly); err != nil || matched {
 		return rid, err
 	}
-	if rid, err := newestWithSymTag(h, name, rv.ciOnly); err != nil || rid != 0 {
+	if rid, err := rv.symTag(name); err != nil || rid != 0 {
 		return rid, err
 	}
 	if trimmed, ok := trimTrailingPunct(name); ok {

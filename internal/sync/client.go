@@ -11,6 +11,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -96,6 +97,17 @@ func (s *session) headerCards(cycle int) ([]xfer.Card, error) {
 		}
 		cards = append(cards, sparse...)
 	}
+	// Horizon §6.2.6: the origin's cursor goes on every request to it, after
+	// the horizon pragma, where zit sends it (sync.zig, the request's
+	// horizon_cursor card): a push's reply announces too.
+	if s.cursor.peer > 0 {
+		cards = append(cards, cursorCard(s.cursor.peer))
+	}
+	// Horizon §6.2.4: asked once, after the cursor, as zit asks it; the
+	// answer rides the first reply.
+	if s.opts.Pull && cycle == 0 && s.opts.MergeBaseOf.Primary != "" {
+		cards = append(cards, &xfer.PragmaCard{Name: horizonMergeBasePragma, Values: s.opts.MergeBaseOf.hashes()})
+	}
 	if s.opts.Private && cycle > 0 {
 		cards = append(cards, sendPrivate)
 	}
@@ -179,8 +191,11 @@ func (s *session) contentCards(cycle int) ([]xfer.Card, error) {
 		cards = append(cards, clusterCards...)
 	}
 
-	// Request cluster catalog on round 2 when pulling.
-	if cycle == 1 && s.opts.Pull {
+	// Request cluster catalog on round 2 when pulling. A horizon store whose
+	// origin serves its horizon is announced what it keeps directly and asks
+	// for none; against a horizon-ignorant origin it asks, since a new
+	// check-in may be named only by a cluster (draft-fossil-horizon-00 §4.5).
+	if cycle == 1 && s.opts.Pull && !s.servedHorizon() {
 		cards = append(cards, &xfer.PragmaCard{Name: "req-clusters"})
 	}
 
@@ -291,8 +306,12 @@ func (s *session) uvRequestCards() ([]xfer.Card, error) {
 // sendUnclustered queries the unclustered table and produces igot cards
 // for artifacts the remote doesn't already have, excluding phantoms.
 func (s *session) sendUnclustered() ([]xfer.Card, error) {
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(`
-		SELECT b.uuid FROM unclustered u JOIN blob b ON b.rid=u.rid
+		SELECT b.rid, b.uuid FROM unclustered u JOIN blob b ON b.rid=u.rid
 		WHERE b.size >= 0
 		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=u.rid)
 		AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)
@@ -305,11 +324,12 @@ func (s *session) sendUnclustered() ([]xfer.Card, error) {
 
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid})
@@ -317,12 +337,70 @@ func (s *session) sendUnclustered() ([]xfer.Card, error) {
 	return cards, rows.Err()
 }
 
+// announceFloor is the rid at or below which this session announces
+// nothing to the origin it addresses, and silent when it announces nothing
+// at all (horizon §6.2.6, zit's announce_from and cursor_pull in sync.zig):
+// under a cursor a pull-only request names nothing, since the origin skips
+// what it served; a request that sends names only what this store appended
+// after the recorded count. Without a record it is 0.
+func (s *session) announceFloor() (floor int64, silent bool) {
+	if s.opts.Pull && !s.opts.Push && s.cursor.peer > 0 {
+		return 0, true
+	}
+	return s.cursor.local, false
+}
+
+// loadCursor reads the record kept for this session's origin, and this
+// store's position as the session starts.
+func (s *session) loadCursor() error {
+	if s.coneDigest == "" {
+		return nil
+	}
+	var err error
+	if s.cursor, err = loadCursor(s.repo.DB(), s.opts.Origin, s.coneDigest); err != nil {
+		return err
+	}
+	s.startPosition, err = storePosition(s.repo.DB())
+	return err
+}
+
+// recordCursor keeps what a converged session leaves the origin knowing: the
+// cursor of its last reply (the old one when none came), and the count of
+// this store's artifacts the origin holds. A session that pushed announced
+// all it holds; a pull sends nothing, so it advances the count only over
+// what it received, and only when nothing of this store's came before it.
+// zit records the same after its pull, push and sync (cmd/sync.zig).
+func (s *session) recordCursor() error {
+	if s.coneDigest == "" || len(s.result.Errors) != 0 {
+		return nil
+	}
+	end, err := storePosition(s.repo.DB())
+	if err != nil {
+		return err
+	}
+	rec := cursorRecord{peer: s.cursor.peer, local: s.cursor.local}
+	if s.peerCursor > 0 {
+		rec.peer = s.peerCursor
+	}
+	switch {
+	case s.opts.Push && !s.pushStopped:
+		rec.local = end
+	case s.cursor.found && s.cursor.local == s.startPosition:
+		rec.local = end
+	}
+	return storeCursor(s.repo.DB(), s.opts.Origin, s.coneDigest, rec)
+}
+
 // sendAllClusters produces igot cards for cluster artifacts that have already
 // been clustered (not in unclustered) and are not phantoms. Sent on round 2+
 // when pushing and the remote has requested blobs (nGimmeRcvd > 0).
 func (s *session) sendAllClusters() ([]xfer.Card, error) {
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(`
-		SELECT b.uuid FROM tagxref tx JOIN blob b ON tx.rid=b.rid
+		SELECT b.rid, b.uuid FROM tagxref tx JOIN blob b ON tx.rid=b.rid
 		WHERE tx.tagid=7
 		AND NOT EXISTS(SELECT 1 FROM unclustered WHERE rid=b.rid)
 		AND NOT EXISTS(SELECT 1 FROM phantom WHERE rid=b.rid)
@@ -337,11 +415,12 @@ func (s *session) sendAllClusters() ([]xfer.Card, error) {
 
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid})
@@ -359,8 +438,12 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 		return nil, nil
 	}
 
+	floor, silent := s.announceFloor()
+	if silent {
+		return nil, nil
+	}
 	rows, err := s.repo.DB().Query(
-		"SELECT b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
+		"SELECT b.rid, b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sendPrivate: %w", err)
@@ -368,11 +451,12 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 	defer rows.Close()
 	var cards []xfer.Card
 	for rows.Next() {
+		var rid int64
 		var uuid string
-		if err := rows.Scan(&uuid); err != nil {
+		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
@@ -643,6 +727,7 @@ func (s *session) processReply(ctx context.Context,
 	var t replyTally
 	s.pass = newReceivePass()
 	defer func() { s.pass = nil }()
+	s.structural.beginReply()
 	for _, card := range msg.Cards {
 		stop, err := s.handleReplyCard(ctx, card, &t)
 		if err != nil {
@@ -668,9 +753,28 @@ func (s *session) processReply(ctx context.Context,
 		s.result.Errors = append(s.result.Errors, "error: "+content.Error())
 		cardErr = nil
 	}
+	// Horizon §6.2.5: the first reply to a request carrying the horizon, a
+	// pull's, decides whether a structural store stays structural, before
+	// the phantoms it learned of are classified. A push alone asks nothing.
+	if s.result.Rounds == 0 && s.opts.Pull {
+		fell, err := s.structural.endFirstReply(s.repo)
+		if err != nil {
+			return false, cardErr, err
+		}
+		s.result.HorizonFallback = s.result.HorizonFallback || fell
+		t.fellBack = fell
+		s.reloadPhantoms = s.reloadPhantoms || fell
+	}
 	if err := s.closeReply(ctx, &t); err != nil {
 		return false, cardErr, err
 	}
+	fell, err := s.structural.endReply(s.repo)
+	if err != nil {
+		return false, cardErr, err
+	}
+	s.result.HorizonFallback = s.result.HorizonFallback || fell
+	t.fellBack = t.fellBack || fell
+	s.reloadPhantoms = s.reloadPhantoms || fell
 	if cardErr != nil {
 		return false, cardErr, nil
 	}
@@ -690,6 +794,11 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	// The phantoms this reply filled are crosslinked together, before the
 	// phantoms that crosslinking creates are loaded below.
 	manifest.AfterDephantomizeBatch(ctx, s.repo, s.dephantomized)
+	for _, rid := range s.dephantomized {
+		if err := noteRekept(s.repo.DB(), rid); err != nil {
+			return err
+		}
+	}
 	s.dephantomized = s.dephantomized[:0]
 	created, err := s.flushNewPhantoms()
 	if err != nil {
@@ -732,10 +841,11 @@ func (s *session) malformedFile(compressed bool) bool {
 
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
-	filesRecvd   int // file and cfile cards received
-	filesSent    int // files queued for the next request on the server's gimme
-	newPhantoms  int // phantoms an igot created
-	privateIGots int // igot HASH 1 answers queued for the server's gimme
+	filesRecvd   int  // file and cfile cards received
+	filesSent    int  // files queued for the next request on the server's gimme
+	newPhantoms  int  // phantoms an igot created
+	privateIGots int  // igot HASH 1 answers queued for the server's gimme
+	fellBack     bool // a structural store fell back, making the manifests below its horizon wanted
 }
 
 // handleReplyCard acts on one reply card. It reports stop when the card ends
@@ -799,6 +909,9 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 	case *xfer.PragmaCard:
 		if c.Name == "link" {
 			return false, s.handleLink(c)
+		}
+		if handled, err := s.structural.pragma(s.repo.DB(), c); handled || err != nil {
+			return false, err
 		}
 		s.handleReplyPragma(c)
 	case *xfer.UVIGotCard, *xfer.UVFileCard, *xfer.UVGimmeCard:
@@ -877,6 +990,24 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 		// Sparse-cone §6.3: the peer applied this request's cone. Every
 		// reply is filtered locally regardless; this only reports the mode.
 		s.result.ConeServed++
+	case c.Name == horizonServedPragma:
+		if d, ok := s.structural.level(c); ok {
+			s.result.HorizonServed++
+			if d == cone.DepthStructural {
+				s.result.StructuralServed++
+			}
+			if u := servedHistoryURL(c); u != "" {
+				s.result.HorizonHistoryURL = u
+			}
+		}
+	case c.Name == horizonCursorPragma:
+		if n, ok := parseCursor(c); ok {
+			s.peerCursor = n
+		}
+	case c.Name == horizonMergeBasePragma:
+		if base, ok := mergeBaseAnswer(c, s.opts.MergeBaseOf); ok && s.opts.MergeBaseOf.Primary != "" {
+			s.result.MergeBaseAnswered, s.result.MergeBase = true, base
+		}
 	case c.Name == sendSubmanifestsPragma:
 		// draft-fossil-submanifests-00 §7.2: the server reads trees. Latched
 		// for the session: a reply without the pragma does not unsay it.
@@ -961,6 +1092,11 @@ func (s *session) converged(t replyTally) (bool, error) {
 			return false, fmt.Errorf("sync: check phantoms: %w", err)
 		}
 	}
+	// Horizon §6.3: a fallback made the manifests below the horizon wanted,
+	// which only another round can ask for.
+	if t.fellBack && s.opts.Pull {
+		return false, nil
+	}
 	// §3.7 (b): files are queued for the next request.
 	if t.filesSent > 0 || len(s.pendingSend) > 0 {
 		return false, nil
@@ -974,8 +1110,11 @@ func (s *session) converged(t replyTally) (bool, error) {
 
 	// If we sent igot cards but the server didn't gimme anything,
 	// clear the unsent table — those artifacts have been announced
-	// and the server either has them or doesn't want them.
-	if s.igotSentThisRound > 0 && t.filesSent == 0 {
+	// and the server either has them or doesn't want them. A pull the
+	// horizon cursor silenced (§6.2.6) stands where such a round stood: the
+	// recorded count, not this table, carries what a later push announces.
+	_, silent := s.announceFloor()
+	if (s.igotSentThisRound > 0 || silent) && t.filesSent == 0 {
 		if _, err := s.repo.DB().Exec("DELETE FROM unsent"); err != nil {
 			return false, fmt.Errorf("sync: delete unsent: %w", err)
 		}
@@ -1083,6 +1222,9 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	// inside the storage transaction instead, so it must not run a second.
 	if linker == nil && dephantomizedRid > 0 {
 		manifest.AfterDephantomize(ctx, r, dephantomizedRid)
+		if rerr := noteRekept(r.DB(), dephantomizedRid); rerr != nil {
+			return errors.Join(err, rerr)
+		}
 	}
 	return err
 }
@@ -1126,7 +1268,7 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		// delta, and a clone's, that xfer_accept_file does not pre-verify.
 		// One whose basis is not held yet is stored dangling and checked by
 		// the pass once the basis arrives.
-		verdict, target, err := checkDelta(r.DB(), uuid, deltaSrc, payload)
+		verdict, target, err := pass.checkDelta(r.DB(), uuid, deltaSrc, payload)
 		if err != nil {
 			return 0, fmt.Errorf("received file %s: %w", uuid, err)
 		}
@@ -1156,7 +1298,7 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	deltaSrc string, payload []byte, storedBlob []byte, vis visibility,
 	linker *manifest.ReceiveLinker, target []byte) error {
 	verified := target != nil
-	var dangling, root libfossil.FslID // tracked once the store succeeds
+	var stored, dangling, root libfossil.FslID // tracked once the store succeeds
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
 		alreadyHeld, err := heldReal(tx, uuid)
 		if err != nil {
@@ -1183,8 +1325,11 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		if err := recordVisibility(tx, rid, vis); err != nil {
 			return err
 		}
+		if !alreadyHeld {
+			stored = rid
+		}
 		if linker != nil {
-			if err := linker.LinkStored(ctx, tx, rid, uuid, nil); err != nil {
+			if err := linker.LinkStored(ctx, tx, rid, uuid, target); err != nil {
 				return fmt.Errorf("storeDeltaContent: link %s: %w", uuid, err)
 			}
 		} else if verified {
@@ -1206,6 +1351,9 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	})
 	if err == nil && dangling > 0 {
 		pass.track(dangling, root, uuid)
+	}
+	if err == nil && verified && stored > 0 {
+		pass.remember(stored, target)
 	}
 	return err
 }
@@ -1302,12 +1450,15 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 		return 0, &hashMismatchError{uuid: uuid}
 	}
 
-	var dephantomizedRid libfossil.FslID
+	var stored, dephantomizedRid libfossil.FslID
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
-		rid, filled, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob, vis,
-			linker)
+		rid, filled, wrote, err := storeResolvedTx(ctx, tx, uuid, fullContent, storedBlob,
+			vis, linker)
 		if err != nil {
 			return err
+		}
+		if wrote {
+			stored = rid
 		}
 		if filled {
 			dephantomizedRid = rid
@@ -1317,34 +1468,40 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	if err != nil {
 		return 0, err
 	}
+	// A row held before this store keeps its own bytes, which a delta
+	// against it is checked with.
+	if stored > 0 {
+		pass.remember(stored, fullContent)
+	}
 	return dephantomizedRid, nil
 }
 
 // storeResolvedTx is storeResolvedContent's write, inside its transaction. It
-// returns the rid holding uuid, and filled when that rid was a phantom this
-// store filled.
+// returns the rid holding uuid, filled when that rid was a phantom this store
+// filled, and wrote when this store wrote the row's content (filled or
+// inserted it).
 func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []byte,
 	storedBlob []byte, vis visibility,
-	linker *manifest.ReceiveLinker) (rid libfossil.FslID, filled bool, err error) {
+	linker *manifest.ReceiveLinker) (rid libfossil.FslID, filled, wrote bool, err error) {
 	// A received SHA3 name promotes an auto-policy repo, as in fossil.
 	if err := hash.PromoteFor(tx, uuid); err != nil {
-		return 0, false, fmt.Errorf("storeResolvedContent: hash policy: %w", err)
+		return 0, false, false, fmt.Errorf("storeResolvedContent: hash policy: %w", err)
 	}
 	rid, filled, inserted, err := writeResolved(tx, uuid, fullContent, storedBlob)
 	if err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if err := recordVisibility(tx, rid, vis); err != nil {
-		return 0, false, err
+		return 0, false, false, err
 	}
 	if linker != nil {
 		if err := linker.LinkStored(ctx, tx, rid, uuid, fullContent); err != nil {
-			return 0, false, fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
+			return 0, false, false, fmt.Errorf("storeResolvedContent: link %s: %w", uuid, err)
 		}
-		return rid, filled, nil
+		return rid, filled, filled || inserted, nil
 	}
 	if !inserted {
-		return rid, filled, nil
+		return rid, filled, filled || inserted, nil
 	}
 	// Crosslink cluster artifacts: parse the content and if it's a
 	// cluster manifest, process its M-card UUIDs to create phantoms
@@ -1353,16 +1510,16 @@ func storeResolvedTx(ctx context.Context, tx *db.Tx, uuid string, fullContent []
 	if d, parseErr := deck.Parse(fullContent); parseErr == nil {
 		if d.Type == deck.Cluster {
 			if err := manifest.CrosslinkCluster(tx, rid, d); err != nil {
-				return 0, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
+				return 0, false, false, fmt.Errorf("crosslink cluster %s: %w", uuid, err)
 			}
 		}
 		// A tree arms the §7.2 gate as it is stored, not at the session's
 		// closing sweep.
 		if err := manifest.NoteStoredArtifact(tx, rid, d); err != nil {
-			return 0, false, fmt.Errorf("received %s: %w", uuid, err)
+			return 0, false, false, fmt.Errorf("received %s: %w", uuid, err)
 		}
 	}
-	return rid, filled, nil
+	return rid, filled, filled || inserted, nil
 }
 
 // writeResolved writes verified full content under uuid: a real row already
@@ -1598,16 +1755,24 @@ func (s *session) loadDBPhantoms() error {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
 		}
-		if elided != nil && elided.Class(rid) == content.Elided {
+		// A structural store elides a name nothing it holds requests, but
+		// one its origin announces this session is kept there (horizon
+		// §4.5, §5.1) and is asked for.
+		announced := s.structural.active && s.remoteHas[uuid] && elided != nil && elided.Unnamed(rid)
+		if elided != nil && elided.Class(rid) == content.Elided && !announced {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)
 			continue
 		}
-		if !s.remoteHas[uuid] {
+		if !s.remoteHas[uuid] || s.reloadPhantoms {
 			s.phantoms[uuid] = true
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	s.reloadPhantoms = false
+	return nil
 }
 
 // elidedPhantoms classifies a sparse store's phantoms, or is nil for a dense
@@ -1649,6 +1814,12 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	// server-push receive paths.
 	if s.pass == nil {
 		panic("sync.handleFileCard: pass must be set by processResponse")
+	}
+	if taken, err := s.structural.takeSeed(s.repo, uuid, deltaSrc, payload); taken || err != nil {
+		return false, err
+	}
+	if servedCluster(s.servedHorizon(), deltaSrc, payload) {
+		return false, nil
 	}
 	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
 		return false, err
@@ -1810,4 +1981,10 @@ func (s *session) handleUVFileCard(c *xfer.UVFileCard) error {
 		return fmt.Errorf("handleUVFileCard: %w", err)
 	}
 	return nil
+}
+
+// servedHorizon reports a horizon store whose origin has said it serves the
+// store's horizon (horizon-served content) in a reply of this session.
+func (s *session) servedHorizon() bool {
+	return s.horizon && s.result.HorizonServed > 0
 }

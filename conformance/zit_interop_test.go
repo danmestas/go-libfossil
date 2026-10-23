@@ -88,6 +88,29 @@ func zitReadsPragma(bin string) (bool, error) {
 	return bytes.Contains(data, []byte("send-submanifests")), nil
 }
 
+// zitHorizonBinary is zitBinary for a horizon test: it also requires a zit
+// that implements draft-fossil-horizon-00, which a release from trunk can
+// predate while reporting the same version number. Such a binary is skipped,
+// or fails the run under REQUIRE_ZIT_BIN=1, rather than failing on an
+// unknown --horizon flag.
+func zitHorizonBinary(t *testing.T) string {
+	t.Helper()
+	bin := zitBinary(t)
+	data, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatalf("probing zit: %v", err)
+	}
+	if !bytes.Contains(data, []byte("horizon-served")) {
+		msg := fmt.Sprintf("%s (%s) predates draft-fossil-horizon-00: the horizon interop run needs "+
+			"zit from horizon-rfc bbd1435674 or later", bin, zitVersion(bin))
+		if os.Getenv("REQUIRE_ZIT_BIN") == "1" {
+			t.Fatal("REQUIRE_ZIT_BIN=1 but " + msg)
+		}
+		t.Skip(msg)
+	}
+	return bin
+}
+
 // zitVersion is the first line `zit version` prints, for a skip message.
 func zitVersion(bin string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -579,6 +602,12 @@ func zitStrip(msg *xfer.Message) {
 // zitStrippingHandler serves r over HTTP with send-submanifests stripped
 // from every reply, as a server that does not read trees would answer.
 func zitStrippingHandler(t *testing.T, r *repo.Repo) http.Handler {
+	return xferHandler(t, r, zitStrip)
+}
+
+// xferHandler serves r's sync endpoint over HTTP, passing every reply
+// through rewrite before it is encoded.
+func xferHandler(t *testing.T, r *repo.Repo, rewrite func(*xfer.Message)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, hr *http.Request) {
 		body, err := io.ReadAll(hr.Body)
 		if err != nil {
@@ -596,7 +625,7 @@ func zitStrippingHandler(t *testing.T, r *repo.Repo) http.Handler {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		zitStrip(resp)
+		rewrite(resp)
 		encode, contentType := resp.Encode, xfer.ContentTypeCompressed
 		if resp.Uncompressed {
 			encode, contentType = resp.EncodeUncompressed, xfer.ContentTypeUncompressed

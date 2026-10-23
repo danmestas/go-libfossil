@@ -93,6 +93,20 @@ type CloneResult struct {
 	// cone-served, draft-fossil-sparse-cone-00 §6.3). Both are zero for a
 	// dense clone.
 	Elided, ConeServed int
+	// HorizonServed counts the replies whose server served the store's
+	// horizon (pragma horizon-served, draft-fossil-horizon-00 §6.2.5); the
+	// other rounds were classified locally. StructuralServed counts those
+	// served at the structural level, and HorizonFallback reports a
+	// structural clone that kept the content horizon instead (§6.3).
+	HorizonServed    int
+	StructuralServed int
+	HorizonFallback  bool
+	// HorizonHistoryURL is the interface outside the sync protocol at which
+	// the origin says history below a horizon can be queried (pragma
+	// horizon-served URL, draft-fossil-horizon-00 §6.2.5), the last a reply
+	// named; "" when none did. An origin names it with
+	// SettingHorizonHistoryURL.
+	HorizonHistoryURL string
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -108,20 +122,29 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		Observer:     adaptObserver(opts.Observer),
 		Buggify:      opts.Buggify,
 		PullPhantoms: opts.PullPhantoms,
+		StoreCone:    unwrapCone(opts.StoreCone),
+	}
+	// A transport that names its peer keys the horizon cursor, as for Sync.
+	if o, ok := t.(interface{ syncOrigin() string }); ok {
+		iOpts.Origin = o.syncOrigin()
 	}
 	inner, iResult, err := internalsync.Clone(ctx, path, adapter, iOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
 	}
 	result := &CloneResult{
-		Rounds:          iResult.Rounds,
-		BlobsRecvd:      iResult.BlobsRecvd,
-		ArtifactsLinked: iResult.ArtifactsLinked,
-		ProjectCode:     iResult.ProjectCode,
-		ServerCode:      iResult.ServerCode,
-		Messages:        iResult.Messages,
-		Elided:          iResult.Elided,
-		ConeServed:      iResult.ConeServed,
+		Rounds:            iResult.Rounds,
+		BlobsRecvd:        iResult.BlobsRecvd,
+		ArtifactsLinked:   iResult.ArtifactsLinked,
+		ProjectCode:       iResult.ProjectCode,
+		ServerCode:        iResult.ServerCode,
+		Messages:          iResult.Messages,
+		Elided:            iResult.Elided,
+		ConeServed:        iResult.ConeServed,
+		HorizonServed:     iResult.HorizonServed,
+		StructuralServed:  iResult.StructuralServed,
+		HorizonFallback:   iResult.HorizonFallback,
+		HorizonHistoryURL: iResult.HorizonHistoryURL,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
 }

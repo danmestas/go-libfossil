@@ -2,6 +2,7 @@ package manifest
 
 import (
 	"context"
+	"errors"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -21,26 +22,37 @@ func checkinSources(d *deck.Deck) []string {
 	return sources
 }
 
+// belowStructural reports a store cone with a structural horizon
+// (draft-fossil-horizon-00 §5.1), which holds no manifest below it: a source
+// it lacks may never arrive, so a check-in is linked against its phantom as
+// a dense store links it, rather than wait.
+func belowStructural(c *cone.Cone) bool {
+	if c == nil {
+		return false
+	}
+	h, ok := c.Horizon()
+	return ok && h.Depth() == cone.DepthStructural
+}
+
 // Parent spines may have metadata without complete file sets. Mlinks must wait
 // on the actual tree dependency, not mistake an event row for full derivation.
 func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 	c, _ := content.StoreCone(tx)
 	for _, uuid := range checkinSources(d) {
-		rid, ok := content.AvailableByUUID(tx, uuid)
+		rid, ok := g.avail.ByUUID(tx, uuid)
 		if !ok {
+			if c != nil && !belowStructural(c) {
+				return uuid
+			}
+			continue
+		}
+		parent, err := parseManifestAt(tx, g.cache, rid)
+		if err != nil && errors.Is(err, errExpandManifest) {
 			if c != nil {
 				return uuid
 			}
 			continue
 		}
-		data, err := g.cache.Expand(tx, rid)
-		if err != nil {
-			if c != nil {
-				return uuid
-			}
-			continue
-		}
-		parent, err := deck.Parse(data)
 		if err != nil || parent.Type != deck.Checkin {
 			if c != nil {
 				return uuid
@@ -54,6 +66,10 @@ func (g *checkinDeferralGuard) parentTreeGap(tx *db.Tx, d *deck.Deck) string {
 	return ""
 }
 
+// loadConeReferences is content.LoadConeReferences; tests swap it to observe
+// the store's state at the moment whole-store references are loaded.
+var loadConeReferences = content.LoadConeReferences
+
 // Partial derivation publishes only spine metadata. The orphan row remains the
 // completion marker; no mlink transition is represented by a partial row set.
 func crosslinkPartialCheckin(
@@ -65,7 +81,7 @@ func crosslinkPartialCheckin(
 		return false, err
 	}
 	if g.coneReferences == nil {
-		g.coneReferences, err = content.LoadConeReferences(ctx, tx, c)
+		g.coneReferences, err = loadConeReferences(ctx, tx, c)
 		if err != nil {
 			return false, err
 		}
@@ -100,9 +116,15 @@ func SparseCheckinReady(ctx context.Context, q db.Querier, cache *content.Cache,
 		return false, err
 	}
 	for _, uuid := range checkinSources(d) {
+		// An absent source has no file set to judge, and may never arrive:
+		// a structural horizon holds no manifest below it, and an origin can
+		// lack an artifact its own history names (fossil-scm.org's lacks
+		// five check-ins' parents). The check-in's spine is published as a
+		// dense store publishes it, against the phantom; its orphan row keeps
+		// mlink derivation waiting on the source.
 		parent, ok := content.AvailableByUUID(q, uuid)
 		if !ok {
-			return false, nil
+			continue
 		}
 		data, err := cache.Expand(q, parent)
 		if err != nil {
@@ -161,6 +183,13 @@ func (r sparseReadiness) fileSet(d *deck.Deck) (bool, error) {
 	files, err := checkinFileCardsFiltered(r.q, r.cache, d, r.cone)
 	if err != nil {
 		return false, nil
+	}
+	// Under a horizon a covered file may lie below it (draft-fossil-horizon-00
+	// §4.2), and which do is placed over the linked check-ins this readiness
+	// gates: the classification at rest tells an elided file from a transit
+	// one, and the spine published here reads no file.
+	if _, ok := r.cone.Horizon(); ok {
+		return true, nil
 	}
 	for _, f := range files {
 		if r.cone.Covers(f.Name) {

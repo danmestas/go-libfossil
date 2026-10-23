@@ -7,6 +7,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
@@ -47,6 +48,17 @@ type SyncOpts struct {
 	Observer     Observer       // nil defaults to no-op
 	CkinLock     *CkinLockReq   // nil = no lock requested
 	ContentCache *content.Cache // nil = no caching; rid-keyed, so not across a rollback
+	// Origin names the peer this session addresses, keying the horizon
+	// cursor a horizon store keeps per origin (draft-fossil-horizon-00
+	// §6.2.6). Empty keeps no cursor: every request announces in full.
+	Origin string
+	// SeedVerifier checks a structural horizon's seed against the origin's
+	// key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned seed.
+	SeedVerifier seed.Verifier
+	// MergeBaseOf, when set, asks the origin for the merge base it names
+	// (draft-fossil-horizon-00 §6.2.4), once, in the first request; it needs
+	// Pull, and one or two secondaries. The answer is in the result.
+	MergeBaseOf MergeBaseQuery
 }
 
 // CkinLockReq requests a server-side check-in lock.
@@ -61,7 +73,18 @@ type SyncResult struct {
 	// ConeServed counts the replies whose peer acknowledged applying the
 	// store cone (pragma cone-served, sparse-cone §6.3). The other rounds of
 	// a sparse store were served densely and filtered locally.
-	ConeServed                    int
+	ConeServed int
+	// HorizonServed counts the replies whose origin served the store's
+	// horizon at either level (pragma horizon-served, horizon §6.2.5). The
+	// other rounds were served densely and classified locally (§6.3).
+	HorizonServed int
+	// StructuralServed counts the replies that served the structural level.
+	// HorizonFallback reports a structural store that fell back to the
+	// content horizon for good: its origin did not serve the structural
+	// level with a seed in the first reply, or the seed failed its
+	// provenance (§5.1, §5.2.4, §6.3).
+	StructuralServed              int
+	HorizonFallback               bool
 	Rounds, FilesSent, FilesRecvd int
 	UVFilesSent, UVFilesRecvd     int
 	UVGimmesSent                  int
@@ -69,16 +92,40 @@ type SyncResult struct {
 	ArtifactsLinked               int
 	Errors                        []string
 	CkinLockFail                  *CkinLockFail // nil = no conflict
+	// HorizonHistoryURL is the interface outside the protocol at which the
+	// origin says history below a horizon can be queried (horizon-served
+	// URL, §6.2.5), the last a reply named; "" when none did.
+	HorizonHistoryURL string
 	// AvoidSubmanifests reports that this exchange received pragma
 	// avoid-submanifests (draft-fossil-submanifests-00 §7.2). Sync makes no
 	// commit; this observation does not bind a later local commit.
 	AvoidSubmanifests bool
+	// MergeBaseAnswered reports that the origin answered MergeBaseOf, and
+	// MergeBase is its answer: the base's hash, or "" when the two share no
+	// ancestor.
+	MergeBaseAnswered bool
+	MergeBase         string
 }
 
 // session holds the mutable state of a running sync.
 type session struct {
-	ctx               context.Context
-	sparseReceived    map[string]bool
+	ctx            context.Context
+	sparseReceived map[string]bool
+	horizon        bool // the store cone has a horizon: no cluster is asked for
+	structural     structuralClient
+	// reloadPhantoms makes the next phantom load ask for every wanted
+	// phantom, announced or not: a structural store that fell back wants the
+	// manifests below its horizon, which an origin announced while they were
+	// still elided (horizon §6.3).
+	reloadPhantoms bool
+	// The horizon cursor (draft-fossil-horizon-00 §6.2.6), kept per origin
+	// under coneDigest: cursor is the record this session started from,
+	// startPosition this store's position then, and peerCursor the last
+	// cursor a reply handed out. coneDigest is empty when none is kept.
+	coneDigest        string
+	cursor            cursorRecord
+	startPosition     int64
+	peerCursor        int64
 	repo              *repo.Repo
 	env               *simio.Env
 	opts              SyncOpts
@@ -224,6 +271,10 @@ func newSession(r *repo.Repo, opts SyncOpts) *session {
 	s.smGate = gate
 	if c, err := content.StoreCone(r.DB()); err == nil && c != nil {
 		s.sparseReceived = map[string]bool{}
+		_, s.horizon = c.Horizon()
+		if s.horizon && opts.Origin != "" {
+			s.coneDigest = c.Digest()
+		}
 	}
 
 	return s
@@ -279,6 +330,11 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		}
 	}()
 
+	if opts.MergeBaseOf.Primary != "" && !opts.MergeBaseOf.valid() {
+		return nil, fmt.Errorf("sync: a merge-base query names full hashes and one or two secondaries (horizon §6.2.4): %q",
+			opts.MergeBaseOf.hashes())
+	}
+
 	obs := resolveObserver(opts.Observer)
 	var clock simio.Clock
 	if opts.Env != nil {
@@ -290,8 +346,14 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}
 	s := newSession(r, opts)
 	s.ctx = ctx
+	if s.structural, err = newStructuralClient(r.DB(), opts.SeedVerifier); err != nil {
+		return &s.result, fmt.Errorf("sync: %w", err)
+	}
 	if err := s.seedPhantoms(); err != nil {
 		return &s.result, fmt.Errorf("sync: load phantoms: %w", err)
+	}
+	if err := s.loadCursor(); err != nil {
+		return &s.result, err
 	}
 
 	ctx = obs.Started(ctx, SessionStart{
@@ -386,6 +448,15 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		if err != nil {
 			return &s.result, fmt.Errorf("sync: sparse receive filtering: %w", err)
 		}
+	}
+	// Horizon §5.2.3: the seed applies to what the closing crosslink linked.
+	fell, err := s.structural.apply(s.repo)
+	if err != nil {
+		return &s.result, fmt.Errorf("sync: horizon seed: %w", err)
+	}
+	s.result.HorizonFallback = s.result.HorizonFallback || fell
+	if err := s.recordCursor(); err != nil {
+		return &s.result, err
 	}
 
 	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)

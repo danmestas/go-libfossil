@@ -19,7 +19,7 @@ func (c *RepoAnnotateCmd) Run(g *Globals) error {
 	}
 	defer r.Close()
 
-	startRID, err := resolveRID(r, c.Version)
+	startRID, err := resolveCheckin(r, c.Version)
 	if err != nil {
 		return err
 	}
@@ -32,13 +32,25 @@ func (c *RepoAnnotateCmd) Run(g *Globals) error {
 		return err
 	}
 
+	horizon := ""
 	for _, l := range lines {
 		uuid := l.UUID
 		if len(uuid) > 10 {
 			uuid = uuid[:10]
 		}
+		if l.BelowHorizon {
+			// The line's origin is not held: mark the horizon, as git blame
+			// marks a boundary commit, rather than credit its check-in.
+			horizon = l.UUID
+			fmt.Printf("^%s %8s %10s | %s\n", uuid, "horizon", "", l.Text)
+			continue
+		}
 		fmt.Printf("%s %8s %s | %s\n",
 			uuid, l.User, l.Date.Format("2006-01-02"), l.Text)
+	}
+	if horizon != "" {
+		fmt.Printf("^ lines originate at or below the structural horizon at %s, whose history is not held here; "+
+			"deepen the horizon (repo cone deepen CHECKIN) to attribute them\n", horizon)
 	}
 	return nil
 }

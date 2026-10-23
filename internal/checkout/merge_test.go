@@ -256,6 +256,38 @@ func TestMergeTwiceRecordsOnce(t *testing.T) {
 	}
 }
 
+// A second merge diffs against fossil's pivot of the merged-in version and
+// the checkout's version with what is already merged into it (merge.c's
+// vmerge secondaries): merging a child of merged after merged takes merged
+// as the base, not base.
+func TestMergeAfterMergeTakesPendingMergeIntoBase(t *testing.T) {
+	f := newMergeFixture(t,
+		map[string]string{"a.txt": "1\n2\n3\n"},
+		map[string]string{"a.txt": "1\n2\n3 local\n"},
+		map[string]string{"a.txt": "1 merged\n2\n3\n"})
+	if _, err := f.co.Merge(MergeOpts{Version: f.merged}); err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := manifest.Checkin(f.repo, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "a.txt", Content: []byte("1 merged\n2 next\n3\n")}},
+		Comment: "c", User: "test", Parent: f.merged,
+		Time: time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.co.Merge(MergeOpts{Version: next})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ancestor != f.merged {
+		t.Fatalf("second merge diffed against %d, want merged %d", res.Ancestor, f.merged)
+	}
+	if got := f.read(t, "a.txt"); got != "1 merged\n2 next\n3 local\n" {
+		t.Fatalf("a.txt = %q", got)
+	}
+}
+
 // The conflict-fork strategy keeps the checkout's copy and records every
 // version in the repository's conflict table.
 func TestMergeConflictForkRecordsFork(t *testing.T) {

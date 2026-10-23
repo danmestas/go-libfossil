@@ -95,6 +95,22 @@ func EnsureSyncSchema(d *db.DB) error {
 	return err
 }
 
+// HasSyncSchema reports whether the _sync_schema table exists. A repository
+// no table sync has reached has none, and so no synced table: a reader can
+// say so without creating it, which is a write.
+func HasSyncSchema(d *db.DB) (bool, error) {
+	if d == nil {
+		panic("repo.HasSyncSchema: d must not be nil")
+	}
+	var n int
+	err := d.QueryRow(
+		"SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_sync_schema'").Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("repo.HasSyncSchema: %w", err)
+	}
+	return n > 0, nil
+}
+
 // RegisterSyncedTable registers a table for sync and creates its extension table.
 func RegisterSyncedTable(d *db.DB, name string, def TableDef, mtime int64) error {
 	if d == nil {

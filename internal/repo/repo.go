@@ -257,6 +257,18 @@ func (r *Repo) WithBoundTx(fn func(bound *Repo) error) error {
 	})
 }
 
+// WithBoundReadTx is WithBoundTx over a read transaction (db.WithReadTx): a
+// Repo bound to one snapshot of the database, taken without the write lock.
+// fn must not write.
+func (r *Repo) WithBoundReadTx(fn func(bound *Repo) error) error {
+	if fn == nil {
+		panic("repo.WithBoundReadTx: fn must not be nil")
+	}
+	return r.db.WithBoundReadTx(func(b *db.DB) error {
+		return fn(&Repo{db: b, path: r.path, receipt: r.receipt})
+	})
+}
+
 // Config reads a configuration value from the repo's config table.
 func (r *Repo) Config(key string) (string, error) {
 	var value string
@@ -290,6 +302,11 @@ func (r *Repo) SetConfig(key, value string) error {
 	if key == "hash-policy" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 || n > 4 {
 			return fmt.Errorf("repo.SetConfig: hash-policy %q is not a policy ordinal (0-4)", value)
+		}
+	}
+	if key == SettingHorizonHistoryURL && value != "" {
+		if err := CheckHistoryURL(value); err != nil {
+			return fmt.Errorf("repo.SetConfig: %s: %w", key, err)
 		}
 	}
 	_, err := r.db.Exec(

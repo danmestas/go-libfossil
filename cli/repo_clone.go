@@ -12,12 +12,17 @@ import (
 
 // RepoCloneCmd clones a remote Fossil repository.
 type RepoCloneCmd struct {
-	URL     string        `arg:"" optional:"" help:"Remote Fossil server URL"`
-	Path    string        `arg:"" optional:"" help:"Local path for new repository file"`
-	User    string        `short:"u" help:"Username for clone auth"`
-	Pass    string        `short:"p" help:"Password for clone auth"`
-	Invite  string        `help:"Invite token (from fossil invite)"`
-	Timeout time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+	URL        string        `arg:"" optional:"" help:"Remote Fossil server URL"`
+	Path       string        `arg:"" optional:"" help:"Local path for new repository file"`
+	User       string        `short:"u" help:"Username for clone auth"`
+	Pass       string        `short:"p" help:"Password for clone auth"`
+	Invite     string        `help:"Invite token (from fossil invite)"`
+	Timeout    time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash; what each rule would hold needs a local repository ('repo cone cost') or a peer that exposes it out of band, as the origin's horizon-served URL may"`
+	Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
+	Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
+	Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
+	ConeNot    []string      `name:"cone-not" help:"Carve this path out of a --cone (repeatable)"`
 }
 
 // cloneContext builds the context that bounds a clone. A positive timeout caps
@@ -54,13 +59,23 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("path required")
 	}
 
+	storeCone, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Leaves, c.Structural)
+	if err != nil {
+		return err
+	}
+
+	if c.Leaves {
+		warnLeavesCost()
+	}
+
 	ctx, cancel := cloneContext(context.Background(), c.Timeout)
 	defer cancel()
 
 	transport := libfossil.NewHTTPTransport(c.URL)
 	opts := libfossil.CloneOpts{
-		User:     c.User,
-		Password: c.Pass,
+		User:      c.User,
+		Password:  c.Pass,
+		StoreCone: storeCone,
 	}
 
 	r, result, err := libfossil.Clone(ctx, c.Path, transport, opts)
@@ -78,6 +93,20 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	fmt.Printf("  Rounds:       %d\n", result.Rounds)
 	fmt.Printf("  Blobs:        %d\n", result.BlobsRecvd)
 	fmt.Printf("  Project-code: %s\n", result.ProjectCode)
+	if storeCone != nil {
+		fmt.Printf("  Elided:       %d\n", result.Elided)
+	}
+	if c.Structural {
+		// Horizon §6.2.5: a client reports which mode a transfer used.
+		if result.HorizonFallback {
+			fmt.Println("  Horizon:      content (the origin did not serve the structural horizon)")
+		} else {
+			fmt.Println("  Horizon:      structural")
+		}
+	}
+	if result.HorizonHistoryURL != "" {
+		fmt.Printf("  History:      %s\n", result.HorizonHistoryURL)
+	}
 	return nil
 }
 

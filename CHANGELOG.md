@@ -7,6 +7,360 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `libfossil repo cone cost <check-in>` reports what each horizon rule would
+  hold at a check-in (draft-fossil-horizon-00 §3.4): for descendants and
+  leaves, the check-ins of the held set and the bytes, expanded and
+  stored, of the blobs they name. `Repo.HorizonCost` returns the same
+  figures as `[]HorizonRuleCost`. The `--horizon` help of `repo clone` and
+  `repo cone store` points to it; a clone has no repository yet, so its
+  figures come from a local one or from a peer that exposes them.
+- Annotating back past a structural horizon (draft-fossil-horizon-00
+  §5.5) reports a line whose origin lies at or below the horizon as
+  originating at the horizon, rather than crediting the oldest held
+  version: `AnnotatedLine.BelowHorizon` marks it, with `UUID`, `User` and
+  `Date` describing the horizon's check-in, and `libfossil repo annotate`
+  prints such a line against `^<horizon>` and a trailing note naming the
+  horizon and `repo cone deepen`. A content horizon holds every manifest
+  and marks nothing.
+- An origin's classification memo keeps the trees its horizons' walks read
+  (draft-fossil-horizon-00 §6.2), so a second horizon over the same store,
+  under another C or rule, reads only the trees no earlier walk did. Each
+  manifest, baseline and node is kept once with its own F cards, so delta
+  manifests share their baseline's entry, and names are interned. The
+  cache is capped at 64MiB with least-recently-used eviction (fossil-scm's
+  history names about 21M F entries), and is dropped when the store is read
+  in full. On a copy of a 21k-check-in fossil repository, a horizon 2000
+  check-ins back first classified after one 1000 back fell from about
+  2.5–3.0s to 1.6s.
+- An origin can name the interface outside the sync protocol at which
+  history below a horizon can be queried (draft-fossil-horizon-00
+  §6.2.5): the new `horizon-history-url` setting
+  (`SettingHorizonHistoryURL`) is appended to every `pragma horizon-served`
+  it emits. `SetConfig` refuses a value that is not one http or https URL
+  with a host and no white space or credentials, and a value stored past
+  that check is not emitted. A horizon client records the URL a reply
+  names, from go-libfossil or any other origin, as
+  `CloneResult.HorizonHistoryURL` and `SyncResult.HorizonHistoryURL`, and
+  `libfossil repo clone`, `repo cone store` and `repo cone deepen` print it.
+- Content horizons in the public API and CLI. A horizon is part of a
+  store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
+  builds one, with or without path members, and `Cone.Horizon` and
+  `Cone.WithHorizon` read and change it. `Repo.SetStoreCone` and
+  `Repo.SetStoreConeContext` set, deepen or drop it, deepening fetching
+  what the older horizon keeps, and the new `CloneOpts.StoreCone` clones
+  straight into a cone or horizon store. A checkout cone refuses a horizon
+  with `ErrHorizonCheckout`, since a horizon governs what the repository
+  holds, not which paths a checkout writes. `libfossil repo clone` takes
+  `--horizon <full hash>`, `--leaves`, `--cone` and `--cone-not`, and
+  `libfossil repo cone store` takes `--horizon`, `--leaves` and
+  `--no-horizon` and shows the horizon; both take `--structural`.
+- A cone can carry a horizon (draft-fossil-horizon-00 §3): a check-in
+  named by its full hash, the held-set rule (`descendants` or `leaves`) and
+  the depth of the cut (`content` or `structural`), with or without path
+  members. A cone with a horizon serializes as version 3, byte for byte as
+  zit writes it, so its digest matches zit's; an implementation that
+  predates horizons refuses it.
+- The held set of a horizon (draft-fossil-horizon-00 §3.1): the check-ins
+  whose content a horizon keeps, computed from the check-in graph the
+  repository holds and stored nowhere. Under `descendants` it is C and
+  every check-in descended from it through any parent, merges included;
+  under `leaves` it adds every descendant of each check-in where a
+  childless check-in's ancestry meets C's. Childless is a property of the
+  P cards alone, open or closed: a branch tip merged elsewhere has a child
+  and adds nothing, unlike fossil's same-branch leaf. Both rules give a set
+  closed under descendants. The walk is bounded and fails with an error
+  rather than run unbounded.
+- A store cone can carry a content horizon (draft-fossil-horizon-00 §4,
+  §6.3). A blob is elided when no check-in in the held set names it
+  anywhere in its tree, and with path members too a blob is kept only in
+  both keep sets; structure is never elided under a horizon, and a horizon
+  the store cannot place yet elides nothing. Against any peer, a horizon
+  store requests nothing below the horizon, records below-horizon blobs it
+  is sent as elided instead of storing them, holds and requests no
+  cluster, and fetches a below-horizon blob an operation needs on demand.
+  Moving C earlier and pulling fetches what the deeper horizon keeps.
+  Against a stock Fossil origin a
+  new check-in announced only inside a cluster is not learned until a later
+  check-in names it; the draft now has the clone request a horizon-ignorant
+  origin's cluster members as transit (zit#266), which lands with the
+  horizon pragmas.
+- Horizon serving (draft-fossil-horizon-00 §6.1, §6.2, §6.2.1, §6.2.5,
+  §6.4). A horizon store's clone and pull requests carry `pragma horizon
+  <hash> <rule>`. An origin computes the held set over its own graph,
+  sends every structural artifact and only the blobs above the horizon
+  (and inside any path cone), sends a delta in full when its base is not
+  kept, sends no cluster, and answers `pragma horizon-served content`;
+  `CloneResult` and `SyncResult` gain `HorizonServed`. A server over a
+  horizon store refuses a dense clone, and a horizon request whose held
+  set is not a subset of its own, with the push card ahead of the error so
+  fossil 2.28 aborts. Against an origin that does not answer
+  `horizon-served`, a horizon clone requests the phantoms its clusters
+  name, as transit, and classifies what arrives, so a new check-in stock
+  Fossil announces only inside a cluster still arrives (zit#266).
+  Interoperates with zit at `bbd1435674` in both directions.
+- The horizon cursor (draft-fossil-horizon-00 §6.2.6). An origin that
+  served a request at a horizon answers `pragma horizon-cursor <n>`, its
+  position in its own artifact sequence; a client that converged records
+  it per origin and cone, and sends it back. The origin then announces
+  only what lies above it, and the client sends no igot on a pull and only
+  what it appended since on a push, so a pull from a large horizon store no
+  longer re-announces everything either side holds. A reply to a push-only
+  request announces nothing, gimmes are answered whatever the cursor, and
+  an artifact arriving that a held one already cited voids older cursors
+  once. An origin keeps its classification per store, extended as
+  artifacts arrive and recomputed only when an arrival was already cited
+  (§6.2), so a pull after a one-artifact push on fossil-scm.org's
+  repository is answered in about 0.25 s instead of 2.7 to 4.5 s. Syncs
+  and clones over the HTTP transport key the cursor by the URL
+  without its password; other transports keep none and announce in full.
+  A horizon clone's replies carry the cursor and the clone records it, so
+  its first exchange afterwards announces nothing it already shares.
+  Interoperates with zit in both directions.
+- The structural horizon (draft-fossil-horizon-00 §5, Appendix A step 5).
+  A store at structural depth also elides the manifests and sub-manifest
+  nodes below the horizon, keeps the boundary labels its origin sends so a
+  labelled parent is elided rather than wanted, and holds the seed. Its
+  requests carry `pragma horizon-structural` and `pragma horizon-seed`; an
+  origin restricts manifests and nodes to the held set and what they
+  reach, labels every boundary hash, mints and sends the seed when the
+  client's is not current, refuses a seed offered to it, and answers
+  `horizon-served structural` only when the client will hold a current
+  seed. A client that is not served structurally, or whose seed fails its
+  check, falls back to the content horizon and reports it. Every check-in
+  in the held set derives the branch, tag and closed state it has densely.
+  `Horizon.Structural`, `StructuralServed` and `HorizonFallback` expose it,
+  and `repo info`, `repo verify` and the commands that would cross the
+  horizon (`co`, `diff`, `annotate` below C) name it. An origin labels the
+  parents of every manifest the clone holds, a baseline below C included,
+  not only those of the check-ins in the held set: a clone whose delta
+  manifest's baseline lay below C otherwise stalled requesting that
+  baseline's parent, which the origin withholds (agreed for the draft with
+  zit's author). History renders a
+  labelled boundary parent as the horizon: `Repo.Ancestry` ends there
+  without an error, `TimelineEntry` and `LogEntry` gain `HorizonParents`,
+  and `repo timeline` prints it as `(horizon)`. Interoperates with zit at
+  `9bf7ebfe0f` in both directions.
+- Crossing the horizon (draft-fossil-horizon-00 §5.5, §5.7, §5.8, §5.9,
+  §6.2.4). A merge or update whose base lies below the horizon is refused
+  with `ErrBelowHorizon`, naming the horizon, the base and the deepen that
+  reaches it; never merged against a base the store does not hold.
+  `Checkout.MergeContext` asks the origin for the base (`pragma
+  horizon-mergebase`, answered by a bounded walk), deepens to it and
+  merges. `Repo.DeepenHorizon` and `libfossil repo cone deepen` move C to
+  an ancestor and fetch what the deeper horizon keeps, discarding a
+  structural store's seed first and restoring it if the transfer fails.
+  Bisect refuses a good end below the horizon, and a symbolic name on a
+  check-in below it resolves. An origin rolls back a push whose new branch
+  cancels a branch tag its own derivation says the parent does not carry,
+  unless the push or the store holds the correction. `Repo.VerifySeed` and
+  `libfossil repo verify --seed` check a structural store's seed by
+  deepening and comparing, leaving the store at content depth.
+- The structural horizon's seed (draft-fossil-horizon-00 §5.2). An origin mints a control artifact whose T cards apply the
+  tags in force at every entry of the held set (C, and each check-in of K
+  whose primary parent lies outside it), dated at the latest tag event it
+  summarizes rounded up to a whole second, so it is byte-identical to the
+  seed zit mints. A clone holds the seed in its own table, outside the
+  artifact store, where no sync, clone or rebuild can send it, and applies
+  it to the derivation, so every check-in in K has the branch, tag and
+  closed state it has densely. Replacing or discarding a seed re-derives
+  the store. Seed signing is not implemented: go-libfossil signs no
+  artifact.
+
+### Fixed
+
+- Receiving a delta against an artifact already held no longer rebuilds
+  that basis from the root of its chain. Each received delta's basis was
+  expanded through its whole chain to check the delta (§7.7), and its
+  availability walked the chain again, so receiving a file's history, a
+  chain of hundreds or thousands of deltas, cost time quadratic in its
+  depth: a dense clone of the Fossil repository ran past an hour of CPU.
+  The basis is now rebuilt through a cache, kept across a clone's rounds,
+  of what each received row rebuilds to, from the deepest node of its
+  chain the cache holds, and a basis the cache holds needs no
+  availability walk. The bytes are those the unchecked rebuild gave, so
+  every verdict is unchanged. `content.NewUncheckedCache` and
+  `Cache.ExpandUnchecked` provide that cache; `Cache.Holds` and
+  `content.CheckAvailable` are new too.
+- A clone origin no longer sends again, in a later round, a delta chain an
+  earlier round sent. Each row goes out with its chain, source first, and
+  fossil stores each version of a file as a delta of the next, so the
+  oldest version's round sent a file's whole history and each later
+  version's row, reached in a later round, sent the rest of it again: a
+  dense clone of the Fossil repository carried about five copies of it,
+  each verified again by the client. The origin now stops a chain, and
+  skips a row, that a row below the cursor its round sent reaches through
+  sources the clone forwards.
+- `repo serve` answers a clone or pull while another request holds the
+  write lock, instead of failing it with HTTP 500 "database is locked
+  (SQLITE_BUSY)" once the busy timeout ran out. Every request had run in
+  a write transaction, and a horizon request read the classification memo
+  in one too, so a horizon clone arriving while another clone was served
+  waited behind it and its client gave up after four attempts. A request
+  none of whose cards can write (clone, pull, gimme, igot without push,
+  login, reqconfig and read-only pragmas) now runs in a read transaction,
+  as does the memo read, and each request no longer creates the table-sync
+  schema on a repository that lacks it; a schema card creates it. v0.14.0
+  has the same write transaction per request.
+- A cone or horizon clone of a large repository completes. A clone of the
+  Fossil repository stalled in its first round, in every sparse mode, on
+  v0.14.0 as on this branch; under a {src} cone, a content horizon and a
+  structural horizon it now takes about 8 minutes, 2 and a half, and 30
+  seconds, and verifies. Four costs were behind it:
+  - The origin classified each row it walked, and each served delta's
+    base, by expanding its whole chain afresh. It now takes the rows its
+    crosslink tables prove to be file content without reading them
+    (`mlink` names them and no artifact table claims them; a store that
+    has seen a sub-manifest proves nothing this way), and expands the
+    rest through a cache kept for the request.
+  - A row the walk passed over was charged its expanded size against the
+    round, and a dense round charges a row's stored delta, so a sparse
+    round covered a hundredth of a dense one's rows and the clone ran out
+    of rounds. It is now charged its stored size, as SC-6.2-1 bounds the
+    walk as a dense clone bounds its batches.
+  - A file version's base is the next version, which a walk in rid order
+    reaches later, so each version went out whole. A base the store's
+    classification of the cone keeps is now sent first and the version as
+    a delta of it.
+  - The client tested each waiting check-in's every file again at each
+    arrival, and its waiter index filled after a few check-ins. A clone
+    into a sparse store now waits on no file (the origin sends every file
+    the store keeps in the same session), a pull waits on none its cone's
+    paths exclude, and a waiting check-in is tested again only once all it
+    waits on has arrived.
+- A check-in that arrives before the check-in it cherrypicks keeps its
+  `cherrypick` row and the auxiliary `mlink` rows for that source. The
+  missing source is reserved as a phantom, as a missing parent is, and is
+  linked when it arrives; fossil leaves this to the rebuild its clone ends
+  with. A clone of the Fossil repository lacked 139 `cherrypick` rows and
+  262 `mlink` rows.
+- A sparse store publishes a check-in's event and plink rows when a parent
+  or cherrypick source is absent, against its phantom as a dense store
+  does; its orphan row keeps the file history waiting until the source
+  arrives. The Fossil repository lacks the parents of five check-ins, so
+  every sparse clone of it failed `repo verify` on them.
+- An origin answering a horizon request no longer sends a cluster that the
+  request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
+  pull and sync replies already announced none, and req-clusters already
+  got nothing, but a gimme naming a cluster was answered with the cluster's
+  file card, so a horizon clone could still hold a name only a cluster
+  gives.
+- Merges use the base fossil uses. go-libfossil chose the merge base by a
+  bidirectional breadth-first search, the common ancestor nearest in
+  edges; fossil's `pivot_find` takes the most recent by check-in time,
+  with the check-out's pending merges as further candidates. On criss-cross
+  and skewed histories the two differ, and `Checkout.Merge` and
+  `Repo.Merge` merged against a different base than `fossil merge` and
+  produced different results. Both now follow fossil exactly, checked
+  against fossil 2.28 on 114 merge-base queries and a byte-for-byte merge.
+- Merges follow renames as fossil's merge does. A file renamed on one side
+  and edited on the other used to merge as a delete and an add; fossil's
+  name pivot, `find_filename_changes` and file matching are now ported, so
+  it merges into the renamed file, and renames on both sides, rename
+  chains, swaps and rename-with-delete resolve as fossil resolves them. A
+  merged-in rename is applied to the checkout and reported:
+  `CheckoutMergeFile.RenamedTo`, and `RENAME a -> b` from `repo merge` in
+  fossil's order. Matches fossil 2.28 on 13 rename scenarios, including
+  the bytes, `fossil changes` and the committed F cards. Where fossil would
+  rename over a file the checkout keeps or over an untracked file,
+  go-libfossil refuses instead, and a rename across a sparse cone boundary
+  is refused.
+- A rebuild of fossil-scm.org's own repository (67,894 artifacts) takes
+  about 50 s instead of three to six minutes. Each node of a delta chain
+  had its availability checked with its own SQL statement instead of the
+  sweep's cache, and each manifest was parsed three times, as child, as
+  parent and as a baseline; both are now done once. Every derived table is
+  identical before and after.
+- A sparse or horizon store of a real-sized repository rebuilds. A
+  check-in deferred during the sweep loaded the store's references while
+  mlink was half refilled and the non-artifact record not yet written, so
+  nothing could be answered from the tables and every blob was read raw:
+  a path-cone store of fossil-scm.org's repository failed with "byte
+  budget exceeded". Deferred check-ins are now linked after the sweep; the
+  same store rebuilds in under a minute with every absent artifact
+  classified as before.
+- `Repo.Merge` no longer brings back files the merge deleted: it carried
+  the target's file list forward and restored them. It now commits the
+  merged tree, recording renames through the new `FileToCommit.OldName`.
+- A sparse store of a real-sized repository classifies its absent
+  artifacts. v0.14.0 read, inflated and expanded every blob in the store,
+  file content included, to find the manifests among them, under a
+  whole-store budget of 64 MiB stored and 128 MiB expanded; a path-cone
+  store of fossil-scm.org's own repository (67,894 artifacts, 8.4 GB
+  expanded) failed at once with "byte budget exceeded", so its pull,
+  verify and compaction failed too. Classification now never reads file
+  content, answers completely linked check-ins from the crosslink tables,
+  and parses raw cards only for what crosslinking does not record: roots,
+  partly linked check-ins, sub-manifest trees and artifacts of other kinds.
+  The same store classifies in about 2 s at a 65 MiB peak. One answer
+  narrows: a cherry-pick source the repository has never held no longer
+  counts as required content. fossil records no row and no phantom for it
+  and never fetches it, so compaction no longer refuses over it.
+
+### Changed
+
+- The horizon draft is re-pinned to zit `5d618aaeb1`: an origin with no tag
+  in force at any check-in a seed would cover mints no seed and serves the
+  content level (§5.2), and the cost report is guidance for the tool, not a
+  wire obligation (§3.4).
+- Under a structural horizon, `Checkout.Merge` and `Repo.Merge` now refuse
+  a merge whenever either side's ancestry crosses the horizon, even when the
+  store's own walk finds a base it holds (draft-fossil-horizon-00 §5.5):
+  over part of the graph that base need not be the nearest, and only the
+  origin can name it. They used to merge over such a base unless the walk
+  itself crossed. The error matches `ErrBelowHorizon`, names the horizon
+  and points to `Checkout.MergeContext` with a `Peer`, which asks the
+  origin; `MergeContext` refuses the same way when the origin does not
+  answer. `libfossil repo merge` asks the remote in these cases too. A
+  merge whose ancestry stays above the horizon still merges locally.
+- Breaking, for callers comparing values with `==`: the CLI's
+  `RepoCloneCmd` gained the `Cone` and `ConeNot` lists, so it is no longer
+  comparable. Every other change to the exported API is an addition.
+- The horizon draft is pinned at zit's `horizon-rfc` check-in
+  `24457c7dd6`, the text its author integrated after the review of this
+  implementation; the other six drafts are byte-identical to their earlier
+  pins. Changes made to the draft along the way, each reflected below:
+  the leaves rule restated over P cards with K closed under descendants,
+  the seed covering every entry of K and dated at its latest tag event
+  rounded up to a whole second, the cluster rule bound to origins that
+  serve at a horizon (zit#266), path cones eliding nodes under a horizon,
+  the cursor, the list-form merge-base query, the boundary over every held
+  manifest, and the structural store's fallback.
+- A path cone elides sub-manifest nodes under either horizon, as a sparse store does (§3.2, §4.1, §5.1, §6.2). Of the trees a
+  horizon keeps, every check-in's under a content horizon and K's under a
+  structural one, a store holds only the nodes on paths into the cone and
+  classifies the rest as elided; before, a content horizon held every node
+  of history, which on a large tree-structured repository is millions of
+  artifacts outside the cone. An origin answering a horizon request with
+  path members walks those trees descending only slots that may reach the
+  cone, keeps the walk with its classification so a later request walks
+  only the trees appended since, sends and announces only the nodes it
+  reaches, and does not answer a gimme for the rest; a request without path
+  members still receives every node. A cursor is void when an appended tree
+  keeps an older node that was withheld (§6.2.6). A store under a horizon
+  links a check-in whose in-cone files lie below it, and an operation that
+  needs a withheld node fetches it as a sparse store does. The origin's
+  classification memo also no longer reads a stale name for an artifact
+  appended without growing any of its lists. Interoperates with zit
+  both ways, at both depths.
+- The merge-base query takes the list form of §6.2.4: a
+  primary and one or two secondaries, answered with the query repeated and
+  Fossil's pivot over the set appended (`MergeBaseOf` is now a
+  `MergeBaseQuery`); an origin answers nothing when it lacks a named
+  check-in. `Checkout.MergeContext` asks the origin whenever either side's
+  ancestry crosses the horizon (§5.5), even when its own walk finds a base,
+  naming the merged-in version over the checkout and its pending plain
+  merges, and refuses a merge that must ask with two merges already
+  pending. A seed's U card is the minting implementation's label,
+  `go-libfossil`, never a login (§5.2.2). A refused deepen names its
+  remedy, a fresh clone with an earlier horizon (§5.8). Under the leaves
+  rule a fork that moves a meeting point deeper voids every cursor handed
+  out before it (§6.2.6), so the blobs of the older check-ins that join K
+  are announced. Interoperates with zit at `24457c7dd6` both ways: the
+  list-form merge base, the structural store's fallback discarding its
+  seed, and the parents of a held baseline labelled as boundary hashes.
+
 ## [0.14.0] - 2026-10-21
 
 ### Added

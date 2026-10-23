@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -57,10 +58,21 @@ func StoreCone(q db.Querier) (*cone.Cone, error) {
 // SetStoreCone replaces the store cone; nil makes the store dense. Neither
 // direction moves content: narrowing deletes nothing (§5.4), and widening
 // only makes the newly covered elided phantoms wanted again, for the next
-// synchronization to fetch.
+// synchronization to fetch. The boundary labels of a structural horizon
+// (draft-fossil-horizon-00 §5.3) name what lies below one C, so a cone whose
+// horizon differs drops them.
 func SetStoreCone(q db.Querier, c *cone.Cone) error {
 	if q == nil {
 		panic("content.SetStoreCone: q must not be nil")
+	}
+	old, err := StoreCone(q)
+	if err != nil {
+		return err
+	}
+	if horizonOf(old) != horizonOf(c) {
+		if _, err := q.Exec("DROP TABLE IF EXISTS " + belowLabelTable); err != nil {
+			return fmt.Errorf("content.SetStoreCone: %w", err)
+		}
 	}
 	if c == nil {
 		if _, err := q.Exec("DROP TABLE IF EXISTS storecone"); err != nil {
@@ -114,6 +126,12 @@ type Absences struct {
 	cone   *cone.Cone
 	class  map[libfossil.FslID]Absence
 	counts [Elided + 1]int
+	work   ReferenceWork // what classification read, for tests to bound
+	// below are the elided phantoms a structural horizon proves to be
+	// manifests below it: labelled boundary hashes and the targets only a
+	// tag or cherry-pick names (draft-fossil-horizon-00 §5.4); unnamed are
+	// those of them nothing the store holds names at all.
+	below, unnamed map[libfossil.FslID]bool
 }
 
 // LoadAbsences classifies the store's phantoms. Shunned names win; raw F/S
@@ -121,12 +139,18 @@ type Absences struct {
 // reference. Retained delta ancestors remain transit. Crosslink references
 // supplement raw provenance for historical names, including prior rename paths.
 // A partial tree need not be crosslinked to classify its outside S children.
+// A content horizon in the cone also elides the blobs below it and the
+// clusters the store was sent.
 func LoadAbsences(q db.Querier) (*Absences, error) {
 	return LoadAbsencesContext(context.Background(), q)
 }
 
 // LoadAbsencesContext carries cancellation through raw provenance discovery.
 func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
+	return loadAbsences(ctx, q, defaultReferenceLimits)
+}
+
+func loadAbsences(ctx context.Context, q db.Querier, limits referenceLimits) (*Absences, error) {
 	if ctx == nil || q == nil {
 		panic("content.LoadAbsencesContext: nil context or querier")
 	}
@@ -138,11 +162,16 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 		return nil, err
 	}
 	a := &Absences{cone: c, class: map[libfossil.FslID]Absence{}}
+	hasHorizon := false
+	if c != nil {
+		_, hasHorizon = c.Horizon()
+	}
 	rows, err := q.Query(`
 		SELECT p.rid,
 		       EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid),
 		       EXISTS(SELECT 1 FROM delta d JOIN blob h ON h.rid=d.rid
-		              WHERE d.srcid=p.rid AND h.size>=0)
+		              WHERE d.srcid=p.rid AND h.size>=0),
+		       EXISTS(SELECT 1 FROM tagxref WHERE tagid=7 AND rid=p.rid)
 		FROM phantom p JOIN blob b ON b.rid=p.rid`)
 	if err != nil {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
@@ -150,14 +179,19 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 	candidates := map[libfossil.FslID]bool{}
 	for rows.Next() {
 		var rid libfossil.FslID
-		var shunned, base bool
-		if err := rows.Scan(&rid, &shunned, &base); err != nil {
+		var shunned, base, cluster bool
+		if err := rows.Scan(&rid, &shunned, &base, &cluster); err != nil {
 			rows.Close()
 			return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 		}
 		switch {
 		case shunned:
 			a.class[rid] = Shunned
+		case cluster && hasHorizon && !base:
+			// A cluster the store was sent and did not keep (horizon §4.5):
+			// the cluster tag outlives its content, and a horizon store
+			// never asks for it back.
+			a.class[rid] = Elided
 		default:
 			a.class[rid] = Transit
 			if c != nil && !base {
@@ -169,28 +203,148 @@ func LoadAbsencesContext(ctx context.Context, q db.Querier) (*Absences, error) {
 		return nil, fmt.Errorf("content.LoadAbsences: phantoms: %w", err)
 	}
 	if len(candidates) > 0 {
-		refs, err := LoadConeReferences(ctx, q, c)
-		if err != nil {
+		if err := a.classify(ctx, q, candidates, limits); err != nil {
 			return nil, err
-		}
-		if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
-			return nil, err
-		}
-		if err := a.elide(q, candidates); err != nil {
-			return nil, err
-		}
-		for rid := range candidates {
-			if refs.Outside(rid) {
-				a.class[rid] = Elided
-			} else if refs.Required(rid) {
-				a.class[rid] = Transit
-			}
 		}
 	}
 	for _, k := range a.class {
 		a.counts[k]++
 	}
 	return a, nil
+}
+
+// classify decides the candidates, the phantoms that are neither shunned
+// nor a held delta's base. Path members elide by name. A content horizon
+// (draft-fossil-horizon-00 §3.2, §4) then elides every blob no check-in in
+// its held set names, so a kept blob is in both keep sets. It holds the
+// rest of structure at every age, but for the sub-manifest nodes path
+// members elide (§4.1): of every check-in's tree, those no in-cone slot
+// reaches.
+func (a *Absences) classify(
+	ctx context.Context, q db.Querier, candidates map[libfossil.FslID]bool, limits referenceLimits,
+) error {
+	facts, work, err := loadConeReferenceFactsBounded(ctx, q, limits.refs, true)
+	a.work = work
+	if err != nil {
+		return err
+	}
+	refs, err := facts.Classify(ctx, a.cone)
+	if err != nil {
+		return err
+	}
+	pool := maps.Clone(candidates)
+	if err := keepRequiredPhantoms(q, candidates, refs); err != nil {
+		return err
+	}
+	if err := a.elide(q, candidates); err != nil {
+		return err
+	}
+	h, hasHorizon := a.cone.Horizon()
+	for rid := range candidates {
+		if hasHorizon && refs.structure(rid) && !refs.Outside(rid) {
+			a.class[rid] = Transit
+		} else if refs.Outside(rid) {
+			a.class[rid] = Elided
+		} else if refs.Required(rid) {
+			a.class[rid] = Transit
+		}
+	}
+	if !hasHorizon {
+		return nil
+	}
+	cut, placed, err := horizonTrees(ctx, q, h, limits, &a.work)
+	if err != nil || !placed {
+		return err
+	}
+	for rid := range candidates {
+		if refs.below(cut.above, rid) {
+			a.class[rid] = Elided
+		}
+	}
+	if h.Depth() != cone.DepthStructural {
+		return nil
+	}
+	return a.classifyStructural(q, pool, refs, cut)
+}
+
+// classifyStructural applies a structural horizon (draft-fossil-horizon-00
+// §5.1, §5.3) to the phantoms that are neither shunned nor a held delta's
+// base. The store requests what a P, F, S or B card of a held artifact names,
+// or an attachment carries (§4.5); of those, a parent the origin labelled
+// below the horizon, a baseline or node no tree of K reaches, and a node the
+// path members exclude (§7) are elided, and an unlabelled parent stays
+// transit, since it may only be late. Every
+// other phantom -- the target of a tag or a cherry-pick, a manifest dropped
+// after it was linked -- is a manifest below the horizon that nothing in K
+// reaches, and is elided. A name an origin announces is still requested
+// during its synchronization; the classification is of the store at rest.
+func (a *Absences) classifyStructural(
+	q db.Querier, pool map[libfossil.FslID]bool, refs *ConeReferences, cut horizonCut,
+) error {
+	labels, err := BelowLabels(q)
+	if err != nil {
+		return err
+	}
+	a.below, a.unnamed = map[libfossil.FslID]bool{}, map[libfossil.FslID]bool{}
+	named, err := ridSet(q, "SELECT rid FROM tagxref UNION SELECT parentid FROM cherrypick UNION SELECT objid FROM event")
+	if err != nil {
+		return err
+	}
+	parents, err := ridSet(q, "SELECT pid FROM plink")
+	if err != nil {
+		return err
+	}
+	baselines, err := ridSet(q, "SELECT baseid FROM plink WHERE baseid>0 UNION SELECT baseline FROM orphan")
+	if err != nil {
+		return err
+	}
+	attached, err := ridSet(q, "SELECT b.rid FROM attachment a JOIN blob b ON b.uuid=a.src")
+	if err != nil {
+		return err
+	}
+	for rid := range pool {
+		uuid := refs.names[rid]
+		switch {
+		case labels[uuid]:
+			a.class[rid] = Elided
+			a.below[rid] = true
+		case parents[rid]:
+		case refs.tree[uuid] || baselines[rid]:
+			// A node of K's trees that path members exclude is elided too:
+			// an origin may withhold it, as a path cone's origin does.
+			if !cut.reach[uuid] && !refs.file(rid) || refs.tree[uuid] && refs.Outside(rid) {
+				a.class[rid] = Elided
+			}
+		case refs.file(rid) || attached[rid]:
+		default:
+			a.class[rid] = Elided
+			a.below[rid] = true
+			a.unnamed[rid] = !named[rid] && !refs.Required(rid)
+		}
+	}
+	return nil
+}
+
+// ridSet reads one column of rids.
+func ridSet(q db.Querier, query string) (map[libfossil.FslID]bool, error) {
+	rows, err := q.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("content.LoadAbsences: %w", err)
+	}
+	out := map[libfossil.FslID]bool{}
+	for rows.Next() {
+		var rid sql.NullInt64
+		if err := rows.Scan(&rid); err != nil {
+			return nil, errors.Join(err, rows.Close())
+		}
+		if rid.Valid {
+			out[libfossil.FslID(rid.Int64)] = true
+		}
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, fmt.Errorf("content.LoadAbsences: %w", err)
+	}
+	return out, nil
 }
 
 // An artifact may be both a file's content and a structural reference or
@@ -301,6 +455,20 @@ func (a *Absences) elide(q db.Querier, candidates map[libfossil.FslID]bool) erro
 	}
 	return nil
 }
+
+// BelowHorizon counts the elided phantoms that are check-ins below a
+// structural horizon (draft-fossil-horizon-00 §5.4): its boundary hashes and
+// the manifests only a tag or cherry-pick names.
+func (a *Absences) BelowHorizon() int { return len(a.below) }
+
+// Below reports rid as a check-in below a structural horizon.
+func (a *Absences) Below(rid libfossil.FslID) bool { return a.below[rid] }
+
+// Unnamed reports a phantom a structural horizon elides only because
+// nothing the store holds names it, such as one a peer announced. A
+// synchronization that heard the name announced asks for it: an origin
+// announces only what it keeps, and a pusher what it is sending.
+func (a *Absences) Unnamed(rid libfossil.FslID) bool { return a.unnamed[rid] }
 
 // Cone is the store cone the classification used, nil for a dense store.
 func (a *Absences) Cone() *cone.Cone { return a.cone }

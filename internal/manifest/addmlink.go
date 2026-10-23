@@ -20,7 +20,7 @@ package manifest
 //   - A parent whose manifest cannot be read (a phantom, or an artifact that
 //     does not parse) yields NO rows at all, not "every file is new". The rows
 //     are derived later, from the parent's side, once it arrives -- see
-//     linkPlinkChildren.
+//     linkLateChildren.
 
 import (
 	"fmt"
@@ -272,7 +272,7 @@ func ridForUUID(q db.Querier, uuid string) int64 {
 //
 // child/childFiles describe mid and may both be nil, in which case mid's
 // manifest is loaded here -- that is the "parent arrived after its child" entry
-// point (linkPlinkChildren), and it is also where canonical's guard against
+// point (linkLateChildren), and it is also where canonical's guard against
 // deriving merge-parent rows before the primary parent exists applies.
 //
 // A pmid of 0, a parent whose content cannot be expanded or parsed, or a delta
@@ -442,18 +442,11 @@ func addMlink(
 // loadCheckinManifest expands, parses, and builds the file views for the
 // check-in manifest stored at rid.
 func loadCheckinManifest(q db.Querier, cache *content.Cache, rid libfossil.FslID) (*deck.Deck, *manifestFiles, error) {
-	data, err := expandManifestBytes(q, cache, rid)
+	d, err := parseManifestAt(q, cache, rid)
 	if err != nil {
-		return nil, nil, fmt.Errorf("expand manifest rid=%d: %w", rid, err)
+		return nil, nil, err
 	}
-	if len(data) == 0 {
-		return nil, nil, fmt.Errorf("manifest rid=%d is empty", rid)
-	}
-	d, err := deck.Parse(data)
-	if err != nil {
-		return nil, nil, fmt.Errorf("parse manifest rid=%d: %w", rid, err)
-	}
-	mf, err := loadManifestFiles(q, cache, d)
+	mf, err := manifestFilesAt(q, cache, rid, d)
 	if err != nil {
 		return nil, nil, fmt.Errorf("files of rid=%d: %w", rid, err)
 	}
@@ -597,6 +590,8 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 		// path; this keeps the cascade path from inventing rows.
 		return nil
 	}
+	rememberCheckin(cache, rid, d)
+	rememberFiles(cache, rid, childFiles)
 
 	primaryMid, _ := resolveParentMids(tx, d)
 	if err := addMlink(tx, cache, primaryMid, rid, d, childFiles, true, 0); err != nil {
@@ -606,7 +601,7 @@ func insertCheckinMlinks(tx *db.Tx, cache *content.Cache, rid libfossil.FslID, d
 	if err := fixMergeAddedPids(tx, rid, d); err != nil {
 		return err
 	}
-	if err := linkPlinkChildren(tx, cache, rid); err != nil {
+	if err := linkLateChildren(tx, cache, rid); err != nil {
 		return err
 	}
 
@@ -674,24 +669,35 @@ func fixMergeAddedPids(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	return nil
 }
 
-// linkPlinkChildren derives the transitions that could not be derived when a
-// child of rid was crosslinked because rid itself was still missing.
+// linkLateChildren derives the transitions that could not be derived when a
+// child of rid was crosslinked because rid itself was still missing: rid as
+// the child's parent (plink) or as its cherrypick source (cherrypick).
 //
 // This is what makes the derivation independent of the order artifacts are
 // visited in. The sweep walks candidates in delta-chain order, and a phantom
 // parent may fill rounds after its children linked; canonical handles both with
 // the same loop over plink (src/manifest.c manifest_add_checkin_linkages), and
 // addMlink's early-out makes re-visiting an already-derived transition free.
-func linkPlinkChildren(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
+// Canonical's loop walks plink alone and leaves a late cherrypick source to the
+// rebuild its clone ends with; walking cherrypick too (insertCherrypicks
+// reserves the row) makes a clone match a rebuild in any arrival order.
+func linkLateChildren(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) error {
 	if tx == nil {
-		panic("manifest.linkPlinkChildren: tx must not be nil")
+		panic("manifest.linkLateChildren: tx must not be nil")
 	}
 	// plink.isprim is declared BOOLEAN, and one of the two SQLite drivers this
 	// package builds against surfaces that as a Go bool. CAST pins it to an
-	// integer so the scan below means the same thing on both.
-	rows, err := tx.Query("SELECT cid, CAST(isprim AS INTEGER) FROM plink WHERE pid=?", rid)
+	// integer so the scan below means the same thing on both. A cherrypick
+	// source is never a primary parent, and a backout source (isExclude)
+	// yields no transition at all.
+	rows, err := tx.Query(
+		`SELECT cid, CAST(isprim AS INTEGER) FROM plink WHERE pid=?
+		 UNION
+		 SELECT childid, 0 FROM cherrypick WHERE parentid=? AND NOT isExclude`,
+		rid, rid,
+	)
 	if err != nil {
-		return fmt.Errorf("plink children of rid=%d: %w", rid, err)
+		return fmt.Errorf("late children of rid=%d: %w", rid, err)
 	}
 	type childEdge struct {
 		cid    libfossil.FslID
@@ -703,13 +709,13 @@ func linkPlinkChildren(tx *db.Tx, cache *content.Cache, rid libfossil.FslID) err
 		var isprim int
 		if err := rows.Scan(&cid, &isprim); err != nil {
 			rows.Close()
-			return fmt.Errorf("scan plink child of rid=%d: %w", rid, err)
+			return fmt.Errorf("scan late child of rid=%d: %w", rid, err)
 		}
 		children = append(children, childEdge{cid: libfossil.FslID(cid), isPrim: isprim != 0})
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("plink children of rid=%d: %w", rid, err)
+		return fmt.Errorf("late children of rid=%d: %w", rid, err)
 	}
 
 	for _, c := range children {

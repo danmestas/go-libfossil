@@ -1,6 +1,12 @@
 package cli
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/content"
+)
 
 // RepoInfoCmd shows repository statistics.
 type RepoInfoCmd struct{}
@@ -31,5 +37,28 @@ func (c *RepoInfoCmd) Run(g *Globals) error {
 	fmt.Printf("deltas:        %d\n", deltaCount)
 	fmt.Printf("phantoms:      %d\n", phantomCount)
 	fmt.Printf("total size:    %d bytes\n", totalSize)
+	return printHorizon(db)
+}
+
+// printHorizon names the store's horizon, and under a structural one the
+// check-ins below it: a boundary hash is the horizon, not a missing parent
+// (draft-fossil-horizon-00 §5.4).
+func printHorizon(q db.Querier) error {
+	sc, err := content.StoreCone(q)
+	if err != nil || sc == nil {
+		return err
+	}
+	h, ok := sc.Horizon()
+	if !ok {
+		return nil
+	}
+	fmt.Printf("horizon:       %s %s %s\n", h.Hash(), h.Rule(), h.Depth())
+	a, err := content.LoadAbsencesContext(context.Background(), q)
+	if err != nil {
+		return err
+	}
+	if n := a.BelowHorizon(); n > 0 {
+		fmt.Printf("below horizon: %d check-in(s)\n", n)
+	}
 	return nil
 }

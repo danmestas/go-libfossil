@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -86,6 +88,9 @@ type cloneSession struct {
 	roundFrom             int  // the clone sequence the last request named
 	roundPush             bool // the last reply carried a push card
 	coned                 bool // requests carry the store cone (§6.1)
+	structural            structuralClient
+	structuralDecided     bool  // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
+	peerCursor            int64 // the last cursor a reply handed out (horizon §6.2.6)
 	// smConfig stages the sub-manifest settings one reply's config cards
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
@@ -98,6 +103,10 @@ type cloneSession struct {
 	obs Observer
 	// pass is the current round's verification pass (§7.7).
 	pass *receivePass
+	// basis is every round's pass's basis cache. A chain sent in one round
+	// is sent again, source first, with a later row of it in a later round,
+	// so a cache per round rebuilt each such chain from its root again.
+	basis *content.Cache
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -148,6 +157,11 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
 		return
 	}
+	structural, structuralErr := newStructuralClient(r.DB(), opts.SeedVerifier)
+	if structuralErr != nil {
+		err = fmt.Errorf("sync.Clone: %w", structuralErr)
+		return
+	}
 
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
@@ -170,7 +184,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		linker:                linker,
 		phantoms:              make(map[string]bool),
 		availableDeltaSources: make(map[string]struct{}),
+		basis:                 content.NewUncheckedCache(receiveBasisBytes),
 		seqno:                 1,
+		structural:            structural,
 	}
 	if opts.StoreCone != nil {
 		cs.sparseReceived = map[string]bool{}
@@ -226,7 +242,42 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 			return cloneResult, err
 		}
 	}
-	return cloneResult, cs.fillPhantoms(ctx, t)
+	// Horizon §5.2.3: the seed applies to what the linker's finalize linked.
+	fell, err := cs.structural.apply(cs.repo)
+	if err != nil {
+		return cloneResult, fmt.Errorf("sync.Clone: horizon seed: %w", err)
+	}
+	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	if err := cs.fillPhantoms(ctx, t); err != nil {
+		return cloneResult, err
+	}
+	return cloneResult, cs.recordCursor()
+}
+
+// recordCursor keeps what a converged horizon clone leaves its origin
+// knowing (horizon §6.2.6): the cursor of the last reply and the count of
+// this store's artifacts, all of which came from the origin, so the first
+// request that sends announces only what is appended after. zit records the
+// same after its clone (cmd/sync.zig).
+func (cs *cloneSession) recordCursor() error {
+	if cs.opts.Origin == "" {
+		return nil
+	}
+	c, err := content.StoreCone(cs.repo.DB())
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return nil
+	}
+	if _, ok := c.Horizon(); !ok {
+		return nil
+	}
+	end, err := storePosition(cs.repo.DB())
+	if err != nil {
+		return err
+	}
+	return storeCursor(cs.repo.DB(), cs.opts.Origin, c.Digest(), cursorRecord{peer: cs.peerCursor, local: end})
 }
 
 // clearInheritedConfig drops the config rows a fresh repository is seeded
@@ -273,15 +324,19 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 		return nil
 	}
 	res, err := Sync(ctx, cs.repo, t, SyncOpts{
-		Pull:        true,
-		ProjectCode: cs.projectCode,
-		ServerCode:  cs.serverCode,
-		User:        cs.opts.User,
-		Password:    cs.opts.Password,
-		Env:         cs.env,
-		Buggify:     cs.opts.Buggify,
-		Observer:    cs.opts.Observer,
+		Pull:         true,
+		ProjectCode:  cs.projectCode,
+		ServerCode:   cs.serverCode,
+		User:         cs.opts.User,
+		Password:     cs.opts.Password,
+		Env:          cs.env,
+		Buggify:      cs.opts.Buggify,
+		Observer:     cs.opts.Observer,
+		SeedVerifier: cs.opts.SeedVerifier,
 	})
+	if res != nil {
+		cs.result.HorizonFallback = cs.result.HorizonFallback || res.HorizonFallback
+	}
 	if res != nil {
 		cs.result.Rounds += res.Rounds
 		cs.result.BlobsRecvd += res.FilesRecvd
@@ -564,15 +619,21 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		defer cs.bindRepo(bound)()
 		filesRecvd = 0
 		cs.smConfig = stagedSubmanifestConfig{}
+		cs.structural.beginReply()
 		cardErr := cs.processCards(ctx, cycle, msg, &filesRecvd)
 		if failsRound(cardErr) {
 			return nil, cardErr // §10.1: the round, prefix included, rolls back
 		}
 		cs.applySubmanifestConfig()
+		if err := cs.decideStructural(msg); err != nil {
+			return nil, err
+		}
 		return cardErr, nil
 	})
 	if err != nil {
-		return err // the round rolled back
+		// The round rolled back, and with it the rows its pass cached.
+		cs.basis.Clear()
+		return err
 	}
 	cs.result.BlobsRecvd += filesRecvd
 	// An authentication challenge includes push codes, and a cosmetic error
@@ -607,7 +668,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 func (cs *cloneSession) processCards(ctx context.Context, cycle int, msg *xfer.Message,
 	filesRecvd *int) error {
 	cs.roundPush = false
-	cs.pass = newReceivePass() // each round is one verification pass (§7.7)
+	cs.pass = newReceivePassOver(cs.basis) // each round is one verification pass (§7.7)
 	defer func() { cs.pass = nil }()
 	for i, card := range msg.Cards {
 		if i%processResponseCancelCheckStride == 0 {
@@ -642,6 +703,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		cs.roundPush = true
 		return false, cs.recordCodes(c)
 	case *xfer.FileCard:
+		if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
+			return false, err
+		}
 		if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
 			return false, err
 		}
@@ -663,8 +727,23 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 	case *xfer.MessageCard:
 		cs.result.Messages = append(cs.result.Messages, c.Message)
 	case *xfer.PragmaCard:
+		if handled, err := cs.structural.pragma(cs.repo.DB(), c); handled || err != nil {
+			return false, err
+		}
 		if c.Name == coneServedPragma {
 			cs.result.ConeServed++ // sparse-cone §6.3, reported only
+		}
+		if n, ok := parseCursor(c); ok && c.Name == horizonCursorPragma {
+			cs.peerCursor = n
+		}
+		if d, ok := cs.structural.level(c); ok && c.Name == horizonServedPragma {
+			cs.result.HorizonServed++ // horizon §6.2.5
+			if d == cone.DepthStructural {
+				cs.result.StructuralServed++
+			}
+			if u := servedHistoryURL(c); u != "" {
+				cs.result.HorizonHistoryURL = u
+			}
 		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {
@@ -687,6 +766,9 @@ func (cs *cloneSession) applySubmanifestConfig() {
 // shunned cfile even in a clone, though not a shunned file card (xfer.c:162,
 // !cloneFlag), so a shunned one is skipped and not counted.
 func (cs *cloneSession) receiveCFile(ctx context.Context, c *xfer.CFileCard) (bool, error) {
+	if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
+		return false, err
+	}
 	shunned, err := shun.IsShunned(cs.repo.DB(), c.UUID)
 	if err != nil || shunned {
 		return false, err
@@ -805,6 +887,9 @@ func (cs *cloneSession) receiveContent(
 	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
 		return nil
 	}
+	if servedCluster(cs.servedHorizon(), deltaSrc, content) {
+		return nil
+	}
 	return cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
 }
 
@@ -836,7 +921,7 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 			// needs requesting, and so does a delta whose own base is a
 			// phantom. Only a confirmed available source is memoized: an
 			// unavailable source can arrive later in this same clone.
-			if _, available := content.AvailableByUUID(cs.repo.DB(), deltaSrc); !available {
+			if !cs.pass.available(cs.repo.DB(), deltaSrc) {
 				// request_phantoms never asks for a shunned name.
 				shunned, err := shun.IsShunned(cs.repo.DB(), deltaSrc)
 				if err != nil {
@@ -853,6 +938,30 @@ func (cs *cloneSession) handleFile(ctx context.Context, uuid, deltaSrc string, p
 	return nil
 }
 
+// decideStructural settles a structural clone's depth at the first reply
+// that carries the clone sequence, the first that answers the clone rather
+// than an authentication challenge (horizon §6.2.5), and applies the held
+// seed to what each later reply linked.
+func (cs *cloneSession) decideStructural(msg *xfer.Message) error {
+	if !cs.structuralDecided && slices.ContainsFunc(msg.Cards, func(c xfer.Card) bool {
+		_, ok := c.(*xfer.CloneSeqNoCard)
+		return ok
+	}) {
+		cs.structuralDecided = true
+		fell, err := cs.structural.endFirstReply(cs.repo)
+		if err != nil {
+			return err
+		}
+		cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	}
+	if !cs.structuralDecided {
+		return nil
+	}
+	fell, err := cs.structural.endReply(cs.repo)
+	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	return err
+}
+
 // bindRepo points the clone session at bound, the repository bound to the
 // current round's transaction, and returns the function that points it back.
 func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
@@ -862,4 +971,14 @@ func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
 	orig := cs.repo
 	cs.repo = bound
 	return func() { cs.repo = orig }
+}
+
+// servedHorizon reports a horizon clone whose origin has said it serves the
+// clone's horizon (horizon-served content) in a reply of this session.
+func (cs *cloneSession) servedHorizon() bool {
+	if cs.opts.StoreCone == nil || cs.result.HorizonServed == 0 {
+		return false
+	}
+	_, ok := cs.opts.StoreCone.Horizon()
+	return ok
 }

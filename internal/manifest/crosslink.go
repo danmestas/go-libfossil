@@ -616,6 +616,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 	defer func() { st.guard.coneReferences = nil }()
 	batchLinked := 0
 	var batchNonArtifact []libfossil.FslID
+	var partial []libfossil.FslID // deferred check-ins, in sweep order
 	for i, c := range batch {
 		if i%crosslinkCancelCheckStride == 0 {
 			select {
@@ -624,11 +625,10 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 			default:
 			}
 		}
-		data, err := st.cache.Expand(tx, c.rid)
-		if err != nil {
+		d, err := parseManifestAt(tx, st.cache, c.rid)
+		if err != nil && errors.Is(err, errExpandManifest) {
 			continue // not expandable, skip
 		}
-		d, err := deck.Parse(data)
 		if err != nil {
 			// Expanded fine, holds no artifact: ordinary file content. That
 			// verdict is a property of immutable bytes, so record it and never
@@ -654,13 +654,7 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 				return err
 			}
 			if deferred {
-				linked, err := crosslinkPartialCheckin(ctx, tx, c.rid, d, st.guard, st.sched)
-				if err != nil {
-					return err
-				}
-				if linked {
-					batchLinked++
-				}
+				partial = append(partial, c.rid)
 				continue
 			}
 		}
@@ -675,6 +669,23 @@ func linkBatch(ctx context.Context, tx *db.Tx, batch []candidate, st *linkState)
 	}
 	if err := recordNonArtifacts(tx, batchNonArtifact); err != nil {
 		return err
+	}
+	// A deferred check-in's partial link is judged against the whole store's
+	// references. Those are answered from the crosslink tables, which only the
+	// sweep above and recordNonArtifacts fill, so judging mid-sweep would read
+	// every blob raw and exceed the reference budget on a real repository.
+	for _, rid := range partial {
+		d, err := parseManifestAt(tx, st.cache, rid)
+		if err != nil {
+			return err
+		}
+		linked, err := crosslinkPartialCheckin(ctx, tx, rid, d, st.guard, st.sched)
+		if err != nil {
+			return err
+		}
+		if linked {
+			batchLinked++
+		}
 	}
 	st.linked += batchLinked
 	return nil
@@ -1363,8 +1374,17 @@ func (g *checkinDeferralGuard) baselineIsCheckin(tx *db.Tx, uuid string) bool {
 // with no parent manifest there is no file transition to derive -- fossil's
 // add_mlink returns before reading a file -- and the parent's own crosslink
 // derives the rows once it arrives (issue #398).
+//
+// A sparse store does not wait on a file its path members exclude: it never
+// arrives. Waiting on those cost a cone clone of fossil-scm.org's repository
+// one availability query per file of every check-in, and left it in its
+// first round after 20 minutes.
 func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []string {
 	missing := missingFileSet(tx, d, g)
+	storeCone, err := content.StoreCone(tx)
+	if err != nil {
+		return missing
+	}
 	if len(d.P) > 0 {
 		if _, ok := g.avail.ByUUID(tx, d.P[0]); !ok {
 			return missing
@@ -1386,6 +1406,9 @@ func missingCheckinRefs(tx *db.Tx, d *deck.Deck, g *checkinDeferralGuard) []stri
 	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		if f.UUID == "" { // a deleted file in a delta manifest
+			continue
+		}
+		if storeCone != nil && !storeCone.Covers(f.Name) {
 			continue
 		}
 		if _, dup := seen[f.UUID]; dup {
@@ -1653,6 +1676,12 @@ func resolveParentMids(tx *db.Tx, d *deck.Deck) (primaryParentMid libfossil.FslI
 }
 
 // insertCherrypicks inserts cherrypick rows for Q-cards (cherrypick/backout).
+//
+// A source that has not arrived is reserved as a phantom, so the row exists
+// before the source does and linkLateChildren can find this check-in when the
+// source arrives. Canonical skips a missing source and relies on the rebuild
+// its clone ends with; a clone here links as artifacts arrive and has no such
+// rebuild, so it would keep the row, and the source's mlink rows, missing.
 func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 	for _, cp := range d.Q {
 		target := cp.Target
@@ -1660,9 +1689,9 @@ func insertCherrypicks(tx *db.Tx, rid libfossil.FslID, d *deck.Deck) error {
 		if cp.IsBackout {
 			isExclude = 1
 		}
-		var parentRid int64
-		if err := tx.QueryRow("SELECT rid FROM blob WHERE uuid=?", target).Scan(&parentRid); err != nil {
-			continue // target blob missing, skip
+		parentRid, err := ridOrPhantom(tx, target)
+		if err != nil {
+			return fmt.Errorf("cherrypick source %q: %w", target, err)
 		}
 		if _, err := tx.Exec(
 			"REPLACE INTO cherrypick(parentid, childid, isExclude) VALUES(?, ?, ?)",
@@ -2324,7 +2353,13 @@ func crosslinkForumReply(tx *db.Tx, rid libfossil.FslID, d *deck.Deck, froot, fp
 
 // CrosslinkCluster processes a cluster artifact: applies the cluster singleton
 // tag (tagid=7), removes clustered blobs from unclustered, and creates phantoms
-// for any referenced UUIDs not yet in the blob table.
+// for any referenced UUIDs not yet in the blob table. A horizon store does so
+// too: it is stored a cluster only by an origin that does not serve its
+// horizon, which may name a new check-in nowhere else, so the names are
+// requested as transit and classified as they arrive
+// (draft-fossil-horizon-00 §4.5). The tag is also how such a store recognizes
+// the cluster's phantom once it drops the content. A cluster an origin
+// serving the horizon sends is never stored (sync's servedCluster).
 func CrosslinkCluster(q db.Querier, rid libfossil.FslID, d *deck.Deck) error {
 	if q == nil {
 		panic("manifest.CrosslinkCluster: q must not be nil")
@@ -2343,7 +2378,6 @@ func CrosslinkCluster(q db.Querier, rid libfossil.FslID, d *deck.Deck) error {
 	); err != nil {
 		return fmt.Errorf("manifest.CrosslinkCluster tag: %w", err)
 	}
-
 	// Process each M-card UUID.
 	for _, uuid := range d.M {
 		memberRID, exists := blob.Exists(q, uuid)

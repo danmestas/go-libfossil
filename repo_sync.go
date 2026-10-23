@@ -46,6 +46,20 @@ type SyncResult struct {
 	// cone-served, draft-fossil-sparse-cone-00 §6.3); the rest of a sparse
 	// store's rounds were served densely and filtered locally.
 	Elided, ConeServed int
+	// HorizonServed counts the replies whose peer served the store's
+	// horizon (pragma horizon-served, draft-fossil-horizon-00 §6.2.5); the
+	// other rounds were classified locally. StructuralServed counts those
+	// served at the structural level, and HorizonFallback reports a
+	// structural store that fell back to the content horizon for good (§6.3).
+	HorizonServed    int
+	StructuralServed int
+	HorizonFallback  bool
+	// HorizonHistoryURL is the interface outside the sync protocol at which
+	// the origin says history below a horizon can be queried (pragma
+	// horizon-served URL, draft-fossil-horizon-00 §6.2.5), the last a reply
+	// named; "" when none did. An origin names it with
+	// SettingHorizonHistoryURL.
+	HorizonHistoryURL string
 }
 
 // HandleOpts configures server-side sync handling.
@@ -79,6 +93,14 @@ type CloneOpts struct {
 	// after clone_seqno 0, so it is off by default: like fossil(1)'s clone,
 	// Clone then succeeds with those artifacts left as phantoms.
 	PullPhantoms bool
+	// StoreCone, when non-nil, clones straight into a sparse store: only the
+	// artifacts the cone covers are fetched, and the cone becomes the store's
+	// policy. With a horizon (NewHorizonCone) it clones a content-horizon
+	// store, eliding the blobs below the horizon; CloneResult.HorizonServed
+	// counts the replies whose server cut at the horizon, the others being
+	// classified locally. A server that will not serve a sparse clone
+	// refuses it (SettingPartialMirror).
+	StoreCone *Cone
 }
 
 // transportAdapter bridges the public byte-level Transport to the internal
@@ -238,6 +260,11 @@ func (r *Repo) Sync(ctx context.Context, t Transport, opts SyncOpts) (*SyncResul
 		Observer:    adaptObserver(opts.Observer),
 		Buggify:     opts.Buggify,
 	}
+	// A transport that names its peer keys the horizon cursor; any other
+	// keeps none, and its requests announce in full, which §6.2.6 allows.
+	if o, ok := t.(interface{ syncOrigin() string }); ok {
+		iOpts.Origin = o.syncOrigin()
+	}
 	res, err := internalsync.Sync(ctx, r.inner, adapter, iOpts)
 	if err != nil {
 		return convertSyncResult(res), fmt.Errorf("libfossil: sync: %w", err)
@@ -250,17 +277,21 @@ func convertSyncResult(r *internalsync.SyncResult) *SyncResult {
 		return nil
 	}
 	return &SyncResult{
-		Rounds:       r.Rounds,
-		FilesSent:    r.FilesSent,
-		FilesRecvd:   r.FilesRecvd,
-		UVFilesSent:  r.UVFilesSent,
-		UVFilesRecvd: r.UVFilesRecvd,
-		UVGimmesSent: r.UVGimmesSent,
-		BytesSent:    r.BytesSent,
-		BytesRecvd:   r.BytesRecvd,
-		Errors:       r.Errors,
-		Elided:       r.Elided,
-		ConeServed:   r.ConeServed,
+		Rounds:            r.Rounds,
+		FilesSent:         r.FilesSent,
+		FilesRecvd:        r.FilesRecvd,
+		UVFilesSent:       r.UVFilesSent,
+		UVFilesRecvd:      r.UVFilesRecvd,
+		UVGimmesSent:      r.UVGimmesSent,
+		BytesSent:         r.BytesSent,
+		BytesRecvd:        r.BytesRecvd,
+		Errors:            r.Errors,
+		Elided:            r.Elided,
+		ConeServed:        r.ConeServed,
+		HorizonServed:     r.HorizonServed,
+		StructuralServed:  r.StructuralServed,
+		HorizonFallback:   r.HorizonFallback,
+		HorizonHistoryURL: r.HorizonHistoryURL,
 	}
 }
 

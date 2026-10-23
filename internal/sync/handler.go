@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -170,7 +172,8 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		Operation: detectOperation(req),
 	})
 
-	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx}
+	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx,
+		memo: originMemo(r.DB())}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -188,12 +191,15 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	if err == nil && resp == nil {
 		panic("sync.HandleSync: resp must not be nil on success")
 	}
+	if err == nil {
+		h.publishView()
+	}
 
 	obs.HandleCompleted(ctx, HandleEnd{
 		CardsProcessed:   len(req.Cards),
 		FilesSent:        h.filesSent,
 		FilesReceived:    h.filesRecvd,
-		SparseClassified: h.keep.classified(),
+		SparseClassified: h.keep.classified() + h.structuralRead,
 		Err:              err,
 	})
 	return resp, err
@@ -220,6 +226,7 @@ type handler struct {
 	cone            *cone.Cone
 	keep            *sparseKeep
 	partialMirror   bool
+	historyURL      string // named in a horizon reply's horizon-served (§6.2.5)
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -259,7 +266,16 @@ type handler struct {
 	remoteLacks     map[string]bool           // UUIDs the client asked for (fossil's unk)
 	logins          int                       // login cards read so far; only one is allowed
 	pass            *receivePass              // this request's verification pass (§7.7)
+	cursor          int64                     // the request's horizon cursor (horizon §6.2.6); 0 bounds nothing
+	structural      *structuralServe          // a structural request this origin serves (horizon §6.2); nil otherwise
+	seedOffered     string                    // the seed a structural request names as held (horizon §6.2.3)
+	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
+	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
+	received        []string                  // the artifacts this request stored, in card order
 	receipt         *db.Receipt               // what this request stores is recorded under
+	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
+	view            *content.MemoView         // what the inventory classified over, published once the request commits
+	structuralRead  int                       // what placing a structural horizon read through the memo
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -268,6 +284,11 @@ type handler struct {
 	// cloneRead is Read derived from Clone before any login, as page_xfer
 	// derives it from nobody's capabilities ahead of its card loop.
 	cloneRead bool
+
+	// sources memoizes forwardableSource for the request, whose snapshot
+	// does not change under it: a round's chain walks and sentEarlier's
+	// searches ask about the same rows again and again.
+	sources map[int]forwardable
 }
 
 func (h *handler) initAuth() {
@@ -460,12 +481,29 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		h.fail(coneErr.Error())
 		return h.reply(), nil
 	}
+	if h.cone != nil {
+		if err := h.prepareStructural(ctx, req.Cards); err != nil {
+			return nil, err
+		}
+		var err error
+		if h.historyURL, err = historyURL(h.repo.DB()); err != nil {
+			return nil, err
+		}
+	}
 	if !hasClientVersion(req.Cards) {
 		h.emitCapabilityPragmas()
 	}
 	// §10.1: the request's cards run in one write transaction, as page_xfer
-	// runs them after db_begin_write, and so does the closing crosslink.
-	if _, err := runPass(h.repo, func(bound *repo.Repo) (error, error) {
+	// runs them after db_begin_write, and so does the closing crosslink. A
+	// request none of whose cards can write runs in a read transaction
+	// instead: it holds the write lock from no other request, and a clone
+	// round on a large repository is served for longer than a waiting
+	// request's busy timeout.
+	begin := h.repo.WithBoundTx
+	if readOnlyRequest(req.Cards) {
+		begin = h.repo.WithBoundReadTx
+	}
+	if _, err := runPassIn(begin, func(bound *repo.Repo) (error, error) {
 		defer h.bindRepo(bound)()
 		return nil, h.processInTx(ctx, req)
 	}); err != nil {
@@ -479,6 +517,32 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	h.resp = append(h.resp, h.timestampComment())
 	return h.reply(), nil
+}
+
+// readOnlyRequest reports whether no card of a request can make the handler
+// write: it neither pushes (push, file, cfile, private, an igot under push)
+// nor sends configuration, unversioned content or table rows, nor a pragma
+// whose answer writes: uv-hash and xtable-hash (which an unversioned or table
+// sync sends in place of a push card) and the check-in lock pair. Without a
+// push card an igot only records what the client holds. A read transaction
+// refuses a write the list misses, under the ncruces driver at least.
+func readOnlyRequest(cards []xfer.Card) bool {
+	for _, card := range cards {
+		switch c := card.(type) {
+		case *xfer.LoginCard, *xfer.CloneCard, *xfer.PullCard, *xfer.CookieCard,
+			*xfer.GimmeCard, *xfer.IGotCard, *xfer.ReqConfigCard,
+			*xfer.BadFileCard, *xfer.BadCommandCard, *xfer.ErrorCard,
+			*xfer.MessageCard, *xfer.CloneSeqNoCard:
+		case *xfer.PragmaCard:
+			switch c.Name {
+			case "uv-hash", "xtable-hash", "ci-lock", "ci-unlock":
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // processInTx is process's work inside the request transaction. A §8.1
@@ -496,10 +560,23 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
-	if err := h.emitInventory(); err != nil {
+	if err := h.emitInventory(ctx); err != nil {
 		return err
 	}
-	return h.crosslinkReceived(ctx)
+	if err := h.crosslinkReceived(ctx); err != nil {
+		return err
+	}
+	// Horizon §5.7: a push whose cancellation contradicts this origin's
+	// derivation is refused whole, so it stores nothing.
+	refusal, err := h.staleCancel()
+	if err != nil {
+		return err
+	}
+	if refusal != "" {
+		h.fail(refusal)
+		return errPassAborted
+	}
+	return nil
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -604,9 +681,16 @@ func (h *handler) crosslinkReceived(ctx context.Context) error {
 	return nil
 }
 
-// reply is the message the handler answers with.
+// reply is the message the handler answers with. A horizon-cursor no
+// inventory valued is dropped: only a reply to a pull hands one out.
 func (h *handler) reply() *xfer.Message {
-	return &xfer.Message{Cards: h.resp, Uncompressed: h.uncompressed}
+	cards := h.resp
+	if h.servedCursor != nil && len(h.servedCursor.Values) == 0 {
+		cards = slices.DeleteFunc(slices.Clone(cards), func(c xfer.Card) bool {
+			return c == xfer.Card(h.servedCursor)
+		})
+	}
+	return &xfer.Message{Cards: cards, Uncompressed: h.uncompressed}
 }
 
 // loadCodes reads the repository's project and server codes. A login's
@@ -699,7 +783,7 @@ func countedErrors(cards []xfer.Card) int {
 // emitInventory sends what follows the card loop: the phantom gimmes of a
 // push and the igot inventory of a pull. A clone's batch and the cluster
 // igots of req-clusters go out in place instead, at their cards.
-func (h *handler) emitInventory() error {
+func (h *handler) emitInventory(ctx context.Context) error {
 	// An accepted push asks for the server's phantoms, ahead of the pull's
 	// inventory as page_xfer's request_phantoms runs ahead of
 	// send_unclustered (§6.4, §8.5).
@@ -708,8 +792,12 @@ func (h *handler) emitInventory() error {
 			return err
 		}
 	}
-	// If pull was requested, emit igot for all non-phantom blobs.
+	// If pull was requested, emit igot for all non-phantom blobs. Horizon
+	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it.
 	if h.pullOK {
+		if err := h.answerMergeBase(ctx); err != nil {
+			return err
+		}
 		if err := h.emitIGots(); err != nil {
 			return err
 		}
@@ -740,7 +828,11 @@ func (h *handler) handleClone(c *xfer.CloneCard) error {
 		if err != nil {
 			return err
 		}
-		if !coneContains(have, h.cone) {
+		covered, err := h.coversRequest(have)
+		if err != nil {
+			return err
+		}
+		if !covered {
 			h.refuseClone("Sparse cone does not cover requested clone; configure a partial mirror to allow it.")
 			return nil
 		}
@@ -936,11 +1028,12 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		if h.canRead() && (h.pullOK || h.pushOK) {
 			h.handlePragmaXTableHash(c.Values[0], c.Values[1])
 		}
-	case c.Name == "req-clusters":
+	case c.Name == "req-clusters" && !h.horizonScoped():
 		// Answered in place, as page_xfer answers it, so a later reset
 		// discards the igots (§10.1). Like fossil, any requester gets them:
 		// they name public artifacts and carry no content, which a gimme
-		// still needs Read to fetch.
+		// still needs Read to fetch. A horizon-scoped request is sent no
+		// cluster (draft-fossil-horizon-00 §6.2), so it gets nothing.
 		return h.sendAllClusters()
 	case c.Name == "ci-lock" && len(c.Values) == 2 && hash.IsValidHash(c.Values[0]):
 		// fossil takes the pragma only with exactly HASH and CLIENT-ID, HASH
@@ -951,6 +1044,14 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 		// fossil drops CLIENT-ID's check-in locks for any requester, with no
 		// Write or ownership test (§9.4).
 		releaseCkinLocks(h.repo.DB(), c.Values[0])
+	case c.Name == horizonCursorPragma:
+		if n, ok := parseCursor(c); ok {
+			h.cursor = n
+		}
+	case c.Name == horizonMergeBasePragma:
+		if q, ok := parseMergeBaseQuery(c); ok {
+			h.mergeBaseQuery = q
+		}
 	case c.Name == "send-private":
 		if auth.CanSyncPrivate(h.caps) {
 			h.syncPrivate = true
@@ -972,10 +1073,23 @@ func (h *handler) emitCapabilityPragmas() {
 	h.resp = append(h.resp, capabilityPragmas(enableSubmanifests(h.repo.DB()))...)
 	// Sparse-cone §6.3: this server applies a request's whole cone or
 	// refuses it (requestCone, handleClone), so a cone request's reply is
-	// acknowledged here. A refusal resets the reply and discards it.
-	if h.cone != nil {
+	// acknowledged here, and a horizon request's says the level it is served
+	// at (horizon §6.2.5). A refusal resets the reply and discards both.
+	if h.cone != nil && len(h.cone.Include()) > 0 {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
 	}
+	if h.horizonScoped() {
+		h.emitHorizonServed()
+	}
+}
+
+// horizonScoped reports a request that carried a horizon pragma.
+func (h *handler) horizonScoped() bool {
+	if h.cone == nil {
+		return false
+	}
+	_, ok := h.cone.Horizon()
+	return ok
 }
 
 // handleCkinLock answers pragma ci-lock HASH CLIENT-ID. The lock row holds
@@ -1236,7 +1350,11 @@ func (h *handler) requestPhantoms() error {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return fmt.Errorf("handler: listing phantoms: %w", err)
 		}
-		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided) {
+		// A structural store asks for a name the pusher announced though
+		// nothing it holds names it yet (horizon §5.1): a new check-in.
+		_, heard := h.remoteHas[uuid]
+		announced := heard && elided != nil && elided.Unnamed(rid)
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1276,7 +1394,15 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		return nil // blob not found — not fatal, skip.
 	}
 	// §6.4: a gimme names its artifact, so a cone request is answered
-	// densely; the requester never names what its own cone elides.
+	// densely; the requester never names what its own cone elides. A
+	// horizon request with path members is not answered a node the origin
+	// withholds (horizon §6.2); one without path members is.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	if h.keep.withholds(rid) {
+		return nil
+	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1308,6 +1434,16 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		h.resp = append(h.resp, &xfer.ErrorCard{
 			Message: fmt.Sprintf("expand %s: %v", c.UUID, err),
 		})
+		return nil
+	}
+	// Horizon §5.1: a structural request keeps no manifest or node below
+	// its horizon, so one asked for is not sent, as zit skips it.
+	if h.structural.withholds(c.UUID, data) {
+		return nil
+	}
+	// Horizon §4.5, §6.2: a horizon-scoped request is sent no cluster,
+	// even one it names, so a clone never learns what only a cluster names.
+	if h.horizonScoped() && isCluster(data) {
 		return nil
 	}
 	if isPriv {
@@ -1351,7 +1487,10 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if err != nil {
 		return err
 	}
-	if shunned {
+	// Horizon §5.2.3: an origin refuses a seed offered to it. The request's
+	// horizon-seed names the client's seed, so a file bearing that name is
+	// dropped unstored, as a shunned one is.
+	if shunned || h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
 		h.nextIsPrivate = false
 		return nil
 	}
@@ -1378,6 +1517,7 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		return nil
 	}
 	h.filesRecvd++
+	h.received = append(h.received, uuid)
 	return nil
 }
 
@@ -1460,6 +1600,14 @@ func (h *handler) emitIGots() error {
 	if err := h.ensureSparseKeep(); err != nil {
 		return err
 	}
+	position, err := originPosition(h.repo.DB())
+	if err != nil {
+		return err
+	}
+	floor, err := h.announceFloor(position)
+	if err != nil {
+		return err
+	}
 	// Sparse inventories advertise only the request's keep-set; announcing an
 	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
@@ -1473,13 +1621,16 @@ func (h *handler) emitIGots() error {
 	defer rows.Close()
 
 	var uuids []string
+	var rids []libfossil.FslID
 	for rows.Next() {
 		var rid libfossil.FslID
 		var uuid string
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return err
 		}
-		if !h.keep.keeps(rid) {
+		// Horizon §6.2.6: what lies at or below the cursor was announced or
+		// sent already, in any reply, classified or not.
+		if int64(rid) <= floor || !h.keep.keeps(rid) {
 			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
@@ -1490,6 +1641,7 @@ func (h *handler) emitIGots() error {
 			continue
 		}
 		uuids = append(uuids, uuid)
+		rids = append(rids, rid)
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -1497,6 +1649,10 @@ func (h *handler) emitIGots() error {
 
 	// BUGGIFY: 10% chance truncate igot list to test multi-round convergence.
 	if h.buggify != nil && h.buggify.Check("handler.emitIGots.truncate", 0.10) && len(uuids) > 1 {
+		// The cursor stops short of the first name left unannounced.
+		for _, rid := range rids[len(uuids)/2:] {
+			position = min(position, int64(rid)-1)
+		}
 		uuids = uuids[:len(uuids)/2]
 	}
 
@@ -1505,11 +1661,41 @@ func (h *handler) emitIGots() error {
 	}
 
 	if h.syncPrivate {
-		if err := h.emitPrivateIGots(); err != nil {
+		unsent, err := h.emitPrivateIGots(floor)
+		if err != nil {
 			return err
 		}
+		if unsent > 0 {
+			position = min(position, int64(unsent)-1)
+		}
+	}
+	if h.servedCursor != nil {
+		h.servedCursor.Values = cursorCard(max(position, 0)).Values
 	}
 	return nil
+}
+
+// announceFloor is the rid at or below which this reply announces nothing:
+// the request's cursor, or 0 when it carried none, one beyond position this
+// origin cannot have handed out, or one from before the origin's last
+// reclassification, which is answered as if it carried none (horizon
+// §6.2.6). That reply's cursor moves the client past it.
+func (h *handler) announceFloor(position int64) (int64, error) {
+	if h.cursor == 0 || h.cursor > position {
+		return 0, nil
+	}
+	at, err := rekeptAt(h.repo.DB())
+	if err != nil {
+		return 0, err
+	}
+	if h.cursor < at {
+		return 0, nil
+	}
+	voids, err := h.keep.voids(h.cursor)
+	if err != nil || voids {
+		return 0, err
+	}
+	return h.cursor, nil
 }
 
 // emitPrivateIGots emits igot cards with IsPrivate=true for all blobs in
@@ -1520,26 +1706,30 @@ func (h *handler) emitIGots() error {
 // (src/xfer.c) selects from the private table with no shun filter, unlike
 // the public igot paths. #349 asked for the filter, but matching fossil
 // wins; the receiving side drops a shunned file on arrival either way.
-func (h *handler) emitPrivateIGots() error {
+//
+// Nothing at or below floor is announced (horizon §6.2.6). It returns the
+// lowest rid a truncation left unannounced, 0 when none.
+func (h *handler) emitPrivateIGots(floor int64) (libfossil.FslID, error) {
 	if err := h.ensureSparseKeep(); err != nil {
-		return err
+		return 0, err
 	}
 	rows, err := h.repo.DB().Query(
 		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
 	if err != nil {
-		return fmt.Errorf("handler: listing private blobs: %w", err)
+		return 0, fmt.Errorf("handler: listing private blobs: %w", err)
 	}
 	defer rows.Close()
 
 	var uuids []string
+	var rids []libfossil.FslID
 	for rows.Next() {
 		var rid libfossil.FslID
 		var uuid string
 		if err := rows.Scan(&rid, &uuid); err != nil {
-			return err
+			return 0, err
 		}
-		if !h.keep.keeps(rid) {
+		if int64(rid) <= floor || !h.keep.keeps(rid) {
 			continue
 		}
 		// Skip if the client already has this blob as private.
@@ -1549,20 +1739,27 @@ func (h *handler) emitPrivateIGots() error {
 			continue
 		}
 		uuids = append(uuids, uuid)
+		rids = append(rids, rid)
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 
 	// BUGGIFY: 10% chance truncate private igot list to test multi-round convergence.
+	var unsent libfossil.FslID
 	if h.buggify != nil && h.buggify.Check("handler.emitPrivateIGots.truncate", 0.10) && len(uuids) > 1 {
+		for _, rid := range rids[len(uuids)/2:] {
+			if unsent == 0 || rid < unsent {
+				unsent = rid
+			}
+		}
 		uuids = uuids[:len(uuids)/2]
 	}
 
 	for _, uuid := range uuids {
 		h.resp = append(h.resp, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
 	}
-	return nil
+	return unsent, nil
 }
 
 // sendAllClusters emits igot cards for all cluster artifacts that are
@@ -1670,6 +1867,26 @@ func (h *handler) emitCloneBatch() error {
 	h.emitCloneResume(round)
 	// SeqNo 0 signals completion so the client stops requesting.
 	h.resp = append(h.resp, &xfer.CloneSeqNoCard{SeqNo: round.nextRID})
+	return h.valueCloneCursor(round)
+}
+
+// valueCloneCursor values the reply's horizon-cursor with the position this
+// round served the clone sequence through (horizon §6.2.6): every rid below
+// the sequence it hands on, or the origin's whole position once it hands on
+// none, bounded by the snapshot the clone opened.
+func (h *handler) valueCloneCursor(round *cloneBatch) error {
+	if h.servedCursor == nil {
+		return nil
+	}
+	position, err := originPosition(h.repo.DB())
+	if err != nil {
+		return err
+	}
+	position = min(position, int64(h.cloneSnapMax))
+	if round.nextRID != 0 {
+		position = min(position, int64(round.nextRID)-1)
+	}
+	h.servedCursor.Values = cursorCard(max(position, 0)).Values
 	return nil
 }
 
@@ -1726,7 +1943,8 @@ func (h *handler) newCloneBatch() *cloneBatch {
 
 func (h *handler) walkCloneRows(round *cloneBatch) error {
 	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		`SELECT rid, uuid, size, substr(content, 1, 4) FROM blob
+		  WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid`,
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -1737,10 +1955,13 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 		var rid int
 		var uuid string
 		var fullSize int
-		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
+		var prefix []byte
+		if err := rows.Scan(&rid, &uuid, &fullSize, &prefix); err != nil {
 			return err
 		}
-		more, err := h.cloneRow(round, rid, uuid, fullSize)
+		more, err := h.cloneRow(round, cloneCandidate{
+			rid: rid, uuid: uuid, fullSize: fullSize, storedSize: storedSize(prefix, fullSize),
+		})
 		if err != nil {
 			return err
 		}
@@ -1751,9 +1972,39 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 	return rows.Err()
 }
 
+// excludedCost is what a round is charged for a row it walks past (§6.2,
+// SC-6.2-1): what a dense round charges to send it as stored. Charging the
+// expanded size instead made a sparse round of fossil-scm.org's repository
+// cover a hundredth of a dense round's rows, and the clone outlasted
+// MaxRounds.
+func excludedCost(c cloneCandidate) int {
+	return cloneCardOverheadBytes + c.storedSize
+}
+
+// cloneCandidate is one row a clone round may send. storedSize is the size
+// of its stored bytes once inflated: its delta when it is stored as one.
+type cloneCandidate struct {
+	rid        int
+	uuid       string
+	fullSize   int
+	storedSize int
+}
+
+// storedSize reads a blob's inflated stored size from the four-byte
+// big-endian prefix fossil's blob_compress writes ahead of the zlib stream,
+// so a row can be charged without inflating it. A content too short to
+// carry the prefix is charged its full size.
+func storedSize(prefix []byte, fullSize int) int {
+	if len(prefix) < 4 {
+		return max(fullSize, 0)
+	}
+	return int(binary.BigEndian.Uint32(prefix))
+}
+
 // cloneRow offers one candidate row to the round. It reports false once the
 // round is full, having set the cursor the client resumes from.
-func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
+	rid, uuid, fullSize := c.rid, c.uuid, c.fullSize
 	// A higher-rid delta source that a dependent's chain already pulled in
 	// this round is on the wire; skip it before it can consume budget or
 	// advance the cursor a second time. A sparse walk still owes the walk of
@@ -1761,6 +2012,12 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 	walk := h.keep != nil && h.keep.walk != nil
 	if round.sent[rid] && !walk {
 		return true, nil
+	}
+	if !walk {
+		earlier, err := h.sentEarlier(rid)
+		if err != nil || earlier {
+			return err == nil, err
+		}
 	}
 	shunned, err := shun.IsShunned(h.repo.DB(), uuid)
 	if err != nil || shunned {
@@ -1775,13 +2032,12 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 		return false, nil
 	}
 	if walk {
-		return h.cloneSparseRow(round, rid, uuid, fullSize)
+		return h.cloneSparseRow(round, c)
 	}
 	// §6.2: a cone-excluded row is charged as a dense round would charge
-	// it, at no less than its expanded size, so the walk stops no later
-	// than a dense batch over the same rows would.
+	// it, at the size of its stored bytes (excludedCost).
 	if !h.keep.keeps(libfossil.FslID(rid)) {
-		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		round.bytesSent += excludedCost(c)
 		return true, nil
 	}
 	sent, err := h.cloneSend(round, rid, uuid, fullSize)
@@ -1944,20 +2200,9 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		if src == 0 {
 			return append(chain, m), nil // full-content tip
 		}
-		info, ok, err := h.loadCloneBlob(int(src))
+		info, forwardable, err := h.forwardableSource(int(src))
 		if err != nil {
 			return nil, err
-		}
-		forwardable := ok && info.size >= 0 && int(src) <= h.cloneSnapMax &&
-			h.keep.sourceKept(int(src)) && (!info.priv || h.syncPrivate)
-		if forwardable {
-			// Checked before sent: a withheld source is never on the wire,
-			// whatever an earlier chain recorded.
-			barred, err := h.smGate.barred(h.repo.DB(), h.cache, src, h.peerReadsTrees)
-			if err != nil {
-				return nil, err
-			}
-			forwardable = !barred
 		}
 		if !forwardable {
 			m.expanded = true
@@ -1968,6 +2213,13 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 		if sent[int(src)] {
 			return chain, nil // source already on the wire this round
 		}
+		earlier, err := h.sentEarlier(int(src))
+		if err != nil {
+			return nil, err
+		}
+		if earlier {
+			return chain, nil // the client holds the source from an earlier round
+		}
 		curRID, curUUID, curUSize, curPriv = int(src), info.uuid, info.size, info.priv
 	}
 	// Walk cap hit: force the deepest artifact to full content so its delta
@@ -1975,6 +2227,129 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 	chain[len(chain)-1].srcUUID = ""
 	chain[len(chain)-1].expanded = true
 	return chain, nil
+}
+
+// forwardableSource reports whether a chain may name src as a delta source
+// this clone sends: a held row inside the snapshot bound that the store cone
+// keeps as a source, public unless the clone takes private content, and no
+// tree the §7.2 gate withholds from this client.
+func (h *handler) forwardableSource(src int) (cloneBlobRow, bool, error) {
+	if f, ok := h.sources[src]; ok {
+		return f.info, f.ok, nil
+	}
+	info, ok, err := h.decideSource(src)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	if h.sources == nil {
+		h.sources = make(map[int]forwardable)
+	}
+	h.sources[src] = forwardable{info: info, ok: ok}
+	return info, ok, nil
+}
+
+// forwardable is a memoized forwardableSource verdict.
+type forwardable struct {
+	info cloneBlobRow
+	ok   bool
+}
+
+// decideSource is forwardableSource without the memo.
+func (h *handler) decideSource(src int) (cloneBlobRow, bool, error) {
+	info, ok, err := h.loadCloneBlob(src)
+	if err != nil || !ok {
+		return cloneBlobRow{}, false, err
+	}
+	if info.size < 0 || src > h.cloneSnapMax || !h.keep.sourceKept(src) ||
+		(info.priv && !h.syncPrivate) {
+		return info, false, nil
+	}
+	// Checked before sent: a withheld source is never on the wire, whatever
+	// an earlier chain recorded.
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(src), h.peerReadsTrees)
+	if err != nil {
+		return cloneBlobRow{}, false, err
+	}
+	return info, !barred, nil
+}
+
+// maxSentEarlierRows bounds the rows sentEarlier examines below one row.
+const maxSentEarlierRows = 256
+
+// sentEarlier reports whether rid went out in an earlier round of this clone.
+// Rounds take rows in rid order and send each with its delta chain, source
+// first, through every source the clone forwards; so rid went out when a row
+// below the cursor that its round sent reaches rid through forwardable
+// sources. fossil deltifies each version of a file against the next, so the
+// versions' rows come in rid order, each a delta on a later one: the oldest
+// row's round sends the whole history, and without this each later version's
+// row sent the rest of it again in its own round. A dense clone of the Fossil
+// repository carried its histories about five times over, each copy verified
+// again by the client.
+//
+// The search walks down the delta table from rid, through rows that are
+// forwardable sources themselves, examining at most maxSentEarlierRows rows,
+// far short of maxCloneChainWalk. Not finding such a row sends rid again,
+// which is only redundant. A row below the cursor that was a phantom or
+// private when its round passed it, and has since been filled or published,
+// was not sent but is taken as sent; rows below the cursor are not sent again
+// in any case.
+func (h *handler) sentEarlier(rid int) (bool, error) {
+	if h.cloneSeq <= 1 {
+		return false, nil
+	}
+	frontier := []int{rid}
+	examined := 0
+	for len(frontier) > 0 {
+		var next []int
+		for _, parent := range frontier {
+			kids, err := childRows(h.repo.DB(), libfossil.FslID(parent), nil)
+			if err != nil {
+				return false, err
+			}
+			// rid went out only as a source; asked once it is one.
+			if parent == rid && len(kids) > 0 {
+				if _, ok, err := h.forwardableSource(rid); err != nil || !ok {
+					return false, err
+				}
+			}
+			for _, kid := range kids {
+				if examined++; examined > maxSentEarlierRows {
+					return false, nil
+				}
+				sent, err := h.sentAsRow(int(kid))
+				if err != nil || sent {
+					return sent, err
+				}
+				_, ok, err := h.forwardableSource(int(kid))
+				if err != nil {
+					return false, err
+				}
+				if ok {
+					next = append(next, int(kid))
+				}
+			}
+		}
+		frontier = next
+	}
+	return false, nil
+}
+
+// sentAsRow reports whether rid is a row an earlier round of this clone sent
+// as itself: below the cursor, held, and not one cloneRow or
+// buildCloneArtifact withholds (shunned, private to a public clone, outside
+// the store cone, a refused SHA3 name or a withheld tree).
+func (h *handler) sentAsRow(rid int) (bool, error) {
+	if rid >= h.cloneSeq || rid > h.cloneSnapMax || !h.keep.keeps(libfossil.FslID(rid)) {
+		return false, nil
+	}
+	info, ok, err := h.loadCloneBlob(rid)
+	if err != nil || !ok || info.size < 0 || (info.priv && !h.syncPrivate) ||
+		sha3Barred(info.uuid, h.peerVersion) {
+		return false, err
+	}
+	barred, err := h.smGate.barred(h.repo.DB(), h.cache, libfossil.FslID(rid), h.peerReadsTrees)
+	return err == nil && !barred, err
 }
 
 // buildCloneArtifact assembles the wire cards that deliver artifact rid to the

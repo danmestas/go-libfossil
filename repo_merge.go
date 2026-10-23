@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -52,7 +53,8 @@ func (e *MergeConflictError) Is(target error) bool {
 	return target == ErrMergeConflict
 }
 
-// FindCommonAncestor finds the nearest common ancestor of two checkins.
+// FindCommonAncestor finds the most recent common ancestor of two checkins,
+// the merge base fossil's merge-base command names.
 func (r *Repo) FindCommonAncestor(ridA, ridB int64) (int64, error) {
 	ancestor, err := merge.FindCommonAncestor(r.inner, fsltype.FslID(ridA), fsltype.FslID(ridB))
 	if err != nil {
@@ -154,6 +156,11 @@ func (r *Repo) BranchOpenLeaf(name string) (rid int64, open bool, err error) {
 //   - Present on only one side (new file): kept as-is.
 //   - In ancestor, missing on one side, unchanged on the other: agreed deletion.
 //   - In ancestor, missing on one side, modified on the other: modify/delete conflict.
+//
+// Files are matched across the three versions following renames, as fossil's
+// merge matches them: a file srcBranch renamed and dstBranch did not takes
+// srcBranch's name, and the commit records the rename; a file dstBranch
+// renamed keeps its name.
 func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string, error) {
 	if srcBranch == "" || dstBranch == "" {
 		return 0, "", fmt.Errorf("libfossil: merge: src and dst branches are required")
@@ -177,9 +184,28 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 		return 0, "", fmt.Errorf("libfossil: merge: branches %q and %q point to same checkin (rid=%d)", srcBranch, dstBranch, srcTip)
 	}
 
-	ancestor, err := r.FindCommonAncestor(srcTip, dstTip)
-	if err != nil {
+	// fossil's merge: the merged-in version is the primary (merge.c).
+	base, err := merge.FindPivot(context.Background(), r.inner, merge.PivotQuery{
+		Primary: fsltype.FslID(srcTip), Secondaries: []fsltype.FslID{fsltype.FslID(dstTip)}})
+	if err != nil && !errors.Is(err, merge.ErrNoCommonAncestor) {
 		return 0, "", fmt.Errorf("libfossil: merge: %w", err)
+	}
+	ancestor := base.RID
+	// draft-fossil-horizon-00 §5.5: never merge against a base the store
+	// does not hold, nor one found by a walk that crossed the horizon, and
+	// name the horizon when that is why.
+	if cerr := content.MergeBaseCrossing(r.inner.DB(), fsltype.FslID(srcTip), ancestor, base.Unheld); cerr != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w", cerr)
+	}
+	// Nor over one it found while either side's ancestry crosses the
+	// horizon: only the origin can name that base, and Merge has no peer.
+	sides := []fsltype.FslID{fsltype.FslID(srcTip), fsltype.FslID(dstTip)}
+	if cerr := content.AncestryCrossing(r.inner.DB(), sides[0], sides); cerr != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w; Repo.Merge cannot ask the origin: "+
+			"merge in a checkout with Checkout.MergeContext and a Peer", cerr)
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: find common ancestor: %w", err)
 	}
 
 	srcFiles, err := loadFileset(r, srcTip)
@@ -190,31 +216,52 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: dst fileset: %w", err)
 	}
-	baseFiles, err := loadFileset(r, ancestor)
+	baseFiles, err := loadFileset(r, int64(ancestor))
 	if err != nil {
 		return 0, "", fmt.Errorf("libfossil: merge: ancestor fileset: %w", err)
 	}
 
-	allNames := make(map[string]struct{}, len(srcFiles)+len(dstFiles))
-	for n := range srcFiles {
-		allNames[n] = struct{}{}
+	// Files are matched across the versions following renames, as fossil's
+	// merge matches them; dst is the checkout's version.
+	dstNames := make([]merge.LocalFile, 0, len(dstFiles))
+	for _, n := range sortedFileNames(dstFiles) {
+		dstNames = append(dstNames, merge.LocalFile{Name: n})
 	}
-	for n := range dstFiles {
-		allNames[n] = struct{}{}
+	matches, err := merge.FollowRenames(context.Background(), r.inner, merge.RenameQuery{
+		V: fsltype.FslID(dstTip), P: ancestor, M: fsltype.FslID(srcTip), Local: dstNames,
+		Pivot: sortedFileNames(baseFiles), Merged: sortedFileNames(srcFiles),
+	})
+	if err != nil {
+		return 0, "", fmt.Errorf("libfossil: merge: %w", err)
 	}
 
 	strat := &merge.ThreeWayText{}
 	var conflictFiles []string
 	var merged []FileToCommit
 
-	for name := range allNames {
-		local, localOK := dstFiles[name]
-		remote, remoteOK := srcFiles[name]
-		base, baseOK := baseFiles[name]
+	for _, m := range matches {
+		var name string
+		var local mergeFileEntry
+		localOK := m.Local >= 0
+		if localOK {
+			name = dstNames[m.Local].Name
+			local = dstFiles[name]
+		}
+		remote, remoteOK := srcFiles[m.Merged]
+		base, baseOK := baseFiles[m.Pivot]
+		if !localOK {
+			name = m.Merged
+		}
+		// Renamed on src only: the result takes src's name (fnp=fn,
+		// fnm!=fnp in merge_cmd), and the commit records the rename.
+		oldName := ""
+		if localOK && remoteOK && baseOK && m.Pivot == name && m.Merged != name {
+			name, oldName = m.Merged, name
+		}
 
 		switch {
 		case !localOK && !remoteOK:
-			// Shouldn't happen (not in union).
+			// In the base alone: deleted on both sides.
 			continue
 
 		case localOK && !remoteOK:
@@ -259,7 +306,7 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 			if perm == "" {
 				perm = remote.perm
 			}
-			merged = append(merged, FileToCommit{Name: name, Content: res.Content, Perm: perm})
+			merged = append(merged, FileToCommit{Name: name, Content: res.Content, Perm: perm, OldName: oldName})
 		}
 	}
 
@@ -270,13 +317,26 @@ func (r *Repo) Merge(srcBranch, dstBranch, message, user string) (int64, string,
 
 	sort.Slice(merged, func(i, j int) bool { return merged[i].Name < merged[j].Name })
 
+	// merged is the whole tree: a file dst has and the merge drops stays
+	// dropped.
 	return r.Commit(CommitOpts{
-		Files:        merged,
-		Comment:      message,
-		User:         user,
-		ParentID:     dstTip,
-		MergeParents: []int64{srcTip},
+		Files:           merged,
+		Comment:         message,
+		User:            user,
+		ParentID:        dstTip,
+		MergeParents:    []int64{srcTip},
+		PartialManifest: true,
 	})
+}
+
+// sortedFileNames is a fileset's names, sorted.
+func sortedFileNames(files map[string]mergeFileEntry) []string {
+	names := make([]string, 0, len(files))
+	for n := range files {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // mergeFileEntry caches the expanded bytes and perm of one file in a fileset.

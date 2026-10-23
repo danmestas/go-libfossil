@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 
 	libfossil "github.com/danmestas/go-libfossil"
 )
@@ -24,7 +25,9 @@ type RepoConeCmd struct {
 	Dense   RepoConeDenseCmd   `cmd:"" help:"Drop the cone and materialize every file"`
 	Test    RepoConeTestCmd    `cmd:"" help:"Classify paths against the cone and name the deciding member"`
 	Store   RepoConeStoreCmd   `cmd:"" help:"Show or replace the repository's store cone, fetching what widening covers"`
+	Deepen  RepoConeDeepenCmd  `cmd:"" help:"Move the store's horizon down to reach a check-in, fetching the history it keeps"`
 	Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
+	Cost    RepoConeCostCmd    `cmd:"" help:"Report what each horizon rule would hold at a check-in, from this repository"`
 }
 
 // RepoConeShowCmd lists the inclusions, then the exclusions marked '!'.
@@ -48,6 +51,9 @@ func printCone(cone *libfossil.Cone) {
 		fmt.Println("dense")
 		return
 	}
+	if h, ok := cone.Horizon(); ok {
+		fmt.Printf("horizon %s %s%s\n", h.Checkin, h.Rule, structuralSuffix(h))
+	}
 	for _, m := range cone.Include() {
 		fmt.Println(m)
 	}
@@ -60,24 +66,44 @@ func printCone(cone *libfossil.Cone) {
 // form of demand fetch (draft-fossil-sparse-cone-00 §6.4): artifacts the new
 // cone covers that the old one elided are pulled from --remote, else the saved
 // last-sync-url. With such artifacts and no peer it refuses and changes nothing.
+//
+// A store cone may carry a horizon (draft-fossil-horizon-00): --horizon sets
+// it, or deepens it when the check-in is older than the current one, with
+// --structural taking the structural cut, and --no-horizon drops it. Either
+// keeps the store's path members unless paths are given, which replace them.
 type RepoConeStoreCmd struct {
 	RecoveryFlags
-	Paths []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
-	Not   []string `help:"Exclusion members (repeatable)"`
-	Dense bool     `help:"Drop the store cone, fetching everything it elided"`
+	Paths      []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
+	Not        []string `help:"Exclusion members (repeatable)"`
+	Dense      bool     `help:"Drop the store cone, fetching everything it elided"`
+	Horizon    string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps; 'repo cone cost' shows what each rule would hold"`
+	Leaves     bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
+	Structural bool     `help:"With --horizon, also elide the manifests below the check-in; the next pull fetches the origin's seed"`
+	NoHorizon  bool     `help:"Drop the horizon, keeping the path members, and fetch what it elided"`
 }
 
 func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 	members := len(c.Paths) > 0 || len(c.Not) > 0
-	if c.Dense && members {
-		return fmt.Errorf("--dense takes no cone members")
+	horizon := c.Horizon != "" || c.NoHorizon
+	switch {
+	case c.Dense && (members || horizon):
+		return fmt.Errorf("--dense takes no cone members or horizon")
+	case c.Horizon != "" && c.NoHorizon:
+		return fmt.Errorf("--horizon and --no-horizon are exclusive")
+	case c.Leaves && c.Horizon == "":
+		return fmt.Errorf("--leaves needs --horizon")
+	case c.Structural && c.Horizon == "":
+		return fmt.Errorf("--structural needs --horizon")
+	}
+	if c.Leaves {
+		warnLeavesCost()
 	}
 	r, err := g.OpenRepo()
 	if err != nil {
 		return err
 	}
 	defer closeWith(r.Close, &err)
-	if !c.Dense && !members {
+	if !c.Dense && !members && !horizon {
 		cone, err := r.StoreCone()
 		if err != nil {
 			return err
@@ -85,9 +111,11 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 		printCone(cone)
 		return nil
 	}
-	next, err := coneFlags(c.Paths, c.Not)
-	if err != nil {
-		return err
+	var next *libfossil.Cone
+	if !c.Dense {
+		if next, err = c.storeCone(r, members); err != nil {
+			return err
+		}
 	}
 	required, err := c.requiredContent(r)
 	if err != nil {
@@ -104,7 +132,157 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 		fetched = result.FilesRecvd
 	}
 	fmt.Printf("fetched %d artifact(s)\n", fetched)
+	printHistoryURL(result)
 	return nil
+}
+
+// storeCone is the store cone the flags ask for. Path members given replace
+// the current ones; with none, the current ones stay and only the horizon
+// changes.
+func (c *RepoConeStoreCmd) storeCone(r *libfossil.Repo, members bool) (*libfossil.Cone, error) {
+	if !members && c.Horizon == "" && c.NoHorizon {
+		current, err := r.StoreCone()
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			return nil, fmt.Errorf("the store cone is dense; there is no horizon to drop")
+		}
+		if _, ok := current.Horizon(); !ok {
+			return nil, fmt.Errorf("the store cone has no horizon to drop")
+		}
+		if len(current.Include()) == 0 {
+			return nil, fmt.Errorf("the store cone is only a horizon; --dense drops it")
+		}
+		return current.WithHorizon(nil)
+	}
+	if c.Horizon == "" {
+		return coneFlags(c.Paths, c.Not)
+	}
+	rid, err := resolveRID(r, c.Horizon)
+	if err != nil {
+		return nil, fmt.Errorf("--horizon %q: %w", c.Horizon, err)
+	}
+	checkin, err := r.UUIDFromRID(rid)
+	if err != nil {
+		return nil, err
+	}
+	h := libfossil.Horizon{Checkin: checkin, Rule: horizonRule(c.Leaves), Structural: c.Structural}
+	if members {
+		if len(c.Paths) == 0 {
+			return nil, fmt.Errorf("--not needs a path to carve from")
+		}
+		return libfossil.NewHorizonCone(c.Paths, c.Not, h)
+	}
+	current, err := r.StoreCone()
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return libfossil.NewHorizonCone(nil, nil, h)
+	}
+	return current.WithHorizon(&h)
+}
+
+// RepoConeCostCmd reports what a horizon at a check-in would hold under each
+// rule (draft-fossil-horizon-00 §3.4): the check-ins of the held set and the
+// bytes of the blobs they name, stored and expanded, so the rule is chosen
+// with its cost in view. It reads the local repository, which must hold the
+// history; a clone has none yet, so the figures come before it, from a peer
+// that exposes them (an origin may name such an interface through
+// horizon-served) or from a repository already held.
+type RepoConeCostCmd struct {
+	Checkin string `arg:"" help:"Check-in to place the horizon at: a name, branch or hash prefix"`
+}
+
+func (c *RepoConeCostCmd) Run(g *Globals) (err error) {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+
+	costs, err := r.HorizonCost(c.Checkin)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("horizon at %s\n", c.Checkin)
+	for _, cost := range costs {
+		fmt.Printf("%s  %d check-ins, %d blobs, %d B expanded, %d B stored\n",
+			cost.Rule, cost.Checkins, cost.Blobs, cost.ExpandedBytes, cost.StoredBytes)
+	}
+	return nil
+}
+
+// RepoConeDeepenCmd deepens the store's horizon (draft-fossil-horizon-00
+// §5.8) so that it reaches a check-in: C moves to that check-in when it is
+// an ancestor of C, else to a common ancestor of the two, which the remote
+// is asked for when the store cannot see one. The rule, the depth and the
+// path members stay. History comes from --remote, else the saved
+// last-sync-url.
+type RepoConeDeepenCmd struct {
+	RecoveryFlags
+	Checkin string `arg:"" help:"Check-in to reach: a full hash, which may lie below the horizon, or a name"`
+}
+
+func (c *RepoConeDeepenCmd) Run(g *Globals) (err error) {
+	r, err := g.OpenRepo()
+	if err != nil {
+		return err
+	}
+	defer closeWith(r.Close, &err)
+	required, err := c.requiredContent(r)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cloneContext(context.Background(), c.Timeout)
+	defer cancel()
+	result, err := r.DeepenHorizon(ctx, c.Checkin, required)
+	if err != nil {
+		return err
+	}
+	cone, err := r.StoreCone()
+	if err != nil {
+		return err
+	}
+	printCone(cone)
+	fmt.Printf("fetched %d artifact(s)\n", result.FilesRecvd)
+	printHistoryURL(result)
+	return nil
+}
+
+// printHistoryURL names the interface at which the origin says history
+// below the horizon can be queried, when a reply named one
+// (draft-fossil-horizon-00 §6.2.5).
+func printHistoryURL(result *libfossil.SyncResult) {
+	if result != nil && result.HorizonHistoryURL != "" {
+		fmt.Printf("history: %s\n", result.HorizonHistoryURL)
+	}
+}
+
+// structuralSuffix marks a structural horizon where one is printed; the
+// content horizon, the default, is printed bare.
+func structuralSuffix(h libfossil.Horizon) string {
+	if h.Structural {
+		return " structural"
+	}
+	return ""
+}
+
+// warnLeavesCost states the cost of the leaves rule on stderr (draft-fossil-
+// horizon-00 §3.1): it holds every descendant of where each childless
+// check-in's history meets C's, so a client picks it knowingly.
+func warnLeavesCost() {
+	fmt.Fprintln(os.Stderr, "warning: --leaves holds every descendant of where each childless check-in's "+
+		"history meets the horizon's; on a repository with old unmerged branches that is nearly the whole "+
+		"history (20,907 of 21,008 check-ins of fossil-scm.org's repository)")
+}
+
+func horizonRule(leaves bool) libfossil.HorizonRule {
+	if leaves {
+		return libfossil.HorizonLeaves
+	}
+	return libfossil.HorizonDescendants
 }
 
 // RepoConeAddCmd adds members to the cone.
@@ -273,6 +451,29 @@ func (c *RepoConeTestCmd) Run(g *Globals) (err error) {
 		return ErrConeTestElided
 	}
 	return nil
+}
+
+// cloneConeFlags is coneFlags for a clone, which can also start a content
+// horizon store. Nothing is local yet, so the check-in must be a full hash.
+func cloneConeFlags(include, exclude []string, checkin string, leaves, structural bool) (*libfossil.Cone, error) {
+	if checkin == "" {
+		if leaves {
+			return nil, fmt.Errorf("--leaves needs --horizon")
+		}
+		if structural {
+			return nil, fmt.Errorf("--structural needs --horizon")
+		}
+		return coneFlags(include, exclude)
+	}
+	if len(include) == 0 && len(exclude) > 0 {
+		return nil, fmt.Errorf("--cone-not needs a --cone to carve from")
+	}
+	c, err := libfossil.NewHorizonCone(include, exclude,
+		libfossil.Horizon{Checkin: checkin, Rule: horizonRule(leaves), Structural: structural})
+	if err != nil {
+		return nil, fmt.Errorf("--horizon needs the full check-in hash on clone: %w", err)
+	}
+	return c, nil
 }
 
 // coneFlags is the --cone and --cone-not pair of a command that can start a

@@ -7,21 +7,10 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
-
-// crosslinkTables are the derived tables a crosslink sweep owns. Rebuild empties
-// them so every blob is a candidate again, then lets manifest.Crosslink refill
-// them exactly as a clone that received every artifact would. This is the same
-// set the repository-state corpus test empties before its sweep, which matches
-// `fossil rebuild` in event, plink, mlink, tagxref, leaf and phantom. orphan is
-// among them because the sweep files a delta manifest whose baseline is absent
-// there; `fossil rebuild` drops and recreates it the same way.
-var crosslinkTables = []string{
-	"event", "plink", "leaf", "mlink", "tagxref",
-	"forumpost", "attachment", "backlink", "cherrypick", "orphan",
-}
 
 // bookkeepingTables are the sync-bookkeeping tables the crosslink sweep does not
 // own. fossil's rebuild repopulates them; Rebuild clears and refills them after
@@ -29,7 +18,7 @@ var crosslinkTables = []string{
 var bookkeepingTables = []string{"unclustered", "unsent"}
 
 // rebuildTableList reports every table Rebuild reconstructs, for Report.
-var rebuildTableList = append(append([]string{}, crosslinkTables...), bookkeepingTables...)
+var rebuildTableList = append(manifest.RederivedTables(), bookkeepingTables...)
 
 // Rebuild reconstructs all derived tables from raw blob content. It first
 // verifies blob integrity (read-only), then empties the crosslink-derived
@@ -78,20 +67,19 @@ func Rebuild(r *repo.Repo) (*Report, error) {
 	return report, nil
 }
 
-// rederive empties the crosslink-derived tables so every blob owes the sweep an
-// examination again, crosslinks every artifact, and refills the sync-bookkeeping
-// tables the sweep does not own. The sweep writes event/plink/mlink/tagxref,
-// creates phantoms for absent targets, parents and file content, reparents,
-// then repairs leaf and tag-propagation state over the whole plink graph -- the
-// order `fossil rebuild` uses. CrosslinkRebuild, not Crosslink, so the whole
-// rebuild runs in tx: a check-in whose files or parent are absent is linked
-// with phantoms, and a delta manifest whose baseline is absent is refused and
-// filed in orphan, exactly as Crosslink and `fossil rebuild` do.
+// rederive re-derives the crosslink tables (manifest.Rederive), applies the
+// horizon seed a structural-horizon clone holds outside the artifact store,
+// as draft-fossil-horizon-00 §5.2.3 requires of every derivation, and refills
+// the sync-bookkeeping tables the sweep does not own. manifest.Rederive runs
+// CrosslinkRebuild, not Crosslink, so the whole rebuild runs in tx: a check-in
+// whose files or parent are absent is linked with phantoms, and a delta
+// manifest whose baseline is absent is refused and filed in orphan, exactly as
+// Crosslink and `fossil rebuild` do.
 func rederive(tx *db.Tx) error {
-	if err := clearTables(tx, crosslinkTables); err != nil {
+	if _, err := manifest.Rederive(tx); err != nil {
 		return err
 	}
-	if _, err := manifest.CrosslinkRebuild(tx); err != nil {
+	if _, err := seed.Apply(tx, nil); err != nil {
 		return err
 	}
 	return rebuildBookkeeping(tx)

@@ -1,13 +1,19 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 
 	libfossil "github.com/danmestas/go-libfossil"
 )
 
-// RepoMergeCmd merges a divergent version into the current checkout.
+// RepoMergeCmd merges a divergent version into the current checkout. In a
+// store with a structural horizon, a merge whose base lies below the horizon
+// asks --remote, else the saved last-sync-url, for the base and deepens the
+// horizon to reach it before merging (draft-fossil-horizon-00 §5.5).
 type RepoMergeCmd struct {
+	RecoveryFlags
 	Version  string `arg:"" help:"Version to merge into current checkout"`
 	Strategy string `help:"Override merge strategy for all files"`
 	DryRun   bool   `help:"Show what would be merged without writing"`
@@ -15,7 +21,7 @@ type RepoMergeCmd struct {
 }
 
 func (c *RepoMergeCmd) Run(g *Globals) (err error) {
-	_, co, done, err := openWorkingCheckout(g, c.Dir)
+	r, co, done, err := openWorkingCheckout(g, c.Dir)
 	if err != nil {
 		return err
 	}
@@ -25,11 +31,20 @@ func (c *RepoMergeCmd) Run(g *Globals) (err error) {
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", c.Version, err)
 	}
-	res, err := co.Merge(libfossil.CheckoutMergeOpts{
-		Version:  rid,
-		Strategy: c.Strategy,
-		DryRun:   c.DryRun,
-	})
+	opts := libfossil.CheckoutMergeOpts{Version: rid, Strategy: c.Strategy, DryRun: c.DryRun}
+	res, err := co.Merge(opts)
+	if errors.Is(err, libfossil.ErrBelowHorizon) {
+		// Only a crossing contacts a peer: an ordinary merge stays local.
+		required, rerr := c.requiredContent(r)
+		if rerr != nil {
+			return errors.Join(err, rerr)
+		}
+		if required.Peer != nil {
+			ctx, cancel := cloneContext(context.Background(), c.Timeout)
+			defer cancel()
+			res, err = co.MergeContext(ctx, opts, required)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -47,9 +62,11 @@ var mergeLabels = map[string]string{
 	"added":    "ADDED",
 	"deleted":  "DELETE",
 	"mode":     "MODE",
+	"renamed":  "RENAME",
 }
 
-// printMergeResult reports a merge the way fossil's merge command does.
+// printMergeResult reports a merge the way fossil's merge command does:
+// renames after every other change but additions, which come last.
 func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 	if len(res.Files) == 0 {
 		fmt.Println("merge skipped: nothing to merge")
@@ -62,6 +79,8 @@ func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 			panic("cli.printMergeResult: unknown merge action " + f.Action)
 		}
 		switch f.Action {
+		case "renamed", "added":
+			// Printed below.
 		case "conflict":
 			fmt.Printf("%s %s\n***** merge conflict in %s\n", label, f.Name, f.Name)
 			conflicts++
@@ -73,6 +92,16 @@ func printMergeResult(res libfossil.CheckoutMergeResult, dryRun bool) {
 			conflicts++
 		default:
 			fmt.Printf("%s %s\n", label, f.Name)
+		}
+	}
+	for _, f := range res.Files {
+		if f.RenamedTo != "" {
+			fmt.Printf("%s %s -> %s\n", mergeLabels["renamed"], f.Name, f.RenamedTo)
+		}
+	}
+	for _, f := range res.Files {
+		if f.Action == "added" {
+			fmt.Printf("%s %s\n", mergeLabels["added"], f.Name)
 		}
 	}
 	if conflicts > 0 {

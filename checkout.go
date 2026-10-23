@@ -23,7 +23,8 @@ type CheckoutCreateOpts struct {
 	Observer CheckoutObserver // nil = nop
 	// Cone makes the checkout sparse: Extract, Update and Status work only on
 	// the files it covers, and Checkin carries the others from the parent
-	// unchanged. nil is dense. See Cone and Checkout.SetCone.
+	// unchanged. nil is dense. A cone with a horizon is refused with
+	// ErrHorizonCheckout. See Cone and Checkout.SetCone.
 	Cone *Cone
 }
 
@@ -140,11 +141,17 @@ type CheckoutMergeResult struct {
 //	"added"    - new in the merged-in version
 //	"deleted"  - deleted in the merged-in version, unchanged here
 //	"mode"     - only the merged-in version changed its executable bit; taken
+//	"renamed"  - only renamed: the merged-in version renamed it, this checkout did not
+//
+// Name is the file's name in the checkout before the merge. RenamedTo is
+// set when the merge also renamed it, as fossil's merge does a file the
+// merged-in version renamed and the checkout did not.
 type CheckoutMergeFile struct {
-	Name     string
-	Action   string
-	Strategy string // the strategy that merged it, when one ran
-	Reason   string // why the file was kept, for "kept"
+	Name      string
+	Action    string
+	Strategy  string // the strategy that merged it, when one ran
+	Reason    string // why the file was kept, for "kept"
+	RenamedTo string // its new name, when the merge renamed it
 }
 
 // CheckoutChange describes a single file change in the checkout.
@@ -162,10 +169,14 @@ type CheckoutChange struct {
 // The directory is created if it does not exist. The checkout is initialized
 // to the tip checkin.
 func (r *Repo) CreateCheckout(dir string, opts CheckoutCreateOpts) (*Checkout, error) {
+	coneInner, err := checkoutCone(opts.Cone)
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: create checkout: %w", err)
+	}
 	inner, err := checkout.Create(r.inner, dir, checkout.CreateOpts{
 		Env:      opts.Env,
 		Observer: adaptCheckoutObserver(opts.Observer),
-		Cone:     unwrapCone(opts.Cone),
+		Cone:     coneInner,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: create checkout: %w", err)
@@ -389,13 +400,33 @@ func (c *Checkout) checkin(
 // Merge refuses, changing nothing, when the repository lacks content it
 // needs or an added file would overwrite an untracked one. A file edited
 // here but deleted in the merged-in version is kept and reported. Renames
-// are not followed. Merging the checkout's own version or one of its
-// ancestors does nothing.
+// are followed as fossil's merge follows them: a change made under one name
+// is merged into the file under another, and a file the merged-in checkin
+// renamed is renamed here too (CheckoutMergeFile.RenamedTo); Merge refuses
+// to rename one onto a file the checkout keeps or an untracked file.
+// Merging the checkout's own version or one of its ancestors does nothing. The common ancestor is the one fossil's merge
+// diffs against: the most recent common ancestor of the merged-in checkin
+// and the checkout's version with every checkin already merged into it.
+//
+// Under a structural horizon Merge refuses, with an error matching
+// ErrBelowHorizon, a merge whose base it does not hold or whose sides'
+// ancestry crosses the horizon (draft-fossil-horizon-00 §5.5): only the
+// origin can name that base, and MergeContext with a Peer asks it.
 func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
+	res, err := c.merge(opts, 0)
+	if errors.Is(err, ErrBelowHorizon) {
+		return res, fmt.Errorf("%w; Checkout.MergeContext with a Peer asks the origin", err)
+	}
+	return res, err
+}
+
+// merge is Merge, diffing against baseline when it is set.
+func (c *Checkout) merge(opts CheckoutMergeOpts, baseline int64) (CheckoutMergeResult, error) {
 	res, err := c.inner.Merge(checkout.MergeOpts{
 		Version:  fsltype.FslID(opts.Version),
 		Strategy: opts.Strategy,
 		DryRun:   opts.DryRun,
+		Baseline: fsltype.FslID(baseline),
 	})
 	if err != nil {
 		return CheckoutMergeResult{}, fmt.Errorf("libfossil: merge: %w", err)
@@ -403,10 +434,11 @@ func (c *Checkout) Merge(opts CheckoutMergeOpts) (CheckoutMergeResult, error) {
 	out := CheckoutMergeResult{Ancestor: int64(res.Ancestor)}
 	for _, f := range res.Files {
 		out.Files = append(out.Files, CheckoutMergeFile{
-			Name:     f.Name,
-			Action:   mergeActionString(f.Action),
-			Strategy: f.Strategy,
-			Reason:   f.Reason,
+			Name:      f.Name,
+			Action:    mergeActionString(f.Action),
+			Strategy:  f.Strategy,
+			Reason:    f.Reason,
+			RenamedTo: f.RenamedTo,
 		})
 	}
 	return out, nil
@@ -441,6 +473,8 @@ func mergeActionString(a checkout.MergeAction) string {
 		return "deleted"
 	case checkout.MergeMode:
 		return "mode"
+	case checkout.MergeRenamed:
+		return "renamed"
 	default:
 		panic(fmt.Sprintf("libfossil: unknown merge action %d", a))
 	}

@@ -1,0 +1,158 @@
+package content
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+)
+
+// ErrBelowHorizon is matched by the diagnostic of an operation that needs
+// history below the store's structural horizon (draft-fossil-horizon-00
+// §5.5): the store does not hold it, and a deepen is what brings it.
+var ErrBelowHorizon = errors.New("history below the structural horizon")
+
+// MergeBaseError is a merge whose base lies below the structural horizon at
+// Horizon (§5.5), or may: Base is the base the store's walk found when the
+// store does not hold it, "" when the walk crossed the horizon, so that only
+// the origin can name the base. Side is the check-in being merged in.
+type MergeBaseError struct {
+	Horizon, Side, Base string
+}
+
+func (e *MergeBaseError) Error() string {
+	if e.Base != "" {
+		return fmt.Sprintf("the merge base of %s is %s, below the structural horizon at %s: it is not held here; "+
+			"deepen the horizon to it (repo cone deepen %s), or merge with a remote to ask the origin and deepen",
+			e.Side, e.Base, e.Horizon, e.Base)
+	}
+	return fmt.Sprintf("the merge base of %s may lie below the structural horizon at %s: its ancestry crosses the "+
+		"horizon, so only the origin can name it; merge with a remote to ask the origin for the base and deepen to it",
+		e.Side, e.Horizon)
+}
+
+func (e *MergeBaseError) Is(target error) bool { return target == ErrBelowHorizon }
+
+// StructuralHorizon is the store cone's horizon when it is structural.
+func StructuralHorizon(q db.Querier) (cone.Horizon, bool, error) {
+	if q == nil {
+		panic("content.StructuralHorizon: q must not be nil")
+	}
+	c, err := StoreCone(q)
+	if err != nil {
+		return cone.Horizon{}, false, err
+	}
+	h := horizonOf(c)
+	return h, h.Hash() != "" && h.Depth() == cone.DepthStructural, nil
+}
+
+// MergeBaseCrossing decides whether the merge of side crosses the store's
+// structural horizon (§5.5), given the base the store's own walk found, 0
+// for none, and whether that walk reached a check-in the store does not
+// hold (merge.Pivot.Unheld). A base the store does not hold is a crossing.
+// So is any walk that reached the horizon: the store holds only part of the
+// graph, and a common ancestor found in part of it need not be the one the
+// whole graph gives, so the origin must be asked. It returns a
+// *MergeBaseError for a crossing and nil otherwise, so a merge never runs
+// against a base it does not hold or one the origin would not choose.
+func MergeBaseCrossing(q db.Querier, side, base libfossil.FslID, unheld bool) error {
+	if q == nil {
+		panic("content.MergeBaseCrossing: q must not be nil")
+	}
+	if side <= 0 || base < 0 {
+		panic("content.MergeBaseCrossing: invalid rid")
+	}
+	h, structural, err := StructuralHorizon(q)
+	if err != nil || !structural {
+		return err
+	}
+	crossing := &MergeBaseError{Horizon: h.Hash()}
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", side).Scan(&crossing.Side); err != nil {
+		return fmt.Errorf("content.MergeBaseCrossing: %w", err)
+	}
+	if base > 0 {
+		var held bool
+		var uuid string
+		if err := q.QueryRow(`SELECT size>=0 AND EXISTS(SELECT 1 FROM event WHERE objid=rid AND type='ci')
+			AND NOT EXISTS(SELECT 1 FROM phantom WHERE phantom.rid=blob.rid), uuid
+			FROM blob WHERE rid=?`, base).Scan(&held, &uuid); err != nil {
+			return fmt.Errorf("content.MergeBaseCrossing: %w", err)
+		}
+		if !held {
+			crossing.Base = uuid
+			return crossing
+		}
+	}
+	if unheld {
+		return crossing
+	}
+	return nil
+}
+
+// AncestryCrosses reports whether the ancestry of any of starts, walked back
+// through every P card, reaches a parent the store does not hold as a
+// check-in, when the store is at a structural horizon (§5.5): the merge base
+// of such a check-in is then the origin's to name, even when a walk over
+// what the store holds finds one. False for any other store. A walk past
+// limit check-ins counts as crossing, since it cannot say otherwise.
+func AncestryCrosses(q db.Querier, starts []libfossil.FslID, limit int) (bool, error) {
+	if q == nil {
+		panic("content.AncestryCrosses: q must not be nil")
+	}
+	if len(starts) == 0 || limit <= 0 {
+		panic("content.AncestryCrosses: needs a start and a positive limit")
+	}
+	if _, structural, err := StructuralHorizon(q); err != nil || !structural {
+		return false, err
+	}
+	for _, start := range starts {
+		if start <= 0 {
+			panic("content.AncestryCrosses: invalid rid")
+		}
+		var walked int
+		var crosses bool
+		err := q.QueryRow(`WITH RECURSIVE anc(rid) AS (
+				SELECT ?1 UNION SELECT plink.pid FROM plink JOIN anc ON plink.cid=anc.rid LIMIT ?2)
+			SELECT count(*), coalesce(max(NOT EXISTS(SELECT 1 FROM blob WHERE blob.rid=anc.rid AND size>=0)
+				OR NOT EXISTS(SELECT 1 FROM event WHERE objid=anc.rid AND type='ci')), 0)
+			FROM anc`, start, limit+1).Scan(&walked, &crosses)
+		if err != nil {
+			return false, fmt.Errorf("content.AncestryCrosses: %w", err)
+		}
+		if crosses || walked > limit {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// MergeAncestryLimit bounds the walk that decides whether a merge's ancestry
+// crosses the horizon, as the origin bounds its merge-base walk.
+const MergeAncestryLimit = 1 << 20
+
+// AncestryCrossing decides whether the base the store's own walk found for
+// a merge of side may stand (§5.5): not when the ancestry of any of starts,
+// the merge's sides, crosses the structural horizon, even when the walk
+// itself did not, since over part of the graph the common ancestor found
+// need not be the nearest and only the origin can name the base. It returns
+// a *MergeBaseError naming no base for such a merge, and nil otherwise.
+func AncestryCrossing(q db.Querier, side libfossil.FslID, starts []libfossil.FslID) error {
+	if side <= 0 {
+		panic("content.AncestryCrossing: invalid rid")
+	}
+	crosses, err := AncestryCrosses(q, starts, MergeAncestryLimit)
+	if err != nil || !crosses {
+		return err
+	}
+	h, _, err := StructuralHorizon(q)
+	if err != nil {
+		return err
+	}
+	crossing := &MergeBaseError{Horizon: h.Hash()}
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", side).Scan(&crossing.Side); err != nil {
+		return fmt.Errorf("content.AncestryCrossing: %w", err)
+	}
+	return crossing
+}

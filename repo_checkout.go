@@ -40,11 +40,14 @@ type CommitOpts struct {
 	PartialManifest bool
 }
 
-// FileToCommit describes a file to include in a commit.
+// FileToCommit describes a file to include in a commit. OldName, when set,
+// records that the file was renamed from that name in the parent, as
+// fossil's commit records a rename (the F card's old-name field).
 type FileToCommit struct {
 	Name    string
 	Content []byte
 	Perm    string
+	OldName string
 }
 
 // TagSpec describes a tag to attach to an artifact.
@@ -82,6 +85,7 @@ func (r *Repo) commit(ctx context.Context, opts CommitOpts) (int64, string, erro
 			Name:    f.Name,
 			Content: f.Content,
 			Perm:    f.Perm,
+			OldName: f.OldName,
 		}
 	}
 	if opts.ParentID > 0 && !opts.PartialManifest {
@@ -141,13 +145,14 @@ func (r *Repo) Ancestry(opts LogOpts) ([]LogEntry, error) {
 	result := make([]LogEntry, len(entries))
 	for i, e := range entries {
 		result[i] = LogEntry{
-			RID:     int64(e.RID),
-			UUID:    e.UUID,
-			Comment: e.Comment,
-			User:    e.User,
-			Time:    e.Time,
-			Kind:    e.Kind,
-			Parents: e.Parents,
+			RID:            int64(e.RID),
+			UUID:           e.UUID,
+			Comment:        e.Comment,
+			User:           e.User,
+			Time:           e.Time,
+			Kind:           e.Kind,
+			Parents:        e.Parents,
+			HorizonParents: e.HorizonParents,
 		}
 	}
 	return result, nil
@@ -181,13 +186,14 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 	for i, e := range entries {
 		result[i] = TimelineEntry{
 			LogEntry: LogEntry{
-				RID:     int64(e.RID),
-				UUID:    e.UUID,
-				Comment: e.Comment,
-				User:    e.User,
-				Time:    e.Time,
-				Kind:    e.Kind,
-				Parents: e.Parents,
+				RID:            int64(e.RID),
+				UUID:           e.UUID,
+				Comment:        e.Comment,
+				User:           e.User,
+				Time:           e.Time,
+				Kind:           e.Kind,
+				Parents:        e.Parents,
+				HorizonParents: e.HorizonParents,
 			},
 			Cursor: e.Cursor,
 		}

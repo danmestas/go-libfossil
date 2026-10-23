@@ -43,7 +43,7 @@ func (c *RepoDiffCmd) Run(g *Globals) error {
 		return fmt.Errorf("--json needs two versions: repo diff --json A B [PATH]")
 	}
 
-	rid, err := resolveRID(r, c.Version)
+	rid, err := resolveCheckin(r, c.Version)
 	if err != nil {
 		return err
 	}

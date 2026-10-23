@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 )
 
@@ -16,6 +17,15 @@ import (
 // the clone would receive elided phantoms it must resolve elsewhere. It
 // governs every serving surface: HandleSync, XferHandler and ServeHTTP.
 const SettingPartialMirror = internalsync.SettingPartialMirror
+
+// SettingHorizonHistoryURL names the repository setting an origin appends to
+// pragma horizon-served as the interface, outside the sync protocol, at
+// which history below a horizon can be queried (draft-fossil-horizon-00
+// §6.2.5). It must be one http or https URL with a host, no white space and
+// no credentials; SetConfig refuses any other value, and an empty one
+// names none. Horizon clients report it as CloneResult.HorizonHistoryURL
+// and SyncResult.HorizonHistoryURL.
+const SettingHorizonHistoryURL = repo.SettingHorizonHistoryURL
 
 // StoreCone returns the repository's store cone, or nil when the store is
 // dense. A store cone (draft-fossil-sparse-cone-00 §5) is local policy: an
@@ -35,6 +45,11 @@ func (r *Repo) StoreCone() (*Cone, error) {
 // no content. Narrowing deletes nothing (§5.4). Widening makes the newly
 // covered elided phantoms wanted again, and the next pull fetches them.
 // While a cone is set, a commit carries no R card (§4.3).
+//
+// A cone may carry a horizon (draft-fossil-horizon-00): setting one elides
+// blobs only check-ins below it name, and SetStoreCone moves no content, as
+// for any narrowing. Setting an older check-in, or nil, widens, and
+// SetStoreConeContext fetches what the deeper horizon keeps.
 func (r *Repo) SetStoreCone(c *Cone) error {
 	if err := content.SetStoreCone(r.inner.DB(), unwrapCone(c)); err != nil {
 		return fmt.Errorf("libfossil: set store cone: %w", err)

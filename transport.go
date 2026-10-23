@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -62,6 +63,21 @@ type httpTransport struct {
 	url    string
 	client *http.Client
 	peer   internalsync.PeerAddr
+}
+
+// syncOrigin names the peer this transport addresses, for state a sync keeps
+// per origin (the horizon cursor of draft-fossil-horizon-00 §6.2.6): its URL
+// with any password removed, as last-sync-url keeps it, so no credential is
+// written into the repository.
+func (t *httpTransport) syncOrigin() string {
+	u, err := url.Parse(t.url)
+	if err != nil {
+		return ""
+	}
+	if u.User != nil {
+		u.User = url.User(u.User.Username())
+	}
+	return u.String()
 }
 
 // PeerAddr returns the IP address of the server the last round trip reached.

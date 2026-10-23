@@ -13,16 +13,19 @@ import (
 const coneReferenceDepth = 16
 const coneReferenceNodes = 1 << 20
 
-// ConeReferences is inferred from raw artifacts, not crosslink tables: a sparse
-// tree can be healthy before its elided children permit whole-tree crosslinking.
-// Unknown artifacts stay wanted. A covered alias or structural reference wins
-// over every outside reference.
+// ConeReferences is inferred from raw artifacts wherever crosslink tables cannot
+// stand in for them: a sparse tree can be healthy before its elided children
+// permit whole-tree crosslinking, so trees are always read raw, while a check-in
+// linked completely is answered by its mlink, plink, cherrypick and tagxref rows
+// (ConeReferenceFacts). Unknown artifacts stay wanted. A covered alias or
+// structural reference wins over every outside reference.
 type ConeReferences struct {
 	names                     map[libfossil.FslID]string
 	outside, inside, required map[string]bool
 	tree                      map[string]bool
 	held                      map[string]libfossil.FslID
 	nodes                     map[libfossil.FslID]*deck.Deck
+	facts                     *ConeReferenceFacts // nil only for a dense classification
 }
 
 // Outside reports only proven elision candidates. Delta dependency closure is
@@ -43,6 +46,29 @@ func (p *ConeReferences) Required(rid libfossil.FslID) bool {
 	}
 	uuid := p.names[rid]
 	return p.inside[uuid] || p.required[uuid]
+}
+
+// structure reports a structural reference or a sub-manifest node: an
+// artifact a content horizon holds at every age.
+func (p *ConeReferences) structure(rid libfossil.FslID) bool {
+	uuid := p.names[rid]
+	return p.required[uuid] || p.tree[uuid]
+}
+
+// file reports a name some held F card gives: a blob, which a horizon may
+// place below it. A phantom no F card names is not proven to be one.
+func (p *ConeReferences) file(rid libfossil.FslID) bool {
+	uuid := p.names[rid]
+	return p.inside[uuid] || p.outside[uuid]
+}
+
+// Nodes returns the held sub-manifest nodes by rid, with their names.
+func (p *ConeReferences) Nodes() map[libfossil.FslID]string {
+	out := make(map[libfossil.FslID]string, len(p.nodes))
+	for rid := range p.nodes {
+		out[rid] = p.names[rid]
+	}
+	return out
 }
 
 // Artifacts counts the artifact names the classification read.

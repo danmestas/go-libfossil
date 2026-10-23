@@ -1,12 +1,17 @@
 package verify
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/content"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	_ "github.com/danmestas/go-libfossil/internal/testdriver"
 )
@@ -32,15 +37,71 @@ func TestCorpusCheckBlobs(t *testing.T) {
 // LIBFOSSIL_CORPUS names one.
 func TestCorpusRebuild(t *testing.T) {
 	r := openCorpusCopy(t)
+	peak := samplePeakHeap(t)
 	report, err := Rebuild(r)
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
-	t.Logf("rebuilt in %s: %d blobs checked, %d failed",
-		report.Duration.Round(time.Millisecond), report.BlobsChecked, report.BlobsFailed)
+	t.Logf("rebuilt in %s: %d blobs checked, %d failed, peak heap %d MiB",
+		report.Duration.Round(time.Millisecond), report.BlobsChecked, report.BlobsFailed,
+		peak()>>20)
 	if !report.OK() {
 		t.Errorf("issues: %d, first: %+v", len(report.Issues), report.Issues[0])
 	}
+}
+
+// TestCorpusRebuildKeepsAbsences rebuilds a real sparse repository and checks
+// that every phantom classifies as it did before: a rebuild empties the
+// tables classification reads, and must refill them. Skipped unless
+// LIBFOSSIL_CORPUS names one.
+func TestCorpusRebuildKeepsAbsences(t *testing.T) {
+	r := openCorpusCopy(t)
+	before := corpusAbsences(t, r)
+	if _, err := Rebuild(r); err != nil {
+		t.Fatalf("Rebuild: %v", err)
+	}
+	after := corpusAbsences(t, r)
+	// A rebuild links a reference to an artifact the store never held against
+	// a new phantom, so the phantoms may grow; none may disappear or change.
+	counts := map[string]int{}
+	for rid, b := range before {
+		if a, ok := after[rid]; !ok || a != b {
+			t.Errorf("rid %d: %+v before, %+v after (held %v)", rid, b, a, ok)
+		}
+		counts[fmt.Sprintf("class=%d", b.class)]++
+	}
+	t.Logf("%d phantoms unchanged by rebuild (%d after): %v", len(before), len(after), counts)
+}
+
+type corpusAbsence struct {
+	class          content.Absence
+	below, unnamed bool
+}
+
+func corpusAbsences(t *testing.T, r *repo.Repo) map[int64]corpusAbsence {
+	t.Helper()
+	a, err := content.LoadAbsences(r.DB())
+	if err != nil {
+		t.Fatalf("LoadAbsences: %v", err)
+	}
+	rows, err := r.DB().Query("SELECT rid FROM blob WHERE size<0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	out := map[int64]corpusAbsence{}
+	for rows.Next() {
+		var rid int64
+		if err := rows.Scan(&rid); err != nil {
+			t.Fatal(err)
+		}
+		id := libfossil.FslID(rid)
+		out[rid] = corpusAbsence{a.Class(id), a.Below(id), a.Unnamed(id)}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
 
 // TestCorpusVerify times a whole Verify of a real repository and logs the
@@ -61,6 +122,30 @@ func TestCorpusVerify(t *testing.T) {
 		}
 		t.Logf("issue: %+v", issue)
 	}
+}
+
+// samplePeakHeap polls the Go heap until the test ends and returns a func
+// reporting the highest HeapInuse seen, in bytes.
+func samplePeakHeap(t *testing.T) func() uint64 {
+	t.Helper()
+	var peak atomic.Uint64
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	go func() {
+		var ms runtime.MemStats
+		for {
+			runtime.ReadMemStats(&ms)
+			if ms.HeapInuse > peak.Load() {
+				peak.Store(ms.HeapInuse)
+			}
+			select {
+			case <-done:
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+	return peak.Load
 }
 
 // openCorpusCopy opens a private copy of the LIBFOSSIL_CORPUS repository, or

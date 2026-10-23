@@ -23,7 +23,8 @@ func (c *Cone) Exclude() []string {
 // Equal reports whether two cones have the same members, and so the same
 // coverage.
 func (c *Cone) Equal(other *Cone) bool {
-	return slices.Equal(c.include, other.include) && slices.Equal(c.exclude, other.exclude)
+	return slices.Equal(c.include, other.include) && slices.Equal(c.exclude, other.exclude) &&
+		(c.horizon == nil) == (other.horizon == nil) && (c.horizon == nil || *c.horizon == *other.horizon)
 }
 
 // String lists the members in one sorted order, an exclusion marked with a
@@ -31,6 +32,9 @@ func (c *Cone) Equal(other *Cone) bool {
 // the cone.
 func (c *Cone) String() string {
 	var b strings.Builder
+	if c.horizon != nil {
+		b.WriteString(c.horizon.String())
+	}
 	c.eachMember(func(m string, exclude bool) {
 		if b.Len() > 0 {
 			b.WriteString(", ")
@@ -59,24 +63,33 @@ func (c *Cone) eachMember(fn func(member string, exclude bool)) {
 	}
 }
 
-// Serialize returns the canonical form. With no exclusions it is version 1:
-// the member count, then per member a u16 little-endian length and the
-// bytes, so an exclusion-free cone keeps its digest across the exclusion
-// extension. With exclusions: a 0x00 lead-in, the version byte, the total
-// count, then per member a polarity flag (0 include, 1 exclude), the length
-// and the bytes, in one sorted order (§3.1, §3.3).
+// Serialize returns the canonical form. With no exclusions and no horizon it
+// is version 1: the member count, then per member a u16 little-endian length
+// and the bytes, so such a cone keeps its digest across the later versions.
+// With exclusions: a 0x00 lead-in, the version byte, the total count, then
+// per member a polarity flag (0 include, 1 exclude), the length and the
+// bytes, in one sorted order (§3.1, §3.3). With a horizon, version 3: the
+// same, with the horizon's rule, depth, hash length and hash between the
+// count and the members (draft-fossil-horizon-00 §3.3).
 func (c *Cone) Serialize() []byte {
 	total := len(c.include) + len(c.exclude)
-	if len(c.include) == 0 || total > MaxMembers {
+	if (len(c.include) == 0 && c.horizon == nil) || total > MaxMembers {
 		panic("cone.Serialize: cone was not built by New")
 	}
+	flagged := len(c.exclude) > 0 || c.horizon != nil
 	var out []byte
-	if len(c.exclude) > 0 {
-		out = append(out, 0, serialVersionExclusions)
+	switch {
+	case c.horizon != nil:
+		h := c.horizon
+		out = append(out, 0, serialVersionHorizon, byte(total), byte(h.rule), byte(h.depth), byte(len(h.hash)))
+		out = append(out, h.hash...)
+	case flagged:
+		out = append(out, 0, serialVersionExclusions, byte(total))
+	default:
+		out = append(out, byte(total))
 	}
-	out = append(out, byte(total))
 	c.eachMember(func(m string, exclude bool) {
-		if len(c.exclude) > 0 {
+		if flagged {
 			flag := byte(0)
 			if exclude {
 				flag = 1
@@ -102,34 +115,62 @@ func Parse(data []byte) (*Cone, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: empty serialized cone", ErrInvalidMember)
 	}
-	// A version-1 form opens with its nonzero count; a later one with 0x00,
-	// the version byte and the count.
-	flagged := data[0] == 0
-	offset := 1
-	if flagged {
-		if len(data) < 3 || data[1] != serialVersionExclusions {
-			return nil, fmt.Errorf("%w: unknown serialized cone version", ErrInvalidMember)
-		}
-		offset = 3
-	}
-	count := int(data[offset-1])
-	if count == 0 {
-		return nil, fmt.Errorf("%w: no members", ErrBounds)
-	}
-	include, exclude, err := parseMembers(data, offset, count, flagged)
+	h, offset, count, err := parseHeader(data)
 	if err != nil {
 		return nil, err
 	}
-	c, err := New(include, exclude)
+	if count == 0 && h == nil {
+		return nil, fmt.Errorf("%w: no members", ErrBounds)
+	}
+	// Only a version-1 form is unflagged, and it opens with its count.
+	include, exclude, err := parseMembers(data, offset, count, data[0] == 0)
+	if err != nil {
+		return nil, err
+	}
+	c, err := build(include, exclude, h)
 	if err != nil {
 		return nil, err
 	}
 	// Round-trip identity: stored state that normalization would change was
-	// not written by Serialize, and authoritative state fails closed.
+	// not written by Serialize, and authoritative state fails closed. An
+	// upper-case horizon hash is lower-cased by NewHorizon and so refused
+	// here.
 	if !bytes.Equal(c.Serialize(), data) {
 		return nil, fmt.Errorf("%w: serialized cone is not canonical", ErrInvalidMember)
 	}
 	return c, nil
+}
+
+// parseHeader reads the version lead-in, the count and, for version 3, the
+// horizon, returning the offset of the first member.
+func parseHeader(data []byte) (h *Horizon, offset, count int, err error) {
+	// A version-1 form opens with its nonzero count; a later one with 0x00,
+	// the version byte and the count.
+	if data[0] != 0 {
+		return nil, 1, int(data[0]), nil
+	}
+	if len(data) < 3 {
+		return nil, 0, 0, fmt.Errorf("%w: truncated serialized cone", ErrInvalidMember)
+	}
+	switch data[1] {
+	case serialVersionExclusions:
+		return nil, 3, int(data[2]), nil
+	case serialVersionHorizon:
+		const fixed = 6 // lead-in, version, count, rule, depth, hash length
+		if len(data) < fixed {
+			return nil, 0, 0, fmt.Errorf("%w: truncated horizon", ErrInvalidMember)
+		}
+		n := int(data[5])
+		if (n != 40 && n != 64) || len(data)-fixed < n {
+			return nil, 0, 0, fmt.Errorf("%w: bad horizon hash length", ErrInvalidMember)
+		}
+		hz, err := NewHorizon(string(data[fixed:fixed+n]), HorizonRule(data[3]), HorizonDepth(data[4]))
+		if err != nil {
+			return nil, 0, 0, fmt.Errorf("%w: %v", ErrInvalidMember, err)
+		}
+		return &hz, fixed + n, int(data[2]), nil
+	}
+	return nil, 0, 0, fmt.Errorf("%w: unknown serialized cone version", ErrInvalidMember)
 }
 
 // parseMembers reads count members starting at offset, each with a polarity
@@ -173,7 +214,7 @@ func parseMembers(data []byte, offset, count int, flagged bool) (include, exclud
 // exclusions, renormalized: the incremental amendment of §3.5, equivalent to
 // restating every member.
 func (c *Cone) With(include, exclude []string) (*Cone, error) {
-	return New(append(c.Include(), include...), append(c.Exclude(), exclude...))
+	return build(append(c.Include(), include...), append(c.Exclude(), exclude...), c.horizon)
 }
 
 // Without returns the cone with every member equal to one of paths removed,
@@ -182,5 +223,5 @@ func (c *Cone) With(include, exclude []string) (*Cone, error) {
 // inclusion an exclusion depends on is ErrDeadExclusion.
 func (c *Cone) Without(paths []string) (*Cone, error) {
 	drop := func(m string) bool { return slices.Contains(paths, m) }
-	return New(slices.DeleteFunc(c.Include(), drop), slices.DeleteFunc(c.Exclude(), drop))
+	return build(slices.DeleteFunc(c.Include(), drop), slices.DeleteFunc(c.Exclude(), drop), c.horizon)
 }

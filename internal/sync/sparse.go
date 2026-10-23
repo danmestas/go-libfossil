@@ -192,7 +192,12 @@ func withDepth(c *cone.Cone, d cone.HorizonDepth) *cone.Cone {
 // alone gives, so the card is dropped unstored. Only a full-form card is
 // tested: a cluster's first card is an M card.
 func servedCluster(served bool, deltaSrc string, payload []byte) bool {
-	if !served || deltaSrc != "" || !bytes.HasPrefix(payload, []byte("M ")) {
+	return served && deltaSrc == "" && isCluster(payload)
+}
+
+// isCluster reports a full artifact that parses as a cluster.
+func isCluster(payload []byte) bool {
+	if !bytes.HasPrefix(payload, []byte("M ")) {
 		return false
 	}
 	d, err := deck.Parse(payload)

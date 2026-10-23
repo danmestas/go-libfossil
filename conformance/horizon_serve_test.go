@@ -37,13 +37,14 @@ var (
 	horizonServeIgnored  = Case{ID: "horizon.6.3.served-absent", Req: "HZ-6.3-1"}
 	horizonServeRefuse   = Case{ID: "horizon.6.4.refuse", Req: "HZ-6.4-1"}
 	horizonServeNoChase  = Case{ID: "horizon.4.5.served-no-cluster-chase", Req: "HZ-4.5-1"}
+	horizonServeOrigin   = Case{ID: "horizon.4.1.origin-no-cluster", Req: "HZ-4.1-1"}
 )
 
 func horizonServeCases() []Case {
 	return []Case{
 		horizonServeRequest, horizonServeAbove, horizonServePaths, horizonServeTree, horizonServeRounds,
 		horizonServeClusters, horizonServeInflate, horizonServeServed, horizonServeIgnored,
-		horizonServeRefuse, horizonServeNoChase,
+		horizonServeRefuse, horizonServeNoChase, horizonServeOrigin,
 	}
 }
 
@@ -59,6 +60,7 @@ func TestHorizonServe(t *testing.T) {
 	check(t, horizonServeIgnored, func() error { return hzServeIgnored(t) })
 	check(t, horizonServeRefuse, func() error { return hzServeRefuse(t) })
 	check(t, horizonServeNoChase, func() error { return hzServeNoChase(t) })
+	check(t, horizonServeOrigin, func() error { return hzServeOriginClusters(t) })
 }
 
 // hzPragmas returns the values of every pragma named name in m.
@@ -689,4 +691,81 @@ func hzServeNoChase(t *testing.T) error {
 		}
 	}
 	return hzElided(r, g.below)
+}
+
+// An origin answering a horizon request names no cluster: not in a clone,
+// pull or sync reply, with a cursor or without, and not even when the
+// request asks for one by gimme or for the catalog. A horizon clone of it,
+// pulling and syncing across freshly minted clusters, so never learns a
+// cluster's name, requests none and holds none (§4.1, §4.5, §6.2).
+func hzServeOriginClusters(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	hzClustered(t, g.f.r, "old", content.ClusterThreshold)
+	peer, r, _, err := hzServeClone(t, g, g.c, sync.HandleOpts{})
+	if err != nil {
+		return err
+	}
+	parent := hzCommit(t, g.f, "c5", []libfossil.FslID{g.m}, nil)
+	_, clusters := hzClustered(t, g.f.r, "new", content.ClusterThreshold)
+	hzCommit(t, g.f, "c6", []libfossil.FslID{parent}, nil)
+	for _, opts := range []sync.SyncOpts{{Pull: true}, {Pull: true, Push: true}, {Pull: true}} {
+		if _, err := sync.Sync(context.Background(), r, peer, opts); err != nil {
+			return err
+		}
+	}
+	if err := hzCrossed(peer.replies, clusters); err != nil {
+		return err
+	}
+	if err := hzNoGimme(peer.requests, clusters); err != nil {
+		return err
+	}
+	if hzReqClusters(peer.requests) {
+		return expectf("the horizon clone asked for the cluster catalog")
+	}
+	if err := hzHeld(r, clusters, false); err != nil {
+		return err
+	}
+	asks := []xfer.Card{&xfer.PragmaCard{Name: "req-clusters"}}
+	for _, uuid := range scSorted(clusters) {
+		asks = append(asks, &xfer.GimmeCard{UUID: uuid})
+	}
+	dense, err := hzAsk(t, g.f.r, nil, true, false, hzNoCursor, asks...)
+	if err != nil {
+		return err
+	}
+	if hzCrossed([]*xfer.Message{dense}, clusters) == nil {
+		return expectf("fixture: a dense pull naming the clusters was sent none")
+	}
+	clone := append([]xfer.Card{&xfer.CloneCard{Version: 3, SeqNo: 1}}, asks...)
+	for _, shape := range []struct {
+		pull, push bool
+		cursor     int64
+		extra      []xfer.Card
+	}{
+		{true, false, hzNoCursor, asks},
+		{true, false, 1, asks},
+		{true, true, hzNoCursor, asks},
+		{true, true, 1, asks},
+		{false, false, hzNoCursor, clone},
+		{true, false, hzNoCursor, clone},
+	} {
+		resp, err := hzAsk(t, g.f.r, g.c, shape.pull, shape.push, shape.cursor, shape.extra...)
+		if err != nil {
+			return err
+		}
+		if err := hzCrossed([]*xfer.Message{resp}, clusters); err != nil {
+			return fmt.Errorf("pull=%v push=%v cursor=%d clone=%v: %w",
+				shape.pull, shape.push, shape.cursor, len(shape.extra) == len(clone), err)
+		}
+	}
+	h, _ := g.c.Horizon()
+	late, err := hzAsk(t, g.f.r, nil, true, false, hzNoCursor, append(asks,
+		&xfer.PragmaCard{Name: "horizon", Values: []string{h.Hash(), h.Rule().String()}})...)
+	if err != nil {
+		return err
+	}
+	if err := hzCrossed([]*xfer.Message{late}, clusters); err != nil {
+		return fmt.Errorf("horizon pragma after the asks: %w", err)
+	}
+	return nil
 }

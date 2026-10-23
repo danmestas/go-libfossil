@@ -1396,6 +1396,11 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if h.structural.withholds(c.UUID, data) {
 		return nil
 	}
+	// Horizon §4.5, §6.2: a horizon-scoped request is sent no cluster,
+	// even one it names, so a clone never learns what only a cluster names.
+	if h.horizonScoped() && isCluster(data) {
+		return nil
+	}
 	if isPriv {
 		// BUGGIFY: 5% chance skip the PrivateCard prefix — client should
 		// treat the file as public; next sync round corrects the status.

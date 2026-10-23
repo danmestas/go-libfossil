@@ -135,6 +135,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An origin answering a horizon request no longer sends a cluster that the
+  request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
+  pull and sync replies already announced none, and req-clusters already
+  got nothing, but a gimme naming a cluster was answered with the cluster's
+  file card, so a horizon clone could still hold a name only a cluster
+  gives.
 - Merges use the base fossil uses. go-libfossil chose the merge base by a
   bidirectional breadth-first search, the common ancestor nearest in
   edges; fossil's `pivot_find` takes the most recent by check-in time,

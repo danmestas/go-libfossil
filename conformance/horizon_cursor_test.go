@@ -25,6 +25,7 @@ var (
 	horizonCursorOrigin   = Case{ID: "horizon.6.2.6.origin-cursor", Req: "HZ-6.2-11"}
 	horizonCursorPushOnly = Case{ID: "horizon.6.2.6.push-only-silent", Req: "HZ-6.2-11"}
 	horizonCursorRekept   = Case{ID: "horizon.6.2.6.reclassified-once", Req: "HZ-6.2-11"}
+	horizonCursorMeeting  = Case{ID: "horizon.6.2.6.meeting-moved", Req: "HZ-6.2-11"}
 	horizonCursorClient   = Case{ID: "horizon.6.2.6.client-cursor", Req: "HZ-6.2-12"}
 	horizonCursorGimme    = Case{ID: "horizon.6.2.6.gimme-answered", Req: "HZ-6.2-13"}
 	horizonCursorLost     = Case{ID: "horizon.6.2.6.lost-cursor", Req: "HZ-6.2-13"}
@@ -34,7 +35,7 @@ var (
 )
 
 func horizonCursorCases() []Case {
-	return []Case{horizonCursorOrigin, horizonCursorPushOnly, horizonCursorRekept,
+	return []Case{horizonCursorOrigin, horizonCursorPushOnly, horizonCursorRekept, horizonCursorMeeting,
 		horizonCursorClient, horizonCursorGimme, horizonCursorLost,
 		horizonCursorCloneReply, horizonCursorCloneRecord}
 }
@@ -43,6 +44,7 @@ func TestHorizonCursor(t *testing.T) {
 	check(t, horizonCursorOrigin, func() error { return hzCursorOrigin(t) })
 	check(t, horizonCursorPushOnly, func() error { return hzCursorPushOnly(t) })
 	check(t, horizonCursorRekept, func() error { return hzCursorRekept(t) })
+	check(t, horizonCursorMeeting, func() error { return hzCursorMeeting(t) })
 	check(t, horizonCursorClient, func() error { return hzCursorClient(t) })
 	check(t, horizonCursorGimme, func() error { return hzCursorGimme(t) })
 	check(t, horizonCursorLost, func() error { return hzCursorLost(t) })
@@ -373,6 +375,63 @@ func hzCursorRekept(t *testing.T) error {
 	}
 	if got := hzIGots(after); len(got) != 0 {
 		return expectf("the cursor %d past the reclassification was not honoured: %d announced", next, len(got))
+	}
+	return nil
+}
+
+// hzCursorMeeting: under the leaves rule a new childless check-in forked at
+// c1, below C, moves the meeting point of its ancestry with C's to c1, and
+// c1, c2 and feat, all older than any cursor handed out, join K (§3.1). The
+// origin reclassifies, so a cursor from before is answered as if the request
+// carried none, once, and the reply's cursor is honoured after (§6.2.6).
+func hzCursorMeeting(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	leaves := hzStoreCone(t, hzUUID(t, g.f.r, g.c3), cone.RuleLeaves, cone.DepthContent)
+	before, err := hzAsk(t, g.f.r, leaves, true, false, hzNoCursor)
+	if err != nil {
+		return err
+	}
+	old, err := hzCursorOf(before)
+	if err != nil {
+		return err
+	}
+	c2Blobs := hzMinus(hzFiles(t, g.f.r, g.c2), g.above)
+	if len(c2Blobs) == 0 {
+		return expectf("fixture: c2 names no blob of its own")
+	}
+	for _, uuid := range c2Blobs {
+		if hzIGots(before)[uuid] {
+			return expectf("fixture: c2's blob %s is above the leaves horizon before the fork", uuid)
+		}
+	}
+	hzCommit(t, g.f, "late", []libfossil.FslID{g.c1}, hzBranch("late"))
+	full, err := hzAsk(t, g.f.r, leaves, true, false, hzNoCursor)
+	if err != nil {
+		return err
+	}
+	for _, uuid := range c2Blobs {
+		if !hzIGots(full)[uuid] {
+			return expectf("fixture: c2's blob %s did not join K with the fork at c1", uuid)
+		}
+	}
+	voided, err := hzAsk(t, g.f.r, leaves, true, false, old)
+	if err != nil {
+		return err
+	}
+	if err := hzSameNames(fmt.Sprintf("announced under the cursor %d from before the fork", old),
+		hzIGots(voided), hzIGots(full)); err != nil {
+		return err
+	}
+	next, err := hzCursorOf(voided)
+	if err != nil {
+		return err
+	}
+	after, err := hzAsk(t, g.f.r, leaves, true, false, next)
+	if err != nil {
+		return err
+	}
+	if got := hzIGots(after); len(got) != 0 {
+		return expectf("the cursor %d past the fork was not honoured: %d announced", next, len(got))
 	}
 	return nil
 }

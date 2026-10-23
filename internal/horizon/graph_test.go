@@ -77,3 +77,42 @@ func TestGraphExtendCopies(t *testing.T) {
 		t.Fatalf("extension changed the graph it extended: %v", got)
 	}
 }
+
+// draft-fossil-horizon-00 §6.2.6: under the leaves rule a new childless
+// check-in forked below C moves a meeting point deeper, and older check-ins
+// join K. A cursor handed out before that arrival names a position whose
+// classification held fewer of them, so it is void; one handed out after,
+// or under the descendants rule, which no fork changes, is not.
+func TestGraphJoinedAfter(t *testing.T) {
+	ctx := context.Background()
+	d := newDAG(t)
+	c := d.chain("c1", "c2", "c3", "c4")
+	before := int64(c[3])
+	late := d.commit("late", p(c[0]), branchTags("late")...)
+	g, err := horizon.LoadGraph(ctx, d.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		rule   cone.HorizonRule
+		cursor int64
+		want   bool
+	}{
+		{cone.RuleLeaves, before, true},
+		{cone.RuleLeaves, int64(late), false},
+		{cone.RuleLeaves, int64(c[0]) - 1, false},
+		{cone.RuleDescendants, before, false},
+	} {
+		k, err := g.HeldSet(ctx, c[2], tc.rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := g.JoinedAfter(ctx, c[2], tc.rule, k, tc.cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Errorf("%v cursor %d: joined after = %v, want %v (K %v)", tc.rule, tc.cursor, got, tc.want, k)
+		}
+	}
+}

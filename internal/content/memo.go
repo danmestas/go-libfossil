@@ -565,6 +565,14 @@ func (v *MemoView) HorizonReach(
 	return c.cut.k, c.cut.reach, true, nil
 }
 
+// HorizonJoinedAfter is HorizonJoinedAfter over the view's store graph.
+func (v *MemoView) HorizonJoinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error) {
+	if v == nil || ctx == nil || q == nil {
+		panic("content.MemoView.HorizonJoinedAfter: nil view, context or querier")
+	}
+	return joinedAfter(ctx, q, v.store.graph, h, cursor)
+}
+
 // HorizonBelow is p.HorizonBelow over the view's store, p a classification
 // the view returned.
 func (v *MemoView) HorizonBelow(

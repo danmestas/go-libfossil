@@ -57,6 +57,9 @@ type classifier interface {
 	slots(ctx context.Context, refs *content.ConeReferences, c *cone.Cone, reach map[string]bool) (*content.SlotKeep, error)
 	// read is how many artifacts classifying read from the store.
 	read(refs *content.ConeReferences) int
+	// joinedAfter reports whether h's held set gained at or below cursor a
+	// check-in it lacked through cursor (§6.2.6).
+	joinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error)
 }
 
 type freshClassifier struct{}
@@ -83,6 +86,10 @@ func (freshClassifier) slots(
 
 func (freshClassifier) read(refs *content.ConeReferences) int { return refs.Artifacts() }
 
+func (freshClassifier) joinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error) {
+	return content.HorizonJoinedAfter(ctx, q, h, cursor)
+}
+
 type memoClassifier struct{ v *content.MemoView }
 
 func (m memoClassifier) references(ctx context.Context, _ db.Querier, c *cone.Cone) (*content.ConeReferences, error) {
@@ -106,6 +113,10 @@ func (m memoClassifier) slots(
 }
 
 func (m memoClassifier) read(*content.ConeReferences) int { return m.v.Read() }
+
+func (m memoClassifier) joinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error) {
+	return m.v.HorizonJoinedAfter(ctx, q, h, cursor)
+}
 
 // classifier returns how this request classifies over q: through the
 // store's memo when it has one, else afresh. The memo's view is the

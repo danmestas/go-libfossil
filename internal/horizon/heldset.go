@@ -286,6 +286,49 @@ func (g *Graph) heldSet(ctx context.Context, c libfossil.FslID, rule cone.Horizo
 	return out, nil
 }
 
+// JoinedAfter reports whether some check-in of k, c's held set under rule
+// over g, lies at or below cursor yet is not in the held set of the
+// check-ins g held through cursor (draft-fossil-horizon-00 §6.2.6). Under
+// the leaves rule a childless check-in appended after cursor can move a
+// meeting point deeper, so that older check-ins join K: a cursor from
+// before names a position whose classification kept less than this one
+// keeps at or below it, and an origin answers it as if the request carried
+// none. rid order is the origin's artifact sequence; a phantom filled later
+// is the reclassification an origin records when the fill arrives.
+func (g *Graph) JoinedAfter(ctx context.Context, c libfossil.FslID, rule cone.HorizonRule,
+	k []libfossil.FslID, cursor int64) (bool, error) {
+	if g == nil || ctx == nil {
+		panic("horizon.Graph.JoinedAfter: nil graph or context")
+	}
+	if cursor < 0 {
+		panic("horizon.Graph.JoinedAfter: negative cursor")
+	}
+	if len(k) == 0 || int64(k[0]) > cursor {
+		return false, nil // nothing of K lies at or below the cursor
+	}
+	then := map[libfossil.FslID]bool{}
+	if int64(c) <= cursor {
+		w := walk{ctx: ctx, limit: heldSetNodes, through: libfossil.FslID(cursor)}
+		if err := w.run(c, g.children, then, nil); err != nil {
+			return false, err
+		}
+		if rule == cone.RuleLeaves {
+			if err := addLeafMeetings(&w, g, c, then); err != nil {
+				return false, err
+			}
+		}
+	}
+	for _, rid := range k {
+		if int64(rid) > cursor {
+			break
+		}
+		if !then[rid] {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // addLeafMeetings extends k, holding C and its descendants, by the leaves
 // rule: the descendants of every check-in where a childless check-in's
 // ancestry meets C's. k stays closed under descendants, because each
@@ -298,7 +341,10 @@ func addLeafMeetings(w *walk, g *Graph, c libfossil.FslID, k map[libfossil.FslID
 	}
 	var meetings []libfossil.FslID
 	for _, leaf := range g.checkins {
-		if len(g.children[leaf]) > 0 || descendants[leaf] || ancestors[leaf] {
+		if w.beyond(leaf) {
+			break // ascending: every later check-in is beyond too
+		}
+		if w.hasChild(g, leaf) || descendants[leaf] || ancestors[leaf] {
 			continue
 		}
 		seen := map[libfossil.FslID]bool{}
@@ -347,10 +393,28 @@ func heldCheckins(q db.Querier, query string, limit int, args ...any) ([]libfoss
 }
 
 // walk carries one visited-node budget across every walk of a computation.
+// A nonzero through confines it to the check-ins at or below that rid: the
+// graph as it stood when the store held no later one.
 type walk struct {
-	ctx    context.Context
-	limit  int
-	visits int
+	ctx     context.Context
+	limit   int
+	visits  int
+	through libfossil.FslID
+}
+
+// beyond reports whether rid lies past the walk's bound.
+func (w *walk) beyond(rid libfossil.FslID) bool {
+	return w.through > 0 && rid > w.through
+}
+
+// hasChild reports whether rid has a child within the walk's bound.
+func (w *walk) hasChild(g *Graph, rid libfossil.FslID) bool {
+	for _, child := range g.children[rid] {
+		if !w.beyond(child) {
+			return true
+		}
+	}
+	return false
 }
 
 // run adds start and everything reachable from it through next to out,
@@ -375,7 +439,7 @@ func (w *walk) run(start libfossil.FslID, next map[libfossil.FslID][]libfossil.F
 			continue
 		}
 		for _, n := range next[cur] {
-			if out[n] {
+			if out[n] || w.beyond(n) {
 				continue
 			}
 			if err := w.visit(out, n); err != nil {

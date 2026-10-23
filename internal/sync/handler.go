@@ -1638,8 +1638,12 @@ func (h *handler) announceFloor(position int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.cursor < at || h.keep.voids(h.cursor) {
+	if h.cursor < at {
 		return 0, nil
+	}
+	voids, err := h.keep.voids(h.cursor)
+	if err != nil || voids {
+		return 0, err
 	}
 	return h.cursor, nil
 }

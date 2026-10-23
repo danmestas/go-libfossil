@@ -81,6 +81,42 @@ func HorizonReach(
 	return cut.k, cut.reach, placed, err
 }
 
+// HorizonJoinedAfter reports whether h's held set gained, at or below
+// cursor, a check-in the store's held set through cursor lacked
+// (horizon.Graph.JoinedAfter): a cursor from before such a reclassification
+// is void (draft-fossil-horizon-00 §6.2.6). False when the store cannot
+// place C.
+func HorizonJoinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error) {
+	if ctx == nil || q == nil {
+		panic("content.HorizonJoinedAfter: nil context or querier")
+	}
+	g, err := horizon.LoadGraph(ctx, q)
+	if err != nil {
+		return false, err
+	}
+	return joinedAfter(ctx, q, g, h, cursor)
+}
+
+// joinedAfter is HorizonJoinedAfter over g, the store's check-in graph.
+func joinedAfter(ctx context.Context, q db.Querier, g *horizon.Graph, h cone.Horizon, cursor int64) (bool, error) {
+	var c libfossil.FslID
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", h.Hash()).Scan(&c)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("horizon: C: %w", err)
+	}
+	k, err := g.HeldSet(ctx, c, h.Rule())
+	if errors.Is(err, horizon.ErrNotHeld) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return g.JoinedAfter(ctx, c, h.Rule(), k, cursor)
+}
+
 // HorizonBelow returns the elision predicate of c's content horizon
 // (draft-fossil-horizon-00 §4.2) over the artifacts p names, held or not:
 // true for a blob a held F card names that no check-in in the held set

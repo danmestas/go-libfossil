@@ -95,7 +95,7 @@ func deepenPoint(ctx context.Context, r *repo.Repo, peer Transport, c, target st
 		}
 	}
 	opts.Pull, opts.Push = true, false
-	opts.MergeBaseOf = [2]string{c, target}
+	opts.MergeBaseOf = MergeBaseQuery{Primary: target, Secondaries: []string{c}}
 	res, err := Sync(ctx, r, peer, opts)
 	if err != nil {
 		return "", err

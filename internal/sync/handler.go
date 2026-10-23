@@ -268,7 +268,7 @@ type handler struct {
 	structural      *structuralServe          // a structural request this origin serves (horizon §6.2); nil otherwise
 	seedOffered     string                    // the seed a structural request names as held (horizon §6.2.3)
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
-	mergeBaseQuery  [2]string                 // the request's horizon-mergebase query (horizon §6.2.4); zero when none
+	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
@@ -1004,7 +1004,7 @@ func (h *handler) handlePragma(c *xfer.PragmaCard) error {
 			h.cursor = n
 		}
 	case c.Name == horizonMergeBasePragma:
-		if q, ok := mergeBaseQuery(c); ok {
+		if q, ok := parseMergeBaseQuery(c); ok {
 			h.mergeBaseQuery = q
 		}
 	case c.Name == "send-private":

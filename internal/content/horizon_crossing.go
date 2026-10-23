@@ -90,3 +90,40 @@ func MergeBaseCrossing(q db.Querier, side, base libfossil.FslID, unheld bool) er
 	}
 	return nil
 }
+
+// AncestryCrosses reports whether the ancestry of any of starts, walked back
+// through every P card, reaches a parent the store does not hold as a
+// check-in, when the store is at a structural horizon (§5.5): the merge base
+// of such a check-in is then the origin's to name, even when a walk over
+// what the store holds finds one. False for any other store. A walk past
+// limit check-ins counts as crossing, since it cannot say otherwise.
+func AncestryCrosses(q db.Querier, starts []libfossil.FslID, limit int) (bool, error) {
+	if q == nil {
+		panic("content.AncestryCrosses: q must not be nil")
+	}
+	if len(starts) == 0 || limit <= 0 {
+		panic("content.AncestryCrosses: needs a start and a positive limit")
+	}
+	if _, structural, err := StructuralHorizon(q); err != nil || !structural {
+		return false, err
+	}
+	for _, start := range starts {
+		if start <= 0 {
+			panic("content.AncestryCrosses: invalid rid")
+		}
+		var walked int
+		var crosses bool
+		err := q.QueryRow(`WITH RECURSIVE anc(rid) AS (
+				SELECT ?1 UNION SELECT plink.pid FROM plink JOIN anc ON plink.cid=anc.rid LIMIT ?2)
+			SELECT count(*), coalesce(max(NOT EXISTS(SELECT 1 FROM blob WHERE blob.rid=anc.rid AND size>=0)
+				OR NOT EXISTS(SELECT 1 FROM event WHERE objid=anc.rid AND type='ci')), 0)
+			FROM anc`, start, limit+1).Scan(&walked, &crosses)
+		if err != nil {
+			return false, fmt.Errorf("content.AncestryCrosses: %w", err)
+		}
+		if crosses || walked > limit {
+			return true, nil
+		}
+	}
+	return false, nil
+}

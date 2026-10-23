@@ -1,6 +1,7 @@
 ---
 title: Quickstart
-weight: 10
+weight: 20
+aliases: ["/docs/quickstart/"]
 ---
 
 A five-minute tour of libfossil: clone a repo and read its history from Go.

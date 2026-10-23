@@ -1,6 +1,7 @@
 ---
 title: Architecture
-weight: 20
+weight: 10
+aliases: ["/docs/architecture/"]
 ---
 
 <svg viewBox="0 0 640 260" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:auto;margin:0 auto 1.5rem;color:currentColor;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-width:720px">
@@ -80,31 +81,40 @@ harness in `simio/` exercise concurrent repo operations under a seed.
 
 ## Module layout
 
-This is a multi-module workspace (`go.work`) with four `go.mod` files:
-the root, two driver modules, and the OTel observer. Layout:
+The library is a Go workspace (`go.work`) of four modules: the root, the
+two driver modules, and the OTel observer. (The documentation site under
+`docs/site` has its own `go.mod` and is not in the workspace.) Layout:
 
 - **Root package `libfossil`** — thin facade over `internal/repo`,
-  `internal/sync`, and `internal/checkout`. Files: `fossil.go` (Create,
-  Open, Clone), `repo.go` (Repo handle + DB accessor), `checkout.go`,
-  `repo_checkout.go`, `repo_merge.go`, `repo_sync.go`, `repo_history.go`,
-  `repo_admin.go`, `repo_extras.go`, `transport.go`, `observer.go`,
-  `types.go`, `errors.go`, `julian.go`.
-- **`cli/`** — Kong command definitions. `repo.go` aggregates 35+
+  `internal/sync`, and `internal/checkout`. Main files: `fossil.go`
+  (Create, Open, Clone), `repo.go` (Repo handle + DB accessor),
+  `checkout.go`, `checkout_sparse.go` (cones and horizons),
+  `repo_checkout.go`, `repo_merge.go`, `repo_sync.go`, `repo_pull.go`,
+  `repo_sparse.go`, `repo_submanifest.go`, `repo_history.go`,
+  `repo_admin.go`, `repo_extras.go`, `required_content*.go`,
+  `horizon_*.go`, `signing.go`, `transport.go`, `observer.go`, `types.go`,
+  `errors.go`, `julian.go`.
+- **`cli/`** — Kong command definitions. `repo.go` aggregates 43
   subcommands (`new`, `clone`, `ci`, `co`, `timeline`, `diff`, `merge`,
-  `tag`, `branch`, `uv`, `stash`, `bisect`, `annotate`, `user`, etc.).
-  Intended to be embedded by any `main` that wants a fossil-shaped CLI.
-- **`cmd/libfossil/`** — the shipped binary (`main.go`, 25 lines). Wires
-  Kong, selects `modernc` by default (`ncruces` under `test_ncruces`), and
-  dispatches to `cli`.
+  `tag`, `branch`, `uv`, `stash`, `bisect`, `annotate`, `user`, `serve`,
+  `cone`, `submanifests`, etc.). Intended to be embedded by any `main` that
+  wants a fossil-shaped CLI.
+- **`cmd/libfossil/`** — the shipped binary. `main.go` wires Kong and
+  dispatches to `cli`; `driver_modernc.go` and `driver_ncruces.go` select
+  the driver by build tag (`modernc` by default, `ncruces` under
+  `test_ncruces`).
 - **`internal/`** — private implementation, grouped by concern:
   - Storage layer: `blob`, `content`, `manifest`, `deck`, `delta`,
-    `hash`, `fsltype`, `repo` (schema + DB boot), `tag`.
+    `hash`, `fsltype`, `repo` (schema + DB boot), `tag`, `leaf`,
+    `clearsign`.
+  - Sparse and horizon stores: `cone`, `horizon` (held set and seed).
   - Working-tree operations: `checkout` (checkin, extract, update,
-    revert, fork, rename, status, vfile), `merge` (three-way, ancestor,
+    revert, fork, rename, status), `vfile`, `merge` (three-way, ancestor,
     detect, resolve, strategies), `diff`, `annotate`, `undo`, `stash`,
     `bisect`, `branch`, `path`.
   - Sync / transport: `sync` (client, handler, clone, session,
-    ckin-lock, serve-http, table-sync, UV), `xfer` (card codec).
+    ckin-lock, serve-http, table-sync, UV, sparse and horizon serving),
+    `xfer` (card codec).
   - Housekeeping: `auth`, `shun`, `verify`, `search`, `uv`, `testdriver`.
 - **`db/`** — SQLite abstraction (see below).
 - **`db/driver/modernc`**, **`db/driver/ncruces`** — separate modules,
@@ -126,7 +136,8 @@ users — lives in that file. libfossil does not maintain any sidecar
 state for the repo itself (a working tree has its own SQLite DB).
 
 Content is stored **content-addressed** in the `blob` table, keyed by
-either SHA1 or SHA3-256 UUIDs (hash mode is per-project). Every blob is
+either SHA1 or SHA3-256 names (the repository's hash policy picks which
+names new content; see [Artifacts](/docs/concepts/artifacts/)). Every blob is
 zlib-compressed with a 4-byte big-endian uncompressed-size prefix;
 `internal/blob.Compress` and `Decompress` handle that framing. Blobs may
 be stored as full content or as deltas against a parent; reconstruction
@@ -134,13 +145,14 @@ walks the chain and applies deltas via `internal/content.Expand`, with
 cycle detection. `internal/content.Verify` rehashes expanded content
 against the stored UUID.
 
-**Manifests** are themselves blobs whose text describes a commit, check-
-out state, tag change, branch operation, wiki edit, ticket change, or
-cluster. `internal/manifest` and `internal/deck` parse and assemble
-manifests; "crosslinking" (`internal/manifest/crosslink.go`) is the step
-that projects a manifest's effects into derived tables (`mlink`, `plink`,
+**Structural artifacts** are themselves blobs whose text describes a
+check-in (a manifest), a tag change, a wiki edit, a ticket change, an
+attachment, a technote, a forum post, or a cluster. `internal/deck`
+parses and marshals them and `internal/manifest` builds check-ins;
+"crosslinking" (`internal/manifest/crosslink.go`) is the step that
+projects an artifact's effects into derived tables (`mlink`, `plink`,
 `event`, `tagxref`, etc.) so queries like timeline and checkout work
-without re-parsing blobs.
+without re-parsing blobs. See [Repository state](/docs/concepts/repository-state/).
 
 ## Driver layer
 
@@ -167,24 +179,9 @@ Shipped drivers:
 
 ## Sync protocol
 
-libfossil implements Fossil's sync-over-HTTP protocol as a client /
-server pair in `internal/sync`. Wire framing (xfer "cards") lives in
-`internal/xfer`. Public entry points are re-exported from
-`libfossil` as `Clone` (`fossil.go`) and from
-`repo_sync.go`.
-
-- **Client** (`internal/sync/client.go`, `clone.go`, `session.go`): drives
-  rounds until `igot`/`gimme` reconcile. Supports clone, pull, push,
-  sync (both directions), plus unversioned-content (`client_uv*.go`) and
-  config table (`client_tablesync.go`) sync.
-- **Server** (`internal/sync/handler.go`, `serve_http.go`,
-  `handler_uv.go`, `handler_tablesync.go`): stateless per round;
-  `XferHandler` plugs into `http.ServeMux`.
-- **Check-in lock** (`ckin_lock.go`): a `ci-lock-<parent>` row in the
-  `config` table serialises concurrent check-ins against the same
-  parent. Stale entries expire after `DefaultCkinLockTimeout` (60s).
-- **Shun propagation** (`xdelete.go`, `internal/shun`): deleted blobs
-  are tombstoned and the tombstone propagates during sync.
+`internal/sync` implements Fossil's sync-over-HTTP protocol as a client
+and a stateless server, with the card codec in `internal/xfer`. See
+[Sync](/docs/concepts/sync/) for the protocol and where each part lives.
 
 ## Observer model
 
@@ -199,7 +196,7 @@ For OpenTelemetry, [`observer/otel`](https://github.com/danmestas/go-libfossil/t
 module so the core doesn't pull in the OTel SDK. Users import it
 explicitly when they want traces, metrics, or structured logs.
 
-See [Extension Points](./extension-points) for the full observer
+See [Extension Points](/docs/guides/extension-points/) for the full observer
 contract and a worked example of a custom observer.
 
 ## DST / simulation
@@ -210,12 +207,13 @@ contract and a worked example of a custom observer.
 schedule clones, check-ins, merges, UV pushes, and partitions, and
 tests assert invariants (`dst/invariants.go`, `crosslink_completeness_test.go`).
 
-Fault injection uses `simio.Buggify(p)` — a global probability gate that
-returns `false` in production but flips `true` with probability `p`
-during simulation. Sites like `clone.emitCloneBatch.truncate` in the
-sync code wrap calls behind `Buggify` so the simulator can exercise
-failure paths. `SeededBuggify` in `dst` adapts this to the
-`BuggifyChecker` interface used by the sync client.
+Fault injection has two forms. `simio.Buggify(p)` is a global
+probability gate that returns `false` in production but flips `true`
+with probability `p` once the simulator enables it; the blob and content
+layers use it. The sync code instead asks a `BuggifyChecker` passed in
+its options, at named sites such as `clone.emitCloneBatch.truncate` and
+`handler.handleGimme.skip`; a nil checker injects nothing. `SeededBuggify`
+in `dst` implements `BuggifyChecker` from a seeded random source.
 
-See [testing.md](./testing) for running the DST matrix, seed sweeps,
+See [Testing](/docs/guides/testing/) for running the DST matrix, seed sweeps,
 and the driver test matrix.

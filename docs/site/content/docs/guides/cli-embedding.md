@@ -1,6 +1,7 @@
 ---
 title: Embedding the CLI
-weight: 65
+weight: 30
+aliases: ["/docs/cli-embedding/"]
 ---
 
 An application that keeps version history in a Fossil repository can run the `libfossil` binary as a child process: no checkout, no shadow working tree. `repo new` and four more commands make up the interface; their output and exit statuses are stable.

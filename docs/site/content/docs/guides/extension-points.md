@@ -1,13 +1,15 @@
 ---
-title: Extension Points
+title: Extension points
 weight: 40
+aliases: ["/docs/extension-points/"]
 ---
 
-libfossil exposes three surfaces for consumers that want to instrument, extend, or replace pieces of the stack:
+libfossil exposes four surfaces for consumers that want to instrument, extend, or replace pieces of the stack:
 
 1. **Observer interfaces** for sync and checkout lifecycle events (`SyncObserver`, `CheckoutObserver`).
 2. **SQLite driver registration** (`db.Register`) — pick the SQLite backend at link time.
 3. **The `db.DB` abstraction** — an opaque wrapper around `database/sql` with Fossil-specific helpers. Treat it as internal; it is less stable than the observer and driver surfaces.
+4. **The `Transport` interface** — one method, `RoundTrip(ctx, payload) ([]byte, error)`, carries a sync round. `Repo.Sync` and `Clone` take any implementation, so sync can run over HTTP, WebSocket, NATS or an in-process pipe. `TransportFunc` adapts a plain function.
 
 ## Observer interfaces
 
@@ -43,7 +45,7 @@ type SyncObserver interface {
 | `TableSyncStarted` | An extension table sync (for example `peer_registry`) is about to run. |
 | `TableSyncCompleted` | An extension table sync finishes. |
 
-Libfossil ships `NopSyncObserver()` and `StdoutSyncObserver()` as drop-in implementations.
+libfossil ships `NopSyncObserver()` and `StdoutSyncObserver()` (logs to stderr) as drop-in implementations.
 
 ### `CheckoutObserver`
 
@@ -99,7 +101,7 @@ func newLogSyncObserver() libfossil.SyncObserver {
 }
 ```
 
-The embedded `NopSyncObserver()` provides no-op implementations of the methods you do not override, so you only need to define the events you care about. The same pattern applies to `CheckoutObserver` via `NopCheckoutObserver()`.
+The embedded `NopSyncObserver()` provides no-op implementations of the methods you do not override, so you only need to define the events you care about. The same pattern applies to `CheckoutObserver` via `NopCheckoutObserver()`; `StdoutCheckoutObserver()` is its stderr logger.
 
 For a full real-world observer that emits spans and counters, see `observer/otel/otel.go`. It implements both interfaces and is the reference you should copy from when wiring up your own telemetry backend.
 

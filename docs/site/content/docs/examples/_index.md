@@ -1,6 +1,7 @@
 ---
 title: Examples
-weight: 60
+weight: 50
+aliases: ["/examples/"]
 ---
 
 Runnable examples live in the repo. Each is a self-contained `main.go` you can clone and run.
@@ -13,6 +14,6 @@ Minimal example of embedding libfossil as a library in a Go application. Walks t
 
 ## wasm
 
-Building libfossil for a generic WASI Preview 1 target. The compiled `.wasm` is not tied to any specific runtime and runs under `wasmtime`, `wazero`, or any WASI P1 host. Uses the [`ncruces` driver](../docs/reference/sdk/db/driver/ncruces) — the default `modernc` driver pulls in syscalls (`pthread`, etc.) that WASI doesn't provide.
+Building libfossil for a generic WASI Preview 1 target. The compiled `.wasm` is not tied to any specific runtime and runs under `wasmtime`, `wazero`, or any WASI P1 host. Uses the [`ncruces` driver](/docs/reference/sdk/db/driver/ncruces/) — the default `modernc` driver pulls in syscalls (`pthread`, etc.) that WASI doesn't provide.
 
 → [`examples/wasm`](https://github.com/danmestas/go-libfossil/tree/main/examples/wasm)

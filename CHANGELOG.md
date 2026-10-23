@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The whole public API, the HTTP sync client and signing included, compiles
+  with TinyGo 0.43 for the wasm target: 3.83 MB raw and 1.40 MB gzipped after
+  `wasm-opt -Oz`, against 16.1 MB and 4.06 MB from the standard toolchain
+  (`examples/tinygo`). Three uses of standard-library features TinyGo lacks
+  sit behind a `tinygo` build tag: under TinyGo a sync redirect ends the
+  request with an error instead of being followed, DNS failures are not
+  classified as transient, and two names of one checkout marker are reported
+  as ambiguous rather than paired. CI builds the example with TinyGo.
 - Signing, as fossil and zit sign (fossil's `clearsign` and `pgp-command`
   settings, with PGP and SSH keys). With `clearsign` on, `Commit`,
   `Checkout.Checkin` and `repo branch new` store each check-in's manifest

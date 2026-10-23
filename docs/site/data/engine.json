@@ -1,0 +1,88 @@
+{
+  "manifest": {
+    "text": "C plan\\sthe\\srelease\nD 2026-10-23T13:30:00.000\nF README.md 39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06\nF src/main.go 9a9719984127d081c38b60aeb3034789b67b517a11cf0e102f3f1161f2ccd2a8\nP d62b0f181e5262cf454532b2f7f076f3c6c93aee524843f5f4b7d351ecc0c88b\nR be8e6172c39c3f0aedf5b833b49f5df9\nU ana\nZ 1f37be8da8b9d9797176dcb9660b4359\n",
+    "name": "5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7",
+    "bytes": 346,
+    "parent": {
+      "rid": 3,
+      "uuid": "d62b0f181e5262cf454532b2f7f076f3c6c93aee524843f5f4b7d351ecc0c88b"
+    }
+  },
+  "rows": {
+    "blob": [
+      {
+        "rid": 5,
+        "uuid": "5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7",
+        "size": 346
+      },
+      {
+        "rid": 4,
+        "uuid": "39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06",
+        "size": 25
+      }
+    ],
+    "event": [
+      {
+        "type": "ci",
+        "objid": 5,
+        "user": "ana",
+        "comment": "plan the release"
+      }
+    ],
+    "plink": [
+      {
+        "pid": 3,
+        "cid": 5,
+        "isprim": 1
+      }
+    ],
+    "mlink": [
+      {
+        "mid": 5,
+        "fid": 4,
+        "pid": 1,
+        "file": "README.md"
+      }
+    ],
+    "tagxref": [
+      {
+        "tag": "branch",
+        "value": "trunk",
+        "rid": 5
+      }
+    ],
+    "leaf": [
+      5
+    ]
+  },
+  "pull": [
+    {
+      "request": [
+        "pull 52fdfc072182654f163f5f0f9a621d729566c74d 0ab0c192687b3e1f5d84c6a7e2b9f0d3c5a71e48",
+        "igot bd98d3f928c48505f493521f658a02044eb59caaa6952f40a10df3df72ebfa10",
+        "igot 9a9719984127d081c38b60aeb3034789b67b517a11cf0e102f3f1161f2ccd2a8",
+        "igot d62b0f181e5262cf454532b2f7f076f3c6c93aee524843f5f4b7d351ecc0c88b"
+      ],
+      "reply": [
+        "igot 39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06",
+        "igot 5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7"
+      ]
+    },
+    {
+      "request": [
+        "pull 52fdfc072182654f163f5f0f9a621d729566c74d 0ab0c192687b3e1f5d84c6a7e2b9f0d3c5a71e48",
+        "igot bd98d3f928c48505f493521f658a02044eb59caaa6952f40a10df3df72ebfa10",
+        "igot 9a9719984127d081c38b60aeb3034789b67b517a11cf0e102f3f1161f2ccd2a8",
+        "igot d62b0f181e5262cf454532b2f7f076f3c6c93aee524843f5f4b7d351ecc0c88b",
+        "gimme 39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06",
+        "gimme 5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7"
+      ],
+      "reply": [
+        "file 39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06 25",
+        "file 5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7 346",
+        "igot 39e24e73b26268efd7c53c40b025da6a2deb2e4fc10fe5d2d88bdbdbf404dd06",
+        "igot 5f3eccd15aaaeccf576efd04f9c50a695e81a960cf0a7590bdf390624b8ba0c7"
+      ]
+    }
+  ]
+}

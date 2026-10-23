@@ -1,0 +1,5065 @@
+{
+  "requirements": 620,
+  "covered": 618,
+  "partial": 2,
+  "suites": [
+    {
+      "suite": "artifact",
+      "title": "Artifact format",
+      "draft": "draft-fossil-artifact-format-00",
+      "requirements": 115,
+      "covered": 115,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 529,
+      "rows": [
+        {
+          "id": "AF-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An artifact's name is the hash of its exact stored bytes, with nothing added, removed or transformed; a signed artifact's name covers its wrapper.",
+          "notes": ""
+        },
+        {
+          "id": "AF-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A 40-digit name is the SHA-1, and a 64-digit name the SHA3-256 (FIPS 202, not Keccak), of the raw bytes.",
+          "notes": ""
+        },
+        {
+          "id": "AF-3.2-2",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A candidate name of any length other than 40 or 64 is invalid.",
+          "notes": ""
+        },
+        {
+          "id": "AF-3.3-1",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Every name an implementation computes or emits is lowercase hexadecimal.",
+          "notes": ""
+        },
+        {
+          "id": "AF-3.3-2",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A parser that accepts an uppercase-hex name does not case-normalize it.",
+          "notes": ""
+        },
+        {
+          "id": "AF-3.4-1",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Verification compares a name byte for byte with the lowercase digest its length selects; any other length, an uppercase digit or a mismatch never verifies.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1-1",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The raw input is non-empty and its last byte is LF, checked before any signature wrapper is removed.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 7,
+          "text": "The stripped content is at least 10 bytes, starts with a letter A-Z, and has a space as its second byte.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1-3",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Bytes left unconsumed after the card loop cause rejection.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-1",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A PGP clearsign wrapper is removed before parsing.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-2",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An SSH signed-message wrapper is removed before parsing.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-3",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A wrapper is removed only when the first 34 bytes of the input are exactly one of the two header lines.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-4",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The body starts after the first blank line (LF LF or LF CR LF); with no blank line nothing is stripped.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-5",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The content is cut after the LF that starts the last signature-armor line, and runs to the end of input when there is none.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.1-6",
+          "section": "4.1.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Only the first 29 bytes of the 30-byte signature-armor literal are compared.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.1.2-1",
+          "section": "4.1.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A sterilized artifact, its marker line after the final card or before a signature block, is rejected by the card-ordering rule.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The byte after a card letter is exactly a space or LF; any other byte, tab included, makes the card invalid.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2-2",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Tokens are split on space and LF only; tab and CR are ordinary token bytes.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2-3",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A card's final token may be empty (the line ends in a space), giving a present, empty value distinct from an omitted token; an empty token anywhere else is malformed.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2.1-1",
+          "section": "4.2.1",
+          "status": "COVERED",
+          "cases": 20,
+          "text": "A card with more tokens than its grammar defines is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2.2-1",
+          "section": "4.2.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A card letter outside A-Z is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.2.2-2",
+          "section": "4.2.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "The undefined letters O, S, V, X and Y are rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.3-1",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The eight escapes \\n \\s \\t \\r \\v \\f \\0 and \\\\ decode to LF, space, tab, CR, VT, FF, NUL and backslash.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.3-2",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A backslash before any other byte decodes to that byte, and a token's final backslash is kept; neither is an error.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.3.1-1",
+          "section": "4.3.1",
+          "status": "COVERED",
+          "cases": 12,
+          "text": "Tokens are decoded at the A filename and target, C comment, F filename and old-name, H title, J value, L title, N mimetype, T name and value, and U login.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.3.1-2",
+          "section": "4.3.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "No other token is decoded: hashes, checksums, timestamps, the J field name, and the W size and body stay raw.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.3.1-3",
+          "section": "4.3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The A target is decoded before it is validated, so an escaped token that decodes to hex digits is checked as a hash.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.4-1",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Each card's letter is greater than or equal to the previous card's letter.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.4-2",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An N card directly after a P card is accepted once an E card has been seen, and rejected otherwise.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.1-1",
+          "section": "4.5.1",
+          "status": "COVERED",
+          "cases": 14,
+          "text": "A second A, B, C, D, E, G, H, I, K, L, N, R, U or W card is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.1-2",
+          "section": "4.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "F, J, M, T, P and Q cards may repeat, each adding to its list.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.1-3",
+          "section": "4.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The Z card has no duplicate guard: an earlier Z line is content covered by the final checksum.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-1",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "F cards are strictly ascending by decoded filename.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-2",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "J cards are strictly ascending by field name.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-3",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "M cards are strictly ascending by hash.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-4",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "T cards ascend by the full name token, sign included, and strictly by target among equal names.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-5",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "P tokens keep their order and are not deduplicated.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.2-6",
+          "section": "4.5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Q cards are neither ordered nor checked for duplicates.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.5.3-1",
+          "section": "4.5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The canonical comparator compares unsigned bytes with no case folding or normalization; a prefix sorts first and '/' is not special.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.1-1",
+          "section": "4.6.1",
+          "status": "COVERED",
+          "cases": 15,
+          "text": "A decoded A filename, F filename or F old-name is rejected when empty, starting with '/', '.' or '..' alone, starting with './' or '../', containing '//', ending in '/', or with a '.' or '..' element.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.1-2",
+          "section": "4.6.1",
+          "status": "COVERED",
+          "cases": 8,
+          "text": "The pathname predicate rejects nothing else: backslashes, spaces, control bytes and invalid UTF-8 pass.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.1-3",
+          "section": "4.6.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A writer does not create a filename containing a backslash or outside the UTF-8 profile.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.2-1",
+          "section": "4.6.2",
+          "status": "COVERED",
+          "cases": 7,
+          "text": "A decoded wiki name is rejected when its first byte is 0x20 or below, a later byte is below 0x20, it has two adjacent spaces, it ends in a space, or it is not 1 to 100 bytes long.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.2-2",
+          "section": "4.6.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A wiki name is otherwise unconstrained: 0x7F, bytes 0x80 and above, and invalid UTF-8 pass.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.3-1",
+          "section": "4.6.3",
+          "status": "COVERED",
+          "cases": 7,
+          "text": "An F card whose decoded filename is reserved (_FOSSIL_ or .fslckout, whole or after '/', or followed by -wal, -shm or -journal) is dropped, not rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.3-2",
+          "section": "4.6.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A reserved tail that is neither whole, after '/', nor followed by a sidecar suffix is not reserved, and the old-name is never tested.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.3-3",
+          "section": "4.6.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The F sort check runs before the drop, and a dropped card never becomes the anchor for the next comparison.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.3-4",
+          "section": "4.6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A dropped F card assigns no artifact type and records no file entry.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-1",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A writer emits D and E timestamps as YYYY-MM-DDTHH:MM:SS with an optional fraction.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-2",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 14,
+          "text": "A parser accepts a date-time with T or whitespace separators, HH:MM with optional seconds and a fraction of any length, and an optional +HH:MM, -HH:MM, Z or z zone.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-3",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A lowercase t separator is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-4",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 13,
+          "text": "In the date-time, date-only and time-only forms, the year is 4 digits, month 01-12, day 01-31 with no calendar check, hour 00-24, minute and second 00-59.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-5",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A date on or before -4713-11-24 is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-6",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 9,
+          "text": "A Julian day number is an optional sign, digits with an optional fraction (at least one digit), and an optional E or e exponent with an optional sign; no other numeric spelling is recognized.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.6.4-7",
+          "section": "4.6.4",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A Julian day number that is zero, negative, or 5373484.5 or more, after rounding to the nearest millisecond, is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.1-1",
+          "section": "4.7.1",
+          "status": "COVERED",
+          "cases": 34,
+          "text": "Every hash position (A target as a hash, A source, B, E ID, F hash, G, I, M, P, both Q tokens, T target) holds exactly 40 or 64 hexadecimal digits.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.1-2",
+          "section": "4.7.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The K ticket ID is exactly 40 hexadecimal digits; 64 is invalid.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.2-1",
+          "section": "4.7.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Only the final path component of the A filename is kept as the attachment name.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.2-2",
+          "section": "4.7.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The A target is a valid hash or a well-formed wiki name.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.2-3",
+          "section": "4.7.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The A source is optional and none is recorded when absent; a present but empty source fails hash validation and is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.3-1",
+          "section": "4.7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A delta manifest whose baseline is itself a delta manifest is accepted, and its file set is computed from that baseline's own F cards only.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.3-2",
+          "section": "4.7.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The named delta's delete markers enter the one-level walk on the baseline side and add no file: every merged entry without a hash is filtered out of the file set and of a lookup.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.4-1",
+          "section": "4.7.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A C card with no token at all (a bare C line) is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.4-2",
+          "section": "4.7.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A C card whose single token is empty is a present, empty comment and is accepted.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.5-1",
+          "section": "4.7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An E card carries a timestamp and a technote ID.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.6-1",
+          "section": "4.7.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "In a baseline manifest every F card carries a hash; a hashless F card needs a B card.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.6-2",
+          "section": "4.7.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The third F token is the raw permission, accepted without validation; only the fourth is the old-name.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.6-3",
+          "section": "4.7.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A producer that writes an old-name also writes an explicit permission token.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.8-1",
+          "section": "4.7.8",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An absent J value and a present empty one (J, SP, name, SP, LF) both decode to the empty string, and a reader does not distinguish them.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.9-1",
+          "section": "4.7.9",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A writer emits the K ticket ID in lowercase.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.13-1",
+          "section": "4.7.13",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An empty P card is accepted.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.14-1",
+          "section": "4.7.14",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The first Q token is + or - followed by a hash; the optional second is a plain hash, empty when absent.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.16-1",
+          "section": "4.7.16",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A T name starts with +, - or *.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.16-2",
+          "section": "4.7.16",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A T name is not entirely hexadecimal after its sign, at any length and in either case.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.16-3",
+          "section": "4.7.16",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A T target is a hash or exactly '*'.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.16-4",
+          "section": "4.7.16",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An absent T value is distinct from a present, empty one (4.2).",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.17-1",
+          "section": "4.7.17",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A U card with an empty or omitted login yields the login \"anonymous\".",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.18-1",
+          "section": "4.7.18",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The W body is exactly size bytes, may hold any byte including LF, and is not scanned for card boundaries.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.18-2",
+          "section": "4.7.18",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The byte after the W body is LF.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.18-3",
+          "section": "4.7.18",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A reader takes only the leading digits of the W size token, so 4x is 4 and abc is 0.",
+          "notes": ""
+        },
+        {
+          "id": "AF-4.7.18-4",
+          "section": "4.7.18",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A W size beyond the rest of the artifact, or one that overflows, is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 8,
+          "text": "Every structural artifact is classified as exactly one of the eight types.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.2-1",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 109,
+          "text": "An artifact with a card outside its type's allowed set is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.2-2",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 19,
+          "text": "An artifact missing a card of its type's required set is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When several type-setting cards appear, the last one processed sets the type.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "With no type-setting card, an artifact with a C or P card is a manifest, and any other a control artifact.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.3-3",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An artifact whose every F card was dropped for a reserved filename, with no C or P card, is a control artifact and is rejected for its F card.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.4-1",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A control artifact has no self-referential T card.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.4-2",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Every T card in a technote is self-referential and has the + sign.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.4-3",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A forum post does not have both an H card and an I card.",
+          "notes": ""
+        },
+        {
+          "id": "AF-5.4-4",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A forum post's P card lists at most one parent.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The R and Z tokens are exactly 32 hexadecimal digits.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An artifact whose Z card does not match is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-2",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The Z value is compared, byte for byte, with the lowercase MD5 of the stripped content before its last 35 bytes, so an uppercase digit fails.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-3",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An artifact without a Z card is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-4",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A producer writes the Z card as Z, a space, 32 lowercase digits and LF.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-5",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The Z verification stage does not itself reject an artifact for lacking a Z card, or for being too short to hold one.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-6",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The Z verifier neither reads nor requires any value at the artifact's last byte.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.2-7",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The Z verification state is decided by the bytes at offsets n-35 and n-34, not by where card lines begin: an artifact with no Z card whose last line ends in Z, a space and 32 further bytes before its LF is verified, and fails on a mismatch.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.3-1",
+          "section": "6.3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A parser does not check the R value against file content.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.3-2",
+          "section": "6.3.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The R value is the MD5 of, for each file in comparator order, its name, a space, its decimal size, LF and its content, written as 32 lowercase digits.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.3-3",
+          "section": "6.3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A delta manifest's R value covers the merged file set, not its own F cards.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.3-4",
+          "section": "6.3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A writer emits the R card as R, a space, 32 lowercase digits and LF.",
+          "notes": ""
+        },
+        {
+          "id": "AF-6.3-5",
+          "section": "6.3.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "At commit time the R card is checked byte for byte against the lowercase digest recomputed from the checkout.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.1-1",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "New content is named SHA-1 under sha1 and auto, and SHA3-256 under sha3, sha3-only and shun-sha1.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.1-2",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 15,
+          "text": "Policy value strings match case-sensitively and exactly; an unrecognized value is a fatal error.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.2-1",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "With no policy set, a repository holding a SHA3 name or no SHA-1 name, including an empty one, defaults to sha3, and otherwise to auto.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.4-1",
+          "section": "7.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Under auto, storing an artifact under a name longer than 40 digits promotes the repository to sha3 and persists the change.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.5-1",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Under sha1, auto and sha3, content already stored under the other algorithm's name keeps that name and is not stored again.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.5-2",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Under sha3-only and shun-sha1, content is named SHA3-256 even when it is already stored under a SHA-1 name.",
+          "notes": ""
+        },
+        {
+          "id": "AF-7.6-1",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Changing the policy never renames a stored artifact.",
+          "notes": ""
+        },
+        {
+          "id": "AF-8-1",
+          "section": "8",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest is a delta manifest exactly when it has a B card, and its file set is the merge with its baseline.",
+          "notes": ""
+        },
+        {
+          "id": "AF-8.2-1",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "In the merge, a delta entry with a hash replaces or adds a file, a hashless entry deletes it, other baseline files carry forward, and an unmatched deletion adds nothing.",
+          "notes": ""
+        },
+        {
+          "id": "AF-8.3-1",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Enumerating a delta manifest's files fails when its baseline is missing or is not a manifest.",
+          "notes": ""
+        },
+        {
+          "id": "AF-8.4-1",
+          "section": "8.4",
+          "status": "COVERED",
+          "cases": 7,
+          "text": "Looking up one name in a delta manifest searches the delta first, and a delete marker answers not-found without reading the baseline.",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "delta",
+      "title": "Delta format",
+      "draft": "draft-fossil-delta-format-00",
+      "requirements": 40,
+      "covered": 40,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 93,
+      "rows": [
+        {
+          "id": "DF-3-1",
+          "section": "3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A delta is a header, zero or more segments and a trailer, concatenated with nothing between them (delta = header *segment trailer); a decoder accepts every such delta whose bounds hold.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3-2",
+          "section": "3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Applying a delta a producer emitted for a source and target to that source yields the target exactly.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A producer writes every integer in canonical form: base 64, most significant digit first, no leading zeros, and zero as the single digit 0.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-2",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Digits 0-9 have values 0-9, A-Z 10-35, _ 36, a-z 37-62 and ~ 63, and a multi-digit integer is read most significant digit first.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-3",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Reading an integer stops at the first byte that is not a digit; that byte is the opcode or separator that follows the integer.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-4",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A decoder that accepts an integer field with no digits treats it as zero; it may reject such a delta instead.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-5",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A decoder that accepts an integer field with leading zeros uses its decoded value; it may reject such a delta instead.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.1-6",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A producer emits only integer values below 2^32.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A decoder rejects a delta whose header integer is not immediately followed by 0x0a.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.1-1",
+          "section": "3.3.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A copy segment (count @ offset ,) appends count bytes of the source starting at zero-based byte position offset.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.1-2",
+          "section": "3.3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a copy segment whose offset is not followed by a comma (0x2c).",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.1-3",
+          "section": "3.3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A copy segment with count zero copies zero bytes, not the rest of the source (Appendix A).",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.1-4",
+          "section": "3.3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A producer never emits a copy segment with count zero.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.2-1",
+          "section": "3.3.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A literal segment (count : payload) appends the count bytes that follow the colon.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.3.2-2",
+          "section": "3.3.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A reader consumes exactly count payload bytes without scanning them for a separator; any byte in a payload, 0x0a included, is data.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.4-1",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A producer always ends a delta with a trailer (checksum ;) carrying the checksum of the target, including when the target is empty.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.4-2",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The checksum is the sum modulo 2^32 of the target's big-endian 32-bit words, plus any 1 to 3 trailing bytes added as z[0]\u003c\u003c24, z[1]\u003c\u003c16 and z[2]\u003c\u003c8.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.4-3",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A decoder that verifies the checksum rejects a delta whose trailer does not match the reconstructed target.",
+          "notes": ""
+        },
+        {
+          "id": "DF-3.4-4",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A decoder treats the delta as complete at the trailer opcode; bytes after it are not read as segments.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-1",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a zero-length delta before attempting any read (also section 6).",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-2",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A decoder rejects a delta that ends inside an integer field.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-3",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a copy segment that would take the output past the declared target length.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-4",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A decoder rejects a copy segment whose offset plus count exceeds the source length.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-5",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The offset-plus-count check is made with arithmetic that cannot overflow, so large offsets or counts cannot wrap past it.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-6",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a literal segment that would take the output past the declared target length.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-7",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a literal segment whose count exceeds the bytes remaining in the delta.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-8",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder rejects a delta whose output length at the trailer differs from the declared target length.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-9",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A decoder rejects a segment whose opcode byte is not @, : or ;.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-10",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A decoder rejects a delta that ends without a ; trailer.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-11",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A decoder that accepts an empty, leading-zero or 2^32-or-larger integer still applies every structural and bounds check to the value it uses.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4-12",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A decoder does not require, or reject a delta for, a particular segmentation or copy strategy.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4.1-1",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A target-size query returns the header integer after reading only it and the following 0x0a; it needs no later bytes and does not validate them.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A target-size query fails on an empty buffer.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4.1-3",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A target-size query fails when the header integer is not immediately followed by 0x0a.",
+          "notes": ""
+        },
+        {
+          "id": "DF-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The caller supplies the complete source before invoking the decoder; a delta whose source is not held is not applied.",
+          "notes": ""
+        },
+        {
+          "id": "DF-6-1",
+          "section": "6",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A parser never reads past the end of the delta buffer it was given; integer accumulation stops at that boundary.",
+          "notes": ""
+        },
+        {
+          "id": "DF-6-2",
+          "section": "6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A failed delta application is never reported as success.",
+          "notes": ""
+        },
+        {
+          "id": "DF-6-3",
+          "section": "6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A caller discards the output buffer when application fails.",
+          "notes": ""
+        },
+        {
+          "id": "DF-6-4",
+          "section": "6",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Bytes 0x80 through 0xFF in integer position terminate the integer; they are never decoded as digits (no high-bit masking).",
+          "notes": ""
+        },
+        {
+          "id": "DF-6-5",
+          "section": "6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A decoder treats the header's declared target length as untrusted: it does not allocate in proportion to it before the delta supplies that much output (SHOULD).",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "repostate",
+      "title": "Repository state",
+      "draft": "draft-fossil-repo-state-00",
+      "requirements": 97,
+      "covered": 97,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 236,
+      "rows": [
+        {
+          "id": "RS-2-1",
+          "section": "2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An operation that tags a check-in with a user-supplied symbolic name stores it as \"sym-\" + name unless the caller asks for the raw name.",
+          "notes": ""
+        },
+        {
+          "id": "RS-2-2",
+          "section": "2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Tags whose names begin with \"wiki-\", \"tkt-\" or \"event-\" are never created by a user tagging operation.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Each parent named on a check-in's P card yields a linkage row (parent, child) carrying the primary-parent flag, the check-in's mtime and the baseline id.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.1-2",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A parent named more than once on one P card yields a single linkage row for that (parent, child) pair.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.1-3",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A delta manifest whose baseline is absent or is not a manifest is not linked: it gets no event or linkage row, and the gap is recorded against the baseline (artifact-format-00 Section 8.3) so it links when the baseline arrives.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The first parent on the P card is the primary parent (flag set); every other parent is a merge parent (flag unset).",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.2-2",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A repeated parent keeps the primary flag chosen by its first occurrence.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.2-3",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Linear-history operations (first-parent traversal, the prev keyword) follow only the primary-parent row.",
+          "notes": ""
+        },
+        {
+          "id": "RS-3.2-4",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Full-ancestry operations (merge base, ancestor tests) include merge-parent rows.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.1-1",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest with a T-card whose name lacks a -, + or * prefix is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest with a T-card whose name after the prefix is all hexadecimal digits is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.1-3",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest whose T-cards are not strictly ascending by (name, uuid) is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.1-4",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A rejected manifest contributes no tag state at all, not even from its valid T-cards.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A T-card naming an artifact not yet stored resolves to a phantom rid; the tag is recorded against it and is in effect once the artifact arrives and is crosslinked.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-2",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 8,
+          "text": "A P-card parent not yet stored yields a phantom rid and a linkage row to it, not an error.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-3",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "T-cards are applied only from control, check-in and technote (event) artifacts.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-4",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Crosslinking a cluster applies an implicit singleton \"cluster\" tag to the cluster itself.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-5",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "After a check-in with a resolved primary parent is crosslinked, the parent's tags are re-propagated, so the new check-in inherits them.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-6",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A T-card of any type applied to a resolved target runs the propagation walk from that target; a singleton enters it as a cancel, removing the same-named tag the descendants inherited.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-7",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Crosslinking an artifact again creates no additional linkage or event rows and leaves derived state unchanged.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-8",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Singleton reparent operations recorded during a crosslink batch are re-applied when the batch ends.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-9",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A date tag applied to a crosslinked check-in sets its stored event time to the tag's value, which otherwise is the D-card time.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-10",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A date tag that arrives before its check-in sets the event time when the check-in is crosslinked.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-11",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A newer date tag replaces an older one, so the newest date tag's value orders the check-in.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-12",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A date tag of any type sets the time of its target only; a propagating date tag does not retime descendants.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-13",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Cancelling the date tag restores the D-card time.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-14",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "A date tag whose value does not parse, or parses to a time that is not positive, is ignored, leaving the D-card time.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.2-15",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The D-card timestamp is retained separately as the original time.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.3-1",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "No tag, propagation or linkage effect is applied on behalf of a manifest that fails the T-card checks.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.4-1",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An artifact that hashes to its name but is not classifiable does not make state assembly fail.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.4-2",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An unclassifiable artifact contributes no linkage, tag or branch effect.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.4-3",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An artifact whose bytes do not hash to its stored name is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "RS-4.6-1",
+          "section": "4.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A tag or anti-tag operation stores a control artifact with exactly one T-card and derives its state by crosslinking that artifact.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A T-card prefix - is stored as tagtype 0, + as 1 and * as 2.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.1-2",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Any other leading character on a T-card is a fatal error and is never stored as a tag type.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.2-1",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "tagxref holds at most one row per (rid, tag), carrying tagtype, srcid, origid, value and mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A direct application is skipped when the (tag, rid) row already has an mtime greater than or equal to the incoming one, whether that row was applied directly or inherited by propagation.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Otherwise the row is replaced with the card's raw tagtype, srcid = the artifact carrying the card, origid = rid = the target.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-3",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A cancel application keeps the T card's value on the row it writes, NULL when the card has none.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-4",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A singleton is propagated as a cancel: it removes the inherited same-name rows of the target's descendants.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-5",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "When a check-in's ancestor carries a propagating tag newer than a direct tag of the same name on the check-in, the result follows arrival order: the direct tag applied first keeps the direct value and stops the propagation; the propagation arriving first makes the direct tag skipped, so the check-in keeps the inherited value and, for a date tag, its D-card time.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-6",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "For cached state such as the event table, and for the propagation walk, a cancel's value is treated as null.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.3-7",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The tag cards of one artifact are applied in card order, all with the artifact's mtime, so between two cards of one artifact for the same tag and target the first in card order wins.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-1",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Propagation follows primary-parent links only and never crosses a merge link.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-2",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Re-propagating a parent's full tag set treats its singleton rows as cancels.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-3",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A child with a same-tag row qualifies only when that row has srcid 0 and an mtime strictly earlier than the propagating tag's; an equal mtime keeps the row.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-4",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A child with no same-tag row qualifies for a propagating walk; a cancel walk does not qualify there and does not continue past it.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-5",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A qualifying child of a propagating walk gets tagtype 2, srcid 0, the origin's origid, value and mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-6",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A qualifying child of a cancel walk has its same-tag row deleted.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.4-7",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Every child updated by the walk is itself walked, so the effect reaches all qualifying primary descendants.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.5-1",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A directly applied same-tag row (srcid nonzero) stops propagation regardless of its mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.5-2",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A cancel tag on a check-in deletes the inherited row there and keeps the tag from its descendants.",
+          "notes": ""
+        },
+        {
+          "id": "RS-5.5-3",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A singleton tag on a check-in keeps a same-name propagating tag from its descendants.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A check-in's branch is the value of its branch tag row with tagtype greater than 0.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.1-2",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A check-in with no active branch tag is attributed to the default branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.1-3",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Creating a branch, including the default branch of a new repository, creates its sym-\u003cbranch\u003e tag, propagating like its branch tag.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.1-4",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The default branch is the main-branch setting, and trunk only when that setting is unset.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Branch creation writes a propagating branch tag with the name as value and a propagating sym-\u003cname\u003e tag on the branch-root check-in.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.2-2",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Branch creation emits a cancel card on the root for every propagating sym-* tag active on the parent other than the new branch's own.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.2-3",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Branch creation fails, before writing anything, when an open branch already has the name.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.2-4",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A branch root carrying both a propagating and a cancel card for its own sym-\u003cname\u003e keeps the propagating tag: the * card precedes the - card in card order, and the cancel is skipped.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.3-1",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The branch list has one entry per distinct active branch-tag value, with that value's greatest event.mtime and check-in count.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.3-2",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A listed branch is closed exactly when its representative (greatest event.mtime) check-in carries an active closed tag.",
+          "notes": ""
+        },
+        {
+          "id": "RS-6.4-1",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The current branch of a checkout is read with the same tagtype \u003e 0 rule as any branch membership.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.2-1",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "The leaf test passes a check-in exactly when no plink child of it, primary or merge, is on the same branch; the leaf table holds the Section 7.3 candidates that passed it when last rechecked.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.3-1",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 7,
+          "text": "A full leaf rebuild gives the table crosslinking every check-in in one batch gives: the candidates are the check-ins a branch tag is applied or propagated to, and their parents; a candidate with no same-branch child is a member, and a check-in that is not a candidate is not, even with no same-branch child. A check-in keeps its verdict when a child carrying no branch row is linked to it in a later batch, so the table is not a function of the repository alone.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.3-2",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An incremental leaf check removes a check-in with a same-branch child and inserts one without, tolerating an existing row.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.3-3",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 10,
+          "text": "A branch tag applied to a check-in, or a propagation walk updating or deleting its branch entry, rechecks the check-in and each of its parents, merge parents included; crosslinking a check-in or creating a plink edge schedules no recheck by itself.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.3-4",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Scheduled leaf rechecks have all been applied before the leaf table is read.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.4-1",
+          "section": "7.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An open leaf is a leaf without a closed tag row of tagtype greater than 0.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.5-1",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A branch's open leaves are its leaf-table members that are not closed and share its branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.5-2",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The ambiguity test answers no for a check-in that is not itself a leaf.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.5-3",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "For a leaf, the ambiguity test answers yes exactly when another open leaf shares its branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.6-1",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Directly applying a branch tag re-evaluates that check-in's leaf status.",
+          "notes": ""
+        },
+        {
+          "id": "RS-7.6-2",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Each descendant that gains or loses a branch tag by propagation has its leaf status re-evaluated.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.2-1",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A plain name N resolves to the check-in carrying an active sym-N tag with the greatest event.mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.2-2",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A closed tag on a candidate does not affect name resolution.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.2-3",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Whether a candidate is a leaf does not affect name resolution.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.2-4",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A name no form matches fails to resolve.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-1",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"rid:DIGITS\" resolves to that rid.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-2",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"tag:NAME\" resolves NAME by the plain-name rule without trying it as a hash.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-3",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"tip\" resolves to the check-in with the greatest event.mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-4",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 16,
+          "text": "\"current\", \"prev\"/\"previous\" and \"next\" resolve relative to the open checkout; \"ckout\" names the checkout only in a \"ci+\" request with an open checkout and only as the whole name given, and is otherwise resolved like any other name, the trailing-punctuation retry and the contained names of root:, start: and merge-in: included.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-5",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"root:BR\" resolves to the first primary ancestor of BR that is off BR's branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-6",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"start:BR\" resolves to the earliest primary ancestor of BR still on BR's branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-7",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "\"merge-in:BR\" resolves to the most recent merge-in point of BR from its parent branch.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-8",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Date forms and NAME:TIMESTAMP resolve to the latest eligible event with mtime at or below the expanded upper bound.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-9",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A hexadecimal name of 4 or more digits is tried as a hash prefix before the plain-name rule.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-10",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A hash prefix matching more than one artifact is rejected as ambiguous.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-11",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A name that matches nothing is retried without one trailing . _ ) \u003e ! ? or , when longer than four characters, or without two when longer than five; three or more are never stripped.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.3-12",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A branch-type request resolves to the first check-in of the branch the name resolves into.",
+          "notes": ""
+        },
+        {
+          "id": "RS-8.5-1",
+          "section": "8.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Name resolution and open-leaf enumeration stay distinct: a newer closed sym carrier wins resolution while the leaf view omits it.",
+          "notes": ""
+        },
+        {
+          "id": "RS-9-1",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The current trunk is the main-branch setting's name resolved by the Section 8 symbolic-name procedure.",
+          "notes": ""
+        },
+        {
+          "id": "RS-9-2",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Resolving a forked branch picks one check-in by greatest mtime and is not an error.",
+          "notes": ""
+        },
+        {
+          "id": "RS-9-3",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A branch's open leaf carries its active branch tag, is in the leaf table and is not closed; a branch with none is not open.",
+          "notes": ""
+        },
+        {
+          "id": "RS-9-4",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A report naming one open leaf of a branch with several picks the greatest mtime.",
+          "notes": ""
+        },
+        {
+          "id": "RS-12-1",
+          "section": "12",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An artifact that the artifact-format rules reject contributes no crosslink state.",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "sync",
+      "title": "Sync protocol",
+      "draft": "draft-fossil-sync-protocol-00",
+      "requirements": 169,
+      "covered": 169,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 350,
+      "rows": [
+        {
+          "id": "SP-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: every request carries pragma client-version.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-2",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: pragma client-version precedes every content-requesting card (gimme, uvgimme, reqconfig) in the request.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-3",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Client: every request ends with a comment line of random bytes.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-4",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: in private sync, pragma send-private precedes client-version in the first request and follows it in later requests.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-5",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a push, pull or sync session carries its push and/or pull card in every request until Section 10.2 suppresses push.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-6",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a returned state cookie follows the fixed operation card, or client-version when there is none.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-7",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a completed reply ends with the \"# timestamp DATETIME errors N\" comment.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.2-8",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: pragma server-version precedes every clone-specific card in a clone reply.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-1",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 9,
+          "text": "Receiver: igot HASH creates a phantom only when HASH is absent and the current direction lets the receiver obtain it (client pull or clone, server push).",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-2",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: a delta file or cfile whose DELTASRC is absent stores the delta, deletes HASH's phantom, creates a DELTASRC phantom and sets the content-received flag; no per-artifact received state is kept, and HASH is not requested again.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-3",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Client: the phantom scan requests no hash the peer asked for this round, no shunned name and no private hash unless private sync is on.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-4",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a gimme for content the current direction may not send produces neither content nor an error and is not deferred.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-5",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a gimme for an absent hash is silently skipped.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.3-6",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: a gimme for held content that direction and policy permit is answered with that content in this or a later message.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.6-1",
+          "section": "3.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a received cookie card replaces the stored cookie.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.6-2",
+          "section": "3.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: does not depend on a cookie and tolerates foreign and repeated cookie cards.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-1",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: continues when stored content or an igot-created phantom leaves the phantom table non-empty (limb a).",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-2",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: continues when processing the reply appended file or delta content to the next request, or the UV upload phase is selected (limb b).",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-3",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: continues once when, without private sync, the first round's reply was answered by appending at least one igot HASH 1 for a gimme of private content (limb c).",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-4",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: continues for uvgimme as limb d states: sent uvgimme with a uvfile reply or round below 3, or a uvgimme appended.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-5",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: a modern clone continues after the first round, after a round that stored content, or while a positive sequence and the raw artifact count advance (limb e).",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-6",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: remaining phantoms alone neither continue the session nor cause an error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.7-7",
+          "section": "3.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: with no continuation condition true, the session stops without another request.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.9-1",
+          "section": "3.9",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Sender: never emits a card with a seventh token.",
+          "notes": ""
+        },
+        {
+          "id": "SP-3.9-2",
+          "section": "3.9",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: tokens beyond the sixth are invisible to card handlers and create no other card condition.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-1",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: posts to the repository URL path unchanged and never appends /xfer.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-2",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: every request carries an exact Content-Length and a nonempty body.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-3",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a POST with Content-Type application/x-fossil or application/x-fossil-debug dispatches to sync whatever its path.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-4",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Client: follows at most 19 redirects with status 301, 302, 307 or 308, re-posting the same request body; the twentieth is fatal.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-5",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: refuses a redirect from HTTPS to HTTP.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-6",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: strips one trailing /xfer, if present, from a redirect target before using it as the new base.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-7",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: only HTTP 200 is a protocol reply; any other non-redirect status aborts before card parsing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4-8",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Client: a reply without Content-Type is compressed; an x-fossil-debug or x-fossil-uncompressed prefix is uncompressed; an x-fossil prefix is compressed; any other type is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-1",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Sender: the compressed container is the 4-byte big-endian actual input length followed by a zlib stream.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: production requests use application/x-fossil, never application/x-fossil-debug.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-3",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: the advertised container length is a capacity; a shorter decoded body is not rejected for that alone.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-4",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: bytes after a successfully decoded zlib stream are ignored.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-5",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a clone version 3 reply is sent as application/x-fossil-uncompressed.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.1-6",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: decodes the container whatever DEFLATE level it was compressed at.",
+          "notes": ""
+        },
+        {
+          "id": "SP-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a reply that ends without a terminal card is complete, not an error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Receiver: a byte-counted payload ends only at its declared count and may contain LF and card-like text.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.1-2",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Sender: a cfile payload not ending in LF is followed by one padding LF, which the receiver consumes as an empty line.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.1-3",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a payload cut short by the end of the body is not stored; the card is a validation failure of its handler, with error malformed file line, malformed cfile line or malformed uvfile line.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.1-4",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a payload cut short by the end of the reply is not stored; the client stops reading the reply at that card and keeps the prefix it processed.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-1",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Sender: emits canonical cards: one SP between tokens, no leading or trailing whitespace, one LF.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-2",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Receiver: accepts canonical cards and splits tokens on at most SP, HTAB, VT, FF and CR runs.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-3",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: defossilizes fossilized arguments.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-4",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: an unknown operator resets accumulated output, emits error with fossilized TEXT \"bad command: LINE\" and continues with later request cards.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-5",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: an unknown operator records a local warning, sends no error, and ends the reply-card loop; earlier cards stay effective and continuation is evaluated.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-6",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Server: a defined operator with the wrong arity or received in the wrong direction (including client-sent error and clone_seqno) gets error bad command and later cards are processed.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-7",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Server: a file, cfile or uvfile handler validation failure resets output, emits the handler's fossilized error, counts it and stops request parsing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-8",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Client: a malformed defined card records a warning and ends the reply-card loop; earlier cards stay effective and continuation is evaluated.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-9",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: private ignores visible surplus tokens and still sets the marker.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-10",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: igot accepts at least two visible tokens; a third token of exactly 1 marks it private, any other third token public, and later tokens are ignored.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.2-11",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: imposes no maximum line length before LF.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a line beginning with # is not dispatched as a card.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: the timestamp comment is \"# timestamp YYYY-MM-DDTHH:MM:SS errors N\" in UTC with N canonical decimal.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.3-3",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: answering req-clusters, a nonempty run of public cluster igot cards is enclosed by # sending-clusters and # end-of-clusters, and an empty run by neither.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.3-4",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Server: N counts the errors raised while handling the request, including those whose cards a later reset discarded; the unknown-operator error, the private-content refusal and the SHA3 version refusal are not counted.",
+          "notes": ""
+        },
+        {
+          "id": "SP-5.3-5",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: does not act on N.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: the login card is login USER NONCE SIGNATURE with USER fossilized and NONCE and SIGNATURE 40 lowercase hex characters.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.1-2",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a second login in one request is fatal: output is reset and an error emitted.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: NONCE is the SHA-1 of every decompressed body byte after the login line's LF.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.3-1",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: the shared secret is SHA1(project-code \"/\" login \"/\" password) in lowercase hex.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-1",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: SIGNATURE is SHA1 of the NONCE hex followed by the shared-secret hex.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-2",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: nobody and anonymous logins succeed without a signature check.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-3",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: a named login succeeds when SHA1(NONCE || stored credential) equals SIGNATURE, compared case-sensitively.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-4",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: when that fails and the stored credential is not exactly 40 bytes, the secret is derived from the stored cleartext and retried.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-5",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: NONCE must equal the SHA-1 of the body after the login line, compared case-sensitively.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-6",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a failed login keeps HTTP 200, discards staged output, emits error login failed and ends card processing without rolling back the request.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-7",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a successful login only adds capabilities to the request's baseline.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.4-8",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Server: after a failed login, the end-of-request steps still run for a direction an earlier card established, and the reply ends with the timestamp comment.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.5-1",
+          "section": "6.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: once the recorded server version passes the gate (VERSION \u003e= 22700 and DATE/TIME at or after 20250727 110500), login goes in Cookie: x-f-l-c=login+USER+NONCE+SIGNATURE and no body login is sent.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.5-2",
+          "section": "6.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: before server-version is seen, or when the gate is false, a named login uses the body card and never the cookie.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.5-3",
+          "section": "6.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: accepts body login whatever the gate.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.5-4",
+          "section": "6.5",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: accepts a login carried in the x-f-l-c cookie through the body-login path.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.6-1",
+          "section": "6.6",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Server: each card is checked against its capability (o read, i write, g clone, x private, a admin) and an error is emitted when it is lacking.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.6-2",
+          "section": "6.6",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Server: a push without Write after an accepted pull gets message \"pull only - not authorized to push\" without a reset; otherwise output is reset and error not authorized to write is emitted; neither ends card processing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.6-3",
+          "section": "6.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: while push is not enabled, the first file or cfile card is refused with reset output and error not authorized to write, ends card processing, and end-of-request steps for an earlier direction still run.",
+          "notes": ""
+        },
+        {
+          "id": "SP-6.6-4",
+          "section": "6.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a refusal is recognized by the text the draft gives at the start of the decoded text, not by the whole text, since a server may append further words.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.1-1",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Receiver: file HASH SIZE and file HASH DELTASRC SIZE carry exactly SIZE payload bytes with no trailing separator.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.1-2",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: push and pull transfer content with file cards, not cfile.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.2-1",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Receiver: cfile HASH [DELTASRC] USIZE CSIZE carries exactly CSIZE payload bytes.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.2-2",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: USIZE is parsed but not validated against the payload at the transfer layer.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.2-3",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a clone cfile payload is the repository's stored compressed blob, retransmitted verbatim.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.2-4",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: clone version 3 transfers content with cfile cards only.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-1",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Receiver: uvfile NAME MTIME HASH SIZE FLAGS has a fossilized NAME, carries SIZE payload bytes unless FLAGS has 0x0001 or 0x0004, and HASH is a hash or -.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-2",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Receiver: rejects negative FLAGS and ignores reserved FLAGS bits.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-3",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: emits a deletion as HASH -, SIZE 0 and FLAGS with 0x0001 set, and clears reserved FLAGS bits.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-4",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: HASH - with a positive SIZE and no payload-suppressing flag is rejected without storing or deleting.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-5",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: before applying a uvfile, recomputes its status from the current row: statuses 3 to 5 change nothing and status 2 updates MTIME only.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-6",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: content omitted by FLAGS 0x0004, or SIZE 0, is stored with size zero and NULL content.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-7",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a client uvfile requires UV write permission, and an unauthorized one is an error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-8",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a uvgimme for an absent NAME emits no card.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-9",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a uvgimme is answered with uvfile FLAGS 0 for a live file or HASH - SIZE 0 FLAGS 1 for a tombstone.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-10",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: for status 0 or 1, a uvfile creates or replaces the row with the received NAME, MTIME, HASH and content.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-11",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a uvgimme from a requester without Read permission emits neither content nor error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.3-12",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: for the uvgimme Read check, Clone permission implies Read.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.4-1",
+          "section": "7.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a card for an already verified HASH is consumed and ignored and never replaces or downgrades it; delta-source handling may run first or be skipped.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.4-2",
+          "section": "7.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: for an unverified target with a missing DELTASRC, the delta is kept under HASH and the DELTASRC phantom carries the card's private classification.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-1",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: private marks the next file or cfile; repetition, comments, other cards and uvfile do not consume it, and it survives a reply boundary.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-2",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: private sets the marker only for a sender with Private capability; otherwise it emits the private authorization error and leaves no marker.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-3",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: entering the file or cfile handler clears the marker, so it applies to one card.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-4",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: never sends a delta against a private basis to a peer without private authorization; it sends full content.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-5",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Receiver: an unauthorized igot HASH 1 is not an error and creates no phantom, but reclassifies a held HASH or phantom as private.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.5-6",
+          "section": "7.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: private content is sent only after a successful send-private.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.6-1",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Sender: to a peer whose recorded VERSION is below 20000, a SHA3 file or cfile, or a uvfile with a 64-hex HASH, is replaced by error Fossil version 2.0 or later required., and the rest of the message is still built.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.6-2",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: the client VERSION is 0 until pragma client-version arrives.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.6-3",
+          "section": "7.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: the recorded server VERSION starts as the client's own release and is replaced by server-version.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.7-1",
+          "section": "7.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a non-clone file whose target is in the shun table is consumed and discarded with no error, no content-received and no mutation.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.7-2",
+          "section": "7.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: a cfile with a shunned target is discarded after its payload, even in a clone.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.7-3",
+          "section": "7.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: admission applies to the target hash, not the DELTASRC.",
+          "notes": ""
+        },
+        {
+          "id": "SP-7.7-4",
+          "section": "7.7",
+          "status": "COVERED",
+          "cases": 14,
+          "text": "Receiver: before commit, every newly stored artifact whose bytes are available is hashed and a mismatch aborts the commit.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8-1",
+          "section": "8",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a clone starts with client-version, clone 3 1 and randomness, and no login card.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.1-1",
+          "section": "8.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: an authorized three-token clone with integer VERSION \u003e= 2 and a digit-only SEQNO of 0 clears output, rolls back, emits error invalid clone sequence number and stops parsing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-1",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Server: an accepting clone reply sends cfile cards in RID order from SEQNO, skipping gaps, then clone_seqno NEXT, then push SERVERCODE PROJECTCODE; NEXT 0 marks exhaustion.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-2",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: records a digit-only NEXT; a nondecimal NEXT leaves the sequence unchanged and does not stop parsing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-3",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a clone authorization refusal resets output and emits push SERVERCODE PROJECTCODE then error, with no cfile and no clone_seqno.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-4",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: reissues clone 3 NEXT only when the reply carried a well-formed push and NEXT is positive; otherwise it sends the operation-less cleanup.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-5",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: after NEXT 0 no clone, pull or push card is sent; cleanup carries no operation card.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-6",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: in a directionless request, gimme yields neither file, cfile nor error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.2-7",
+          "section": "8.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: accepts and ignores igot cards received without push enablement.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.3-1",
+          "section": "8.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: an error in the first clone reply is not fatal: later cards are parsed, a later push is recorded and the second clone request is made.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.4-1",
+          "section": "8.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: reqconfig and uv-hash are deferred until after clone round 0.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.4-2",
+          "section": "8.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: with UV sync enabled, an authorized clone reply carries pragma uv-pull-only and the full UV catalog.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5-1",
+          "section": "8.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a push or pull whose PROJECTCODE differs from the repository's is refused.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-1",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: the UV send table starts with every local row whose hash is non-NULL; tombstones are excluded.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-2",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: pragma uv-hash is sent exactly once, in the first eligible round, never in clone round 0.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-3",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: the UV catalog hash is the SHA-1 of \"NAME SP YYYY-MM-DD SP HH:MM:SS SP HASH LF\" for each non-tombstone row, sorted by name bytes.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-4",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a matching uv-hash gets no catalog; a mismatch with Read gets uv-push-ok or uv-pull-only and one uvigot per entry, tombstones as HASH -.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-5",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Client: each uvigot is classified into status 0 to 5 and handled as Table 6 states.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-6",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: after uv-pull-only, status 4 and 5 names are removed from the send table.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.5.1-7",
+          "section": "8.5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: never sends uvigot, neither the well-formed form nor the short tombstone form.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.6-1",
+          "section": "8.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: under private sync, lists its private inventory as igot HASH 1 in every request that carries push, starting with the first, with no peer-date check.",
+          "notes": ""
+        },
+        {
+          "id": "SP-8.6-2",
+          "section": "8.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Sender: without private sync, a gimme for private content is answered with igot HASH 1 only when the peer's date is 2020-04-13 or later, and with nothing otherwise.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9-1",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: an unknown pragma name is ignored silently, whatever its arguments.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9-2",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: a known pragma received in the wrong direction is ignored and changes no state.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9-3",
+          "section": "9",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a bare pragma with no NAME gets error bad command and later cards are processed.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.1-1",
+          "section": "9.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: a full client-version replaces the peer VERSION, DATE and TIME and is answered with a full server-version; a short one updates VERSION only and gets no reply.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.1-2",
+          "section": "9.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: a full server-version replaces the peer VERSION, DATE and TIME; a short one updates VERSION only.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.2-1",
+          "section": "9.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: on a uv-hash mismatch with Read, sends uv-push-ok when the principal may write unversioned files, otherwise uv-pull-only, exactly once.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-1",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: reqconfig without Read is silently ignored.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-2",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: reqconfig for a name matching no group emits no config card and no error.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-3",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: a scalar setting is config /config SIZE whose payload is MTIME 'NAME' value 'VALUE', followed by one LF.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-4",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Receiver: consumes one byte after a config payload without checking that it is LF.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-5",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a config card whose SIZE is signed or not decimal takes the bad command path.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.3-6",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: a config card requires Admin; otherwise it emits error not authorized to push configuration and applies nothing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.4-1",
+          "section": "9.4",
+          "status": "COVERED",
+          "cases": 8,
+          "text": "Server: ci-lock for a hash held by a different client emits ci-lock-fail LOGIN MTIME; the same client gets no lock result; no live lock writes one, with no positive acknowledgement.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.4-2",
+          "section": "9.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: ci-unlock CLIENT-ID deletes that client's locks and emits nothing.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.4-3",
+          "section": "9.4",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Server: after processing a ci-lock that passes the argument guard, written or not, emits pragma avoid-delta-manifests when its forbid-delta-manifests setting (default on) is true, after ci-lock-fail when that is emitted; a ci-lock that fails the guard emits neither.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-1",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: send-private without Private capability appends error not authorized to sync private content without resetting output, and parsing continues.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-2",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: sends pragma send-private in every private round.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-3",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: emits no link pragma in reply to a request without req-links.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-4",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Receiver: stores a link's ARG defossilized and verbatim, and never parses, alters or echoes it.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-5",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Client: keeps a link only in share-links mode, with exactly URL, ARG and MTIME, a URL that parses as HTTP(S) and a positive decimal MTIME; otherwise it discards every field.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-6",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Client: sends pragma req-links only in share-links mode.",
+          "notes": ""
+        },
+        {
+          "id": "SP-9.5-7",
+          "section": "9.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: pragma avoid-delta-manifests SHOULD be followed by writing a pending commit as a baseline manifest; the pragma changes neither the artifacts the client sends or requests nor the repository.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-1",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Client: a server error outside the first clone reply ends the reply-card loop; earlier cards stay committed and continuation is evaluated.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-2",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "Server: at wrong-project, authorization, duplicate-login and unknown-card errors, partial output is discarded before the error, except for the push refusal's message form.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-3",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Server: the SHA3 gate and unauthorized send-private append their error without reset, and parsing continues.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-4",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: card errors keep HTTP status 200.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-5",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Server: only invalid clone sequence number and invalid config record roll back the request; other card errors keep earlier mutations.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-6",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: a handler-reported content error that leaves the stored artifacts consistent, such as a malformed card or a refused private file, ends the reply-card loop, and the prefix of the reply processed before it stays committed.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-7",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: after a handler-reported content error that leaves the stored artifacts consistent, continuation (Section 3.7) is evaluated.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.1-8",
+          "section": "10.1",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "Client: a received file or cfile whose reconstructed content does not match its HASH fails the round: nothing the round received is committed, its processed prefix included, and no further round starts, in a clone too.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.2-1",
+          "section": "10.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Receiver: message takes exactly two visible tokens, its TEXT is defossilized and it is not fatal.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.2-2",
+          "section": "10.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Client: with push enabled, a message matching \"pull only *\" clears push: later gimme cards in that reply append no content and later requests omit push.",
+          "notes": ""
+        },
+        {
+          "id": "SP-10.2-3",
+          "section": "10.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Client: any other message changes no state.",
+          "notes": ""
+        },
+        {
+          "id": "SP-11.4-1",
+          "section": "11.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sender: never truncates, renames or re-identifies a SHA3 name as SHA1.",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "submanifest",
+      "title": "Sub-manifests",
+      "draft": "draft-fossil-submanifests-00",
+      "requirements": 75,
+      "covered": 75,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 142,
+      "rows": [
+        {
+          "id": "SM-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "A card letter outside A-Z is rejected, and the in-range undefined letters O, V, X and Y are rejected; S is defined.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An S card carries exactly a filename and a hash; a third token, or a missing hash, is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.3-1",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The S card filename is escape-decoded; the S card hash is never decoded.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.4-1",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "S cards repeat, and an S run ascends strictly by decoded filename under the canonical comparator; an equal or descending neighbour is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.4-2",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "S falls between R and T in the card order, so a manifest's S run follows its R card and precedes its T cards.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.5-1",
+          "section": "3.5",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The S card hash is exactly 40 or 64 case-insensitive hexadecimal characters.",
+          "notes": ""
+        },
+        {
+          "id": "SM-3.6-1",
+          "section": "3.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The decoded S card filename passes the pathname predicate; one that does not is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest may carry an S card alongside B C D F N P Q R T U Z, and requires D and Z.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.2-2",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A sub-manifest may carry only F, S and Z cards, and requires a Z card.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.3-1",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "S is a manifest-setting letter, and a manifest with no D card is reclassified as SUBMANIFEST once its type is final and before legality is checked; no card assigns SUBMANIFEST directly.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.3-2",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "No artifact valid under the base artifact format changes classification.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.4-1",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A manifest carrying both a B card and an S card is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.4-2",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A manifest carrying both F cards and S cards is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.4-3",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A sub-manifest carrying both F cards and S cards, or neither, is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.4-4",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Every F card of a sub-manifest carries a hash; a delete marker in a sub-manifest is rejected.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.4-5",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The tree walk delivers each emitted F card's hash, permission and old-name tokens to consumers unaltered.",
+          "notes": ""
+        },
+        {
+          "id": "SM-4.5-1",
+          "section": "4.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An interior sub-manifest, whose first card is S, is not rejected by a pre-filter on its first card letter.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5-1",
+          "section": "5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A manifest is a tree manifest if and only if it carries an S card, and a consumer that needs its file set derives it by the tree walk.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The walk enumerates a tree depth first and in order, emitting each leaf's F cards in order, through interior sub-manifests as well as leaves.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-2",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Each S card's decoded filename, and each emitted filename, compares strictly greater than the last filename emitted; an enumeration that does not ascend across sibling slices fails.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-3",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The enumeration fails when a referenced sub-manifest is absent.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-4",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The enumeration fails when a referenced artifact is not of type SUBMANIFEST.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-5",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The enumeration fails when a referenced artifact is the artifact of a frame already on the walk's stack.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-6",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The enumeration fails when a sub-manifest lies deeper than 16 sub-manifests, counting the leaf; a depth of 16 is accepted.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-7",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A leaf's first emitted filename is byte-identical to the filename of the S card that reached it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-8",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An interior sub-manifest's first S card filename is byte-identical to the filename of the S card that reached it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.1-9",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Downstream consumers do not distinguish a walked enumeration from a flat one: a tree check-in's file-change records are those of a flat check-in of the same files.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.2-1",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The enumeration entry points, the full walk and single-name lookup, treat an unresolvable sub-manifest as a fatal error, and no partially resolved tree is presented as a complete file set.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.2-2",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A consumer that defers records the gap, keyed by the dependent and the missing hash and inserted idempotently, and retries when the sub-manifest arrives.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Single-name lookup binary-searches each S run for the last card at or before the name, descending one sub-manifest per level to a leaf; a name before the first S card is absent.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A lookup that would resolve a sub-manifest deeper than 16 fails, and a sub-manifest it cannot resolve fails it hard.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.4-1",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A delta manifest may name a tree manifest as its baseline: the merge walk takes the tree walk as its baseline cursor, and single-name lookup takes the tree lookup as its baseline step.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.4-2",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A writer with the enable-submanifests setting off does not create a delta manifest against a tree baseline.",
+          "notes": ""
+        },
+        {
+          "id": "SM-5.5-1",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A tree manifest's R card is computed over the walked enumeration, and a delta over a tree baseline's over the composed enumeration.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The partition predicate is the count of leading zero bits of the SHA3-256 digest of the decoded filename, tested against k for leaves and (h+1)*k at height h; content, permission and old name never influence the partition.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The construction is deterministic: leaves carry their group's F cards and a Z card, interiors one S card per member and a Z card, each S card names its child under the repository hash policy, and two writers produce byte-identical artifacts for the same check-in and k.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-2",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A scan yielding fewer than two groups emits a flat manifest and no sub-manifest: N = 0, N = 1, at most MAX names with no qualifying boundary, and a boundary suppressed by MIN.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-3",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A group holding MAX members forces a boundary whatever the predicate says.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-4",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A final group shorter than MIN merges into its predecessor when the two fit in MAX, at height 0 and at every interior height.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-5",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A scan yielding one group, or as many groups as nodes, ends the construction with the manifest carrying that height's nodes; otherwise interior sub-manifests form the next height, never a node of height 16.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-6",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "S card filenames and a leaf's filename and old-name tokens take the canonical encoding: exactly space, newline and backslash escaped, every other byte raw.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-7",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sub-manifests are stored before the manifest that references them, and an unchanged subtree is shared by content addressing.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-8",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sparse writers produce the full canonical construction, including MAX-cut shifts, MIN and final-small-group merges, renames and propagation at every height; necessary absent nodes are fetched or cause explicit refusal without a partial check-in.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.2-9",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Opaque reuse requires partition verification under the requested k or trusted local derivation tied to the immutable parent identity, construction rules and k; a different or unknown parent k requires validation or reconstruction even when filenames are unchanged.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-1",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A supporting server answers reqconfig /config, the scalar marker, with submanifest-k, enable-submanifests and submanifest-auto-retune when the requester holds Read permission.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-2",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A receiver validates the adopted state and applies all three settings or none: an invalid value, or enable-submanifests on without a submanifest-k from 1 to 12, leaves the repository's values unchanged, and card order does not affect the result.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-3",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A client supporting this specification requests the three settings with reqconfig /config in the clone's cleanup round, after clone authorization succeeds, and a pull does not request them.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-4",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A newly cloned repository that could not retrieve the settings leaves enable-submanifests false.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-5",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The writer takes k from the stored pin, never derives it per commit, and supports every value from 1 to 12.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-6",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A stored k outside 1 to 12 makes the writer fall back to flat manifests rather than substitute a value, and report it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.3-7",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Automatic selection costs every k from 1 to 12 over the current check-in's entries under the sha3 policy, C(k) = S + sum(L*L)/sum(L), choosing the least cost and the lowest k on a tie; with no candidate it has no result. With no checkout the current check-in is the newest leaf of the main branch. The snapshot choice k_s is refined by replaying the last 200 check-ins under k_s - 1, k_s and k_s + 1, as zit refines it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.4-1",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A re-tune is forward-only and operator-initiated: the next commit is built under the new value, sharing exactly the byte-identical sub-manifests, and no history is rewritten.",
+          "notes": ""
+        },
+        {
+          "id": "SM-6.4-2",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A writer re-tunes automatically only while submanifest-auto-retune is true (default false), and only when a distinct candidate costs less than (1 - m) times the pin's cost; m is 15%, as zit's.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.1-1",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Storing a structural artifact whose S references are absent creates a phantom for each, with the referencing artifact's privacy.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.1-2",
+          "section": "7.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Dephantomizing a sub-manifest retries the deferred processing of every recorded dependent.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.2-1",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "A sender refuses to transmit a SUBMANIFEST artifact, or a manifest carrying an S card, to a peer that has not sent pragma send-submanifests, whatever version it announces, with an explicit error and never by converting, downgrading or silently omitting it; a server decides from the request it answers, a client from the replies of its session.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.2-2",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A server whose enable-submanifests setting is false sends pragma avoid-submanifests in every reply, clone replies included, in the leading pragma run after server-version.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.2-3",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "A client that received avoid-submanifests emits no S card in a commit created during that session; a commit created outside a session follows the client's own setting, and the pragma does not gate receipt.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.2-4",
+          "section": "7.2",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A peer that reads sub-manifests sends pragma send-submanifests: a client in every request, right after client-version, and a server in every reply, clone replies included, right after server-version, whatever the enable-submanifests setting and the avoid-submanifests pragma; the version it announces is the fossil release whose protocol it speaks.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.3-1",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.3-2",
+          "section": "7.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.",
+          "notes": ""
+        },
+        {
+          "id": "SM-8.1-1",
+          "section": "8.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A writer emits no S card unless the enable-submanifests setting is true, which is false by default.",
+          "notes": ""
+        },
+        {
+          "id": "SM-8.1-2",
+          "section": "8.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When the first S-bearing artifact is stored, a seen-submanifest indicator is recorded.",
+          "notes": ""
+        },
+        {
+          "id": "SM-8.1-3",
+          "section": "8.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A local request to enable emission keeps a valid pin and refuses a different explicit k; a stored k outside 1 to 12 refuses a request without an explicit k, naming the stored value, and is replaced by an explicit k from 1 to 12; with no stored k it pins an explicit k from 1 to 12, refuses one outside, or selects one automatically; a request that cannot be met changes neither setting.",
+          "notes": ""
+        },
+        {
+          "id": "SM-8.1-4",
+          "section": "8.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Disabling the setting stops new tree manifests and leaves existing ones in place.",
+          "notes": ""
+        },
+        {
+          "id": "SM-9.1-1",
+          "section": "9.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "SUBMANIFEST is determined by the post-pass reassignment, not while cards are read, and required-card logic treats it as an exception to the D card.",
+          "notes": ""
+        },
+        {
+          "id": "SM-9.2-1",
+          "section": "9.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A sweep that discovers crosslink work by the absence of derived rows excludes SUBMANIFEST artifacts or records a completion marker for them, so it never reselects them.",
+          "notes": ""
+        },
+        {
+          "id": "SM-9.3-1",
+          "section": "9.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Every consumer of a check-in's file set (checkout, diff, crosslink, rebuild, annotate, commit) obtains it through one shared enumeration interface.",
+          "notes": ""
+        },
+        {
+          "id": "SM-9.4-1",
+          "section": "9.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When a tree manifest's processing is deferred, enough is recorded to rediscover it when the missing sub-manifest arrives, and the dephantomization path traverses that record.",
+          "notes": ""
+        },
+        {
+          "id": "SM-10-1",
+          "section": "10",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "The tree walk enforces the depth bound and the repeated-artifact check, and bounds the total sub-manifests visited per enumeration.",
+          "notes": ""
+        },
+        {
+          "id": "SM-A-1",
+          "section": "A.2, A.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The Appendix A.2 and A.3 artifacts parse, determine their types, recompute their names, walk to the four-file enumeration, and the R card verifies over it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-A-2",
+          "section": "A.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The Appendix A.4 artifacts parse, recompute their names, walk to the nine-file enumeration, and the R card verifies over it.",
+          "notes": ""
+        },
+        {
+          "id": "SM-A-3",
+          "section": "A.5",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "The authored Appendix A.5 acceptance vectors (three-level tree, height-0 merge, canonical encoding, delta over a tree) parse, walk, and verify their R cards; the reader accepts them at any partition parameter.",
+          "notes": ""
+        },
+        {
+          "id": "SM-A-4",
+          "section": "A.5",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "The writer vectors of A.5: the A.4 set reproduced at k = 3, the height-0 merge and three-level vectors reproduced, flat output for N = 1 and a MIN-suppressed boundary, no selection over one name with a first enable failing atomically, and an injected persistence failure leaving no setting applied.",
+          "notes": ""
+        },
+        {
+          "id": "SM-A-5",
+          "section": "A.6",
+          "status": "COVERED",
+          "cases": 10,
+          "text": "The SHA3 MAX-propagation, final-small-group-merge and different/unknown-parent-basis vectors compare successful results and every transitive node byte with full construction; absent S payloads require fetching or atomic explicit refusal, and dense runs require canonical success.",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "sparsecone",
+      "title": "Sparse cones",
+      "draft": "draft-fossil-sparse-cone-00",
+      "requirements": 63,
+      "covered": 63,
+      "partial": 0,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 121,
+      "rows": [
+        {
+          "id": "SC-2-1",
+          "section": "2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A member covers a path when it equals the path or is a prefix of it ending at a '/' boundary; a cone has at least one inclusion member, and the absent cone covers everything (dense operation).",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A worktree cone is checkout-local state recorded with the checkout's other local records; it is not an artifact, does not synchronize, and affects no artifact's bytes or name.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.1-2",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A cone may be widened or narrowed at any time.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.1-3",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The canonical serialization marks a cone carrying members of other kinds with a distinct version, and an implementation that does not understand a version refuses the cone rather than reading it as path members.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.1-4",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Refusal of a store cone is policy loss: the store heals toward dense.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Members are normalized through the worktree-path validation applied to tracked paths: no dot or dot-dot components, no empty components, no reserved roots.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.2-2",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A member covered by another member of the same polarity with no opposite-polarity member between them is removed, and the normalized cone is what classification uses.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.2-3",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "At least 64 members are supported, and 255 should be.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.2-4",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A cone contains at least one inclusion member; constructing one with none is refused, as a dead exclusion is, with or without exclusions.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-1",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Coverage is decided by the longest member of either polarity that covers the path, which is order-independent, so the canonical sorted serialization and the digest do not depend on input order.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-2",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Polarity may alternate along a nesting chain: a subtree excluded from an inclusion may contain a deeper re-inclusion.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-3",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A member whose nearest covering member has the same polarity is redundant and is removed.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-4",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An exclusion that no inclusion covers is a dead rule and is refused.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-5",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "One path carried with both polarities is a contradiction and is refused.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.3-6",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A key range wholly inside an inclusion and outside every exclusion classifies as before; a range an exclusion intersects is classified per file, at no cost to correctness.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.4-1",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Members are literal path prefixes; glob and pattern members are not part of the mechanism.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.4-2",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A member names a directory subtree or a single file with equal standing.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.4-3",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A metacharacter in a member is a literal character of the path: it is never expanded, and the member may be refused.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.5-1",
+          "section": "3.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Amending a cone by wholesale replacement and by member addition or removal are equivalent, and the incremental form should be offered.",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.5-2",
+          "section": "3.5",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Widening fetches what the cone newly covers (the policy form of demand fetch).",
+          "notes": ""
+        },
+        {
+          "id": "SC-3.5-3",
+          "section": "3.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Narrowing dematerializes and leaves reclamation to explicit compaction.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4-1",
+          "section": "4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The sparse worktree is available to any conforming repository, with flat or tree-structured manifests.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.1-1",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A checkout operation given a cone materializes exactly the covered files.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The managed-file record covers only in-cone files.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.1-3",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Status, untracked-file listing and bulk tracking operate within the cone; an uncovered on-disk path is neither reported as untracked nor eligible for tracking.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.1-4",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A request to track a path outside the cone is refused, and the refusal names the cone as the reason; a diagnostic that reports a missing file or alleges damage does not conform.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.1-5",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "All file-set enumeration flows through the shared enumeration interface with the cone applied there as a range predicate, never filtered at individual call sites.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A commit from a sparse worktree produces a check-in whose file set is the in-cone files as observed in the worktree and the baseline's out-of-cone entries carried unchanged.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.2-2",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "For flat manifests the baseline's out-of-cone F cards are copied byte-verbatim, merged in sorted order with the in-cone F cards.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.2-3",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 17,
+          "text": "Tree commits produce full canonical construction under the requested k; opaque reuse requires compatible partition evidence bound to the immutable parent, rules and k or verification from needed descriptors and entries. The structural affected range includes MAX-cut shifts, final-small-group merges and propagation at every height; necessary absent nodes are fetched or cause explicit refusal without a partial check-in.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.2-4",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The result is an ordinary check-in: a reader cannot detect that it was committed sparsely, and no new artifact form is introduced.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.3-1",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A sparse-worktree commit over a dense store may compute the R card by reading out-of-cone content from the store.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.3-2",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A commit over a sparse store omits the R card.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.3-3",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Verifiers do not treat an absent R card as damage.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.3-4",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A verifier checking a present R card during a sparse materialization computes the aggregate over the dense enumeration, reading out-of-cone content from the store.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.3-5",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A verifier over a sparse store skips R verification rather than report disagreement.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.4-1",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 9,
+          "text": "Over a dense store, merge, update and revert apply changes to out-of-cone files to the record without materializing them.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.4-2",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The count of out-of-cone changes applied should be reported.",
+          "notes": ""
+        },
+        {
+          "id": "SC-4.4-3",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Read operations on an uncovered path over a dense store read the store: the cone governs materialization, not readability.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5-1",
+          "section": "5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A sparse store requires tree manifests for the segment it elides; a flat segment may elide only its content blobs and holds its manifests densely.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A store sparse at a cone holds every manifest, every in-cone sub-manifest node and every blob an in-cone F card names, and every non-manifest structural artifact densely. Out-of-cone nodes and blobs MAY be absent as elided phantoms; already-held or demand-fetched payloads need not be discarded.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.2-1",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Transit phantoms, shunned artifacts and elided phantoms are distinguished; synchronization does not spontaneously request an elided phantom, whose absence is healthy.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.2-2",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Elision is computed from the cone, not stored on the phantom: reclassification on cone change is recomputation, and losing the store cone should reclassify every elided phantom as a transit phantom.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.2-3",
+          "section": "5.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Verification reports a store complete within its cone as healthy, reports elision counts distinctly from damage, and reports transit phantoms and damaged in-cone artifacts as for a dense store.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A commit may reference elided subtrees proved identical to canonical construction by hash without possession; nodes required for boundary propagation or partition validation are fetched or cause explicit refusal. Pushing a canonically valid check-in is sound.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A server should refuse to be a clone origin for cones it does not cover, unless configured as a partial mirror, with one error card and no content.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.3-3",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A client treats a clone-round reply that carries an error card and no clone progress as fatal.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.4-1",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Widening reclassifies the newly covered elided phantoms as transit phantoms and fetches them.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.4-2",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "Narrowing does not by itself delete held content; only explicit compaction deletes, dropping out-of-cone blobs no in-cone F card references and retaining every manifest and sub-manifest node already held, through the store-rewrite machinery and its locks.",
+          "notes": ""
+        },
+        {
+          "id": "SC-5.5-1",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The flat prefix of a hybrid history holds its manifests densely; its content blobs may be elided by F-card classification.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A cone-scoped pull or clone adds one pragma cone card per inclusion member, encoded exactly as an F-card filename, and one pragma cone-not card per exclusion.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.1-2",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "For check-in content a cone-scoped request asks for spines, in-cone sub-manifest nodes and in-cone blobs, and neither expects nor requests the remainder.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 8,
+          "text": "A cone-aware server walks each check-in's tree descending only nodes whose key range intersects the cone, emits the spine, the in-cone nodes and blobs, and bounds the per-round walk as a dense clone bounds its batches.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.2-2",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A cone-aware server does not serve a delta whose base is outside the keep set it computed for the request; it serves that artifact in full form.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.2-3",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A recipient treats a phantom that a retained delta names as its source as a transit phantom whatever its cone classification.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.2-4",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The per-round bound governs the tree walk only; a cone request's pull inventory may be announced densely or filtered to the cone, and the requester relies on neither for correctness: an out-of-cone blob announced with its check-in is requested as a transit phantom and elided on arrival, and one announced after the check-in that classifies it is never requested.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.3-1",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Against a cone-ignorant server the requester filters locally: it stores in-cone blobs and every manifest and sub-manifest node received, records elided phantoms for the out-of-cone blobs and reports the counts.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.3-2",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A cone-aware server should acknowledge each reply that applied the request's whole cone with pragma cone-served, in the reply's leading pragma run, never in a reply that refused the request, served densely or ignored a member; the requester counts acknowledged replies.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.4-1",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An operation over a sparse store that crosses the cone resolves elided phantoms by a targeted request or by the policy form, which is recommended for lasting intent.",
+          "notes": ""
+        },
+        {
+          "id": "SC-6.4-2",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "With no configured peer the operation refuses, and the diagnostic names the class (the count elided by the cone and the absence of a peer), never missing or corrupt.",
+          "notes": ""
+        },
+        {
+          "id": "SC-7-1",
+          "section": "7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Derived caches are cone-independent: their keys do not incorporate the cone.",
+          "notes": ""
+        },
+        {
+          "id": "SC-8-1",
+          "section": "8",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The member count and member length of a cone are bounded with the same limits applied to F-card filenames.",
+          "notes": ""
+        },
+        {
+          "id": "SC-8-2",
+          "section": "8",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The server-side tree walk on cone requests carries the depth and visited-node bounds of single-name lookup.",
+          "notes": ""
+        }
+      ]
+    },
+    {
+      "suite": "horizon",
+      "title": "Horizons",
+      "draft": "draft-fossil-horizon-00",
+      "requirements": 61,
+      "covered": 59,
+      "partial": 2,
+      "deviation": 0,
+      "failing": 0,
+      "gap": 0,
+      "cases": 100,
+      "rows": [
+        {
+          "id": "HZ-1.1-1",
+          "section": "1.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An implementation may provide the content horizon alone; the structural horizon presupposes the content horizon.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.1-1",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A horizon names one check-in C by its full artifact hash and one of two held-set rules: descendants (the default), C and every descendant of C; or leaves, those plus, for every childless check-in L not descended from C, every descendant of each nearest common ancestor of L and C, that ancestor included.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.1-2",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A client that expects to merge across live branches offline should choose the leaves rule knowingly.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.1-3",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The held set is a function of C, the rule and the check-in graph, recomputed by clone and origin from what each holds, and stored by no party.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.1-4",
+          "section": "3.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Both rules are stated over P cards alone and yield a set closed under descendants: every child of a check-in in K is in K. Childless means no check-in names it in a P card, open or closed, not the same-branch leaf of repo-state.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.2-1",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A horizon is store-adjacent local state: not an artifact, not synchronized, affecting no artifact's bytes or name; its loss reclassifies every elided artifact as a transit phantom and the store heals toward dense.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.2-2",
+          "section": "3.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "With both a horizon and a path cone, the blobs kept are the intersection of the two keep sets; the check-in manifests held are governed by the horizon alone; sub-manifest nodes by both, the horizon deciding whose trees are held and the path cone eliding within them the nodes no S-card slot that may hold an in-cone path reaches, as the sparse store does; every other structural artifact is held whatever either says.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.3-1",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A horizon serializes into the canonical cone form as one member of a distinct kind carrying C's hash and the rule name, canonically, so the cone's digest stays a valid memoization key.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.3-2",
+          "section": "3.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A cone with a horizon member is marked with a version distinct from a cone without one, so that an implementation predating this document refuses rather than misreads it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.4-1",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A tool that suggests a C should show what each rule would hold (check-ins and bytes) before the choice is made; this is guidance for the tool, not a wire obligation, and an origin may expose such figures through an interface outside this protocol.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-3.4-2",
+          "section": "3.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Clients should not express a horizon as a count or a date at the protocol layer.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.1-1",
+          "section": "4.1",
+          "status": "PARTIAL",
+          "cases": 4,
+          "text": "A content-horizon clone holds every structural artifact of every age but clusters (under a path cone, of the sub-manifest nodes only those on a path into the cone), every blob an F card of a check-in in the held set names, and elided phantoms for every other blob; it holds, mints and requests no cluster.",
+          "notes": "covered against a horizon-serving origin, go-libfossil's or zit's, which names no cluster in a clone, pull or sync reply, cursor or not, nor to a gimme; against a horizon-ignorant origin (§6.3) the clone still requests once a cluster that origin names by igot, before it can know it is one. zit answers req-clusters under a horizon pragma with the catalog, which a store served at its horizon never sends"
+        },
+        {
+          "id": "HZ-4.1-2",
+          "section": "4.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "Composed with a path cone, a content horizon holds, of every check-in of every age, the sub-manifest nodes reached from the manifest through S-card slots that may hold an in-cone path; the others are elided phantoms, which an origin withholds, every in-cone tree is whole, and an operation needing an elided node (a commit, a listing outside the cone) obtains it as the sparse-cone draft's §5.3 provides.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.2-1",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A blob is above the horizon when a check-in in the held set names it, directly or through a sub-manifest; elision is the sparse-cone draft's third phantom class with all of its rules: never spontaneously requested, counted distinctly from damage, reclassified by recomputation.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.2-2",
+          "section": "4.2",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A phantom created because a held artifact arrived as a delta against it is a transit phantom whatever its horizon classification.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.3-1",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Derived caches and prefix-anchored checkpoints are horizon-independent: their keys do not incorporate the horizon.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.3-2",
+          "section": "4.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The derivation of repository state runs over check-in manifests and control artifacts and reads no sub-manifest node; a content horizon holds every one of them, with or without a path cone, so the derivation is the dense repository's.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.4-1",
+          "section": "4.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An operation needing a blob below the horizon resolves the elided phantom by demand fetch, targeted, or by moving C (a deepen).",
+          "notes": ""
+        },
+        {
+          "id": "HZ-4.5-1",
+          "section": "4.5",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A horizon clone does not hold the clusters it is sent. Against an origin whose replies carry horizon-served it does not request a phantom whose only reference is a cluster artifact; against a horizon-ignorant origin it requests the phantoms a received cluster names, as transit, and classifies what arrives. It requests phantoms named by igot cards, by the P, F and S cards of held artifacts, and by delta sources of held artifacts.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.1-1",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A structural-horizon clone holds the manifests and nodes of check-ins in the held set and everything they reach through B and S cards, every control, wiki, ticket, event, forum and attachment artifact, the blobs of the content horizon, elided phantoms for the rest, and the seed, which it keeps from every peer; under a path cone, of those trees' nodes only those on a path into the cone.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.1-2",
+          "section": "5.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A clone does not enter the structural horizon against a horizon-ignorant peer.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-1",
+          "section": "5.2.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The seed is a control artifact minted by the origin whose T cards apply to every entry of K (C, and each check-in of K whose primary parent is not in K) every tag in force there in the dense repository, each with the value the dense derivation holds; its D and U cards are those of Section 5.2.2.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-2",
+          "section": "5.2.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The origin sets each seed's D card to the latest mtime among the tag events it summarizes, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, when it summarizes none); its U card is the origin's own label for the minting implementation, never a user's login; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-3",
+          "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A clone never sends its seed to any peer, private-content synchronization included; it holds the seed private or outside the artifact store and applies it at every open.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-4",
+          "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "An origin refuses a seed offered to it, and an artifact of the seed's shape arriving by any route but the horizon reply is an ordinary control artifact.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-5",
+          "section": "5.2.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin holding a signing key should sign the seed with the clear-signing envelope.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-6",
+          "section": "5.2.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A clone that knows its origin's public key verifies every seed's signature and discards an unsigned or wrongly signed seed, falling back to the content horizon; a clone with no key accepts an unsigned seed.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-7",
+          "section": "5.2.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When no tag is in force at any check-in the seed would cover, the origin mints no seed and serves the request at the content level, since a control artifact carries at least one T card.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.3-1",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A boundary hash is a P-card parent, not in K, of any check-in manifest the clone holds, a held baseline below C included; a clone classifies a labelled boundary hash as an elided phantom and an unlabelled unheld reference as a transit phantom, which it requests.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.3-2",
+          "section": "5.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When a new check-in forks from below the horizon, or a new delta manifest reaches a baseline below it, the origin labels the new parents in the round that delivers the manifest naming them; a clone requests an unheld unlabelled parent, and an origin does not send one it does not keep.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.4-1",
+          "section": "5.4",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A boundary hash should be rendered as the horizon and is never described as damage; verification reports manifests below the horizon as elided, distinctly from damage.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.5-1",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "An operation needing history below the horizon (a merge base, a symbolic name, a checkout, diff or annotate below C, a bisection) detects the crossing, names the horizon in its diagnostic and offers the stated remedy.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.5-2",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An implementation never merges against a base it does not hold.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.5-3",
+          "section": "5.5",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Whenever the ancestry of either side of a merge crosses the horizon the clone asks the origin for the base, even when it finds a common ancestor among what it holds, and deepens to the base when it lies below the horizon.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.6-1",
+          "section": "5.6",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A clone requests the seed at each synchronization, naming the seed it holds; the origin replies with a new seed only when it differs, keeping no per-client state, and the clone replaces the seed it holds with the new one whole.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.7-1",
+          "section": "5.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A commit from a structural horizon is an ordinary commit: on an existing branch it writes no branch tag; creating a branch it writes the repository-state T cards, the parent branch's cancellation included.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.7-2",
+          "section": "5.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin should check a pushed cancellation against its own derivation and refuse on disagreement, naming the stale seed and the parent's branch; it admits the check-in when the push or its store carries a control artifact cancelling the parent's branch tag on it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.8-1",
+          "section": "5.8",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "A deepen names an ancestor C' of C, recomputes the held set and synchronizes at C'; nothing held is replaced, and the deepening clone discards the old seed before applying the new one.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.8-2",
+          "section": "5.8",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A deepen that must reach a check-in outside K names as C' a common ancestor of C and that check-in, computed locally or asked of the origin; when none is known it is refused naming the remedy, a fresh clone with an earlier horizon, and C never moves to a check-in that is not its ancestor.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.9-1",
+          "section": "5.9",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An implementation should offer seed verification by deepening as a verification mode.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.1-1",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A horizon-scoped request carries at most one pragma horizon \u003chash\u003e \u003crule\u003e, may carry path-cone pragmas (the keep set is then the intersection), and adds pragma horizon-structural for the structural horizon; any request may carry pragma horizon-cursor.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-1",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 4,
+          "text": "An origin receiving a horizon pragma computes the held set over the dense graph and restricts the blobs it sends; for a structural request it also restricts manifests and nodes, sends every other structural artifact, the boundary labels and the seed, and bounds the per-round walk.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-2",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin should not send cluster artifacts in reply to a horizon-scoped request.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-3",
+          "section": "6.2.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin does not send, in reply to a horizon-scoped request, a delta whose base is outside the keep set; it sends that artifact in full, may send in-keep-set deltas verbatim, should bound reconstruction per round, and may send a delta verbatim when it cannot reconstruct it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-4",
+          "section": "6.2.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "For a structural request the origin emits pragma horizon-below for every boundary hash the manifests in the reply introduce, the parents of every check-in manifest a baseline below C included, no later than the reply carrying the first manifest that names it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-5",
+          "section": "6.2.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A structural request carries pragma horizon-seed with the held seed or '-'; the origin announces a differing seed with the pragma before its file card; the client verifies the bytes hash to the announced name and parse as a control artifact, drops a card failing either, routes it to its seed holding, and never announces or sends it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-6",
+          "section": "6.2.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the tag events summarized, two mints over unchanged state produce the same name.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-7",
+          "section": "6.2.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A client may ask pragma horizon-mergebase \u003cprimary\u003e \u003csecondary\u003e [\u003csecondary\u003e]; an origin that can answer repeats every hash of the query in the order asked and appends Fossil's pivot of the primary over the secondaries, or '-' when no common ancestor exists, and bounds the ancestry walk; an answer whose hashes do not repeat the query is no answer.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-16",
+          "section": "6.2.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "In a merge the primary is the check-in merged in and the secondaries are the checkout and each plain merge pending in it (not a cherry-pick, backout or integrate); a query carries at most two secondaries and an origin answers none with more, nor one naming a check-in it does not hold.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-8",
+          "section": "6.2.5",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "An origin emits pragma horizon-served \u003clevel\u003e [\u003curl\u003e] in every reply to a horizon request; a client does not enter the structural horizon unless its first reply carried structural, and should report the mode a transfer used.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-9",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "An origin should keep its classification keyed by the cone digest and the store prefix it classified, extend it by the artifacts appended since, and recompute in full only when an appended artifact carries a name a held P, B or S card cited while it was absent.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-10",
+          "section": "6.2",
+          "status": "PARTIAL",
+          "cases": 1,
+          "text": "An origin should read each structural artifact's kind and P, B, S, F and A references once per store into a cone-independent graph keyed to the same prefix, extend it by appended artifacts, and classify every cone over that graph.",
+          "notes": "covered but for the F cards of a horizon's trees, which the first walk to need each tree reads from the store rather than with the graph, into a cache later horizons under any C or rule reuse; the cache is bounded (64MiB, least recently used evicted) and dropped when the store is read in full, so a tree evicted from it is read again"
+        },
+        {
+          "id": "HZ-6.2-11",
+          "section": "6.2.6",
+          "status": "COVERED",
+          "cases": 6,
+          "text": "An origin that classified a request emits pragma horizon-cursor \u003cn\u003e in every reply, n its artifact-sequence position through which the reply was served; receiving a cursor it announces no artifact at or below it and every kept artifact above it the request did not name, and after a reclassification, or after an appended tree reaches through an in-cone slot an older node the classification withheld (which it then keeps), answers a request carrying a cursor below the position it recorded once as if it carried none; it announces with igot only in reply to a request that pulls, and a reply to a push-only request announces nothing, cursor or not.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-14",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "When a horizon request also carries path members, the origin withholds at either depth the sub-manifest nodes of the trees it keeps that no S-card slot that may hold an in-cone path reaches, neither sending them in a clone nor answering a request for them; a request without path members receives every node of those trees.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-15",
+          "section": "6.2",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Under a content horizon with path members the origin's walk should be kept like the classification: descending only slots that may reach the cone, visiting each node once per bound it is reached under (a last slot's bound its parent's, a wider bound deciding for a narrower), and recording what it walked, so that a later request walks only the trees appended since.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-12",
+          "section": "6.2.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A client that converged records the last reply's cursor and its own artifact count per origin and sends the cursor on every request to that origin; it may then announce nothing on a pull-only request, must still announce on a request that sends but may announce only artifacts appended after the recorded count, and advances the count only past artifacts the origin holds.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-13",
+          "section": "6.2.6",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The cursor changes what is announced, never what is answered: an origin answers a gimme for any kept artifact whatever cursor the request carried, a client requests every phantom it wants as without one, and either side may drop the cursor and fall back to a full announcement.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.3-1",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "Against a horizon-ignorant peer a content-horizon client classifies locally, stores the blobs above the horizon, records elided phantoms and reports the counts; a structural clone request falls back to the content horizon for that transfer and reports that it did.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.3-2",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A store at the structural horizon whose pull or sync replies carry no horizon-served structural falls back to the content horizon at the same C and rule, records that depth, discards its seed, fetches the manifests and nodes below C, and reports that it did.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.4-1",
+          "section": "6.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A server over a horizon clone refuses a dense clone request, and a horizon request whose held set is not a subset of its own, with one error card and no content; the requesting client treats that reply as fatal.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-8-1",
+          "section": "8",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "The origin's held-set walk and merge-base query carry the depth and visited-node bounds of any server-side graph walk, and delta inflation on the serve path is bounded by the round's batch limit.",
+          "notes": ""
+        }
+      ]
+    }
+  ]
+}

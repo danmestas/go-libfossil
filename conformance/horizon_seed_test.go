@@ -202,10 +202,10 @@ func TestHorizonSeed(t *testing.T) {
 }
 
 // hzSeedCards: the seed's T cards apply to each entry exactly the rows in
-// force there densely, its U card is the origin's login, and a store lacking
+// force there densely, its U card is the origin's label, and a store lacking
 // C's ancestry derives K densely once it holds the seed and not before.
 func hzSeedCards(t *testing.T, s *hzSeed) error {
-	_, data, err := s.mint("origin")
+	_, data, err := s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}
@@ -213,8 +213,8 @@ func hzSeedCards(t *testing.T, s *hzSeed) error {
 	if err != nil || d.Type != deck.Control {
 		return expectf("seed parses as %v, %v; want a control artifact", d, err)
 	}
-	if d.U == nil || *d.U != "origin" {
-		return expectf("U card %v, want the origin's login", d.U)
+	if d.U == nil || *d.U != seedLoginGo {
+		return expectf("U card %v, want the origin's label", d.U)
 	}
 	c3, feat2 := hzUUID(t, s.f.r, s.c3), hzUUID(t, s.f.r, s.feat2)
 	for _, line := range []string{
@@ -262,10 +262,57 @@ func hzSeedCards(t *testing.T, s *hzSeed) error {
 // same name, and a later tag event moves D past the seed it replaces.
 func hzSeedDate(t *testing.T) error {
 	s := newHZSeed(t)
-	name, data, err := s.mint("origin")
+	name, data, err := s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}
+	if err := hzSeedDated(s, data); err != nil {
+		return err
+	}
+	again, _, err := s.mint(seedLoginGo)
+	if err != nil || again != name {
+		return expectf("re-mint over unchanged state named %s (%v), first %s", again, err, name)
+	}
+	// A tag event a quarter second past the second: the D card rounds up to
+	// the next whole second, never down before the event, and is written
+	// with no fraction, so every origin writes the same D.
+	s.f.when = s.f.when.Add(time.Hour + 250*time.Millisecond)
+	if _, err := tag.AddTag(s.f.r, tag.TagOpts{
+		TargetRID: s.c3, TagName: "sym-v2", TagType: tag.TagSingleton, User: "u", Time: s.f.when,
+	}); err != nil {
+		return err
+	}
+	_, data, err = s.mint(seedLoginGo)
+	if err != nil {
+		return err
+	}
+	if err := hzSeedDated(s, data); err != nil {
+		return err
+	}
+	d, err := deck.Parse(data)
+	if err != nil {
+		return err
+	}
+	if want := s.f.when.Truncate(time.Second).Add(time.Second); !d.D.Equal(want) {
+		return expectf("D %v after an event at %v, want %v", d.D, s.f.when, want)
+	}
+	// The U card is the origin's label for the minting implementation, never
+	// a user's login.
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	if held, err := deck.Parse(mustHeld(t, r)); err != nil || held.U == nil || *held.U != seedLoginGo {
+		return expectf("the served seed's U card %v (%v), want %q", held, err, seedLoginGo)
+	}
+	return nil
+}
+
+// hzSeedDated checks a seed's D card against §5.2.2: the latest mtime among
+// the tag events it summarizes, at C and feat2, rounded up to a whole second
+// and written with no fractional part.
+func hzSeedDated(s *hzSeed, data []byte) error {
 	d, err := deck.Parse(data)
 	if err != nil {
 		return err
@@ -276,24 +323,14 @@ func hzSeedDate(t *testing.T) error {
 		s.f.r.DB().QueryRow("SELECT max(mtime) FROM tagxref WHERE rid=? AND tagtype>0", rid).Scan(&m)
 		latest = max(latest, m)
 	}
-	if got := libfossil.MillisFromJulianDay(latest); d.D.UnixMilli() != got {
-		return expectf("D %v, want the latest summarized event %v", d.D, time.UnixMilli(got).UTC())
+	ms := libfossil.MillisFromJulianDay(latest)
+	if want := (ms + 999) / 1000 * 1000; d.D.UnixMilli() != want {
+		return expectf("D %v, want the latest summarized event %v rounded up to a second",
+			d.D, time.UnixMilli(ms).UTC())
 	}
-	again, _, err := s.mint("origin")
-	if err != nil || again != name {
-		return expectf("re-mint over unchanged state named %s (%v), first %s", again, err, name)
-	}
-	s.tag(t, s.c3, "sym-v2", tag.TagSingleton, "")
-	_, data2, err := s.mint("origin")
-	if err != nil {
-		return err
-	}
-	d2, err := deck.Parse(data2)
-	if err != nil {
-		return err
-	}
-	if !d2.D.After(d.D) {
-		return expectf("re-minted D %v is not after the replaced seed's %v", d2.D, d.D)
+	line, _, _ := strings.Cut(string(data), "\n")
+	if !strings.HasPrefix(line, "D ") || strings.Contains(line, ".") {
+		return expectf("D card %q, want whole seconds with no fraction", line)
 	}
 	return nil
 }
@@ -317,7 +354,7 @@ func hzSeedPrivate(t *testing.T, s *hzSeed) error {
 		return b.String()
 	}
 	before := counts()
-	name, data, err := s.mint("origin")
+	name, data, err := s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}
@@ -363,7 +400,7 @@ func hzSeedPrivate(t *testing.T, s *hzSeed) error {
 // to peers like any other, and never held as the seed.
 func hzSeedOrdinary(t *testing.T, s *hzSeed) error {
 	clone := s.lacking(t)
-	name, data, err := s.mint("origin")
+	name, data, err := s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}
@@ -401,7 +438,7 @@ func hzSeedOrdinary(t *testing.T, s *hzSeed) error {
 // horizon's derivation.
 func hzSeedProvenance(t *testing.T, s *hzSeed) error {
 	clone := s.lacking(t)
-	name, data, err := s.mint("origin")
+	name, data, err := s.mint(seedLoginGo)
 	if err != nil {
 		return err
 	}

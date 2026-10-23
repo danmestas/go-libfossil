@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/clearsign"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -235,7 +236,9 @@ func Hold(tx *db.Tx, name string, data []byte, verify Verifier) error {
 		return err
 	}
 	if verify != nil {
-		if err := verify(data); err != nil {
+		if err := verify(data); errors.Is(err, clearsign.ErrCannotVerify) {
+			return err // no judgement of the seed: refuse it without falling back
+		} else if err != nil {
 			return fmt.Errorf("%w: %w", ErrProvenance, err)
 		}
 	}
@@ -314,8 +317,16 @@ func Apply(tx *db.Tx, verify Verifier) (bool, error) {
 	if err != nil || data == nil {
 		return false, err
 	}
-	if verify != nil && verify(data) != nil {
-		return false, Discard(tx)
+	if verify != nil {
+		// A verifier that could not judge the seed (gpg absent or timed out)
+		// fails the caller and keeps the seed, which verified when it was
+		// held: discarding it would downgrade the store for good over a
+		// passing fault.
+		if err := verify(data); errors.Is(err, clearsign.ErrCannotVerify) {
+			return false, err
+		} else if err != nil {
+			return false, Discard(tx)
+		}
 	}
 	d, err := parse(data)
 	if err != nil {

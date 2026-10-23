@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/clearsign"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -157,7 +158,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
 		return
 	}
-	structural, structuralErr := newStructuralClient(r.DB(), opts.SeedVerifier)
+	if err = keepSeedKey(r, opts.SeedKey); err != nil {
+		return
+	}
+	structural, structuralErr := newStructuralClient(r.DB())
 	if structuralErr != nil {
 		err = fmt.Errorf("sync.Clone: %w", structuralErr)
 		return
@@ -303,6 +307,23 @@ func clearInheritedConfig(r *repo.Repo) error {
 	return nil
 }
 
+// keepSeedKey records the origin's key as the clone's horizon-seed-key
+// setting before any round, so the first seed is verified against it and
+// every later pull and rebuild reads it from there. An empty key keeps none.
+func keepSeedKey(r *repo.Repo, key string) error {
+	if key == "" {
+		return nil
+	}
+	k, err := clearsign.ParseKey(key)
+	if err != nil {
+		return fmt.Errorf("sync.Clone: seed key: %w", err)
+	}
+	if err := r.SetConfig(clearsign.SettingSeedKey, k.String()); err != nil {
+		return fmt.Errorf("sync.Clone: %w", err)
+	}
+	return nil
+}
+
 // fillPhantoms fetches artifacts the clone left missing (phantoms) with an
 // ordinary pull session, when CloneOpts.PullPhantoms asks for it. The clone
 // session cannot ask for them: clone_seqno 0 bars pull from it, and a gimme
@@ -324,15 +345,14 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 		return nil
 	}
 	res, err := Sync(ctx, cs.repo, t, SyncOpts{
-		Pull:         true,
-		ProjectCode:  cs.projectCode,
-		ServerCode:   cs.serverCode,
-		User:         cs.opts.User,
-		Password:     cs.opts.Password,
-		Env:          cs.env,
-		Buggify:      cs.opts.Buggify,
-		Observer:     cs.opts.Observer,
-		SeedVerifier: cs.opts.SeedVerifier,
+		Pull:        true,
+		ProjectCode: cs.projectCode,
+		ServerCode:  cs.serverCode,
+		User:        cs.opts.User,
+		Password:    cs.opts.Password,
+		Env:         cs.env,
+		Buggify:     cs.opts.Buggify,
+		Observer:    cs.opts.Observer,
 	})
 	if res != nil {
 		cs.result.HorizonFallback = cs.result.HorizonFallback || res.HorizonFallback

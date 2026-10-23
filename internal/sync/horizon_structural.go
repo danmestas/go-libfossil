@@ -32,7 +32,8 @@ type structuralServe struct {
 	boundary []string
 	seedName string
 	seedData []byte
-	sendSeed bool // the client offered another name, or none
+	sendSeed bool         // the client offered another name, or none
+	signing  *seedSigning // the seed is signed after the request's transaction; nil sends it unsigned
 }
 
 // prepareStructural places a structural request's horizon and mints its
@@ -76,8 +77,15 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 	}
 	offered := requestSeedOffer(cards)
 	h.seedOffered = offered
+	// An origin that holds a signing key signs the seed (§5.2.4), as it signs
+	// check-ins, under clearsign and pgp-command; only the kept signature is
+	// read here, since whether the requester may read is not yet known.
+	signing, err := newSeedSigning(q, name, data, offered)
+	if err != nil {
+		return err
+	}
 	h.structural = &structuralServe{reach: reach, boundary: boundary, seedName: name, seedData: data,
-		sendSeed: !strings.EqualFold(offered, name)}
+		sendSeed: !strings.EqualFold(offered, name), signing: signing}
 	return nil
 }
 
@@ -186,6 +194,10 @@ func (h *handler) emitHorizonServed() {
 	for _, uuid := range h.structural.boundary {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonBelowPragma, Values: []string{uuid}})
 	}
+	if h.structural.signing != nil {
+		h.resp = h.structural.signing.placeholder(h.resp)
+		return
+	}
 	if h.structural.sendSeed {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: horizonSeedPragma, Values: []string{h.structural.seedName}},
 			&xfer.FileCard{UUID: h.structural.seedName, Content: h.structural.seedData})
@@ -214,8 +226,14 @@ type structuralClient struct {
 	fallback bool   // the current reply's seed failed its provenance
 }
 
-func newStructuralClient(q db.Querier, verify seed.Verifier) (structuralClient, error) {
+func newStructuralClient(q db.Querier) (structuralClient, error) {
 	c, err := content.StoreCone(q)
+	if err != nil {
+		return structuralClient{}, err
+	}
+	// The key is the clone's own setting, never one an origin sends
+	// (§5.2.4): a seed verified against a key its origin chose proves nothing.
+	verify, err := seed.VerifierFor(q)
 	if err != nil {
 		return structuralClient{}, err
 	}

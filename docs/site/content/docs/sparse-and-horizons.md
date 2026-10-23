@@ -63,6 +63,17 @@ The descendants rule saves much more. On the same repository, a structural horiz
 - **content** (available): which blobs are held. Every check-in's structure is still held.
 - **structural** (`Horizon.Structural`, `--structural`): also cuts the check-ins below C. It needs a seed, a control artifact the origin mints so a clone can derive tag and branch state without C's ancestry.
 
+### Signed seeds
+
+An origin with the `clearsign` setting on signs each seed it mints with its `pgp-command`, the same setting fossil and zit sign check-ins with (draft-fossil-horizon-00 §5.2.4). It keeps one signature per seed, so a seed keeps its name while the tag state it records is unchanged.
+
+A clone given the origin's public key verifies every seed against it: at clone time, on every pull, and when it rebuilds. A seed that is unsigned, or signed by another key, is discarded and the clone falls back to the content horizon. A clone with no key accepts an unsigned seed. The key is the clone's own `horizon-seed-key` setting, never something the origin sends.
+
+- **SSH:** the origin signs with `ssh-keygen -q -Y sign -n fossilscm -f KEY`; the clone's key is the public key line, verified in process.
+- **PGP:** the origin signs with `gpg --clearsign -o`, fossil's default; the clone's key is the key's fingerprint, verified by `gpg` against the user's keyring.
+
+An origin signs only for a requester that may read, after the request is authorized, and keeps the signature in its own table; a store that cannot write, such as a read-only mirror, signs again for every request. Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged `pgp-command` takes effect at once. A clone that cannot run its verifier (gpg missing, or timed out) keeps the seed it holds and reports the error rather than falling back. Settings are read from the repository only: go-libfossil reads no global fossil configuration, so `clearsign` and `pgp-command` set with `fossil settings --global` do not apply.
+
 ### Moving the horizon
 
 Moving C earlier and pulling fetches what the deeper horizon keeps. Moving it later keeps what you hold until you compact. A horizon store cannot be a checkout's cone: a horizon governs what the repository holds, not which paths a checkout writes.
@@ -252,6 +263,7 @@ libfossil repo clone URL repo.fossil --horizon <full hash> --leaves --cone src
 - `--leaves`: with `--horizon`, also hold every open leaf's ancestry back to the check-in.
 - `--cone=CONE,...`: clone a sparse store: fetch only this path's subtree (repeatable).
 - `--cone-not=CONE-NOT,...`: carve this path out of a `--cone` (repeatable).
+- `--seed-key=KEY`: with `--structural`, the origin's public key (an SSH public key line or an OpenPGP fingerprint). A seed it did not sign is discarded and the clone falls back to the content horizon.
 
 The clone needs a full hash because nothing is local yet to resolve a name against.
 
@@ -300,7 +312,7 @@ These take the same `--remote`, `--sync-user`, `--sync-pass`, `--sync-private` a
 
 - **Compaction is irreversible locally.** `CompactStore` and `repo cone compact` delete held blobs. Widening later fetches them again, which needs a peer that still has them. Structural artifacts, sub-manifest nodes, unsent or private content and the delta bases of retained artifacts are kept.
 - **The structural horizon needs an origin that serves it.** Against a peer that does not answer `horizon-served structural` (stock fossil, or a server without a current seed) the clone falls back to the content horizon and reports `HorizonFallback`.
-- **Seed signing is not implemented.** The structural horizon relies on a seed that an origin may sign. go-libfossil implements no signing, so a clone without a known key for its origin accepts an unsigned seed.
+- **PGP verification needs gpg.** A PGP-signed seed is verified by running `gpg`, so a clone keyed with a fingerprint needs gpg installed and the key in its keyring; on js/wasm only SSH keys verify. gpg-agent hangs at start under a very large open-file limit, which a macOS shell can set to 2^31 (`ulimit -n`): lower it, to 4096 say, in the environment that signs or verifies with gpg.
 - **The horizon cursor needs a transport that names its peer.** The cursor (`pragma horizon-cursor`) lets an exchange skip re-announcing what both sides hold. The HTTP transport keys it by URL; a custom `Transport` keeps none and announces in full.
 - **A horizon is not a checkout cone.** Give a checkout a horizon and you get `ErrHorizonCheckout`.
 - **A sparse store lacks file content.** Commands that read an elided blob need a peer to fetch it, or fail.

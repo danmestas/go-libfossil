@@ -81,16 +81,16 @@ func TestVerifyZClearsignedBadChecksumSynthetic(t *testing.T) {
 // content (the header prefix is absent, so the scan is a no-op).
 func TestStripClearsignPlainUnaffected(t *testing.T) {
 	plain := []byte(zBody("C hi\nU bob\n"))
-	got := stripClearsign(plain)
+	got := StripClearsign(plain)
 	if string(got) != string(plain) {
-		t.Fatalf("stripClearsign mutated a plain artifact:\n got=%q\nwant=%q", got, plain)
+		t.Fatalf("StripClearsign mutated a plain artifact:\n got=%q\nwant=%q", got, plain)
 	}
 	// Idempotent: stripping the already-inner content is a no-op.
 	inner := buildClearsigned(zBody("C hi\nU bob\n"))
-	once := stripClearsign(inner)
-	twice := stripClearsign(once)
+	once := StripClearsign(inner)
+	twice := StripClearsign(once)
 	if string(once) != string(twice) {
-		t.Fatalf("stripClearsign not idempotent:\n once=%q\ntwice=%q", once, twice)
+		t.Fatalf("StripClearsign not idempotent:\n once=%q\ntwice=%q", once, twice)
 	}
 }
 

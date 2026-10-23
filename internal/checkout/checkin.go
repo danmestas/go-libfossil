@@ -903,6 +903,7 @@ func (c *Checkout) checkinOptions(
 		Parent:  in.parent,
 		Time:    commitTime,
 		Delta:   opts.Delta,
+		NoSign:  opts.NoSign,
 	}
 	if len(in.mergeParents) > 0 {
 		checkinOpts.MergeParents = in.mergeParents

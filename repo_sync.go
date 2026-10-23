@@ -101,6 +101,10 @@ type CloneOpts struct {
 	// classified locally. A server that will not serve a sparse clone
 	// refuses it (SettingPartialMirror).
 	StoreCone *Cone
+	// SeedKey, when set, is the origin's public key, kept as the clone's
+	// SettingHorizonSeedKey: every structural horizon seed is verified against
+	// it, in this clone and every later pull and rebuild.
+	SeedKey string
 }
 
 // transportAdapter bridges the public byte-level Transport to the internal

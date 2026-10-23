@@ -21,6 +21,9 @@ type CreateOpts struct {
 	User   string
 	Time   time.Time
 	Color  string
+	// NoSign creates the branch unsigned even with clearsign on: fossil's
+	// branch new --nosign.
+	NoSign bool
 }
 
 type Branch struct {
@@ -110,6 +113,7 @@ func Create(r *repo.Repo, opts CreateOpts) (libfossil.FslID, string, error) {
 		Parent:  opts.Parent,
 		Time:    opts.Time,
 		Tags:    tags,
+		NoSign:  opts.NoSign,
 		Precheck: func(q db.Querier) error {
 			open, err := branchIsOpen(q, opts.Name)
 			if err != nil {

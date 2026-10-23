@@ -92,3 +92,19 @@ import _ "github.com/danmestas/go-libfossil/db/driver/ncruces"
 ```
 
 Drivers are mutually exclusive — a process can register exactly one. See [`db`](./reference/sdk/db/api/) for the registry contract.
+
+## Signing check-ins
+
+With the `clearsign` setting on, every check-in `Commit`, `Checkout.Checkin` or `repo branch new` stores is signed, as fossil and zit sign them. The signer is the `pgp-command` setting, fossil's contract:
+
+- **PGP:** unset, it is `gpg --clearsign -o `, run as `COMMAND OUTFILE INFILE`.
+- **SSH:** a command whose name starts with `ssh`, such as `ssh-keygen -q -Y sign -n fossilscm -f ~/.ssh/id_ed25519`, is run as `COMMAND INFILE` and its detached signature is wrapped in fossil's SSH envelope.
+
+```
+libfossil -R repo.fossil repo config set clearsign on
+libfossil -R repo.fossil repo config set pgp-command "ssh-keygen -q -Y sign -n fossilscm -f ~/.ssh/id_ed25519"
+```
+
+The signed text is the artifact, so a signed check-in is named by the hash of the signed bytes; fossil 2.26 and later, and zit, read it. A signer that fails abandons the commit. `CommitOpts.NoSign`, `CheckoutCommitOpts.NoSign` and `--nosign` store one check-in unsigned. The command runs through the shell, so `~` and environment variables expand, and it runs inside the commit's transaction: a signer that waits on a passphrase prompt holds the repository's write lock until it returns or two minutes pass.
+
+The same settings sign the seeds a structural-horizon origin mints; see [Signed seeds](../sparse-and-horizons/#signed-seeds).

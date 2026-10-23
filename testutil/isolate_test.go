@@ -66,6 +66,9 @@ var notFossilExec = map[string]string{
 	"testutil/server_unix.go":                   "runs the bin its caller resolved",
 	"testutil/server_other.go":                  "runs the bin its caller resolved",
 	"conformance/zit_interop_test.go":           "runs zit, under a HOME of its own",
+	"internal/clearsign/exec.go":                "runs the repository's signing command and gpg",
+	"internal/clearsign/clearsign_test.go":      "runs gpg, under the GNUPGHOME signtest sets",
+	"internal/clearsign/signtest/signtest.go":   "runs ssh-keygen and gpg, under a GNUPGHOME of its own",
 }
 
 // TestFossilInvocationsIsolateHome fails when a Go file runs a subprocess

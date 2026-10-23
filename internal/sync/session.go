@@ -7,7 +7,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/uv"
@@ -52,9 +51,6 @@ type SyncOpts struct {
 	// cursor a horizon store keeps per origin (draft-fossil-horizon-00
 	// §6.2.6). Empty keeps no cursor: every request announces in full.
 	Origin string
-	// SeedVerifier checks a structural horizon's seed against the origin's
-	// key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned seed.
-	SeedVerifier seed.Verifier
 	// MergeBaseOf, when set, asks the origin for the merge base it names
 	// (draft-fossil-horizon-00 §6.2.4), once, in the first request; it needs
 	// Pull, and one or two secondaries. The answer is in the result.
@@ -346,7 +342,7 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}
 	s := newSession(r, opts)
 	s.ctx = ctx
-	if s.structural, err = newStructuralClient(r.DB(), opts.SeedVerifier); err != nil {
+	if s.structural, err = newStructuralClient(r.DB()); err != nil {
 		return &s.result, fmt.Errorf("sync: %w", err)
 	}
 	if err := s.seedPhantoms(); err != nil {

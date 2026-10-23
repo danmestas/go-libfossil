@@ -123,6 +123,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		Buggify:      opts.Buggify,
 		PullPhantoms: opts.PullPhantoms,
 		StoreCone:    unwrapCone(opts.StoreCone),
+		SeedKey:      opts.SeedKey,
 	}
 	// A transport that names its peer keys the horizon cursor, as for Sync.
 	if o, ok := t.(interface{ syncOrigin() string }); ok {

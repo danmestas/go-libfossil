@@ -2,7 +2,6 @@ package sync
 
 import (
 	"github.com/danmestas/go-libfossil/internal/cone"
-	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/simio"
 )
 
@@ -21,10 +20,11 @@ type CloneOpts struct {
 	// departs from Section 8.2 of the sync draft, which sends no clone,
 	// pull or push card after clone_seqno 0, so it is off by default.
 	PullPhantoms bool
-	// SeedVerifier checks the seed of a structural horizon against the
-	// origin's key (draft-fossil-horizon-00 §5.2.4); nil accepts an unsigned
-	// seed, as a clone knowing no key does.
-	SeedVerifier seed.Verifier
+	// SeedKey, when set, is the origin's public key: an SSH public key line
+	// or an OpenPGP fingerprint. The clone keeps it as its horizon-seed-key
+	// setting and verifies every structural seed against it
+	// (draft-fossil-horizon-00 §5.2.4); empty accepts an unsigned seed.
+	SeedKey string
 	// Origin names the peer the clone addresses, keying the horizon cursor
 	// a converged horizon clone records (draft-fossil-horizon-00 §6.2.6) as
 	// SyncOpts.Origin keys a sync's. Empty keeps none.

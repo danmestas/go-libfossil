@@ -1,598 +1,245 @@
+{{- /*
+  The landing page. A page of its own, outside Hextra: one dark identity.
+  The hero figure, the conformance table and every number on the page come
+  from data/*.json and site params, written by scripts/gen-docs.sh and
+  scripts/sync-version.sh; nothing here is typed by hand that the code knows.
+*/ -}}
+{{- $engine := hugo.Data.engine -}}
+{{- $conf := hugo.Data.conformance -}}
+{{- $facts := hugo.Data.facts -}}
+{{- $words := dict "1" "One" "2" "Two" "3" "Three" "4" "Four" "5" "Five" "6" "Six" "7" "Seven" "8" "Eight" "9" "Nine" -}}
+{{- $fossil := $facts.fossilVersion -}}
+{{- $goVersion := replaceRE `^(\d+\.\d+).*$` "$1" site.Params.goVersion -}}
+{{- $css := resources.Get "css/landing.css" | minify | fingerprint -}}
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="go-libfossil — pure-Go library and CLI for Fossil SCM repositories. Zero CGo, static binaries, WASM-ready.">
-<meta name="color-scheme" content="light dark">
-<title>go-libfossil — pure-Go Fossil SCM library</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="go-libfossil reads, writes and syncs Fossil repositories in Go without cgo: a command-line tool, a library, and an engine that compiles to WebAssembly.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#14110d">
+<title>go-libfossil · a Fossil repository engine in Go</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-<style>
-:root {
-  --paper:  #f5f1e6;
-  --paper-2:#ece7d8;
-  --ink:    #14110b;
-  --mute:   #5e5b53;
-  --rule:   #14110b;
-  --ember:  #c63a0f;
-  --measure: 76ch;
-  --gap:   clamp(2.25rem, 5vw, 3.5rem);
-  --mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Mono", "Roboto Mono", Consolas, "Courier New", monospace;
-}
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html { font-size: 16px; -webkit-text-size-adjust: 100%; }
-body {
-  background: var(--paper);
-  color: var(--ink);
-  font: 400 clamp(15px, 1.05vw, 17px)/1.7 var(--mono);
-  font-feature-settings: "tnum" 1, "calt" 1, "ss01" 1;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-}
-.skip { position: absolute; left: -9999px; }
-.skip:focus {
-  position: fixed; top: 0.75rem; left: 0.75rem;
-  background: var(--ember); color: var(--paper);
-  padding: 0.5rem 0.75rem; z-index: 10; text-decoration: none;
-}
-header.topbar {
-  border-bottom: 1px solid var(--rule);
-  padding: clamp(0.625rem, 2.5vw, 0.75rem) clamp(1rem, 4vw, 1.5rem);
-  display: flex; justify-content: space-between; align-items: baseline;
-  gap: 1rem; flex-wrap: wrap;
-  font-size: 0.78125rem;
-  letter-spacing: 0.04em;
-}
-.topbar a { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
-.topbar a:hover { color: var(--ember); }
-.topbar .name { font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; }
-.topbar .meta { color: var(--mute); display: flex; gap: 1.25rem; flex-wrap: wrap; }
-.topbar .meta span { display: inline-flex; gap: 0.4rem; }
-.topbar .meta b { color: var(--ink); font-weight: 500; }
-
-main {
-  max-width: 88ch;
-  margin: 0 auto;
-  padding: clamp(2rem, 4vw, 3rem) clamp(1rem, 4vw, 1.5rem) clamp(3rem, 6vw, 4.5rem);
-  overflow-wrap: anywhere;
-}
-
-.title {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.25rem;
-  padding-bottom: clamp(2rem, 4vw, 2.75rem);
-  margin-bottom: clamp(2rem, 4vw, 3rem);
-  border-bottom: 1px solid var(--rule);
-}
-.title h1 {
-  font-size: clamp(2.75rem, 13vw, 6.5rem);
-  font-weight: 700;
-  letter-spacing: -0.05em;
-  line-height: 0.92;
-}
-.title .lead {
-  font-size: clamp(1rem, 1.2vw, 1.0625rem);
-  max-width: var(--measure);
-  color: var(--ink);
-  line-height: 1.6;
-}
-.spec {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.78125rem;
-  margin-top: 0.5rem;
-  letter-spacing: 0.02em;
-}
-.spec td { padding: 0.35rem 0; border-top: 1px dashed var(--rule); vertical-align: top; }
-.spec td:first-child {
-  width: 12rem;
-  color: var(--mute);
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-size: 0.6875rem;
-  padding-top: 0.5rem;
-}
-.spec tr:first-child td { border-top: 1px solid var(--rule); }
-.spec tr:last-child td { border-bottom: 1px solid var(--rule); }
-
-section { margin-top: var(--gap); }
-section > .num {
-  display: block;
-  font-size: 0.6875rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--mute);
-  margin-bottom: 0.4rem;
-}
-h2 {
-  font-size: clamp(1.125rem, 1.6vw, 1.3125rem);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  margin-bottom: 1.25rem;
-  padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--rule);
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 1rem;
-  flex-wrap: wrap;
-}
-h2 .anchor {
-  font-size: 0.6875rem;
-  font-weight: 400;
-  color: var(--mute);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
-p { max-width: var(--measure); margin-bottom: 1rem; }
-p:last-child { margin-bottom: 0; }
-strong { font-weight: 700; }
-
-a {
-  color: var(--ink);
-  text-decoration: none;
-  border-bottom: 1px solid var(--ink);
-}
-a:hover { color: var(--ember); border-bottom-color: var(--ember); }
-
-code {
-  font: inherit;
-  font-size: 0.94em;
-  background: var(--paper-2);
-  padding: 0.05em 0.35em;
-}
-
-ol, ul { padding-left: 0; max-width: var(--measure); list-style: none; }
-ol li, ul li {
-  margin-bottom: 0.875rem;
-  padding-left: 2.75rem;
-  position: relative;
-  line-height: 1.65;
-}
-ol { counter-reset: item; }
-ol li {
-  counter-increment: item;
-}
-ol li::before {
-  content: counter(item, decimal-leading-zero);
-  position: absolute;
-  left: 0;
-  top: 0.05em;
-  font-weight: 700;
-  font-size: 0.78125rem;
-  letter-spacing: 0.04em;
-  color: var(--ember);
-  width: 2rem;
-}
-ul li::before {
-  content: "—";
-  position: absolute;
-  left: 0.5rem;
-  color: var(--mute);
-}
-
-.code-block {
-  margin-bottom: 1rem;
-  border: 1px solid var(--rule);
-  background: var(--paper-2);
-}
-.code-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem 0.35rem 0.85rem;
-  border-bottom: 1px solid var(--rule);
-  background: var(--paper);
-  font-size: 0.625rem;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--mute);
-}
-pre {
-  padding: 0.875rem 1.25rem;
-  font-size: 0.85rem;
-  line-height: 1.65;
-  overflow-x: auto;
-  white-space: pre;
-  font-family: var(--mono);
-  color: var(--ink);
-}
-pre.ascii {
-  background: transparent;
-  border: 1px solid var(--rule);
-  padding: clamp(0.75rem, 2.5vw, 1.25rem);
-  font-size: clamp(0.7rem, 1.7vw, 0.8125rem);
-  line-height: 1.45;
-  color: var(--ink);
-  margin-bottom: 1rem;
-  overflow-x: auto;
-}
-
-.diagram {
-  display: block;
-  width: 100%;
-  min-width: 30rem;
-  height: auto;
-  margin-bottom: 0.5rem;
-  font-family: var(--mono);
-  color: var(--ink);
-}
-.diagram .rule { stroke: var(--rule); stroke-width: 1; opacity: 0.5; }
-.diagram .box { fill: none; stroke: var(--rule); stroke-width: 1; }
-.diagram .head {
-  font-size: 11px;
-  letter-spacing: 1.4px;
-  text-transform: uppercase;
-  fill: var(--mute);
-}
-.diagram .item { font-size: 13px; fill: var(--ink); }
-.diagram .stack { font-size: 12px; fill: var(--mute); font-style: italic; }
-.diagram .flow line { stroke: var(--ember); stroke-width: 1.5; fill: none; }
-.diagram .arrowhead { fill: var(--ember); }
-.diagram .flow-label {
-  font-size: 10px;
-  fill: var(--ember);
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-}
-
-.copy-btn {
-  background: transparent;
-  color: var(--ink);
-  border: 1px solid var(--ink);
-  font: inherit;
-  font-size: 0.625rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 0.15rem 0.55rem;
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.copy-btn:hover, .copy-btn:focus-visible { background: var(--ink); color: var(--paper); outline: none; }
-.copy-btn[data-state="copied"] { color: var(--ember); border-color: var(--ember); background: var(--paper); }
-
-.table-scroll {
-  margin: 0 calc(-1 * clamp(0rem, 2vw, 0.5rem));
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-table.cmp {
-  width: 100%;
-  min-width: 30rem;
-  border-collapse: collapse;
-  font-size: 0.875rem;
-  margin-bottom: 0.75rem;
-}
-table.cmp th, table.cmp td {
-  text-align: left;
-  padding: 0.625rem 0.875rem;
-  vertical-align: top;
-  border-bottom: 1px dashed var(--rule);
-}
-table.cmp thead th {
-  border-bottom: 1px solid var(--rule);
-  border-top: 1px solid var(--rule);
-  font-size: 0.6875rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  background: var(--paper-2);
-}
-table.cmp td:first-child, table.cmp th:first-child {
-  padding-left: 0.875rem;
-  width: 30%;
-  font-weight: 500;
-  color: var(--mute);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.75rem;
-}
-table.cmp td:last-child, table.cmp th:last-child { padding-right: 0.875rem; }
-table.cmp .col-self { color: var(--ember); font-weight: 700; }
-table.cmp tbody tr:last-child td { border-bottom: 1px solid var(--rule); }
-
-.fineprint {
-  font-size: 0.75rem;
-  color: var(--mute);
-  margin-top: 0.5rem;
-  letter-spacing: 0.02em;
-}
-
-footer {
-  border-top: 1px solid var(--rule);
-  margin-top: var(--gap);
-  padding: 1.5rem 0;
-  font-size: 0.78125rem;
-  color: var(--mute);
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 1rem;
-  letter-spacing: 0.04em;
-}
-footer a { color: inherit; border-bottom-color: var(--mute); }
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --paper:  #15140f;
-    --paper-2:#1f1d17;
-    --ink:    #ece8dc;
-    --mute:   #908b80;
-    --rule:   #ece8dc;
-    --ember:  #ff5a26;
-  }
-}
-@media print {
-  body { background: white; color: black; font-size: 11pt; line-height: 1.5; }
-  .code-block, pre { background: white; color: black; border: 1px solid black; }
-  a { color: black; border-bottom: 0; text-decoration: underline; }
-  a::after { content: " (" attr(href) ")"; font-size: 0.85em; color: #555; }
-  .copy-btn, .skip { display: none; }
-  section { break-inside: avoid; }
-}
-@media (max-width: 540px) {
-  header.topbar { flex-direction: column; align-items: flex-start; gap: 0.5rem; }
-  .topbar .meta { gap: 0.75rem; row-gap: 0.35rem; }
-  .spec td:first-child { width: 8rem; font-size: 0.625rem; }
-  .spec td { padding: 0.4rem 0; }
-  table.cmp { font-size: 0.6875rem; min-width: 0; table-layout: auto; }
-  table.cmp th, table.cmp td { padding: 0.45rem 0.4rem; }
-  table.cmp tbody td { white-space: normal; word-break: normal; overflow-wrap: break-word; }
-  table.cmp thead th {
-    font-size: 0.5rem;
-    letter-spacing: 0.06em;
-    padding: 0.5rem 0.3rem;
-    white-space: nowrap;
-  }
-  table.cmp td:first-child, table.cmp th:first-child {
-    padding-left: 0.55rem;
-    width: 28%;
-    font-size: 0.5625rem;
-    letter-spacing: 0.04em;
-  }
-  table.cmp td:last-child, table.cmp th:last-child { padding-right: 0.55rem; }
-  ol li, ul li { padding-left: 2.25rem; }
-  ol li::before { width: 1.75rem; }
-  footer { flex-direction: column; gap: 0.5rem; align-items: flex-start; }
-  .copy-btn { font-size: 0.5625rem; padding: 0.1rem 0.4rem; }
-  pre { font-size: 0.78rem; padding: 0.75rem 0.9rem; }
-  .code-bar { padding: 0.3rem 0.4rem 0.3rem 0.7rem; }
-}
-@media (max-width: 380px) {
-  .topbar .name { letter-spacing: 0.12em; }
-  .spec td:first-child { width: 7rem; }
-  table.cmp { font-size: 0.625rem; }
-  table.cmp th, table.cmp td { padding: 0.4rem 0.25rem; }
-  table.cmp thead th { font-size: 0.4375rem; padding: 0.45rem 0.2rem; }
-  table.cmp td:first-child, table.cmp th:first-child { font-size: 0.5rem; padding-left: 0.4rem; width: 26%; }
-}
-</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="{{ $css.RelPermalink }}" integrity="{{ $css.Data.Integrity }}">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 
-<a href="#main" class="skip">skip to content</a>
-
-<header class="topbar">
-  <div class="name">go-libfossil</div>
-  <div class="meta">
-    <span>v <b>{{ .Site.Params.version | default "0.4.2" }}</b></span>
-    <span>license <b>MIT</b></span>
-    <span><a href="https://github.com/danmestas/go-libfossil">github</a></span>
-    <span><a href="/docs/">docs</a></span>
-  </div>
-</header>
+<div class="gutter"><div class="inner">
+  <header class="nav">
+    <a class="brand" href="{{ site.Home.RelPermalink }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 17h20M2 12h20M2 7h20" stroke="#a99c86" stroke-width="1.6"/><path d="M2 12h20" stroke="#d9663b" stroke-width="1.8" stroke-dasharray="3 2.5"/></svg>go-libfossil</a>
+    <nav aria-label="Main">
+      {{- range site.Menus.main }}
+        {{- if ne (.Params.type | default "") "search" }}
+          <a href="{{ .URL }}">{{ .Name }}</a>
+        {{- end }}
+      {{- end }}
+    </nav>
+    <span class="ver" title="The latest release tag">v{{ site.Params.version }}</span>
+  </header>
+</div></div>
 
 <main id="main">
-
-<section class="title">
-  <h1>go-libfossil</h1>
-  <p class="lead">A pure-Go library for Fossil SCM repositories. Zero CGo. Static binaries. WASM-ready.</p>
-  <table class="spec">
-    <tbody>
-      <tr><td>Project</td>      <td>go-libfossil — pure-Go Fossil SCM library</td></tr>
-      <tr><td>Language</td>     <td>Go (module <code>github.com/danmestas/go-libfossil</code>)</td></tr>
-      <tr><td>Runtime deps</td> <td>none · pluggable SQLite drivers (modernc · ncruces)</td></tr>
-      <tr><td>Binaries</td>     <td>1 (libfossil CLI)</td></tr>
-      <tr><td>License</td>      <td>MIT</td></tr>
-      <tr><td>Status</td>       <td>v{{ .Site.Params.version | default "0.4.2" }} · alpha · breaking changes possible</td></tr>
-    </tbody>
-  </table>
-</section>
-
-<section>
-  <span class="num">§01</span>
-  <h2>Install <span class="anchor">install</span></h2>
-  <div class="code-block">
-    <div class="code-bar">
-      <span>shell</span>
-      <button type="button" class="copy-btn" data-copy="install" aria-label="Copy install command">copy</button>
+<div class="gutter"><div class="inner">
+  <div class="hero wide">
+    <div class="stack">
+      <h1>A Fossil repository engine that <em>compiles to WebAssembly.</em></h1>
+      <p class="lede">go-libfossil reads, writes and syncs Fossil repositories: the artifact format, the derived tables and the sync protocol, in Go without cgo. The same engine runs as a command-line tool, inside a server, in a browser tab, or inside a storage object at the edge.</p>
+      <div class="ctas"><a class="btn solid" href="/docs/get-started/">Get started</a><a class="btn line" href="/docs/concepts/">Read the concepts</a></div>
+      <div class="install"><span>$</span> go get github.com/danmestas/go-libfossil@latest</div>
     </div>
-    <pre id="install">$ go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
-$ libfossil --help</pre>
+    {{- with $engine }}
+    {{- $m := .manifest }}
+    {{- $changed := slice }}
+    {{- range .rows.mlink }}{{ $changed = $changed | append .file }}{{ end }}
+    <figure class="engine" style="margin:0">
+      <figcaption class="cap"><span>one check-in, three views · output of a real go-libfossil run</span><span>{{ cond (eq (len $m.name) 64) "sha3-256" "sha1" }} · fossil {{ $fossil }} schema · sync protocol</span></figcaption>
+      <div class="panes">
+        <div class="pane">
+          <h4>1 · The artifact</h4>
+          <p class="sub">A check-in is a text manifest. Its name is the hash of its bytes, so anything that names it pins its exact content.</p>
+          <div class="cards">
+            {{- $labels := dict "C" "comment" "D" "time" "R" "tree MD5" "U" "user" "Z" "card MD5" "P" "parent check-in" }}
+            {{- range split (strings.TrimSuffix "\n" $m.text) "\n" }}
+              {{- $card := substr . 0 1 }}
+              {{- $fields := split (substr . 2) " " }}
+              {{- $shown := slice }}
+              {{- range $fields }}{{ $shown = $shown | append (partial "landing/short.html" .) }}{{ end }}
+              {{- $label := index $labels $card | default "" }}
+              {{- if eq $card "F" }}{{ $label = cond (in $changed (index $fields 0)) "file → blob" "unchanged" }}{{ end }}
+            <div class="ln"><b>{{ $card }}</b><span>{{ delimit $shown " " }}{{ with $label }} <i>{{ . }}</i>{{ end }}</span></div>
+            {{- end }}
+          </div>
+          <div class="name">name = {{ cond (eq (len $m.name) 64) "sha3-256" "sha1" }}({{ $m.bytes }} bytes) =<br><span>{{ $m.name }}</span></div>
+        </div>
+        <div class="pane">
+          <h4>2 · The repository</h4>
+          <p class="sub">Storing it derives the rows fossil derives, in fossil's own tables. <code>fossil rebuild</code> on the same blobs writes the same rows.</p>
+          <div class="rows">
+            <div><div class="t"><b>blob</b> rid · uuid · size</div>{{ range .rows.blob }}<div class="r">{{ .rid }} · {{ partial "landing/short.html" .uuid }} · {{ .size }}</div>{{ end }}</div>
+            <div><div class="t"><b>event</b> type · objid · user · comment</div>{{ range .rows.event }}<div class="r">{{ .type }} · {{ .objid }} · {{ .user }} · {{ .comment }}</div>{{ end }}</div>
+            <div><div class="t"><b>plink</b> pid → cid · primary</div>{{ range .rows.plink }}<div class="r">{{ .pid }} → {{ .cid }} · {{ .isprim }}</div>{{ end }}</div>
+            <div><div class="t"><b>mlink</b> mid · fid · pid · file</div>{{ range .rows.mlink }}<div class="r">{{ .mid }} · {{ .fid }} · {{ .pid }} · {{ .file }}</div>{{ end }}</div>
+            <div><div class="t"><b>tagxref</b> tag · value · rid</div>{{ range .rows.tagxref }}<div class="r">{{ .tag }} · {{ .value }} · {{ .rid }}</div>{{ end }}</div>
+            <div><div class="t"><b>leaf</b> rid</div>{{ range .rows.leaf }}<div class="r">{{ . }}</div>{{ end }}</div>
+          </div>
+        </div>
+        <div class="pane">
+          <h4>3 · The wire</h4>
+          {{- $rounds := len .pull }}
+          <p class="sub">A clone that has check-in {{ $m.parent.rid }} pulls. Each side announces what it holds; the client asks for what it lacks. {{ index $words (string $rounds) | default $rounds }} round{{ if ne $rounds 1 }}s{{ end }}.</p>
+          <div class="wire">
+            {{- $announced := false }}
+            {{- range $i, $round := .pull }}
+            <div class="dir">→ round {{ add $i 1 }}</div>
+              {{- range $round.request }}
+                {{- $f := split . " " }}
+                {{- $rest := slice }}
+                {{- range after 1 $f }}{{ $rest = $rest | append (partial "landing/short.html" .) }}{{ end }}
+            <div><span class="k">{{ index $f 0 }}</span> {{ delimit $rest " " }}{{ if and (eq (index $f 0) "igot") (eq (index $f 1) $m.parent.uuid) }} <span class="s"># check-in {{ $m.parent.rid }}</span>{{ end }}</div>
+              {{- end }}
+            <div class="dir">← reply</div>
+              {{- range $round.reply }}
+                {{- $f := split . " " }}
+                {{- $rest := slice }}
+                {{- range after 1 $f }}{{ $rest = $rest | append (partial "landing/short.html" .) }}{{ end }}
+                {{- $new := and (not $announced) (eq (index $f 0) "igot") (eq (index $f 1) $m.name) }}
+                {{- if $new }}{{ $announced = true }}{{ end }}
+            <div><span class="k">{{ index $f 0 }}</span> {{ delimit $rest " " }}{{ if $new }} <span class="s"># new</span>{{ end }}</div>
+              {{- end }}
+            {{- end }}
+          </div>
+        </div>
+      </div>
+      <div class="hoststrip">
+        <div><b>native</b> · one static binary, no cgo</div>
+        <div><b>js/wasm</b> · SQLite itself in wasm</div>
+        <div><b>TinyGo</b> · whole API {{ printf "%.1f" (div hugo.Data.wasm.tinygo_build.gzip 1000000.0) }} MB gzipped</div>
+      </div>
+    </figure>
+    {{- end }}
   </div>
-  <p>That is the entire install. The binary is pure-Go, statically linked, and CGo-free &mdash; drop it on any Linux/macOS/Windows host with no runtime dependency.</p>
-</section>
+</div></div>
 
-<section>
-  <span class="num">§02</span>
-  <h2>What it is <span class="anchor">overview</span></h2>
-  <p>libfossil is a pure-Go reader and writer for <a href="https://fossil-scm.org">Fossil SCM</a> repositories &mdash; the SQLite-backed <code>.fossil</code> files used by Fossil. It exposes a Go API for opening repos, reading the timeline, committing, and syncing over HTTP, plus a <code>libfossil</code> CLI driving the same code paths.</p>
-  <p>No CGo means static binaries that cross-compile cleanly. A <code>GOOS=wasip1</code> build runs in browsers and edge runtimes. Two SQLite drivers (<code>modernc</code>, <code>ncruces</code>) are swappable depending on whether you want pure-Go ergonomics or a smaller WASM footprint.</p>
-  <ul>
-    <li><strong>One library, three pluggable axes.</strong> Swap the SQLite driver (<code>modernc</code>/<code>ncruces</code>), the sync transport (HTTP/custom), or the observer (OTel/custom) without touching application code.</li>
-    <li><strong>Static everywhere.</strong> Static binaries cross-compile cleanly. WASM works.</li>
-    <li><strong>Embeddable.</strong> Drop <code>libfossil.Open</code> into any Go service that needs to read <code>.fossil</code> repos &mdash; build pipelines, mirror servers, code-search indexers.</li>
-  </ul>
-</section>
+<section class="gutter"><div class="inner stack" style="gap:30px">
+  <div class="stack" style="gap:10px"><span class="label">Where it runs</span><h2>Version control inside the application, not beside it.</h2>
+  <p class="muted">The repository is a SQLite database with Fossil's own tables, so wherever SQLite runs, so does the repository. A <code>database/sql</code> driver is the only thing a new host has to supply.</p></div>
+  <div class="runs">
+    <div class="run"><span class="label">Server and CLI</span><h3>One static binary</h3><p class="muted">The <code>libfossil</code> command and the Go API build to a single binary for Linux, macOS and Windows, with no fossil installation and no C toolchain.</p><p class="idea">Serve repositories, mirror them, or read history from a build pipeline through typed Go values instead of parsed command output.</p></div>
+    <div class="run"><span class="label">Browser</span><h3>A repository in the page</h3><p class="muted">Built for <code>js/wasm</code> with the ncruces SQLite driver, which ships SQLite itself as WebAssembly. A page holds a whole repository and syncs it with a server when it chooses to.</p><p class="idea">A document that explains a protocol can let its reader commit, branch, merge and sync in the page, and watch the tables change.</p></div>
+    <div class="run"><span class="label">Edge storage</span><h3>History next to the data</h3><p class="muted">Built with TinyGo, the whole API fits inside a storage object that runs its own SQLite. Each request is one call into the engine inside one transaction, so it completes or leaves nothing behind.</p><p class="idea">A publishing tool can keep every revision of what it publishes as Fossil check-ins in the object that serves it, and show the history without a separate service.</p></div>
+  </div>
+</div></section>
 
-<section>
-  <span class="num">§03</span>
-  <h2>Why you might want it <span class="anchor">why</span></h2>
-  <p>Three reasons to reach for libfossil instead of shelling out to the upstream <code>fossil</code> binary or using CGo bindings.</p>
-  <p><strong>You're embedding Fossil into a Go service.</strong> Build pipelines, code-search indexers, mirror servers, and AI-agent tools that read repository history all benefit from a library API instead of subprocess parsing. No exec calls, no version drift between hosts, observable through Go's standard <code>context.Context</code> and OpenTelemetry hooks.</p>
-  <p><strong>You're shipping to constrained targets.</strong> Static binaries cross-compile in seconds; CGo bindings don't. WASM compilation works out of the box. The cost is a slightly slower SQLite (modernc is pure Go); the upside is the binary runs on any target without a build farm.</p>
-  <p><strong>You want one library, not five subprocesses.</strong> Calling <code>fossil</code> over <code>os/exec</code> means re-parsing CLI text on every request. libfossil exposes typed Go values directly.</p>
-</section>
+{{- $w := hugo.Data.wasm -}}
+{{- $mb := 1000000.0 -}}
+<section class="gutter"><div class="inner split">
+  <div class="stack"><span class="label">Size</span><h2>Small enough to ship with the page.</h2>
+    <p class="muted">The whole public API, the HTTP sync client and signing included, built with TinyGo {{ $w.tinygo }} is {{ printf "%.1f" (div $w.tinygo_build.gzip $mb) }} MB compressed. The standard Go toolchain builds the same program about {{ printf "%.0f" (div (float $w.standard.gzip) $w.tinygo_build.gzip) }} times larger, which is still useful for debugging. A program that leaves out sync is smaller.</p>
+    <p class="small">Measured from <code>examples/tinygo</code>: the TinyGo size is what CI builds on every change; the standard build is Go {{ $w.go }} with <code>-ldflags='-s -w'</code>. Under TinyGo a sync redirect ends the request with an error instead of being followed.</p></div>
+  <div class="bars">
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_build.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_build.gzip) $w.standard.gzip)) }}%"></div></div></div>
+    <div class="bar"><div class="row"><span>Standard Go, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.standard.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, raw</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_build.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_build.raw) $w.standard.raw)) }}%"></div></div></div>
+    <div class="bar"><div class="row"><span>Standard Go, raw</span><span class="mono">{{ printf "%.1f" (div $w.standard.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+  </div>
+</div></section>
 
-<section>
-  <span class="num">§04</span>
-  <h2>How it fits together <span class="anchor">architecture</span></h2>
-  <div class="table-scroll">
-    <svg class="diagram" viewBox="0 0 640 260" role="img" aria-labelledby="arch-title arch-desc" preserveAspectRatio="xMidYMid meet">
-      <title id="arch-title">go-libfossil architecture</title>
-      <desc id="arch-desc">Callers (cli, library, wasm) invoke methods on the Repo handle. The Repo delegates to three pluggable axes: db driver, transport, observer. Repository state lives on disk in a .fossil SQLite file.</desc>
+<section class="gutter"><div class="inner stack" style="gap:30px">
+  <div class="stack" style="gap:10px"><span class="label">How we know it is right</span><h2>Checked against the specification, requirement by requirement.</h2>
+  <p class="muted">Fossil's behaviour is written down as a set of RFC drafts. The test suite turns each draft into a table of requirements and runs at least one case against every row; this table is that test's output, {{ $conf.covered }} of {{ $conf.requirements }} requirements met.</p></div>
+  {{- $notes := dict
+      "artifact" "every card type, parse and write"
+      "delta" "compared with fossil's own output"
+      "repostate" "derived tables match <code>fossil rebuild</code>"
+      "sync" "client and server"
+      "submanifest" "extension, shared with zit"
+      "sparsecone" "extension, shared with zit"
+      "horizon" "extension, shared with zit"
+  }}
+  <div class="scroll"><table class="ledger">
+    <tr><th>Draft</th><th style="text-align:right">Requirements</th><th style="text-align:right">Met</th><th>Notes</th></tr>
+    {{- range $conf.suites }}
+    <tr><td><a href="/docs/reference/conformance/#{{ .suite }}">{{ .title }}</a></td><td class="n">{{ .requirements }}</td><td class="n{{ if eq .covered .requirements }} full{{ end }}">{{ .covered }}</td><td class="muted">{{ index $notes .suite | safeHTML }}{{ with .partial }}; {{ . }} partial, its scope in the table{{ end }}{{ with .failing }}; {{ . }} failing{{ end }}{{ with .gap }}; {{ . }} without a case{{ end }}</td></tr>
+    {{- end }}
+  </table></div>
+  <div class="facts">
+    <div class="fact"><h3>Against the real implementations</h3><p class="muted">Interop tests run the fossil {{ $fossil }} binary and zit against go-libfossil in both directions: each clones, pulls and pushes the other's repositories, and each verifies what it received.</p></div>
+    <div class="fact"><h3>Deterministic simulation</h3><p class="muted">Sync is also run in a seeded simulation that drops requests, truncates replies and partitions nodes. After each run it checks blob integrity, delta chains and convergence. Any failure replays exactly from its seed. The repository also carries {{ lower (index $words (string $facts.fuzzTargets) | default (string $facts.fuzzTargets)) }} fuzz targets.</p></div>
+  </div>
+</div></section>
 
-      <defs>
-        <marker id="lf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path class="arrowhead" d="M0,0 L10,5 L0,10 Z"/>
-        </marker>
-      </defs>
-
-      <g class="rule">
-        <line x1="40" y1="38" x2="160" y2="38"/>
-        <line x1="240" y1="38" x2="400" y2="38"/>
-        <line x1="480" y1="38" x2="600" y2="38"/>
+<section class="gutter"><div class="inner split">
+  <div class="stack"><span class="label">Partial history</span><h2>Hold the history you need.</h2>
+    <p class="muted">A repository does not have to hold everything. A cone keeps the content of chosen paths. A horizon keeps history from a chosen check-in forward and leaves the rest on the origin, fetched only when an operation needs it. At the structural depth the clone also drops the manifests below the horizon and derives branch and tag state from a seed the origin signs.</p>
+    <p class="small">A structural clone of fossil-scm.org's repository, 21,008 check-ins, takes about 30 seconds. <a href="/docs/concepts/horizons/">How horizons work</a>.</p></div>
+  <figure class="strata" style="margin:0">
+    <svg viewBox="0 0 420 240" role="img" aria-label="A commit graph cut by a horizon line: check-ins above it are held, those below are left on the origin">
+      <defs><linearGradient id="below" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9663b" stop-opacity=".12"/><stop offset="1" stop-color="#d9663b" stop-opacity="0"/></linearGradient></defs>
+      <rect x="0" y="134" width="420" height="106" fill="url(#below)"/>
+      <line x1="12" y1="134" x2="408" y2="134" stroke="#d9663b" stroke-width="1.5" stroke-dasharray="6 5"/>
+      <g font-family="JetBrains Mono, monospace" font-size="10"><text x="14" y="127" fill="#d9663b">horizon C</text><text x="14" y="152" fill="#a99c86">on the origin</text><text x="14" y="32" fill="#a99c86">held</text></g>
+      <g stroke="#a99c86" stroke-width="1.6" fill="none">
+        <path d="M210 220 V30"/><path d="M210 168 C 280 158, 300 126, 300 98 V62"/><path d="M300 62 C 290 44, 240 38, 210 30"/><path d="M210 98 C 150 90, 140 72, 140 56"/>
       </g>
-
-      <g class="head">
-        <text x="100" y="28" text-anchor="middle">callers</text>
-        <text x="320" y="28" text-anchor="middle">core</text>
-        <text x="540" y="28" text-anchor="middle">plugins</text>
-      </g>
-
-      <g class="item">
-        <text x="100" y="76" text-anchor="middle">cli</text>
-        <text x="100" y="100" text-anchor="middle">library</text>
-        <text x="100" y="124" text-anchor="middle">wasm</text>
-      </g>
-
-      <rect class="box" x="240" y="60" width="160" height="100"/>
-      <g class="item">
-        <text x="320" y="88" text-anchor="middle">Open</text>
-        <text x="320" y="112" text-anchor="middle">Sync</text>
-        <text x="320" y="136" text-anchor="middle">Timeline</text>
-      </g>
-
-      <rect class="box" x="490" y="60" width="100" height="100"/>
-      <g class="item">
-        <text x="540" y="88" text-anchor="middle">db driver</text>
-        <text x="540" y="112" text-anchor="middle">transport</text>
-        <text x="540" y="136" text-anchor="middle">observer</text>
-      </g>
-
-      <rect class="box" x="240" y="200" width="160" height="40"/>
-      <g class="item">
-        <text x="320" y="225" text-anchor="middle">.fossil (SQLite)</text>
-      </g>
-
-      <g class="flow">
-        <line x1="160" y1="100" x2="234" y2="100" marker-end="url(#lf-arrow)"/>
-        <line x1="400" y1="88" x2="486" y2="88" marker-end="url(#lf-arrow)"/>
-        <line x1="490" y1="136" x2="404" y2="136" marker-end="url(#lf-arrow)"/>
-        <line x1="320" y1="160" x2="320" y2="196" marker-end="url(#lf-arrow)"/>
-      </g>
-
-      <g class="flow-label">
-        <text x="197" y="92" text-anchor="middle">calls</text>
-        <text x="443" y="80" text-anchor="middle">delegate</text>
-        <text x="447" y="154" text-anchor="middle">events</text>
-        <text x="334" y="183" text-anchor="start">persist</text>
+      <g font-family="JetBrains Mono, monospace" font-size="9.5" fill="#f1e9da">
+        <circle cx="210" cy="220" r="6" fill="#30291f" stroke="#a99c86"/><circle cx="210" cy="168" r="6" fill="#30291f" stroke="#a99c86"/>
+        <circle cx="210" cy="134" r="7" fill="#d9663b"/><text x="222" y="138">C</text>
+        <circle cx="210" cy="98" r="6" fill="#f1e9da"/><circle cx="210" cy="62" r="6" fill="#f1e9da"/><circle cx="210" cy="30" r="6" fill="#f1e9da"/><text x="222" y="34">trunk</text>
+        <circle cx="300" cy="98" r="6" fill="#f1e9da"/><circle cx="300" cy="62" r="6" fill="#f1e9da"/><text x="312" y="66">feature</text>
+        <circle cx="140" cy="56" r="6" fill="#f1e9da"/><text x="74" y="60">release</text>
       </g>
     </svg>
+    <figcaption class="legend"><span><i style="background:#f1e9da"></i>held</span><span><i style="background:#30291f;border:1px solid #a99c86"></i>left on the origin</span><span><i style="background:#d9663b"></i>horizon, with a signed seed</span></figcaption>
+  </figure>
+</div></section>
+
+<section class="gutter"><div class="inner split">
+  <div class="stack"><span class="label">Start</span><h2>Open a repository and commit.</h2>
+    <p class="muted">From the command line, or from Go. The <code>libfossil</code> command drives the same code as the library, and the file it writes is an ordinary Fossil repository: stock <code>fossil</code> reads it.</p>
+    <div class="ctas"><a class="btn solid" href="/docs/get-started/quickstart/">Get started</a><a class="btn line" href="/docs/reference/sdk/libfossil/api/">API reference</a></div></div>
+  <div class="stack" style="gap:16px">
+  <div class="code"><div class="cap">shell · the check-in name depends on the time</div><pre><span class="k">$</span> go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
+<span class="k">$</span> libfossil repo new notes.fossil
+<span class="c">created repository: notes.fossil</span>
+<span class="k">$</span> mkdir work &amp;&amp; cd work
+<span class="k">$</span> libfossil -R ../notes.fossil repo open .
+<span class="k">$</span> echo '# notes' &gt; README.md
+<span class="k">$</span> libfossil repo add README.md
+<span class="c">ADDED    README.md</span>
+<span class="k">$</span> libfossil repo ci -m "first notes" --user ana
+<span class="c">checkin &lt;name&gt; (rid=2)</span>
+<span class="k">$</span> fossil timeline -R ../notes.fossil
+<span class="c">&lt;time&gt; [&lt;name&gt;] first notes (user: ana tags: trunk)</span></pre></div>
+  <div class="code"><div class="cap">main.go</div><pre><span class="k">import</span> (
+  <span class="s">"github.com/danmestas/go-libfossil"</span>
+  _ <span class="s">"github.com/danmestas/go-libfossil/db/driver/modernc"</span>
+)
+
+r, err := libfossil.<span class="k">Create</span>(<span class="s">"notes.fossil"</span>, libfossil.CreateOpts{User: <span class="s">"ana"</span>})
+<span class="c">// handle err</span>
+rid, uuid, err := r.<span class="k">Commit</span>(libfossil.CommitOpts{
+  Files:   []libfossil.FileToCommit{{"{{"}}Name: <span class="s">"README"</span>, Content: readme}},
+  Comment: <span class="s">"first notes"</span>,
+  User:    <span class="s">"ana"</span>,
+})
+<span class="c">// fossil open notes.fossil sees the same check-in.</span></pre></div>
   </div>
-  <p class="fineprint"><code>Repo</code> is the only handle your code touches. Three pluggable axes around it decide how SQLite runs, how sync talks to remotes, and where telemetry goes — swappable without changing application code.</p>
-</section>
+</div></section>
 
-<section>
-  <span class="num">§05</span>
-  <h2>Compared to neighbors <span class="anchor">comparison</span></h2>
-  <div class="table-scroll">
-  <table class="cmp">
-    <thead>
-      <tr>
-        <th></th>
-        <th class="col-self">go-libfossil</th>
-        <th>shell-out to fossil</th>
-        <th>CGo libfossil bindings</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr><td>Runtime deps</td>     <td class="col-self">none</td>            <td><code>fossil</code> binary in PATH</td> <td>C toolchain + libsqlite3</td></tr>
-      <tr><td>Static binary</td>    <td class="col-self">yes</td>             <td>host fossil only</td>                  <td>host SQLite only</td></tr>
-      <tr><td>WASM target</td>      <td class="col-self">yes (wasip1)</td>    <td>no</td>                                 <td>no</td></tr>
-      <tr><td>Observability</td>    <td class="col-self">context + OTel</td>  <td>parse stderr</td>                       <td>none built-in</td></tr>
-      <tr><td>Embeddable in Go</td> <td class="col-self">yes</td>             <td>subprocess only</td>                    <td>yes (with CGo)</td></tr>
-      <tr><td>API stability</td>    <td class="col-self">alpha; v0.x</td>     <td>stable</td>                             <td>tracks C upstream</td></tr>
-    </tbody>
-  </table>
-  </div>
-  <p class="fineprint">Comparison reflects libfossil's current scope. The upstream Fossil binary remains the reference implementation; libfossil targets the embedding-into-Go-services niche.</p>
-</section>
-
-<section>
-  <span class="num">§06</span>
-  <h2>What it is not <span class="anchor">limits</span></h2>
-  <p><strong>No GUI.</strong> Fossil ships an embedded web UI; libfossil does not. If you need it, run the upstream <code>fossil</code> binary alongside.</p>
-  <p><strong>No hosting (yet).</strong> libfossil reads and writes <code>.fossil</code> files; it does not run an HTTP server that serves them to other Fossil clients. Mirroring works as a sync target, not a host.</p>
-  <p><strong>No magic schema migrations.</strong> libfossil tracks the upstream Fossil schema. Breaking format changes upstream require a libfossil update before you can open the new format.</p>
-</section>
-
-<section>
-  <span class="num">§07</span>
-  <h2>Get going <span class="anchor">start</span></h2>
-  <div class="code-block">
-    <div class="code-bar">
-      <span>shell</span>
-      <button type="button" class="copy-btn" data-copy="quickstart" aria-label="Copy quickstart commands">copy</button>
-    </div>
-    <pre id="quickstart">$ go install github.com/danmestas/go-libfossil/cmd/libfossil@latest
-$ libfossil --help                            # CLI commands
-$ libfossil --version</pre>
-  </div>
-  <p>Walkthrough: <a href="/docs/quickstart/">/docs/quickstart</a> · Architecture: <a href="/docs/architecture/">/docs/architecture</a> · SDK reference: <a href="/docs/reference/sdk/">/docs/reference/sdk</a> · Source: <a href="https://github.com/danmestas/go-libfossil">github.com/danmestas/go-libfossil</a>.</p>
-</section>
-
+<section class="gutter"><div class="inner stack">
+  <span class="label">What it is not</span>
+  <ul class="nots">
+    <li>Not a replacement for the fossil binary's web interface, wiki or forum server.</li>
+    <li>Not a hosting service: it is a library and a command-line tool you run.</li>
+    <li>Not a Git bridge. It speaks Fossil's formats and protocol only.</li>
+  </ul>
+</div></section>
 </main>
 
-<footer>
-  <div>go-libfossil &nbsp;·&nbsp; MIT &nbsp;·&nbsp; v{{ .Site.Params.version | default "0.4.2" }} &nbsp;·&nbsp; {{ now.Year }} &nbsp;·&nbsp; <a href="https://github.com/danmestas/go-libfossil">github.com/danmestas/go-libfossil</a></div>
-</footer>
-
-<script>
-(function () {
-  var btns = document.querySelectorAll(".copy-btn");
-  btns.forEach(function (b) {
-    b.addEventListener("click", function () {
-      var t = document.getElementById(b.dataset.copy);
-      if (!t) return;
-      var s = t.textContent.replace(/^\s*\$\s?/gm, "").replace(/\s+#.*$/gm, "").trim();
-      var done = function () {
-        b.dataset.state = "copied";
-        b.textContent = "copied";
-        setTimeout(function () { b.dataset.state = ""; b.textContent = "copy"; }, 1500);
-      };
-      if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(s).then(done).catch(function () { b.textContent = "select+copy"; });
-      } else {
-        var ta = document.createElement("textarea");
-        ta.value = s;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        try { document.execCommand("copy"); done(); } catch (e) { b.textContent = "select+copy"; }
-        document.body.removeChild(ta);
-      }
-    });
-  });
-})();
-</script>
-
+<footer class="gutter"><div class="inner"><span>go-libfossil · <a href="https://github.com/danmestas/go-libfossil/blob/main/LICENSE">MIT</a></span><span class="mono">fossil {{ $fossil }} · zit · Go {{ $goVersion }}</span></div></footer>
 </body>
 </html>

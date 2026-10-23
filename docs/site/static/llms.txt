@@ -1,0 +1,126 @@
+# go-libfossil
+
+> A Fossil repository engine in Go without cgo: it reads, writes and syncs Fossil repositories (the artifact format, the derived tables and the sync protocol). Go module `github.com/danmestas/go-libfossil` (package `libfossil`), command `libfossil`. A repository is an ordinary `.fossil` SQLite file that stock fossil reads.
+
+This file is generated from `docs/site/llms-header.md` plus the docs site. Every link below is a page on the docs site; [llms-full.txt](https://libfossil-docs.daniel-mestas.workers.dev/llms-full.txt) holds all pages in one file.
+
+## Key concepts
+
+- **Artifact**: a text manifest made of cards (check-in, tag, wiki, cluster, ...). Its name is the SHA1 or SHA3-256 hash of its bytes.
+- **Repository state**: the tables (`event`, `plink`, `mlink`, `tagxref`, `leaf`, ...) derived from the artifacts by crosslinking, matching what `fossil rebuild` writes.
+- **Sync**: Fossil's card protocol over HTTP (`igot`, `gimme`, `file`, ...), as a client (`Clone`, `Repo.Sync`, `Repo.Pull`) and a stateless server (`libfossil repo serve`).
+- **Sparse cone**: a set of paths a checkout or a store holds; content outside it is elided, not lost.
+- **Horizon**: a check-in below which a store leaves history on the origin; at the structural depth the clone verifies a seed the origin can sign.
+- **Sub-manifests**: an extension that writes a check-in as a tree of manifests instead of one flat file list, shared with zit.
+- **Driver**: the `database/sql` SQLite driver, chosen by blank import: `db/driver/modernc` (pure Go) or `db/driver/ncruces` (SQLite as WebAssembly, for js/wasm and wasip1).
+
+## Quick start
+
+1. `go install github.com/danmestas/go-libfossil/cmd/libfossil@latest`
+2. `libfossil repo new notes.fossil`, then `libfossil -R notes.fossil repo open .`, `libfossil repo add README.md`, `libfossil repo ci -m "first notes"`.
+3. From Go: blank-import a driver, then `libfossil.Create(path, libfossil.CreateOpts{User: "ana"})` or `libfossil.Open(path)`, and `r.Commit(libfossil.CommitOpts{...})`, `r.Timeline(libfossil.TimelineOpts{...})`.
+4. Sync: `libfossil.Clone(ctx, path, libfossil.NewHTTPTransport(url), libfossil.CloneOpts{})`, then `r.Sync(ctx, t, libfossil.SyncOpts{Pull: true})`.
+
+## Go packages
+
+- `.` (package `libfossil`): `Repo`, `Create`, `Open`, `Clone`, check-ins, checkouts, history, merge, sync.
+- `cli`: the Kong command structs behind `libfossil`, embeddable in another binary.
+- `db`: the SQLite abstraction and driver registration.
+- `db/driver/modernc`: pure-Go SQLite driver (separate module).
+- `db/driver/ncruces`: SQLite-as-WebAssembly driver (separate module).
+- `observer/otel`: OpenTelemetry observer (separate module).
+- `dst`: deterministic simulation of sync between nodes.
+- `simio`: clock, randomness and storage seams for deterministic tests.
+
+## Overview
+
+- [Documentation](https://libfossil-docs.daniel-mestas.workers.dev/docs/): go-libfossil reads, writes and syncs Fossil repositories in Go, without cgo.
+- [Examples](https://libfossil-docs.daniel-mestas.workers.dev/docs/examples/): Runnable examples live in the repo.
+
+## Get started
+
+- [Install](https://libfossil-docs.daniel-mestas.workers.dev/docs/get-started/install/): go-libfossil is a Go module and a command.
+- [Quickstart: the CLI](https://libfossil-docs.daniel-mestas.workers.dev/docs/get-started/quickstart/): Create a repository, commit a file, and read the result with stock fossil.
+- [Embed in Go](https://libfossil-docs.daniel-mestas.workers.dev/docs/get-started/embed-in-go/): The libfossil package does what the command does, as typed Go values instead of command output.
+- [First sync](https://libfossil-docs.daniel-mestas.workers.dev/docs/get-started/first-sync/): Two repositories exchange check-ins with Fossil's sync protocol over HTTP.
+
+## Concepts
+
+- [Architecture](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/architecture/): The packages of go-libfossil, the SQLite driver layer, the observer interfaces and the deterministic simulator.
+- [Artifacts](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/artifacts/): Everything a Fossil repository records is an artifact: a run of bytes, named by its own hash, that is never changed once written.
+- [Repository state](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/repository-state/): Artifacts are the only facts a repository records.
+- [Sync](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/sync/): Two repositories exchange artifacts with Fossil's sync protocol: text cards carried in HTTP POST bodies, one request and one reply per round.
+- [Sub-manifests](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/sub-manifests/): A check-in manifest has one F card per file in the tree, not per changed file.
+- [Sparse cones](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/sparse-cones/): A repository does not have to hold everything.
+- [Horizons](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/horizons/): A horizon cuts a store by time.
+- [Signing](https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/signing/): go-libfossil signs two kinds of artifact: check-ins, as fossil and zit sign them, and the seeds an origin mints for structural horizons.
+
+## Guides
+
+- [Production patterns](https://libfossil-docs.daniel-mestas.workers.dev/docs/guides/production/): The Quickstart uses log.Fatal to keep the snippets short.
+- [Migrating from fossil](https://libfossil-docs.daniel-mestas.workers.dev/docs/guides/migrating-from-fossil/): This guide is for users of upstream Fossil SCM (the C binary distributed by fossil-scm.org) who are evaluating libfossil — a pure-Go implementation of the Fossil repository format and sync protocol.
+- [Embedding the CLI](https://libfossil-docs.daniel-mestas.workers.dev/docs/guides/cli-embedding/): An application that keeps version history in a Fossil repository can run the libfossil binary as a child process: no checkout, no shadow working tree.
+- [Extension points](https://libfossil-docs.daniel-mestas.workers.dev/docs/guides/extension-points/): libfossil exposes four surfaces for consumers that want to instrument, extend, or replace pieces of the stack:
+- [Testing](https://libfossil-docs.daniel-mestas.workers.dev/docs/guides/testing/): This guide describes libfossil's test strategy for contributors adding tests or investigating failures.
+
+## Reference
+
+- [SDK](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/): Auto-generated Go API reference.
+- [cli](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/cli/api/):   - func \(g \*Globals\) OpenRepo\(\) \(\*libfossil.Repo, error\) - type RepoAddCmd   - func \(c \*RepoAddCmd\) Run\(g \*Globals\) \(err error\) - type RepoAnnotateCmd   - func \(c \*RepoAnnotateCmd\) Run\(g \*Globals...
+- [db/driver/modernc](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/db/driver/modernc/): Pure-Go SQLite driver, the libfossil default.
+- [db/driver/ncruces](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/db/driver/ncruces/): Wasm-friendly SQLite driver based on ncruces/go-sqlite3.
+- [db](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/db/api/): Package db provides a SQLite database layer with pluggable drivers.
+- [dst](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/dst/api/):   - func NewDefaultNode\(r \*repo.Repo, t sync.Transport, projectCode, serverCode string, opts DefaultNodeOpts\) \*DefaultNode   - func \(n \*DefaultNode\) Repo\(\) \*repo.Repo   - func \(n \*DefaultNode\) Tick\(ctx c...
+- [libfossil](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/libfossil/api/):   - [func \(c \*Checkout\) Add\(patterns \[\]string\) \(int, error\)](<#Checkout.Add>)   - func \(c \*Checkout\) Checkin\(opts CheckoutCommitOpts\) \(rid int64, uuid string, err error\)   - func \(c \*Checkout\) Close...
+- [observer/otel](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/observer/otel/api/): Package otel provides OpenTelemetry implementations of the libfossil SyncObserver and CheckoutObserver interfaces.
+- [CLI](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/): The libfossil command, one page per command group.
+- [repo new](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-new/): Create a new repository
+- [repo clone](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-clone/): Clone a remote repository
+- [repo ci](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-ci/): Checkin file changes
+- [repo co](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-co/): Checkout a version
+- [repo ls](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-ls/): List files in a version
+- [repo timeline](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-timeline/): Show repository history
+- [repo snapshot](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-snapshot/): Commit a file's bytes onto trunk, no checkout needed
+- [repo log](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-log/): Show the check-ins that changed a path
+- [repo cat](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-cat/): Output artifact content
+- [repo info](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-info/): Repository statistics
+- [repo hash](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-hash/): Hash files (SHA1 or SHA3)
+- [repo delta](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-delta/): Delta create/apply operations
+- [repo config](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-config/): Repository configuration
+- [repo query](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-query/): Execute SQL against repository
+- [repo verify](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-verify/): Verify repository integrity
+- [repo resolve](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-resolve/): Resolve symbolic name to UUID
+- [repo extract](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-extract/): Extract files from a version
+- [repo wiki](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-wiki/): Wiki page operations
+- [repo tag](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-tag/): Tag operations
+- [repo open](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-open/): Open a checkout in a directory
+- [repo status](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-status/): Show working directory changes
+- [repo add](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-add/): Stage files for addition
+- [repo rm](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-rm/): Stage files for removal
+- [repo rename](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-rename/): Rename a tracked file
+- [repo revert](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-revert/): Undo staging changes
+- [repo diff](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-diff/): Show changes vs a version
+- [repo merge](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-merge/): Merge a divergent version
+- [repo conflicts](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-conflicts/): List/manage unresolved conflicts
+- [repo mark-resolved](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-mark-resolved/): Mark a conflict as resolved
+- [repo undo](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-undo/): Undo last operation
+- [repo redo](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-redo/): Redo undone operation
+- [repo stash](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-stash/): Stash working changes
+- [repo bisect](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-bisect/): Binary search for bugs
+- [repo annotate](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-annotate/): Annotate file lines with version history
+- [repo blame](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-blame/): Alias for annotate
+- [repo branch](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-branch/): Branch operations
+- [repo uv](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-uv/): Unversioned file operations
+- [repo schema](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-schema/): Synced table schema operations
+- [repo user](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-user/): User management
+- [repo invite](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-invite/): Generate invite token for a user
+- [repo serve](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-serve/): Serve repository over HTTP for sync/clone
+- [repo submanifests](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-submanifests/): Sub-manifest tree settings
+- [repo cone](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-cone/): Show or edit a checkout's sparse cone
+- [version](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/version/): Print version information
+- [Settings](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/settings/): A repository setting is one row of the config table in the repository file.
+- [Conformance](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/conformance/): Every requirement of every draft go-libfossil implements, with its status, from the conformance test suite.
+
+## Optional
+
+- [Full documentation in one file](https://libfossil-docs.daniel-mestas.workers.dev/llms-full.txt): every page above, concatenated in order

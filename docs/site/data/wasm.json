@@ -1,0 +1,8 @@
+{
+  "program": "examples/tinygo: the whole public API, HTTP sync and signing included",
+  "tinygo": "0.43.0",
+  "tinygo_source": "the Build (tinygo) CI job: TinyGo's Linux release, its own wasm-opt, no further pass",
+  "tinygo_build": {"raw": 3515322, "gzip": 1259972},
+  "go": "1.27.3",
+  "standard": {"raw": 16104412, "gzip": 4055005}
+}

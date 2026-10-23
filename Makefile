@@ -1,6 +1,6 @@
 GOMARKDOC_VERSION := v1.1.0
 
-.PHONY: test test-drivers test-otel test-all vet build setup-hooks docs-gen-sdk docs-gen-llms docs-serve docs-build docs
+.PHONY: test test-drivers test-otel test-all vet build setup-hooks docs-gen-sdk docs-gen-llms docs-check-llms docs-gen docs-check docs-version docs-serve docs-build docs
 
 test:
 	go test ./... -count=1 -timeout=120s
@@ -38,14 +38,33 @@ docs-gen-sdk:
 	gomarkdoc --output docs/site/content/docs/reference/sdk/dst/api.md           ./dst/
 	bash scripts/prepend-sdk-frontmatter.sh
 
-docs-gen-llms: docs-gen-sdk
-	bash scripts/gen-llms-txt.sh
+# llms.txt and llms-full.txt, from docs/site/llms-header.md and the content tree.
+docs-gen-llms:
+	./scripts/gen-llms-txt.sh
+
+docs-check-llms:
+	./scripts/check-llms-txt.sh
+
+# Every generated docs input: the hero figure and conformance data, the CLI
+# reference and llms*.txt. docs-check fails if any is stale; CI runs it.
+docs-gen:
+	./scripts/gen-docs.sh
+
+docs-check: docs-check-llms
+	./scripts/check-docs-generated.sh
+
+# params.version and params.goVersion in docs/site/hugo.yaml, from the latest
+# release tag and go.mod. The Cloudflare build runs it before Hugo.
+docs-version:
+	./scripts/sync-version.sh
 
 docs-serve:
-	cd docs/site && hugo server -D --port 1313
+	cd docs/site && GOWORK=off hugo server -D --port 1313
 
-docs-build: docs-gen-sdk docs-gen-llms
-	cd docs/site && hugo --minify
+# The deploy build (scripts/docs-build.sh, no Go needed) after regenerating
+# every generated input.
+docs-build: docs-gen-sdk docs-gen
+	GOWORK=off ./scripts/docs-build.sh
 
 docs: docs-build
 	@echo "=== docs: built into docs/site/public/ ==="

@@ -15,4 +15,4 @@ On `js/wasm` targets the package additionally imports `go-sqlite3-opfs`, routing
 
 Use this driver when you need a smaller Wasm footprint than `modernc` provides, or for build configurations where `ncruces`'s tradeoffs are preferred.
 
-See [db](../..) for the registry interface.
+See [db](/docs/reference/sdk/db/api/) for the registry interface.

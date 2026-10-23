@@ -203,6 +203,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as does the memo read, and each request no longer creates the table-sync
   schema on a repository that lacks it; a schema card creates it. v0.14.0
   has the same write transaction per request.
+- A cone or horizon clone of a large repository completes. A clone of the
+  Fossil repository stalled in its first round, in every sparse mode, on
+  v0.14.0 as on this branch; under a {src} cone, a content horizon and a
+  structural horizon it now takes about 8 minutes, 2 and a half, and 30
+  seconds, and verifies. Four costs were behind it:
+  - The origin classified each row it walked, and each served delta's
+    base, by expanding its whole chain afresh. It now takes the rows its
+    crosslink tables prove to be file content without reading them
+    (`mlink` names them and no artifact table claims them; a store that
+    has seen a sub-manifest proves nothing this way), and expands the
+    rest through a cache kept for the request.
+  - A row the walk passed over was charged its expanded size against the
+    round, and a dense round charges a row's stored delta, so a sparse
+    round covered a hundredth of a dense one's rows and the clone ran out
+    of rounds. It is now charged its stored size, as SC-6.2-1 bounds the
+    walk as a dense clone bounds its batches.
+  - A file version's base is the next version, which a walk in rid order
+    reaches later, so each version went out whole. A base the store's
+    classification of the cone keeps is now sent first and the version as
+    a delta of it.
+  - The client tested each waiting check-in's every file again at each
+    arrival, and its waiter index filled after a few check-ins. A clone
+    into a sparse store now waits on no file (the origin sends every file
+    the store keeps in the same session), a pull waits on none its cone's
+    paths exclude, and a waiting check-in is tested again only once all it
+    waits on has arrived.
+- A check-in that arrives before the check-in it cherrypicks keeps its
+  `cherrypick` row and the auxiliary `mlink` rows for that source. The
+  missing source is reserved as a phantom, as a missing parent is, and is
+  linked when it arrives; fossil leaves this to the rebuild its clone ends
+  with. A clone of the Fossil repository lacked 139 `cherrypick` rows and
+  262 `mlink` rows.
+- A sparse store publishes a check-in's event and plink rows when a parent
+  or cherrypick source is absent, against its phantom as a dense store
+  does; its orphan row keeps the file history waiting until the source
+  arrives. The Fossil repository lacks the parents of five check-ins, so
+  every sparse clone of it failed `repo verify` on them.
 - An origin answering a horizon request no longer sends a cluster that the
   request names by gimme (draft-fossil-horizon-00 §4.5, §6.2). Its clone,
   pull and sync replies already announced none, and req-clusters already

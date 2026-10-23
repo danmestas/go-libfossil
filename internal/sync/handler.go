@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -1942,7 +1943,8 @@ func (h *handler) newCloneBatch() *cloneBatch {
 
 func (h *handler) walkCloneRows(round *cloneBatch) error {
 	rows, err := h.repo.DB().Query(
-		"SELECT rid, uuid, size FROM blob WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid",
+		`SELECT rid, uuid, size, substr(content, 1, 4) FROM blob
+		  WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid`,
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -1953,10 +1955,13 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 		var rid int
 		var uuid string
 		var fullSize int
-		if err := rows.Scan(&rid, &uuid, &fullSize); err != nil {
+		var prefix []byte
+		if err := rows.Scan(&rid, &uuid, &fullSize, &prefix); err != nil {
 			return err
 		}
-		more, err := h.cloneRow(round, rid, uuid, fullSize)
+		more, err := h.cloneRow(round, cloneCandidate{
+			rid: rid, uuid: uuid, fullSize: fullSize, storedSize: storedSize(prefix, fullSize),
+		})
 		if err != nil {
 			return err
 		}
@@ -1967,9 +1972,39 @@ func (h *handler) walkCloneRows(round *cloneBatch) error {
 	return rows.Err()
 }
 
+// excludedCost is what a round is charged for a row it walks past (§6.2,
+// SC-6.2-1): what a dense round charges to send it as stored. Charging the
+// expanded size instead made a sparse round of fossil-scm.org's repository
+// cover a hundredth of a dense round's rows, and the clone outlasted
+// MaxRounds.
+func excludedCost(c cloneCandidate) int {
+	return cloneCardOverheadBytes + c.storedSize
+}
+
+// cloneCandidate is one row a clone round may send. storedSize is the size
+// of its stored bytes once inflated: its delta when it is stored as one.
+type cloneCandidate struct {
+	rid        int
+	uuid       string
+	fullSize   int
+	storedSize int
+}
+
+// storedSize reads a blob's inflated stored size from the four-byte
+// big-endian prefix fossil's blob_compress writes ahead of the zlib stream,
+// so a row can be charged without inflating it. A content too short to
+// carry the prefix is charged its full size.
+func storedSize(prefix []byte, fullSize int) int {
+	if len(prefix) < 4 {
+		return max(fullSize, 0)
+	}
+	return int(binary.BigEndian.Uint32(prefix))
+}
+
 // cloneRow offers one candidate row to the round. It reports false once the
 // round is full, having set the cursor the client resumes from.
-func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
+func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
+	rid, uuid, fullSize := c.rid, c.uuid, c.fullSize
 	// A higher-rid delta source that a dependent's chain already pulled in
 	// this round is on the wire; skip it before it can consume budget or
 	// advance the cursor a second time. A sparse walk still owes the walk of
@@ -1997,13 +2032,12 @@ func (h *handler) cloneRow(round *cloneBatch, rid int, uuid string, fullSize int
 		return false, nil
 	}
 	if walk {
-		return h.cloneSparseRow(round, rid, uuid, fullSize)
+		return h.cloneSparseRow(round, c)
 	}
 	// §6.2: a cone-excluded row is charged as a dense round would charge
-	// it, at no less than its expanded size, so the walk stops no later
-	// than a dense batch over the same rows would.
+	// it, at the size of its stored bytes (excludedCost).
 	if !h.keep.keeps(libfossil.FslID(rid)) {
-		round.bytesSent += cloneCardOverheadBytes + max(fullSize, 0)
+		round.bytesSent += excludedCost(c)
 		return true, nil
 	}
 	sent, err := h.cloneSend(round, rid, uuid, fullSize)

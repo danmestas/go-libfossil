@@ -131,6 +131,7 @@ func (c *RepoConeStoreCmd) Run(g *Globals) (err error) {
 		fetched = result.FilesRecvd
 	}
 	fmt.Printf("fetched %d artifact(s)\n", fetched)
+	printHistoryURL(result)
 	return nil
 }
 
@@ -215,7 +216,17 @@ func (c *RepoConeDeepenCmd) Run(g *Globals) (err error) {
 	}
 	printCone(cone)
 	fmt.Printf("fetched %d artifact(s)\n", result.FilesRecvd)
+	printHistoryURL(result)
 	return nil
+}
+
+// printHistoryURL names the interface at which the origin says history
+// below the horizon can be queried, when a reply named one
+// (draft-fossil-horizon-00 §6.2.5).
+func printHistoryURL(result *libfossil.SyncResult) {
+	if result != nil && result.HorizonHistoryURL != "" {
+		fmt.Printf("history: %s\n", result.HorizonHistoryURL)
+	}
 }
 
 // structuralSuffix marks a structural horizon where one is printed; the

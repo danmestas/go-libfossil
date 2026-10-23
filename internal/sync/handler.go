@@ -225,6 +225,7 @@ type handler struct {
 	cone            *cone.Cone
 	keep            *sparseKeep
 	partialMirror   bool
+	historyURL      string // named in a horizon reply's horizon-served (§6.2.5)
 	repo            *repo.Repo
 	buggify         BuggifyChecker
 	resp            []xfer.Card
@@ -476,6 +477,10 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	if h.cone != nil {
 		if err := h.prepareStructural(ctx, req.Cards); err != nil {
+			return nil, err
+		}
+		var err error
+		if h.historyURL, err = historyURL(h.repo.DB()); err != nil {
 			return nil, err
 		}
 	}

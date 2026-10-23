@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- An origin can name the interface outside the sync protocol at which
+  history below a horizon can be queried (draft-fossil-horizon-00
+  §6.2.5): the new `horizon-history-url` setting
+  (`SettingHorizonHistoryURL`) is appended to every `pragma horizon-served`
+  it emits. `SetConfig` refuses a value that is not one http or https URL
+  with a host and no white space or credentials, and a value stored past
+  that check is not emitted. A horizon client records the URL a reply
+  names, from go-libfossil or any other origin, as
+  `CloneResult.HorizonHistoryURL` and `SyncResult.HorizonHistoryURL`, and
+  `libfossil repo clone`, `repo cone store` and `repo cone deepen` print it.
 - Content horizons in the public API and CLI. A horizon is part of a
   store `Cone`: `NewHorizonCone(include, exclude, Horizon{Checkin, Rule})`
   builds one, with or without path members, and `Cone.Horizon` and

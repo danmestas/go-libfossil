@@ -604,3 +604,33 @@ func TestResolveNameBelowHorizon(t *testing.T) {
 		t.Fatalf("an unknown name: %v, want ErrVersionNotFound", err)
 	}
 }
+
+// An origin's horizon-history-url rides horizon-served, and a horizon clone
+// and pull report it (draft-fossil-horizon-00 §6.2.5); an invalid one is
+// refused when set.
+func TestHorizonHistoryURL(t *testing.T) {
+	f := newHorizonFixture(t)
+	if err := f.source.SetConfig(SettingHorizonHistoryURL, "ftp://example.org/h"); err == nil {
+		t.Fatal("an ftp history URL was accepted")
+	}
+	const url = "https://example.org/history"
+	if err := f.source.SetConfig(SettingHorizonHistoryURL, url); err != nil {
+		t.Fatal(err)
+	}
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, cloned, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer, CloneOpts{StoreCone: hc})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	pulled, err := target.Sync(context.Background(), f.peer, SyncOpts{Pull: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloned.HorizonHistoryURL != url || pulled.HorizonHistoryURL != url {
+		t.Fatalf("clone reported %q and pull %q, want %q", cloned.HorizonHistoryURL, pulled.HorizonHistoryURL, url)
+	}
+}

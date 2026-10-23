@@ -104,6 +104,9 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 			fmt.Println("  Horizon:      structural")
 		}
 	}
+	if result.HorizonHistoryURL != "" {
+		fmt.Printf("  History:      %s\n", result.HorizonHistoryURL)
+	}
 	return nil
 }
 

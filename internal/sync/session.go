@@ -92,6 +92,10 @@ type SyncResult struct {
 	ArtifactsLinked               int
 	Errors                        []string
 	CkinLockFail                  *CkinLockFail // nil = no conflict
+	// HorizonHistoryURL is the interface outside the protocol at which the
+	// origin says history below a horizon can be queried (horizon-served
+	// URL, §6.2.5), the last a reply named; "" when none did.
+	HorizonHistoryURL string
 	// AvoidSubmanifests reports that this exchange received pragma
 	// avoid-submanifests (draft-fossil-submanifests-00 §7.2). Sync makes no
 	// commit; this observation does not bind a later local commit.

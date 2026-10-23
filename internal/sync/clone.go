@@ -734,6 +734,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 			if d == cone.DepthStructural {
 				cs.result.StructuralServed++
 			}
+			if u := servedHistoryURL(c); u != "" {
+				cs.result.HorizonHistoryURL = u
+			}
 		}
 	case *xfer.ConfigCard:
 		if c.Name == configScalarMarker {

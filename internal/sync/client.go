@@ -996,6 +996,9 @@ func (s *session) handleReplyPragma(c *xfer.PragmaCard) {
 			if d == cone.DepthStructural {
 				s.result.StructuralServed++
 			}
+			if u := servedHistoryURL(c); u != "" {
+				s.result.HorizonHistoryURL = u
+			}
 		}
 	case c.Name == horizonCursorPragma:
 		if n, ok := parseCursor(c); ok {

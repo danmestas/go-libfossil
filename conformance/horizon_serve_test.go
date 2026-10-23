@@ -38,6 +38,7 @@ var (
 	horizonServeRefuse   = Case{ID: "horizon.6.4.refuse", Req: "HZ-6.4-1"}
 	horizonServeNoChase  = Case{ID: "horizon.4.5.served-no-cluster-chase", Req: "HZ-4.5-1"}
 	horizonServeOrigin   = Case{ID: "horizon.4.1.origin-no-cluster", Req: "HZ-4.1-1"}
+	horizonServeHistory  = Case{ID: "horizon.6.2.5.history-url", Req: "HZ-6.2-8"}
 )
 
 func horizonServeCases() []Case {
@@ -45,6 +46,7 @@ func horizonServeCases() []Case {
 		horizonServeRequest, horizonServeAbove, horizonServePaths, horizonServeTree, horizonServeRounds,
 		horizonServeClusters, horizonServeInflate, horizonServeServed, horizonServeIgnored,
 		horizonServeRefuse, horizonServeNoChase, horizonServeOrigin,
+		horizonServeHistory,
 	}
 }
 
@@ -61,6 +63,7 @@ func TestHorizonServe(t *testing.T) {
 	check(t, horizonServeRefuse, func() error { return hzServeRefuse(t) })
 	check(t, horizonServeNoChase, func() error { return hzServeNoChase(t) })
 	check(t, horizonServeOrigin, func() error { return hzServeOriginClusters(t) })
+	check(t, horizonServeHistory, func() error { return hzServeHistoryURL(t) })
 }
 
 // hzPragmas returns the values of every pragma named name in m.
@@ -768,4 +771,45 @@ func hzServeOriginClusters(t *testing.T) error {
 		return fmt.Errorf("horizon pragma after the asks: %w", err)
 	}
 	return nil
+}
+
+// An origin whose horizon-history-url is set names it after the level in
+// every horizon-served it emits, and the clone and pull report it; a
+// setting that is not one http or https token is refused, so no reply
+// carries a token its client cannot read (§6.2.5).
+func hzServeHistoryURL(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	if err := g.f.r.SetConfig(repo.SettingHorizonHistoryURL, "https://example.org/a b"); err == nil {
+		return expectf("the origin took a history URL holding a space")
+	}
+	const url = "https://example.org/history?repo=horizon"
+	if err := g.f.r.SetConfig(repo.SettingHorizonHistoryURL, url); err != nil {
+		return err
+	}
+	peer, r, cloned, err := hzServeClone(t, g, g.c, sync.HandleOpts{})
+	if err != nil {
+		return err
+	}
+	hzCommit(t, g.f, "c5", []libfossil.FslID{g.m}, nil)
+	pulled, err := sync.Sync(context.Background(), r, peer, sync.SyncOpts{Pull: true})
+	if err != nil {
+		return err
+	}
+	if cloned.HorizonHistoryURL != url || pulled.HorizonHistoryURL != url {
+		return expectf("clone reported %q and pull %q, want %q", cloned.HorizonHistoryURL, pulled.HorizonHistoryURL, url)
+	}
+	for i, reply := range peer.replies {
+		got := hzPragmas(reply, "horizon-served")
+		if len(got) != 1 || strings.Join(got[0], " ") != "content "+url {
+			return expectf("reply %d carries horizon-served %q, want content %s", i, got, url)
+		}
+	}
+	dense, _, densed, err := hzServeClone(t, g, nil, sync.HandleOpts{})
+	if err != nil {
+		return err
+	}
+	if densed.HorizonHistoryURL != "" {
+		return expectf("a dense clone reported history URL %q", densed.HorizonHistoryURL)
+	}
+	return hzServedReplies(dense.replies, 0)
 }

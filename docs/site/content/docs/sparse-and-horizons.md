@@ -154,6 +154,8 @@ The result counts:
 
 All three are zero for a dense clone. `SyncResult` has the same three fields. A server that will not serve a sparse clone refuses it.
 
+`HorizonHistoryURL`, on both results, is the address the origin gives for querying history below the horizon outside the sync protocol, when it gives one. An origin sets it with `repo config set horizon-history-url https://...` (`SettingHorizonHistoryURL`); only one http or https URL with no spaces or credentials is accepted. `repo clone` prints it as `History:`.
+
 ### Set, deepen and drop on an existing store
 
 ```go

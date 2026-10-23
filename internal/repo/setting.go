@@ -1,6 +1,8 @@
 package repo
 
 import (
+	"fmt"
+	"net/url"
 	"runtime"
 	"strings"
 )
@@ -59,4 +61,42 @@ func (r *Repo) FilenamesCaseSensitive() bool {
 		return dflt
 	}
 	return SettingBoolean(value, dflt)
+}
+
+// SettingHorizonHistoryURL names the repository setting an origin appends
+// to pragma horizon-served as the interface, outside the sync protocol, at
+// which history below a horizon can be queried (draft-fossil-horizon-00
+// §6.2.5, §5.5). Unset or empty, an origin names none.
+const SettingHorizonHistoryURL = "horizon-history-url"
+
+// MaxHistoryURLLen bounds a history URL, which every horizon reply carries.
+const MaxHistoryURLLen = 2048
+
+// CheckHistoryURL reports why s cannot be a horizon-served URL. It rides
+// the pragma as one card token, so it holds no white space or control
+// byte; it names an http or https interface with a host, and no
+// credentials, since every horizon client is sent it.
+func CheckHistoryURL(s string) error {
+	if s == "" || len(s) > MaxHistoryURLLen {
+		return fmt.Errorf("history URL must be 1 to %d bytes, not %d", MaxHistoryURLLen, len(s))
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] <= ' ' || s[i] == 0x7f {
+			return fmt.Errorf("history URL %q must be a single token: byte %d is white space or a control byte", s, i)
+		}
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return fmt.Errorf("history URL %q: %w", s, err)
+	}
+	if scheme := strings.ToLower(u.Scheme); scheme != "http" && scheme != "https" {
+		return fmt.Errorf("history URL %q must be http or https", s)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("history URL %q names no host", s)
+	}
+	if u.User != nil {
+		return fmt.Errorf("history URL %q must not carry credentials", s)
+	}
+	return nil
 }

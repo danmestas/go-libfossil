@@ -61,8 +61,10 @@ docs-version:
 docs-serve:
 	cd docs/site && GOWORK=off hugo server -D --port 1313
 
-docs-build: docs-version docs-gen-sdk docs-gen
-	cd docs/site && GOWORK=off hugo --gc --minify
+# The deploy build (scripts/docs-build.sh, no Go needed) after regenerating
+# every generated input.
+docs-build: docs-gen-sdk docs-gen
+	GOWORK=off ./scripts/docs-build.sh
 
 docs: docs-build
 	@echo "=== docs: built into docs/site/public/ ==="

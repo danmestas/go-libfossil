@@ -271,7 +271,7 @@ func pathRows(q db.Querier, root libfossil.FslID,
 }
 
 // childRows lists the rows whose delta is against parent and that lie on a
-// path to a dangling delta, in rid order.
+// path to a dangling delta, in rid order; with a nil onPath, every one.
 func childRows(q db.Querier, parent libfossil.FslID,
 	onPath map[libfossil.FslID]bool) ([]libfossil.FslID, error) {
 	rows, err := q.Query("SELECT rid FROM delta WHERE srcid=? ORDER BY rid", parent)
@@ -285,7 +285,7 @@ func childRows(q db.Querier, parent libfossil.FslID,
 		if err := rows.Scan(&kid); err != nil {
 			return nil, fmt.Errorf("deltas on rid=%d: %w", parent, err)
 		}
-		if onPath[kid] {
+		if onPath == nil || onPath[kid] {
 			kids = append(kids, kid)
 		}
 	}

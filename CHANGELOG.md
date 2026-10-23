@@ -183,6 +183,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every verdict is unchanged. `content.NewUncheckedCache` and
   `Cache.ExpandUnchecked` provide that cache; `Cache.Holds` and
   `content.CheckAvailable` are new too.
+- A clone origin no longer sends again, in a later round, a delta chain an
+  earlier round sent. Each row goes out with its chain, source first, and
+  fossil stores each version of a file as a delta of the next, so the
+  oldest version's round sent a file's whole history and each later
+  version's row, reached in a later round, sent the rest of it again: a
+  dense clone of the Fossil repository carried about five copies of it,
+  each verified again by the client. The origin now stops a chain, and
+  skips a row, that a row below the cursor its round sent reaches through
+  sources the clone forwards.
 - `repo serve` answers a clone or pull while another request holds the
   write lock, instead of failing it with HTTP 500 "database is locked
   (SQLITE_BUSY)" once the busy timeout ran out. Every request had run in

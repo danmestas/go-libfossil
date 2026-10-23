@@ -142,10 +142,11 @@ pass identical tests:
   `//go:build test_ncruces`.
 
 GitHub Actions (`.github/workflows/test.yml`) runs `test`, `test-ncruces`,
-`build-wasm`, `test-otel` and `test-docs` as parallel jobs. The first two
+`build-wasm`, `build-tinygo`, `test-otel` and `test-docs` as parallel jobs. The first two
 install the pinned fossil 2.28, build every package, then run the unit tests,
 DST and the driver submodule tests under modernc and ncruces respectively.
-`build-wasm` compiles the packages for `js/wasm` with the ncruces tag, and
+`build-wasm` compiles the packages for `js/wasm` with the ncruces tag,
+`build-tinygo` builds `examples/tinygo` with TinyGo 0.43, and
 `test-docs` builds this site with Hugo. For the canonical local invocation,
 use `make test-drivers` or `make ci` rather than hand-rolling tag flags.
 

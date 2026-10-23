@@ -117,7 +117,7 @@
       <div class="hoststrip">
         <div><b>native</b> · one static binary, no cgo</div>
         <div><b>js/wasm</b> · SQLite itself in wasm</div>
-        <div><b>TinyGo</b> · engine 0.85 MB gzipped</div>
+        <div><b>TinyGo</b> · whole API {{ printf "%.1f" (div hugo.Data.wasm.tinygo_oz.gzip 1000000.0) }} MB gzipped</div>
       </div>
     </figure>
     {{- end }}
@@ -130,19 +130,21 @@
   <div class="runs">
     <div class="run"><span class="label">Server and CLI</span><h3>One static binary</h3><p class="muted">The <code>libfossil</code> command and the Go API build to a single binary for Linux, macOS and Windows, with no fossil installation and no C toolchain.</p><p class="idea">Serve repositories, mirror them, or read history from a build pipeline through typed Go values instead of parsed command output.</p></div>
     <div class="run"><span class="label">Browser</span><h3>A repository in the page</h3><p class="muted">Built for <code>js/wasm</code> with the ncruces SQLite driver, which ships SQLite itself as WebAssembly. A page holds a whole repository and syncs it with a server when it chooses to.</p><p class="idea">A document that explains a protocol can let its reader commit, branch, merge and sync in the page, and watch the tables change.</p></div>
-    <div class="run"><span class="label">Edge storage</span><h3>History next to the data</h3><p class="muted">Built with TinyGo, the engine fits inside a storage object that runs its own SQLite. Each request is one call into the engine inside one transaction, so it completes or leaves nothing behind.</p><p class="idea">A publishing tool can keep every revision of what it publishes as Fossil check-ins in the object that serves it, and show the history without a separate service.</p></div>
+    <div class="run"><span class="label">Edge storage</span><h3>History next to the data</h3><p class="muted">Built with TinyGo, the whole API fits inside a storage object that runs its own SQLite. Each request is one call into the engine inside one transaction, so it completes or leaves nothing behind.</p><p class="idea">A publishing tool can keep every revision of what it publishes as Fossil check-ins in the object that serves it, and show the history without a separate service.</p></div>
   </div>
 </div></section>
 
+{{- $w := hugo.Data.wasm -}}
+{{- $mb := 1000000.0 -}}
 <section class="gutter"><div class="inner split">
   <div class="stack"><span class="label">Size</span><h2>Small enough to ship with the page.</h2>
-    <p class="muted">The repository engine built with TinyGo and one <code>wasm-opt -Oz</code> pass is under a megabyte compressed. The standard Go toolchain builds the same code about three times larger, which is still useful for debugging.</p>
-    <p class="small">The TinyGo build covers the repository engine: storage, commits, history, merging, verification. The built-in HTTP sync client needs the standard toolchain today; a TinyGo host supplies its own transport.</p></div>
+    <p class="muted">The whole public API, the HTTP sync client and signing included, built with TinyGo {{ $w.tinygo }} and one <code>wasm-opt -Oz</code> pass is {{ printf "%.1f" (div $w.tinygo_oz.gzip $mb) }} MB compressed. The standard Go toolchain builds the same program about {{ printf "%.0f" (div (float $w.standard.gzip) $w.tinygo_oz.gzip) }} times larger, which is still useful for debugging. A program that leaves out sync is smaller.</p>
+    <p class="small">Measured from <code>examples/tinygo</code> (Go {{ $w.go }}); CI builds it with TinyGo on every change. Under TinyGo a sync redirect ends the request with an error instead of being followed.</p></div>
   <div class="bars">
-    <div class="bar tiny"><div class="row"><span>TinyGo 0.43, gzipped</span><span class="mono">0.85 MB</span></div><div class="track"><div class="fill" style="width:35%"></div></div></div>
-    <div class="bar"><div class="row"><span>Standard Go, gzipped</span><span class="mono">2.4 MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
-    <div class="bar tiny"><div class="row"><span>TinyGo 0.43, raw</span><span class="mono">2.44 MB</span></div><div class="track"><div class="fill" style="width:27%"></div></div></div>
-    <div class="bar"><div class="row"><span>Standard Go, raw</span><span class="mono">≈ 9 MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_oz.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_oz.gzip) $w.standard.gzip)) }}%"></div></div></div>
+    <div class="bar"><div class="row"><span>Standard Go, gzipped</span><span class="mono">{{ printf "%.2f" (div $w.standard.gzip $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
+    <div class="bar tiny"><div class="row"><span>TinyGo {{ $w.tinygo }}, raw</span><span class="mono">{{ printf "%.2f" (div $w.tinygo_oz.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:{{ printf "%.0f" (mul 100 (div (float $w.tinygo_oz.raw) $w.standard.raw)) }}%"></div></div></div>
+    <div class="bar"><div class="row"><span>Standard Go, raw</span><span class="mono">{{ printf "%.1f" (div $w.standard.raw $mb) }} MB</span></div><div class="track"><div class="fill" style="width:100%"></div></div></div>
   </div>
 </div></section>
 

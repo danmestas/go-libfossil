@@ -64,7 +64,7 @@ func TestCorpusClone(t *testing.T) {
 	horizon := corpusAncestor(t, origin, tip, 1000)
 	// A failed request reaches the client only as an HTTP status.
 	serve := func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Message, error) {
-		resp, err := HandleSync(ctx, r, req)
+		resp, err := HandleSyncWithOpts(ctx, r, req, HandleOpts{Observer: corpusObserver{t: t}})
 		if err != nil {
 			t.Logf("origin: %v", err)
 		}
@@ -85,7 +85,7 @@ func TestCorpusClone(t *testing.T) {
 			path := filepath.Join(out, mode+".fossil")
 			cpu0, wall0 := processCPU(t), time.Now()
 			r, res, err := Clone(ctx, path, &HTTPTransport{URL: server.URL},
-				CloneOpts{StoreCone: storeCone})
+				CloneOpts{StoreCone: storeCone, Observer: corpusObserver{t: t}})
 			cpu, wall := processCPU(t)-cpu0, time.Since(wall0)
 			if err != nil {
 				t.Fatalf("%s clone after %s wall, %s CPU: %v", mode, wall, cpu, err)
@@ -134,4 +134,19 @@ func processCPU(t *testing.T) time.Duration {
 		t.Fatal(err)
 	}
 	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
+
+// corpusObserver logs each clone round and each request the origin served,
+// so a clone that runs out of rounds shows whether it was converging.
+type corpusObserver struct {
+	nopObserver
+	t *testing.T
+}
+
+func (o corpusObserver) RoundCompleted(_ context.Context, round int, stats RoundStats) {
+	o.t.Logf("round %d: %d files received", round, stats.FilesReceived)
+}
+
+func (o corpusObserver) HandleCompleted(_ context.Context, info HandleEnd) {
+	o.t.Logf("origin: %d files sent, %d classified", info.FilesSent, info.SparseClassified)
 }

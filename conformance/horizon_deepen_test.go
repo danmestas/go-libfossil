@@ -34,7 +34,7 @@ import (
 // is the origin, its structural clone the client.
 
 func horizonDeepenCases() []Case {
-	return []Case{horizonMergeBaseQuery, horizonMergeBaseBound, horizonDeepen, horizonDeepenPoint, horizonDeepenFailed,
+	return []Case{horizonMergeBaseQuery, horizonMergeBaseBound, horizonDeepen, horizonDeepenPoint, horizonDeepenFailed, horizonDeepenRefused,
 		horizonMergeCrossing, horizonMergeDeepen, horizonMergeMustAsk, horizonMergeListForm, horizonPushCheck,
 		horizonSeedVerify, horizonBisectCrossing}
 }
@@ -45,6 +45,7 @@ var (
 	horizonDeepen         = Case{ID: "horizon.5.8.deepen", Req: "HZ-5.8-1"}
 	horizonDeepenPoint    = Case{ID: "horizon.5.8.deepen-point", Req: "HZ-5.8-1"}
 	horizonDeepenFailed   = Case{ID: "horizon.5.8.deepen-failed", Req: "HZ-5.8-1"}
+	horizonDeepenRefused  = Case{ID: "horizon.5.8.deepen-refused", Req: "HZ-5.8-2"}
 	horizonMergeCrossing  = Case{ID: "horizon.5.5.merge-crossing", Req: "HZ-5.5-1"}
 	horizonMergeDeepen    = Case{ID: "horizon.5.5.merge-deepen", Req: "HZ-5.5-2"}
 	horizonMergeMustAsk   = Case{ID: "horizon.5.5.merge-must-ask", Req: "HZ-5.5-3"}
@@ -60,6 +61,7 @@ func TestHorizonDeepen(t *testing.T) {
 	check(t, horizonDeepen, func() error { return hzDeepen(t) })
 	check(t, horizonDeepenPoint, func() error { return hzDeepenPoint(t) })
 	check(t, horizonDeepenFailed, func() error { return hzDeepenFailed(t) })
+	check(t, horizonDeepenRefused, func() error { return hzDeepenRefused(t) })
 	check(t, horizonMergeCrossing, func() error { return hzMergeCrossing(t) })
 	check(t, horizonMergeDeepen, func() error { return hzMergeDeepen(t) })
 	check(t, horizonMergeMustAsk, func() error { return hzMergeMustAsk(t) })
@@ -221,6 +223,38 @@ func (hzFailingPeer) Exchange(context.Context, *xfer.Message) (*xfer.Message, er
 
 // hzStoredHorizon is nil when r's store cone carries a horizon at c, of the
 // descendants rule, at depth d.
+// hzDeepenRefused: a deepen toward a check-in that shares no history with C,
+// where the origin answers -, and toward one the origin does not hold,
+// where it answers nothing, has no common ancestor to move C to. It is
+// refused naming the remedy, a fresh clone with an earlier horizon, and C,
+// the seed and the store stay as they were: C never moves to a check-in
+// that is not its ancestor (§5.8).
+func hzDeepenRefused(t *testing.T) error {
+	x := newHZStruct(t)
+	unrelated := hzUUID(t, x.s.f.r, hzCommit(t, x.s.f, "unrelated", []libfossil.FslID{0}, nil))
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	held := mustHeld(t, r)
+	for _, target := range []string{unrelated, strings.Repeat("ab", 20)} {
+		_, err := sync.Deepen(context.Background(), r, x.peer(), target, sync.SyncOpts{})
+		if !errors.Is(err, sync.ErrNoDeepenPoint) {
+			return expectf("deepen to %.10s: %v, want ErrNoDeepenPoint", target, err)
+		}
+		if !strings.Contains(err.Error(), "clone") || !strings.Contains(err.Error(), "earlier horizon") {
+			return expectf("the refusal %q does not name the remedy, a clone at an earlier horizon", err)
+		}
+		if err := hzStoredHorizon(r, x.c3, cone.DepthStructural); err != nil {
+			return err
+		}
+		if got := mustHeld(t, r); string(got) != string(held) {
+			return expectf("the refused deepen changed the seed to %q", got)
+		}
+	}
+	return x.s.derivesDense(t, r)
+}
+
 func hzStoredHorizon(r *repo.Repo, c string, d cone.HorizonDepth) error {
 	sc, err := content.StoreCone(r.DB())
 	if err != nil {

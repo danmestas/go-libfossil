@@ -17,8 +17,13 @@ import (
 
 // ErrNoDeepenPoint is returned by Deepen when no common ancestor of the
 // store's C and the target can be established, here or by the origin: no
-// ancestor of C reaches the target, so no deepen does.
+// ancestor of C reaches the target, so no deepen does, and C never moves to
+// a check-in that is not its ancestor (draft-fossil-horizon-00 §5.8). The
+// message names the remedy.
 var ErrNoDeepenPoint = errors.New("horizon: no common ancestor of the horizon and the target to deepen to")
+
+// noDeepenRemedy is the remedy §5.8 has a refused deepen name.
+const noDeepenRemedy = "clone afresh with an earlier horizon to reach it"
 
 // Deepen moves the store's horizon toward target, the full hash of a
 // check-in the store needs history down to (draft-fossil-horizon-00 §5.8),
@@ -101,10 +106,10 @@ func deepenPoint(ctx context.Context, r *repo.Repo, peer Transport, c, target st
 		return "", err
 	}
 	if !res.MergeBaseAnswered {
-		return "", fmt.Errorf("%w: %s and %s; the origin did not answer", ErrNoDeepenPoint, c, target)
+		return "", fmt.Errorf("%w: %s and %s; the origin did not answer; %s", ErrNoDeepenPoint, c, target, noDeepenRemedy)
 	}
 	if res.MergeBase == "" {
-		return "", fmt.Errorf("%w: %s and %s; the origin names none", ErrNoDeepenPoint, c, target)
+		return "", fmt.Errorf("%w: %s and %s; the origin names none; %s", ErrNoDeepenPoint, c, target, noDeepenRemedy)
 	}
 	return res.MergeBase, nil
 }

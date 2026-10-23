@@ -259,6 +259,12 @@ func (rl *ReceiveLinker) linkStored(ctx context.Context, tx *db.Tx, rid libfossi
 	if _, busy := rl.inFlight[rid]; busy {
 		return nil
 	}
+	if _, waiting := rl.waitingOn[rid]; waiting {
+		// A waiter is grounded and parsed already; only the arrival of what it
+		// waits on (retryWaitersFor) or Finalize can change its verdict, so a
+		// delta source arriving under it is no reason to test its files again.
+		return nil
+	}
 	if *remaining == 0 {
 		return nil
 	}
@@ -543,12 +549,41 @@ func (rl *ReceiveLinker) retryWaitersFor(ctx context.Context, tx *db.Tx, uuid st
 				return err
 			}
 		}
+		if rl.strikeWait(rid, uuid) {
+			continue
+		}
 		rl.removeWaiter(rid)
 		if err := rl.linkStored(ctx, tx, rid, nil, remaining); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// strikeWait records that uuid, one of the references waiter rid waits on,
+// has arrived, and reports whether rid still waits on another. A check-in is
+// examined again only once its whole wait set has arrived: testing every
+// F card again at each arrival made a check-in cost one availability query
+// per file per arrival, and a sparse store, whose out-of-cone files never
+// arrive, left a clone of fossil-scm.org's repository in its first round
+// after 20 minutes. A wait set the waiter limit cut short empties early,
+// which costs a premature examination, never a missed one.
+func (rl *ReceiveLinker) strikeWait(rid libfossil.FslID, uuid string) bool {
+	byUUID := rl.waitingOn[rid]
+	if _, ok := byUUID[uuid]; !ok {
+		panic("manifest.ReceiveLinker.strikeWait: rid does not wait on uuid")
+	}
+	if len(byUUID) == 1 {
+		return false
+	}
+	delete(byUUID, uuid)
+	byRID := rl.waiters[uuid]
+	delete(byRID, rid)
+	if len(byRID) == 0 {
+		delete(rl.waiters, uuid)
+	}
+	rl.waiterSize--
+	return true
 }
 
 func (rl *ReceiveLinker) retryAllWaiters(ctx context.Context) error {

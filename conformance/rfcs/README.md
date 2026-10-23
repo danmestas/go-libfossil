@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `9bf7ebfe0f` (branch `horizon-rfc`) | `782253dc68` | `aaea870edc239842…` |
+| `draft-fossil-horizon-00.txt` | `3a2df62515` (branch `horizon-rfc`) | `360f8c9d9b` | `037f9ad4cb1eeed0…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,12 +57,21 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`9bf7ebfe0f` (2026-10-22): `bbd1435674`, the revision zit's author called
-ready to implement against, plus the zit#266 correction to §4.5, which
-binds the cluster prohibition to an origin that serves at a horizon and
-has a clone request what a horizon-ignorant origin's clusters name. The
-sparse-cone text there is byte-identical to the copy at `e6ee276c89`. Its Appendix C lists every change to the earlier text: the
-leaves rule restated over P cards alone, with K closed under descendants
+`3a2df62515` (2026-10-22). Against the `9bf7ebfe0f` copy it replaces
+(`bbd1435674`, the revision zit's author called ready to implement
+against, plus the zit#266 correction to §4.5, which binds the cluster
+prohibition to an origin that serves at a horizon and has a clone request
+what a horizon-ignorant origin's clusters name) it changes one rule: a
+path cone elides sub-manifest nodes under either horizon, as the sparse
+store of the sparse-cone draft's §5.1 does. Of the trees the horizon
+keeps, every check-in's under a content horizon, only the nodes on paths
+into the cone are held and an origin withholds the rest (§3.2, §4.1,
+§5.1, §6.2); the derivation reads no node (§4.3); §6.2 states how the
+origin's walk is bounded and kept; and §6.2.6 voids a cursor when an
+appended tree makes an older withheld node kept. The other six drafts and
+the sparse-cone text there are byte-identical at both check-ins. Its
+Appendix C lists every change to the earlier text: that rule; the leaves
+rule restated over P cards alone, with K closed under descendants
 under both rules (§3.1, §3.4); the seed carrying T cards for every entry
 of K, not C alone (§5.2.1); the cursor's announcements made only in reply
 to a request that pulls (§6.2.6); and, from the revision before, the

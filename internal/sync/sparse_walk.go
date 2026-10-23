@@ -23,7 +23,7 @@ type sparseKind uint8
 
 const (
 	sparseContent    sparseKind = iota // bytes no artifact parses from
-	sparseNode                         // sub-manifest node: sent by a walk, or at its row under a horizon
+	sparseNode                         // sub-manifest node: sent by a walk, or at its row under a horizon alone
 	sparseStructural                   // held densely (§5.1)
 	sparseCheckin
 	sparseCluster // held densely, but never sent under a horizon (horizon §4.5)
@@ -37,15 +37,21 @@ const (
 // blob of every check-in is sent once its own check-in is.
 //
 // Under a content horizon (draft-fossil-horizon-00 §6.2) only a check-in in
-// the held set walks its tree, and its parent counts as sent only when it is
-// in the held set too: the blobs sent are those above the horizon. Every
-// node and every other structural artifact but a cluster goes out at its
-// row, as §4.1 holds them at every age.
+// the held set walks its tree for blobs, and its parent counts as sent only
+// when it is in the held set too: the blobs sent are those above the
+// horizon. Every structural artifact but a cluster goes out at its row, as
+// §4.1 holds them at every age, and so does every node of a horizon alone.
+// With path members too, a node goes out only by a walk, as without a
+// horizon: every other check-in the request keeps walks its tree for its
+// nodes alone, so the nodes sent are those on paths into the cone of every
+// tree the horizon keeps, and the rest are withheld.
 type coneWalk struct {
 	ctx        context.Context
 	h          *handler
 	cone       *cone.Cone
 	horizon    bool
+	paths      bool            // the request carries path members
+	nodesOnly  bool            // the tree being walked sends its nodes and no blob
 	held       map[int]bool    // the held set; nil when there is no horizon or the store cannot place C
 	reach      map[string]bool // a structural request's kept manifests and nodes (§5.1); nil otherwise
 	kinds      map[int]sparseKind
@@ -61,7 +67,8 @@ func newConeWalk(ctx context.Context, h *handler) *coneWalk {
 		panic("sync.newConeWalk: nil context, handler or cone")
 	}
 	_, horizon := h.cone.Horizon()
-	w := &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, kinds: map[int]sparseKind{},
+	w := &coneWalk{ctx: ctx, h: h, cone: h.cone, horizon: horizon, paths: len(h.cone.Include()) > 0,
+		kinds: map[int]sparseKind{},
 		decks: map[int]*deck.Deck{}, reached: map[int]bool{}, path: map[string]bool{}}
 	if h.structural != nil {
 		w.reach = h.structural.reach
@@ -100,7 +107,7 @@ func (w *coneWalk) atRow(kind sparseKind) bool {
 	case sparseStructural, sparseCheckin:
 		return true
 	case sparseNode:
-		return w.horizon
+		return w.horizon && !w.paths
 	case sparseCluster:
 		return !w.horizon
 	}
@@ -191,6 +198,8 @@ func (w *coneWalk) items(rid int, d *deck.Deck) ([]int, error) {
 	switch {
 	case d.A != nil && d.A.Source != "":
 		err = w.add(d.A.Source, out)
+	case d.Type == deck.Checkin && !w.inHeld(rid) && len(d.S) > 0 && !w.atRow(sparseNode):
+		err = w.nodes(d, out)
 	case d.Type == deck.Checkin && !w.inHeld(rid):
 	case d.Type == deck.Checkin && len(d.S) > 0:
 		prior := coneTreeLevel{}
@@ -213,6 +222,28 @@ func (w *coneWalk) items(rid int, d *deck.Deck) ([]int, error) {
 	}
 	sort.Ints(rids)
 	return rids, nil
+}
+
+// nodes sends the in-cone nodes of the tree of d, a check-in whose blobs
+// the request does not keep, that its primary parent's tree does not
+// already carry over the same range. A parent's nodes went out when it did:
+// every check-in's under a content horizon, a reached one's under a
+// structural horizon.
+func (w *coneWalk) nodes(d *deck.Deck, out map[int]bool) error {
+	prior := coneTreeLevel{}
+	if len(d.P) > 0 {
+		p, _, err := w.checkin(d.P[0])
+		if err != nil {
+			return err
+		}
+		if p != nil && (w.reach == nil || w.reach[d.P[0]]) {
+			prior.cards = p.S
+		}
+	}
+	w.nodesOnly = true
+	err := w.tree(coneTreeLevel{cards: d.S}, prior, nil, 1, out)
+	w.nodesOnly = false
+	return err
 }
 
 func (w *coneWalk) add(uuid string, out map[int]bool) error {

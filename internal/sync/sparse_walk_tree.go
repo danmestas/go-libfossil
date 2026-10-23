@@ -79,8 +79,8 @@ func (w *coneWalk) node(
 	if w.path[card.UUID] {
 		return fmt.Errorf("sparse cone: cyclic sub-manifest %s", card.UUID)
 	}
-	if !w.horizon {
-		out[rid] = true // under a horizon a node goes out at its own row
+	if !w.atRow(sparseNode) {
+		out[rid] = true
 	}
 	nextFiles := priorFiles
 	nextPrior := coneTreeLevel{}
@@ -94,6 +94,9 @@ func (w *coneWalk) node(
 		}
 	}
 	if len(d.F) > 0 {
+		if w.nodesOnly {
+			return nil
+		}
 		return w.files(d.F, nextFiles, out)
 	}
 	w.path[card.UUID] = true

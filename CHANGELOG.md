@@ -201,6 +201,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The requirement table reads these as six new rows and updated ones: 51
   requirements, of which the cone's horizon member and the held set are
   implemented.
+- The horizon draft is re-pinned to zit's `horizon-rfc` check-in
+  `3a2df62515`, and a path cone now elides sub-manifest nodes under either
+  horizon, as a sparse store does (§3.2, §4.1, §5.1, §6.2). Of the trees a
+  horizon keeps, every check-in's under a content horizon and K's under a
+  structural one, a store holds only the nodes on paths into the cone and
+  classifies the rest as elided; before, a content horizon held every node
+  of history, which on a large tree-structured repository is millions of
+  artifacts outside the cone. An origin answering a horizon request with
+  path members walks those trees descending only slots that may reach the
+  cone, keeps the walk with its classification so a later request walks
+  only the trees appended since, sends and announces only the nodes it
+  reaches, and does not answer a gimme for the rest; a request without path
+  members still receives every node. A cursor is void when an appended tree
+  keeps an older node that was withheld (§6.2.6). A store under a horizon
+  links a check-in whose in-cone files lie below it, and an operation that
+  needs a withheld node fetches it as a sparse store does. The origin's
+  classification memo also no longer reads a stale name for an artifact
+  appended without growing any of its lists. Interoperates with zit at
+  `3a2df62515` both ways, at both depths.
 
 ## [0.14.0] - 2026-10-21
 

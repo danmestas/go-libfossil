@@ -97,7 +97,7 @@ func (facts *ConeReferenceFacts) Classify(
 // so the copy can grow without changing from, or empty when from is nil.
 func (facts *ConeReferenceFacts) references(from *ConeReferences) *ConeReferences {
 	p := &ConeReferences{
-		names: facts.names, held: facts.held, nodes: facts.nodes,
+		names: facts.names, held: facts.held, nodes: facts.nodes, facts: facts,
 		outside: map[string]bool{}, inside: map[string]bool{},
 		required: map[string]bool{}, tree: map[string]bool{},
 	}

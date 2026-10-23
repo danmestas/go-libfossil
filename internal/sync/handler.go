@@ -1349,7 +1349,15 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 		return nil // blob not found — not fatal, skip.
 	}
 	// §6.4: a gimme names its artifact, so a cone request is answered
-	// densely; the requester never names what its own cone elides.
+	// densely; the requester never names what its own cone elides. A
+	// horizon request with path members is not answered a node the origin
+	// withholds (horizon §6.2); one without path members is.
+	if err := h.ensureSparseKeep(); err != nil {
+		return err
+	}
+	if h.keep.withholds(rid) {
+		return nil
+	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		// §8.6: outside a private sync, a peer dated 2020-04-13 or later is
@@ -1630,7 +1638,7 @@ func (h *handler) announceFloor(position int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if h.cursor < at {
+	if h.cursor < at || h.keep.voids(h.cursor) {
 		return 0, nil
 	}
 	return h.cursor, nil

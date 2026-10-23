@@ -25,6 +25,7 @@ type ConeReferences struct {
 	tree                      map[string]bool
 	held                      map[string]libfossil.FslID
 	nodes                     map[libfossil.FslID]*deck.Deck
+	facts                     *ConeReferenceFacts // nil only for a dense classification
 }
 
 // Outside reports only proven elision candidates. Delta dependency closure is

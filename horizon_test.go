@@ -634,3 +634,45 @@ func TestHorizonHistoryURL(t *testing.T) {
 		t.Fatalf("clone reported %q and pull %q, want %q", cloned.HorizonHistoryURL, pulled.HorizonHistoryURL, url)
 	}
 }
+
+// A clone may name its horizon instead of giving its hash: the origin
+// resolves trunk's tip stepped back one check-in to c2, and the store
+// records c2. A path-only or absent StoreCone takes the content horizon
+// under the descendants rule; a horizon StoreCone keeps its rule and level.
+func TestCloneNamedHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	leaves, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c1, Rule: HorizonLeaves})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sc := range []*Cone{nil, leaves} {
+		target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
+			CloneOpts{StoreCone: sc, HorizonName: "trunk", HorizonDepth: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer target.Close()
+		if res.HorizonResolved != f.c2 || res.HorizonSteps != 1 || res.HorizonResolvedLocally {
+			t.Fatalf("resolved %+v, want c2 after 1 step by the origin", res)
+		}
+		got, err := target.StoreCone()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := Horizon{Checkin: f.c2}
+		if sc != nil {
+			want.Rule = HorizonLeaves
+		}
+		if h, ok := got.Horizon(); !ok || h != want {
+			t.Fatalf("store cone horizon = %+v, %v; want %+v", h, ok, want)
+		}
+		if holdsBlob(t, target, "old a\n") {
+			t.Fatal("blob below the horizon was transferred")
+		}
+	}
+	for _, opts := range []CloneOpts{{HorizonDepth: 1}, {HorizonName: "trunk", HorizonDepth: -1}} {
+		if _, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "x.fossil"), f.peer, opts); err == nil {
+			t.Fatalf("Clone(%+v) succeeded", opts)
+		}
+	}
+}

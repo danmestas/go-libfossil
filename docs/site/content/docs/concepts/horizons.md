@@ -95,6 +95,27 @@ fmt.Println(res.Elided, res.HorizonServed, res.StructuralServed, res.HorizonFall
 
 `SyncResult` has the same fields.
 
+### Clone by name or depth
+
+A clone has no history yet, so it cannot turn a branch name or a count into C. It asks the origin, which resolves the name once, in its first reply (§6.2.7):
+
+```go
+repo, res, err := libfossil.Clone(ctx, "repo.fossil", t, libfossil.CloneOpts{
+    HorizonName:  "trunk", // "tip", a branch or tag, or a full hash
+    HorizonDepth: 100,     // step back 100 check-ins along primary parents
+})
+fmt.Println(res.HorizonResolved, res.HorizonSteps, res.HorizonResolvedLocally)
+```
+
+- `tip` is the most recent check-in. A full hash names that check-in. Any other name is the most recent check-in carrying the tag `sym-NAME`, so branches and tags both work. Hash prefixes are not resolved.
+- `HorizonDepth` steps back along primary parents. If history runs out first, C is the root it stopped at and `HorizonSteps` is less than the depth asked for.
+- The store records only the resolved hash. Every later request of the clone, and every later pull, sync or deepen, sends that hash, never the name.
+- A name the origin cannot resolve fails the clone with `horizon name not found: NAME`, and nothing is left on disk.
+
+Without a horizon in `StoreCone`, the clone takes a content horizon under the descendants rule, over `StoreCone`'s path members if it has any. To ask for the leaves rule or the structural cut by name, pass a horizon `StoreCone`: its rule and depth stand, and its `Checkin` is only a stand-in until the name resolves. A structural clone by name gets the seed the origin mints for the resolved C.
+
+An origin that does not answer the name (stock fossil, zit 0.7.0 and earlier) serves the clone densely. The clone then resolves the name itself over what it received, classifies locally at the content horizon, and reports `HorizonResolvedLocally`; a structural request falls back to the content horizon and reports `HorizonFallback` (§6.3).
+
 `HorizonHistoryURL`, on both results, is the address the origin gives for querying history below the horizon outside the sync protocol, when it gives one. An origin sets it with `repo config set horizon-history-url https://...` (`SettingHorizonHistoryURL`); only one http or https URL with no spaces or credentials is accepted. `repo clone` prints it as `History:`.
 
 ### Deepen, merge across, and verify the seed
@@ -132,16 +153,18 @@ An origin checks each pushed check-in that creates a branch: if the branch it ca
 
 ```
 libfossil repo clone URL repo.fossil --horizon <full hash>
-libfossil repo clone URL repo.fossil --horizon <full hash> --leaves --cone src
-libfossil repo clone URL repo.fossil --horizon <full hash> --structural --seed-key "ssh-ed25519 AAAA..."
+libfossil repo clone URL repo.fossil --horizon trunk --depth 100
+libfossil repo clone URL repo.fossil --horizon tip --leaves --cone src
+libfossil repo clone URL repo.fossil --horizon release --structural --seed-key "ssh-ed25519 AAAA..."
 ```
 
-- `--horizon=STRING`: clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash.
+- `--horizon=STRING`: clone a horizon store: elide blobs below this check-in, given as `tip`, a branch or tag, or its full 40 or 64 digit hash.
+- `--depth=N`: with `--horizon`, step the check-in back N check-ins along primary parents, stopping at a root.
 - `--leaves`: with `--horizon`, also hold every open leaf's ancestry back to the check-in.
 - `--structural`: with `--horizon`, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed.
 - `--seed-key=STRING`: the origin's public key, an SSH public key line or an OpenPGP fingerprint. With `--structural`, a seed not signed by it is discarded and the clone falls back to the content horizon. It is kept as the `horizon-seed-key` setting.
 
-`--cone` and `--cone-not` combine with these. The clone needs a full hash because nothing is local yet to resolve a name against.
+`--cone` and `--cone-not` combine with these. The origin resolves a name, since nothing is local yet to resolve it against, and the clone prints the check-in it resolved to as `Horizon at:`. A full hash with no `--depth` is sent as the hash itself, which every horizon origin reads.
 
 ### Change the horizon
 
@@ -179,7 +202,9 @@ libfossil -R repo.fossil repo verify --seed
 
 **Stock fossil 2.28.** A horizon store refuses a dense clone, because the clone would be silently incomplete.
 
-**A peer that knows nothing of horizons.** A horizon clone from stock Fossil works. The client asks for nothing below the horizon, records the below-horizon blobs it is sent as elided instead of storing them, and classifies locally. `HorizonServed` stays 0. Stock Fossil can announce a new check-in only inside a cluster. A horizon store holds no clusters, so it requests the cluster members as transit and classifies what arrives (§4.5). Without that a new check-in would not be learned until a later one named it.
+**zit 0.7.1** resolves horizon names and depths as go-libfossil's origin does. Against zit 0.7.0 and earlier a clone by name falls back to resolving locally.
+
+**A peer that knows nothing of horizons.** A horizon clone from stock Fossil works, by hash or by name. The client asks for nothing below the horizon, records the below-horizon blobs it is sent as elided instead of storing them, and classifies locally. `HorizonServed` stays 0. Stock Fossil can announce a new check-in only inside a cluster. A horizon store holds no clusters, so it requests the cluster members as transit and classifies what arrives (§4.5). Without that a new check-in would not be learned until a later one named it.
 
 ## Limits
 

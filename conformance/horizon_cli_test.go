@@ -239,8 +239,9 @@ func hzWireHorizon(peer *scSyncPeer, wantHash string) error {
 }
 
 // A horizon clone and a later pull send the horizon as a full hash and a
-// rule, never a count or a date. The CLI's clone refuses a name outright; its
-// store cone resolves a branch name to the full hash before any request.
+// rule, never a count or a date. The CLI's clone sends a name and a count
+// in its first request only (§3.4 as amended), and its store cone resolves a
+// branch name to the full hash before any request.
 func hzNoCountOrDate(t *testing.T) error {
 	g := newHZSyncGraph(t)
 	c := hzUUID(t, g.f.r, g.c3)
@@ -257,10 +258,8 @@ func hzNoCountOrDate(t *testing.T) error {
 		}
 	}
 
-	cloneErr := (&cli.RepoCloneCmd{URL: "http://127.0.0.1:1", Path: filepath.Join(t.TempDir(), "x.fossil"),
-		Horizon: "trunk"}).Run(&cli.Globals{})
-	if cloneErr == nil || !strings.Contains(cloneErr.Error(), "full check-in hash") {
-		return expectf("clone --horizon trunk = %v, want a refusal asking for the full hash", cloneErr)
+	if err := hzCLINamedClone(t, g); err != nil {
+		return err
 	}
 
 	path := filepath.Join(t.TempDir(), "named.fossil")
@@ -295,4 +294,37 @@ func hzNoCountOrDate(t *testing.T) error {
 		return err
 	}
 	return hzWireHorizon(peer, h.Hash())
+}
+
+// hzCLINamedClone: `repo clone --horizon trunk --depth 1` asks the origin for
+// trunk's tip stepped back one check-in in its first request, names the
+// resolved c4 by hash in every later one, records c4 and reports it.
+func hzCLINamedClone(t *testing.T, g *hzSyncGraph) error {
+	origin := &hzRecorder{r: g.f.r}
+	server := httptest.NewServer(origin)
+	defer server.Close()
+	path := filepath.Join(t.TempDir(), "cli-named.fossil")
+	out, err := hzStdout(t, func() error {
+		return (&cli.RepoCloneCmd{URL: server.URL, Path: path, Horizon: "trunk", Depth: 1}).Run(&cli.Globals{})
+	})
+	if err != nil {
+		return err
+	}
+	c := hzUUID(t, g.f.r, g.c4)
+	if !strings.Contains(out, c) {
+		return expectf("clone --horizon trunk --depth 1 printed no resolved check-in %.12s:\n%s", c, out)
+	}
+	var requests, replies []*xfer.Message
+	for _, x := range origin.take() {
+		requests, replies = append(requests, x.request), append(replies, x.reply)
+	}
+	if err := hzNamedWire(requests, replies, "trunk", 1, c, 1); err != nil {
+		return err
+	}
+	r, err := repo.Open(path)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	return hzStoredHorizon(r, c, cone.DepthContent)
 }

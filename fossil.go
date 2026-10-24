@@ -3,8 +3,12 @@ package libfossil
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/danmestas/go-libfossil/internal/cone"
 
 	"github.com/danmestas/go-libfossil/internal/repo"
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
@@ -107,6 +111,13 @@ type CloneResult struct {
 	// named; "" when none did. An origin names it with
 	// SettingHorizonHistoryURL.
 	HorizonHistoryURL string
+	// HorizonResolved is the check-in CloneOpts.HorizonName resolved to and
+	// HorizonSteps the steps back it took, fewer than HorizonDepth when
+	// history ran out; HorizonResolvedLocally reports that the origin did
+	// not resolve the name and the clone did, at the content horizon.
+	HorizonResolved        string
+	HorizonSteps           int
+	HorizonResolvedLocally bool
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -116,14 +127,20 @@ type CloneResult struct {
 // rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo, *CloneResult, error) {
 	adapter := &transportAdapter{pub: t}
+	storeCone, depth, err := namedCloneCone(opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
+	}
 	iOpts := internalsync.CloneOpts{
 		User:         opts.User,
 		Password:     opts.Password,
 		Observer:     adaptObserver(opts.Observer),
 		Buggify:      opts.Buggify,
 		PullPhantoms: opts.PullPhantoms,
-		StoreCone:    unwrapCone(opts.StoreCone),
+		StoreCone:    storeCone,
 		SeedKey:      opts.SeedKey,
+		HorizonName:  opts.HorizonName,
+		HorizonDepth: depth,
 	}
 	// A transport that names its peer keys the horizon cursor, as for Sync.
 	if o, ok := t.(interface{ syncOrigin() string }); ok {
@@ -146,6 +163,41 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		StructuralServed:  iResult.StructuralServed,
 		HorizonFallback:   iResult.HorizonFallback,
 		HorizonHistoryURL: iResult.HorizonHistoryURL,
+
+		HorizonResolved:        iResult.HorizonResolved,
+		HorizonSteps:           int(iResult.HorizonSteps),
+		HorizonResolvedLocally: iResult.HorizonResolvedLocally,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
+}
+
+// namedCloneCone is the store cone and depth a clone asks for. A named
+// horizon over a StoreCone without one is a content horizon under the
+// descendants rule, whose check-in stands in until the name resolves.
+func namedCloneCone(opts CloneOpts) (*cone.Cone, uint32, error) {
+	sc := unwrapCone(opts.StoreCone)
+	if opts.HorizonDepth < 0 || int64(opts.HorizonDepth) > math.MaxUint32 {
+		return nil, 0, fmt.Errorf("horizon depth %d out of range", opts.HorizonDepth)
+	}
+	if opts.HorizonName == "" {
+		if opts.HorizonDepth != 0 {
+			return nil, 0, fmt.Errorf("a horizon depth needs a horizon name")
+		}
+		return sc, 0, nil
+	}
+	if sc != nil {
+		if _, ok := sc.Horizon(); ok {
+			return sc, uint32(opts.HorizonDepth), nil
+		}
+	}
+	h, err := cone.NewHorizon(strings.Repeat("0", 40), cone.RuleDescendants, cone.DepthContent)
+	if err != nil {
+		panic("libfossil.namedCloneCone: " + err.Error())
+	}
+	var include, exclude []string
+	if sc != nil {
+		include, exclude = sc.Include(), sc.Exclude()
+	}
+	nc, err := cone.NewWithHorizon(include, exclude, h)
+	return nc, uint32(opts.HorizonDepth), err
 }

@@ -26,12 +26,17 @@ Flags:
       --invite=STRING            Invite token (from fossil invite)
       --timeout=10m              Abort the clone if it runs longer than this;
                                  0 disables the deadline
-      --horizon=STRING           Clone a horizon store: elide blobs below
-                                 this check-in, given as its full 40 or 64
-                                 digit hash; what each rule would hold needs a
-                                 local repository ('repo cone cost') or a peer
-                                 that exposes it out of band, as the origin's
-                                 horizon-served URL may
+      --horizon=STRING           Clone a horizon store: elide blobs below this
+                                 check-in, given as tip, a branch or tag,
+                                 or its full 40 or 64 digit hash; the origin
+                                 resolves a name, or the clone does over what
+                                 an origin that cannot sends it; what each rule
+                                 would hold needs a local repository ('repo cone
+                                 cost') or a peer that exposes it out of band,
+                                 as the origin's horizon-served URL may
+      --depth=INT                With --horizon, step the check-in back this
+                                 many check-ins along primary parents, stopping
+                                 at a root
       --leaves                   With --horizon, also hold every open leaf's
                                  ancestry back to the check-in, for merging
                                  across live branches offline; costly: on a

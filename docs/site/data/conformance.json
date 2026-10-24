@@ -1,6 +1,6 @@
 {
-  "requirements": 620,
-  "covered": 618,
+  "requirements": 625,
+  "covered": 623,
   "partial": 2,
   "suites": [
     {
@@ -4563,13 +4563,13 @@
       "suite": "horizon",
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
-      "requirements": 61,
-      "covered": 59,
+      "requirements": 66,
+      "covered": 64,
       "partial": 2,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 100,
+      "cases": 112,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4656,7 +4656,7 @@
           "section": "3.4",
           "status": "COVERED",
           "cases": 1,
-          "text": "Clients should not express a horizon as a count or a date at the protocol layer.",
+          "text": "A client that wants N recent check-ins or the tip of a branch may name it with the horizon-name pragma, resolved once by the origin, and records only the check-in it resolved to; clients should not send a count or a name in any later request, and should not express a horizon as a date at the protocol layer.",
           "notes": ""
         },
         {
@@ -4900,6 +4900,14 @@
           "notes": ""
         },
         {
+          "id": "HZ-6.1-2",
+          "section": "6.1",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A request may carry pragma horizon-name \u003cname\u003e \u003crule\u003e \u003cdepth\u003e in place of pragma horizon, never both: name is tip, a symbolic name or a full check-in hash, as a card token; rule as for pragma horizon; depth a required base-10 count, 0 the named check-in itself. A client sends it only in the first request of a clone; every later request of the clone, and every later pull, sync or deepen, sends pragma horizon \u003chash\u003e \u003crule\u003e with the resolved hash, and the store records the hash, never the name.",
+          "notes": ""
+        },
+        {
           "id": "HZ-6.2-1",
           "section": "6.2",
           "status": "COVERED",
@@ -5028,6 +5036,22 @@
           "notes": ""
         },
         {
+          "id": "HZ-6.2-17",
+          "section": "6.2.7",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "An origin resolves a horizon-name over its dense repository: tip is the most recent check-in, a full hash names that check-in, any other name the most recent check-in carrying sym-\u003cname\u003e; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-18",
+          "section": "6.2.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A horizon-name that resolves to nothing, a malformed depth, or both pragma forms in one request is answered with one error card and nothing else, horizon\\sname\\snot\\sfound:\\s\u003cname\u003e or malformed\\shorizon-name\\spragma; the client then fails the clone and leaves nothing on disk.",
+          "notes": ""
+        },
+        {
           "id": "HZ-6.3-1",
           "section": "6.3",
           "status": "COVERED",
@@ -5041,6 +5065,22 @@
           "status": "COVERED",
           "cases": 1,
           "text": "A store at the structural horizon whose pull or sync replies carry no horizon-served structural falls back to the content horizon at the same C and rule, records that depth, discards its seed, fetches the manifests and nodes below C, and reports that it did.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.3-3",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A client whose first reply carries horizon-resolved takes its hash as C and reports when the steps taken are fewer than the depth requested, history having run out.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.3-4",
+          "section": "6.3",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A client whose reply carries no horizon-resolved completes the dense transfer, resolves the name and depth locally by the rule of §6.2.7, classifies locally at the content horizon, records the hash and reports that the name was resolved locally; a structural request falls back to the content horizon.",
           "notes": ""
         },
         {

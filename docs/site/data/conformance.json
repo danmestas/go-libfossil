@@ -5040,7 +5040,7 @@
           "section": "6.2.7",
           "status": "COVERED",
           "cases": 5,
-          "text": "An origin resolves a horizon-name over its dense repository: tip is the most recent check-in, a full hash names that check-in, any other name the most recent check-in carrying sym-\u003cname\u003e; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
+          "text": "An origin resolves a horizon-name over its dense repository: tip is the most recent check-in, a full hash names that check-in, any other name the most recent check-in carrying sym-\u003cname\u003e, most recent meaning the highest event mtime with a tie going to the lexicographically lowest full hash, and a hash prefix never accepted; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
           "notes": ""
         },
         {

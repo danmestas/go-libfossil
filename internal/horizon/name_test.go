@@ -2,12 +2,16 @@ package horizon_test
 
 import (
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/horizon"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 )
 
 func (d *dag) uuid(rid libfossil.FslID) string {
@@ -78,5 +82,37 @@ func TestResolveNameCancelled(t *testing.T) {
 	got, err := horizon.ResolveName(d.r.DB(), "trunk", 0)
 	if err != nil || got.Hash != d.uuid(c[1]) {
 		t.Fatalf("trunk = %.12s, %v; want c2 (x cancels sym-trunk)", got.Hash, err)
+	}
+}
+
+// TestResolveNameTie: check-ins tied on mtime resolve to the lowest full
+// hash, never the lowest rid, so two origins resolve a name alike. The
+// siblings are committed until one sorts below the first, which has the
+// lowest rid.
+func TestResolveNameTie(t *testing.T) {
+	d := newDAG(t)
+	root := d.commit("root", nil)
+	when := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	var hashes []string
+	for i := 0; i < 64 && (len(hashes) < 2 || slices.Min(hashes) == hashes[0]); i++ {
+		rid, _, err := manifest.Checkin(d.r, manifest.CheckinOpts{
+			Files:   []manifest.File{{Name: "f.txt", Content: []byte(fmt.Sprintf("sibling %d\n", i))}},
+			Comment: "sibling", User: "test", Time: when, Parent: root, Tags: branchTags("x"),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hashes = append(hashes, d.uuid(rid))
+	}
+	want := slices.Min(hashes)
+	if want == hashes[0] {
+		t.Fatal("fixture: no sibling sorts below the lowest rid's")
+	}
+	for _, name := range []string{"tip", "x"} {
+		got, err := horizon.ResolveName(d.r.DB(), name, 0)
+		if err != nil || got.Hash != want {
+			t.Errorf("ResolveName(%s) = %.12s, %v; want the lowest hash %.12s, not the lowest rid's %.12s",
+				name, got.Hash, err, want, hashes[0])
+		}
 	}
 }

@@ -107,7 +107,7 @@ repo, res, err := libfossil.Clone(ctx, "repo.fossil", t, libfossil.CloneOpts{
 fmt.Println(res.HorizonResolved, res.HorizonSteps, res.HorizonResolvedLocally)
 ```
 
-- `tip` is the most recent check-in. A full hash names that check-in. Any other name is the most recent check-in carrying the tag `sym-NAME`, so branches and tags both work. Hash prefixes are not resolved.
+- `tip` is the most recent check-in. A full hash names that check-in. Any other name is the most recent check-in carrying the tag `sym-NAME`, so branches and tags both work. Two check-ins with the same time resolve to the one with the lower full hash, so every origin resolves a name alike. Hash prefixes are not resolved.
 - `HorizonDepth` steps back along primary parents. If history runs out first, C is the root it stopped at and `HorizonSteps` is less than the depth asked for.
 - The store records only the resolved hash. Every later request of the clone, and every later pull, sync or deepen, sends that hash, never the name.
 - A name the origin cannot resolve fails the clone with `horizon name not found: NAME`, and nothing is left on disk.

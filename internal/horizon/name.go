@@ -27,7 +27,8 @@ type Resolved struct {
 // draft-fossil-horizon-00 §6.2.7 does: tip is the most recent check-in, a
 // full hash names its check-in, and any other name, or a full hash naming no
 // check-in, is the most recent check-in carrying an active sym-NAME tag,
-// propagated or not; ties go to the lower rid. From there it steps back up
+// propagated or not. A tie on mtime goes to the lexicographically lowest
+// full hash, never a local rid, so every origin resolves a name alike. From there it steps back up
 // to depth times along primary parents, stopping early at a check-in with
 // none.
 func ResolveName(q db.Querier, name string, depth uint32) (Resolved, error) {
@@ -64,7 +65,8 @@ func ResolveName(q db.Querier, name string, depth uint32) (Resolved, error) {
 // namedCheckin is the check-in name names before any step back.
 func namedCheckin(q db.Querier, name string) (libfossil.FslID, error) {
 	if name == NameTip {
-		return firstCheckin(q, `SELECT objid FROM event WHERE type='ci' ORDER BY mtime DESC, objid ASC LIMIT 1`)
+		return firstCheckin(q, `SELECT e.objid FROM event e JOIN blob b ON b.rid=e.objid
+			WHERE e.type='ci' ORDER BY e.mtime DESC, b.uuid ASC LIMIT 1`)
 	}
 	if isFullHash(name) {
 		rid, err := firstCheckin(q, `SELECT e.objid FROM blob b JOIN event e ON e.objid=b.rid AND e.type='ci'
@@ -74,8 +76,8 @@ func namedCheckin(q db.Querier, name string) (libfossil.FslID, error) {
 		}
 	}
 	return firstCheckin(q, `SELECT e.objid FROM tagxref x JOIN tag t ON t.tagid=x.tagid
-		JOIN event e ON e.objid=x.rid AND e.type='ci'
-		WHERE t.tagname=? AND x.tagtype>0 ORDER BY e.mtime DESC, e.objid ASC LIMIT 1`, "sym-"+name)
+		JOIN event e ON e.objid=x.rid AND e.type='ci' JOIN blob b ON b.rid=e.objid
+		WHERE t.tagname=? AND x.tagtype>0 ORDER BY e.mtime DESC, b.uuid ASC LIMIT 1`, "sym-"+name)
 }
 
 // firstCheckin is the rid query's first row names, ErrNameNotFound for none.

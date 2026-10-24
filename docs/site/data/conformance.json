@@ -1,7 +1,7 @@
 {
-  "requirements": 632,
-  "covered": 626,
-  "partial": 6,
+  "requirements": 635,
+  "covered": 628,
+  "partial": 7,
   "suites": [
     {
       "suite": "artifact",
@@ -4563,13 +4563,13 @@
       "suite": "horizon",
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
-      "requirements": 73,
-      "covered": 67,
-      "partial": 6,
+      "requirements": 76,
+      "covered": 69,
+      "partial": 7,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 132,
+      "cases": 139,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4767,8 +4767,8 @@
           "id": "HZ-5.2-2",
           "section": "5.2.2",
           "status": "PARTIAL",
-          "cases": 1,
-          "text": "The origin sets each seed's D card to the latest mtime among the tag events it summarizes, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, when it summarizes none); its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
+          "cases": 3,
+          "text": "The origin sets each seed's D card to the latest mtime of any tag event in the repository, whether it applied, propagated or cancelled a tag, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, in a repository with no tag event); no change to tag state moves it earlier, so it changes whenever any tag in the repository changes and the next exchange carries the new seed; its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
           "notes": "covered but for the label's exclusivity, which no case checks: go-libfossil writes its label (go-libfossil) on seeds alone, by construction rather than by test"
         },
         {
@@ -4783,8 +4783,8 @@
           "id": "HZ-5.2-4",
           "section": "5.2.3",
           "status": "COVERED",
-          "cases": 5,
-          "text": "An origin must refuse a seed offered to it, identifying one by its own seed label on the U card of a pushed control artifact, judged on the expanded content after any delta is applied, a delta whose base arrives later in the same request included; the refusal is atomic: it stores nothing the request carried and replies with one error card alone, seed refused: a seed is private to the clone that holds it; it is never pushed. It may also refuse a pushed artifact whose name matches a seed the same request offered as held. A clone that receives an artifact of the seed's shape outside a horizon-seed announcement treats it as an ordinary control artifact.",
+          "cases": 4,
+          "text": "An origin must refuse a seed offered to it, identifying one by its own seed label on the U card of a pushed control artifact, judged on the expanded content after any delta is applied, a delta whose base arrives later in the same request included; the refusal is atomic: it stores nothing the request carried and replies with one error card alone, seed refused: a seed is private to the clone that holds it; it is never pushed. It may also refuse a pushed artifact whose name matches a seed the same request offered as held.",
           "notes": ""
         },
         {
@@ -4801,6 +4801,30 @@
           "status": "COVERED",
           "cases": 3,
           "text": "An origin refuses only its own label, a control artifact bearing another implementation's seed label being by that label ordinary; it must also refuse, in the same way and with the same error card, any pushed control artifact carrying a horizon-seed T card whatever its U card; only a foreign artifact carrying neither the origin's label nor a binding card is stored as ordinary.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-14",
+          "section": "5.2.3",
+          "status": "PARTIAL",
+          "cases": 4,
+          "text": "A store never keeps a seed it did not receive through a horizon-seed announcement: on every receive path (pull, clone and sync) it drops an artifact that is a seed by its own seed label or by a binding card, and stores one that carries neither as an ordinary control artifact; the test is made when the artifact first becomes storable, whether it arrives in full or as a delta completed in a later round; a dropped artifact is not counted as received and must not be requested again in the same session; a seed found on the origin path is dropped the same way; a store still skips a stored seed when deriving.",
+          "notes": "covered but for a seed completed as a delta in a later round, or found on the origin path only once a later request supplies its base: it is refused by its hash and kept, inert (never linked, announced, served or asked for), rather than deleted, since deleting it would leave deltas built on it unreadable and free its rid under a receive pass; and it was counted as received when its delta arrived, before it could be judged"
+        },
+        {
+          "id": "HZ-5.2-15",
+          "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Across sessions a store should keep a record of the hashes it dropped, keyed by hash and never synchronized, and skip them when a peer announces them; a store without one asks again and drops again.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-16",
+          "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A store that keeps a pushed or received delta whose base it lacks must not announce or serve that delta while it cannot be expanded; dropping such deltas also conforms.",
           "notes": ""
         },
         {
@@ -5000,7 +5024,7 @@
           "section": "6.2.3",
           "status": "COVERED",
           "cases": 1,
-          "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the tag events summarized, two mints over unchanged state produce the same name.",
+          "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the repository's tag events, two mints over unchanged state produce the same name.",
           "notes": ""
         },
         {

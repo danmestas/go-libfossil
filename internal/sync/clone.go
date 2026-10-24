@@ -16,6 +16,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -247,6 +248,11 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 	if finalizeErr != nil {
 		return cloneResult, fmt.Errorf(
 			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
+	}
+	// A delta its source sent without the base is kept, but not announced
+	// or served while it cannot be expanded (horizon §5.2.3).
+	if err := cs.repo.WithTx(func(tx *db.Tx) error { return seedcheck.WithholdUnreadable(tx) }); err != nil {
+		return cloneResult, fmt.Errorf("sync.Clone: %w", err)
 	}
 	if err := cs.settleNamed(); err != nil {
 		return cloneResult, err
@@ -744,10 +750,13 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
 			return false, err
 		}
-		if err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil); err != nil {
+		stored, err := cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, nil)
+		if err != nil {
 			return false, err
 		}
-		*filesRecvd++
+		if stored {
+			*filesRecvd++
+		}
 	case *xfer.CFileCard:
 		cs.named.noteContent()
 		stored, err := cs.receiveCFile(ctx, c)
@@ -815,8 +824,7 @@ func (cs *cloneSession) receiveCFile(ctx context.Context, c *xfer.CFileCard) (bo
 	if err != nil || shunned {
 		return false, err
 	}
-	err = cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
-	return err == nil, err
+	return cs.receiveContent(ctx, c.UUID, c.DeltaSrc, c.Content, c.StoredBlob)
 }
 
 // recordSeqNo records the clone sequence a clone_seqno card carries. The
@@ -909,7 +917,7 @@ func (cs *cloneSession) recordCodes(c *xfer.PushCard) error {
 // storedBlob is the cfile's payload in fossil's on-disk format, or nil.
 func (cs *cloneSession) receiveContent(
 	ctx context.Context, uuid, deltaSrc string, content, storedBlob []byte,
-) error {
+) (bool, error) {
 	// BUGGIFY: 2% chance corrupt file content to test hash verification.
 	// Relies on blob.Store verify-before-commit to catch corruption.
 	// storedBlob must be dropped alongside content: it decodes to the
@@ -927,12 +935,27 @@ func (cs *cloneSession) receiveContent(
 	}
 	// BUGGIFY: 5% chance skip storing a received file, creating a phantom.
 	if cs.opts.Buggify != nil && cs.opts.Buggify.Check("clone.processResponse.dropFile", 0.05) {
-		return nil
+		return true, nil
 	}
 	if servedCluster(cs.servedHorizon(), deltaSrc, content) {
-		return nil
+		return true, nil
 	}
-	return cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
+	// Horizon F.2: a seed outside the announcement is dropped, not counted
+	// and not asked for again; its hash is refused (seedcheck).
+	refused, err := seedcheck.IsRefusedUUID(cs.repo.DB(), uuid)
+	if err != nil {
+		return false, err
+	}
+	if refused {
+		delete(cs.phantoms, uuid)
+		return false, nil
+	}
+	err = cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
+	if errors.Is(err, errSeed) {
+		delete(cs.phantoms, uuid)
+		return false, seedcheck.Refuse(cs.repo.DB(), uuid)
+	}
+	return err == nil, err
 }
 
 // handleFile stores a received file. storeReceivedFile now persists a

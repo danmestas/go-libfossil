@@ -136,10 +136,15 @@ func Entries(q db.Querier, c libfossil.FslID, k []libfossil.FslID) ([]libfossil.
 // a horizon-seed row (§5.2.1). The binding card, T +horizon-seed <C> <rule>,
 // is added to the cards in force and is not one of them.
 //
-// The D card is the latest mtime among the rows the seed summarizes, not the
-// time of minting, rounded up to a whole second and written with no fraction
-// (§5.2.2): never earlier than the latest event, and the same at every origin,
-// so two mints over unchanged state yield one name. The U card is login, the
+// The D card is the latest mtime of any tag event in the repository, one
+// that applied, propagated or cancelled a tag, not the time of minting,
+// rounded up to a whole second and written with no fraction (§5.2.2): the
+// same at every origin, so two mints over unchanged state yield one name,
+// and never earlier than an earlier mint's. A tag event takes effect only
+// over an older row and its own row keeps its time, so no change to tag
+// state moves D back. Dated from the rows in force instead, a cancel of the
+// newest one moved D earlier and the clone refused the re-seed as a replay
+// (§5.2.4). The U card is login, the
 // origin's label for the minting implementation. With no row in force there
 // is nothing to seed: a control artifact needs a T card, so Mint returns
 // ErrNothingToSeed where zit mints a seed of no T card dated at C.
@@ -158,7 +163,10 @@ func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.
 		return "", nil, err
 	}
 	var cards []deck.TagCard
-	var latest int64
+	latest, err := latestTagEvent(q)
+	if err != nil {
+		return "", nil, err
+	}
 	for _, rid := range entries {
 		rowCards, rowLatest, err := cardsAt(q, rid)
 		if err != nil {
@@ -193,6 +201,24 @@ func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.
 		panic(fmt.Sprintf("seed.Mint: postcondition: minted seed does not parse back (%v)", err))
 	}
 	return hash.SHA3(data), data, nil
+}
+
+// latestTagEvent is the latest mtime among every tagxref row in the
+// repository, cancels and propagated rows included, in milliseconds since
+// the Unix epoch, or 0 when there is none.
+func latestTagEvent(q db.Querier) (int64, error) {
+	var mtimeRaw any
+	if err := q.QueryRow("SELECT max(mtime) FROM tagxref").Scan(&mtimeRaw); err != nil {
+		return 0, fmt.Errorf("seed.Mint: latest tag event: %w", err)
+	}
+	if mtimeRaw == nil {
+		return 0, nil
+	}
+	mtime, ok := db.ScanJulianDay(mtimeRaw)
+	if !ok {
+		return 0, fmt.Errorf("seed.Mint: latest tag event: unreadable mtime %T", mtimeRaw)
+	}
+	return libfossil.MillisFromJulianDay(mtime), nil
 }
 
 // cardsAt returns a T card for every tag in force at rid, applied to rid,
@@ -254,8 +280,9 @@ func cardsAt(q db.Querier, rid libfossil.FslID) ([]deck.TagCard, int64, error) {
 // Hold is for the seed of the clone's own structural request. The sync layer
 // routes a file card to it only when a horizon-seed pragma in the same reply
 // named it; an origin never calls it (§5.2.3: it refuses a seed offered to
-// it), and an artifact of the seed's shape arriving any other way is stored
-// and crosslinked as the ordinary control artifact it is.
+// it). A seed arriving any other way is dropped (seedcheck), and an artifact
+// of its shape that carries neither this store's label nor a binding card
+// is stored and crosslinked as the ordinary control artifact it is.
 func Hold(tx *db.Tx, name string, data []byte, verify Verifier) error {
 	if tx == nil {
 		panic("seed.Hold: tx must not be nil")

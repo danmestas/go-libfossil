@@ -367,10 +367,11 @@ func TestMintCardsCarryDenseState(t *testing.T) {
 
 func TestMintDateIsTheLatestEvent(t *testing.T) {
 	w := newWorld(t)
-	// c4 holds only inherited rows; the latest of them is hue's, a whole
-	// second, which D keeps.
+	// c4 holds only inherited rows, the latest of them hue's; D is the
+	// latest tag event anywhere in the repository instead (§5.2.2): closed's,
+	// on feat1, rounded up to the next whole second.
 	_, data := w.mint(w.c4, "origin")
-	if want := "D 2026-01-11T00:00:00\n"; !strings.Contains(string(data), want) {
+	if want := "D 2026-01-13T00:00:01\n"; !strings.Contains(string(data), want) {
 		t.Errorf("seed at c4 lacks %q:\n%s", want, data)
 	}
 	// Minting twice over unchanged state yields the same seed.
@@ -379,7 +380,7 @@ func TestMintDateIsTheLatestEvent(t *testing.T) {
 	if name1 != name2 {
 		t.Errorf("two mints over one state differ: %s, %s", name1, name2)
 	}
-	// A later tag event the seed summarizes moves D past it.
+	// A later tag event moves D past it.
 	w.tag(w.c3, "sym-v2", tag.TagSingleton, "", w.at(20))
 	_, data = w.mint(w.c3, "origin")
 	if want := "D 2026-01-21T00:00:00\n"; !strings.Contains(string(data), want) {
@@ -661,11 +662,17 @@ func TestVerifierDiscardsAnUnattributedSeed(t *testing.T) {
 	}
 }
 
+// An artifact of a seed's shape that carries neither this store's seed label
+// nor a binding card is an ordinary control artifact (§5.2.3): stored,
+// linked, offered to peers, and never held as the seed.
 func TestSeedShapedArtifactIsAnOrdinaryControl(t *testing.T) {
 	w := newWorld(t)
 	k := w.k(w.c3)
 	clone := w.lacking(k)
-	name, data := w.mint(w.c3, "origin")
+	_, minted := w.mint(w.c3, "origin")
+	name, data := reseal(t, minted, func(cards []deck.TagCard) []deck.TagCard {
+		return slices.DeleteFunc(cards, func(c deck.TagCard) bool { return c.Name == seed.BindingTag })
+	})
 	var rid libfossil.FslID
 	err := clone.WithTx(func(tx *db.Tx) error {
 		var err error
@@ -698,6 +705,30 @@ func TestSeedShapedArtifactIsAnOrdinaryControl(t *testing.T) {
 	}
 	if unsent != 1 {
 		t.Error("the ordinary control artifact is not offered to peers like any other")
+	}
+}
+
+// A seed that carries a binding card is never linked, whatever path stored
+// it (§5.2.3): its tags never reach derived state.
+func TestSeedWithBindingCardNotLinked(t *testing.T) {
+	w := newWorld(t)
+	clone := w.lacking(w.k(w.c3))
+	_, data := w.mint(w.c3, "origin")
+	var rid libfossil.FslID
+	err := clone.WithTx(func(tx *db.Tx) error {
+		var err error
+		rid, _, err = blob.Store(tx, data)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Crosslink(clone); err != nil {
+		t.Fatal(err)
+	}
+	var srcRows int
+	if err := clone.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", rid).Scan(&srcRows); err != nil || srcRows != 0 {
+		t.Errorf("the seed was linked: %d tag rows (%v)", srcRows, err)
 	}
 }
 
@@ -766,8 +797,9 @@ func TestMintNeverDerivesTheBindingTag(t *testing.T) {
 	if got := bindings(t, data); len(got) != 1 || got[0].Value != "descendants" {
 		t.Errorf("binding cards %+v, want the seed's own alone:\n%s", got, data)
 	}
-	// The derived tag's event is not summarized: D stays closed's.
-	if want := "D 2026-01-13T00:00:01\n"; !strings.Contains(string(data), want) {
+	// Its event is still a tag event in the repository, which dates D
+	// (§5.2.2), though it is no card of the seed.
+	if want := "D 2026-01-21T00:00:00\n"; !strings.Contains(string(data), want) {
 		t.Errorf("seed lacks %q:\n%s", want, data)
 	}
 	if _, err := w.r.DB().Exec(`DELETE FROM tagxref WHERE tagid NOT IN
@@ -901,5 +933,28 @@ func TestApplyDiscardsAnUnboundHeldSeed(t *testing.T) {
 	}
 	if w.derivesDense(clone, k) == nil {
 		t.Error("the discarded seed's state survived")
+	}
+}
+
+// A cancel, here and at an ancestor, is a tag event: D never moves earlier
+// when a newer tag is cancelled (§5.2.2), where dated from the rows in force
+// it fell back to the row before.
+func TestMintDateCountsCancels(t *testing.T) {
+	for _, target := range []string{"C", "ancestor"} {
+		w := newWorld(t)
+		on := w.c3
+		if target == "ancestor" {
+			on = w.c1
+		}
+		w.tag(on, "tint", tag.TagPropagating, "", w.at(30))
+		_, before := w.mint(w.c3, "origin")
+		w.tag(on, "tint", tag.TagCancel, "", w.at(31))
+		_, after := w.mint(w.c3, "origin")
+		if want := "D 2026-01-31T00:00:00\n"; !strings.Contains(string(before), want) {
+			t.Fatalf("%s: before the cancel the seed lacks %q:\n%s", target, want, before)
+		}
+		if want := "D 2026-02-01T00:00:00\n"; !strings.Contains(string(after), want) {
+			t.Errorf("%s: after the cancel the seed lacks %q:\n%s", target, want, after)
+		}
 	}
 }

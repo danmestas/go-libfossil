@@ -34,21 +34,23 @@ leaves  1 check-ins, 3 blobs, 6 B expanded, 57 B stored
 
 A content horizon keeps all structure and elides only blobs; a structural horizon also leaves out the manifests below C.
 
-## Seeds are never pushed
+## Seeds are never pushed or kept
 
-A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3 and its F.1 erratum):
+A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3):
 
 - its U card is `go-libfossil`, the label go-libfossil writes on every seed it mints; or
 - it carries a `horizon-seed` T card, whatever its U card.
 
 The test runs when the artifact first becomes readable, on its content after any delta is applied. A push that carries a seed the origin can read within that push is refused whole: nothing it carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived is stored as any dangling delta is, and withheld, never announced or sent, until something supplies the base: a later push, a pull, or a check-in or tag that writes the same bytes. That supplies only the base, so it is stored as usual, with no error, and the seed is refused then.
 
-A refused seed's hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The seed stays stored, so a delta built on it stays readable, but it is never linked, announced or sent, and a re-push of it is refused at once. Pulling the same hash from a peer stores nothing new: the row is already held, and stays refused. Any other seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
+A store keeps a seed only when it arrives through a `horizon-seed` announcement, as a horizon clone or pull receives its origin's seed (§5.2.3). One received by pull, clone or sync outside an announcement is dropped as soon as it can be read: not stored, not counted as received, and not asked for again. A delta completed in a later round is refused by the link step instead: kept, but never linked, announced or sent. A control artifact with neither the store's seed label nor a `horizon-seed` card stays ordinary. Any delta a store keeps without its base, pushed or received, is not announced or sent until it can be expanded; a clone records the ones still unreadable when it ends.
+
+A refused seed's hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. A refused seed that is stored stays stored, so a delta built on it stays readable, but it is never linked, announced or sent. The store never asks for a refused hash again, and an origin refuses a re-push of it at once.
 
 Two consequences follow:
 
-- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed; one that carries a `horizon-seed` card is refused.
-- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil origin, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
+- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed or pulled; one that carries a `horizon-seed` card is refused.
+- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil store, and a store drops ones it receives or relinks, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
 
 ## The binding card
 
@@ -60,6 +62,8 @@ T +horizon-seed <C> <rule>
 
 The card is part of the seed's bytes, so a signature covers it. It is not a tag in force: a clone skips it when it applies the seed, and an origin never derives a `horizon-seed` tag it holds into a seed. It does not count as the one T card a control artifact needs, so with no other tag in force there is still no seed.
 
+A seed's D card is the latest tag event anywhere in the repository, one that applied, propagated or cancelled a tag, rounded up to a whole second (§5.2.2). A tag event takes effect only over an older one and its own row keeps its time, so a cancel, or a closed branch reopened, moves D later, never earlier, and D changes whenever any tag in the repository changes: the next pull re-sends the seed. Dated from the tags in force instead, as go-libfossil and zit did before, cancelling the newest tag moved D back and the clone below refused the honest re-seed as a replay.
+
 Before it holds a seed, signed or not, a clone checks it (§5.2.4):
 
 - it carries exactly one binding card, and that card names the clone's own C and rule;
@@ -67,7 +71,7 @@ Before it holds a seed, signed or not, a clone checks it (§5.2.4):
 
 A seed that fails either check is refused as a wrongly signed one: the clone falls back to the content horizon, completes, and reports `HorizonFallback`; later pulls keep the content horizon. A deepen discards the held seed first, so the floor starts again at the new C. A held seed that is no longer bound to the store's horizon is discarded when it is next applied, as one that fails its signature is. A seed held by v0.15.0, which carried no binding card, is replaced on the first pull from an origin that binds its seeds; a rebuild before that discards it, and the next pull fetches a bound one.
 
-zit 0.7.1 writes and checks the same card, so the two implementations' seeds for one repository are byte-identical up to the U card.
+zit 0.7.1 writes and checks the same card. zit 0.7.2 dates its seeds from the repository's latest tag event too, so the two implementations' seeds for one repository are byte-identical up to the U card; interop is tested against zit 0.7.2. Against zit 0.7.1 they still are wherever no tag has been cancelled.
 
 ## Signed seeds
 

@@ -24,8 +24,8 @@ env:
   # own server, checked against the release's SHA256SUMS. The interop and
   # horizon-seed tests compare bytes with it, so a missing zit must fail the
   # run, not skip it.
-  ZIT_VERSION: "0.7.1"
-  ZIT_SHA256: "f20cebd3d54b5ba286996c063861a70c9feeb1efb7eaa60fc5ef54489d290fc2"
+  ZIT_VERSION: "0.7.2"
+  ZIT_SHA256: "9f328fa107723353a5625cc32d834255922e855bba684dbcfe47557b6f13f3df"
 
 jobs:
   test:
@@ -102,6 +102,9 @@ jobs:
         env:
           REQUIRE_FOSSIL_BIN: "1"
           REQUIRE_ZIT_BIN: "1"
+          # zit 0.7.2 dates a seed at the repository's latest tag event, so
+          # the seed byte-identity test over a cancelled tag must not skip.
+          REQUIRE_ZIT_SEED_DATE: "1"
         run: GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=300s
       - name: DST
         run: GOWORK=off go test ./dst/... -count=1 -timeout=300s

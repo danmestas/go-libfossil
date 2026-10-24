@@ -20,6 +20,12 @@ env:
   # we test against.
   FOSSIL_VERSION: "2.28"
   FOSSIL_SHA256: "c9d2bf9d150dff1076eae1b0b822ed3cde892e1273f78b040c4f8ace1b59dd40"
+  # zit, the Zig fossil, pinned the same way: the release tarball from zit's
+  # own server, checked against the release's SHA256SUMS. The interop and
+  # horizon-seed tests compare bytes with it, so a missing zit must fail the
+  # run, not skip it.
+  ZIT_VERSION: "0.7.1"
+  ZIT_SHA256: "f20cebd3d54b5ba286996c063861a70c9feeb1efb7eaa60fc5ef54489d290fc2"
 
 jobs:
   test:
@@ -48,6 +54,15 @@ jobs:
             exit 1
           fi
           fossil version
+      - name: Install pinned zit
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
+            -o /tmp/zit.tar.gz \
+            "https://fossil.craftdesign.group/zit/uv/releases/${ZIT_VERSION}/zit-${ZIT_VERSION}-linux-x86_64.tar.gz"
+          echo "${ZIT_SHA256}  /tmp/zit.tar.gz" | sha256sum -c -
+          sudo tar -xzf /tmp/zit.tar.gz -C /usr/local/bin --strip-components=1 "zit-${ZIT_VERSION}/zit"
+          rm -f /tmp/zit.tar.gz
+          zit version
       - name: Warm Fossil global config
         # Fossil keeps a per-user global config database outside any repository
         # and creates it lazily on first use. `go test` runs packages
@@ -86,6 +101,7 @@ jobs:
         # is the one thing our own tests cannot substitute for.
         env:
           REQUIRE_FOSSIL_BIN: "1"
+          REQUIRE_ZIT_BIN: "1"
         run: GOWORK=off go test $(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=300s
       - name: DST
         run: GOWORK=off go test ./dst/... -count=1 -timeout=300s

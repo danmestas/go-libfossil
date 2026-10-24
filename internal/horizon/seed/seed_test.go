@@ -939,6 +939,46 @@ func TestApplyDiscardsAnUnboundHeldSeed(t *testing.T) {
 // A cancel, here and at an ancestor, is a tag event: D never moves earlier
 // when a newer tag is cancelled (§5.2.2), where dated from the rows in force
 // it fell back to the row before.
+// TestMintDateKeepsTheMintedFloor removes the latest tag event's rows, as a
+// shun and purge does, and mints again: the seed keeps the D already minted
+// (§5.2.2), and the same seed after the repository is closed and reopened,
+// and a later event still moves it on.
+func TestMintDateKeepsTheMintedFloor(t *testing.T) {
+	w := newWorld(t)
+	w.tag(w.c3, "late", tag.TagSingleton, "", w.at(300))
+	_, before := w.mint(w.c3, "origin")
+	if _, err := w.r.DB().Exec(`DELETE FROM tagxref WHERE tagid=(SELECT tagid FROM tag WHERE tagname='late')`); err != nil {
+		t.Fatal(err)
+	}
+	const floor = "D 2026-10-28T00:00:00\n"
+	if !strings.HasPrefix(string(before), floor) {
+		t.Fatalf("the first seed is not dated %q:\n%s", floor, before)
+	}
+	_, purged := w.mint(w.c3, "origin")
+	if !strings.HasPrefix(string(purged), floor) {
+		t.Fatalf("after the purge the seed is not dated %q:\n%s", floor, purged)
+	}
+	path := w.r.Path()
+	if err := w.r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.r = r
+	t.Cleanup(func() { r.Close() })
+	_, reopened := w.mint(w.c3, "origin")
+	if string(reopened) != string(purged) {
+		t.Fatalf("after reopening the seed changed:\n%s\nwant\n%s", reopened, purged)
+	}
+	w.tag(w.c3, "later", tag.TagSingleton, "", w.at(301))
+	_, later := w.mint(w.c3, "origin")
+	if want := "D 2026-10-29T00:00:00\n"; !strings.HasPrefix(string(later), want) {
+		t.Errorf("a later event left the seed without %q:\n%s", want, later)
+	}
+}
+
 func TestMintDateCountsCancels(t *testing.T) {
 	for _, target := range []string{"C", "ancestor"} {
 		w := newWorld(t)

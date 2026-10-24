@@ -2,14 +2,20 @@ package conformance
 
 import (
 	"context"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // A seed's D is the latest tag event in the repository, cancels included
@@ -98,4 +104,49 @@ func hzStillStructural(r *repo.Repo) error {
 		return expectf("the store fell back to depth %v", d)
 	}
 	return nil
+}
+
+// TestHorizonSeedDateZit is TestHorizonSeedZit over a repository whose
+// newest tag event is a cancel: both implementations date the seed at the
+// repository's latest tag event (§5.2.2), so the seeds are the same bytes.
+// A zit before check-in caeef421ee dates it at the latest tag in force,
+// earlier, and no string in its binary tells it apart, so the test detects
+// that from the seed and skips unless REQUIRE_ZIT_SEED_DATE=1; CI's pinned
+// zit 0.7.1 predates it.
+func TestHorizonSeedDateZit(t *testing.T) {
+	bin := zitHorizonBinary(t)
+	s := newHZSeed(t)
+	s.tag(t, s.c3, "late", tag.TagSingleton, "")
+	s.tag(t, s.c3, "late", tag.TagCancel, "")
+	dir := t.TempDir()
+	home := filepath.Join(dir, "home")
+	if err := os.Mkdir(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(xferHandler(t, s.f.r, func(*xfer.Message) {}))
+	defer srv.Close()
+	dense := filepath.Join(dir, "dense")
+	zitRun(t, bin, home, dir, "clone", srv.URL, dense, "--no-open", "--once")
+	url := zitServe(t, bin, home, dense)
+	structural := filepath.Join(dir, "structural")
+	zitRun(t, bin, home, dir, "clone", url, structural, "--no-open", "--once",
+		"--horizon="+hzUUID(t, s.f.r, s.c3), "--structural")
+	zitSeed, err := os.ReadFile(filepath.Join(structural, ".zit-cache", "horizon-seed"))
+	if err != nil {
+		t.Fatalf("zit held no seed: %v", err)
+	}
+	goName, goSeed, err := s.mint("zit-seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(goSeed) == string(zitSeed) && goName == hash.SHA3(zitSeed) {
+		return
+	}
+	zd, zerr := deck.Parse(zitSeed)
+	gd, gerr := deck.Parse(goSeed)
+	if zerr == nil && gerr == nil && zd.D.Before(gd.D) && os.Getenv("REQUIRE_ZIT_SEED_DATE") != "1" {
+		t.Skipf("%s (%s) dates the seed at the latest tag in force (%v, go-libfossil %v): the run needs zit "+
+			"at check-in caeef421ee or later", bin, zitVersion(bin), zd.D, gd.D)
+	}
+	t.Errorf("seeds differ:\nzit %s\n%s\ngo  %s\n%s", hash.SHA3(zitSeed), zitSeed, goName, goSeed)
 }

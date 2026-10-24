@@ -1550,24 +1550,21 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.aborted = late
 		return nil
 	}
-	return h.recordStored(uuid, deltaSrc, payload)
+	if h.fatal {
+		return nil // storeFile refused a seed: the request is refused whole
+	}
+	return h.recordStored(uuid, deltaSrc)
 }
 
 // recordStored notes an artifact handleFile stored, for crosslinking and
-// for the seed check (horizon §5.2.3). An artifact is judged when it first
-// becomes readable: full text and a delta on a readable basis now; a delta
-// on an unreadable basis is recorded pending in seedcheck, and judged by
-// ownSeedReadable or at the crosslink step of whatever later fills it.
-func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
-	if payload == nil {
-		panic("handler.recordStored: payload must not be nil")
-	}
+// for the seed check (horizon §5.2.3): storeReceived refused a seed it could
+// read, so what is left to judge is a delta it could not. That is recorded
+// pending, withheld until a basis makes it readable; ownSeedReadable judges
+// it if the basis comes later in this request.
+func (h *handler) recordStored(uuid, deltaSrc string) error {
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
 	if deltaSrc == "" {
-		if seedcheck.IsSeedBytes(payload) {
-			h.fail(seedRefusedText)
-		}
 		return nil
 	}
 	q := h.repo.DB()
@@ -1575,23 +1572,11 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 	if !ok {
 		panic("handler.recordStored: a stored artifact must exist")
 	}
-	if !content.IsAvailable(q, rid) {
-		h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
-		return seedcheck.MarkPending(q, rid)
+	if content.IsAvailable(q, rid) {
+		return nil
 	}
-	if h.pass == nil {
-		panic("handler.recordStored: a stored delta implies a receive pass")
-	}
-	// storeFile verified these bytes against uuid; expanding them again is
-	// tolerated, since the pass's basis cache makes it one delta apply.
-	data, err := h.pass.basis.ExpandUnchecked(q, rid)
-	if err != nil {
-		return fmt.Errorf("handler: seed check: %w", err)
-	}
-	if seedcheck.IsSeedBytes(data) {
-		h.fail(seedRefusedText)
-	}
-	return nil
+	h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
+	return seedcheck.MarkPending(q, rid)
 }
 
 // storedDelta is a delta a request stored, by name and rid.
@@ -1633,6 +1618,10 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	var mismatch *hashMismatchError
 	if errors.As(err, &mismatch) {
 		return wrongHashText(mismatch.uuid), mismatch.late
+	}
+	if errors.Is(err, errSeed) {
+		h.fail(seedRefusedText)
+		return "", false
 	}
 	if err != nil {
 		return fmt.Sprintf("storing %s: %v", uuid, err), false

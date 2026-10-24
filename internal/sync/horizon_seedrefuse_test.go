@@ -745,3 +745,211 @@ func TestHorizonLinkJudgesPendingSeed(t *testing.T) {
 		t.Fatalf("the seed was crosslinked: %d rows", n)
 	}
 }
+
+// seedPeer serves upstream to a client and records every request.
+type seedPeer struct {
+	t        *testing.T
+	upstream *repo.Repo
+	requests []*xfer.Message
+}
+
+func (p *seedPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	p.requests = append(p.requests, req)
+	return HandleSync(ctx, p.upstream, req)
+}
+
+// asked reports whether any request p saw gimmes uuid.
+func (p *seedPeer) asked(uuid string) bool {
+	for _, req := range p.requests {
+		for _, c := range req.Cards {
+			if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == uuid {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Horizon F.2: a store never keeps a seed it did not receive through a
+// horizon-seed announcement. A pull receiving one by label, or by binding
+// card under another label, drops it: not stored, not counted, no phantom,
+// and a second sync does not ask for it again.
+func TestHorizonPullDropsSeed(t *testing.T) {
+	for _, shape := range []string{"label", "card"} {
+		src := newPCOrigin(t)
+		var seed []byte
+		if shape == "label" {
+			_, seed = src.labelled(seedLogin, "a")
+		} else {
+			_, seed = src.bound("zit-seed")
+		}
+		// A peer that keeps seeds, as one predating F.2 does: stored raw,
+		// since this store's own link step would refuse it.
+		_, uuid, err := blob.Store(src.r.DB(), seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client := setupSyncTestRepo(t)
+		peer := &seedPeer{t: t, upstream: src.r}
+		res, err := Sync(context.Background(), client, peer, SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC})
+		if err != nil || len(res.Errors) != 0 {
+			t.Fatalf("%s: pull: %v %q", shape, err, res.Errors)
+		}
+		if !peer.asked(uuid) {
+			t.Fatalf("%s: fixture: the client never asked for the seed", shape)
+		}
+		assertRefused(t, client, uuid, true)
+		var held int
+		if err := client.DB().QueryRow("SELECT count(*) FROM blob WHERE size>=0").Scan(&held); err != nil {
+			t.Fatal(err)
+		}
+		if res.FilesRecvd != held {
+			t.Fatalf("%s: %d files counted received, %d held", shape, res.FilesRecvd, held)
+		}
+		// A peer with no cursor for this client announces the seed again.
+		other := setupPushableTestRepo(t)
+		if _, _, err := blob.Store(other.DB(), seed); err != nil {
+			t.Fatal(err)
+		}
+		peer = &seedPeer{t: t, upstream: other}
+		if _, err := Sync(context.Background(), client, peer, SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+			t.Fatal(err)
+		}
+		if peer.asked(uuid) {
+			t.Fatalf("%s: a second sync asked for the dropped seed again", shape)
+		}
+	}
+}
+
+// A seed that arrives as a delta whose basis comes in a later round is
+// dropped once the basis makes it readable.
+func TestHorizonPullDropsLateSeedDelta(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	_, seed := o.labelled(seedLogin, "a")
+	baseUUID := hash.SHA3(base)
+	s := deltaCard(t, base, baseUUID, seed)
+	round := 0
+	tr := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		round++
+		if round == 1 {
+			return &xfer.Message{Cards: []xfer.Card{s}}
+		}
+		for _, c := range req.Cards {
+			if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == baseUUID {
+				return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: baseUUID, Content: base}}}
+			}
+		}
+		return &xfer.Message{}
+	}}
+	client := setupSyncTestRepo(t)
+	if _, err := Sync(context.Background(), client, tr, SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+	if round < 2 {
+		t.Fatal("fixture: the basis was never asked for")
+	}
+	assertRefused(t, client, s.UUID, true)
+	if n := seedLinkRows(t, client, s.UUID); n != 0 {
+		t.Fatalf("the seed was crosslinked: %d rows", n)
+	}
+	if phantom, err := isPhantomRow(client.DB(), baseUUID); err != nil || phantom {
+		t.Fatalf("the basis was not stored (%v)", err)
+	}
+}
+
+// A refused seed sent again unasked, as a delta whose basis the client
+// lacks, is dropped by its hash: not stored and not counted.
+func TestHorizonPullDropsResentSeed(t *testing.T) {
+	o := newPCOrigin(t)
+	_, seed := o.labelled(seedLogin, "a")
+	_, base := o.labelled("u", "never sent")
+	full := &xfer.FileCard{UUID: hash.SHA1(seed), Content: seed}
+	resent := deltaCard(t, base, hash.SHA3(base), seed)
+	client := setupSyncTestRepo(t)
+	for i, card := range []*xfer.FileCard{full, resent} {
+		sent := false
+		tr := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+			if sent {
+				return &xfer.Message{}
+			}
+			sent = true
+			return &xfer.Message{Cards: []xfer.Card{card}}
+		}}
+		res, err := Sync(context.Background(), client, tr, SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.FilesRecvd != 0 {
+			t.Fatalf("send %d: %d files counted received", i, res.FilesRecvd)
+		}
+		assertRefused(t, client, full.UUID, true)
+	}
+}
+
+// cloneScript answers a clone round by round from fixed replies; rounds past
+// the last get the final one.
+func cloneScript(replies ...[]xfer.Card) *MockTransport {
+	round := 0
+	return &MockTransport{Handler: func(*xfer.Message) *xfer.Message {
+		cards := replies[min(round, len(replies)-1)]
+		round++
+		return &xfer.Message{Cards: cards}
+	}}
+}
+
+// A clone drops a seed by label and by binding card, and a refused seed sent
+// again in another form, counting none of them.
+func TestHorizonCloneDropsSeed(t *testing.T) {
+	o := newPCOrigin(t)
+	_, labelled := o.labelled(seedLogin, "a")
+	_, bound := o.bound("zit-seed")
+	ordinary := []byte("an ordinary file the clone keeps\n")
+	again := deltaCard(t, ordinary, hash.SHA1(ordinary), labelled)
+	push := &xfer.PushCard{ServerCode: "s", ProjectCode: testPC}
+	tr := cloneScript(
+		[]xfer.Card{push,
+			&xfer.FileCard{UUID: hash.SHA1(labelled), Content: labelled},
+			&xfer.FileCard{UUID: hash.SHA1(bound), Content: bound},
+			again,
+			&xfer.FileCard{UUID: hash.SHA1(ordinary), Content: ordinary},
+			&xfer.CloneSeqNoCard{SeqNo: 0}},
+		[]xfer.Card{&xfer.CloneSeqNoCard{SeqNo: 0}},
+	)
+	clone, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"), tr, CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	if res.BlobsRecvd != 1 {
+		t.Fatalf("%d blobs counted received, want the ordinary file alone", res.BlobsRecvd)
+	}
+	assertRefused(t, clone, hash.SHA1(labelled), true)
+	assertRefused(t, clone, hash.SHA1(bound), true)
+}
+
+// A clone drops a seed sent as a delta whose basis comes in a later round.
+func TestHorizonCloneDropsLateSeedDelta(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, hash.SHA1(base), seed)
+	push := &xfer.PushCard{ServerCode: "s", ProjectCode: testPC}
+	tr := cloneScript(
+		[]xfer.Card{push, s, &xfer.CloneSeqNoCard{SeqNo: 1}},
+		[]xfer.Card{&xfer.FileCard{UUID: hash.SHA1(base), Content: base}, &xfer.CloneSeqNoCard{SeqNo: 0}},
+		[]xfer.Card{&xfer.CloneSeqNoCard{SeqNo: 0}},
+	)
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"), tr, CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	assertRefused(t, clone, s.UUID, true)
+	if n := seedLinkRows(t, clone, s.UUID); n != 0 {
+		t.Fatalf("the seed was crosslinked: %d rows", n)
+	}
+	if _, ok := blob.Exists(clone.DB(), hash.SHA1(base)); !ok {
+		t.Fatal("the basis was not kept")
+	}
+}

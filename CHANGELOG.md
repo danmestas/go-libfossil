@@ -68,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `horizon-seed` card; a user whose login is `go-libfossil` cannot push
   control artifacts. The §5.7 stale-seed check is likewise judged on
   expanded content, a late delta included.
+- A store keeps a horizon seed only through a `horizon-seed` announcement
+  (horizon F.2, F.3 of the zit 0.7.2 draft). A pull, clone or sync drops a
+  seed received outside one as soon as it can be read, a delta completed in
+  a later round included: it is not stored, not counted as received, and
+  its hash is never asked for again. The link step refuses a seed-shaped
+  artifact whatever path stored it. A seed-shaped artifact with neither
+  this store's label nor a `horizon-seed` card stays ordinary.
 
 ### Fixed
 

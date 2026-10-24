@@ -1239,6 +1239,12 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	return err
 }
 
+// errSeed is storeReceived's refusal of a horizon seed received outside a
+// horizon-seed announcement (§5.2.3, F.1, F.2): nothing is stored. The push
+// handler refuses the request; a client or clone drops the artifact and
+// refuses its hash.
+var errSeed = errors.New("sync: a horizon seed outside a horizon-seed announcement")
+
 // storeReceived is storeReceivedFile without the after-dephantomize cascade:
 // it returns the rid of a phantom it filled, for which the caller owes the
 // cascade, with or without an error. The sync client runs those cascades once
@@ -1284,6 +1290,9 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		}
 		if verdict == deltaMismatch {
 			return 0, &hashMismatchError{uuid: uuid}
+		}
+		if target != nil && seedcheck.IsSeedBytes(target) {
+			return 0, errSeed
 		}
 		return 0, storeDeltaContent(ctx, r, pass, uuid, deltaSrc, payload, storedBlob, vis,
 			linker, target)
@@ -1459,6 +1468,9 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	if !hashMatches(uuid, fullContent) {
 		return 0, &hashMismatchError{uuid: uuid}
 	}
+	if seedcheck.IsSeedBytes(fullContent) {
+		return 0, errSeed
+	}
 
 	var stored, dephantomizedRid libfossil.FslID
 	err := withLinkerTx(r, linker, func(tx *db.Tx) error {
@@ -1617,7 +1629,12 @@ func (s *session) addPhantom(uuid string, vis visibility) error {
 	if err != nil {
 		return err
 	}
-	if !shunned {
+	// Nor of a refused seed's hash, which is never asked for again.
+	refused, err := seedcheck.IsRefusedUUID(s.repo.DB(), uuid)
+	if err != nil {
+		return err
+	}
+	if !shunned && !refused {
 		s.phantoms[uuid] = true
 		s.newPhantoms = append(s.newPhantoms, phantomUpdate{uuid: uuid, vis: vis})
 	}
@@ -1831,6 +1848,16 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	if servedCluster(s.servedHorizon(), deltaSrc, payload) {
 		return false, nil
 	}
+	// Horizon F.2: a seed outside the announcement is dropped, not counted
+	// and not asked for again; its hash is refused (seedcheck).
+	refused, err := seedcheck.IsRefusedUUID(s.repo.DB(), uuid)
+	if err != nil {
+		return false, err
+	}
+	if refused {
+		delete(s.phantoms, uuid)
+		return false, nil
+	}
 	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
 		return false, err
 	}
@@ -1838,6 +1865,10 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 		nil)
 	if rid > 0 {
 		s.dephantomized = append(s.dephantomized, rid)
+	}
+	if errors.Is(err, errSeed) {
+		delete(s.phantoms, uuid)
+		return false, seedcheck.Refuse(s.repo.DB(), uuid)
 	}
 	if err != nil {
 		return false, err

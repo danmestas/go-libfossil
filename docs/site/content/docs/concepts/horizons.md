@@ -34,7 +34,7 @@ leaves  1 check-ins, 3 blobs, 6 B expanded, 57 B stored
 
 A content horizon keeps all structure and elides only blobs; a structural horizon also leaves out the manifests below C.
 
-## Seeds are never pushed
+## Seeds are never pushed or kept
 
 A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3 and its F.1 erratum):
 
@@ -43,12 +43,14 @@ A seed is private to the clone that holds it, so a go-libfossil origin refuses a
 
 The test runs when the artifact first becomes readable, on its content after any delta is applied. A push that carries a seed the origin can read within that push is refused whole: nothing it carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived is stored as any dangling delta is, and withheld, never announced or sent, until something supplies the base: a later push, a pull, or a check-in or tag that writes the same bytes. That supplies only the base, so it is stored as usual, with no error, and the seed is refused then.
 
-A refused seed's bytes are deleted, and its hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The origin never asks for that hash, and refuses a re-push of it at once. A seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
+A store keeps a seed only when it arrives through a `horizon-seed` announcement, as a horizon clone or pull receives its origin's seed (F.2, F.3). One received by pull, clone or sync outside an announcement is dropped as soon as it can be read: not stored, not counted as received, and not asked for again. That covers a delta completed in a later round, which the link step refuses before it links it. A control artifact with neither the store's seed label nor a `horizon-seed` card stays ordinary.
+
+A refused seed's bytes are deleted, and its hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The store never asks for that hash again, and an origin refuses a re-push of it at once.
 
 Two consequences follow:
 
-- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed; one that carries a `horizon-seed` card is refused.
-- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil origin, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
+- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed or pulled; one that carries a `horizon-seed` card is refused.
+- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil store, and a store drops ones it receives or relinks, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
 
 ## Signed seeds
 

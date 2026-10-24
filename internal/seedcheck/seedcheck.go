@@ -1,6 +1,9 @@
-// Package seedcheck keeps an origin from storing, linking or serving a
-// horizon seed pushed to it (draft-fossil-horizon-00 §5.2.3 and its zit
-// 0.7.1 erratum, F.1).
+// Package seedcheck keeps a store from storing, linking or serving a
+// horizon seed it did not receive through a horizon-seed announcement
+// (draft-fossil-horizon-00 §5.2.3 and its zit erratum: F.1 for a push, F.2
+// and F.3 for a pull, clone or sync). The receive paths refuse a seed they
+// can read as it arrives, and the link step refuses any seed-shaped
+// artifact it reaches (Judge); what follows is the push side's bookkeeping.
 //
 // A pushed control artifact is a seed when it carries this implementation's
 // seed label or a horizon-seed T card. It is judged when it first becomes
@@ -243,6 +246,23 @@ func Present(q db.Querier) (Tables, error) {
 func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, error) {
 	if q == nil || rid <= 0 || d == nil {
 		panic("seedcheck.Judge: q and d must not be nil and rid must be positive")
+	}
+	// Horizon F.2: a store never keeps a seed it did not receive through a
+	// horizon-seed announcement, and an announced seed is held outside the
+	// artifact store, so a seed-shaped artifact reaching the link step is
+	// refused whatever path stored it. This catches a seed completed in a
+	// later round of a pull or clone, which no pending row records.
+	if IsSeed(d) {
+		var uuid string
+		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+			return false, fmt.Errorf("seedcheck.Judge: rid=%d: %w", rid, err)
+		}
+		if t.Pending {
+			if _, err := q.Exec("DELETE FROM "+pendingTable+" WHERE rid=?", rid); err != nil {
+				return false, fmt.Errorf("seedcheck.Judge: %w", err)
+			}
+		}
+		return true, Refuse(q, uuid)
 	}
 	if !t.Pending && !t.Refused {
 		return false, nil

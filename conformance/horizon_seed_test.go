@@ -452,10 +452,14 @@ func hzSeedPrivate(t *testing.T, s *hzSeed) error {
 
 // hzSeedOrdinary: an artifact of the seed's shape arriving as an ordinary
 // artifact is stored and crosslinked as the control artifact it is, offered
-// to peers like any other, and never held as the seed.
+// to peers like any other, and never held as the seed. Under the zit 0.7.1
+// erratum (F.2) that holds only for one carrying neither the receiver's seed
+// label nor a binding card, so this one is minted under another
+// implementation's label; the receive paths drop the others
+// (horizon.5.2.3.seed-*).
 func hzSeedOrdinary(t *testing.T, s *hzSeed) error {
 	clone := s.lacking(t)
-	name, data, err := s.mint(seedLoginGo)
+	name, data, err := s.mint("zit-seed")
 	if err != nil {
 		return err
 	}

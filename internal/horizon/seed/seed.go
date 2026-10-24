@@ -234,7 +234,7 @@ const floorConfig = "horizon-seed-floor"
 // draft permits (the mark is a SHOULD).
 func mintedFloor(q db.Querier) (int64, error) {
 	var value string
-	err := q.QueryRow("SELECT value FROM config WHERE name=?", floorConfig).Scan(&value)
+	err := q.QueryRow("SELECT coalesce(value, '') FROM config WHERE name=?", floorConfig).Scan(&value)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
 	}
@@ -260,7 +260,7 @@ func raiseFloor(q db.Querier, d int64) error {
 	_, err := q.Exec(`INSERT INTO config(name, value, mtime) VALUES(?1, ?2, strftime('%s','now'))
 		ON CONFLICT(name) DO UPDATE SET value=excluded.value, mtime=excluded.mtime
 		WHERE CAST(config.value AS INTEGER) < CAST(excluded.value AS INTEGER)
-			OR CAST(CAST(config.value AS INTEGER) AS TEXT) IS NOT config.value`,
+			OR CAST(CAST(config.value AS INTEGER) AS TEXT) IS NOT config.value OR config.value IS NULL`,
 		floorConfig, strconv.FormatInt(d, 10))
 	if err != nil {
 		return fmt.Errorf("seed.Mint: %s: %w", floorConfig, err)

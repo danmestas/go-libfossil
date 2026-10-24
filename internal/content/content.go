@@ -18,6 +18,10 @@ import (
 // that cannot be read at all (draft-fossil-repo-state-00 Section 4.4).
 var ErrHashMismatch = errors.New("hash mismatch")
 
+// ErrChainUnresolvable is a delta chain that loops back on itself or runs
+// past maxDeltaChainDepth: no basis that arrives can make it readable.
+var ErrChainUnresolvable = errors.New("delta chain does not resolve")
+
 // HashMismatchError is the error behind ErrHashMismatch. RID names the blob
 // whose name the bytes failed, which is not the blob asked for when an interior
 // delta base is the misnamed one.
@@ -269,7 +273,7 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 	// here as it does in IsAvailable. See maxDeltaChainDepth.
 	for {
 		if seen[current] {
-			return nil, nil, fmt.Errorf("delta chain cycle detected at rid=%d", current)
+			return nil, nil, fmt.Errorf("delta chain cycle detected at rid=%d: %w", current, ErrChainUnresolvable)
 		}
 		seen[current] = true
 		chain = append(chain, current)
@@ -289,7 +293,7 @@ func walkDeltaChain(q db.Querier, rid libfossil.FslID, have func(libfossil.FslID
 
 		if len(chain) >= maxDeltaChainDepth {
 			return nil, nil, fmt.Errorf(
-				"delta chain from rid=%d exceeds %d nodes", rid, maxDeltaChainDepth)
+				"delta chain from rid=%d exceeds %d nodes: %w", rid, maxDeltaChainDepth, ErrChainUnresolvable)
 		}
 		current = libfossil.FslID(sourceID)
 	}

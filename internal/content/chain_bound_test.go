@@ -1,6 +1,7 @@
 package content
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -63,6 +64,54 @@ func TestChainBoundBitesAtSameLength(t *testing.T) {
 		}
 		if n == maxDeltaChainDepth+1 && available {
 			t.Errorf("chain of maxDeltaChainDepth+1 (%d) nodes was accepted", n)
+		}
+	}
+}
+
+// A chain no basis can resolve, a cycle or one past maxDeltaChainDepth, is
+// reported as ErrChainUnresolvable, which a caller tells apart from a fault
+// in the store.
+func TestUnresolvableChainSentinel(t *testing.T) {
+	build := func(t *testing.T, n int, cycle bool) (*db.DB, libfossil.FslID) {
+		t.Helper()
+		d := setupTestDB(t)
+		rids := make([]libfossil.FslID, n)
+		if err := d.WithTx(func(tx *db.Tx) error {
+			for i := range n {
+				res, err := tx.Exec(
+					"INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040d', ?), 42, x'00', 1)", i)
+				if err != nil {
+					return err
+				}
+				id, err := res.LastInsertId()
+				if err != nil {
+					return err
+				}
+				rids[i] = libfossil.FslID(id)
+			}
+			for i := 0; i < n-1; i++ {
+				if _, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[i], rids[i+1]); err != nil {
+					return err
+				}
+			}
+			if cycle {
+				_, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rids[n-1], rids[0])
+				return err
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return d, rids[0]
+	}
+	for _, c := range []struct {
+		name  string
+		n     int
+		cycle bool
+	}{{"cycle", 3, true}, {"too deep", maxDeltaChainDepth + 1, false}} {
+		d, top := build(t, c.n, c.cycle)
+		if _, err := Expand(d, top); !errors.Is(err, ErrChainUnresolvable) {
+			t.Errorf("%s: Expand = %v, want ErrChainUnresolvable", c.name, err)
 		}
 	}
 }

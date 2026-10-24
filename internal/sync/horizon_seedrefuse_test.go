@@ -1005,3 +1005,67 @@ func TestHorizonPulledDeltaFillsPendingBasis(t *testing.T) {
 		}
 	}
 }
+
+// plantDeepChain stores, under root's phantom, a chain of n delta rows one
+// on the next, its top row pending on root: what a pusher can build by
+// re-rooting. Only the chain's length is read, so the rows carry no content
+// and, sized as phantoms, are no work for a crosslink sweep.
+func plantDeepChain(t *testing.T, r *repo.Repo, root libfossil.FslID, n int) libfossil.FslID {
+	t.Helper()
+	var top libfossil.FslID
+	err := r.WithTx(func(tx *db.Tx) error {
+		below := root
+		for i := 0; i < n; i++ {
+			res, err := tx.Exec("INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040x', ?), -1, NULL, 1)", i+1)
+			if err != nil {
+				return err
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			rid := libfossil.FslID(id)
+			if _, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", rid, below); err != nil {
+				return err
+			}
+			below, top = rid, rid
+		}
+		if err := seedcheck.MarkPending(tx, top); err != nil {
+			return err
+		}
+		_, err := tx.Exec("UPDATE seedpending SET root=? WHERE rid=?", root, top)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return top
+}
+
+// A pending row whose chain is longer than any readable one cannot be
+// judged: it stays withheld, and the honest push that supplies its root as
+// a delta is stored as usual instead of failing on it.
+func TestHorizonOverDeepPendingChainDoesNotBlockFill(t *testing.T) {
+	o := newPCOrigin(t)
+	held := []byte("a basis the origin holds\n")
+	if _, _, err := blob.Store(o.r.DB(), held); err != nil {
+		t.Fatal(err)
+	}
+	basis := append(slices.Clone(held), []byte("the basis an honest pusher supplies\n")...)
+	phantom, err := blob.StorePhantom(o.r.DB(), hash.SHA3(basis))
+	if err != nil {
+		t.Fatal(err)
+	}
+	top := plantDeepChain(t, o.r, phantom, content.MaxDeltaChainDepth+1)
+	honest := deltaCard(t, held, hash.SHA3(held), basis)
+	honest.UUID = hash.SHA3(basis)
+	if errs := errorsOf(o.push(honest)); len(errs) != 0 {
+		t.Fatalf("the honest push failed: %q", errs)
+	}
+	if rid, ok := blob.Exists(o.r.DB(), honest.UUID); !ok || !content.IsAvailable(o.r.DB(), rid) {
+		t.Fatal("the honest basis was not stored")
+	}
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), top); err != nil || !withheld {
+		t.Fatalf("the over-deep row is not withheld (%v)", err)
+	}
+}

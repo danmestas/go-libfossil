@@ -242,12 +242,14 @@ func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
 	return examined, nil
 }
 
-// unreadable reports whether err from expanding a row says the row's own
-// bytes cannot be read: a delta that does not apply, or bytes that are not
-// the artifact its name names.
+// unreadable reports whether err from expanding a row says the row cannot be
+// read, whatever basis arrives: its chain loops or runs past the depth bound
+// (a pusher can plant either under a root an honest push later supplies), a
+// delta that does not apply, or bytes that are not the artifact its name
+// names.
 func unreadable(err error) bool {
-	return errors.Is(err, content.ErrHashMismatch) || errors.Is(err, delta.ErrInvalidDelta) ||
-		errors.Is(err, delta.ErrChecksum)
+	return errors.Is(err, content.ErrHashMismatch) || errors.Is(err, content.ErrChainUnresolvable) ||
+		errors.Is(err, delta.ErrInvalidDelta) || errors.Is(err, delta.ErrChecksum)
 }
 
 // Tables is which of the two tables a store has. A caller that links many

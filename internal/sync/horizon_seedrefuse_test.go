@@ -517,6 +517,18 @@ func TestHorizonPendingFileClearedWhenJudged(t *testing.T) {
 	if _, ok := blob.Exists(peer.DB(), d.UUID); !ok {
 		t.Fatal("a pulling peer did not receive the file")
 	}
+	// And the origin announces it again when it pushes on.
+	pushed := false
+	for _, req := range pushOnRecording(t, o) {
+		for _, c := range req.Cards {
+			if g, ok := c.(*xfer.IGotCard); ok && g.UUID == d.UUID {
+				pushed = true
+			}
+		}
+	}
+	if !pushed {
+		t.Fatal("the origin did not announce the judged file when pushing on")
+	}
 }
 
 // Purging a pending delta forgets its record, so an innocent artifact that
@@ -915,6 +927,8 @@ func TestHorizonPullDropsLateSeedDelta(t *testing.T) {
 	if phantom, err := isPhantomRow(client.DB(), baseUUID); err != nil || phantom {
 		t.Fatalf("the basis was not stored (%v)", err)
 	}
+	// Kept but refused, it is not announced when this store pushes on.
+	assertNeverNamed(t, pushOnFrom(t, client), s.UUID)
 }
 
 // A refused seed sent again unasked, as a delta whose basis the client
@@ -1040,4 +1054,142 @@ func TestHorizonPullDropsSeedDeltaOnHeldBase(t *testing.T) {
 		t.Fatalf("%d files counted received", res.FilesRecvd)
 	}
 	assertDropped(t, client, s.UUID)
+}
+
+// pushOnRecording pushes o's store to a fresh peer and returns every request
+// the peer saw, failing if the push does not converge.
+func pushOnRecording(t *testing.T, o *pcOrigin) []*xfer.Message {
+	t.Helper()
+	return pushOnFrom(t, o.r)
+}
+
+// pushOnFrom is pushOnRecording from any store.
+func pushOnFrom(t *testing.T, r *repo.Repo) []*xfer.Message {
+	t.Helper()
+	peer := &requestRecorder{upstream: setupPushableTestRepo(t)}
+	if _, err := Sync(context.Background(), r, peer, SyncOpts{Push: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	return peer.requests
+}
+
+// requestRecorder serves upstream and records every request.
+type requestRecorder struct {
+	upstream *repo.Repo
+	requests []*xfer.Message
+}
+
+func (p *requestRecorder) Exchange(ctx context.Context, req *xfer.Message) (*xfer.Message, error) {
+	p.requests = append(p.requests, req)
+	return HandleSync(ctx, p.upstream, req)
+}
+
+// assertNeverNamed checks that no request named uuid in any card.
+func assertNeverNamed(t *testing.T, requests []*xfer.Message, uuid string) {
+	t.Helper()
+	for _, req := range requests {
+		for _, c := range req.Cards {
+			switch c := c.(type) {
+			case *xfer.IGotCard:
+				if c.UUID == uuid {
+					t.Fatalf("a push announced %.10s", uuid)
+				}
+			case *xfer.FileCard:
+				if c.UUID == uuid {
+					t.Fatalf("a push sent %.10s", uuid)
+				}
+			}
+		}
+	}
+}
+
+// A pending seed is not announced when the origin pushes on to a peer.
+func TestHorizonPendingSeedNotAnnouncedOnPush(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "never sent")
+	s := danglingSeed(t, o, base)
+	assertNeverNamed(t, pushOnRecording(t, o), s.UUID)
+}
+
+// After a rebuild, which marks every blob unclustered and unsent again, a
+// refused seed is still not announced: a push on to a peer converges and
+// the peer never learns its hash.
+func TestHorizonRefusedSeedNotAnnouncedAfterRebuild(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	assertRefused(t, o.r, s.UUID, true)
+	if _, err := verify.Rebuild(o.r); err != nil {
+		t.Fatal(err)
+	}
+	assertNeverNamed(t, pushOnRecording(t, o), s.UUID)
+}
+
+// privateDanglingSeed pushes a seed to o privately, as a delta whose basis
+// o lacks, so it is pending and private.
+func privateDanglingSeed(t *testing.T, o *pcOrigin) *xfer.FileCard {
+	t.Helper()
+	if _, err := o.r.DB().Exec("UPDATE user SET cap=cap||'x' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	_, base := o.labelled("u", "never sent")
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, hash.SHA3(base), seed)
+	resp, err := HandleSync(context.Background(), o.r, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "send-private"}, &xfer.PushCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.PrivateCard{}, s}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := errorsOf(resp); len(errs) != 0 {
+		t.Fatalf("the private dangling seed: errors %q", errs)
+	}
+	return s
+}
+
+// A private push on to a peer does not announce a privately pushed pending
+// seed.
+func TestHorizonPendingSeedNotAnnouncedPrivately(t *testing.T) {
+	o := newPCOrigin(t)
+	s := privateDanglingSeed(t, o)
+	upstream := setupPushableTestRepo(t)
+	if _, err := upstream.DB().Exec("UPDATE user SET cap=cap||'x' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	peer := &requestRecorder{upstream: upstream}
+	if _, err := Sync(context.Background(), o.r, peer,
+		SyncOpts{Push: true, Private: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+	assertNeverNamed(t, peer.requests, s.UUID)
+}
+
+// A peer asking for a privately pushed pending seed outside a private sync
+// is not told it exists.
+func TestHorizonPendingSeedNotNamedPrivate(t *testing.T) {
+	o := newPCOrigin(t)
+	s := privateDanglingSeed(t, o)
+	peer := setupPushableTestRepo(t)
+	asked := false
+	var requests []*xfer.Message
+	tr := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		requests = append(requests, req)
+		resp, err := HandleSync(context.Background(), peer, req)
+		if err != nil {
+			t.Errorf("HandleSync: %v", err)
+			return &xfer.Message{}
+		}
+		if !asked {
+			asked = true
+			resp.Cards = append(resp.Cards, &xfer.GimmeCard{UUID: s.UUID})
+		}
+		return resp
+	}}
+	if _, err := Sync(context.Background(), o.r, tr, SyncOpts{Push: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+	assertNeverNamed(t, requests, s.UUID)
 }

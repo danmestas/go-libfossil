@@ -1216,6 +1216,20 @@ leaves  1 check-ins, 3 blobs, 6 B expanded, 57 B stored
 
 A content horizon keeps all structure and elides only blobs; a structural horizon also leaves out the manifests below C.
 
+## Seeds are never pushed
+
+A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3):
+
+- its U card is `go-libfossil`, the label go-libfossil writes on every seed it mints; or
+- it carries a `horizon-seed` T card, whatever its U card.
+
+Each test runs on the artifact's content after any delta is applied, including a delta whose base arrives later in the same push. The refusal is atomic: nothing the push carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base never arrives cannot be read, so it is not identified and is stored as any other dangling delta is.
+
+Two consequences follow:
+
+- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed; one that carries a `horizon-seed` card is refused.
+- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil origin, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
+
 ## Signed seeds
 
 An origin with the `clearsign` setting on (and the legacy `omitsign` off) signs each seed it mints with its `pgp-command`, the same settings fossil and zit sign check-ins with (§5.2.4). It keeps one signature per seed, so a seed keeps its name while the tag state it records is unchanged.

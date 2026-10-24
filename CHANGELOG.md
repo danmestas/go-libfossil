@@ -44,6 +44,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync and keeps the held seed. SHA-1 `ssh-rsa` signatures are refused, as
   PROTOCOL.sshsig requires.
 
+### Changed
+
+- An origin refuses a pushed seed by its shape (horizon §5.2.3, as zit
+  0.7.1's erratum words it; #471). A pushed control artifact is a seed when
+  its U card is `go-libfossil`, the origin's own seed label, or when it
+  carries a `horizon-seed` T card under any label. It is judged on its
+  content after any delta is applied, a delta whose base arrives later in
+  the same request included. The refusal is atomic: the request stores
+  nothing, and its reply is the single error card `seed refused: a seed is
+  private to the clone that holds it; it is never pushed`, which the pusher
+  reports among its sync errors. Before, a seed was dropped only when the
+  request's `horizon-seed` named it, and was otherwise stored as an ordinary
+  control artifact; that name match now refuses the request the same way. A
+  delta never made readable is not identified. Another implementation's
+  label alone, such as `U zit-seed` with no `horizon-seed` card, stays
+  ordinary, and a user whose login is `go-libfossil` cannot push control
+  artifacts. The §5.7 stale-seed check is likewise judged on expanded
+  content, a late delta included.
+
 ## [0.15.0] - 2026-10-23
 
 ### Added

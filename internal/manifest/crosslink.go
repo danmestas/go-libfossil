@@ -354,11 +354,6 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if err := prepareCrosslinkTables(tx); err != nil {
 		return 0, err
 	}
-	// A rebuild holds no receive pass: rows under a refused seed hash go
-	// before anything is linked (seedcheck).
-	if err := seedcheck.Sweep(tx); err != nil {
-		return 0, err
-	}
 	candidates, err := collectCrosslinkCandidates(tx)
 	if err != nil {
 		return 0, err

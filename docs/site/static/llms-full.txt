@@ -1225,7 +1225,7 @@ A seed is private to the clone that holds it, so a go-libfossil origin refuses a
 
 The test runs when the artifact first becomes readable, on its content after any delta is applied. A push that carries a seed the origin can read within that push is refused whole: nothing it carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived is stored as any dangling delta is, and withheld, never announced or sent, until something supplies the base: a later push, a pull, or a check-in or tag that writes the same bytes. That supplies only the base, so it is stored as usual, with no error, and the seed is refused then.
 
-A refused seed's bytes are deleted, and its hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The origin never asks for that hash, and refuses a re-push of it at once. A seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
+A refused seed's hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The seed stays stored, so a delta built on it stays readable, but it is never linked, announced or sent, and a re-push of it is refused at once. Pulling the same hash from a peer stores nothing new: the row is already held, and stays refused. Any other seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
 
 Two consequences follow:
 

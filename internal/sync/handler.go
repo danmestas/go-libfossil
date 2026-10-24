@@ -594,11 +594,7 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(refusal)
 		return errPassAborted
 	}
-	// The request's receive pass is done with rids: rows stored under a
-	// refused seed hash, a phantom an igot of one made included, can go
-	// (seedcheck). It only reads when there is nothing to delete, as in a
-	// read-only request.
-	return seedcheck.Sweep(h.repo.DB())
+	return nil
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -1360,10 +1356,6 @@ func (h *handler) requestPhantoms() error {
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
-	refused, err := seedcheck.RefusedUUIDs(h.repo.DB())
-	if err != nil {
-		return err
-	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
 		return fmt.Errorf("handler: listing phantoms: %w", err)
@@ -1380,9 +1372,7 @@ func (h *handler) requestPhantoms() error {
 		// nothing it holds names it yet (horizon §5.1): a new check-in.
 		_, heard := h.remoteHas[uuid]
 		announced := heard && elided != nil && elided.Unnamed(rid)
-		// A refused seed's hash is never asked for again (seedcheck).
-		if h.remoteLacks[uuid] || refused[uuid] ||
-			(elided != nil && elided.Class(rid) == content.Elided && !announced) {
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})

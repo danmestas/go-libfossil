@@ -184,7 +184,11 @@ func TestHorizonPushSeedLaterJudgesEveryDependent(t *testing.T) {
 	s := deltaCard(t, base, baseCard.UUID, seed)
 	forged := deltaCard(t, base, baseCard.UUID, forgedSeed)
 	forged.UUID = hash.SHA1([]byte("a name the forged bytes do not hash to\n"))
-	if errs := errorsOf(o.push(plain, forged, s)); len(errs) != 0 {
+	// A plain file after the forgery: no link step judges it, so it is
+	// cleared only if the forgery does not end the fill's judging.
+	fileBytes := append(slices.Clone(base), []byte("a plain file on the base\n")...)
+	file := deltaCard(t, base, baseCard.UUID, fileBytes)
+	if errs := errorsOf(o.push(plain, forged, file, s)); len(errs) != 0 {
 		t.Fatalf("the dangling deltas: errors %q", errs)
 	}
 	if errs := errorsOf(o.push(baseCard)); len(errs) != 0 {
@@ -195,6 +199,10 @@ func TestHorizonPushSeedLaterJudgesEveryDependent(t *testing.T) {
 		want bool
 	}{{ordinaryCard.UUID, false}, {s.UUID, true}, {forged.UUID, false}} {
 		assertRefused(t, o.r, c.uuid, c.want)
+	}
+	frid, _ := blob.Exists(o.r.DB(), file.UUID)
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), frid); err != nil || withheld {
+		t.Fatalf("the file after the forgery is withheld (%v)", err)
 	}
 	var linked int
 	if err := o.r.DB().QueryRow(`SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid
@@ -329,19 +337,29 @@ func isPhantomRow(q db.Querier, uuid string) (bool, error) {
 }
 
 // assertRefused checks whether r records uuid as a refused seed: refused by
-// its hash and no longer held. A refusal never lands in the shun table,
-// which peers pull.
+// its hash, kept stored, withheld from every reply and never linked. A
+// refusal never lands in the shun table, which peers pull.
 func assertRefused(t *testing.T, r *repo.Repo, uuid string, want bool) {
 	t.Helper()
 	refused, err := seedcheck.IsRefusedUUID(r.DB(), uuid)
 	if err != nil || refused != want {
 		t.Fatalf("%.10s refused = %v (%v), want %v", uuid, refused, err, want)
 	}
-	if _, held := blob.Exists(r.DB(), uuid); want && held {
-		t.Fatalf("the refused %.10s is still held", uuid)
-	}
 	if shunned, err := shun.IsShunned(r.DB(), uuid); err != nil || shunned {
 		t.Fatalf("%.10s is shunned (%v)", uuid, err)
+	}
+	if !want {
+		return
+	}
+	rid, held := blob.Exists(r.DB(), uuid)
+	if !held {
+		t.Fatalf("the refused %.10s is not kept", uuid)
+	}
+	if withheld, err := seedcheck.IsWithheld(r.DB(), rid); err != nil || !withheld {
+		t.Fatalf("the refused %.10s is not withheld (%v)", uuid, err)
+	}
+	if n := seedLinkRows(t, r, uuid); n != 0 {
+		t.Fatalf("the refused %.10s was crosslinked: %d rows", uuid, n)
 	}
 }
 
@@ -554,34 +572,64 @@ func TestHorizonSeedWithheldFromPrivateInventory(t *testing.T) {
 	}
 }
 
-// A delta whose basis is a refused seed cannot come from a legitimate peer:
-// it is unreadable and withheld, and the seed is never asked for.
-func TestHorizonDeltaOnRefusedSeedWithheld(t *testing.T) {
-	o := newPCOrigin(t)
-	_, base := o.labelled("u", "b")
-	s := danglingSeed(t, o, base)
-	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
-		t.Fatalf("the base's push: errors %q", errs)
-	}
-	assertRefused(t, o.r, s.UUID, true)
-	_, seedBytes := o.labelled(seedLogin, "a")
-	onSeed := append(slices.Clone(seedBytes), []byte("an artifact stored as a delta on the seed\n")...)
-	dep := deltaCard(t, seedBytes, s.UUID, onSeed)
-	resp := o.push(dep)
-	for _, c := range resp.Cards {
-		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == s.UUID {
-			t.Fatal("the origin asked for the refused seed")
+// A delta built on a pending seed is an ordinary artifact: once the base
+// arrives the seed is refused but kept, so the delta on it is readable,
+// linked and served. Its chain runs through the seed, whether it arrived
+// after the seed (root the base) or before it (root the seed, moved to the
+// base when the seed arrives).
+func TestHorizonDeltaOnSeedServed(t *testing.T) {
+	for _, order := range []string{"seed first", "dependent first"} {
+		o := newPCOrigin(t)
+		_, base := o.labelled("u", "b")
+		_, seed := o.labelled(seedLogin, "a")
+		s := deltaCard(t, base, hash.SHA3(base), seed)
+		depCard, dep := o.labelled("u", "built on the seed")
+		y := deltaCard(t, seed, s.UUID, dep)
+		// A plain file on the seed too: no link step judges it, so only the
+		// fill that grounds it clears it.
+		file := append(slices.Clone(seed), []byte("a plain file built on the seed\n")...)
+		f := deltaCard(t, seed, s.UUID, file)
+		cards := []*xfer.FileCard{s, y, f}
+		if order == "dependent first" {
+			cards = []*xfer.FileCard{y, f, s}
 		}
-	}
-	rid, ok := blob.Exists(o.r.DB(), dep.UUID)
-	if !ok {
-		t.Fatal("the dependent was not stored")
-	}
-	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || !withheld {
-		t.Fatalf("the dependent is not withheld (%v)", err)
-	}
-	if phantom, err := isPhantomRow(o.r.DB(), s.UUID); err != nil || phantom {
-		t.Fatalf("the refused seed was left a phantom (%v)", err)
+		for _, c := range cards {
+			if errs := errorsOf(o.push(c)); len(errs) != 0 {
+				t.Fatalf("%s: pushing %.10s: errors %q", order, c.UUID, errs)
+			}
+		}
+		if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+			t.Fatalf("%s: the base's push: errors %q", order, errs)
+		}
+		assertRefused(t, o.r, s.UUID, true)
+		rid, _ := blob.Exists(o.r.DB(), depCard.UUID)
+		if !content.IsAvailable(o.r.DB(), rid) {
+			t.Fatalf("%s: the delta on the seed is not readable", order)
+		}
+		if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || withheld {
+			t.Fatalf("%s: the delta on the seed is withheld (%v)", order, err)
+		}
+		if n := seedLinkRows(t, o.r, depCard.UUID); n == 0 {
+			t.Fatalf("%s: the delta on the seed was not linked", order)
+		}
+		frid, _ := blob.Exists(o.r.DB(), f.UUID)
+		if withheld, err := seedcheck.IsWithheld(o.r.DB(), frid); err != nil || withheld {
+			t.Fatalf("%s: the file on the seed is withheld (%v)", order, err)
+		}
+		resp, err := HandleSync(context.Background(), o.r, &xfer.Message{Cards: []xfer.Card{
+			&xfer.PullCard{ServerCode: "s", ProjectCode: testPC}, &xfer.GimmeCard{UUID: depCard.UUID}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		served := false
+		for _, c := range resp.Cards {
+			if f, ok := c.(*xfer.FileCard); ok && f.UUID == depCard.UUID {
+				served = true
+			}
+		}
+		if !served {
+			t.Fatalf("%s: the delta on the seed was not served", order)
+		}
 	}
 }
 
@@ -691,9 +739,6 @@ func TestHorizonRePushRefusedByHash(t *testing.T) {
 		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == s.UUID {
 			t.Fatal("the origin asked for a refused seed a pusher announced")
 		}
-	}
-	if _, held := blob.Exists(o.r.DB(), s.UUID); held {
-		t.Fatal("the announcement left a row for the refused seed")
 	}
 }
 

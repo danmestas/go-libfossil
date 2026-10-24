@@ -127,11 +127,6 @@ func CheckinContext(
 		if txErr != nil {
 			return txErr
 		}
-		// A seed checkinTx's stores made readable goes: no receive pass holds
-		// rids here (seedcheck).
-		if err := seedcheck.Sweep(tx); err != nil {
-			return err
-		}
 		return ctx.Err()
 	})
 	if err != nil {

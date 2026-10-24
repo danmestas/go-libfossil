@@ -31,6 +31,10 @@ import (
 // once per F-card of every check-in being crosslinked.
 const maxDeltaChainDepth = 16_384
 
+// MaxDeltaChainDepth is maxDeltaChainDepth for callers that must bound their
+// own walks the same way.
+const MaxDeltaChainDepth = maxDeltaChainDepth
+
 // IsAvailable reports whether the content of rid can actually be read.
 //
 // This is the availability predicate, distinct from blob.Exists, which

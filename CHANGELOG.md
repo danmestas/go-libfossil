@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7).
+  `CloneOpts.Horizon`, whose `Checkin` may be a name, with `HorizonDepth`, and `repo clone --horizon NAME --depth N`, clone
+  a horizon store at `tip`, a branch or tag, or a full hash, stepped back N
+  check-ins along primary parents. The client sends `pragma horizon-name` in the clone's first
+  request only; the origin resolves the name over its dense repository,
+  echoes `pragma horizon-resolved HASH STEPS` and serves the request at that
+  check-in, minting a structural seed for it; the store records the hash and
+  every later request sends it. A name that resolves to nothing, or a
+  malformed request, is answered with one error card and the clone leaves
+  nothing on disk; a requester that may neither read nor clone is answered
+  as if it named no horizon. Against a peer that does not resolve names, such as stock
+  fossil, the clone resolves the name over what it received at the content
+  horizon. `CloneResult` reports the check-in (`HorizonResolved`), the steps
+  taken (`HorizonSteps`) and whether it was resolved locally.
 - The whole public API, the HTTP sync client and signing included, compiles
   with TinyGo 0.43 for the wasm target: 3.83 MB raw and 1.40 MB gzipped after
   `wasm-opt -Oz`, against 16.1 MB and 4.06 MB from the standard toolchain
@@ -43,6 +57,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verifies. A verifier that cannot run (gpg missing or timed out) fails the
   sync and keeps the held seed. SHA-1 `ssh-rsa` signatures are refused, as
   PROTOCOL.sshsig requires.
+
+### Changed
+
+- The horizon draft is re-pinned to zit `236b7b4285`, the zit 0.7.1 text,
+  which adds named horizons (§6.2.7), the origin's own seed label and the
+  refusal of a pushed seed judged on expanded content (§5.2.2, §5.2.3,
+  §5.7), and the seed's `T +horizon-seed <C> <rule>` binding card with the
+  clone's checks on it (§5.2, §5.2.4). The requirements table gains rows for
+  each; the binding card, the clone's D floor and the separate seed-signing
+  namespace (HZ-5.2-8, HZ-5.2-11 to HZ-5.2-13) are not built yet, and the
+  named-horizon client rows move from §6.3 to §6.2.7 (HZ-6.2-19 to
+  HZ-6.2-21).
+- An origin refuses a pushed seed by its shape (horizon §5.2.3; #471). A pushed control artifact is a seed
+  when its U card is `go-libfossil`, the origin's own seed label, or when it
+  carries a `horizon-seed` T card under any label. It is judged when it
+  first becomes readable, on its content after any delta is applied. A push
+  that carries a seed the origin can read within it is refused atomically:
+  it stores nothing, and its reply is the single error card `seed refused:
+  a seed is private to the clone that holds it; it is never pushed`, which
+  the pusher reports among its sync errors. A pushed delta whose base has
+  not arrived is withheld from every reply until something supplies the
+  base (a later push, a pull, a check-in or a tag), which is stored as usual
+  while the seed is refused; each fill judges only the deltas waiting on
+  it. A refused seed's hash is kept in a store-local table no configuration
+  group carries; the seed stays stored, so deltas on it stay readable, but
+  it is never linked, announced or sent, and a re-push is refused at once.
+  Withheld artifacts stay out of the tables an origin announces from when
+  it pushes on, a rebuild's included. Before, a seed was dropped only when the
+  request's `horizon-seed` named it (that name match now refuses the push
+  the same way) and was otherwise stored as an ordinary control artifact.
+  A seed-shaped artifact received by pull or clone stays ordinary, as does
+  another implementation's label alone, such as `U zit-seed` with no
+  `horizon-seed` card; a user whose login is `go-libfossil` cannot push
+  control artifacts. The §5.7 stale-seed check is likewise judged on
+  expanded content, a late delta included.
 
 ### Fixed
 

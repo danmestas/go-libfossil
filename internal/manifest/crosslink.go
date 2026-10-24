@@ -18,6 +18,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
@@ -879,11 +880,34 @@ func linkArtifact(
 	if sched == nil {
 		panic("manifest.linkArtifact: sched must not be nil")
 	}
+	// Every path that links an artifact reaches here, so a pushed seed still
+	// pending, or one refused and not yet swept, is never linked (seedcheck).
+	tables, err := seedTables(tx, sched)
+	if err != nil {
+		return false, err
+	}
+	refused, err := seedcheck.Judge(tx, tables, rid, d)
+	if err != nil || refused {
+		return false, err
+	}
 	handled, err = linkArtifactRows(tx, rid, d, cache, sched)
 	if handled && err == nil {
 		sched.owed = true
 	}
 	return handled, err
+}
+
+// seedTables reports which seedcheck tables exist, asking once per
+// transaction.
+func seedTables(tx *db.Tx, sched *batchSchedule) (seedcheck.Tables, error) {
+	if sched.seedTables == nil {
+		t, err := seedcheck.Present(tx)
+		if err != nil {
+			return seedcheck.Tables{}, err
+		}
+		sched.seedTables = &t
+	}
+	return *sched.seedTables, nil
 }
 
 // linkArtifactRows is linkArtifact's dispatch on the artifact's type.

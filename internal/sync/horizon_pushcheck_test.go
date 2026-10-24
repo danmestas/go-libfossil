@@ -9,12 +9,14 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // pcOrigin is an origin with trunk root -> p.
 type pcOrigin struct {
 	t       *testing.T
+	r       *repo.Repo
 	when    time.Time
 	p       string
 	file    []byte
@@ -26,7 +28,7 @@ type pcOrigin struct {
 func newPCOrigin(t *testing.T) *pcOrigin {
 	t.Helper()
 	r := setupPushableTestRepo(t)
-	o := &pcOrigin{t: t, when: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), file: []byte("c\n")}
+	o := &pcOrigin{t: t, r: r, when: time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), file: []byte("c\n")}
 	o.fileUID = hash.SHA1(o.file)
 	root, _ := mbCommit(t, r, "root", 0, o.when)
 	_, o.p = mbCommit(t, r, "p", root, o.when.Add(time.Hour))

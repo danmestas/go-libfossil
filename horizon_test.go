@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
@@ -632,5 +634,86 @@ func TestHorizonHistoryURL(t *testing.T) {
 	}
 	if cloned.HorizonHistoryURL != url || pulled.HorizonHistoryURL != url {
 		t.Fatalf("clone reported %q and pull %q, want %q", cloned.HorizonHistoryURL, pulled.HorizonHistoryURL, url)
+	}
+}
+
+// A clone may name its horizon instead of giving its hash: the origin
+// resolves trunk's tip stepped back one check-in to c2, and the store
+// records c2 under the rule CloneOpts.Horizon gives, over StoreCone's path
+// members. A full hash at depth 0 is the hash itself. A horizon given twice,
+// or a depth without one, is refused.
+func TestCloneNamedHorizon(t *testing.T) {
+	f := newHorizonFixture(t)
+	paths, err := NewCone([]string{"a"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		sc *Cone
+		h  Horizon
+	}{
+		{nil, Horizon{Checkin: "trunk"}},
+		{paths, Horizon{Checkin: "trunk", Rule: HorizonLeaves}},
+	} {
+		target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
+			CloneOpts{StoreCone: tc.sc, Horizon: &tc.h, HorizonDepth: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer target.Close()
+		if res.HorizonResolved != f.c2 || res.HorizonSteps != 1 || res.HorizonResolvedLocally {
+			t.Fatalf("resolved %+v, want c2 after 1 step by the origin", res)
+		}
+		got, err := target.StoreCone()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h, ok := got.Horizon(); !ok || h != (Horizon{Checkin: f.c2, Rule: tc.h.Rule}) {
+			t.Fatalf("store cone horizon = %+v, %v; want c2 %v", h, ok, tc.h.Rule)
+		}
+		if tc.sc != nil && !slices.Equal(got.Include(), []string{"a"}) {
+			t.Fatalf("store cone paths = %v, want [a]", got.Include())
+		}
+		if holdsBlob(t, target, "old a\n") {
+			t.Fatal("blob below the horizon was transferred")
+		}
+	}
+	// A full hash given as the horizon is still a name the origin resolves
+	// (§6.2.7 C.3): a hash first, then a symbolic name, so a tag spelled as
+	// 40 hex digits that no check-in has is found.
+	hexTag := strings.Repeat("ab", 20)
+	var r2 int64
+	if err := f.source.inner.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", f.c2).Scan(&r2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tag.AddTag(f.source.inner, tag.TagOpts{TargetRID: fsltype.FslID(r2), TagName: "sym-" + hexTag,
+		TagType: tag.TagSingleton, User: "test", Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, checkin := range []string{f.c2, hexTag} {
+		target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "h.fossil"), f.peer,
+			CloneOpts{Horizon: &Horizon{Checkin: checkin}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer target.Close()
+		if res.HorizonResolved != f.c2 || res.HorizonResolvedLocally {
+			t.Fatalf("horizon %.12s: %+v, want c2 resolved by the origin", checkin, res)
+		}
+	}
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, opts := range []CloneOpts{
+		{HorizonDepth: 1},
+		{Horizon: &Horizon{Checkin: "trunk"}, HorizonDepth: -1},
+		{Horizon: &Horizon{Checkin: "trunk"}, StoreCone: hc},
+		{Horizon: &Horizon{Checkin: f.c2}, StoreCone: hc},
+		{Horizon: &Horizon{}},
+	} {
+		if _, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "x.fossil"), f.peer, opts); err == nil {
+			t.Fatalf("Clone(%+v) succeeded", opts)
+		}
 	}
 }

@@ -90,8 +90,9 @@ type cloneSession struct {
 	roundPush             bool // the last reply carried a push card
 	coned                 bool // requests carry the store cone (§6.1)
 	structural            structuralClient
-	structuralDecided     bool  // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
-	peerCursor            int64 // the last cursor a reply handed out (horizon §6.2.6)
+	structuralDecided     bool        // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
+	named                 *namedClone // a horizon asked for by name (horizon §6.2.7); nil otherwise
+	peerCursor            int64       // the last cursor a reply handed out (horizon §6.2.6)
 	// smConfig stages the sub-manifest settings one reply's config cards
 	// carry, applied together once the reply ends (§6.3).
 	smConfig  stagedSubmanifestConfig
@@ -124,6 +125,10 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	}
 
 	env, storage := cloneEnv(opts)
+	named, err := newNamedClone(opts)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Path must not already exist.
 	if _, statErr := storage.Stat(path); statErr == nil {
@@ -155,7 +160,11 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 	if err = clearInheritedConfig(r); err != nil {
 		return
 	}
-	if err = content.SetStoreCone(r.DB(), opts.StoreCone); err != nil {
+	storeCone := opts.StoreCone
+	if named != nil {
+		storeCone = named.pathCone() // horizon §6.1: C is not known until resolved
+	}
+	if err = content.SetStoreCone(r.DB(), storeCone); err != nil {
 		return
 	}
 	if err = keepSeedKey(r, opts.SeedKey); err != nil {
@@ -166,6 +175,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		err = fmt.Errorf("sync.Clone: %w", structuralErr)
 		return
 	}
+	structural.active = structural.active || named != nil && named.structural()
 
 	linker, linkerErr := manifest.NewReceiveLinker(r)
 	if linkerErr != nil {
@@ -191,8 +201,9 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		basis:                 content.NewUncheckedCache(receiveBasisBytes),
 		seqno:                 1,
 		structural:            structural,
+		named:                 named,
 	}
-	if opts.StoreCone != nil {
+	if opts.StoreCone != nil || named != nil {
 		cs.sparseReceived = map[string]bool{}
 	}
 	cs.obs = resolveObserver(opts.Observer)
@@ -236,6 +247,9 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 	if finalizeErr != nil {
 		return cloneResult, fmt.Errorf(
 			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
+	}
+	if err := cs.settleNamed(); err != nil {
+		return cloneResult, err
 	}
 	if cs.sparseReceived != nil {
 		if err := cs.repo.WithTx(func(tx *db.Tx) error {
@@ -540,7 +554,9 @@ func (cs *cloneSession) buildRequest(cycle int) (*xfer.Message, error) {
 		return nil, err
 	}
 	cards = append(cards, sparse...)
-	cs.coned = len(sparse) > 0
+	named := cs.named.pragmas(cs.cleanup)
+	cards = append(cards, named...)
+	cs.coned = len(sparse)+len(named) > 0
 
 	// Cookie carries the server-captured clone snapshot bound. Echoing it back
 	// every round lets the stateless handler enforce a stable upper rid bound
@@ -645,6 +661,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 			return nil, cardErr // §10.1: the round, prefix included, rolls back
 		}
 		cs.applySubmanifestConfig()
+		cs.named.endReply(msg)
 		if err := cs.decideStructural(msg); err != nil {
 			return nil, err
 		}
@@ -723,6 +740,7 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		cs.roundPush = true
 		return false, cs.recordCodes(c)
 	case *xfer.FileCard:
+		cs.named.noteContent()
 		if taken, err := cs.structural.takeSeed(cs.repo, c.UUID, c.DeltaSrc, c.Content); taken || err != nil {
 			return false, err
 		}
@@ -731,6 +749,7 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 		}
 		*filesRecvd++
 	case *xfer.CFileCard:
+		cs.named.noteContent()
 		stored, err := cs.receiveCFile(ctx, c)
 		if err != nil {
 			return false, err
@@ -747,6 +766,9 @@ func (cs *cloneSession) processCard(ctx context.Context, cycle int, card xfer.Ca
 	case *xfer.MessageCard:
 		cs.result.Messages = append(cs.result.Messages, c.Message)
 	case *xfer.PragmaCard:
+		if c.Name == horizonResolvedPragma {
+			return false, cs.takeResolved(c)
+		}
 		if handled, err := cs.structural.pragma(cs.repo.DB(), c); handled || err != nil {
 			return false, err
 		}
@@ -996,9 +1018,9 @@ func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
 // servedHorizon reports a horizon clone whose origin has said it serves the
 // clone's horizon (horizon-served content) in a reply of this session.
 func (cs *cloneSession) servedHorizon() bool {
-	if cs.opts.StoreCone == nil || cs.result.HorizonServed == 0 {
+	if cs.result.HorizonServed == 0 {
 		return false
 	}
-	_, ok := cs.opts.StoreCone.Horizon()
-	return ok
+	_, ok := horizonOf(cs.opts.StoreCone)
+	return ok || cs.named != nil
 }

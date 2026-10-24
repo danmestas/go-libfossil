@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `5d618aaeb1` (branch `horizon-rfc`) | `d1e6cab361` | `d0373036daf43204…` |
+| `draft-fossil-horizon-00.txt` | `236b7b4285` (zit 0.7.1) | `130b85e386` | `ce78240e414dddd0…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,9 +57,50 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`5d618aaeb1` (2026-10-22). The other six drafts are byte-identical at
-`3a2df62515`, `24457c7dd6` and `5d618aaeb1`. Against the `24457c7dd6` copy it
-replaces, the horizon draft adds two Appendix C bullets: §5.2 says that when
+`236b7b4285`, the zit 0.7.1 text; the `version-0.7.1` tag (`1c4cd7a165`)
+carries the same bytes. At that check-in the sparse-cone,
+sub-manifest, repo-state and delta-format drafts are byte-identical to the
+copies here; the artifact-format and sync-protocol drafts differ and stay
+pinned at their own check-ins. The other six drafts are byte-identical at
+`3a2df62515`, `24457c7dd6` and `5d618aaeb1`. Against the `5d618aaeb1` copy
+it replaces, the horizon draft adds three Appendix C bullets, each a
+normative change.
+Named horizons (§6.2.7, new, with §6.1 and §3.4): a cloning client that
+cannot name C by hash sends, in its first request only and in place of
+pragma horizon, `pragma horizon-name <name> <rule> <depth>`, where name is
+`tip`, a symbolic name or a full hash, and depth plain base-10 digits that
+fit 32 bits; the origin looks a full hash up as a hash first, resolves any
+other name to the most recent check-in carrying an active `sym-<name>`,
+ties going to the lowest full hash, steps back depth primary parents, and
+emits `pragma horizon-resolved <hash> <steps>` before any file card and
+before horizon-served; a name that resolves to nothing, a malformed depth,
+or both pragma forms is one error card, after any login or authorization
+error; the client fails the clone, leaving nothing on disk, on a malformed
+or late echo, too many steps or a resolved check-in that never arrives, and
+against a peer that ignores the name resolves it locally at the content
+horizon; the store records the hash, never the name. The seed's label
+(§5.2.2, §5.2.3): the U card is the origin's own seed label (zit writes
+`zit-seed`, no longer `zit-serve`), which appears on nothing else it writes
+for sharing; an origin refuses a pushed control artifact bearing it, judged
+on expanded content, a delta whose base arrives later in the request
+included, storing nothing and replying with the one error card `seed
+refused: a seed is private to the clone that holds it; it is never pushed`;
+a seed delta that becomes expandable only later, by a push, pull, clone or
+local check-in, is never crosslinked, applied or served, and is recorded
+refused in local state that is never synchronized, never in the shun list,
+the transfer that filled it being stored normally; §5.7's stale-seed check
+is judged on expanded content the same way. The seed's binding (§5.2,
+§5.2.3, §5.2.4): every seed carries `T +horizon-seed <C> <rule>`, which the
+clone strips before derivation and the origin never counts toward the one
+T card nor derives into a seed; an origin refuses any pushed control
+artifact carrying that card, whatever its label, and only a foreign
+artifact carrying neither its label nor the card is ordinary; a clone holds
+a seed only with exactly one binding card naming its own C and rule, and
+refuses one dated earlier than the seed it holds, the floor restarting at
+a deepen; seed signing is configured apart from check-in signing and, for
+SSH, signs under the namespace `fossil-horizon-seed`. Against the
+`24457c7dd6` copy that the `5d618aaeb1` copy replaced, the horizon draft
+added two Appendix C bullets: §5.2 says that when
 no tag is in force at any check-in a seed would cover, the origin mints no
 seed and serves the content level, since a control artifact needs a T card
 (a normative change); and §3.4 makes the cost report guidance for the tool

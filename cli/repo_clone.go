@@ -18,7 +18,8 @@ type RepoCloneCmd struct {
 	Pass       string        `short:"p" help:"Password for clone auth"`
 	Invite     string        `help:"Invite token (from fossil invite)"`
 	Timeout    time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
-	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as its full 40 or 64 digit hash; what each rule would hold needs a local repository ('repo cone cost') or a peer that exposes it out of band, as the origin's horizon-served URL may"`
+	Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as tip, a branch or tag, or its full 40 or 64 digit hash; the origin resolves a name, or the clone does over what an origin that cannot sends it; what each rule would hold needs a local repository ('repo cone cost') or a peer that exposes it out of band, as the origin's horizon-served URL may"`
+	Depth      int           `help:"With --horizon, step the check-in back this many check-ins along primary parents, stopping at a root"`
 	Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
 	Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
 	Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
@@ -60,7 +61,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("path required")
 	}
 
-	storeCone, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Leaves, c.Structural)
+	storeCone, horizon, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Depth, c.Leaves, c.Structural)
 	if err != nil {
 		return err
 	}
@@ -74,10 +75,12 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 
 	transport := libfossil.NewHTTPTransport(c.URL)
 	opts := libfossil.CloneOpts{
-		User:      c.User,
-		Password:  c.Pass,
-		StoreCone: storeCone,
-		SeedKey:   c.SeedKey,
+		User:         c.User,
+		Password:     c.Pass,
+		StoreCone:    storeCone,
+		SeedKey:      c.SeedKey,
+		Horizon:      horizon,
+		HorizonDepth: c.Depth,
 	}
 
 	r, result, err := libfossil.Clone(ctx, c.Path, transport, opts)
@@ -95,8 +98,11 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	fmt.Printf("  Rounds:       %d\n", result.Rounds)
 	fmt.Printf("  Blobs:        %d\n", result.BlobsRecvd)
 	fmt.Printf("  Project-code: %s\n", result.ProjectCode)
-	if storeCone != nil {
+	if storeCone != nil || horizon != nil {
 		fmt.Printf("  Elided:       %d\n", result.Elided)
+	}
+	if result.HorizonResolved != "" {
+		reportResolved(c.Horizon, c.Depth, result)
 	}
 	if c.Structural {
 		// Horizon §6.2.5: a client reports which mode a transfer used.
@@ -122,4 +128,17 @@ func rememberedSyncURL(raw string) string {
 	}
 	u.User = url.User(u.User.Username())
 	return u.String()
+}
+
+// reportResolved says which check-in a named horizon resolved to, who
+// resolved it, and when history ran out before the depth asked for.
+func reportResolved(name string, depth int, result *libfossil.CloneResult) {
+	by := "origin"
+	if result.HorizonResolvedLocally {
+		by = "this clone; the origin does not resolve horizon names"
+	}
+	fmt.Printf("  Horizon at:   %s (%s, resolved by %s)\n", result.HorizonResolved, name, by)
+	if result.HorizonSteps < depth {
+		fmt.Printf("  History ran out after %d of %d steps back\n", result.HorizonSteps, depth)
+	}
 }

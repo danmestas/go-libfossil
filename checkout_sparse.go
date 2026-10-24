@@ -79,7 +79,9 @@ func (r HorizonRule) String() string {
 // §3.1): blobs only check-ins outside the held set name are elided. The zero
 // value of Structural is the content horizon (§4), which keeps every manifest.
 type Horizon struct {
-	Checkin string // full artifact hash of the check-in, 40 or 64 hex digits
+	// Checkin is the check-in's full artifact hash, 40 or 64 hex digits; as
+	// CloneOpts.Horizon it may also be a name the origin resolves.
+	Checkin string
 	Rule    HorizonRule
 	// Structural takes the structural cut (§5): the manifests below the
 	// check-in are elided too, and a seed the origin mints stands in for the

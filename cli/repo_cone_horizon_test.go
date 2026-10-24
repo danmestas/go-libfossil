@@ -80,16 +80,37 @@ func TestRepoCloneHorizon(t *testing.T) {
 	}
 }
 
-func TestRepoCloneHorizonNeedsFullHash(t *testing.T) {
+// --horizon takes a name the origin resolves, stepped back --depth
+// check-ins; a hash prefix is no name, and the failed clone leaves nothing.
+func TestRepoCloneHorizonByName(t *testing.T) {
 	url, _, c2, _ := horizonSource(t)
 	path := filepath.Join(t.TempDir(), "h.fossil")
-	err := (&RepoCloneCmd{URL: url, Path: path, Horizon: c2[:10]}).Run(&Globals{})
-	if err == nil || !strings.Contains(err.Error(), "full check-in hash") {
+	out := requiredHTTPStdout(t, func() error {
+		return (&RepoCloneCmd{URL: url, Path: path, Horizon: "trunk", Depth: 1, Leaves: true}).Run(&Globals{})
+	})
+	if !strings.Contains(out, "Horizon at:   "+c2+" (trunk, resolved by origin)") {
+		t.Fatalf("clone output = %q", out)
+	}
+	if got, want := storeConeOutput(t, path), "horizon "+c2+" leaves\n"; got != want {
+		t.Fatalf("store cone = %q, want %q", got, want)
+	}
+	prefix := filepath.Join(t.TempDir(), "p.fossil")
+	err := (&RepoCloneCmd{URL: url, Path: prefix, Horizon: c2[:10]}).Run(&Globals{})
+	if err == nil || !strings.Contains(err.Error(), "horizon name not found: "+c2[:10]) {
 		t.Fatalf("error = %v", err)
 	}
-	err = (&RepoCloneCmd{URL: url, Path: path, Leaves: true}).Run(&Globals{})
-	if err == nil || !strings.Contains(err.Error(), "--leaves needs --horizon") {
-		t.Fatalf("error = %v", err)
+	if _, statErr := os.Stat(prefix); !os.IsNotExist(statErr) {
+		t.Fatalf("the failed clone left %s (%v)", prefix, statErr)
+	}
+	for _, cmd := range []RepoCloneCmd{
+		{URL: url, Path: path, Leaves: true},
+		{URL: url, Path: path, Depth: 1},
+		{URL: url, Path: path, Horizon: "trunk", Depth: -1},
+	} {
+		if err := cmd.Run(&Globals{}); err == nil || !strings.Contains(err.Error(), "needs --horizon") &&
+			!strings.Contains(err.Error(), "negative") {
+			t.Fatalf("%+v: error = %v", cmd, err)
+		}
 	}
 }
 

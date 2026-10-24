@@ -453,27 +453,28 @@ func (c *RepoConeTestCmd) Run(g *Globals) (err error) {
 	return nil
 }
 
-// cloneConeFlags is coneFlags for a clone, which can also start a content
-// horizon store. Nothing is local yet, so the check-in must be a full hash.
-func cloneConeFlags(include, exclude []string, checkin string, leaves, structural bool) (*libfossil.Cone, error) {
+// cloneConeFlags is coneFlags for a clone, which can also start a horizon
+// store: the path cone, and the horizon --horizon names, a full hash or a
+// name the origin resolves, nil without one.
+func cloneConeFlags(include, exclude []string, checkin string, depth int, leaves, structural bool) (*libfossil.Cone, *libfossil.Horizon, error) {
+	if depth < 0 {
+		return nil, nil, fmt.Errorf("--depth must not be negative")
+	}
 	if checkin == "" {
-		if leaves {
-			return nil, fmt.Errorf("--leaves needs --horizon")
+		switch {
+		case leaves:
+			return nil, nil, fmt.Errorf("--leaves needs --horizon")
+		case structural:
+			return nil, nil, fmt.Errorf("--structural needs --horizon")
+		case depth > 0:
+			return nil, nil, fmt.Errorf("--depth needs --horizon")
 		}
-		if structural {
-			return nil, fmt.Errorf("--structural needs --horizon")
-		}
-		return coneFlags(include, exclude)
 	}
-	if len(include) == 0 && len(exclude) > 0 {
-		return nil, fmt.Errorf("--cone-not needs a --cone to carve from")
+	c, err := coneFlags(include, exclude)
+	if err != nil || checkin == "" {
+		return c, nil, err
 	}
-	c, err := libfossil.NewHorizonCone(include, exclude,
-		libfossil.Horizon{Checkin: checkin, Rule: horizonRule(leaves), Structural: structural})
-	if err != nil {
-		return nil, fmt.Errorf("--horizon needs the full check-in hash on clone: %w", err)
-	}
-	return c, nil
+	return c, &libfossil.Horizon{Checkin: checkin, Rule: horizonRule(leaves), Structural: structural}, nil
 }
 
 // coneFlags is the --cone and --cone-not pair of a command that can start a

@@ -3,8 +3,11 @@ package libfossil
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+
+	"github.com/danmestas/go-libfossil/internal/cone"
 
 	"github.com/danmestas/go-libfossil/internal/repo"
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
@@ -107,6 +110,13 @@ type CloneResult struct {
 	// named; "" when none did. An origin names it with
 	// SettingHorizonHistoryURL.
 	HorizonHistoryURL string
+	// HorizonResolved is the check-in CloneOpts.Horizon named resolved to and
+	// HorizonSteps the steps back it took, fewer than HorizonDepth when
+	// history ran out; HorizonResolvedLocally reports that the origin did
+	// not resolve the name and the clone did, at the content horizon.
+	HorizonResolved        string
+	HorizonSteps           int
+	HorizonResolvedLocally bool
 }
 
 // Clone performs a full repository clone from a remote Fossil server.
@@ -116,14 +126,19 @@ type CloneResult struct {
 // rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo, *CloneResult, error) {
 	adapter := &transportAdapter{pub: t}
+	storeCone, named, err := cloneHorizon(opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
+	}
 	iOpts := internalsync.CloneOpts{
 		User:         opts.User,
 		Password:     opts.Password,
 		Observer:     adaptObserver(opts.Observer),
 		Buggify:      opts.Buggify,
 		PullPhantoms: opts.PullPhantoms,
-		StoreCone:    unwrapCone(opts.StoreCone),
+		StoreCone:    storeCone,
 		SeedKey:      opts.SeedKey,
+		Named:        named,
 	}
 	// A transport that names its peer keys the horizon cursor, as for Sync.
 	if o, ok := t.(interface{ syncOrigin() string }); ok {
@@ -146,6 +161,50 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		StructuralServed:  iResult.StructuralServed,
 		HorizonFallback:   iResult.HorizonFallback,
 		HorizonHistoryURL: iResult.HorizonHistoryURL,
+
+		HorizonResolved:        iResult.HorizonResolved,
+		HorizonSteps:           int(iResult.HorizonSteps),
+		HorizonResolvedLocally: iResult.HorizonResolvedLocally,
 	}
 	return &Repo{inner: inner, path: path}, result, nil
+}
+
+// cloneHorizon splits a clone's horizon into the store cone it starts with
+// and the horizon the origin is asked to resolve. A Horizon is always sent
+// by name, a full hash included: the origin tries a full hash as a
+// check-in and then as a symbolic name (§6.2.7), so a branch spelled as 40
+// hex digits is found, and a peer that resolves no name is covered by the
+// local fallback. Only a horizon given on StoreCone goes out as the hash.
+func cloneHorizon(opts CloneOpts) (*cone.Cone, *internalsync.NamedHorizon, error) {
+	sc := unwrapCone(opts.StoreCone)
+	if opts.HorizonDepth < 0 || int64(opts.HorizonDepth) > math.MaxUint32 {
+		return nil, nil, fmt.Errorf("horizon depth %d out of range", opts.HorizonDepth)
+	}
+	h := opts.Horizon
+	if h == nil {
+		if opts.HorizonDepth != 0 {
+			return nil, nil, fmt.Errorf("a horizon depth needs a Horizon")
+		}
+		return sc, nil, nil
+	}
+	if _, ok := horizonOf(sc); ok {
+		return nil, nil, fmt.Errorf("a horizon on both StoreCone and Horizon")
+	}
+	if h.Checkin == "" {
+		return nil, nil, fmt.Errorf("a Horizon with no check-in")
+	}
+	level := cone.DepthContent
+	if h.Structural {
+		level = cone.DepthStructural
+	}
+	return sc, &internalsync.NamedHorizon{Name: h.Checkin, Depth: uint32(opts.HorizonDepth),
+		Rule: cone.HorizonRule(h.Rule), Level: level}, nil
+}
+
+// horizonOf is c's horizon, ok false for nil or a cone without one.
+func horizonOf(c *cone.Cone) (cone.Horizon, bool) {
+	if c == nil {
+		return cone.Horizon{}, false
+	}
+	return c.Horizon()
 }

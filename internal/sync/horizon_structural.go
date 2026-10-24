@@ -16,13 +16,13 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
-// seedLogin is the U card of the seeds this origin mints: the origin's own
-// label for the minting implementation, as zit's is "zit-serve", never a
-// user's login, since a seed is a tag application no user made (§5.2.2).
-const seedLogin = "go-libfossil"
+// seedLogin is the U card of the seeds this origin mints, the label
+// seedcheck refuses on a push (§5.2.2, §5.2.3).
+const seedLogin = seedcheck.Label
 
 // structuralServe is what an origin computed for one structural request
 // (draft-fossil-horizon-00 §6.2): the manifests and nodes K's trees reach,

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -563,9 +565,11 @@ func (s *session) buildGimmeCards() []xfer.Card {
 		panic("sync.buildGimmeCards: mxPhantomReq fell below MaxGimmeBase")
 	}
 
+	// Hash order, not map order: a capped round then always asks for the
+	// same phantoms, and a seeded simulation replays the same wire.
 	var cards []xfer.Card
 	count := 0
-	for uuid := range s.phantoms {
+	for _, uuid := range slices.Sorted(maps.Keys(s.phantoms)) {
 		if count >= maxGimme {
 			break
 		}

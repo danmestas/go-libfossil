@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-24
+
 ### Changed
 
 - The horizon draft is pinned at zit `caeef421ee`, with its §5.2.3 receive
@@ -28,8 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   latest of the tag rows the seed summarizes, so cancelling the newest tag,
   or reopening a closed branch, minted a seed dated earlier than the one a
   structural clone held, and the clone refused it as a replay and fell back
-  to the content horizon. D now only moves later, and changes whenever any
-  tag changes, so the next pull re-sends the seed. Seeds stay
+  to the content horizon. D now changes whenever any tag changes, so the
+  next pull re-sends the seed. Shunning and purging a tag can still lower
+  D (tracked in #483). Seeds stay
   byte-identical with zit 0.7.2's, and interop is now pinned to zit 0.7.2.
 
 ## [0.16.0] - 2026-10-24

@@ -13,7 +13,9 @@
 // of its basis chain (the row whose arrival makes it readable), and withheld
 // from every reply until judged. Whatever later fills that root (a push or
 // pull, a check-in, a tag) judges the rows pending under it, and only those
-// (JudgeFilled); the link step judges a pending row it reaches too (Judge).
+// (JudgeFilled); a delta received onto the root, by any path, judges them
+// if it is readable and otherwise moves them to its own root (DeltaStored);
+// the link step judges a pending row it reaches too (Judge).
 // A seed found that way is refused by its hash: it stays stored, so a delta
 // built on it stays readable, but it is never linked, announced or sent, and
 // a re-push of it is refused on its bytes. Pulling the same hash from a peer
@@ -34,6 +36,7 @@ import (
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
@@ -104,10 +107,7 @@ func IsSeedBytes(data []byte) bool {
 }
 
 // MarkPending records rid, a pushed delta not yet readable, under the root
-// of its basis chain, for judging when that root is filled. Rows pending
-// under rid itself move to the same root: rid, stored as a delta on a basis
-// not held either, is no more readable than that basis, and filling a
-// phantom with a delta fills nothing JudgeFilled hears of.
+// of its basis chain, for judging when that root is filled.
 func MarkPending(q db.Querier, rid libfossil.FslID) error {
 	if q == nil || rid <= 0 {
 		panic("seedcheck.MarkPending: q must not be nil and rid must be positive")
@@ -125,13 +125,8 @@ func markPending(q db.Querier, rid, root libfossil.FslID) error {
 			return fmt.Errorf("seedcheck.MarkPending: %w", err)
 		}
 	}
-	for _, stmt := range []string{
-		"INSERT OR REPLACE INTO " + pendingTable + "(rid, root) VALUES(?1, ?2)",
-		"UPDATE " + pendingTable + " SET root=?2 WHERE root=?1",
-	} {
-		if _, err := q.Exec(stmt, rid, root); err != nil {
-			return fmt.Errorf("seedcheck.MarkPending: %w", err)
-		}
+	if _, err := q.Exec("INSERT OR REPLACE INTO "+pendingTable+"(rid, root) VALUES(?, ?)", rid, root); err != nil {
+		return fmt.Errorf("seedcheck.MarkPending: %w", err)
 	}
 	// It leaves the unclustered table too, so neither an inventory nor a
 	// cluster names it until it is judged not a seed (decide).
@@ -159,6 +154,41 @@ func chainRoot(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
 		}
 		cur = next
 	}
+}
+
+// DeltaStored is told of every received delta stored at rid, on any path
+// (push, pull, clone): the one event besides a full-text fill that can
+// change what the rows pending under rid wait on. If rid is readable now,
+// those rows are too, and are judged (JudgeFilled). If it is not, they wait
+// on what rid waits on, and move to rid's chain root, so the fill that
+// finally makes the chain readable judges them, whatever path it takes.
+func DeltaStored(q db.Querier, rid libfossil.FslID) error {
+	if q == nil || rid <= 0 {
+		panic("seedcheck.DeltaStored: q must not be nil and rid must be positive")
+	}
+	ok, err := tableExists(q, pendingTable)
+	if err != nil || !ok {
+		return err
+	}
+	var waiting int
+	if err := q.QueryRow("SELECT count(*) FROM "+pendingTable+" WHERE root=?", rid).Scan(&waiting); err != nil {
+		return fmt.Errorf("seedcheck.DeltaStored: %w", err)
+	}
+	if waiting == 0 {
+		return nil
+	}
+	if content.IsAvailable(q, rid) {
+		_, err := JudgeFilled(q, []libfossil.FslID{rid})
+		return err
+	}
+	root, err := chainRoot(q, rid)
+	if err != nil {
+		return err
+	}
+	if _, err := q.Exec("UPDATE "+pendingTable+" SET root=? WHERE root=?", root, rid); err != nil {
+		return fmt.Errorf("seedcheck.DeltaStored: %w", err)
+	}
+	return nil
 }
 
 // JudgeFilled judges the rows pending under each of filled, rids whose full
@@ -197,12 +227,17 @@ func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
 		}
 		for _, w := range waiting {
 			examined++
-			// A row that does not expand, or whose bytes are not the artifact
-			// its name names, stays pending, withheld, and does not stop the
-			// other fills in the batch from being judged.
+			// A row whose own bytes cannot be read (its delta does not apply,
+			// or they are not the artifact its name names) stays pending,
+			// withheld, and does not stop the other fills in the batch from
+			// being judged. Any other failure, the chain to the filled root
+			// included, is a fault in the store, and is reported.
 			data, err := cache.Expand(q, w.rid)
-			if err != nil {
+			if unreadable(err) {
 				continue
+			}
+			if err != nil {
+				return examined, fmt.Errorf("seedcheck.JudgeFilled: rid=%d: %w", w.rid, err)
 			}
 			if _, err := decide(q, w.rid, w.uuid, IsSeedBytes(data)); err != nil {
 				return examined, err
@@ -210,6 +245,14 @@ func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
 		}
 	}
 	return examined, nil
+}
+
+// unreadable reports whether err from expanding a row says the row's own
+// bytes cannot be read: a delta that does not apply, or bytes that are not
+// the artifact its name names.
+func unreadable(err error) bool {
+	return errors.Is(err, content.ErrHashMismatch) || errors.Is(err, delta.ErrInvalidDelta) ||
+		errors.Is(err, delta.ErrChecksum)
 }
 
 // Tables is which of the two tables a store has. A caller that links many

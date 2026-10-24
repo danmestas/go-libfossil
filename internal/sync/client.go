@@ -1349,6 +1349,14 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		if err != nil {
 			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
+		// Every received delta passes here: pushed artifacts pending on rid
+		// are judged if it made them readable, and otherwise wait on its
+		// basis (seedcheck).
+		if !alreadyHeld {
+			if err := seedcheck.DeltaStored(tx, rid); err != nil {
+				return fmt.Errorf("storeDeltaContent: %w", err)
+			}
+		}
 		if err := recordVisibility(tx, rid, vis); err != nil {
 			return err
 		}

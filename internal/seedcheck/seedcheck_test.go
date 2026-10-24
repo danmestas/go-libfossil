@@ -118,6 +118,21 @@ func TestJudgeFilledContinuesPastUnreadableRow(t *testing.T) {
 	if err := seedcheck.MarkPending(r.DB(), bad); err != nil {
 		t.Fatal(err)
 	}
+	// And one whose delta applies but fails its checksum: made against bytes
+	// of the arriving basis's length that differ from it.
+	twin := bytes.Repeat([]byte{'x'}, len(broken))
+	twinTarget := append(slices.Clone(twin), []byte("a tail\n")...)
+	checksummed, err := delta.Create(twin, twinTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing, err := blob.StoreDeltaRaw(r.DB(), hash.SHA1(twinTarget), checksummed, src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seedcheck.MarkPending(r.DB(), failing); err != nil {
+		t.Fatal(err)
+	}
 	base := []byte("the second fill's basis\n")
 	sd := &deck.Deck{Type: deck.Control, D: time.Date(2026, 10, 1, 16, 0, 0, 0, time.UTC), U: deck.User(seedcheck.Label),
 		T: []deck.TagCard{{Type: deck.TagSingleton, Name: "x", UUID: "0123456789abcdef0123456789abcdef01234567"}}}
@@ -142,5 +157,28 @@ func TestJudgeFilledContinuesPastUnreadableRow(t *testing.T) {
 	}
 	if withheld, err := seedcheck.IsWithheld(r.DB(), bad); err != nil || !withheld {
 		t.Fatalf("the unreadable row is no longer withheld (%v)", err)
+	}
+}
+
+// A row that fails for a reason other than an unresolvable or mismatched
+// chain, a store fault such as content that does not decompress, is not
+// skipped silently: JudgeFilled reports it.
+func TestJudgeFilledSurfacesStoreFaults(t *testing.T) {
+	r, err := repo.Create(filepath.Join(t.TempDir(), "r.fossil"), "u", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	base := []byte("a basis\n")
+	rid := pending(t, r, base, []byte("a basis\nand a dependent\n"))
+	if _, err := r.DB().Exec("UPDATE blob SET content=x'00000010deadbeef' WHERE rid=?", rid); err != nil {
+		t.Fatal(err)
+	}
+	filled, _, err := blob.Store(r.DB(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedcheck.JudgeFilled(r.DB(), []libfossil.FslID{filled}); err == nil {
+		t.Fatal("JudgeFilled skipped a row whose content does not decompress")
 	}
 }

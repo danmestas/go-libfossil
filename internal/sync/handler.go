@@ -594,11 +594,7 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(refusal)
 		return errPassAborted
 	}
-	// The request's receive pass is done with rids: rows stored under a
-	// refused seed hash, a phantom an igot of one made included, can go
-	// (seedcheck). It only reads when there is nothing to delete, as in a
-	// read-only request.
-	return seedcheck.Sweep(h.repo.DB())
+	return nil
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -1360,10 +1356,6 @@ func (h *handler) requestPhantoms() error {
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
-	refused, err := seedcheck.RefusedUUIDs(h.repo.DB())
-	if err != nil {
-		return err
-	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
 		return fmt.Errorf("handler: listing phantoms: %w", err)
@@ -1380,9 +1372,7 @@ func (h *handler) requestPhantoms() error {
 		// nothing it holds names it yet (horizon §5.1): a new check-in.
 		_, heard := h.remoteHas[uuid]
 		announced := heard && elided != nil && elided.Unnamed(rid)
-		// A refused seed's hash is never asked for again (seedcheck).
-		if h.remoteLacks[uuid] || refused[uuid] ||
-			(elided != nil && elided.Class(rid) == content.Elided && !announced) {
+		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1553,18 +1543,24 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if h.fatal {
 		return nil // storeFile refused a seed: the request is refused whole
 	}
-	return h.recordStored(uuid, deltaSrc)
+	return h.recordStored(uuid, deltaSrc, payload)
 }
 
 // recordStored notes an artifact handleFile stored, for crosslinking and
-// for the seed check (horizon §5.2.3): storeReceived refused a seed it could
-// read, so what is left to judge is a delta it could not. That is recorded
-// pending, withheld until a basis makes it readable; ownSeedReadable judges
-// it if the basis comes later in this request.
-func (h *handler) recordStored(uuid, deltaSrc string) error {
+// for the seed check (horizon §5.2.3). An artifact is judged when it first
+// becomes readable: full text and a delta on a readable basis now; a delta
+// on an unreadable basis is recorded pending in seedcheck, and judged by
+// ownSeedReadable or at the crosslink step of whatever later fills it.
+func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
+	if payload == nil {
+		panic("handler.recordStored: payload must not be nil")
+	}
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
 	if deltaSrc == "" {
+		if seedcheck.IsSeedBytes(payload) {
+			h.fail(seedRefusedText)
+		}
 		return nil
 	}
 	q := h.repo.DB()
@@ -1572,11 +1568,23 @@ func (h *handler) recordStored(uuid, deltaSrc string) error {
 	if !ok {
 		panic("handler.recordStored: a stored artifact must exist")
 	}
-	if content.IsAvailable(q, rid) {
-		return nil
+	if !content.IsAvailable(q, rid) {
+		h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
+		return seedcheck.MarkPending(q, rid)
 	}
-	h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
-	return seedcheck.MarkPending(q, rid)
+	if h.pass == nil {
+		panic("handler.recordStored: a stored delta implies a receive pass")
+	}
+	// storeFile verified these bytes against uuid; expanding them again is
+	// tolerated, since the pass's basis cache makes it one delta apply.
+	data, err := h.pass.basis.ExpandUnchecked(q, rid)
+	if err != nil {
+		return fmt.Errorf("handler: seed check: %w", err)
+	}
+	if seedcheck.IsSeedBytes(data) {
+		h.fail(seedRefusedText)
+	}
+	return nil
 }
 
 // storedDelta is a delta a request stored, by name and rid.

@@ -298,15 +298,12 @@ func hzSeedLaterRequest(t *testing.T) error {
 	if n, err := linked(); err != nil || n != 0 {
 		return expectf("the seed was crosslinked: %d rows (%v)", n, err)
 	}
-	// The seed is refused by its hash and its bytes are dropped (F.1). The
-	// refusal is store-local: a shun entry would reach every peer that pulls
-	// the shun group, and a horizon clone holding this, its current seed,
-	// would then drop it.
+	// The seed is refused by its hash (F.1), kept stored but never linked or
+	// served. The refusal is store-local: a shun entry would reach every peer
+	// that pulls the shun group, and a horizon clone holding this, its current
+	// seed, would then drop it.
 	if refused, err := seedcheck.IsRefusedUUID(r.DB(), name); err != nil || !refused {
 		return expectf("the seed is not recorded as refused (%v)", err)
-	}
-	if _, held := blob.Exists(r.DB(), name); held {
-		return expectf("the refused seed is still held")
 	}
 	var shunned int
 	if err := r.DB().QueryRow("SELECT count(*) FROM shun").Scan(&shunned); err != nil || shunned != 0 {

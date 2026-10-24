@@ -1629,12 +1629,7 @@ func (s *session) addPhantom(uuid string, vis visibility) error {
 	if err != nil {
 		return err
 	}
-	// Nor of a refused seed's hash, which is never asked for again.
-	refused, err := seedcheck.IsRefusedUUID(s.repo.DB(), uuid)
-	if err != nil {
-		return err
-	}
-	if !shunned && !refused {
+	if !shunned {
 		s.phantoms[uuid] = true
 		s.newPhantoms = append(s.newPhantoms, phantomUpdate{uuid: uuid, vis: vis})
 	}
@@ -1768,6 +1763,12 @@ func (s *session) loadDBPhantoms() error {
 	if err != nil {
 		return err
 	}
+	// A dropped seed's phantom stays, inert: deleting a row would free its
+	// rid for reuse under a receive pass. Its hash is never asked for again.
+	refused, err := seedcheck.RefusedUUIDs(s.repo.DB())
+	if err != nil {
+		return err
+	}
 	rows, err := s.repo.DB().Query(
 		"SELECT b.rid, b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
 			" AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)",
@@ -1786,7 +1787,7 @@ func (s *session) loadDBPhantoms() error {
 		// one its origin announces this session is kept there (horizon
 		// §4.5, §5.1) and is asked for.
 		announced := s.structural.active && s.remoteHas[uuid] && elided != nil && elided.Unnamed(rid)
-		if elided != nil && elided.Class(rid) == content.Elided && !announced {
+		if refused[uuid] || elided != nil && elided.Class(rid) == content.Elided && !announced {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)
 			continue

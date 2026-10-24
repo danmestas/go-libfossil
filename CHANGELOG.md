@@ -58,9 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not arrived is withheld from every reply until something supplies the
   base (a later push, a pull, a check-in or a tag), which is stored as usual
   while the seed is refused; each fill judges only the deltas waiting on
-  it. A refused seed's bytes are deleted and its hash kept in a store-local
-  table no configuration group carries, so the origin never asks for it and
-  refuses a re-push at once. Before, a seed was dropped only when the
+  it. A refused seed's hash is kept in a store-local table no configuration
+  group carries; the seed stays stored, so deltas on it stay readable, but
+  it is never linked, announced or sent, and a re-push is refused at once. Before, a seed was dropped only when the
   request's `horizon-seed` named it (that name match now refuses the push
   the same way) and was otherwise stored as an ordinary control artifact.
   A seed-shaped artifact received by pull or clone stays ordinary, as does
@@ -70,10 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expanded content, a late delta included.
 - A store keeps a horizon seed only through a `horizon-seed` announcement
   (horizon F.2, F.3 of the zit 0.7.2 draft). A pull, clone or sync drops a
-  seed received outside one as soon as it can be read, a delta completed in
-  a later round included: it is not stored, not counted as received, and
-  its hash is never asked for again. The link step refuses a seed-shaped
-  artifact whatever path stored it. A seed-shaped artifact with neither
+  seed it can read on arrival: it is not stored, not counted as received,
+  and its hash is never asked for again. The link step refuses a
+  seed-shaped artifact whatever path stored it, so one completed in a later
+  round is kept but never linked, announced or sent. A seed-shaped artifact with neither
   this store's label nor a `horizon-seed` card stays ordinary.
 
 ### Fixed

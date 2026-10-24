@@ -79,10 +79,10 @@ const seedRefusedText = "seed refused: a seed is private to the clone that holds
 // ownSeedReadable reports whether a delta this request stored before its
 // basis was readable has become readable and is a seed (horizon §5.2.3):
 // the seed is judged within the request that carried it, which is then
-// refused whole. The cascade may have judged it already, refusing its hash;
-// so is a re-push of a hash refused before. A delta still unreadable stays
-// pending and is judged by whatever later fills its basis; one found not to
-// be a seed loses its pending row.
+// refused whole. It reads the bytes, since the cascade that judged the
+// delta when its basis arrived refused the seed's hash but cannot refuse
+// the request; that cascade also cleared the pending row of a delta that is
+// not a seed. A delta still unreadable stays pending.
 func (h *handler) ownSeedReadable() (bool, error) {
 	if len(h.danglingHere) == 0 {
 		return false, nil
@@ -92,10 +92,6 @@ func (h *handler) ownSeedReadable() (bool, error) {
 	}
 	q := h.repo.DB()
 	for _, d := range h.danglingHere {
-		refused, err := seedcheck.IsRefusedUUID(q, d.uuid)
-		if err != nil || refused {
-			return refused, err
-		}
 		if !content.IsAvailable(q, d.rid) {
 			continue
 		}
@@ -107,9 +103,6 @@ func (h *handler) ownSeedReadable() (bool, error) {
 		}
 		if seedcheck.IsSeedBytes(data) {
 			return true, nil
-		}
-		if err := seedcheck.Clear(q, d.rid); err != nil {
-			return false, err
 		}
 	}
 	return false, nil

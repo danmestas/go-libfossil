@@ -238,11 +238,6 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 		return cloneResult, fmt.Errorf(
 			"sync.Clone: finalize receive-linker crosslink: %w", finalizeErr)
 	}
-	// No receive pass holds rids now: rows stored under a refused seed hash
-	// can go (seedcheck).
-	if err := seedcheck.Sweep(cs.repo.DB()); err != nil {
-		return cloneResult, fmt.Errorf("sync.Clone: %w", err)
-	}
 	if cs.sparseReceived != nil {
 		if err := cs.repo.WithTx(func(tx *db.Tx) error {
 			var err error

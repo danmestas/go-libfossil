@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- An origin dates a seed no earlier than the latest D it has minted
+  (horizon §5.2.2; tracked in #483). Shunning and purging the latest tag
+  removed the rows D was dated from, so the next seed was earlier than the
+  one every structural clone held, and each clone refused it as a replay
+  and fell back to the content horizon until the repository's tags caught
+  up. The mark is kept in the store's `horizon-seed-floor` config row,
+  which no config group transfers, so it survives restarts and is never
+  sent. The horizon draft is re-pinned at zit `39546186f4`.
+
 ## [0.16.1] - 2026-10-24
 
 ### Changed

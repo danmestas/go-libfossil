@@ -4569,7 +4569,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 139,
+      "cases": 140,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4767,9 +4767,9 @@
           "id": "HZ-5.2-2",
           "section": "5.2.2",
           "status": "PARTIAL",
-          "cases": 3,
-          "text": "The origin sets each seed's D card to the latest mtime of any tag event in the repository, whether it applied, propagated or cancelled a tag, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, in a repository with no tag event); no change to tag state moves it earlier, so it changes whenever any tag in the repository changes and the next exchange carries the new seed; its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
-          "notes": "covered but for the label's exclusivity, which no case checks: go-libfossil writes its label (go-libfossil) on seeds alone, by construction rather than by test"
+          "cases": 4,
+          "text": "The origin sets each seed's D card to the latest mtime of any tag event in the repository, whether it applied, propagated or cancelled a tag, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, in a repository with no tag event); no new tag event moves it earlier, and an origin should also date a seed no earlier than the latest D it has minted and keep that D across restarts, so a shun of the latest tag events does not move it earlier; it changes whenever any tag in the repository changes and the next exchange carries the new seed; its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; a seed is a function of C, the tag state and the latest D its origin has minted, so two origins mint the same seed for the same C and state up to the U card, unless a shun has left one a later D than the other. No seed need be dated later than the seed it replaces.",
+          "notes": "covered but for the label's exclusivity, which no case checks: go-libfossil writes its label (go-libfossil) on seeds alone, by construction rather than by test; keeping the minted D across restarts is checked by internal/horizon/seed's TestMintDateKeepsTheMintedFloor, not by a case"
         },
         {
           "id": "HZ-5.2-3",
@@ -5024,7 +5024,7 @@
           "section": "6.2.3",
           "status": "COVERED",
           "cases": 1,
-          "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the repository's tag events, two mints over unchanged state produce the same name.",
+          "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the repository's tag events and the latest D the origin has minted, two mints over unchanged state produce the same name.",
           "notes": ""
         },
         {

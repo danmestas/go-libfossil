@@ -643,15 +643,20 @@ Internet-Draft               Fossil Horizons                October 2026
    seed could precede an event with a sub-second time, and with a
    fraction, two origins could write the same instant differently.  A
    tag event takes effect only over an older one, and the row it leaves
-   keeps its time, so no change to tag state moves this time earlier.
-   Dated from the events still in force instead, a seed would move
-   earlier when the latest of them is cancelled or a closed branch is
-   reopened, and a clone would refuse it as a replay (Section 5.2.4).  A
-   seed's D therefore changes whenever any tag in the repository
-   changes, and the next exchange carries the new seed.  A repository
-   with no tag event takes C's own event time, rounded the same way.  A
-   clone holds one seed and replaces it whole when a new one arrives
-   (Section 6.2.3), so a seed never has to outrank an earlier seed.
+   keeps its time, so no new tag event moves this time earlier.  Dated
+   from the events still in force instead, a seed would move earlier
+   when the latest of them is cancelled or a closed branch is reopened,
+   and a clone would refuse it as a replay (Section 5.2.4).  A shun can
+   remove the latest tag events, so an origin SHOULD also date a seed no
+   earlier than the latest D it has minted, and keep that D across
+   restarts.  Otherwise a tag pushed with a far-future time and then
+   shunned would hold every clone at the content horizon until the
+   repository's tags caught up with that time.  A seed therefore changes
+   whenever any tag in the repository changes, and the next exchange
+   carries the new seed.  A repository with no tag event takes C's own
+   event time, rounded the same way.  A clone holds one seed and
+   replaces it whole when a new one arrives (Section 6.2.3), so a seed
+   never has to outrank an earlier seed.
 
    The U card is the origin's own seed label, not the login of any user.
    A seed is applied by no one, and naming a user would attribute to
@@ -662,17 +667,16 @@ Internet-Draft               Fossil Horizons                October 2026
    required, and a user whose login equals the label has their pushed
    control artifacts refused (Section 5.2.3).
 
-   A seed is a pure function of C and the dense repository's tag state.
-   Two origins serving one repository mint the same seed for the same C
-   and the same state, up to the U card.  An origin keeps no record of
-   which clients hold which seeds.
-
-
-
+   A seed is a function of C, the dense repository's tag state and the
+   latest D its origin has minted.  Two origins serving one repository
 Mestas                    Expires 20 April 2027                [Page 12]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   mint the same seed for the same C and the same state, up to the U
+   card, unless a shun has left one of them a later D than the other.
+   An origin keeps no record of which clients hold which seeds.
 
 5.2.3.  Privacy
 
@@ -720,16 +724,14 @@ Internet-Draft               Fossil Horizons                October 2026
    card, any pushed control artifact that carries a horizon-seed T card
    (Section 5.2), whatever its U card.  The label test stays alongside
    this shape test, for an artifact under the origin's label that
-   carries no binding card; only a foreign artifact that carries neither
-   the origin's label nor a binding card is stored as ordinary.  Neither
-
-
 
 Mestas                    Expires 20 April 2027                [Page 13]
 
 Internet-Draft               Fossil Horizons                October 2026
 
 
+   carries no binding card; only a foreign artifact that carries neither
+   the origin's label nor a binding card is stored as ordinary.  Neither
    test identifies a seed minted before seeds had their own label and
    binding card, as zit 0.7.0 minted under the label zit-serve; such
    seeds are held outside the artifact store by the clones that hold
@@ -778,8 +780,6 @@ Internet-Draft               Fossil Horizons                October 2026
    yields an earlier D (Section 5.2.2), so an earlier one is a replay.
    A seed whose D equals the held one's is accepted.  A deepen discards
    the held seed first (Section 5.8), so the floor restarts at the new
-
-
 
 Mestas                    Expires 20 April 2027                [Page 14]
 
@@ -1201,9 +1201,10 @@ Internet-Draft               Fossil Horizons                October 2026
    unless it is sending a seed in the same reply or the client's offered
    name is the seed it would send; a structural request it cannot seed
    is answered, and advertised, as content.  Because a seed's D card is
-   fixed by the repository's tag events (Section 5.2.2) and not by the
-   time of minting, two mints over unchanged state produce the same
-   bytes and the same name, and the offered name matches.
+   fixed by the repository's tag events and the latest D the origin has
+   minted (Section 5.2.2), and not by the time of minting, two mints
+   over unchanged state produce the same bytes and the same name, and
+   the offered name matches.
 
 6.2.4.  Merge Base
 
@@ -1226,7 +1227,6 @@ Internet-Draft               Fossil Horizons                October 2026
    counts them; cherry-pick, backout and integrate merges pending in the
    check-out are not secondaries.  An answer whose hashes do not repeat
    the query is no answer.  A card handler sees six tokens ([FossilSync]
-
 
 
 Mestas                    Expires 20 April 2027                [Page 22]
@@ -1839,11 +1839,11 @@ Internet-Draft               Fossil Horizons                October 2026
       branch was reopened, and the clone's D floor refused the re-seed
       as a replay.  Normative change.
 
-
-
-
-
-
+   *  Section 5.2.2: an origin dates a seed no earlier than the latest D
+      it has minted.  A shun can remove the latest tag events, and a
+      seed dated from those that remain moved earlier, so every clone's
+      D floor refused it and kept the content horizon.  Normative
+      change.
 
 Mestas                    Expires 20 April 2027                [Page 33]
 

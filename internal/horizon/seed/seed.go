@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -141,10 +142,12 @@ func Entries(q db.Querier, c libfossil.FslID, k []libfossil.FslID) ([]libfossil.
 // rounded up to a whole second and written with no fraction (§5.2.2): the
 // same at every origin, so two mints over unchanged state yield one name,
 // and never earlier than an earlier mint's. A tag event takes effect only
-// over an older row and its own row keeps its time, so no change to tag
-// state moves D back. Dated from the rows in force instead, a cancel of the
+// over an older row and its own row keeps its time, so no new tag event
+// moves D back. Dated from the rows in force instead, a cancel of the
 // newest one moved D earlier and the clone refused the re-seed as a replay
-// (§5.2.4). The U card is login, the
+// (§5.2.4). A shun can still remove the latest rows, so D is also no
+// earlier than the latest D this origin has minted, kept in the store's
+// config (floorConfig) and raised by every mint. The U card is login, the
 // origin's label for the minting implementation. With no row in force there
 // is nothing to seed: a control artifact needs a T card, so Mint returns
 // ErrNothingToSeed where zit mints a seed of no T card dated at C.
@@ -183,8 +186,12 @@ func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.
 		return "", nil, fmt.Errorf("seed.Mint: C rid=%d: %w", c, err)
 	}
 	cards = append(cards, deck.TagCard{Type: deck.TagSingleton, Name: BindingTag, UUID: cHash, Value: rule.String()})
+	floor, err := mintedFloor(q)
+	if err != nil {
+		return "", nil, err
+	}
 	const second = 1000
-	date := time.UnixMilli((latest + second - 1) / second * second).UTC()
+	date := time.UnixMilli((max(latest, floor) + second - 1) / second * second).UTC()
 	// deck.Marshal writes D to the millisecond; the seed's D is written to
 	// the second, as zit writes it, so a seed minted over whole-second tag
 	// events is byte-identical to zit's. The cards after D are Marshal's,
@@ -200,7 +207,65 @@ func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.
 	if d, err := parse(data); err != nil || !d.D.Equal(date) {
 		panic(fmt.Sprintf("seed.Mint: postcondition: minted seed does not parse back (%v)", err))
 	}
+	if date.UnixMilli() < floor {
+		panic("seed.Mint: postcondition: D is earlier than the minted floor")
+	}
+	if date.UnixMilli() > floor {
+		// Best effort, as the mark is a SHOULD: a store that cannot write, a
+		// read-only mirror or one whose write lock is held, serves this seed
+		// and dates the next from its tag rows, as before the mark. Only a
+		// later D writes, so an unchanged repository is served without one.
+		_ = raiseFloor(q, date.UnixMilli())
+	}
 	return hash.SHA3(data), data, nil
+}
+
+// floorConfig is the config row holding the latest D this origin has minted,
+// in milliseconds since the Unix epoch, written in decimal as zit keeps it
+// (.zit-cache/seed-floor). It is the origin's high-water mark of §5.2.2: a
+// shun and purge can remove the latest tag rows, and a seed dated from the
+// rows left would be earlier than the one every clone holds. No config group
+// carries the row, so it is never sent; it lives with the repository, so it
+// survives restarts.
+const floorConfig = "horizon-seed-floor"
+
+// mintedFloor returns the floor, or 0 when none is kept or the row is
+// unreadable: without it a seed is dated from the tag rows alone, which the
+// draft permits (the mark is a SHOULD).
+func mintedFloor(q db.Querier) (int64, error) {
+	var value string
+	err := q.QueryRow("SELECT coalesce(value, '') FROM config WHERE name=?", floorConfig).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("seed.Mint: %s: %w", floorConfig, err)
+	}
+	floor, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || floor < 0 {
+		return 0, nil
+	}
+	return floor, nil
+}
+
+// raiseFloor records d as the floor unless a later one is kept. The
+// comparison is in the statement, so of two concurrent mints the later D
+// stays, whichever writes last. A value that is not a canonical integer,
+// one mintedFloor reads as 0, is replaced: cast, an overflowing one would
+// read as the largest integer and never be raised again.
+func raiseFloor(q db.Querier, d int64) error {
+	if d <= 0 {
+		panic("seed.raiseFloor: d must be positive")
+	}
+	_, err := q.Exec(`INSERT INTO config(name, value, mtime) VALUES(?1, ?2, strftime('%s','now'))
+		ON CONFLICT(name) DO UPDATE SET value=excluded.value, mtime=excluded.mtime
+		WHERE CAST(config.value AS INTEGER) < CAST(excluded.value AS INTEGER)
+			OR CAST(CAST(config.value AS INTEGER) AS TEXT) IS NOT config.value OR config.value IS NULL`,
+		floorConfig, strconv.FormatInt(d, 10))
+	if err != nil {
+		return fmt.Errorf("seed.Mint: %s: %w", floorConfig, err)
+	}
+	return nil
 }
 
 // latestTagEvent is the latest mtime among every tagxref row in the

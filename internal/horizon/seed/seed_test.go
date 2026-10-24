@@ -939,6 +939,92 @@ func TestApplyDiscardsAnUnboundHeldSeed(t *testing.T) {
 // A cancel, here and at an ancestor, is a tag event: D never moves earlier
 // when a newer tag is cancelled (§5.2.2), where dated from the rows in force
 // it fell back to the row before.
+// TestMintDateKeepsTheMintedFloor removes the latest tag event's rows, as a
+// shun and purge does, and mints again: the seed keeps the D already minted
+// (§5.2.2), and the same seed after the repository is closed and reopened,
+// and a later event still moves it on.
+func TestMintDateKeepsTheMintedFloor(t *testing.T) {
+	w := newWorld(t)
+	w.tag(w.c3, "late", tag.TagSingleton, "", w.at(300))
+	_, before := w.mint(w.c3, "origin")
+	if _, err := w.r.DB().Exec(`DELETE FROM tagxref WHERE tagid=(SELECT tagid FROM tag WHERE tagname='late')`); err != nil {
+		t.Fatal(err)
+	}
+	const floor = "D 2026-10-28T00:00:00\n"
+	if !strings.HasPrefix(string(before), floor) {
+		t.Fatalf("the first seed is not dated %q:\n%s", floor, before)
+	}
+	_, purged := w.mint(w.c3, "origin")
+	if !strings.HasPrefix(string(purged), floor) {
+		t.Fatalf("after the purge the seed is not dated %q:\n%s", floor, purged)
+	}
+	path := w.r.Path()
+	if err := w.r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	r, err := repo.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.r = r
+	t.Cleanup(func() { r.Close() })
+	_, reopened := w.mint(w.c3, "origin")
+	if string(reopened) != string(purged) {
+		t.Fatalf("after reopening the seed changed:\n%s\nwant\n%s", reopened, purged)
+	}
+	w.tag(w.c3, "later", tag.TagSingleton, "", w.at(301))
+	_, later := w.mint(w.c3, "origin")
+	if want := "D 2026-10-29T00:00:00\n"; !strings.HasPrefix(string(later), want) {
+		t.Errorf("a later event left the seed without %q:\n%s", want, later)
+	}
+}
+
+// TestMintFloorIsBestEffort mints through a read-only handle, which cannot
+// keep the mark: the seed is still served, dated from the tag rows. It then
+// replaces a stored floor too large to read, which a cast would rank above
+// every D and keep for good.
+func TestMintFloorIsBestEffort(t *testing.T) {
+	w := newWorld(t)
+	w.tag(w.c3, "late", tag.TagSingleton, "", w.at(300))
+	k := w.k(w.c3)
+	path := w.r.Path()
+	if err := w.r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := db.OpenSQL(path, db.OpenConfig{}, map[string]string{"mode": "ro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, data, err := seed.Mint(ro, w.c3, cone.RuleDescendants, k, "origin")
+	ro.Close()
+	if err != nil {
+		t.Fatalf("Mint on a read-only handle: %v", err)
+	}
+	if want := "D 2026-10-28T00:00:00\n"; !strings.HasPrefix(string(data), want) {
+		t.Fatalf("the read-only seed is not dated %q:\n%s", want, data)
+	}
+	r, err := repo.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.r = r
+	t.Cleanup(func() { r.Close() })
+	if _, err := r.DB().Exec(`INSERT INTO config(name, value) VALUES('horizon-seed-floor', '99999999999999999999')`); err != nil {
+		t.Fatal(err)
+	}
+	_, data = w.mint(w.c3, "origin")
+	if want := "D 2026-10-28T00:00:00\n"; !strings.HasPrefix(string(data), want) {
+		t.Fatalf("over an unreadable floor the seed is not dated %q:\n%s", want, data)
+	}
+	var floor string
+	if err := r.DB().QueryRow(`SELECT value FROM config WHERE name='horizon-seed-floor'`).Scan(&floor); err != nil {
+		t.Fatal(err)
+	}
+	if want := "1793145600000"; floor != want {
+		t.Errorf("the unreadable floor became %q, want %q", floor, want)
+	}
+}
+
 func TestMintDateCountsCancels(t *testing.T) {
 	for _, target := range []string{"C", "ancestor"} {
 		w := newWorld(t)

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -13,8 +14,10 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/verify"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -24,12 +27,13 @@ import (
 // "horizon seed date" regression (src/horizon_e2e.zig).
 
 func horizonSeedDateCases() []Case {
-	return []Case{horizonSeedDateCancel, horizonSeedDateAncestor}
+	return []Case{horizonSeedDateCancel, horizonSeedDateAncestor, horizonSeedDateShun}
 }
 
 var (
 	horizonSeedDateCancel   = Case{ID: "horizon.5.2.2.seed-date-cancel", Req: "HZ-5.2-2"}
 	horizonSeedDateAncestor = Case{ID: "horizon.5.2.2.seed-date-ancestor-cancel", Req: "HZ-5.2-2"}
+	horizonSeedDateShun     = Case{ID: "horizon.5.2.2.seed-date-shun", Req: "HZ-5.2-2"}
 )
 
 // hzDateStep is one tag event at the origin.
@@ -60,6 +64,96 @@ func TestHorizonSeedDate(t *testing.T) {
 			{onAncestor, "tint", tag.TagCancel},
 		})
 	})
+}
+
+// TestHorizonSeedDateShun pushes the origin's latest tag event far into the
+// future, pulls, then shuns and purges that tag and rebuilds, which removes
+// its rows, and tags again at an ordinary time. Dated from the rows left,
+// the next seed would be earlier than the clone's and refused as a replay;
+// the origin's minted floor (§5.2.2) dates it no earlier. This mirrors
+// zit's shun regression at check-in 39546186f4 (src/horizon_e2e.zig).
+func TestHorizonSeedDateShun(t *testing.T) {
+	check(t, horizonSeedDateShun, func() error {
+		x := newHZStruct(t)
+		r, _, err := x.clone(t, x.peer())
+		if err != nil {
+			return err
+		}
+		future := time.Unix(2500000000, 0).UTC()
+		rid, err := tag.AddTag(x.s.f.r, tag.TagOpts{
+			TargetRID: x.s.c3, TagName: "future", TagType: tag.TagSingleton, User: "u", Time: future,
+		})
+		if err != nil {
+			return err
+		}
+		if err := hzSeedDatePull(r, x, "future tag"); err != nil {
+			return err
+		}
+		held, err := seed.Held(r.DB())
+		if err != nil {
+			return err
+		}
+		if err := hzShunAndPurge(x.s.f.r, rid); err != nil {
+			return err
+		}
+		x.s.tag(t, x.s.c3, "later", tag.TagSingleton, "")
+		if err := hzSeedDatePull(r, x, "after the shun"); err != nil {
+			return err
+		}
+		after, err := seed.Held(r.DB())
+		if err != nil || after == nil || string(after) == string(held) {
+			return expectf("after the shun: the clone did not take the re-seed (%v)", err)
+		}
+		d, err := deck.Parse(after)
+		if err != nil {
+			return err
+		}
+		if d.D.Before(future) {
+			return expectf("after the shun: the seed is dated %v, before the floor %v", d.D, future)
+		}
+		return nil
+	})
+}
+
+// hzSeedDatePull pulls r from x's origin: it must stay structural.
+func hzSeedDatePull(r *repo.Repo, x *hzStruct, step string) error {
+	res, err := sync.Sync(context.Background(), r, x.peer(), sync.SyncOpts{Pull: true})
+	if err != nil {
+		return expectf("%s: pull: %v", step, err)
+	}
+	if len(res.Errors) != 0 || res.HorizonFallback {
+		return expectf("%s: errors %q, fallback %v", step, res.Errors, res.HorizonFallback)
+	}
+	if err := hzStillStructural(r); err != nil {
+		return expectf("%s: %v", step, err)
+	}
+	return nil
+}
+
+// hzShunAndPurge shuns the artifact at rid, purges it and rebuilds, as an
+// operator removes a bad tag: its tagxref rows go with it.
+func hzShunAndPurge(r *repo.Repo, rid libfossil.FslID) error {
+	var uuid string
+	if err := r.DB().QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+		return err
+	}
+	if err := shun.Add(r.DB(), uuid, "far-future tag"); err != nil {
+		return err
+	}
+	if _, err := shun.Purge(r.DB()); err != nil {
+		return err
+	}
+	if _, err := verify.Rebuild(r); err != nil {
+		return err
+	}
+	var n int
+	if err := r.DB().QueryRow("SELECT count(*) FROM tagxref WHERE srcid=?", rid).Scan(&n); err != nil {
+		return err
+	}
+	if n != 0 {
+		return expectf("the purged tag left %d tagxref rows", n)
+	}
+	return nil
 }
 
 // hzSeedDateSteps clones the structural store, then applies each tag event

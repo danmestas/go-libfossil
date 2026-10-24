@@ -29,6 +29,16 @@ type CloneOpts struct {
 	// a converged horizon clone records (draft-fossil-horizon-00 §6.2.6) as
 	// SyncOpts.Origin keys a sync's. Empty keeps none.
 	Origin string
+	// HorizonName, when set, names StoreCone's horizon check-in for the
+	// origin to resolve (draft-fossil-horizon-00 §6.2.7): tip, a symbolic
+	// name or a full hash, stepped back HorizonDepth check-ins along primary
+	// parents. StoreCone must carry a horizon; its rule, level and path
+	// members stand, and its check-in is replaced by the resolved one, the
+	// only one the store records. An origin that does not resolve it serves
+	// densely, and the clone resolves it over what it received at the
+	// content horizon (§6.3).
+	HorizonName  string
+	HorizonDepth uint32
 }
 
 // CloneResult reports what happened during a clone.
@@ -53,4 +63,11 @@ type CloneResult struct {
 	// origin says history below a horizon can be queried (horizon-served
 	// URL, §6.2.5), the last a reply named; "" when none did.
 	HorizonHistoryURL string
+	// HorizonResolved is the check-in a clone's HorizonName resolved to and
+	// HorizonSteps the steps back it took, fewer than HorizonDepth when
+	// history ran out; HorizonResolvedLocally reports the clone resolved it
+	// itself, its origin having answered no horizon-resolved (§6.3).
+	HorizonResolved        string
+	HorizonSteps           uint32
+	HorizonResolvedLocally bool
 }

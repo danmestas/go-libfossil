@@ -276,6 +276,8 @@ type handler struct {
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
 	structuralRead  int                       // what placing a structural horizon read through the memo
+	resolved        *xfer.PragmaCard          // echoed to a request naming its horizon (horizon §6.2.7)
+	nameRefusal     string                    // why the request's horizon-name is refused; "" when it is not
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -475,14 +477,20 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// request with no client-version gets its reply's pragma run here, at
 	// the head; otherwise it follows server-version (handlePragma).
 	h.peerReadsTrees = sendsSubmanifests(req.Cards)
+	// Horizon §6.2.7: a named horizon is served as the hash it resolves to.
+	cards, resolved, refusal, err := resolveRequestName(h.repo.DB(), req.Cards)
+	if err != nil {
+		return nil, err
+	}
+	h.resolved, h.nameRefusal = resolved, refusal
 	var coneErr error
-	h.cone, coneErr = requestCone(req.Cards)
+	h.cone, coneErr = requestCone(cards)
 	if coneErr != nil {
 		h.fail(coneErr.Error())
 		return h.reply(), nil
 	}
-	if h.cone != nil {
-		if err := h.prepareStructural(ctx, req.Cards); err != nil {
+	if h.cone != nil && h.nameRefusal == "" {
+		if err := h.prepareStructural(ctx, cards); err != nil {
 			return nil, err
 		}
 		var err error
@@ -560,6 +568,9 @@ func readOnlyRequest(cards []xfer.Card) bool {
 func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 	if err := h.processCards(ctx, req.Cards); err != nil {
 		return err
+	}
+	if h.canRead() {
+		h.refuseName()
 	}
 	if h.fatal || h.aborted {
 		return errPassAborted
@@ -821,7 +832,7 @@ func (h *handler) emitInventory(ctx context.Context) error {
 // cgi_reset_content discards them (§10.1).
 func (h *handler) handleClone(c *xfer.CloneCard) error {
 	h.handleCloneCard(c)
-	if !h.cloneMode || h.fatal {
+	if !h.cloneMode || h.fatal || h.refuseName() {
 		return nil
 	}
 	mirror, err := h.servesPartialMirror()
@@ -1084,6 +1095,7 @@ func (h *handler) emitCapabilityPragmas() {
 		h.resp = append(h.resp, &xfer.PragmaCard{Name: coneServedPragma})
 	}
 	if h.horizonScoped() {
+		h.echoResolved()
 		h.emitHorizonServed()
 	}
 }

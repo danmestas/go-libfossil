@@ -835,8 +835,10 @@ func (cl *cascadeLinker) walk(ctx context.Context, rid libfossil.FslID, linkFlag
 		// survive: such a cycle now spins until the buffer flushes at
 		// crosslinkBatchSize rather than dying after two pops. Bounded,
 		// idempotent, and still capped by maxIterations.
+		// A shunned child is never linked (candidateQuerySQL), nor walked past.
 		childRows, err := cl.r.DB().Query(
-			`SELECT rid FROM delta WHERE srcid=? AND NOT EXISTS (SELECT 1 FROM mlink WHERE mid=delta.rid)`, current)
+			`SELECT rid FROM delta WHERE srcid=? AND NOT EXISTS (SELECT 1 FROM mlink WHERE mid=delta.rid)
+			AND NOT EXISTS (SELECT 1 FROM shun JOIN blob ON blob.uuid=shun.uuid WHERE blob.rid=delta.rid)`, current)
 		if err != nil {
 			continue
 		}

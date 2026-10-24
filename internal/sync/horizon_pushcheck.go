@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/shun"
 )
 
 // staleCancel is the push-time check of draft-fossil-horizon-00 §5.7, run
@@ -86,6 +89,9 @@ const seedTag = "horizon-seed"
 // Another implementation's label alone is ordinary, and so is a user's login
 // unless it equals seedLogin.
 func isSeed(data []byte) bool {
+	if data == nil {
+		panic("sync.isSeed: data must not be nil")
+	}
 	labelled := bytes.Contains(data, []byte("\nU "+seedLogin+"\n"))
 	if !labelled && !bytes.Contains(data, []byte(seedTag)) {
 		return false
@@ -105,34 +111,89 @@ func isSeed(data []byte) bool {
 	return false
 }
 
-// pushedSeed reports whether a delta the request stored is a seed, judged at
-// the end of the request on its expanded content, so a delta whose basis
-// arrived later in the request is judged too. A delta still unavailable
-// cannot be identified and stays a transit phantom's dependent. Full text is
-// judged as it arrives (handleFile).
-func (h *handler) pushedSeed() (bool, error) {
-	if len(h.receivedDeltas) == 0 {
-		return false, nil
-	}
-	if h.pass == nil {
-		panic("handler.pushedSeed: a stored delta implies a receive pass")
+// seedShunComment is the shun table's comment on a seed recorded as refused.
+const seedShunComment = "horizon seed refused (§5.2.3)"
+
+// judgeGrounded judges, as seeds (horizon §5.2.3), the dangling deltas that
+// filling the phantom filled has made readable. The test is made on the
+// artifact when it first becomes readable, whatever request carried it: a
+// seed this request carried refuses the request whole; one an earlier
+// request left dangling is recorded as shunned, so it is never crosslinked,
+// announced or sent, while this request, which only supplied its basis, is
+// stored as usual. A delta whose bytes do not hash to its name is not the
+// artifact it names and is left as it is: shunning that name would let a
+// forged delta bar the real artifact.
+func (h *handler) judgeGrounded(filled libfossil.FslID) error {
+	if filled <= 0 {
+		panic("handler.judgeGrounded: filled must be positive")
 	}
 	q := h.repo.DB()
-	for _, rid := range h.receivedDeltas {
-		if !content.IsAvailable(q, rid) {
+	if !content.IsAvailable(q, filled) {
+		return nil // still dangling itself: nothing it grounds is readable
+	}
+	deps, err := dependentDeltas(q, []libfossil.FslID{filled})
+	if err != nil {
+		return err
+	}
+	for _, rid := range deps {
+		data, err := content.Expand(q, rid)
+		if errors.Is(err, content.ErrHashMismatch) {
 			continue
 		}
-		// Every delta stored and available has been verified against its
-		// name (§7.7), so its bytes need no second check.
-		data, err := h.pass.basis.ExpandUnchecked(q, rid)
 		if err != nil {
-			return false, fmt.Errorf("handler: seed check: %w", err)
+			return fmt.Errorf("handler: seed check: %w", err)
 		}
-		if isSeed(data) {
-			return true, nil
+		if !isSeed(data) {
+			continue
+		}
+		if h.danglingHere[rid] {
+			h.fail(seedRefusedText)
+			return nil
+		}
+		var uuid string
+		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+			return fmt.Errorf("handler: seed check: %w", err)
+		}
+		if err := shun.Add(q, uuid, seedShunComment); err != nil {
+			return fmt.Errorf("handler: seed check: %w", err)
 		}
 	}
-	return false, nil
+	return nil
+}
+
+// dependentDeltas is every row stored as a delta on one of roots, directly
+// or through other deltas: what filling roots can make readable.
+func dependentDeltas(q db.Querier, roots []libfossil.FslID) ([]libfossil.FslID, error) {
+	seen := make(map[libfossil.FslID]bool, len(roots))
+	queue := slices.Clone(roots)
+	var out []libfossil.FslID
+	for steps := 0; len(queue) > 0; steps++ {
+		if steps > maxChainSteps {
+			return nil, fmt.Errorf("handler: seed check: delta dependents do not end")
+		}
+		cur := queue[0]
+		queue = queue[1:]
+		rows, err := q.Query("SELECT rid FROM delta WHERE srcid=?", cur)
+		if err != nil {
+			return nil, fmt.Errorf("handler: seed check: %w", err)
+		}
+		for rows.Next() {
+			var rid libfossil.FslID
+			if err := rows.Scan(&rid); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("handler: seed check: %w", err)
+			}
+			if !seen[rid] {
+				seen[rid] = true
+				out = append(out, rid)
+				queue = append(queue, rid)
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("handler: seed check: %w", err)
+		}
+	}
+	return out, nil
 }
 
 // branchOfCheckin is the branch this repository derives for the check-in

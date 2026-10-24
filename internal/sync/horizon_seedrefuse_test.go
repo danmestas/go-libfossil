@@ -6,12 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/tag"
+	"github.com/danmestas/go-libfossil/internal/verify"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -104,6 +107,112 @@ func TestHorizonPushSeedUnexpandableAdmitted(t *testing.T) {
 	if !o.held(o.fileUID) {
 		t.Fatal("the ordinary artifact was not stored")
 	}
+}
+
+// A seed admitted as a dangling delta is judged when a later request makes
+// it readable (spec F): that request is innocent and stored whole with no
+// error, while the seed is recorded as shunned, never crosslinked, announced
+// or sent. The label and the shape are both caught.
+func TestHorizonPushSeedBaseInLaterRequest(t *testing.T) {
+	for _, shape := range []string{"label", "shape"} {
+		o := newPCOrigin(t)
+		baseCard, base := o.labelled("u", "b")
+		var seed []byte
+		if shape == "label" {
+			_, seed = o.labelled(seedLogin, "a")
+		} else {
+			_, seed = o.bound("zit-seed")
+		}
+		s := deltaCard(t, base, baseCard.UUID, seed)
+		if errs := errorsOf(o.push(s)); len(errs) != 0 {
+			t.Fatalf("%s: the dangling delta: errors %q", shape, errs)
+		}
+		if errs := errorsOf(o.push(o.blobCard(), baseCard)); len(errs) != 0 {
+			t.Fatalf("%s: the base's push: errors %q", shape, errs)
+		}
+		for _, u := range []string{baseCard.UUID, o.fileUID} {
+			if phantom, err := isPhantomRow(o.r.DB(), u); err != nil || phantom || !o.held(u) {
+				t.Fatalf("%s: %.10s not stored (%v)", shape, u, err)
+			}
+		}
+		if shunned, err := shun.IsShunned(o.r.DB(), s.UUID); err != nil || !shunned {
+			t.Fatalf("%s: the seed is not recorded as refused (%v)", shape, err)
+		}
+		var linked int
+		if err := o.r.DB().QueryRow(`SELECT (SELECT count(*) FROM tagxref JOIN blob ON blob.rid=tagxref.srcid
+			WHERE blob.uuid=?1) + (SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid WHERE blob.uuid=?1)`,
+			s.UUID).Scan(&linked); err != nil {
+			t.Fatal(err)
+		}
+		if linked != 0 {
+			t.Fatalf("%s: the seed was crosslinked: %d rows", shape, linked)
+		}
+		if _, err := verify.Rebuild(o.r); err != nil {
+			t.Fatal(err)
+		}
+		if err := o.r.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN blob ON blob.rid=tagxref.srcid
+			WHERE blob.uuid=?`, s.UUID).Scan(&linked); err != nil || linked != 0 {
+			t.Fatalf("%s: rebuild crosslinked the seed: %d rows (%v)", shape, linked, err)
+		}
+		pull := o.push(&xfer.PullCard{ServerCode: "s", ProjectCode: testPC}, &xfer.GimmeCard{UUID: s.UUID})
+		for _, c := range pull.Cards {
+			if f, ok := c.(*xfer.FileCard); ok && f.UUID == s.UUID {
+				t.Fatalf("%s: the seed was served", shape)
+			}
+			if g, ok := c.(*xfer.IGotCard); ok && g.UUID == s.UUID {
+				t.Fatalf("%s: the seed was announced", shape)
+			}
+		}
+	}
+}
+
+// Every dependent the base grounds is judged: an ordinary one before the
+// seed is linked, and does not end the check. A forged dependent, whose
+// bytes are a seed but not the artifact its name names, is not shunned, so
+// a forgery cannot bar the real artifact.
+func TestHorizonPushSeedLaterJudgesEveryDependent(t *testing.T) {
+	o := newPCOrigin(t)
+	baseCard, base := o.labelled("u", "b")
+	ordinaryCard, ordinary := o.labelled("u", "ordinary")
+	_, seed := o.labelled(seedLogin, "a")
+	_, forgedSeed := o.bound("zit-seed")
+	plain := deltaCard(t, base, baseCard.UUID, ordinary)
+	s := deltaCard(t, base, baseCard.UUID, seed)
+	forged := deltaCard(t, base, baseCard.UUID, forgedSeed)
+	forged.UUID = hash.SHA1([]byte("a name the forged bytes do not hash to\n"))
+	if errs := errorsOf(o.push(plain, forged, s)); len(errs) != 0 {
+		t.Fatalf("the dangling deltas: errors %q", errs)
+	}
+	if errs := errorsOf(o.push(baseCard)); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	for _, c := range []struct {
+		uuid string
+		want bool
+	}{{ordinaryCard.UUID, false}, {s.UUID, true}, {forged.UUID, false}} {
+		if shunned, err := shun.IsShunned(o.r.DB(), c.uuid); err != nil || shunned != c.want {
+			t.Fatalf("%.10s shunned = %v (%v), want %v", c.uuid, shunned, err, c.want)
+		}
+	}
+	var linked int
+	if err := o.r.DB().QueryRow(`SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid
+		WHERE blob.uuid=?`, ordinaryCard.UUID).Scan(&linked); err != nil || linked == 0 {
+		t.Fatalf("the ordinary dependent was not linked: %d rows (%v)", linked, err)
+	}
+}
+
+// A delta that cannot be read does not end the check: a seed after it in
+// the same request is still refused.
+func TestHorizonPushSeedAfterUnexpandable(t *testing.T) {
+	o := newPCOrigin(t)
+	_, never := o.labelled("u", "never")
+	_, other := o.labelled("u", "other")
+	stuck := deltaCard(t, never, hash.SHA1(never), other)
+	baseCard, base := o.labelled("u", "b")
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, baseCard.UUID, seed)
+	resp := o.push(stuck, s, o.blobCard(), baseCard)
+	assertSeedRefused(t, o, resp, stuck.UUID, s.UUID, o.fileUID, baseCard.UUID)
 }
 
 // Only this origin's own label is refused: another implementation's seed
@@ -207,4 +316,12 @@ func TestHorizonPushSeedShapeRefusedLateBase(t *testing.T) {
 	s := deltaCard(t, base, baseCard.UUID, seed)
 	resp := o.push(s, o.blobCard(), baseCard)
 	assertSeedRefused(t, o, resp, s.UUID, o.fileUID, baseCard.UUID)
+}
+
+// isPhantomRow reports whether uuid names a row whose content the store
+// does not hold.
+func isPhantomRow(q db.Querier, uuid string) (bool, error) {
+	var phantom bool
+	err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM blob WHERE uuid=? AND size<0)", uuid).Scan(&phantom)
+	return phantom, err
 }

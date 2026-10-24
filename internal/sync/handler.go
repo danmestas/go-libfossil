@@ -272,7 +272,7 @@ type handler struct {
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
-	receivedDeltas  []libfossil.FslID         // those stored as deltas, judged as seeds once the request ends (horizon §5.2.3)
+	danglingHere    map[libfossil.FslID]bool  // deltas this request stored before their basis was readable (horizon §5.2.3)
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
@@ -563,16 +563,6 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return err
 	}
 	if h.fatal || h.aborted {
-		return errPassAborted
-	}
-	// Horizon §5.2.3: a request that stored a seed is refused whole, its
-	// reply the refusal alone. Late deltas are expanded by now.
-	seed, err := h.pushedSeed()
-	if err != nil {
-		return err
-	}
-	if seed {
-		h.fail(seedRefusedText)
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
@@ -1535,21 +1525,49 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.aborted = late
 		return nil
 	}
+	return h.recordStored(uuid, deltaSrc, payload)
+}
+
+// recordStored notes an artifact handleFile stored, for crosslinking and
+// for the seed check (horizon §5.2.3). An artifact is judged when it first
+// becomes readable: full text and a delta on a readable basis now, a
+// dangling delta when a phantom grounding it is filled (judgeGrounded).
+func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
+	if payload == nil {
+		panic("handler.recordStored: payload must not be nil")
+	}
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
-	// Horizon §5.2.3: full text is judged as it arrives, a delta once the
-	// request ends, when a basis arriving later has made it readable.
 	if deltaSrc == "" {
 		if isSeed(payload) {
 			h.fail(seedRefusedText)
 		}
 		return nil
 	}
-	rid, ok := blob.Exists(h.repo.DB(), uuid)
+	q := h.repo.DB()
+	rid, ok := blob.Exists(q, uuid)
 	if !ok {
-		panic("handler.handleFile: a stored artifact must exist")
+		panic("handler.recordStored: a stored artifact must exist")
 	}
-	h.receivedDeltas = append(h.receivedDeltas, rid)
+	if !content.IsAvailable(q, rid) {
+		if h.danglingHere == nil {
+			h.danglingHere = make(map[libfossil.FslID]bool)
+		}
+		h.danglingHere[rid] = true
+		return nil
+	}
+	if h.pass == nil {
+		panic("handler.recordStored: a stored delta implies a receive pass")
+	}
+	// storeFile verified these bytes against uuid; expanding them again is
+	// tolerated, since the pass's basis cache makes it one delta apply.
+	data, err := h.pass.basis.ExpandUnchecked(q, rid)
+	if err != nil {
+		return fmt.Errorf("handler: seed check: %w", err)
+	}
+	if isSeed(data) {
+		h.fail(seedRefusedText)
+	}
 	return nil
 }
 
@@ -1563,8 +1581,19 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	err := storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
-		nil)
+	// storeReceivedFile's steps, with the seed check between storage and
+	// the after-dephantomize cascade, so a seed the filled phantom grounds
+	// is shunned before the cascade could crosslink it.
+	filled, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis, nil)
+	if err == nil && filled > 0 {
+		err = h.judgeGrounded(filled)
+	}
+	if filled > 0 {
+		manifest.AfterDephantomize(ctx, h.repo, filled)
+		if rerr := noteRekept(h.repo.DB(), filled); rerr != nil {
+			err = errors.Join(err, rerr)
+		}
+	}
 	// A late mismatch names the delta at fault, which this request stored
 	// earlier, not the card that made its bytes available.
 	var mismatch *hashMismatchError

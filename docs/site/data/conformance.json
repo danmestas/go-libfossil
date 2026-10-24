@@ -4569,7 +4569,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 107,
+      "cases": 108,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4767,9 +4767,9 @@
           "id": "HZ-5.2-4",
           "section": "5.2.3",
           "status": "PARTIAL",
-          "cases": 8,
+          "cases": 9,
           "text": "An origin refuses a seed offered to it, and an artifact of the seed's shape arriving by any route but the horizon reply is an ordinary control artifact.",
-          "notes": "the cases also cover the zit 0.7.1 erratum ahead of the re-pin: the origin identifies a pushed seed by its own seed label, or by a horizon-seed T card under any label, on expanded content, a late delta included, and refuses the whole request with one error card, keeping the name match as an extra check; zit's push of such an artifact to go-libfossil is refused, but a zit origin refusing its own label waits for zit 0.7.1"
+          "notes": "the cases also cover the zit 0.7.1 erratum ahead of the re-pin: the origin identifies a pushed seed by its own seed label, or by a horizon-seed T card under any label, on expanded content, a late delta included, and refuses the whole request with one error card, or, for a delta an earlier request left dangling, shuns it when a later request supplies its base, which is stored as usual, keeping the name match as an extra check; zit's push of such an artifact to go-libfossil is refused, but a zit origin refusing its own label waits for zit 0.7.1"
         },
         {
           "id": "HZ-5.2-5",

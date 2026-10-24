@@ -57,7 +57,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports among its sync errors. Before, a seed was dropped only when the
   request's `horizon-seed` named it, and was otherwise stored as an ordinary
   control artifact; that name match now refuses the request the same way. A
-  delta never made readable is not identified. Another implementation's
+  delta whose base has not arrived is stored dangling and judged when a later
+  request supplies the base: that request is stored as usual, and the seed is
+  shunned, so it is never crosslinked, rebuilt into derived state, announced
+  or sent. Crosslinking, by sweep, cascade or rebuild, now skips shunned
+  blobs. Another implementation's
   label alone, such as `U zit-seed` with no `horizon-seed` card, stays
   ordinary, and a user whose login is `go-libfossil` cannot push control
   artifacts. The §5.7 stale-seed check is likewise judged on expanded

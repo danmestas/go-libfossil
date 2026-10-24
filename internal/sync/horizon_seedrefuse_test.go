@@ -934,3 +934,74 @@ func TestHorizonPendingSeedNotNamedPrivate(t *testing.T) {
 	}
 	assertNeverNamed(t, requests, s.UUID)
 }
+
+// Horizon F: a pushed artifact is judged when it first becomes readable,
+// whatever path supplies its basis. Here a pull supplies the basis as a
+// delta, first on a basis the origin lacks, then on a held one: the pushed
+// file and control artifact waiting on it are judged when the chain
+// resolves, then served, announced and, the control artifact, linked.
+func TestHorizonPulledDeltaFillsPendingBasis(t *testing.T) {
+	for _, held := range []bool{false, true} {
+		o := newPCOrigin(t)
+		root := []byte("the root of the basis chain\n")
+		basis := append(slices.Clone(root), []byte("the basis the pending artifacts need\n")...)
+		fileBytes := append(slices.Clone(basis), []byte("a plain file pushed on the basis\n")...)
+		ctlCard, ctl := o.labelled("u", "a control artifact pushed on the basis")
+		file := deltaCard(t, basis, hash.SHA3(basis), fileBytes)
+		control := deltaCard(t, basis, hash.SHA3(basis), ctl)
+		if errs := errorsOf(o.push(file, control)); len(errs) != 0 {
+			t.Fatalf("held=%v: pending pushes: errors %q", held, errs)
+		}
+		if held {
+			if _, _, err := blob.Store(o.r.DB(), root); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The basis arrives by pull as a delta on root; root, unless held,
+		// arrives in the next round.
+		d, err := delta.Create(root, basis)
+		if err != nil {
+			t.Fatal(err)
+		}
+		basisCard := &xfer.FileCard{UUID: hash.SHA3(basis), DeltaSrc: hash.SHA3(root), Content: d}
+		round := 0
+		tr := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+			round++
+			if round == 1 {
+				return &xfer.Message{Cards: []xfer.Card{basisCard}}
+			}
+			for _, c := range req.Cards {
+				if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == hash.SHA3(root) {
+					return &xfer.Message{Cards: []xfer.Card{&xfer.FileCard{UUID: g.UUID, Content: root}}}
+				}
+			}
+			return &xfer.Message{}
+		}}
+		if _, err := Sync(context.Background(), o.r, tr, SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+			t.Fatal(err)
+		}
+		for _, u := range []string{file.UUID, ctlCard.UUID} {
+			rid, _ := blob.Exists(o.r.DB(), u)
+			if !content.IsAvailable(o.r.DB(), rid) {
+				t.Fatalf("held=%v: %.10s is not readable", held, u)
+			}
+			if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || withheld {
+				t.Fatalf("held=%v: %.10s is still withheld (%v)", held, u, err)
+			}
+		}
+		if n := seedLinkRows(t, o.r, ctlCard.UUID); n == 0 {
+			t.Fatalf("held=%v: the control artifact was not linked", held)
+		}
+		announced := map[string]bool{}
+		for _, req := range pushOnRecording(t, o) {
+			for _, c := range req.Cards {
+				if g, ok := c.(*xfer.IGotCard); ok {
+					announced[g.UUID] = true
+				}
+			}
+		}
+		if !announced[file.UUID] || !announced[ctlCard.UUID] {
+			t.Fatalf("held=%v: announced file %v, control %v", held, announced[file.UUID], announced[ctlCard.UUID])
+		}
+	}
+}

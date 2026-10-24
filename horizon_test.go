@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
@@ -677,14 +678,28 @@ func TestCloneNamedHorizon(t *testing.T) {
 			t.Fatal("blob below the horizon was transferred")
 		}
 	}
-	byHash, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "h.fossil"), f.peer,
-		CloneOpts{Horizon: &Horizon{Checkin: f.c2}})
-	if err != nil {
+	// A full hash given as the horizon is still a name the origin resolves
+	// (§6.2.7 C.3): a hash first, then a symbolic name, so a tag spelled as
+	// 40 hex digits that no check-in has is found.
+	hexTag := strings.Repeat("ab", 20)
+	var r2 int64
+	if err := f.source.inner.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", f.c2).Scan(&r2); err != nil {
 		t.Fatal(err)
 	}
-	defer byHash.Close()
-	if res.HorizonResolved != "" || res.HorizonServed == 0 {
-		t.Fatalf("a full hash at depth 0 was sent as a name: %+v", res)
+	if _, err := tag.AddTag(f.source.inner, tag.TagOpts{TargetRID: fsltype.FslID(r2), TagName: "sym-" + hexTag,
+		TagType: tag.TagSingleton, User: "test", Time: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	for _, checkin := range []string{f.c2, hexTag} {
+		target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "h.fossil"), f.peer,
+			CloneOpts{Horizon: &Horizon{Checkin: checkin}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer target.Close()
+		if res.HorizonResolved != f.c2 || res.HorizonResolvedLocally {
+			t.Fatalf("horizon %.12s: %+v, want c2 resolved by the origin", checkin, res)
+		}
 	}
 	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c1})
 	if err != nil {

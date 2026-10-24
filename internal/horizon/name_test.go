@@ -142,7 +142,7 @@ func TestResolveNameBounded(t *testing.T) {
 		if got.Steps > 3 {
 			t.Fatalf("walked %d steps over 3 check-ins", got.Steps)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("the walk back did not end")
+	case <-time.After(2 * time.Second):
+		t.Fatal("the walk back over a 3-check-in cycle at depth 2^32-1 did not end within 2s: it is not bounded by the history")
 	}
 }

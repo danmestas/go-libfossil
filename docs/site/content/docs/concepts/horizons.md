@@ -115,7 +115,7 @@ fmt.Println(res.HorizonResolved, res.HorizonSteps, res.HorizonResolvedLocally)
 - The store records only the resolved hash. Every later request of the clone, and every later pull, sync or deepen, sends that hash, never the name.
 - A name the origin cannot resolve fails the clone with `horizon name not found: NAME`, and nothing is left on disk.
 
-`CloneOpts.Horizon` takes the same `Horizon` as a store cone, except that its `Checkin` may be a name. `StoreCone` then gives only the path members: giving a horizon on both is an error, as is `HorizonDepth` without `Horizon`. A full hash with no depth is sent as the hash itself, which every horizon origin reads. A structural clone by name gets the seed the origin mints for the resolved C.
+`CloneOpts.Horizon` takes the same `Horizon` as a store cone, except that its `Checkin` may be a name. `StoreCone` then gives only the path members: giving a horizon on both is an error, as is `HorizonDepth` without `Horizon`. A full hash is sent as a name too: the origin tries it as a check-in hash first and then as a branch or tag, so a branch spelled as 40 hex digits is found. A structural clone by name gets the seed the origin mints for the resolved C.
 
 An origin resolves a name only for a requester that may read or clone. To anyone else it answers as if the request named no horizon, so whether a name exists cannot be learned from its replies.
 
@@ -169,7 +169,7 @@ libfossil repo clone URL repo.fossil --horizon release --structural --seed-key "
 - `--structural`: with `--horizon`, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed.
 - `--seed-key=STRING`: the origin's public key, an SSH public key line or an OpenPGP fingerprint. With `--structural`, a seed not signed by it is discarded and the clone falls back to the content horizon. It is kept as the `horizon-seed-key` setting.
 
-`--cone` and `--cone-not` combine with these. The origin resolves a name, since nothing is local yet to resolve it against, and the clone prints the check-in it resolved to as `Horizon at:`. A full hash with no `--depth` is sent as the hash itself, which every horizon origin reads.
+`--cone` and `--cone-not` combine with these. The origin resolves a name, since nothing is local yet to resolve it against, and the clone prints the check-in it resolved to as `Horizon at:`. A full hash is sent as a name too, so the origin can also find a branch or tag spelled as one. Later pulls, syncs and deepens send the resolved hash.
 
 ### Change the horizon
 

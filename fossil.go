@@ -6,7 +6,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
 
@@ -171,9 +170,11 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 }
 
 // cloneHorizon splits a clone's horizon into the store cone it starts with
-// and, for a name or a depth, the horizon the origin is asked to resolve. A
-// full hash at depth 0 goes on the store cone as itself, which every horizon
-// origin reads.
+// and the horizon the origin is asked to resolve. A Horizon is always sent
+// by name, a full hash included: the origin tries a full hash as a
+// check-in and then as a symbolic name (§6.2.7), so a branch spelled as 40
+// hex digits is found, and a peer that resolves no name is covered by the
+// local fallback. Only a horizon given on StoreCone goes out as the hash.
 func cloneHorizon(opts CloneOpts) (*cone.Cone, *internalsync.NamedHorizon, error) {
 	sc := unwrapCone(opts.StoreCone)
 	if opts.HorizonDepth < 0 || int64(opts.HorizonDepth) > math.MaxUint32 {
@@ -192,14 +193,6 @@ func cloneHorizon(opts CloneOpts) (*cone.Cone, *internalsync.NamedHorizon, error
 	if h.Checkin == "" {
 		return nil, nil, fmt.Errorf("a Horizon with no check-in")
 	}
-	var include, exclude []string
-	if sc != nil {
-		include, exclude = sc.Include(), sc.Exclude()
-	}
-	if opts.HorizonDepth == 0 && isFullHash(h.Checkin) {
-		hc, err := NewHorizonCone(include, exclude, *h)
-		return unwrapCone(hc), nil, err
-	}
 	level := cone.DepthContent
 	if h.Structural {
 		level = cone.DepthStructural
@@ -214,12 +207,4 @@ func horizonOf(c *cone.Cone) (cone.Horizon, bool) {
 		return cone.Horizon{}, false
 	}
 	return c.Horizon()
-}
-
-// isFullHash reports a 40 or 64 digit hex string, of either case.
-func isFullHash(s string) bool {
-	if len(s) != 40 && len(s) != 64 {
-		return false
-	}
-	return strings.Trim(strings.ToLower(s), "0123456789abcdef") == ""
 }

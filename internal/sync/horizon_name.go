@@ -118,6 +118,14 @@ func (h *handler) echoResolved() {
 // resolved (§6.2.7): for anyone else the request is served as if it named
 // no horizon, so no reply to them depends on whether a name exists, and
 // no walk back is made on their behalf.
+//
+// The login card is credited to the whole request, where fossil credits it
+// only to the cards after it. That is harmless here: the authority decides
+// only whether the name is resolved, and every card the resolution serves,
+// a clone or pull card, a gimme, is still judged in the loop with the
+// capabilities in force at its own position, so a request whose login
+// follows its clone card is refused there and its reply carries nothing
+// the name produced.
 func (h *handler) nameAuthority(cards []xfer.Card) bool {
 	caps := h.caps
 	var logins []*xfer.LoginCard

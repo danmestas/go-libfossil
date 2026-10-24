@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync and keeps the held seed. SHA-1 `ssh-rsa` signatures are refused, as
   PROTOCOL.sshsig requires.
 
+### Fixed
+
+- An origin holding a delta whose source it never received can be cloned.
+  The origin tried to expand the delta, failed, and every clone stopped at
+  clone sequence 1. It now withholds an artifact it cannot expand, as it
+  withholds a row outside the clone's cone; a fossil client would otherwise
+  reject the clone for its unresolved deltas.
+- A pull asks for its missing artifacts in hash order rather than Go map
+  order, so a round capped at fossil's phantom limit always asks for the same
+  ones and a seeded simulation replays the same wire.
+
 ## [0.15.0] - 2026-10-23
 
 ### Added

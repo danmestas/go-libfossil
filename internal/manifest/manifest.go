@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
@@ -197,6 +199,11 @@ func checkinTx(
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
 			return 0, "", tree, fmt.Errorf("unsent file: %w", err)
 		}
+	}
+	// A file or the manifest may fill a pushed delta's basis: the deltas
+	// pending on what this check-in stored are judged (seedcheck).
+	if _, err := seedcheck.JudgeFilled(tx, append(slices.Clone(fileRids), rid)); err != nil {
+		return 0, "", tree, err
 	}
 	return rid, uuid, tree, linkCheckinTags(tx, opts, rid, d.T)
 }

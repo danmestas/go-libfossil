@@ -59,6 +59,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync and keeps the held seed. SHA-1 `ssh-rsa` signatures are refused, as
   PROTOCOL.sshsig requires.
 
+### Changed
+
+- An origin refuses a pushed seed by its shape (horizon §5.2.3, as zit
+  0.7.1's erratum F.1 words it; #471). A pushed control artifact is a seed
+  when its U card is `go-libfossil`, the origin's own seed label, or when it
+  carries a `horizon-seed` T card under any label. It is judged when it
+  first becomes readable, on its content after any delta is applied. A push
+  that carries a seed the origin can read within it is refused atomically:
+  it stores nothing, and its reply is the single error card `seed refused:
+  a seed is private to the clone that holds it; it is never pushed`, which
+  the pusher reports among its sync errors. A pushed delta whose base has
+  not arrived is withheld from every reply until something supplies the
+  base (a later push, a pull, a check-in or a tag), which is stored as usual
+  while the seed is refused; each fill judges only the deltas waiting on
+  it. A refused seed's hash is kept in a store-local table no configuration
+  group carries; the seed stays stored, so deltas on it stay readable, but
+  it is never linked, announced or sent, and a re-push is refused at once.
+  Withheld artifacts stay out of the tables an origin announces from when
+  it pushes on, a rebuild's included. Before, a seed was dropped only when the
+  request's `horizon-seed` named it (that name match now refuses the push
+  the same way) and was otherwise stored as an ordinary control artifact.
+  A seed-shaped artifact received by pull or clone stays ordinary, as does
+  another implementation's label alone, such as `U zit-seed` with no
+  `horizon-seed` card; a user whose login is `go-libfossil` cannot push
+  control artifacts. The §5.7 stale-seed check is likewise judged on
+  expanded content, a late delta included.
+
 ### Fixed
 
 - An origin holding a delta whose source it never received can be cloned.

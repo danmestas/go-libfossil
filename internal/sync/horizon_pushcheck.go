@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // staleCancel is the push-time check of draft-fossil-horizon-00 §5.7, run
@@ -69,6 +70,42 @@ func (h *handler) staleCancel() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// seedRefusedText is the error an origin refuses a pushed seed with (horizon
+// §5.2.3, as the zit 0.7.1 erratum words it).
+const seedRefusedText = "seed refused: a seed is private to the clone that holds it; it is never pushed"
+
+// ownSeedReadable reports whether a delta this request stored before its
+// basis was readable has become readable and is a seed (horizon §5.2.3):
+// the seed is judged within the request that carried it, which is then
+// refused whole. It reads the bytes, since the cascade that judged the
+// delta when its basis arrived refused the seed's hash but cannot refuse
+// the request; that cascade also cleared the pending row of a delta that is
+// not a seed. A delta still unreadable stays pending.
+func (h *handler) ownSeedReadable() (bool, error) {
+	if len(h.danglingHere) == 0 {
+		return false, nil
+	}
+	if h.pass == nil {
+		panic("handler.ownSeedReadable: a stored delta implies a receive pass")
+	}
+	q := h.repo.DB()
+	for _, d := range h.danglingHere {
+		if !content.IsAvailable(q, d.rid) {
+			continue
+		}
+		// The pass's basis cache keeps every node it rebuilds, so a chain of
+		// deltas is expanded once along its length, not once per delta.
+		data, err := h.pass.basis.ExpandUnchecked(q, d.rid)
+		if err != nil {
+			return false, fmt.Errorf("handler: seed check: %w", err)
+		}
+		if seedcheck.IsSeedBytes(data) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // branchOfCheckin is the branch this repository derives for the check-in

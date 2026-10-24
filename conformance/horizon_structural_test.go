@@ -749,8 +749,9 @@ func (p *hzRewritingPeer) Exchange(ctx context.Context, req *xfer.Message) (*xfe
 	return resp, err
 }
 
-// hzStructSeedRefused: an origin refuses a seed offered to it, storing no
-// file the request names as its seed.
+// hzStructSeedRefused: an origin refuses a file bearing the name the
+// request's horizon-seed offered, as it refuses its own seed label: the
+// reply is the refusal alone and the file is not stored.
 func hzStructSeedRefused(t *testing.T) error {
 	x := newHZStruct(t)
 	name, data, err := x.s.mint(seedLoginGo)
@@ -761,8 +762,15 @@ func hzStructSeedRefused(t *testing.T) error {
 	x.s.f.r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc)
 	req := &xfer.Message{Cards: append(slices.Clone(conePragmaCards(x)), &xfer.PragmaCard{Name: "horizon-seed", Values: []string{name}},
 		&xfer.PushCard{ServerCode: "x", ProjectCode: pc}, &xfer.FileCard{UUID: name, Content: data})}
-	if _, err := sync.HandleSync(context.Background(), x.s.f.r, req); err != nil {
+	resp, err := sync.HandleSync(context.Background(), x.s.f.r, req)
+	if err != nil {
 		return err
+	}
+	if len(resp.Cards) != 1 {
+		return expectf("the reply has %d cards, want the refusal alone", len(resp.Cards))
+	}
+	if e, ok := resp.Cards[0].(*xfer.ErrorCard); !ok || e.Message != hzSeedRefused {
+		return expectf("the reply is %#v, want error %q", resp.Cards[0], hzSeedRefused)
 	}
 	var n int
 	x.s.f.r.DB().QueryRow("SELECT count(*) FROM blob WHERE uuid=?", name).Scan(&n)

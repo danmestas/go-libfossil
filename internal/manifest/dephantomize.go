@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // AfterDephantomize crosslinks a formerly-phantom blob and any dependents.
@@ -35,7 +36,24 @@ func AfterDephantomize(ctx context.Context, r *repo.Repo, rid libfossil.FslID) i
 	if rid <= 0 {
 		return 0
 	}
+	judgeFilled(r, []libfossil.FslID{rid})
 	return afterDephantomize(ctx, r, rid, true).linked
+}
+
+// judgeFilled judges, before the cascade links anything, the pushed deltas
+// pending on the phantoms just filled (seedcheck), in the caller's
+// transaction. A failure leaves them pending, so they stay withheld, and
+// the link step judges any it reaches.
+func judgeFilled(r *repo.Repo, rids []libfossil.FslID) {
+	filled := make([]libfossil.FslID, 0, len(rids))
+	for _, rid := range rids {
+		if rid > 0 {
+			filled = append(filled, rid)
+		}
+	}
+	if _, err := seedcheck.JudgeFilled(r.DB(), filled); err != nil {
+		slog.Warn("manifest.AfterDephantomize: seed check failed, pending rows left", "err", err)
+	}
 }
 
 // AfterDephantomizeBatch runs AfterDephantomize's cascade for every rid in
@@ -49,6 +67,7 @@ func AfterDephantomizeBatch(ctx context.Context, r *repo.Repo, rids []libfossil.
 	if len(rids) == 0 {
 		return 0
 	}
+	judgeFilled(r, rids)
 	cl := newCascadeLinker(r)
 	for _, rid := range rids {
 		if rid > 0 && !cl.walk(ctx, rid, true) {

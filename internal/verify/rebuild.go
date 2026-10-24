@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // bookkeepingTables are the sync-bookkeeping tables the crosslink sweep does not
@@ -140,10 +141,21 @@ func rebuildBookkeeping(tx *db.Tx) error {
 	if err := clearTables(tx, bookkeepingTables); err != nil {
 		return err
 	}
+	// A pushed artifact not yet judged, or judged a seed, is never queued to
+	// be announced or sent (seedcheck).
+	withheld, err := seedcheck.Withheld(tx)
+	if err != nil {
+		return fmt.Errorf("rebuildBookkeeping: %w", err)
+	}
 	for _, table := range bookkeepingTables {
 		_, err := tx.Exec("INSERT INTO " + table + "(rid) SELECT rid FROM blob WHERE size >= 0")
 		if err != nil {
 			return fmt.Errorf("rebuildBookkeeping %s: %w", table, err)
+		}
+		for rid := range withheld {
+			if _, err := tx.Exec("DELETE FROM "+table+" WHERE rid=?", rid); err != nil {
+				return fmt.Errorf("rebuildBookkeeping %s: %w", table, err)
+			}
 		}
 	}
 	return nil

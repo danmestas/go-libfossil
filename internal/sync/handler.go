@@ -20,6 +20,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -272,6 +273,8 @@ type handler struct {
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
+	danglingHere    []storedDelta             // deltas this request stored unreadable (horizon §5.2.3)
+	withheld        map[libfossil.FslID]bool  // pushed artifacts pending or refused as seeds (seedcheck), read once
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
@@ -574,6 +577,16 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 	}
 	h.refuseName()
 	if h.fatal || h.aborted {
+		return errPassAborted
+	}
+	// Horizon §5.2.3: a seed this request carried, made readable by a basis
+	// later in it, refuses the request whole, its reply the refusal alone.
+	seed, err := h.ownSeedReadable()
+	if err != nil {
+		return err
+	}
+	if seed {
+		h.fail(seedRefusedText)
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
@@ -1444,6 +1457,9 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if err != nil || shunned {
 		return err
 	}
+	if withheld, err := h.withheldSeed(rid); err != nil || withheld {
+		return err
+	}
 	if barred, err := h.submanifestBarred(rid); err != nil || barred {
 		return err
 	}
@@ -1505,11 +1521,14 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if err != nil {
 		return err
 	}
-	// Horizon §5.2.3: an origin refuses a seed offered to it. The request's
-	// horizon-seed names the client's seed, so a file bearing that name is
-	// dropped unstored, as a shunned one is.
-	if shunned || h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
+	if shunned {
 		h.nextIsPrivate = false
+		return nil
+	}
+	// Horizon §5.2.3: besides a seed's shape (isSeed), an origin
+	// refuses a file bearing the name the request's horizon-seed offered.
+	if h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
+		h.fail(seedRefusedText)
 		return nil
 	}
 	// BUGGIFY: 3% chance reject a valid file to test client re-push.
@@ -1534,9 +1553,70 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.aborted = late
 		return nil
 	}
+	return h.recordStored(uuid, deltaSrc, payload)
+}
+
+// recordStored notes an artifact handleFile stored, for crosslinking and
+// for the seed check (horizon §5.2.3). An artifact is judged when it first
+// becomes readable: full text and a delta on a readable basis now; a delta
+// on an unreadable basis is recorded pending in seedcheck, and judged by
+// ownSeedReadable or at the crosslink step of whatever later fills it.
+func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
+	if payload == nil {
+		panic("handler.recordStored: payload must not be nil")
+	}
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
+	if deltaSrc == "" {
+		if seedcheck.IsSeedBytes(payload) {
+			h.fail(seedRefusedText)
+		}
+		return nil
+	}
+	q := h.repo.DB()
+	rid, ok := blob.Exists(q, uuid)
+	if !ok {
+		panic("handler.recordStored: a stored artifact must exist")
+	}
+	if !content.IsAvailable(q, rid) {
+		h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
+		return seedcheck.MarkPending(q, rid)
+	}
+	if h.pass == nil {
+		panic("handler.recordStored: a stored delta implies a receive pass")
+	}
+	// storeFile verified these bytes against uuid; expanding them again is
+	// tolerated, since the pass's basis cache makes it one delta apply.
+	data, err := h.pass.basis.ExpandUnchecked(q, rid)
+	if err != nil {
+		return fmt.Errorf("handler: seed check: %w", err)
+	}
+	if seedcheck.IsSeedBytes(data) {
+		h.fail(seedRefusedText)
+	}
 	return nil
+}
+
+// storedDelta is a delta a request stored, by name and rid.
+type storedDelta struct {
+	uuid string
+	rid  libfossil.FslID
+}
+
+// withheldSeed reports whether rid is a pushed artifact not yet judged, or
+// judged a seed, which no reply sends (seedcheck). The set is read once per
+// request: a row this request adds is a delta it stored unreadable, which
+// nothing can send, and a row it clears only withholds more than needed. An
+// inventory reads the set itself (inventoryWithheld).
+func (h *handler) withheldSeed(rid libfossil.FslID) (bool, error) {
+	if h.withheld == nil {
+		set, err := seedcheck.Withheld(h.repo.DB())
+		if err != nil {
+			return false, err
+		}
+		h.withheld = set
+	}
+	return h.withheld[rid], nil
 }
 
 // storeFile stores a validated file or cfile card's content and reports the
@@ -1626,6 +1706,11 @@ func (h *handler) emitIGots() error {
 	if err != nil {
 		return err
 	}
+	// Read after the request's stores, so it names every row they added.
+	withheld, err := seedcheck.Withheld(h.repo.DB())
+	if err != nil {
+		return err
+	}
 	// Sparse inventories advertise only the request's keep-set; announcing an
 	// unseen outside leaf's blobs would create phantoms with no F provenance.
 	rows, err := h.repo.DB().Query(`
@@ -1649,6 +1734,9 @@ func (h *handler) emitIGots() error {
 		// Horizon §6.2.6: what lies at or below the cursor was announced or
 		// sent already, in any reply, classified or not.
 		if int64(rid) <= floor || !h.keep.keeps(rid) {
+			continue
+		}
+		if withheld[rid] {
 			continue
 		}
 		// remoteHas is populated from client igot cards in handleIGot.
@@ -1731,6 +1819,10 @@ func (h *handler) emitPrivateIGots(floor int64) (libfossil.FslID, error) {
 	if err := h.ensureSparseKeep(); err != nil {
 		return 0, err
 	}
+	withheld, err := seedcheck.Withheld(h.repo.DB())
+	if err != nil {
+		return 0, err
+	}
 	rows, err := h.repo.DB().Query(
 		"SELECT b.rid,b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
@@ -1748,6 +1840,9 @@ func (h *handler) emitPrivateIGots(floor int64) (libfossil.FslID, error) {
 			return 0, err
 		}
 		if int64(rid) <= floor || !h.keep.keeps(rid) {
+			continue
+		}
+		if withheld[rid] {
 			continue
 		}
 		// Skip if the client already has this blob as private.
@@ -2041,6 +2136,9 @@ func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
 	if err != nil || shunned {
 		return err == nil, err
 	}
+	if withheld, err := h.withheldSeed(libfossil.FslID(rid)); err != nil || withheld {
+		return err == nil, err
+	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		return true, nil // skip private blob, don't count toward batch
@@ -2187,6 +2285,9 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	}
 	if shunned {
 		return cloneBlobRow{}, false, nil
+	}
+	if withheld, err := h.withheldSeed(libfossil.FslID(rid)); err != nil || withheld {
+		return cloneBlobRow{}, false, err
 	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil

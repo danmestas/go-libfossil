@@ -34,6 +34,22 @@ leaves  1 check-ins, 3 blobs, 6 B expanded, 57 B stored
 
 A content horizon keeps all structure and elides only blobs; a structural horizon also leaves out the manifests below C.
 
+## Seeds are never pushed
+
+A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3 and its F.1 erratum):
+
+- its U card is `go-libfossil`, the label go-libfossil writes on every seed it mints; or
+- it carries a `horizon-seed` T card, whatever its U card.
+
+The test runs when the artifact first becomes readable, on its content after any delta is applied. A push that carries a seed the origin can read within that push is refused whole: nothing it carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived is stored as any dangling delta is, and withheld, never announced or sent, until something supplies the base: a later push, a pull, or a check-in or tag that writes the same bytes. That supplies only the base, so it is stored as usual, with no error, and the seed is refused then.
+
+A refused seed's hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The seed stays stored, so a delta built on it stays readable, but it is never linked, announced or sent, and a re-push of it is refused at once. Pulling the same hash from a peer stores nothing new: the row is already held, and stays refused. Any other seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
+
+Two consequences follow:
+
+- Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed; one that carries a `horizon-seed` card is refused.
+- A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil origin, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
+
 ## Signed seeds
 
 An origin with the `clearsign` setting on (and the legacy `omitsign` off) signs each seed it mints with its `pgp-command`, the same settings fossil and zit sign check-ins with (§5.2.4). It keeps one signature per seed, so a seed keeps its name while the tag state it records is unchanged.

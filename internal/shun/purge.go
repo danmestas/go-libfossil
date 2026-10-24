@@ -7,6 +7,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // PurgeResult summarizes what Purge deleted.
@@ -95,7 +96,11 @@ func Purge(d *db.DB) (PurgeResult, error) {
 			return fmt.Errorf("drop toshun: %w", err)
 		}
 
-		// Step 4: Orphan cleanup.
+		// Step 4: Orphan cleanup. A seed verdict on a deleted rid would pass
+		// to the next blob stored under it.
+		if err := seedcheck.ForgetDeleted(tx); err != nil {
+			return err
+		}
 		res, err = tx.Exec("DELETE FROM private WHERE NOT EXISTS (SELECT 1 FROM blob WHERE rid=private.rid)")
 		if err != nil {
 			return fmt.Errorf("cleanup private: %w", err)

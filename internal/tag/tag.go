@@ -12,6 +12,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 const (
@@ -127,8 +128,10 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", controlRid); err != nil {
 			return fmt.Errorf("tag.AddTag: unsent: %w", err)
 		}
-
-		return nil
+		// The control artifact may fill a pushed delta's basis; a seed it
+		// makes readable is judged in this transaction (seedcheck).
+		_, err = seedcheck.JudgeFilled(tx, []libfossil.FslID{controlRid})
+		return err
 	})
 	if err != nil {
 		return 0, fmt.Errorf("tag.AddTag: %w", err)

@@ -17,6 +17,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
@@ -124,6 +125,11 @@ func CheckinContext(
 		manifestRid, manifestUUID, tree, txErr = checkinTx(ctx, tx, opts)
 		if txErr != nil {
 			return txErr
+		}
+		// A file or the manifest may fill a pushed delta's basis; a seed it
+		// makes readable is judged in this transaction (seedcheck).
+		if err := seedcheck.JudgeReadable(tx); err != nil {
+			return err
 		}
 		return ctx.Err()
 	})

@@ -22,6 +22,10 @@ type batchSchedule struct {
 	leaves  *leaf.Pending
 	parents parentSet
 	owed    bool
+	// seedTable caches, for one transaction, whether the seedcheck table
+	// exists (0 not yet asked, 1 absent, 2 present), so linking does not
+	// look it up per artifact.
+	seedTable int8
 }
 
 // linkTx runs link in one transaction on r and, when link linked anything,
@@ -84,6 +88,7 @@ func (s *batchSchedule) rollback(m scheduleMark) {
 	s.leaves.Rollback(m.leaves)
 	s.parents.truncate(m.parents)
 	s.owed = m.owed
+	s.seedTable = 0
 }
 
 // reset empties the schedule once the gate that ran it has committed.
@@ -91,6 +96,7 @@ func (s *batchSchedule) reset() {
 	s.leaves.Reset()
 	s.parents.truncate(0)
 	s.owed = false
+	s.seedTable = 0
 }
 
 // parentSet holds the primary parents a batch wrote plink rows for, in the

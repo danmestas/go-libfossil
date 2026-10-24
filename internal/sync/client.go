@@ -547,8 +547,9 @@ func (s *session) loadFileCard(uuid string) (*xfer.FileCard, int, bool, error) {
 	if err != nil || !ok {
 		return nil, 0, false, err
 	}
-	// A pushed seed this store refused is never sent on (seedcheck).
-	if refused, err := seedcheck.IsRefused(s.repo.DB(), rid); err != nil || refused {
+	// A pushed artifact not yet judged, or judged a seed, is never sent on
+	// (seedcheck).
+	if withheld, err := seedcheck.IsWithheld(s.repo.DB(), rid); err != nil || withheld {
 		return nil, 0, false, err
 	}
 	data, err := s.cache.Expand(s.repo.DB(), rid)

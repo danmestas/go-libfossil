@@ -57,11 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports among its sync errors. Before, a seed was dropped only when the
   request's `horizon-seed` named it, and was otherwise stored as an ordinary
   control artifact; that name match now refuses the request the same way. A
-  pushed delta whose base has not arrived is recorded pending and judged at
-  the crosslink step of whatever fills the base (a later push, a pull, a
-  check-in, a sweep or a rebuild): that request is stored as usual, and the
-  seed is recorded as refused in a store-local table no configuration group
-  carries, never crosslinked, announced or sent. Another implementation's
+  pushed delta whose base has not arrived is recorded pending, and withheld
+  from every reply until judged; whatever fills the base (a later push, a
+  pull, a check-in, a tag, a sweep or a rebuild) judges it in the same
+  transaction. That request is stored as usual, and the seed is recorded as
+  refused in a store-local table no configuration group carries, never
+  crosslinked, announced or sent; a purge forgets the record. Another implementation's
   label alone, such as `U zit-seed` with no `horizon-seed` card, stays
   ordinary, and a user whose login is `go-libfossil` cannot push control
   artifacts. The §5.7 stale-seed check is likewise judged on expanded

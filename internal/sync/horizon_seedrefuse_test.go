@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
+	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -391,8 +393,9 @@ func TestHorizonPullFillsSeedBase(t *testing.T) {
 	}
 }
 
-// A local check-in that writes the base's bytes fills it too; the sweep
-// after it judges the seed.
+// A local check-in that writes the base's bytes fills it too, and judges
+// the seed in its own transaction: with no sweep after it, the seed is
+// already refused, and neither a clone nor a pulling peer receives it.
 func TestHorizonCheckinFillsSeedBase(t *testing.T) {
 	o := newPCOrigin(t)
 	base := []byte("file content that is also the seed's base\n")
@@ -401,12 +404,209 @@ func TestHorizonCheckinFillsSeedBase(t *testing.T) {
 		Comment: "f", User: "u", Parent: 0, Time: o.when.Add(5 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manifest.Crosslink(o.r); err != nil {
+	assertRefused(t, o.r, s.UUID, true)
+	assertNotServed(t, o, s.UUID)
+}
+
+// assertNotServed checks that neither a clone of o nor a peer pulling from it
+// receives uuid.
+func assertNotServed(t *testing.T, o *pcOrigin, uuid string) {
+	t.Helper()
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"),
+		handlerTransport(t, o.r), CloneOpts{})
+	if err != nil {
 		t.Fatal(err)
 	}
+	defer clone.Close()
+	if _, ok := blob.Exists(clone.DB(), uuid); ok {
+		t.Fatalf("a clone received %.10s", uuid)
+	}
+	peer := setupSyncTestRepo(t)
+	if _, err := Sync(context.Background(), peer, handlerTransport(t, o.r),
+		SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := blob.Exists(peer.DB(), uuid); ok {
+		t.Fatalf("a pulling peer received %.10s", uuid)
+	}
+}
+
+// A seed still pending, its base not yet arrived, is withheld too: it has
+// not been judged. (A clone of a store holding a dangling delta stalls
+// whatever the delta is, so only a pull and a gimme are checked.)
+func TestHorizonPendingSeedNotServed(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "never sent")
+	s := danglingSeed(t, o, base)
+	resp, err := HandleSync(context.Background(), o.r, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC}, &xfer.GimmeCard{UUID: s.UUID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Cards {
+		switch c := c.(type) {
+		case *xfer.FileCard:
+			if c.UUID == s.UUID {
+				t.Fatal("a gimme was answered with the pending seed")
+			}
+		case *xfer.IGotCard:
+			if c.UUID == s.UUID {
+				t.Fatal("an inventory announced the pending seed")
+			}
+		}
+	}
+}
+
+// A pending row is cleared once judged, whatever the artifact: a plain file
+// pushed as a delta ahead of its basis is served once the basis arrives.
+func TestHorizonPendingFileClearedWhenJudged(t *testing.T) {
+	o := newPCOrigin(t)
+	base := []byte("the basis of a plain file\n")
+	file := []byte("the basis of a plain file\nand a line more\n")
+	d := deltaCard(t, base, hash.SHA3(base), file)
+	if errs := errorsOf(o.push(d)); len(errs) != 0 {
+		t.Fatalf("the dangling file: errors %q", errs)
+	}
+	rid, _ := blob.Exists(o.r.DB(), d.UUID)
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || !withheld {
+		t.Fatalf("the dangling file is not pending (%v)", err)
+	}
+	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || withheld {
+		t.Fatalf("the judged file is still withheld (%v)", err)
+	}
+	peer := setupSyncTestRepo(t)
+	if _, err := Sync(context.Background(), peer, handlerTransport(t, o.r),
+		SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := blob.Exists(peer.DB(), d.UUID); !ok {
+		t.Fatal("a pulling peer did not receive the file")
+	}
+}
+
+// Purging a refused seed forgets its record, so an innocent artifact that
+// is later stored under the reused rid is served.
+func TestHorizonPurgedSeedForgotten(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	seedRID, _ := blob.Exists(o.r.DB(), s.UUID)
+	var maxRID libfossil.FslID
+	if err := o.r.DB().QueryRow("SELECT max(rid) FROM blob").Scan(&maxRID); err != nil {
+		t.Fatal(err)
+	}
+	if seedRID != maxRID {
+		t.Fatalf("fixture: the seed is rid %d, not the last row %d", seedRID, maxRID)
+	}
+	if err := shun.Add(o.r.DB(), s.UUID, "purge"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shun.Purge(o.r.DB()); err != nil {
+		t.Fatal(err)
+	}
+	innocent := []byte("an innocent blob stored after the purge\n")
+	rid, _, err := blob.Store(o.r.DB(), innocent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rid != seedRID {
+		t.Fatalf("fixture: the innocent blob is rid %d, not the reused %d", rid, seedRID)
+	}
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || withheld {
+		t.Fatalf("the innocent blob inherited the seed's record (%v)", err)
+	}
+}
+
+// A private sync's inventory withholds a seed pushed privately.
+func TestHorizonSeedWithheldFromPrivateInventory(t *testing.T) {
+	o := newPCOrigin(t)
+	if _, err := o.r.DB().Exec("UPDATE user SET cap=cap||'x' WHERE login='nobody'"); err != nil {
+		t.Fatal(err)
+	}
+	_, base := o.labelled("u", "never sent")
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, hash.SHA3(base), seed)
+	private := &xfer.PragmaCard{Name: "send-private"}
+	push := func(cards ...xfer.Card) *xfer.Message {
+		req := &xfer.Message{Cards: append([]xfer.Card{private,
+			&xfer.PushCard{ServerCode: "s", ProjectCode: testPC}}, cards...)}
+		resp, err := HandleSync(context.Background(), o.r, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	if errs := errorsOf(push(&xfer.PrivateCard{}, s)); len(errs) != 0 {
+		t.Fatalf("the private dangling seed: errors %q", errs)
+	}
+	resp, err := HandleSync(context.Background(), o.r, &xfer.Message{Cards: []xfer.Card{private,
+		&xfer.PullCard{ServerCode: "s", ProjectCode: testPC}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Cards {
+		if g, ok := c.(*xfer.IGotCard); ok && g.UUID == s.UUID {
+			t.Fatal("a private inventory announced the seed")
+		}
+	}
+}
+
+// A clone sending an artifact stored as a delta on a refused seed does not
+// send the seed as its source.
+func TestHorizonRefusedSeedNotCloneSource(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
 	assertRefused(t, o.r, s.UUID, true)
-	if n := seedLinkRows(t, o.r, s.UUID); n != 0 {
-		t.Fatalf("the seed was crosslinked: %d rows", n)
+	seedRID, _ := blob.Exists(o.r.DB(), s.UUID)
+	seedBytes, err := content.Expand(o.r.DB(), seedRID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onSeed := append(slices.Clone(seedBytes), []byte("an ordinary blob stored as a delta on the seed\n")...)
+	if errs := errorsOf(o.push(deltaCard(t, seedBytes, s.UUID, onSeed))); len(errs) != 0 {
+		t.Fatalf("the dependent's push: errors %q", errs)
+	}
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"),
+		handlerTransport(t, o.r), CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	if _, ok := blob.Exists(clone.DB(), s.UUID); ok {
+		t.Fatal("a clone received the refused seed as a delta source")
+	}
+	if rid, ok := blob.Exists(clone.DB(), hash.SHA1(onSeed)); !ok || !content.IsAvailable(clone.DB(), rid) {
+		t.Fatal("a clone did not receive the dependent whole")
+	}
+}
+
+// A reply that read the withheld set for a gimme before the request stored
+// a dangling seed still keeps the seed out of its inventory.
+func TestHorizonSeedWithheldAfterEarlierGimme(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "never sent")
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, hash.SHA3(base), seed)
+	resp, err := HandleSync(context.Background(), o.r, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "s", ProjectCode: testPC}, &xfer.PullCard{ServerCode: "s", ProjectCode: testPC},
+		&xfer.GimmeCard{UUID: o.p}, s}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Cards {
+		if g, ok := c.(*xfer.IGotCard); ok && g.UUID == s.UUID {
+			t.Fatal("the inventory announced the seed")
+		}
 	}
 }
 
@@ -441,6 +641,9 @@ func TestHorizonRefusedSeedNotServed(t *testing.T) {
 		for _, c := range req.Cards {
 			if f, ok := c.(*xfer.FileCard); ok && f.UUID == s.UUID {
 				t.Error("the origin pushed the refused seed on")
+			}
+			if g, ok := c.(*xfer.IGotCard); ok && g.UUID == s.UUID {
+				t.Error("the origin announced the refused seed")
 			}
 		}
 		resp, err := HandleSync(context.Background(), peer, req)

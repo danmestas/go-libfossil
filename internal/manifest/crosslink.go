@@ -405,6 +405,11 @@ func prepareCrosslinkTables(q db.Querier) error {
 	if err := ensureNonArtifactTable(q); err != nil {
 		return fmt.Errorf("manifest.Crosslink: %w", err)
 	}
+	// Pushed artifacts left pending whose basis has since been filled are
+	// judged before anything is linked (seedcheck).
+	if err := seedcheck.JudgeReadable(q); err != nil {
+		return fmt.Errorf("manifest.Crosslink: %w", err)
+	}
 	return nil
 }
 
@@ -880,10 +885,13 @@ func linkArtifact(
 	if sched == nil {
 		panic("manifest.linkArtifact: sched must not be nil")
 	}
-	// Every path that makes an artifact readable reaches here, so this is
-	// where a pushed seed recorded pending is judged (seedcheck). Only a
-	// control artifact can be one; another type's pending row is left, inert.
-	if d.Type == deck.Control {
+	// Every path that links an artifact reaches here, so a pushed seed still
+	// pending is judged before it is linked (seedcheck).
+	present, err := seedTablePresent(tx, sched)
+	if err != nil {
+		return false, err
+	}
+	if present {
 		refused, err := seedcheck.Judge(tx, rid, d)
 		if err != nil || refused {
 			return false, err
@@ -894,6 +902,22 @@ func linkArtifact(
 		sched.owed = true
 	}
 	return handled, err
+}
+
+// seedTablePresent reports whether the seedcheck table exists, asking once
+// per transaction.
+func seedTablePresent(tx *db.Tx, sched *batchSchedule) (bool, error) {
+	if sched.seedTable == 0 {
+		ok, err := seedcheck.Exists(tx)
+		if err != nil {
+			return false, err
+		}
+		sched.seedTable = 1
+		if ok {
+			sched.seedTable = 2
+		}
+	}
+	return sched.seedTable == 2, nil
 }
 
 // linkArtifactRows is linkArtifact's dispatch on the artifact's type.

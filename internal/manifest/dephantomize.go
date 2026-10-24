@@ -12,6 +12,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // AfterDephantomize crosslinks a formerly-phantom blob and any dependents.
@@ -714,6 +715,13 @@ type cascadeLinker struct {
 }
 
 func newCascadeLinker(r *repo.Repo) *cascadeLinker {
+	// A filled phantom may have made a pending pushed seed readable; it is
+	// judged in this transaction, before the cascade links anything. A
+	// failure leaves the row pending, so the artifact stays withheld and
+	// the next sweep judges it.
+	if err := seedcheck.JudgeReadable(r.DB()); err != nil {
+		slog.Warn("manifest.AfterDephantomize: seed check failed, pending rows left", "err", err)
+	}
 	guard := newCheckinDeferralGuard()
 	// The cascade runs mid-session, with more blobs on the way, so it waits
 	// on files as well as the baseline; the session's closing sweep links

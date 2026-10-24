@@ -313,6 +313,8 @@ func (s *session) sendUnclustered() ([]xfer.Card, error) {
 	if silent {
 		return nil, nil
 	}
+	// A pushed artifact not yet judged, or judged a seed, is not in
+	// unclustered (seedcheck), so it is not announced.
 	rows, err := s.repo.DB().Query(`
 		SELECT b.rid, b.uuid FROM unclustered u JOIN blob b ON b.rid=u.rid
 		WHERE b.size >= 0
@@ -445,6 +447,12 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 	if silent {
 		return nil, nil
 	}
+	// A pushed artifact not yet judged, or judged a seed, is never
+	// announced (seedcheck).
+	withheld, err := seedcheck.Withheld(s.repo.DB())
+	if err != nil {
+		return nil, err
+	}
 	rows, err := s.repo.DB().Query(
 		"SELECT b.rid, b.uuid FROM private p JOIN blob b ON p.rid=b.rid WHERE b.size >= 0",
 	)
@@ -459,7 +467,7 @@ func (s *session) sendPrivate() ([]xfer.Card, error) {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, err
 		}
-		if rid <= floor || s.remoteHas[uuid] {
+		if rid <= floor || s.remoteHas[uuid] || withheld[libfossil.FslID(rid)] {
 			continue
 		}
 		cards = append(cards, &xfer.IGotCard{UUID: uuid, IsPrivate: true})
@@ -1682,6 +1690,11 @@ func (s *session) queueGimme(uuid string, t *replyTally) {
 	// private sync, a peer dated 2020-04-13 or later is told the artifact
 	// is private, and an older or undated one nothing (§8.6).
 	if held && !s.opts.Private && content.IsPrivate(s.repo.DB(), int64(rid)) {
+		// Nor is a withheld one named as private (seedcheck); a failed
+		// check names nothing.
+		if withheld, err := seedcheck.IsWithheld(s.repo.DB(), rid); err != nil || withheld {
+			return
+		}
 		if s.peerDate >= privateIGotDate {
 			s.privateIGots = append(s.privateIGots, uuid)
 			t.privateIGots++

@@ -60,7 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the seed is refused; each fill judges only the deltas waiting on
   it. A refused seed's hash is kept in a store-local table no configuration
   group carries; the seed stays stored, so deltas on it stay readable, but
-  it is never linked, announced or sent, and a re-push is refused at once. Before, a seed was dropped only when the
+  it is never linked, announced or sent, and a re-push is refused at once.
+  Withheld artifacts stay out of the tables an origin announces from when
+  it pushes on, a rebuild's included. Before, a seed was dropped only when the
   request's `horizon-seed` named it (that name match now refuses the push
   the same way) and was otherwise stored as an ordinary control artifact.
   A seed-shaped artifact received by pull or clone stays ordinary, as does

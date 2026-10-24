@@ -129,6 +129,11 @@ func markPending(q db.Querier, rid, root libfossil.FslID) error {
 			return fmt.Errorf("seedcheck.MarkPending: %w", err)
 		}
 	}
+	// It leaves the unclustered table too, so neither an inventory nor a
+	// cluster names it until it is judged not a seed (decide).
+	if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+		return fmt.Errorf("seedcheck.MarkPending: %w", err)
+	}
 	return nil
 }
 
@@ -161,9 +166,9 @@ func chainRoot(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
 // until the link step reaches them (Judge); a plain file among them stays
 // withheld.
 //
-// A row whose bytes do not hash to its name is not the artifact it names;
-// it stays pending, withheld, rather than be judged on bytes that are not
-// its own.
+// A row that does not expand, or whose bytes do not hash to its name, is
+// not the artifact it names; it stays pending, withheld, rather than be
+// judged on bytes that are not its own, and the batch goes on.
 func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
 	if q == nil {
 		panic("seedcheck.JudgeFilled: q must not be nil")
@@ -188,12 +193,12 @@ func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
 		}
 		for _, w := range waiting {
 			examined++
+			// A row that does not expand, or whose bytes are not the artifact
+			// its name names, stays pending, withheld, and does not stop the
+			// other fills in the batch from being judged.
 			data, err := cache.Expand(q, w.rid)
-			if errors.Is(err, content.ErrHashMismatch) {
-				continue
-			}
 			if err != nil {
-				return examined, fmt.Errorf("seedcheck.JudgeFilled: rid=%d: %w", w.rid, err)
+				continue
 			}
 			if _, err := decide(q, w.rid, w.uuid, IsSeedBytes(data)); err != nil {
 				return examined, err
@@ -262,17 +267,17 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 	return decide(q, rid, uuid, IsSeed(d))
 }
 
-// decide records the verdict on pending rid: a seed's hash is refused, and
-// it leaves the unclustered table, so no inventory or cluster names it;
-// either way the pending row goes.
+// decide records the verdict on pending rid, which MarkPending took out of
+// the unclustered table: a seed's hash is refused and it stays out, so no
+// inventory or cluster names it; anything else goes back in. Either way the
+// pending row goes.
 func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, error) {
 	if seed {
 		if err := Refuse(q, uuid); err != nil {
 			return false, err
 		}
-		if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
-			return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)
-		}
+	} else if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
+		return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)
 	}
 	if _, err := q.Exec("DELETE FROM "+pendingTable+" WHERE rid=?", rid); err != nil {
 		return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)

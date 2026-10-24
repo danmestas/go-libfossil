@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -69,6 +70,69 @@ func (h *handler) staleCancel() (string, error) {
 		}
 	}
 	return "", nil
+}
+
+// seedRefusedText is the error an origin refuses a pushed seed with (horizon
+// §5.2.3, as the zit 0.7.1 erratum words it).
+const seedRefusedText = "seed refused: a seed is private to the clone that holds it; it is never pushed"
+
+// seedTag is the tag name of a seed's binding card; no pushed control
+// artifact may carry it (horizon §5.2.3).
+const seedTag = "horizon-seed"
+
+// isSeed reports whether data, an artifact's full content, is a seed this
+// origin must refuse (horizon §5.2.3): a control artifact whose U card is
+// its own seed label, or one carrying a horizon-seed T card under any label.
+// Another implementation's label alone is ordinary, and so is a user's login
+// unless it equals seedLogin.
+func isSeed(data []byte) bool {
+	labelled := bytes.Contains(data, []byte("\nU "+seedLogin+"\n"))
+	if !labelled && !bytes.Contains(data, []byte(seedTag)) {
+		return false
+	}
+	d, err := deck.Parse(data)
+	if err != nil || d.Type != deck.Control {
+		return false
+	}
+	if d.U != nil && *d.U == seedLogin {
+		return true
+	}
+	for _, t := range d.T {
+		if t.Name == seedTag {
+			return true
+		}
+	}
+	return false
+}
+
+// pushedSeed reports whether a delta the request stored is a seed, judged at
+// the end of the request on its expanded content, so a delta whose basis
+// arrived later in the request is judged too. A delta still unavailable
+// cannot be identified and stays a transit phantom's dependent. Full text is
+// judged as it arrives (handleFile).
+func (h *handler) pushedSeed() (bool, error) {
+	if len(h.receivedDeltas) == 0 {
+		return false, nil
+	}
+	if h.pass == nil {
+		panic("handler.pushedSeed: a stored delta implies a receive pass")
+	}
+	q := h.repo.DB()
+	for _, rid := range h.receivedDeltas {
+		if !content.IsAvailable(q, rid) {
+			continue
+		}
+		// Every delta stored and available has been verified against its
+		// name (§7.7), so its bytes need no second check.
+		data, err := h.pass.basis.ExpandUnchecked(q, rid)
+		if err != nil {
+			return false, fmt.Errorf("handler: seed check: %w", err)
+		}
+		if isSeed(data) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // branchOfCheckin is the branch this repository derives for the check-in

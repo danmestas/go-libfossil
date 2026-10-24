@@ -272,6 +272,7 @@ type handler struct {
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
+	receivedDeltas  []libfossil.FslID         // those stored as deltas, judged as seeds once the request ends (horizon §5.2.3)
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
@@ -562,6 +563,16 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return err
 	}
 	if h.fatal || h.aborted {
+		return errPassAborted
+	}
+	// Horizon §5.2.3: a request that stored a seed is refused whole, its
+	// reply the refusal alone. Late deltas are expanded by now.
+	seed, err := h.pushedSeed()
+	if err != nil {
+		return err
+	}
+	if seed {
+		h.fail(seedRefusedText)
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
@@ -1492,11 +1503,14 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if err != nil {
 		return err
 	}
-	// Horizon §5.2.3: an origin refuses a seed offered to it. The request's
-	// horizon-seed names the client's seed, so a file bearing that name is
-	// dropped unstored, as a shunned one is.
-	if shunned || h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
+	if shunned {
 		h.nextIsPrivate = false
+		return nil
+	}
+	// Horizon §5.2.3: besides a seed's shape (isSeed), an origin
+	// refuses a file bearing the name the request's horizon-seed offered.
+	if h.seedOffered != "" && strings.EqualFold(uuid, h.seedOffered) {
+		h.fail(seedRefusedText)
 		return nil
 	}
 	// BUGGIFY: 3% chance reject a valid file to test client re-push.
@@ -1523,6 +1537,19 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	}
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
+	// Horizon §5.2.3: full text is judged as it arrives, a delta once the
+	// request ends, when a basis arriving later has made it readable.
+	if deltaSrc == "" {
+		if isSeed(payload) {
+			h.fail(seedRefusedText)
+		}
+		return nil
+	}
+	rid, ok := blob.Exists(h.repo.DB(), uuid)
+	if !ok {
+		panic("handler.handleFile: a stored artifact must exist")
+	}
+	h.receivedDeltas = append(h.receivedDeltas, rid)
 	return nil
 }
 

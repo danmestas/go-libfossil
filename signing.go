@@ -4,8 +4,8 @@ import "github.com/danmestas/go-libfossil/internal/clearsign"
 
 // SettingClearsign names the boolean repository setting, read as fossil reads
 // one, that signs every check-in a commit or a branch creation stores, as
-// fossil and zit sign them, and every horizon seed an origin mints
-// (draft-fossil-horizon-00 §5.2.4). Off by default. The signed text is the
+// fossil and zit sign them. Off by default. It signs no horizon seed: see
+// SettingHorizonSeedCommand. The signed text is the
 // artifact, so a signed check-in's name is the hash of the signed bytes; a
 // signer that fails abandons the commit. CommitOpts.NoSign and
 // CheckoutCommitOpts.NoSign store one check-in unsigned, as fossil's
@@ -30,6 +30,21 @@ const SettingPGPCommand = clearsign.SettingPGPCommand
 // process, or the fingerprint of an OpenPGP key in the user's gpg keyring,
 // verified by gpg. With a key set, a seed that is unsigned or not signed by
 // that key is discarded and the clone falls back to the content horizon;
-// unset, an unsigned seed is accepted. CloneOpts.SeedKey sets it when the
-// clone is made. It is the clone's own: an origin never sends it.
+// unset, an unsigned seed is accepted. An SSH signature must carry the
+// namespace fossil-horizon-seed. CloneOpts.SeedKey sets it when the clone is
+// made. It is the clone's own: an origin never sends it.
 const SettingHorizonSeedKey = clearsign.SettingSeedKey
+
+// SettingHorizonSeedCommand names the command an origin signs the
+// structural horizon seeds it mints with (draft-fossil-horizon-00 §5.2.4),
+// configured apart from SettingClearsign and SettingPGPCommand: unset or
+// off, seeds go out unsigned even when check-ins are signed. It follows
+// pgp-command's contract, and an SSH signer must sign in the namespace
+// fossil-horizon-seed, never fossilscm, so that a check-in's signature
+// cannot stand in for a seed's:
+//
+//	ssh-keygen -q -Y sign -n fossil-horizon-seed -f ~/.ssh/id_ed25519
+//
+// An origin whose command signs in another namespace serves no seed: the
+// request fails.
+const SettingHorizonSeedCommand = clearsign.SettingSeedCommand

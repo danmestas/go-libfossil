@@ -1,6 +1,6 @@
 {
   "requirements": 632,
-  "covered": 622,
+  "covered": 626,
   "partial": 6,
   "suites": [
     {
@@ -4564,12 +4564,12 @@
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
       "requirements": 73,
-      "covered": 63,
+      "covered": 67,
       "partial": 6,
       "deviation": 0,
       "failing": 0,
-      "gap": 4,
-      "cases": 123,
+      "gap": 0,
+      "cases": 132,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4750,16 +4750,16 @@
         {
           "id": "HZ-5.2-8",
           "section": "5.2.1",
-          "status": "GAP",
-          "cases": 0,
+          "status": "COVERED",
+          "cases": 1,
           "text": "Every seed carries one binding card, T +horizon-seed \u003cC\u003e \u003crule\u003e, a singleton tag on C whose value is the rule, part of the signed bytes; it is not a tag in force: the clone strips it before derivation, and the origin never counts it toward the one T card a control artifact needs, so with no other tag in force it still mints no seed.",
           "notes": ""
         },
         {
           "id": "HZ-5.2-13",
           "section": "5.2.1",
-          "status": "GAP",
-          "cases": 0,
+          "status": "COVERED",
+          "cases": 1,
           "text": "An origin must not derive a horizon-seed tag into a seed.",
           "notes": ""
         },
@@ -4822,16 +4822,16 @@
         {
           "id": "HZ-5.2-11",
           "section": "5.2.4",
-          "status": "GAP",
-          "cases": 0,
+          "status": "COVERED",
+          "cases": 5,
           "text": "Before holding a seed, signed or not, a clone must check that it carries exactly one horizon-seed card naming its own store cone's C and rule, and must refuse a seed whose D card is earlier than the held seed's (an equal D is accepted; a deepen discards the held seed first, so the floor restarts at the new C); a refused seed is handled as a wrongly signed one, the clone falling back to the content horizon and reporting it.",
           "notes": ""
         },
         {
           "id": "HZ-5.2-12",
           "section": "5.2.4",
-          "status": "GAP",
-          "cases": 0,
+          "status": "COVERED",
+          "cases": 2,
           "text": "An origin's seed-signing command is configured apart from its check-in signing command and, for SSH, signs under the namespace fossil-horizon-seed, never the check-in namespace; an origin with no seed-signing command configured sends seeds unsigned even when it signs check-ins; PGP relies on the binding card alone.",
           "notes": ""
         },

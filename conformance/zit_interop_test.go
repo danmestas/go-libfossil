@@ -89,10 +89,12 @@ func zitReadsPragma(bin string) (bool, error) {
 }
 
 // zitHorizonBinary is zitBinary for a horizon test: it also requires a zit
-// that implements draft-fossil-horizon-00, which a release from trunk can
-// predate while reporting the same version number. Such a binary is skipped,
-// or fails the run under REQUIRE_ZIT_BIN=1, rather than failing on an
-// unknown --horizon flag.
+// that implements draft-fossil-horizon-00 as pinned, through the seed's
+// binding card (§5.2.1, §5.2.4), which zit 0.7.1 (version-0.7.1, check-in
+// 1c4cd7a165) is the first to write and check: an older zit's seeds carry no
+// binding card, so a go-libfossil clone refuses them. Such a binary, found
+// by the binding refusal it reports, is skipped, or fails the run under
+// REQUIRE_ZIT_BIN=1, rather than failing a comparison.
 func zitHorizonBinary(t *testing.T) string {
 	t.Helper()
 	bin := zitBinary(t)
@@ -100,9 +102,9 @@ func zitHorizonBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("probing zit: %v", err)
 	}
-	if !bytes.Contains(data, []byte("horizon-served")) {
-		msg := fmt.Sprintf("%s (%s) predates draft-fossil-horizon-00: the horizon interop run needs "+
-			"zit from horizon-rfc bbd1435674 or later", bin, zitVersion(bin))
+	if !bytes.Contains(data, []byte("horizon-served")) || !bytes.Contains(data, []byte("seed is not bound to this")) {
+		msg := fmt.Sprintf("%s (%s) predates the seed's binding card: the horizon interop run needs "+
+			"zit 0.7.1 (check-in 1c4cd7a165) or later", bin, zitVersion(bin))
 		if os.Getenv("REQUIRE_ZIT_BIN") == "1" {
 			t.Fatal("REQUIRE_ZIT_BIN=1 but " + msg)
 		}

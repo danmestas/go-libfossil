@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The seed's binding card (draft-fossil-horizon-00 §5.2.1, §5.2.4;
+  HZ-5.2-8, HZ-5.2-11 to HZ-5.2-13). Every seed an origin mints carries
+  `T +horizon-seed <C> <rule>`, inside the signed bytes; it is no tag in
+  force, so it does not count toward the T card a seed needs, an origin never
+  derives a `horizon-seed` tag it holds into a seed, and a clone applies
+  every card but it. Before holding a seed, signed or not, a clone checks
+  that it carries exactly one binding card naming its own C and rule, and
+  refuses one dated before the seed it holds (an equal D is accepted); a
+  refused seed is handled as a wrongly signed one, so the clone falls back
+  to the content horizon, completes and reports `HorizonFallback`. A deepen
+  discards the held seed first, so the floor restarts at the new C. A held
+  seed no longer bound to the store's horizon is discarded when next
+  applied. A store holding a v0.15.0 seed, which has no binding card, takes
+  the bound seed on its first pull from an upgraded origin; a rebuild before
+  that discards the old seed and the next pull fetches a bound one.
+  `seed.Mint` takes the horizon's rule. go-libfossil and zit 0.7.1 mint
+  byte-identical seeds up to the U card, and each clones the other at the
+  structural horizon.
+- `horizon-seed-command` (`SettingHorizonSeedCommand`), the command an origin
+  signs its seeds with (§5.2.4). Seed signing no longer follows `clearsign`
+  and `pgp-command`: an origin with no seed command sends its seeds
+  unsigned, even when it signs check-ins. An SSH seed signature is made and
+  verified in the namespace `fossil-horizon-seed`, never `fossilscm`, so a
+  check-in's signature cannot stand in for a seed's; an origin whose seed
+  command signs in another namespace serves no seed and the request fails.
+  `clearsign.Key.Verify` takes the namespace; check-in verification keeps
+  `fossilscm`.
 - Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7).
   `CloneOpts.Horizon`, whose `Checkin` may be a name, with `HorizonDepth`, and `repo clone --horizon NAME --depth N`, clone
   a horizon store at `tip`, a branch or tag, or a full hash, stepped back N
@@ -42,15 +69,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns signing off. fossil 2.28 and zit read the signed check-ins, and a
   check-in zit signs with the same SSH key verifies here.
 - Signed horizon seeds (draft-fossil-horizon-00 §5.2.4, HZ-5.2-5 and
-  HZ-5.2-6). An origin with `clearsign` on signs each seed it mints, keeping
-  one signature per seed so its name is stable. A clone given its origin's
+  HZ-5.2-6). An origin with a seed-signing command (`horizon-seed-command`,
+  above) signs each seed it mints, keeping one signature per seed so its
+  name is stable. A clone given its origin's
   key (`CloneOpts.SeedKey`, `repo clone --seed-key`, kept as the
   `horizon-seed-key` setting) verifies every seed it holds, on clone, pull
   and rebuild, and falls back to the content horizon from one unsigned or
   signed by another key. An SSH key is verified in process; an OpenPGP
   fingerprint by `gpg`. zit clones a signing origin and holds the signed
-  seed. `SettingClearsign`, `SettingPGPCommand` and `SettingHorizonSeedKey`
-  name the settings; `SetConfig` refuses a seed key that is neither an SSH
+  seed. `SettingHorizonSeedCommand` and `SettingHorizonSeedKey` name the
+  settings; `SetConfig` refuses a seed key that is neither an SSH
   public key nor a fingerprint. An origin signs only once the requester is
   known to read, outside the request's transaction; with its own public key
   as `horizon-seed-key` it re-signs a kept signature that key no longer
@@ -65,10 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refusal of a pushed seed judged on expanded content (§5.2.2, §5.2.3,
   §5.7), and the seed's `T +horizon-seed <C> <rule>` binding card with the
   clone's checks on it (§5.2, §5.2.4). The requirements table gains rows for
-  each; the binding card, the clone's D floor and the separate seed-signing
-  namespace (HZ-5.2-8, HZ-5.2-11 to HZ-5.2-13) are not built yet, and the
-  named-horizon client rows move from §6.3 to §6.2.7 (HZ-6.2-19 to
-  HZ-6.2-21).
+  each, and the named-horizon client rows move from §6.3 to §6.2.7
+  (HZ-6.2-19 to HZ-6.2-21).
 - An origin refuses a pushed seed by its shape (horizon §5.2.3; #471). A pushed control artifact is a seed
   when its U card is `go-libfossil`, the origin's own seed label, or when it
   carries a `horizon-seed` T card under any label. It is judged when it

@@ -1232,16 +1232,40 @@ Two consequences follow:
 - Another implementation's label alone is ordinary. A control artifact under zit's `U zit-seed` with no `horizon-seed` T card is stored when pushed; one that carries a `horizon-seed` card is refused.
 - A user whose login is `go-libfossil` cannot push control artifacts (tags, branch moves, closes) to a go-libfossil origin, since they carry that login as their U card. go-libfossil does not forbid the login; do not give it to a user.
 
+## The binding card
+
+Every seed names the horizon it was minted for in one card (§5.2.1):
+
+```
+T +horizon-seed <C> <rule>
+```
+
+The card is part of the seed's bytes, so a signature covers it. It is not a tag in force: a clone skips it when it applies the seed, and an origin never derives a `horizon-seed` tag it holds into a seed. It does not count as the one T card a control artifact needs, so with no other tag in force there is still no seed.
+
+Before it holds a seed, signed or not, a clone checks it (§5.2.4):
+
+- it carries exactly one binding card, and that card names the clone's own C and rule;
+- its D card is not earlier than that of the seed the clone already holds. A newer tag state never gives an earlier D, so an earlier one is a replay. An equal D is accepted.
+
+A seed that fails either check is refused as a wrongly signed one: the clone falls back to the content horizon, completes, and reports `HorizonFallback`; later pulls keep the content horizon. A deepen discards the held seed first, so the floor starts again at the new C. A held seed that is no longer bound to the store's horizon is discarded when it is next applied, as one that fails its signature is. A seed held by v0.15.0, which carried no binding card, is replaced on the first pull from an origin that binds its seeds; a rebuild before that discards it, and the next pull fetches a bound one.
+
+zit 0.7.1 writes and checks the same card, so the two implementations' seeds for one repository are byte-identical up to the U card.
+
 ## Signed seeds
 
-An origin with the `clearsign` setting on (and the legacy `omitsign` off) signs each seed it mints with its `pgp-command`, the same settings fossil and zit sign check-ins with (§5.2.4). It keeps one signature per seed, so a seed keeps its name while the tag state it records is unchanged.
+An origin signs each seed it mints with its `horizon-seed-command`, configured apart from the `clearsign` and `pgp-command` settings that sign check-ins (§5.2.4). An origin with no seed command sends its seeds unsigned, even when it signs check-ins. It keeps one signature per seed, so a seed keeps its name while the tag state it records is unchanged.
 
 A clone given the origin's public key verifies every seed against it: at clone time, on every pull, and when it rebuilds. A seed that is unsigned, or signed by another key, is discarded and the clone falls back to the content horizon. A clone with no key accepts an unsigned seed. The key is the clone's own `horizon-seed-key` setting, never something the origin sends. `CloneOpts.SeedKey` and `repo clone --seed-key` set it when the clone is made; `Repo.SetConfig` refuses a value that is neither an SSH public key nor an OpenPGP fingerprint.
 
-- **SSH:** the origin signs with `ssh-keygen -q -Y sign -n fossilscm -f KEY`; the clone's key is the public key line, verified in process.
-- **PGP:** the origin signs with `gpg --clearsign -o`, fossil's default; the clone's key is the key's 40 or 64 digit fingerprint, verified by `gpg` against the user's keyring.
+- **SSH:** the origin signs with `ssh-keygen -q -Y sign -n fossil-horizon-seed -f KEY`; the clone's key is the public key line, verified in process. The namespace is `fossil-horizon-seed`, never the check-in namespace `fossilscm`, so a signature on a check-in or tag cannot stand in for a seed's. An origin whose seed command signs in another namespace serves no seed: the request fails.
+- **PGP:** the origin signs with a `gpg --clearsign -o` command; the clone's key is the key's 40 or 64 digit fingerprint, verified by `gpg` against the user's keyring. PGP has no namespace and relies on the binding card alone.
 
-An origin signs only for a requester that may read, after the request is authorized, and keeps the signature in its own table; a store that cannot write, such as a read-only mirror, signs again for every request. Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged `pgp-command` takes effect at once. A clone that cannot run its verifier (gpg missing, or timed out) keeps the seed it holds and reports the error rather than falling back. Settings are read from the repository only: go-libfossil reads no global fossil configuration, so `clearsign` and `pgp-command` set with `fossil settings --global` do not apply.
+```
+libfossil -R repo.fossil repo config set horizon-seed-command \
+    "ssh-keygen -q -Y sign -n fossil-horizon-seed -f ~/.ssh/id_ed25519"
+```
+
+An origin signs only for a requester that may read, after the request is authorized, and keeps the signature in its own table; a store that cannot write, such as a read-only mirror, signs again for every request. Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged seed command takes effect at once. A clone that cannot run its verifier (gpg missing, or timed out) keeps the seed it holds and reports the error rather than falling back. Settings are read from the repository only: go-libfossil reads no global fossil configuration.
 
 [Signing](/docs/concepts/signing/) covers the signing settings and the verifier in more detail.
 
@@ -1424,15 +1448,16 @@ libfossil -R repo.fossil repo verify --seed
 URL: https://libfossil-docs.daniel-mestas.workers.dev/docs/concepts/signing/
 
 
-go-libfossil signs two kinds of artifact: check-ins, as fossil and zit sign them, and the seeds an origin mints for [structural horizons](/docs/concepts/horizons/). Both use the same settings and the same two envelopes, a PGP clear-signed message or the SSH envelope fossil builds around a detached `ssh-keygen` signature (`draft-fossil-artifact-format-00` §4.1.1).
+go-libfossil signs two kinds of artifact: check-ins, as fossil and zit sign them, and the seeds an origin mints for [structural horizons](/docs/concepts/horizons/). Each has its own signing command, and both use the same two envelopes, a PGP clear-signed message or the SSH envelope fossil builds around a detached `ssh-keygen` signature (`draft-fossil-artifact-format-00` §4.1.1).
 
 ## Settings
 
 | Setting | Constant | Meaning |
 |---|---|---|
-| `clearsign` | `SettingClearsign` | Sign check-ins and horizon seeds. Off by default. |
-| `omitsign` | | Fossil's legacy setting. On, it turns signing off again. |
-| `pgp-command` | `SettingPGPCommand` | The signing command. Unset, it is fossil's default, `gpg --clearsign -o `. |
+| `clearsign` | `SettingClearsign` | Sign check-ins. Off by default. |
+| `omitsign` | | Fossil's legacy setting. On, it turns check-in signing off again. |
+| `pgp-command` | `SettingPGPCommand` | The check-in signing command. Unset, it is fossil's default, `gpg --clearsign -o `. |
+| `horizon-seed-command` | `SettingHorizonSeedCommand` | The command an origin signs its horizon seeds with. Unset, seeds go out unsigned. |
 | `horizon-seed-key` | `SettingHorizonSeedKey` | The public key a clone verifies its origin's seeds with. |
 
 Settings are read from the repository only. go-libfossil reads no global fossil configuration, so values set with `fossil settings --global` do not apply.
@@ -1482,7 +1507,14 @@ go-libfossil does not verify check-in signatures when it reads them. To check on
 
 ## Signing horizon seeds
 
-An origin with `clearsign` on signs each structural horizon seed it mints with the same `pgp-command` (`draft-fossil-horizon-00` §5.2.4). It keeps one signature per seed in its own table, so a seed keeps its name while the tag state it records is unchanged. It signs only for a requester allowed to read, after the request is authorized. A store that cannot write, such as a read-only mirror, signs again for every request.
+An origin signs each structural horizon seed it mints with its `horizon-seed-command` (`draft-fossil-horizon-00` §5.2.4). The command is configured apart from check-in signing: `clearsign` and `pgp-command` never sign a seed, and an origin with no seed command sends its seeds unsigned even when it signs check-ins. It follows `pgp-command`'s contract. An SSH signer signs in the namespace `fossil-horizon-seed`, never `fossilscm`, so that a signature on a check-in or tag cannot stand in for a seed's; an origin whose seed command signs in another namespace serves no seed, and the request fails. PGP has no namespace and relies on the seed's [binding card](/docs/concepts/horizons/#the-binding-card) alone.
+
+```
+libfossil -R repo.fossil repo config set horizon-seed-command \
+    "ssh-keygen -q -Y sign -n fossil-horizon-seed -f ~/.ssh/id_ed25519"
+```
+
+The origin keeps one signature per seed in its own table, so a seed keeps its name while the tag state it records is unchanged. It signs only for a requester allowed to read, after the request is authorized. A store that cannot write, such as a read-only mirror, signs again for every request.
 
 A clone verifies seeds against its `horizon-seed-key` setting:
 
@@ -1504,12 +1536,14 @@ The clone verifies every seed it holds: at clone time, on every pull, and when i
 
 | Seed | Key set | Result |
 |---|---|---|
-| Signed by the key | yes | Held. |
-| Unsigned, or signed by another key | yes | Discarded; the store falls back to the content horizon. |
+| Signed by the key, in namespace `fossil-horizon-seed` for SSH | yes | Held. |
+| Unsigned, signed by another key, or SSH-signed in another namespace | yes | Discarded; the store falls back to the content horizon. |
 | Any | no | Held. A clone with no key accepts an unsigned seed. |
 | Verifier could not run (gpg missing or timed out) | yes | The seed already held is kept and the error is reported. A new seed is refused. Nothing falls back. |
 
-Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged `pgp-command` takes effect at once.
+Whatever its signature, a seed is also refused when its binding card does not name the clone's own horizon or it is dated before the seed the clone holds; see [the binding card](/docs/concepts/horizons/#the-binding-card).
+
+Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged seed command takes effect at once.
 
 A signature proves where a seed came from, not that its derivation is right (§5.2.4). `repo verify --seed` (`Repo.VerifySeed`) checks the seed against the history it summarizes.
 
@@ -1651,7 +1685,7 @@ libfossil -R repo.fossil repo config set pgp-command "ssh-keygen -q -Y sign -n f
 
 The signed text is the artifact, so a signed check-in is named by the hash of the signed bytes. Stock fossil and zit clone and read signed check-ins. A signer that fails abandons the commit. `CommitOpts.NoSign`, `CheckoutCommitOpts.NoSign` and `--nosign` store one check-in unsigned. The command runs through the shell, so `~` and environment variables expand. It runs inside the commit's transaction, so a signer that waits on a passphrase prompt holds the repository's write lock until it returns or two minutes pass. On js/wasm there is no external signer.
 
-The same settings sign the horizon seeds an origin mints. A clone verifies them against the `horizon-seed-key` setting, which `repo clone --seed-key` (or `CloneOpts.SeedKey`) sets. See [Signing](/docs/concepts/signing/) for the envelope, verification and seed details.
+These settings sign no horizon seed. An origin signs the seeds it mints with its own `horizon-seed-command`, whose SSH signer must use the namespace `fossil-horizon-seed`; with none set, seeds go out unsigned. A clone verifies them against the `horizon-seed-key` setting, which `repo clone --seed-key` (or `CloneOpts.SeedKey`) sets. See [Signing](/docs/concepts/signing/) for the envelope, verification and seed details.
 
 ---
 
@@ -10901,9 +10935,10 @@ go-libfossil reads only the repository's own `config` table. Fossil also falls b
 
 | Setting | Default | Read by |
 | --- | --- | --- |
-| [`clearsign`](#clearsign) | off | check-in and seed signing |
-| [`omitsign`](#omitsign) | off | check-in and seed signing |
-| [`pgp-command`](#pgp-command) | `gpg --clearsign -o ` | check-in and seed signing |
+| [`clearsign`](#clearsign) | off | check-in signing |
+| [`omitsign`](#omitsign) | off | check-in signing |
+| [`pgp-command`](#pgp-command) | `gpg --clearsign -o ` | check-in signing |
+| [`horizon-seed-command`](#horizon-seed-command) | none | seed signing |
 | [`horizon-seed-key`](#horizon-seed-key) | none | clone, seed verification |
 | [`partial-mirror`](#partial-mirror) | off | sync server |
 | [`horizon-history-url`](#horizon-history-url) | none | sync server |
@@ -10926,50 +10961,61 @@ The last list on this page covers internal rows that are not meant to be edited.
 
 ## clearsign
 
-Turns on signing. When it is on, every check-in that a commit or branch creation stores is signed, and so is every horizon seed an origin mints. See [Signing](/docs/concepts/signing/).
+Turns on check-in signing. When it is on, every check-in that a commit or branch creation stores is signed. It signs no horizon seed: an origin signs those with [`horizon-seed-command`](#horizon-seed-command). See [Signing](/docs/concepts/signing/).
 
-- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L84). Callers are the manifest writer ([`manifest.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/manifest/manifest.go#L487)) and the horizon seed signer ([`horizon_seedsign.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/sync/horizon_seedsign.go#L42)).
+- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L93), called from the manifest writer ([`manifest.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/manifest/manifest.go#L494)).
 - **Values:** boolean. Unrecognized text reads as off.
 - **Default:** off. With it off, no signing happens.
 - **Behaviour:** the signed text is the artifact, so a signed check-in is named by the hash of the signed bytes. If the signer fails, the commit is abandoned. `CommitOpts.NoSign` and `CheckoutCommitOpts.NoSign` store one check-in unsigned.
-- **Origin:** fossil 2.28 defines `clearsign` (default off). The envelope format is in `draft-fossil-artifact-format-00` section 4.1.1. Signing horizon seeds is an extension (`draft-fossil-horizon-00` section 5.2.4).
+- **Origin:** fossil 2.28 defines `clearsign` (default off). The envelope format is in `draft-fossil-artifact-format-00` section 4.1.1.
 - **Set:** `libfossil repo config set clearsign on`
-- **Code:** [`SettingClearsign`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L33), [`libfossil.SettingClearsign`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L13)
+- **Code:** [`SettingClearsign`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L34), [`libfossil.SettingClearsign`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L13)
 
 ## omitsign
 
 Turns signing off again, even when `clearsign` is on.
 
-- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L84), after `clearsign`.
+- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L93), after `clearsign`.
 - **Values:** boolean. Unrecognized text reads as off.
 - **Default:** off.
 - **Origin:** fossil's legacy setting. It is not in the list printed by `fossil settings` in 2.28. go-libfossil reads it so a repository that carries it keeps its meaning. No draft specifies it.
 - **Set:** `libfossil repo config set omitsign on`
-- **Code:** [`SettingOmitsign`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L34)
+- **Code:** [`SettingOmitsign`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L35)
 
 ## pgp-command
 
-The command that signs. Used only when signing is on.
+The command that signs check-ins. Used only when signing is on.
 
-- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L84), which builds the `Signer`.
+- **Read by:** [`clearsign.FromSettings`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L93), which builds the `Signer`.
 - **Values:** a shell command. The command runs through the shell, so `~` and environment variables expand. A command whose first word starts with `ssh` is run as `COMMAND INFILE`; it must write a detached `INFILE.sig`, and go-libfossil wraps it in fossil's SSH envelope. Any other command is run as `COMMAND OUTFILE INFILE` and must write a clear-signed `INFILE` to `OUTFILE`. A value that reads as false (`off`, `no`, `false`, `0`) turns signing off. An empty value uses the default.
 - **Default:** `gpg --clearsign -o `.
 - **SSH signing:** set it to `ssh-keygen -q -Y sign -n fossilscm -f ~/.ssh/id_ed25519`. The namespace must be `fossilscm`, or a clone cannot verify the signature.
 - **Origin:** fossil 2.28 defines `pgp-command`. Go-libfossil follows fossil's `src/clearsign.c` contract, so one setting signs with either tool.
 - **Set:** `libfossil repo config set pgp-command 'ssh-keygen -q -Y sign -n fossilscm -f ~/.ssh/id_ed25519'`
-- **Code:** [`SettingPGPCommand`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L35), [`libfossil.SettingPGPCommand`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L25)
+- **Code:** [`SettingPGPCommand`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L36), [`libfossil.SettingPGPCommand`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L25)
+
+## horizon-seed-command
+
+The command an origin signs the horizon seeds it mints with, configured apart from check-in signing. See [Signing](/docs/concepts/signing/) and [Horizons](/docs/concepts/horizons/).
+
+- **Read by:** [`clearsign.SeedSigner`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L122), called from the horizon seed signer ([`horizon_seedsign.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/sync/horizon_seedsign.go#L43)).
+- **Values:** a shell command under `pgp-command`'s contract. An SSH signer must sign in the namespace `fossil-horizon-seed`, never `fossilscm`; an origin whose command signs in another namespace serves no seed, and the request fails. A value that reads as false (`off`, `no`, `false`, `0`), or an empty one, turns seed signing off.
+- **Default:** none. With no command, seeds go out unsigned, even when `clearsign` signs check-ins. `clearsign` and `omitsign` do not affect it.
+- **Origin:** go-libfossil extension, specified in `draft-fossil-horizon-00` section 5.2.4, which requires the seed-signing command to be configured apart from the check-in one but does not name the setting.
+- **Set:** `libfossil repo config set horizon-seed-command 'ssh-keygen -q -Y sign -n fossil-horizon-seed -f ~/.ssh/id_ed25519'`
+- **Code:** [`SettingSeedCommand`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L38), [`libfossil.SettingHorizonSeedCommand`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L50)
 
 ## horizon-seed-key
 
 The public key a clone uses to verify the horizon seeds its origin sends. See [Signing](/docs/concepts/signing/) and [Horizons](/docs/concepts/horizons/).
 
-- **Read by:** [`clearsign.SeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L202), called from the seed code ([`seed/sign.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/horizon/seed/sign.go#L25)) and the seed signer.
+- **Read by:** [`clearsign.SeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L251), called from the seed code ([`seed/sign.go`](https://github.com/danmestas/go-libfossil/blob/main/internal/horizon/seed/sign.go#L26)) and the seed signer.
 - **Values:** an SSH public key line (`ssh-ed25519 AAAA... comment`), checked in process, or an OpenPGP fingerprint of 40 or 64 hex digits (spaces allowed), checked by `gpg` against the user's keyring. `Repo.SetConfig` and `config set` refuse any other non-empty value. An empty value counts as no key.
 - **Default:** none. With no key, a clone accepts an unsigned seed.
-- **Behaviour:** with a key set, a seed that is unsigned or not signed by that key is discarded and the clone falls back to the content horizon.
+- **Behaviour:** with a key set, a seed that is unsigned, not signed by that key, or SSH-signed in another namespace than `fossil-horizon-seed` is discarded and the clone falls back to the content horizon.
 - **Origin:** go-libfossil extension, specified in `draft-fossil-horizon-00` section 5.2.4. It belongs to the clone; an origin never sends it.
-- **Set:** `libfossil repo config set horizon-seed-key 'ssh-ed25519 AAAA...'`, or `CloneOpts.SeedKey` at clone time ([`keepSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/sync/clone.go#L313)).
-- **Code:** [`SettingSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L36), [`libfossil.SettingHorizonSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L35)
+- **Set:** `libfossil repo config set horizon-seed-key 'ssh-ed25519 AAAA...'`, or `CloneOpts.SeedKey` at clone time ([`keepSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/sync/clone.go#L327)).
+- **Code:** [`SettingSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/internal/clearsign/clearsign.go#L37), [`libfossil.SettingHorizonSeedKey`](https://github.com/danmestas/go-libfossil/blob/main/signing.go#L36)
 
 ## partial-mirror
 

@@ -3,15 +3,16 @@ title: Signing
 weight: 80
 ---
 
-go-libfossil signs two kinds of artifact: check-ins, as fossil and zit sign them, and the seeds an origin mints for [structural horizons](/docs/concepts/horizons/). Both use the same settings and the same two envelopes, a PGP clear-signed message or the SSH envelope fossil builds around a detached `ssh-keygen` signature (`draft-fossil-artifact-format-00` §4.1.1).
+go-libfossil signs two kinds of artifact: check-ins, as fossil and zit sign them, and the seeds an origin mints for [structural horizons](/docs/concepts/horizons/). Each has its own signing command, and both use the same two envelopes, a PGP clear-signed message or the SSH envelope fossil builds around a detached `ssh-keygen` signature (`draft-fossil-artifact-format-00` §4.1.1).
 
 ## Settings
 
 | Setting | Constant | Meaning |
 |---|---|---|
-| `clearsign` | `SettingClearsign` | Sign check-ins and horizon seeds. Off by default. |
-| `omitsign` | | Fossil's legacy setting. On, it turns signing off again. |
-| `pgp-command` | `SettingPGPCommand` | The signing command. Unset, it is fossil's default, `gpg --clearsign -o `. |
+| `clearsign` | `SettingClearsign` | Sign check-ins. Off by default. |
+| `omitsign` | | Fossil's legacy setting. On, it turns check-in signing off again. |
+| `pgp-command` | `SettingPGPCommand` | The check-in signing command. Unset, it is fossil's default, `gpg --clearsign -o `. |
+| `horizon-seed-command` | `SettingHorizonSeedCommand` | The command an origin signs its horizon seeds with. Unset, seeds go out unsigned. |
 | `horizon-seed-key` | `SettingHorizonSeedKey` | The public key a clone verifies its origin's seeds with. |
 
 Settings are read from the repository only. go-libfossil reads no global fossil configuration, so values set with `fossil settings --global` do not apply.
@@ -61,7 +62,14 @@ go-libfossil does not verify check-in signatures when it reads them. To check on
 
 ## Signing horizon seeds
 
-An origin with `clearsign` on signs each structural horizon seed it mints with the same `pgp-command` (`draft-fossil-horizon-00` §5.2.4). It keeps one signature per seed in its own table, so a seed keeps its name while the tag state it records is unchanged. It signs only for a requester allowed to read, after the request is authorized. A store that cannot write, such as a read-only mirror, signs again for every request.
+An origin signs each structural horizon seed it mints with its `horizon-seed-command` (`draft-fossil-horizon-00` §5.2.4). The command is configured apart from check-in signing: `clearsign` and `pgp-command` never sign a seed, and an origin with no seed command sends its seeds unsigned even when it signs check-ins. It follows `pgp-command`'s contract. An SSH signer signs in the namespace `fossil-horizon-seed`, never `fossilscm`, so that a signature on a check-in or tag cannot stand in for a seed's; an origin whose seed command signs in another namespace serves no seed, and the request fails. PGP has no namespace and relies on the seed's [binding card](/docs/concepts/horizons/#the-binding-card) alone.
+
+```
+libfossil -R repo.fossil repo config set horizon-seed-command \
+    "ssh-keygen -q -Y sign -n fossil-horizon-seed -f ~/.ssh/id_ed25519"
+```
+
+The origin keeps one signature per seed in its own table, so a seed keeps its name while the tag state it records is unchanged. It signs only for a requester allowed to read, after the request is authorized. A store that cannot write, such as a read-only mirror, signs again for every request.
 
 A clone verifies seeds against its `horizon-seed-key` setting:
 
@@ -83,12 +91,14 @@ The clone verifies every seed it holds: at clone time, on every pull, and when i
 
 | Seed | Key set | Result |
 |---|---|---|
-| Signed by the key | yes | Held. |
-| Unsigned, or signed by another key | yes | Discarded; the store falls back to the content horizon. |
+| Signed by the key, in namespace `fossil-horizon-seed` for SSH | yes | Held. |
+| Unsigned, signed by another key, or SSH-signed in another namespace | yes | Discarded; the store falls back to the content horizon. |
 | Any | no | Held. A clone with no key accepts an unsigned seed. |
 | Verifier could not run (gpg missing or timed out) | yes | The seed already held is kept and the error is reported. A new seed is refused. Nothing falls back. |
 
-Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged `pgp-command` takes effect at once.
+Whatever its signature, a seed is also refused when its binding card does not name the clone's own horizon or it is dated before the seed the clone holds; see [the binding card](/docs/concepts/horizons/#the-binding-card).
+
+Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged seed command takes effect at once.
 
 A signature proves where a seed came from, not that its derivation is right (§5.2.4). `repo verify --seed` (`Repo.VerifySeed`) checks the seed against the history it summarizes.
 

@@ -27,20 +27,27 @@ import (
 // Settings, named as fossil names them. Clearsign turns signing on (fossil
 // db_get_boolean, default off) and fossil's legacy Omitsign turns it off
 // again; PGPCommand names the signer, defaulting to DefaultCommand. SeedKey
-// is go-libfossil's: the key a clone verifies its origin's horizon seeds
-// with (draft-fossil-horizon-00 §5.2.4).
+// and SeedCommand are go-libfossil's (draft-fossil-horizon-00 §5.2.4): the
+// key a clone verifies its origin's horizon seeds with, and the command an
+// origin signs its seeds with, configured apart from check-in signing.
 const (
-	SettingClearsign  = "clearsign"
-	SettingOmitsign   = "omitsign"
-	SettingPGPCommand = "pgp-command"
-	SettingSeedKey    = "horizon-seed-key"
-	DefaultCommand    = "gpg --clearsign -o "
+	SettingClearsign   = "clearsign"
+	SettingOmitsign    = "omitsign"
+	SettingPGPCommand  = "pgp-command"
+	SettingSeedKey     = "horizon-seed-key"
+	SettingSeedCommand = "horizon-seed-command"
+	DefaultCommand     = "gpg --clearsign -o "
 )
 
-// SSHNamespace is the ssh-keygen -n namespace a signature must carry. It is
-// the one fossil's documentation gives (www/signing.md), so an origin set up
-// by that recipe verifies.
+// SSHNamespace is the ssh-keygen -n namespace a check-in's signature must
+// carry. It is the one fossil's documentation gives (www/signing.md), so an
+// origin set up by that recipe verifies.
 const SSHNamespace = "fossilscm"
+
+// SeedNamespace is the namespace a horizon seed's SSH signature carries,
+// never SSHNamespace, so that a signature on a check-in or tag cannot stand
+// in for one (draft-fossil-horizon-00 §5.2.4).
+const SeedNamespace = "fossil-horizon-seed"
 
 // maxSignedBytes bounds what a signer may hand back: a manifest plus armor,
 // never a payload channel.
@@ -73,9 +80,11 @@ var (
 // (src/clearsign.c): COMMAND OUTFILE INFILE writes a clear-signed INFILE to
 // OUTFILE, except that a command whose name starts with "ssh" is run as
 // COMMAND INFILE, writes a detached INFILE.sig, and the SSH envelope is
-// assembled around it.
+// assembled around it. Namespace, when set, is the one an SSH signature the
+// command makes must carry; the command names it, so Sign checks it.
 type Signer struct {
-	Command string
+	Command   string
+	Namespace string
 }
 
 // FromSettings returns the signer q's settings name, or nil when clearsign
@@ -106,6 +115,21 @@ func FromSettings(q db.Querier) (*Signer, error) {
 	return &Signer{Command: command}, nil
 }
 
+// SeedSigner returns the signer of an origin's horizon seeds, q's
+// horizon-seed-command bound to SeedNamespace, or nil when it is unset or
+// off: an origin with no seed-signing command sends seeds unsigned, even
+// when it signs check-ins (draft-fossil-horizon-00 §5.2.4).
+func SeedSigner(q db.Querier) (*Signer, error) {
+	if q == nil {
+		panic("clearsign.SeedSigner: q must not be nil")
+	}
+	command, err := setting(q, SettingSeedCommand)
+	if err != nil || strings.TrimSpace(command) == "" || falsy(command) {
+		return nil, err
+	}
+	return &Signer{Command: command, Namespace: SeedNamespace}, nil
+}
+
 // Sign returns plain wrapped in its envelope. The signer must not alter
 // what it signs: the envelope's content is checked to strip back to plain,
 // as zit checks it, so a dash-escaped or rewritten manifest is refused
@@ -125,6 +149,7 @@ func (s *Signer) Sign(ctx context.Context, plain []byte) ([]byte, error) {
 		var sig []byte
 		if sig, err = runDetached(ctx, s.Command, plain); err == nil {
 			signed = append(append(append([]byte(nil), sshHeader...), plain...), sig...)
+			err = s.checkNamespace(sig)
 		}
 	} else {
 		signed, err = runClearsign(ctx, s.Command, plain)
@@ -137,6 +162,26 @@ func (s *Signer) Sign(ctx context.Context, plain []byte) ([]byte, error) {
 			s.Command, len(plain))
 	}
 	return signed, nil
+}
+
+// checkNamespace refuses an armored SSH signature made under another
+// namespace than the signer's, when it has one.
+func (s *Signer) checkNamespace(armor []byte) error {
+	if s.Namespace == "" {
+		return nil
+	}
+	blob, err := dearmorSSH(armor)
+	if err != nil {
+		return err
+	}
+	sig, err := parseSSHSig(blob)
+	if err != nil {
+		return err
+	}
+	if sig.namespace != s.Namespace {
+		return fmt.Errorf("signed in namespace %q, want %q", sig.namespace, s.Namespace)
+	}
+	return nil
 }
 
 // Key is a signer's public identity: an SSH public key, or the fingerprint
@@ -173,10 +218,14 @@ func (k Key) String() string {
 
 // Verify checks that signed carries a valid signature by k over exactly the
 // bytes a reader parses (deck.StripClearsign), and returns ErrUnsigned for
-// an artifact with no envelope.
-func (k Key) Verify(ctx context.Context, signed []byte) error {
+// an artifact with no envelope. An SSH signature must carry namespace:
+// SSHNamespace for a check-in, SeedNamespace for a seed. PGP has none.
+func (k Key) Verify(ctx context.Context, namespace string, signed []byte) error {
 	if k.ssh == "" && k.pgp == "" {
 		panic("clearsign.Key.Verify: zero Key")
+	}
+	if namespace == "" {
+		panic("clearsign.Key.Verify: empty namespace")
 	}
 	head := envelope(signed)
 	if head == nil {
@@ -188,7 +237,7 @@ func (k Key) Verify(ctx context.Context, signed []byte) error {
 		if k.ssh == "" {
 			return fmt.Errorf("%w: SSH-signed, but the key is an OpenPGP fingerprint", ErrBadSignature)
 		}
-		return verifySSH(k.ssh, signed)
+		return verifySSH(k.ssh, namespace, signed)
 	}
 	if k.pgp == "" {
 		return fmt.Errorf("%w: PGP-signed, but the key is an SSH key", ErrBadSignature)

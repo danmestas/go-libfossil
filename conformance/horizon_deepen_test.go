@@ -145,7 +145,7 @@ func hzDeepen(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	_, want, err := seed.Mint(x.s.f.r.DB(), x.s.c2, k, seedLoginGo)
+	_, want, err := seed.Mint(x.s.f.r.DB(), x.s.c2, cone.RuleDescendants, k, seedLoginGo)
 	if err != nil {
 		return err
 	}

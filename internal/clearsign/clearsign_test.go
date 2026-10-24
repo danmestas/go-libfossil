@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,6 +19,9 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/clearsign/signtest"
 	"github.com/danmestas/go-libfossil/internal/deck"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	_ "github.com/danmestas/go-libfossil/internal/testdriver"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // manifest is a control artifact as a seed is written: cards, then Z.
@@ -70,7 +74,7 @@ func TestSSHSignVerify(t *testing.T) {
 			if !bytes.HasPrefix(signed, sshHeader) {
 				t.Fatalf("not fossil's SSH envelope:\n%s", signed)
 			}
-			if err := mustKey(t, pub).Verify(context.Background(), signed); err != nil {
+			if err := mustKey(t, pub).Verify(context.Background(), SSHNamespace, signed); err != nil {
 				t.Fatalf("Verify: %v", err)
 			}
 		})
@@ -105,7 +109,7 @@ func TestSSHVerifyRefuses(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := c.key.Verify(context.Background(), c.signed); !errors.Is(err, c.want) {
+			if err := c.key.Verify(context.Background(), SSHNamespace, c.signed); !errors.Is(err, c.want) {
 				t.Fatalf("Verify = %v, want %v", err, c.want)
 			}
 		})
@@ -120,14 +124,14 @@ func TestPGPSignVerify(t *testing.T) {
 	if !bytes.HasPrefix(signed, pgpHeader) {
 		t.Fatalf("not a PGP clear-signed message:\n%s", signed)
 	}
-	if err := mustKey(t, fpr).Verify(context.Background(), signed); err != nil {
+	if err := mustKey(t, fpr).Verify(context.Background(), SSHNamespace, signed); err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
 	spaced := ""
 	for i := 0; i < len(fpr); i += 4 {
 		spaced += strings.ToLower(fpr[i:i+4]) + " "
 	}
-	if err := mustKey(t, spaced).Verify(context.Background(), signed); err != nil {
+	if err := mustKey(t, spaced).Verify(context.Background(), SSHNamespace, signed); err != nil {
 		t.Fatalf("Verify with a spaced lower-case fingerprint: %v", err)
 	}
 }
@@ -153,7 +157,7 @@ func TestPGPVerifyRefuses(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := c.key.Verify(context.Background(), c.signed); !errors.Is(err, ErrBadSignature) {
+			if err := c.key.Verify(context.Background(), SSHNamespace, c.signed); !errors.Is(err, ErrBadSignature) {
 				t.Fatalf("Verify = %v, want ErrBadSignature", err)
 			}
 		})
@@ -219,13 +223,13 @@ func TestPGPVerifyRefusesEnvelopes(t *testing.T) {
 	}
 	for name, data := range cases {
 		t.Run(name, func(t *testing.T) {
-			if err := key.Verify(context.Background(), data); !errors.Is(err, ErrBadSignature) {
+			if err := key.Verify(context.Background(), SSHNamespace, data); !errors.Is(err, ErrBadSignature) {
 				t.Fatalf("Verify = %v, want ErrBadSignature", err)
 			}
 		})
 	}
 	trailing := bytes.Replace(signed, []byte("U go-libfossil\n"), []byte("U go-libfossil  \n"), 1)
-	if err := key.Verify(context.Background(), trailing); err == nil || !strings.Contains(err.Error(), "differs") {
+	if err := key.Verify(context.Background(), SSHNamespace, trailing); err == nil || !strings.Contains(err.Error(), "differs") {
 		t.Fatalf("trailing white space: Verify = %v, want the signed text to differ", err)
 	}
 }
@@ -236,7 +240,7 @@ func TestPGPCannotVerify(t *testing.T) {
 	signer, fpr := gpgKey(t)
 	signed := sign(t, signer, manifest)
 	t.Setenv("PATH", t.TempDir())
-	err := mustKey(t, fpr).Verify(context.Background(), signed)
+	err := mustKey(t, fpr).Verify(context.Background(), SSHNamespace, signed)
 	if !errors.Is(err, ErrCannotVerify) || errors.Is(err, ErrBadSignature) {
 		t.Fatalf("Verify without gpg = %v, want ErrCannotVerify alone", err)
 	}
@@ -283,8 +287,87 @@ func TestSSHVerifyRefusesSHA1RSA(t *testing.T) {
 	armor := "-----BEGIN SSH SIGNATURE-----\n" + base64.StdEncoding.EncodeToString(blob) + "\n-----END SSH SIGNATURE-----\n"
 	signed := append(append(append([]byte(nil), sshHeader...), manifest...), armor...)
 	key := mustKey(t, string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-	if err := key.Verify(context.Background(), signed); !errors.Is(err, ErrBadSignature) ||
+	if err := key.Verify(context.Background(), SSHNamespace, signed); !errors.Is(err, ErrBadSignature) ||
 		!strings.Contains(err.Error(), "SHA-1") {
 		t.Fatalf("Verify = %v, want the SHA-1 signature refused", err)
+	}
+}
+
+// TestSSHNamespaceIsTheVerifiers: the namespace an SSH signature must carry
+// is the verifier's parameter, so a check-in's fossilscm signature never
+// verifies as a seed's, nor a seed's as a check-in's
+// (draft-fossil-horizon-00 §5.2.4).
+func TestSSHNamespaceIsTheVerifiers(t *testing.T) {
+	checkin, pub := sshKey(t, "ed25519")
+	key := mustKey(t, pub)
+	seedSigner := &Signer{Command: strings.Replace(checkin.Command, "-n "+SSHNamespace, "-n "+SeedNamespace, 1)}
+	byCheckin, bySeed := sign(t, checkin, manifest), sign(t, seedSigner, manifest)
+	for _, c := range []struct {
+		name, namespace string
+		signed          []byte
+		ok              bool
+	}{
+		{"check-in as check-in", SSHNamespace, byCheckin, true},
+		{"seed as seed", SeedNamespace, bySeed, true},
+		{"check-in as seed", SeedNamespace, byCheckin, false},
+		{"seed as check-in", SSHNamespace, bySeed, false},
+	} {
+		err := key.Verify(context.Background(), c.namespace, c.signed)
+		if c.ok && err != nil || !c.ok && !errors.Is(err, ErrBadSignature) {
+			t.Errorf("%s: Verify = %v, want ok %v", c.name, err, c.ok)
+		}
+	}
+}
+
+// TestSignRefusesAnotherNamespace: a signer bound to a namespace refuses an
+// SSH signature its command made under another, so an origin whose seed
+// command names fossilscm sends no seed a clone could only refuse.
+func TestSignRefusesAnotherNamespace(t *testing.T) {
+	checkin, _ := sshKey(t, "ed25519")
+	wrong := &Signer{Command: checkin.Command, Namespace: SeedNamespace}
+	if _, err := wrong.Sign(context.Background(), manifest); err == nil || !strings.Contains(err.Error(), SeedNamespace) {
+		t.Fatalf("Sign under %s for a %s signer = %v, want a refusal naming %s", SSHNamespace, SeedNamespace, err, SeedNamespace)
+	}
+	right := &Signer{Command: strings.Replace(checkin.Command, "-n "+SSHNamespace, "-n "+SeedNamespace, 1), Namespace: SeedNamespace}
+	sign(t, right, manifest)
+}
+
+// TestSeedSignerIsItsOwnSetting: an origin's seed-signing command is
+// configured apart from its check-in signing (§5.2.4): clearsign and
+// pgp-command sign no seed, and the seed command signs whatever they say.
+func TestSeedSignerIsItsOwnSetting(t *testing.T) {
+	r, err := repo.Create(filepath.Join(t.TempDir(), "origin.fossil"), "u", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	set := func(name, value string) {
+		t.Helper()
+		if err := r.SetConfig(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedSigner := func() *Signer {
+		t.Helper()
+		s, err := SeedSigner(r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	set(SettingClearsign, "on")
+	set(SettingPGPCommand, "gpg --clearsign -o")
+	if s := seedSigner(); s != nil {
+		t.Fatalf("check-in signing alone gives seed signer %+v, want none", s)
+	}
+	const command = "ssh-keygen -q -Y sign -n fossil-horizon-seed -f k"
+	set(SettingSeedCommand, command)
+	set(SettingClearsign, "off")
+	if s := seedSigner(); s == nil || s.Command != command || s.Namespace != SeedNamespace {
+		t.Fatalf("seed signer %+v, want %q in namespace %s", s, command, SeedNamespace)
+	}
+	set(SettingSeedCommand, "off")
+	if s := seedSigner(); s != nil {
+		t.Fatalf("seed command off gives signer %+v", s)
 	}
 }

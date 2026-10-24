@@ -116,7 +116,9 @@ func discardMovedSeed(r *repo.Repo, old, next *cone.Cone) ([]byte, error) {
 // restoreSeed puts back the store cone and seed a failed move replaced.
 // The seed was held, so verified, before the move; it goes back without a
 // verifier, and the next Apply re-checks it against the clone's key
-// (draft-fossil-horizon-00 §5.2.4).
+// (draft-fossil-horizon-00 §5.2.4). One no longer bound to the store's
+// horizon, held before seeds carried a binding card, is not put back: the
+// store's next synchronization fetches a seed for its horizon.
 func restoreSeed(r *repo.Repo, old *cone.Cone, held []byte) error {
 	if held == nil {
 		panic("sync.restoreSeed: no seed to restore")
@@ -125,6 +127,9 @@ func restoreSeed(r *repo.Repo, old *cone.Cone, held []byte) error {
 		if err := content.SetStoreCone(tx, old); err != nil {
 			return err
 		}
-		return seed.Hold(tx, hash.SHA3(held), held, nil)
+		if err := seed.Hold(tx, hash.SHA3(held), held, nil); !errors.Is(err, seed.ErrUnbound) {
+			return err
+		}
+		return nil
 	})
 }

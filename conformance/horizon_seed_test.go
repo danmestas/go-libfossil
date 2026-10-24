@@ -91,7 +91,7 @@ func (s *hzSeed) tag(t *testing.T, target libfossil.FslID, name string, typ int,
 }
 
 func (s *hzSeed) mint(login string) (string, []byte, error) {
-	return seed.Mint(s.f.r.DB(), s.c3, s.k, login)
+	return seed.Mint(s.f.r.DB(), s.c3, cone.RuleDescendants, s.k, login)
 }
 
 // hzTagState is the tag state in force at a check-in: its rows of positive
@@ -144,8 +144,8 @@ func (s *hzSeed) derivesDense(t *testing.T, clone *repo.Repo) error {
 }
 
 // lacking is a fresh store holding every artifact of the origin but the
-// check-in manifests outside K, crosslinked: what a structural-horizon
-// clone holds before its seed.
+// check-in manifests outside K, crosslinked, its store cone C's structural
+// horizon: what a structural-horizon clone holds before its seed.
 func (s *hzSeed) lacking(t *testing.T) *repo.Repo {
 	t.Helper()
 	clone, err := repo.Create(filepath.Join(t.TempDir(), "lacking.fossil"), "u", simio.CryptoRand{}, "")
@@ -153,6 +153,17 @@ func (s *hzSeed) lacking(t *testing.T) *repo.Repo {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { clone.Close() })
+	h, err := cone.NewHorizon(hzUUID(t, s.f.r, s.c3), cone.RuleDescendants, cone.DepthStructural)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc, err := cone.NewWithHorizon(nil, nil, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := content.SetStoreCone(clone.DB(), sc); err != nil {
+		t.Fatal(err)
+	}
 	// The origin names its artifacts by SHA1; so must the copy.
 	if err := clone.SetHashPolicy("sha1"); err != nil {
 		t.Fatal(err)
@@ -230,6 +241,9 @@ func hzSeedCards(t *testing.T, s *hzSeed) error {
 	}
 	cards := map[string][]string{}
 	for _, tc := range d.T {
+		if tc.Name == seed.BindingTag {
+			continue
+		}
 		typ := tag.TagSingleton
 		if tc.Type == deck.TagPropagating {
 			typ = tag.TagPropagating
@@ -329,7 +343,7 @@ func hzSeedNone(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err := seed.Mint(f.r.DB(), c3, k, seedLoginGo); !errors.Is(err, seed.ErrNothingToSeed) {
+	if _, _, err := seed.Mint(f.r.DB(), c3, cone.RuleDescendants, k, seedLoginGo); !errors.Is(err, seed.ErrNothingToSeed) {
 		return expectf("Mint with no tag in force = %v, want ErrNothingToSeed", err)
 	}
 	h, err := cone.NewHorizon(hzUUID(t, f.r, c3), cone.RuleDescendants, cone.DepthStructural)
@@ -546,13 +560,13 @@ func hzSeedProvenance(t *testing.T, s *hzSeed) error {
 	return nil
 }
 
-// TestHorizonSeedZit has zit 0.6.4 mint a seed for the same repository and
+// TestHorizonSeedZit has zit 0.7.1 mint a seed for the same repository and
 // compares it with go-libfossil's: go-libfossil serves hzSeed, zit clones it
 // densely and serves that clone, and a second zit clone at C's structural
 // horizon receives the seed. Every tag event in hzSeed is on a whole second,
-// so with zit's login the two seeds must be the same bytes and so the same
-// name; each implementation must then derive from the other's seed what it
-// derives from its own.
+// so with zit's seed label the two seeds, binding card included, must be the
+// same bytes and so the same name; each implementation must then derive from
+// the other's seed what it derives from its own.
 func TestHorizonSeedZit(t *testing.T) {
 	bin := zitHorizonBinary(t)
 	s := newHZSeed(t)
@@ -573,7 +587,7 @@ func TestHorizonSeedZit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zit held no seed: %v", err)
 	}
-	goName, goSeed, err := s.mint("zit-serve")
+	goName, goSeed, err := s.mint("zit-seed")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -60,7 +60,7 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 		if err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", hz.Hash()).Scan(&c); err != nil {
 			return fmt.Errorf("handler: horizon C: %w", err)
 		}
-		name, data, err = seed.Mint(q, c, k, seedLogin)
+		name, data, err = seed.Mint(q, c, hz.Rule(), k, seedLogin)
 		if errors.Is(err, seed.ErrNothingToSeed) {
 			placed = false
 		} else if err != nil {
@@ -77,9 +77,9 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 	}
 	offered := requestSeedOffer(cards)
 	h.seedOffered = offered
-	// An origin that holds a signing key signs the seed (§5.2.4), as it signs
-	// check-ins, under clearsign and pgp-command; only the kept signature is
-	// read here, since whether the requester may read is not yet known.
+	// An origin with a seed-signing command signs the seed (§5.2.4); only the
+	// kept signature is read here, since whether the requester may read is
+	// not yet known.
 	signing, err := newSeedSigning(q, name, data, offered)
 	if err != nil {
 		return err
@@ -285,8 +285,9 @@ func (c *structuralClient) pragma(q db.Querier, p *xfer.PragmaCard) (handled boo
 // holding instead of the artifact store, and reports that it did (§6.2.3).
 // Only a full-form card can be one. Bytes that do not hash to the name or do
 // not parse as a control artifact are dropped; a seed the origin's key does
-// not verify is dropped and the store falls back to the content horizon at
-// the end of the reply (§5.2.4).
+// not verify, or that is not bound to the store's horizon or is dated before
+// the seed held, is dropped and the store falls back to the content horizon
+// at the end of the reply (§5.2.4).
 func (c *structuralClient) takeSeed(r *repo.Repo, uuid, deltaSrc string, payload []byte) (bool, error) {
 	if r == nil {
 		panic("sync.structuralClient.takeSeed: nil repo")

@@ -42,7 +42,7 @@ func TestSignedCheckin(t *testing.T) {
 	}
 	signedRID := hzCommit(t, f, "signed", []libfossil.FslID{f.c1}, nil)
 	signed := sigStored(t, f.r, signedRID)
-	if err := key.Verify(context.Background(), signed); err != nil {
+	if err := key.Verify(context.Background(), clearsign.SSHNamespace, signed); err != nil {
 		t.Fatalf("the signed check-in does not verify: %v\n%s", err, signed)
 	}
 
@@ -54,7 +54,7 @@ func TestSignedCheckin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := key.Verify(context.Background(), sigStored(t, f.r, plainRID)); err != clearsign.ErrUnsigned {
+	if err := key.Verify(context.Background(), clearsign.SSHNamespace, sigStored(t, f.r, plainRID)); err != clearsign.ErrUnsigned {
 		t.Fatalf("NoSign check-in: Verify = %v, want ErrUnsigned", err)
 	}
 
@@ -174,7 +174,7 @@ func sigZitBothWays(t *testing.T, f *scRepo, url, uuid, command string, key clea
 		t.Fatalf("zit's signed check-in did not arrive: %v", err)
 	}
 	zitSigned := sigStored(t, f.r, rid)
-	if err := key.Verify(context.Background(), zitSigned); err != nil {
+	if err := key.Verify(context.Background(), clearsign.SSHNamespace, zitSigned); err != nil {
 		t.Fatalf("zit's signed check-in does not verify here: %v\n%s", err, zitSigned)
 	}
 }

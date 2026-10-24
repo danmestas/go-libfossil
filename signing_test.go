@@ -47,7 +47,7 @@ func TestCommitSigning(t *testing.T) {
 		}
 		return data
 	}
-	if err := key.Verify(context.Background(), stored(signed)); err != nil {
+	if err := key.Verify(context.Background(), clearsign.SSHNamespace, stored(signed)); err != nil {
 		t.Errorf("signed check-in: %v", err)
 	}
 	if data := stored(plain); !bytes.HasPrefix(data, []byte("C plain")) {

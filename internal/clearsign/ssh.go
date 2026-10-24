@@ -17,8 +17,9 @@ import (
 // verifySSH checks fossil's SSH envelope (src/clearsign.c): the header, a
 // blank line, the artifact verbatim, then the armored detached signature
 // ssh-keygen -Y sign wrote over it. Fossil's layout is the only one
-// accepted, so the signed message is exactly what a reader parses.
-func verifySSH(authorized string, signed []byte) error {
+// accepted, so the signed message is exactly what a reader parses. The
+// signature must carry namespace.
+func verifySSH(authorized, namespace string, signed []byte) error {
 	want, err := parseSSHKey(authorized)
 	if err != nil {
 		return err
@@ -45,8 +46,8 @@ func verifySSH(authorized string, signed []byte) error {
 	if sig.signature.Format == ssh.KeyAlgoRSA {
 		return fmt.Errorf("%w: SHA-1 ssh-rsa signature", ErrBadSignature)
 	}
-	if sig.namespace != SSHNamespace {
-		return fmt.Errorf("%w: namespace %q, want %q", ErrBadSignature, sig.namespace, SSHNamespace)
+	if sig.namespace != namespace {
+		return fmt.Errorf("%w: namespace %q, want %q", ErrBadSignature, sig.namespace, namespace)
 	}
 	var digest []byte
 	switch sig.hash {

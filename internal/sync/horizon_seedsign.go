@@ -37,9 +37,10 @@ type seedSigning struct {
 }
 
 // newSeedSigning returns the signing of the unsigned seed data, named name,
-// when q's clearsign setting is on, or nil.
+// when q configures a seed-signing command, or nil: check-in signing never
+// signs a seed (§5.2.4).
 func newSeedSigning(q db.Querier, name string, data []byte, offered string) (*seedSigning, error) {
-	signer, err := clearsign.FromSettings(q)
+	signer, err := clearsign.SeedSigner(q)
 	if err != nil || signer == nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func (h *handler) finishSeedSigning(ctx context.Context) error {
 // signs afresh for every request, and a clone re-holds the seed whenever its
 // name changes.
 func (s *seedSigning) sign(ctx context.Context, r *repo.Repo, now time.Time) (string, []byte, error) {
-	if s.kept != nil && (s.self == nil || s.self.Verify(ctx, s.kept.Signed) == nil) {
+	if s.kept != nil && (s.self == nil || s.self.Verify(ctx, clearsign.SeedNamespace, s.kept.Signed) == nil) {
 		if s.kept.Stale(now) {
 			// Best effort: a failed touch only lets the row age toward eviction.
 			_, _ = seed.Keep(r, s.unsigned, s.signer.Command, s.kept.Signed, false, now)

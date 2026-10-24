@@ -188,10 +188,12 @@ func (w *world) derivesDense(clone *repo.Repo, k []libfossil.FslID) error {
 
 // lacking copies every artifact of the origin into a fresh store but the
 // check-in manifests outside k: a store that holds K, every control
-// artifact, and none of C's ancestry.
+// artifact, and none of C's ancestry. Its store cone is c3's structural
+// horizon, the one the seeds w.mint mints at c3 are bound to.
 func (w *world) lacking(k []libfossil.FslID) *repo.Repo {
 	w.t.Helper()
 	clone := newRepo(w.t, "clone")
+	w.setHorizon(clone, w.c3, cone.RuleDescendants)
 	rows, err := w.r.DB().Query(`SELECT rid FROM blob WHERE size>=0
 		AND (rid NOT IN (SELECT objid FROM event WHERE type='ci') OR rid IN (SELECT value FROM json_each(?)))
 		ORDER BY rid`, jsonRids(k))
@@ -209,6 +211,22 @@ func (w *world) lacking(k []libfossil.FslID) *repo.Repo {
 	rows.Close()
 	w.copyInto(clone, rids...)
 	return clone
+}
+
+// setHorizon makes r's store cone the structural horizon at c by rule.
+func (w *world) setHorizon(r *repo.Repo, c libfossil.FslID, rule cone.HorizonRule) {
+	w.t.Helper()
+	h, err := cone.NewHorizon(uuidOf(w.t, w.r.DB(), c), rule, cone.DepthStructural)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	sc, err := cone.NewWithHorizon(nil, nil, h)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if err := content.SetStoreCone(r.DB(), sc); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 func (w *world) copyInto(clone *repo.Repo, rids ...libfossil.FslID) {
@@ -243,7 +261,7 @@ func jsonRids(rids []libfossil.FslID) string {
 
 func (w *world) mint(c libfossil.FslID, login string) (string, []byte) {
 	w.t.Helper()
-	name, data, err := seed.Mint(w.r.DB(), c, w.k(c), login)
+	name, data, err := seed.Mint(w.r.DB(), c, cone.RuleDescendants, w.k(c), login)
 	if err != nil {
 		w.t.Fatalf("Mint: %v", err)
 	}
@@ -328,10 +346,13 @@ func TestMintCardsCarryDenseState(t *testing.T) {
 	if err != nil || d.Type != deck.Control {
 		t.Fatalf("seed parses as %v, %v; want a control artifact", d, err)
 	}
-	// Every card is exactly a row in force at its target, and every such
-	// row has its card.
+	// Every card but the binding card is exactly a row in force at its
+	// target, and every such row has its card.
 	cards := map[string][]string{}
 	for _, tc := range d.T {
+		if tc.Name == seed.BindingTag {
+			continue
+		}
 		typ := map[deck.TagType]int{deck.TagPropagating: tag.TagPropagating, deck.TagSingleton: tag.TagSingleton}[tc.Type]
 		cards[tc.UUID] = append(cards[tc.UUID], fmt.Sprintf("%s/%d=%s", tc.Name, typ, tc.Value))
 	}
@@ -368,7 +389,7 @@ func TestMintDateIsTheLatestEvent(t *testing.T) {
 
 func TestMintRefusesWhatIsNotK(t *testing.T) {
 	w := newWorld(t)
-	if _, _, err := seed.Mint(w.r.DB(), w.c3, []libfossil.FslID{w.c4}, "origin"); err == nil {
+	if _, _, err := seed.Mint(w.r.DB(), w.c3, cone.RuleDescendants, []libfossil.FslID{w.c4}, "origin"); err == nil {
 		t.Error("Mint accepted a K without C")
 	}
 }
@@ -677,5 +698,208 @@ func TestSeedShapedArtifactIsAnOrdinaryControl(t *testing.T) {
 	}
 	if unsent != 1 {
 		t.Error("the ordinary control artifact is not offered to peers like any other")
+	}
+}
+
+// reseal returns data with its T cards edited, as a control artifact again
+// under its new name: a seed some origin could have minted.
+func reseal(t *testing.T, data []byte, edit func([]deck.TagCard) []deck.TagCard) (string, []byte) {
+	t.Helper()
+	d, err := deck.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := (&deck.Deck{Type: deck.Control, D: d.D, T: edit(slices.Clone(d.T)), U: d.U}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hash.SHA3(out), out
+}
+
+// bindings returns the seed's horizon-seed cards.
+func bindings(t *testing.T, data []byte) []deck.TagCard {
+	t.Helper()
+	d, err := deck.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []deck.TagCard
+	for _, tc := range d.T {
+		if tc.Name == seed.BindingTag {
+			out = append(out, tc)
+		}
+	}
+	return out
+}
+
+// TestMintCarriesTheBindingCard: every seed carries one binding card, a
+// singleton horizon-seed tag on C whose value is the rule (§5.2.1).
+func TestMintCarriesTheBindingCard(t *testing.T) {
+	w := newWorld(t)
+	c3 := uuidOf(t, w.r.DB(), w.c3)
+	for _, rule := range []cone.HorizonRule{cone.RuleDescendants, cone.RuleLeaves} {
+		_, data, err := seed.Mint(w.r.DB(), w.c3, rule, w.k(w.c3), "origin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line := "T +horizon-seed " + c3 + " " + rule.String() + "\n"; !strings.Contains(string(data), line) {
+			t.Errorf("%v seed lacks %q:\n%s", rule, line, data)
+		}
+		if got := bindings(t, data); len(got) != 1 {
+			t.Errorf("%v seed carries %d binding cards, want 1", rule, len(got))
+		}
+	}
+}
+
+// TestMintNeverDerivesTheBindingTag: a horizon-seed tag in force at an entry
+// is never derived into a seed, which carries its own binding card alone
+// (§5.2.1); with no other tag in force there is nothing to seed.
+func TestMintNeverDerivesTheBindingTag(t *testing.T) {
+	w := newWorld(t)
+	w.tag(w.c3, seed.BindingTag, tag.TagSingleton, "leaves", w.at(20))
+	var rows int
+	if err := w.r.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
+		WHERE tagname=?`, seed.BindingTag).Scan(&rows); err != nil || rows == 0 {
+		t.Fatalf("fixture: %d horizon-seed rows (%v), want the tag in force", rows, err)
+	}
+	_, data := w.mint(w.c3, "origin")
+	if got := bindings(t, data); len(got) != 1 || got[0].Value != "descendants" {
+		t.Errorf("binding cards %+v, want the seed's own alone:\n%s", got, data)
+	}
+	// The derived tag's event is not summarized: D stays closed's.
+	if want := "D 2026-01-13T00:00:01\n"; !strings.Contains(string(data), want) {
+		t.Errorf("seed lacks %q:\n%s", want, data)
+	}
+	if _, err := w.r.DB().Exec(`DELETE FROM tagxref WHERE tagid NOT IN
+		(SELECT tagid FROM tag WHERE tagname=?)`, seed.BindingTag); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := seed.Mint(w.r.DB(), w.c3, cone.RuleDescendants, w.k(w.c3), "origin"); !errors.Is(err, seed.ErrNothingToSeed) {
+		t.Errorf("Mint with only a horizon-seed tag in force = %v, want ErrNothingToSeed", err)
+	}
+}
+
+// TestHoldRefusesAnUnboundSeed: a clone holds no seed whose binding card is
+// missing, doubled, or names another C or rule than its store cone's, and
+// none at all without a horizon; each is refused as a wrongly signed seed is
+// (§5.2.4).
+func TestHoldRefusesAnUnboundSeed(t *testing.T) {
+	w := newWorld(t)
+	k := w.k(w.c3)
+	clone := w.lacking(k)
+	_, good := w.mint(w.c3, "origin")
+	otherC, otherCData := w.mint(w.c4, "origin")
+	leaves, leavesData, err := seed.Mint(w.r.DB(), w.c3, cone.RuleLeaves, k, "origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The extra card sorts before C's, so C's is the last a reader sees.
+	below := strings.Repeat("0", 40)
+	unbound, unboundData := reseal(t, good, func(cards []deck.TagCard) []deck.TagCard {
+		return slices.DeleteFunc(cards, func(tc deck.TagCard) bool { return tc.Name == seed.BindingTag })
+	})
+	twice, twiceData := reseal(t, good, func(cards []deck.TagCard) []deck.TagCard {
+		return append(cards, deck.TagCard{Type: deck.TagSingleton, Name: seed.BindingTag, UUID: below, Value: "descendants"})
+	})
+	for _, tc := range []struct {
+		what string
+		name string
+		data []byte
+	}{
+		{"another C", otherC, otherCData},
+		{"another rule", leaves, leavesData},
+		{"no binding card", unbound, unboundData},
+		{"two binding cards", twice, twiceData},
+	} {
+		err := hold(t, clone, tc.name, tc.data, nil)
+		if !errors.Is(err, seed.ErrUnbound) || !errors.Is(err, seed.ErrProvenance) {
+			t.Errorf("%s: Hold = %v, want ErrUnbound as ErrProvenance", tc.what, err)
+		}
+	}
+	if held, err := seed.Held(clone.DB()); err != nil || held != nil {
+		t.Errorf("Held after refusals = %q, %v", held, err)
+	}
+	dense := newRepo(t, "dense-store")
+	if err := hold(t, dense, hash.SHA3(good), good, nil); !errors.Is(err, seed.ErrUnbound) {
+		t.Errorf("a store with no horizon: Hold = %v, want ErrUnbound", err)
+	}
+}
+
+// TestHoldRefusesAnOlderSeed: a seed dated before the one held is a replay
+// and refused; one dated the same is accepted; and once the held seed is
+// discarded, as a deepen discards it, the floor is gone (§5.2.4).
+func TestHoldRefusesAnOlderSeed(t *testing.T) {
+	w := newWorld(t)
+	k := w.k(w.c3)
+	clone := w.lacking(k)
+	oldName, oldData := w.mint(w.c3, "origin")
+	w.tag(w.c3, "sym-v2", tag.TagSingleton, "", w.at(20))
+	newName, newData := w.mint(w.c3, "origin")
+	if err := hold(t, clone, newName, newData, nil); err != nil {
+		t.Fatal(err)
+	}
+	err := hold(t, clone, oldName, oldData, nil)
+	if !errors.Is(err, seed.ErrReplay) || !errors.Is(err, seed.ErrProvenance) {
+		t.Errorf("Hold of an older seed = %v, want ErrReplay as ErrProvenance", err)
+	}
+	if held, _ := seed.Held(clone.DB()); string(held) != string(newData) {
+		t.Errorf("the refused replay replaced the held seed:\n%s", held)
+	}
+	sameName, sameData := w.mint(w.c3, "another-origin")
+	if sameName == newName {
+		t.Fatal("two labels mint one seed: the equal-D case proves nothing")
+	}
+	if err := hold(t, clone, sameName, sameData, nil); err != nil {
+		t.Errorf("Hold of a seed dated as the held one = %v, want it accepted", err)
+	}
+	if err := clone.WithTx(seed.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := hold(t, clone, oldName, oldData, nil); err != nil {
+		t.Errorf("Hold of the older seed once none is held = %v, want it accepted", err)
+	}
+}
+
+// TestApplyStripsTheBindingCard: the binding card is no tag in force, so a
+// held seed applies every card but it (§5.2.1).
+func TestApplyStripsTheBindingCard(t *testing.T) {
+	w := newWorld(t)
+	clone := w.lacking(w.k(w.c3))
+	name, data := w.mint(w.c3, "origin")
+	if err := hold(t, clone, name, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := clone.DB().QueryRow(`SELECT count(*) FROM tagxref JOIN tag USING(tagid)
+		WHERE tagname=?`, seed.BindingTag).Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d horizon-seed rows derived (%v), want none", n, err)
+	}
+}
+
+// TestApplyDiscardsAnUnboundHeldSeed: a held seed no longer bound to the
+// store's horizon, one held before seeds carried a binding card or swapped
+// on disk, is discarded when applied, as one failing its signature is.
+func TestApplyDiscardsAnUnboundHeldSeed(t *testing.T) {
+	w := newWorld(t)
+	k := w.k(w.c3)
+	clone := w.lacking(k)
+	name, data := w.mint(w.c3, "origin")
+	if err := hold(t, clone, name, data, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, legacy := reseal(t, data, func(cards []deck.TagCard) []deck.TagCard {
+		return slices.DeleteFunc(cards, func(tc deck.TagCard) bool { return tc.Name == seed.BindingTag })
+	})
+	if _, err := clone.DB().Exec("UPDATE horizonseed SET seed=?", legacy); err != nil {
+		t.Fatal(err)
+	}
+	if apply(t, clone, nil) {
+		t.Error("Apply reports an unbound held seed applied")
+	}
+	if held, _ := seed.Held(clone.DB()); held != nil {
+		t.Error("an unbound held seed was kept")
+	}
+	if w.derivesDense(clone, k) == nil {
+		t.Error("the discarded seed's state survived")
 	}
 }

@@ -64,8 +64,15 @@ func VerifySeed(ctx context.Context, r *repo.Repo, peer Transport, opts SyncOpts
 	if err != nil {
 		return SeedReport{}, fmt.Errorf("horizon: the held seed: %w", err)
 	}
+	// The binding card asserts no tag state (§5.2.1), so there is nothing
+	// to compare it with.
 	seeded := map[string]map[string]string{}
+	checked := 0
 	for _, t := range d.T {
+		if t.Name == seed.BindingTag {
+			continue
+		}
+		checked++
 		if seeded[t.UUID] == nil {
 			seeded[t.UUID] = map[string]string{}
 		}
@@ -74,7 +81,7 @@ func VerifySeed(ctx context.Context, r *repo.Repo, peer Transport, opts SyncOpts
 	if _, err := FetchCone(ctx, r, peer, withDepth(sc, cone.DepthContent), opts); err != nil {
 		return SeedReport{}, fmt.Errorf("horizon: verifying the seed: %w", err)
 	}
-	report := SeedReport{Checked: len(d.T)}
+	report := SeedReport{Checked: checked}
 	for entry, cards := range seeded {
 		derived, err := derivedTags(r.DB(), entry)
 		if err != nil {

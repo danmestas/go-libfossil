@@ -22,11 +22,13 @@ import (
 )
 
 // The signing cases (§5.2.4) run over hzStruct: an origin signs the seed it
-// mints when its clearsign setting is on, with its pgp-command, as fossil
-// and zit sign check-ins; a clone given the origin's key verifies every seed
-// it holds against it and falls back to the content horizon from one that is
-// unsigned or signed by another key. The cases sign with ssh-keygen, which
-// clearsign verifies in process; TestHorizonSeedSigningPGP signs with gpg.
+// mints with its horizon-seed-command, configured apart from the clearsign
+// and pgp-command that sign its check-ins, and an SSH signature carries the
+// fossil-horizon-seed namespace; a clone given the origin's key verifies
+// every seed it holds against it and falls back to the content horizon from
+// one that is unsigned or signed by another key. The cases sign with
+// ssh-keygen, which clearsign verifies in process; TestHorizonSeedSigningPGP
+// signs with gpg.
 
 var (
 	horizonSeedSigned   = Case{ID: "horizon.5.2.4.seed-signed", Req: "HZ-5.2-5"}
@@ -40,13 +42,11 @@ func TestHorizonSeedSigning(t *testing.T) {
 	check(t, horizonSeedVerified, func() error { return hzSeedKeyVerified(t) })
 }
 
-// hzSigningOrigin turns on signing at x's origin with command.
+// hzSigningOrigin makes command x's origin's seed-signing command.
 func hzSigningOrigin(t *testing.T, x *hzStruct, command string) {
 	t.Helper()
-	for _, kv := range [][2]string{{clearsign.SettingClearsign, "on"}, {clearsign.SettingPGPCommand, command}} {
-		if err := x.s.f.r.SetConfig(kv[0], kv[1]); err != nil {
-			t.Fatal(err)
-		}
+	if err := x.s.f.r.SetConfig(clearsign.SettingSeedCommand, command); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -86,7 +86,7 @@ func hzSignedSeed(
 	if err != nil {
 		return nil, err
 	}
-	if err := k.Verify(context.Background(), held); err != nil {
+	if err := k.Verify(context.Background(), clearsign.SeedNamespace, held); err != nil {
 		return nil, expectf("the held seed does not verify: %v", err)
 	}
 	_, unsigned, err := x.s.mint(seedLoginGo)
@@ -99,13 +99,13 @@ func hzSignedSeed(
 	return held, x.s.derivesDense(t, r)
 }
 
-// hzSeedSigned: an origin with clearsign on serves its seed signed, a clone
-// keyed with its public key verifies it and derives K densely, and a second
-// clone is sent the same signed seed, since the origin keeps one signature
-// per seed and tag state.
+// hzSeedSigned: an origin with a seed-signing command serves its seed
+// signed, a clone keyed with its public key verifies it and derives K
+// densely, and a second clone is sent the same signed seed, since the origin
+// keeps one signature per seed and tag state.
 func hzSeedSigned(t *testing.T) error {
 	x := newHZStruct(t)
-	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
+	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
 	hzSigningOrigin(t, x, command)
 	r, result, err := x.keyedClone(t, x.peer(), pub)
 	if err != nil {
@@ -153,8 +153,8 @@ func hzFellBack(r *repo.Repo, result *sync.CloneResult, err error) error {
 // clone's own setting, so a rebuild re-verifies the held seed against it.
 func hzSeedKeyVerified(t *testing.T) error {
 	x := newHZStruct(t)
-	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
-	_, otherPub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
+	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
+	_, otherPub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
 	if err := hzFellBack(x.keyedClone(t, x.peer(), pub)); err != nil {
 		return expectf("unsigned seed, keyed clone: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestHorizonSeedSigningPGP(t *testing.T) {
 func TestZitHorizonSeedSigned(t *testing.T) {
 	bin := zitHorizonBinary(t)
 	x := newHZStruct(t)
-	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
+	command, pub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
 	hzSigningOrigin(t, x, command)
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
@@ -249,7 +249,7 @@ func TestZitHorizonSeedSigned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := k.Verify(context.Background(), zitSeed); err != nil {
+	if err := k.Verify(context.Background(), clearsign.SeedNamespace, zitSeed); err != nil {
 		t.Fatalf("zit holds a seed that does not verify against the origin's key: %v\n%s", err, zitSeed)
 	}
 	zd := filepath.Join(dir, "zdense")
@@ -309,13 +309,13 @@ func TestHorizonSeedSigningNeedsRead(t *testing.T) {
 }
 
 // TestHorizonSeedSigningKeyRotation: an origin keeps one signature per seed
-// and command, so replacing the key behind an unchanged pgp-command would
+// and command, so replacing the key behind an unchanged seed command would
 // keep serving the old key's signature. With its own public key as its
 // horizon-seed-key, the origin checks a kept signature against it and signs
 // again when it no longer verifies.
 func TestHorizonSeedSigningKeyRotation(t *testing.T) {
 	x := newHZStruct(t)
-	command, oldPub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
+	command, oldPub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
 	hzSigningOrigin(t, x, command)
 	if err := x.s.f.r.SetConfig(clearsign.SettingSeedKey, oldPub); err != nil {
 		t.Fatal(err)
@@ -328,7 +328,7 @@ func TestHorizonSeedSigningKeyRotation(t *testing.T) {
 		t.Fatalf("before rotation: %v", err)
 	}
 	// Rotate: a new key at the path the unchanged command names.
-	newCommand, newPub := signtest.SSHKey(t, "ed25519", clearsign.SSHNamespace)
+	newCommand, newPub := signtest.SSHKey(t, "ed25519", clearsign.SeedNamespace)
 	path := func(c string) string { return strings.Trim(c[strings.LastIndex(c, " -f ")+4:], "'") }
 	for _, suffix := range []string{"", ".pub"} {
 		data, err := os.ReadFile(path(newCommand) + suffix)

@@ -16,7 +16,8 @@ import (
 
 // VerifierFor returns the Verifier for the key q's horizon-seed-key setting
 // names (draft-fossil-horizon-00 §5.2.4), or nil when none is set: a clone
-// that knows no key for its origin accepts an unsigned seed.
+// that knows no key for its origin accepts an unsigned seed. An SSH
+// signature must carry clearsign.SeedNamespace.
 //
 // A seed that verified is remembered by its bytes and the key, so the
 // re-check every Apply makes (after each round that links artifacts) costs a
@@ -31,7 +32,7 @@ func VerifierFor(q db.Querier) (Verifier, error) {
 		if verified.has(id) {
 			return nil
 		}
-		if err := key.Verify(context.Background(), seed); err != nil {
+		if err := key.Verify(context.Background(), clearsign.SeedNamespace, seed); err != nil {
 			return err
 		}
 		verified.add(id)

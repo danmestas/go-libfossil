@@ -22,17 +22,26 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/clearsign"
+	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
+
+// BindingTag names a seed's binding card, T +horizon-seed <C> <rule>
+// (§5.2.1): the horizon the seed was minted for, part of the signed bytes,
+// and no tag in force, so it is never derived into a seed nor applied.
+const BindingTag = seedcheck.Tag
 
 var (
 	// ErrNotSeed is returned by Hold for bytes that do not hash to the name
@@ -41,8 +50,16 @@ var (
 	// longer parses.
 	ErrNotSeed = errors.New("horizon seed: not a seed")
 	// ErrProvenance is returned by Hold when the origin's key does not verify
-	// the seed (§5.2.4); the clone falls back to the content horizon.
+	// the seed, and wraps ErrUnbound and ErrReplay, since a refused seed is
+	// handled as a wrongly signed one (§5.2.4): the clone falls back to the
+	// content horizon.
 	ErrProvenance = errors.New("horizon seed: provenance does not verify")
+	// ErrUnbound is a seed that does not carry exactly one binding card
+	// naming the store cone's C and rule (§5.2.4).
+	ErrUnbound = errors.New("horizon seed: not bound to this store's horizon")
+	// ErrReplay is a seed whose D card is earlier than the held seed's: a
+	// newer tag state never yields an earlier D (§5.2.2, §5.2.4).
+	ErrReplay = errors.New("horizon seed: dated before the seed held")
 	// ErrNothingToSeed is returned by Mint when no tag is in force at any
 	// entry, so there is no control artifact to mint; the origin then serves
 	// the request as content (§6.2.5).
@@ -110,12 +127,14 @@ func Entries(q db.Querier, c libfossil.FslID, k []libfossil.FslID) ([]libfossil.
 	return slices.Compact(entries), nil
 }
 
-// Mint returns the seed for C and its held set k (horizon.HeldSet), with the
-// SHA3-256 name it is announced under (§6.2.3). It carries one T card per
-// tag in force at each entry in this repository's derivation, applied to the
-// entry directly: a propagating row as a `*` card, a singleton as `+`, each
-// with the value tagxref holds. Cancel rows are not in force and are left
-// out, as zit leaves them out (src/sync.zig composeSeed).
+// Mint returns the seed for C and its held set k (horizon.HeldSet) under
+// rule, with the SHA3-256 name it is announced under (§6.2.3). It carries one
+// T card per tag in force at each entry in this repository's derivation,
+// applied to the entry directly: a propagating row as a `*` card, a singleton
+// as `+`, each with the value tagxref holds. Cancel rows are not in force and
+// are left out, as zit leaves them out (src/sync.zig composeSeed), and so is
+// a horizon-seed row (§5.2.1). The binding card, T +horizon-seed <C> <rule>,
+// is added to the cards in force and is not one of them.
 //
 // The D card is the latest mtime among the rows the seed summarizes, not the
 // time of minting, rounded up to a whole second and written with no fraction
@@ -124,12 +143,15 @@ func Entries(q db.Querier, c libfossil.FslID, k []libfossil.FslID) ([]libfossil.
 // origin's label for the minting implementation. With no row in force there
 // is nothing to seed: a control artifact needs a T card, so Mint returns
 // ErrNothingToSeed where zit mints a seed of no T card dated at C.
-func Mint(q db.Querier, c libfossil.FslID, k []libfossil.FslID, login string) (string, []byte, error) {
+func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.FslID, login string) (string, []byte, error) {
 	if q == nil {
 		panic("seed.Mint: q must not be nil")
 	}
 	if login == "" {
 		panic("seed.Mint: login must not be empty")
+	}
+	if rule != cone.RuleDescendants && rule != cone.RuleLeaves {
+		panic(fmt.Sprintf("seed.Mint: unknown rule %v", rule))
 	}
 	entries, err := Entries(q, c, k)
 	if err != nil {
@@ -148,6 +170,11 @@ func Mint(q db.Querier, c libfossil.FslID, k []libfossil.FslID, login string) (s
 	if len(cards) == 0 {
 		return "", nil, ErrNothingToSeed
 	}
+	var cHash string
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", c).Scan(&cHash); err != nil {
+		return "", nil, fmt.Errorf("seed.Mint: C rid=%d: %w", c, err)
+	}
+	cards = append(cards, deck.TagCard{Type: deck.TagSingleton, Name: BindingTag, UUID: cHash, Value: rule.String()})
 	const second = 1000
 	date := time.UnixMilli((latest + second - 1) / second * second).UTC()
 	// deck.Marshal writes D to the millisecond; the seed's D is written to
@@ -177,7 +204,7 @@ func cardsAt(q db.Querier, rid libfossil.FslID) ([]deck.TagCard, int64, error) {
 	}
 	rows, err := q.Query(`SELECT tag.tagname, tagxref.tagtype, tagxref.value, tagxref.mtime
 		FROM tagxref JOIN tag USING(tagid)
-		WHERE tagxref.rid=? AND tagxref.tagtype>0`, rid)
+		WHERE tagxref.rid=? AND tagxref.tagtype>0 AND tag.tagname!=?`, rid, BindingTag)
 	if err != nil {
 		return nil, 0, fmt.Errorf("seed.Mint: tags of rid=%d: %w", rid, err)
 	}
@@ -213,6 +240,10 @@ func cardsAt(q db.Querier, rid libfossil.FslID) ([]deck.TagCard, int64, error) {
 // applies it. The bytes must hash to name and parse as a control artifact
 // (§6.2.3), or ErrNotSeed is returned and nothing changes; verify, when the
 // clone knows its origin's key, must accept them (§5.2.4), or ErrProvenance.
+// Signed or not, the seed must be bound to the store cone's horizon and
+// dated no earlier than the seed held (§5.2.4), or ErrProvenance wrapping
+// ErrUnbound or ErrReplay; a deepen discards the held seed first, which
+// restarts the floor.
 //
 // A seed replacing a different one (a re-seed, §5.6) re-derives the whole
 // store before applying the new seed: the old seed's rows sit in tagxref
@@ -232,7 +263,8 @@ func Hold(tx *db.Tx, name string, data []byte, verify Verifier) error {
 	if len(data) == 0 || name == "" || !hash.IsValidHash(name) || hash.ContentHash(data, name) != name {
 		return fmt.Errorf("%w: the bytes do not hash to %q", ErrNotSeed, name)
 	}
-	if _, err := parse(data); err != nil {
+	d, err := parse(data)
+	if err != nil {
 		return err
 	}
 	if verify != nil {
@@ -244,6 +276,9 @@ func Hold(tx *db.Tx, name string, data []byte, verify Verifier) error {
 	}
 	old, err := Held(tx)
 	if err != nil {
+		return err
+	}
+	if err := judge(tx, d, old); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(heldSeedSchema); err != nil {
@@ -306,9 +341,10 @@ func Held(q db.Querier) ([]byte, error) {
 // applied is superseded by its own row, so a repeat costs a lookup per card.
 //
 // verify, when the clone knows its origin's key, re-checks the held seed
-// (§5.2.4: every seed it holds); a seed that fails is discarded, the store
-// re-derived without it, and false returned, so the caller falls back to the
-// content horizon.
+// (§5.2.4: every seed it holds); a seed that fails, or that is no longer
+// bound to the store's horizon, is discarded, the store re-derived without
+// it, and false returned, so the caller falls back to the content horizon.
+// The binding card is applied to nothing.
 func Apply(tx *db.Tx, verify Verifier) (bool, error) {
 	if tx == nil {
 		panic("seed.Apply: tx must not be nil")
@@ -332,9 +368,17 @@ func Apply(tx *db.Tx, verify Verifier) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := judge(tx, d, nil); errors.Is(err, ErrProvenance) {
+		return false, Discard(tx)
+	} else if err != nil {
+		return false, err
+	}
 	mtime := libfossil.TimeToJulian(d.D)
 	leaves := leaf.NewPending()
 	for _, tc := range d.T {
+		if tc.Name == BindingTag {
+			continue
+		}
 		var target libfossil.FslID
 		err := tx.QueryRow(`SELECT rid FROM blob WHERE uuid=? AND size>=0
 			AND EXISTS(SELECT 1 FROM event WHERE objid=blob.rid)`, tc.UUID).Scan(&target)
@@ -378,6 +422,43 @@ func Discard(tx *db.Tx) error {
 	}
 	if _, err := manifest.Rederive(tx); err != nil {
 		return fmt.Errorf("seed.Discard: %w", err)
+	}
+	return nil
+}
+
+// judge checks the seed d before it is held or applied (§5.2.4): exactly one
+// binding card, naming the store cone's C and rule, and, against held, the
+// seed held if any, a D card no earlier than held's. A held seed that does
+// not parse sets no floor.
+func judge(q db.Querier, d *deck.Deck, held []byte) error {
+	if q == nil || d == nil {
+		panic("seed.judge: nil querier or seed")
+	}
+	sc, err := content.StoreCone(q)
+	if err != nil {
+		return err
+	}
+	var hz cone.Horizon
+	ok := false
+	if sc != nil {
+		hz, ok = sc.Horizon()
+	}
+	n, bound := 0, false
+	for _, tc := range d.T {
+		if tc.Name == BindingTag {
+			n++
+			bound = ok && tc.Type == deck.TagSingleton && strings.EqualFold(tc.UUID, hz.Hash()) &&
+				tc.Value == hz.Rule().String()
+		}
+	}
+	if n != 1 || !bound {
+		return fmt.Errorf("%w: %w", ErrProvenance, ErrUnbound)
+	}
+	if held == nil {
+		return nil
+	}
+	if h, err := parse(held); err == nil && d.D.Before(h.D) {
+		return fmt.Errorf("%w: %w: %s, held %s", ErrProvenance, ErrReplay, d.D.Format(time.DateTime), h.D.Format(time.DateTime))
 	}
 	return nil
 }

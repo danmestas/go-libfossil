@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-24
+
 ### Added
 
 - The seed's binding card (draft-fossil-horizon-00 §5.2.1, §5.2.4;

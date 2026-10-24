@@ -1,6 +1,5 @@
 // Package seedcheck keeps an origin from linking or serving a horizon seed
-// pushed to it (draft-fossil-horizon-00 §5.2.3 and its zit 0.7.1 erratum,
-// F.1).
+// pushed to it (draft-fossil-horizon-00 §5.2.3).
 //
 // A pushed control artifact is a seed when it carries this implementation's
 // seed label or a horizon-seed T card. It is judged when it first becomes

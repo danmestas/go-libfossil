@@ -20,7 +20,7 @@ import (
 // horizonNamePragma asks for a horizon by name, `pragma horizon-name NAME
 // RULE DEPTH`, in place of pragma horizon, and horizonResolvedPragma echoes
 // what the origin resolved it to, `pragma horizon-resolved HASH STEPS`
-// (draft-fossil-horizon-00 §6.1, §6.2.7, as zit 0.7.1's erratum adds them).
+// (draft-fossil-horizon-00 §6.1, §6.2.7).
 const (
 	horizonNamePragma     = "horizon-name"
 	horizonResolvedPragma = "horizon-resolved"

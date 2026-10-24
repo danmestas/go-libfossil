@@ -9,9 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Named horizons, as zit 0.7.1's erratum to draft-fossil-horizon-00 adds
-  them (§6.1, §6.2.7, §6.3). `CloneOpts.Horizon`, whose `Checkin` may be a
-  name, with `HorizonDepth`, and `repo clone --horizon NAME --depth N`, clone
+- Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7).
+  `CloneOpts.Horizon`, whose `Checkin` may be a name, with `HorizonDepth`, and `repo clone --horizon NAME --depth N`, clone
   a horizon store at `tip`, a branch or tag, or a full hash, stepped back N
   check-ins along primary parents. The client sends `pragma horizon-name` in the clone's first
   request only; the origin resolves the name over its dense repository,
@@ -61,8 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- An origin refuses a pushed seed by its shape (horizon §5.2.3, as zit
-  0.7.1's erratum F.1 words it; #471). A pushed control artifact is a seed
+- The horizon draft is re-pinned to zit `236b7b4285`, the zit 0.7.1 text,
+  which adds named horizons (§6.2.7), the origin's own seed label and the
+  refusal of a pushed seed judged on expanded content (§5.2.2, §5.2.3,
+  §5.7), and the seed's `T +horizon-seed <C> <rule>` binding card with the
+  clone's checks on it (§5.2, §5.2.4). The requirements table gains rows for
+  each; the binding card, the clone's D floor and the separate seed-signing
+  namespace (HZ-5.2-8, HZ-5.2-11 to HZ-5.2-13) are not built yet, and the
+  named-horizon client rows move from §6.3 to §6.2.7 (HZ-6.2-19 to
+  HZ-6.2-21).
+- An origin refuses a pushed seed by its shape (horizon §5.2.3; #471). A pushed control artifact is a seed
   when its U card is `go-libfossil`, the origin's own seed label, or when it
   carries a `horizon-seed` T card under any label. It is judged when it
   first becomes readable, on its content after any delta is applied. A push

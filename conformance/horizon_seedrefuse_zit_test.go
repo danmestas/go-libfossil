@@ -19,8 +19,8 @@ import (
 
 // TestZitHorizonSeedRefuseInterop pushes, from zit, a control artifact
 // bearing go-libfossil's seed label to a go-libfossil origin, which refuses
-// the whole push with the seed-refused error card (horizon §5.2.3, zit 0.7.1
-// erratum). zit 0.7.0 keeps the seed it holds out of every push, so the
+// the whole push with the seed-refused error card (horizon §5.2.3). zit
+// 0.7.0 keeps the seed it holds out of every push, so the
 // artifact reaches zit as ordinary content: a go-libfossil clone of the
 // origin writes it, and zit clones that clone. The reverse direction, a
 // zit origin refusing its own label, waits for zit 0.7.1.

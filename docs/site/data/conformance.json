@@ -1,7 +1,7 @@
 {
-  "requirements": 625,
+  "requirements": 632,
   "covered": 622,
-  "partial": 3,
+  "partial": 6,
   "suites": [
     {
       "suite": "artifact",
@@ -4563,12 +4563,12 @@
       "suite": "horizon",
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
-      "requirements": 66,
+      "requirements": 73,
       "covered": 63,
-      "partial": 3,
+      "partial": 6,
       "deviation": 0,
       "failing": 0,
-      "gap": 0,
+      "gap": 4,
       "cases": 123,
       "rows": [
         {
@@ -4748,12 +4748,28 @@
           "notes": ""
         },
         {
+          "id": "HZ-5.2-8",
+          "section": "5.2.1",
+          "status": "GAP",
+          "cases": 0,
+          "text": "Every seed carries one binding card, T +horizon-seed \u003cC\u003e \u003crule\u003e, a singleton tag on C whose value is the rule, part of the signed bytes; it is not a tag in force: the clone strips it before derivation, and the origin never counts it toward the one T card a control artifact needs, so with no other tag in force it still mints no seed.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-13",
+          "section": "5.2.1",
+          "status": "GAP",
+          "cases": 0,
+          "text": "An origin must not derive a horizon-seed tag into a seed.",
+          "notes": ""
+        },
+        {
           "id": "HZ-5.2-2",
           "section": "5.2.2",
-          "status": "COVERED",
+          "status": "PARTIAL",
           "cases": 1,
-          "text": "The origin sets each seed's D card to the latest mtime among the tag events it summarizes, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, when it summarizes none); its U card is the origin's own label for the minting implementation, never a user's login; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
-          "notes": ""
+          "text": "The origin sets each seed's D card to the latest mtime among the tag events it summarizes, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, when it summarizes none); its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; two origins mint the same seed for the same C and state up to the U card. No seed need be dated later than the seed it replaces.",
+          "notes": "covered but for the label's exclusivity, which no case checks: go-libfossil writes its label (go-libfossil) on seeds alone, by construction rather than by test"
         },
         {
           "id": "HZ-5.2-3",
@@ -4766,10 +4782,26 @@
         {
           "id": "HZ-5.2-4",
           "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 5,
+          "text": "An origin must refuse a seed offered to it, identifying one by its own seed label on the U card of a pushed control artifact, judged on the expanded content after any delta is applied, a delta whose base arrives later in the same request included; the refusal is atomic: it stores nothing the request carried and replies with one error card alone, seed refused: a seed is private to the clone that holds it; it is never pushed. It may also refuse a pushed artifact whose name matches a seed the same request offered as held. A clone that receives an artifact of the seed's shape outside a horizon-seed announcement treats it as an ordinary control artifact.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-9",
+          "section": "5.2.3",
           "status": "PARTIAL",
-          "cases": 9,
-          "text": "An origin refuses a seed offered to it, and an artifact of the seed's shape arriving by any route but the horizon reply is an ordinary control artifact.",
-          "notes": "the cases also cover the zit 0.7.1 erratum F.1 ahead of the re-pin: an origin identifies a pushed seed by its own seed label, or by a horizon-seed T card under any label, when it first becomes readable, on expanded content, a late delta included; it refuses the whole request with one error card, or, for a delta an earlier request left dangling, refuses its hash when whatever fills its basis (a later push, a pull, a check-in, a tag) makes it readable, the filling request being stored as usual, and keeps it stored but never linked, announced or sent; it refuses a re-push; the name match stays as an extra check; zit's push of such an artifact to go-libfossil is refused, but a zit origin refusing its own label waits for zit 0.7.1"
+          "cases": 1,
+          "text": "A seed is judged when it first becomes expandable, by whatever path supplies its missing base (a push, a pull or clone from another peer, a local check-in); a delta that then expands to a seed is never crosslinked, applied or served, and is recorded as refused in local state that is never synchronized, never in the shun list; the rest of the transfer that supplied the base is stored and crosslinked normally; the atomic refusal applies to the request that carried the seed whenever the seed can be judged within it.",
+          "notes": "the case fills the base by a later push; a base filled by a pull, a check-in or a tag is checked by internal/sync's tests (TestHorizonPullFillsSeedBase, TestHorizonCheckinFillsSeedBase, TestHorizonTagFillsSeedBase), not by a conformance case"
+        },
+        {
+          "id": "HZ-5.2-10",
+          "section": "5.2.3",
+          "status": "COVERED",
+          "cases": 3,
+          "text": "An origin refuses only its own label, a control artifact bearing another implementation's seed label being by that label ordinary; it must also refuse, in the same way and with the same error card, any pushed control artifact carrying a horizon-seed T card whatever its U card; only a foreign artifact carrying neither the origin's label nor a binding card is stored as ordinary.",
+          "notes": ""
         },
         {
           "id": "HZ-5.2-5",
@@ -4785,6 +4817,22 @@
           "status": "COVERED",
           "cases": 2,
           "text": "A clone that knows its origin's public key verifies every seed's signature and discards an unsigned or wrongly signed seed, falling back to the content horizon; a clone with no key accepts an unsigned seed.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-11",
+          "section": "5.2.4",
+          "status": "GAP",
+          "cases": 0,
+          "text": "Before holding a seed, signed or not, a clone must check that it carries exactly one horizon-seed card naming its own store cone's C and rule, and must refuse a seed whose D card is earlier than the held seed's (an equal D is accepted; a deepen discards the held seed first, so the floor restarts at the new C); a refused seed is handled as a wrongly signed one, the clone falling back to the content horizon and reporting it.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-5.2-12",
+          "section": "5.2.4",
+          "status": "GAP",
+          "cases": 0,
+          "text": "An origin's seed-signing command is configured apart from its check-in signing command and, for SSH, signs under the namespace fossil-horizon-seed, never the check-in namespace; an origin with no seed-signing command configured sends seeds unsigned even when it signs check-ins; PGP relies on the binding card alone.",
           "notes": ""
         },
         {
@@ -4864,7 +4912,7 @@
           "section": "5.7",
           "status": "COVERED",
           "cases": 2,
-          "text": "An origin should check a pushed cancellation against its own derivation and refuse on disagreement, naming the stale seed and the parent's branch; it admits the check-in when the push or its store carries a control artifact cancelling the parent's branch tag on it.",
+          "text": "An origin should check a pushed cancellation against its own derivation and refuse on disagreement, naming the stale seed and the parent's branch, judging the check-in's expanded content, a delta whose base arrives later in the same request included; it admits the check-in when the push or its store carries a control artifact cancelling the parent's branch tag on it.",
           "notes": ""
         },
         {
@@ -4902,10 +4950,10 @@
         {
           "id": "HZ-6.1-2",
           "section": "6.1",
-          "status": "COVERED",
+          "status": "PARTIAL",
           "cases": 2,
-          "text": "A request may carry pragma horizon-name \u003cname\u003e \u003crule\u003e \u003cdepth\u003e in place of pragma horizon, never both: name is tip, a symbolic name or a full check-in hash, as a card token; rule as for pragma horizon; depth a required base-10 count, 0 the named check-in itself. A client sends it only in the first request of a clone; every later request of the clone, and every later pull, sync or deepen, sends pragma horizon \u003chash\u003e \u003crule\u003e with the resolved hash, and the store records the hash, never the name.",
-          "notes": ""
+          "text": "A request may carry pragma horizon-name \u003cname\u003e \u003crule\u003e \u003cdepth\u003e in place of pragma horizon, never both: name is tip, a symbolic name or a full check-in hash, as a card token with Fossil's \\s escaping; rule as for pragma horizon; depth required, plain base-10 digits that fit an unsigned 32-bit integer, 0 the named check-in itself; the structural, seed, cursor and path-cone pragmas combine with it as with pragma horizon. A client sends it only in the first request of a clone; every later request of the clone, and every later pull, sync or deepen, sends pragma horizon \u003chash\u003e \u003crule\u003e with the resolved hash, and the store records the hash, never the name.",
+          "notes": "covered but for the cursor and path-cone pragmas beside horizon-name, which no case sends: a clone's first request carries no cursor, and the path members a named clone asks for are checked only by the root package's TestCloneNamedHorizon"
         },
         {
           "id": "HZ-6.2-1",
@@ -5038,17 +5086,41 @@
         {
           "id": "HZ-6.2-17",
           "section": "6.2.7",
-          "status": "COVERED",
+          "status": "PARTIAL",
           "cases": 5,
-          "text": "An origin resolves a horizon-name over its dense repository: tip is the most recent check-in, a full hash names that check-in, any other name the most recent check-in carrying sym-\u003cname\u003e, most recent meaning the highest event mtime with a tie going to the lexicographically lowest full hash, and a hash prefix never accepted; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
-          "notes": ""
+          "text": "An origin resolves a horizon-name over its dense repository: a well-formed full hash (40 or 64 hex digits) is looked up as a hash first and names that check-in if one has it, otherwise it is tried as a symbolic name; tip is the most recent check-in; any other name is the most recent check-in carrying sym-\u003cname\u003e as an active tag (singleton or propagated, not cancelled), covering branches and tags alike; most recent means the highest event mtime with a tie going to the lexicographically lowest full hash, never a local row number, and a hash prefix is never accepted; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
+          "notes": "covered but for the mtime tie, which internal/horizon's TestResolveNameTie checks and no conformance case does, and a full-hash-shaped name naming no check-in but carried as a symbolic name, which no test resolves (a full hash naming neither is checked refused)"
         },
         {
           "id": "HZ-6.2-18",
           "section": "6.2.7",
           "status": "COVERED",
           "cases": 4,
-          "text": "A horizon-name that resolves to nothing, a malformed depth, or both pragma forms in one request is answered with one error card and nothing else, horizon\\sname\\snot\\sfound:\\s\u003cname\u003e or malformed\\shorizon-name\\spragma; the client then fails the clone and leaves nothing on disk.",
+          "text": "A horizon-name that resolves to nothing, a malformed depth, or both pragma forms in one request is answered with one error card and nothing else, horizon\\sname\\snot\\sfound:\\s\u003cname\u003e or malformed\\shorizon-name\\spragma; login and authorization errors come first and a name error after them, as the single error card; the client then fails the clone and leaves nothing on disk.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-19",
+          "section": "6.2.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "A client whose first reply carries horizon-resolved takes its hash as C and reports when the steps taken are fewer than the depth requested, history having run out.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-20",
+          "section": "6.2.7",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "The client fails the clone and leaves nothing on disk when horizon-resolved names a malformed hash, takes more steps than the depth requested, arrives after any file card or in reply to a request that sent no horizon-name, or when the clone ends without the resolved check-in having been received.",
+          "notes": ""
+        },
+        {
+          "id": "HZ-6.2-21",
+          "section": "6.2.7",
+          "status": "COVERED",
+          "cases": 2,
+          "text": "A client whose reply carries no horizon-resolved completes the dense transfer, resolves the name and depth over what it holds by the same rule, classifies locally at the content horizon (Section 6.3), records the hash and reports that the name was resolved locally; a structural request against such a peer falls back to the content horizon.",
           "notes": ""
         },
         {
@@ -5065,22 +5137,6 @@
           "status": "COVERED",
           "cases": 1,
           "text": "A store at the structural horizon whose pull or sync replies carry no horizon-served structural falls back to the content horizon at the same C and rule, records that depth, discards its seed, fetches the manifests and nodes below C, and reports that it did.",
-          "notes": ""
-        },
-        {
-          "id": "HZ-6.3-3",
-          "section": "6.3",
-          "status": "COVERED",
-          "cases": 2,
-          "text": "A client whose first reply carries horizon-resolved takes its hash as C and reports when the steps taken are fewer than the depth requested, history having run out.",
-          "notes": ""
-        },
-        {
-          "id": "HZ-6.3-4",
-          "section": "6.3",
-          "status": "COVERED",
-          "cases": 2,
-          "text": "A client whose reply carries no horizon-resolved completes the dense transfer, resolves the name and depth locally by the rule of §6.2.7, classifies locally at the content horizon, records the hash and reports that the name was resolved locally; a structural request falls back to the content horizon.",
           "notes": ""
         },
         {

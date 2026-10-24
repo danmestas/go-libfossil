@@ -22,8 +22,7 @@ import (
 	"github.com/danmestas/go-libfossil/simio"
 )
 
-// Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7, §6.3 as zit 0.7.1's
-// erratum amends them): a clone asks for its horizon by name and depth in
+// Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7): a clone asks for its horizon by name and depth in
 // its first request, the origin resolves the name over its dense repository
 // and echoes the check-in, and every later request names that check-in by
 // hash. Each case is checked at both ends: go-libfossil's handler as the
@@ -38,10 +37,10 @@ var (
 	horizonNamedStructural = Case{ID: "horizon.6.2.7.structural-seed", Req: "HZ-6.2-17"}
 	horizonNamedUnknown    = Case{ID: "horizon.6.2.7.unknown-name", Req: "HZ-6.2-18"}
 	horizonNamedMalformed  = Case{ID: "horizon.6.2.7.malformed", Req: "HZ-6.2-18"}
-	horizonNamedPastRoot   = Case{ID: "horizon.6.3.named-past-root", Req: "HZ-6.3-3"}
-	horizonNamedChecked    = Case{ID: "horizon.6.3.named-resolved-checked", Req: "HZ-6.3-3"}
-	horizonNamedFallback   = Case{ID: "horizon.6.3.named-fallback", Req: "HZ-6.3-4"}
-	horizonNamedFossil     = Case{ID: "horizon.6.3.named-fossil-fallback", Req: "HZ-6.3-4"}
+	horizonNamedPastRoot   = Case{ID: "horizon.6.2.7.named-past-root", Req: "HZ-6.2-19"}
+	horizonNamedChecked    = Case{ID: "horizon.6.2.7.named-resolved-checked", Req: "HZ-6.2-20"}
+	horizonNamedFallback   = Case{ID: "horizon.6.2.7.named-fallback", Req: "HZ-6.2-21"}
+	horizonNamedFossil     = Case{ID: "horizon.6.2.7.named-fossil-fallback", Req: "HZ-6.2-21"}
 	horizonNamedLaterPull  = Case{ID: "horizon.6.1.named-later-pull", Req: "HZ-6.1-2"}
 	horizonNamedNoOracle   = Case{ID: "horizon.6.2.7.no-name-oracle", Req: "HZ-6.2-18"}
 	horizonNamedPullName   = Case{ID: "horizon.6.2.7.pull-unknown-name", Req: "HZ-6.2-18"}

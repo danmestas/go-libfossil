@@ -20,8 +20,7 @@ import (
 
 // An origin identifies a pushed seed by its own seed label, or by a
 // horizon-seed T card under any label, on expanded content, and refuses the
-// whole request with one error card (horizon §5.2.3 as the zit 0.7.1 erratum
-// amends it, not yet in the pinned draft). Each case pushes a seed, with no
+// whole request with one error card (horizon §5.2.3). Each case pushes a seed, with no
 // horizon-seed pragma naming it, beside an ordinary artifact, and checks
 // that the reply is the refusal alone and that neither was stored.
 
@@ -34,10 +33,10 @@ var (
 	horizonSeedRefuseFull   = Case{ID: "horizon.5.2.3.seed-label-full-text", Req: "HZ-5.2-4"}
 	horizonSeedRefuseDelta  = Case{ID: "horizon.5.2.3.seed-label-delta", Req: "HZ-5.2-4"}
 	horizonSeedRefuseLate   = Case{ID: "horizon.5.2.3.seed-label-late-delta", Req: "HZ-5.2-4"}
-	horizonSeedShapeFull    = Case{ID: "horizon.5.2.3.seed-shape-foreign-label", Req: "HZ-5.2-4"}
-	horizonSeedShapeLate    = Case{ID: "horizon.5.2.3.seed-shape-late-delta", Req: "HZ-5.2-4"}
-	horizonForeignOrdinary  = Case{ID: "horizon.5.2.3.foreign-label-ordinary", Req: "HZ-5.2-4"}
-	horizonSeedLaterRequest = Case{ID: "horizon.5.2.3.seed-base-later-request", Req: "HZ-5.2-4"}
+	horizonSeedShapeFull    = Case{ID: "horizon.5.2.3.seed-shape-foreign-label", Req: "HZ-5.2-10"}
+	horizonSeedShapeLate    = Case{ID: "horizon.5.2.3.seed-shape-late-delta", Req: "HZ-5.2-10"}
+	horizonForeignOrdinary  = Case{ID: "horizon.5.2.3.foreign-label-ordinary", Req: "HZ-5.2-10"}
+	horizonSeedLaterRequest = Case{ID: "horizon.5.2.3.seed-base-later-request", Req: "HZ-5.2-9"}
 )
 
 const hzSeedRefused = "seed refused: a seed is private to the clone that holds it; it is never pushed"

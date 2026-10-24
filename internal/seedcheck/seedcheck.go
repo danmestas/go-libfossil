@@ -58,9 +58,10 @@ const (
 	refusedSchema = `CREATE TABLE IF NOT EXISTS ` + refusedTable + `(uuid TEXT PRIMARY KEY) WITHOUT ROWID`
 )
 
-// maxChainSteps bounds a basis-chain walk, so a cycle in the delta table is
-// an error rather than a hang.
-const maxChainSteps = 1 << 24
+// noRoot is the root of a row whose basis chain loops or runs past
+// content.MaxDeltaChainDepth: no fill can make it readable, so it stays
+// pending, withheld, and is never judged.
+const noRoot libfossil.FslID = 0
 
 // judgeCacheBytes bounds the expanded content one JudgeFilled call keeps,
 // so a chain pending under one root is rebuilt once along its length.
@@ -132,12 +133,15 @@ func markPending(q db.Querier, rid, root libfossil.FslID) error {
 }
 
 // chainRoot follows delta.srcid from rid to the row with no delta, whose
-// arrival makes rid readable.
+// arrival makes rid readable, or reports noRoot for a chain that loops or
+// runs past content.MaxDeltaChainDepth. The walk counts nodes as content's
+// does, so a chain it roots is one content can expand, and a planted chain
+// cannot hold the write lock for a walk of every row it holds.
 func chainRoot(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
 	cur := rid
-	for steps := 0; ; steps++ {
-		if steps > maxChainSteps {
-			return 0, fmt.Errorf("seedcheck: basis chain of rid=%d does not end", rid)
+	for nodes := 1; ; nodes++ {
+		if nodes > content.MaxDeltaChainDepth {
+			return noRoot, nil
 		}
 		var next libfossil.FslID
 		err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", cur).Scan(&next)

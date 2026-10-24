@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -180,5 +182,88 @@ func TestJudgeFilledSurfacesStoreFaults(t *testing.T) {
 	}
 	if _, err := seedcheck.JudgeFilled(r.DB(), []libfossil.FslID{filled}); err == nil {
 		t.Fatal("JudgeFilled skipped a row whose content does not decompress")
+	}
+}
+
+// plantChain stores n content-less delta rows, each on the next, the last
+// on root, and returns the top row: only the chain's shape is read.
+func plantChain(t *testing.T, r *repo.Repo, root libfossil.FslID, n int) libfossil.FslID {
+	t.Helper()
+	var top libfossil.FslID
+	err := r.WithTx(func(tx *db.Tx) error {
+		below := root
+		for i := 0; i < n; i++ {
+			res, err := tx.Exec("INSERT INTO blob(uuid, size, content, rcvid) VALUES(printf('%040x', ?), -1, NULL, 1)", i+1)
+			if err != nil {
+				return err
+			}
+			id, err := res.LastInsertId()
+			if err != nil {
+				return err
+			}
+			if _, err := tx.Exec("INSERT INTO delta(rid, srcid) VALUES(?, ?)", id, below); err != nil {
+				return err
+			}
+			below, top = libfossil.FslID(id), libfossil.FslID(id)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return top
+}
+
+// A pending row whose chain runs past content.MaxDeltaChainDepth is put
+// under no root: filling the far end examines nothing, since nothing could
+// read the row anyway.
+func TestMarkPendingOverDeepChainHasNoRoot(t *testing.T) {
+	r, err := repo.Create(filepath.Join(t.TempDir(), "r.fossil"), "u", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	base := []byte("the far end\n")
+	root, err := blob.StorePhantom(r.DB(), hash.SHA3(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	top := plantChain(t, r, root, content.MaxDeltaChainDepth+1)
+	if err := seedcheck.MarkPending(r.DB(), top); err != nil {
+		t.Fatal(err)
+	}
+	filled, _, err := blob.Store(r.DB(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	examined, err := seedcheck.JudgeFilled(r.DB(), []libfossil.FslID{filled})
+	if err != nil || examined != 0 {
+		t.Fatalf("filling the far end examined %d rows (%v), want 0", examined, err)
+	}
+	if withheld, err := seedcheck.IsWithheld(r.DB(), top); err != nil || !withheld {
+		t.Fatalf("the over-deep row is not withheld (%v)", err)
+	}
+}
+
+// Marking a row on a cycle ends at once, under no root.
+func TestMarkPendingCycleEndsQuickly(t *testing.T) {
+	r, err := repo.Create(filepath.Join(t.TempDir(), "r.fossil"), "u", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	a := plantChain(t, r, 0, 2)
+	if _, err := r.DB().Exec("UPDATE delta SET srcid=? WHERE srcid=0", a); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := seedcheck.MarkPending(r.DB(), a); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("marking a row on a cycle took %v", elapsed)
+	}
+	if withheld, err := seedcheck.IsWithheld(r.DB(), a); err != nil || !withheld {
+		t.Fatalf("the row on the cycle is not withheld (%v)", err)
 	}
 }

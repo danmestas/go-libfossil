@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -18,6 +19,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/xfer"
+	"github.com/danmestas/go-libfossil/simio"
 )
 
 // Named horizons (draft-fossil-horizon-00 §6.1, §6.2.7, §6.3 as zit 0.7.1's
@@ -41,6 +43,9 @@ var (
 	horizonNamedFallback   = Case{ID: "horizon.6.3.named-fallback", Req: "HZ-6.3-4"}
 	horizonNamedFossil     = Case{ID: "horizon.6.3.named-fossil-fallback", Req: "HZ-6.3-4"}
 	horizonNamedLaterPull  = Case{ID: "horizon.6.1.named-later-pull", Req: "HZ-6.1-2"}
+	horizonNamedNoOracle   = Case{ID: "horizon.6.2.7.no-name-oracle", Req: "HZ-6.2-18"}
+	horizonNamedPullName   = Case{ID: "horizon.6.2.7.pull-unknown-name", Req: "HZ-6.2-18"}
+	horizonNamedLogin      = Case{ID: "horizon.6.2.7.login-retry", Req: "HZ-6.1-2"}
 )
 
 func horizonNamesCases() []Case {
@@ -48,6 +53,7 @@ func horizonNamesCases() []Case {
 		horizonNamedTip, horizonNamedBranch, horizonNamedTag, horizonNamedHash, horizonNamedStructural,
 		horizonNamedUnknown, horizonNamedMalformed, horizonNamedPastRoot, horizonNamedChecked,
 		horizonNamedFallback, horizonNamedFossil, horizonNamedLaterPull,
+		horizonNamedNoOracle, horizonNamedPullName, horizonNamedLogin,
 	}
 }
 
@@ -84,19 +90,24 @@ func TestHorizonNames(t *testing.T) {
 	check(t, horizonNamedFallback, func() error { return hzNamedFallback(t, false) })
 	check(t, horizonNamedFossil, func() error { return hzNamedFallback(t, true) })
 	check(t, horizonNamedLaterPull, func() error { return hzNamedLaterPull(t) })
+	check(t, horizonNamedNoOracle, func() error { return hzNamedNoOracle(t) })
+	check(t, horizonNamedPullName, func() error { return hzNamedPullName(t) })
+	check(t, horizonNamedLogin, func() error { return hzNamedLogin(t) })
 }
 
 // hzNamedClone clones origin through peer asking for the horizon by name
-// and depth under the descendants rule at level; the store cone's own
-// check-in is a stand-in the resolved one replaces.
+// and depth under the descendants rule at level.
 func hzNamedClone(t *testing.T, peer sync.Transport, name string, depth uint32,
 	level cone.HorizonDepth) (string, *repo.Repo, *sync.CloneResult, error) {
 	t.Helper()
+	return hzNamedCloneOpts(t, peer, sync.CloneOpts{PullPhantoms: true, Named: &sync.NamedHorizon{
+		Name: name, Depth: depth, Rule: cone.RuleDescendants, Level: level}})
+}
+
+func hzNamedCloneOpts(t *testing.T, peer sync.Transport, opts sync.CloneOpts) (string, *repo.Repo, *sync.CloneResult, error) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "named.fossil")
-	r, result, err := sync.Clone(context.Background(), path, peer, sync.CloneOpts{
-		StoreCone:   hzStoreCone(t, horizonHash, cone.RuleDescendants, level),
-		HorizonName: name, HorizonDepth: depth, PullPhantoms: true,
-	})
+	r, result, err := sync.Clone(context.Background(), path, peer, opts)
 	if err != nil {
 		return path, nil, nil, err
 	}
@@ -349,6 +360,14 @@ func hzNamedChecked(t *testing.T) error {
 			}
 		}
 	}
+	twice := func(m *xfer.Message) {
+		for i, card := range m.Cards {
+			if p, ok := card.(*xfer.PragmaCard); ok && p.Name == "horizon-resolved" {
+				m.Cards = slices.Insert(m.Cards, i+1, xfer.Card(p))
+				return
+			}
+		}
+	}
 	late := func(m *xfer.Message) {
 		for i, card := range m.Cards {
 			if p, ok := card.(*xfer.PragmaCard); ok && p.Name == "horizon-resolved" {
@@ -368,6 +387,7 @@ func hzNamedChecked(t *testing.T) error {
 		{"trunk", 1, resolved(c), "horizon-resolved"},
 		{"trunk", 1, late, "horizon-resolved"},
 		{"trunk", 1, resolved(strings.Repeat("ab", 20), "1"), "never arrived"},
+		{"trunk", 1, twice, "horizon-resolved"},
 	} {
 		peer := &hzRewritingPeer{inner: &scSyncPeer{r: g.f.r}, rewrite: tc.rewrite}
 		path, _, _, err := hzNamedClone(t, peer, tc.name, tc.depth, cone.DepthContent)
@@ -387,7 +407,37 @@ func hzNamedChecked(t *testing.T) error {
 	if err == nil || !strings.Contains(err.Error(), "horizon-resolved") {
 		return expectf("clone by hash given horizon-resolved = %v", err)
 	}
+	// A reply to a request that sent no horizon-name, here the cleanup
+	// request after an empty first reply, may not resolve one either.
+	scripted := &hzScriptedPeer{replies: []*xfer.Message{{}, {Cards: []xfer.Card{
+		&xfer.PragmaCard{Name: "horizon-resolved", Values: []string{c, "0"}},
+		&xfer.CloneSeqNoCard{SeqNo: 0},
+	}}}}
+	path, _, _, err := hzNamedClone(t, scripted, "trunk", 1, cone.DepthContent)
+	if err == nil || !strings.Contains(err.Error(), "unexpected horizon-resolved") {
+		return expectf("clone given horizon-resolved to an unnamed request = %v", err)
+	}
+	if got := hzPragmas(scripted.requests[1], "horizon-name"); len(got) != 0 {
+		return expectf("the cleanup request sent horizon-name %q", got)
+	}
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		return expectf("the failed clone left %s (%v)", path, statErr)
+	}
 	return nil
+}
+
+// hzScriptedPeer answers each request with the next of replies.
+type hzScriptedPeer struct {
+	replies  []*xfer.Message
+	requests []*xfer.Message
+}
+
+func (p *hzScriptedPeer) Exchange(_ context.Context, req *xfer.Message) (*xfer.Message, error) {
+	p.requests = append(p.requests, req)
+	if len(p.requests) > len(p.replies) {
+		return nil, expectf("request %d past the script", len(p.requests))
+	}
+	return p.replies[len(p.requests)-1], nil
 }
 
 // Against a peer that answers no horizon-resolved, the client finishes the
@@ -452,6 +502,115 @@ func hzNamedLaterPull(t *testing.T) error {
 		if got := hzPragmas(req, "horizon"); len(got) != 1 || got[0][0] != c {
 			return expectf("pull request %d horizon %q, want %.12s", i, got, c)
 		}
+	}
+	return hzStoredHorizon(r, c, cone.DepthContent)
+}
+
+// hzNamedNoOracle: a requester who may neither read nor clone gets the same
+// reply bytes for a name the origin holds as for one it does not, whatever
+// else the request asks; neither carries horizon-resolved or horizon-served.
+func hzNamedNoOracle(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	if _, err := g.f.r.DB().Exec("UPDATE user SET cap='' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	project, err := g.f.r.Config("project-code")
+	if err != nil {
+		return err
+	}
+	clock := simio.NewSimClockAt(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+	version := &xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "120000"}}
+	for _, tail := range [][]xfer.Card{
+		nil,
+		{&xfer.CloneCard{Version: 3, SeqNo: 1, SeqNoIsDecimal: true}},
+		{&xfer.PullCard{ServerCode: "x", ProjectCode: project}},
+	} {
+		var replies [2][]byte
+		for i, name := range []string{"trunk", "nope"} {
+			cards := append([]xfer.Card{version, &xfer.PragmaCard{Name: "horizon-name",
+				Values: []string{name, "descendants", "0"}}}, tail...)
+			resp, err := sync.HandleSyncWithOpts(context.Background(), g.f.r, &xfer.Message{Cards: cards},
+				sync.HandleOpts{Clock: clock})
+			if err != nil {
+				return err
+			}
+			for _, card := range resp.Cards {
+				if p, ok := card.(*xfer.PragmaCard); ok && strings.HasPrefix(p.Name, "horizon") {
+					return expectf("%s with %d more cards: an unauthorized requester was sent pragma %s", name, len(tail), p.Name)
+				}
+			}
+			if replies[i], err = resp.Encode(); err != nil {
+				return err
+			}
+		}
+		if string(replies[0]) != string(replies[1]) {
+			return expectf("replies differ by name with %d more cards:\n%q\n%q", len(tail), replies[0], replies[1])
+		}
+	}
+	return nil
+}
+
+// hzNamedPullName: a pull naming a horizon the origin cannot resolve is
+// refused with the one error card, not served densely; one it can resolve
+// is echoed and served at the horizon.
+func hzNamedPullName(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	project, err := g.f.r.Config("project-code")
+	if err != nil {
+		return err
+	}
+	for _, name := range []string{"nope", "trunk"} {
+		resp, err := sync.HandleSync(context.Background(), g.f.r, &xfer.Message{Cards: []xfer.Card{
+			&xfer.PragmaCard{Name: "horizon-name", Values: []string{name, "descendants", "1"}},
+			&xfer.PullCard{ServerCode: "x", ProjectCode: project},
+		}})
+		if err != nil {
+			return err
+		}
+		if name == "nope" {
+			if err := hzOnlyError(resp, "horizon name not found: nope"); err != nil {
+				return err
+			}
+			continue
+		}
+		if got := hzPragmas(resp, "horizon-resolved"); len(got) != 1 || got[0][0] != hzUUID(t, g.f.r, g.c4) {
+			return expectf("pull naming trunk at depth 1 was echoed %q, want c4", got)
+		}
+	}
+	return nil
+}
+
+// hzNamedLogin: a clone by name of a private origin is refused in round 0,
+// which carries no login, and resends the name with the login in round 1:
+// still the clone's first request in §6.1's sense. The origin resolves it
+// then, and the clone is not left to resolve it locally.
+func hzNamedLogin(t *testing.T) error {
+	g := newHZSyncGraph(t)
+	if _, err := g.f.r.DB().Exec("UPDATE user SET cap='' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	project, err := g.f.r.Config("project-code")
+	if err != nil {
+		return err
+	}
+	if err := auth.CreateUser(g.f.r.DB(), project, "named-reader", "test-password", "go"); err != nil {
+		return err
+	}
+	peer := &scSyncPeer{r: g.f.r}
+	_, r, result, err := hzNamedCloneOpts(t, peer, sync.CloneOpts{User: "named-reader", Password: "test-password",
+		Named: &sync.NamedHorizon{Name: "trunk", Depth: 1, Rule: cone.RuleDescendants, Level: cone.DepthContent}})
+	if err != nil {
+		return err
+	}
+	c := hzUUID(t, g.f.r, g.c4)
+	if result.HorizonResolved != c || result.HorizonResolvedLocally || result.HorizonServed == 0 {
+		return expectf("private named clone: %+v, want c4 resolved by the origin", result)
+	}
+	if len(peer.requests) < 2 || len(hzPragmas(peer.requests[1], "horizon-name")) != 1 {
+		return expectf("round 1 did not resend the name with the login")
+	}
+	if err := hzResolvedFirst(peer.replies[1], c, 1); err != nil {
+		return err
 	}
 	return hzStoredHorizon(r, c, cone.DepthContent)
 }

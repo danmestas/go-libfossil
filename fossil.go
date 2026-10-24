@@ -111,7 +111,7 @@ type CloneResult struct {
 	// named; "" when none did. An origin names it with
 	// SettingHorizonHistoryURL.
 	HorizonHistoryURL string
-	// HorizonResolved is the check-in CloneOpts.HorizonName resolved to and
+	// HorizonResolved is the check-in CloneOpts.Horizon named resolved to and
 	// HorizonSteps the steps back it took, fewer than HorizonDepth when
 	// history ran out; HorizonResolvedLocally reports that the origin did
 	// not resolve the name and the clone did, at the content horizon.
@@ -127,7 +127,7 @@ type CloneResult struct {
 // rounds leave missing stay phantoms unless opts.PullPhantoms is set.
 func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo, *CloneResult, error) {
 	adapter := &transportAdapter{pub: t}
-	storeCone, depth, err := namedCloneCone(opts)
+	storeCone, named, err := cloneHorizon(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("libfossil: clone: %w", err)
 	}
@@ -139,8 +139,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 		PullPhantoms: opts.PullPhantoms,
 		StoreCone:    storeCone,
 		SeedKey:      opts.SeedKey,
-		HorizonName:  opts.HorizonName,
-		HorizonDepth: depth,
+		Named:        named,
 	}
 	// A transport that names its peer keys the horizon cursor, as for Sync.
 	if o, ok := t.(interface{ syncOrigin() string }); ok {
@@ -171,33 +170,56 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (*Repo
 	return &Repo{inner: inner, path: path}, result, nil
 }
 
-// namedCloneCone is the store cone and depth a clone asks for. A named
-// horizon over a StoreCone without one is a content horizon under the
-// descendants rule, whose check-in stands in until the name resolves.
-func namedCloneCone(opts CloneOpts) (*cone.Cone, uint32, error) {
+// cloneHorizon splits a clone's horizon into the store cone it starts with
+// and, for a name or a depth, the horizon the origin is asked to resolve. A
+// full hash at depth 0 goes on the store cone as itself, which every horizon
+// origin reads.
+func cloneHorizon(opts CloneOpts) (*cone.Cone, *internalsync.NamedHorizon, error) {
 	sc := unwrapCone(opts.StoreCone)
 	if opts.HorizonDepth < 0 || int64(opts.HorizonDepth) > math.MaxUint32 {
-		return nil, 0, fmt.Errorf("horizon depth %d out of range", opts.HorizonDepth)
+		return nil, nil, fmt.Errorf("horizon depth %d out of range", opts.HorizonDepth)
 	}
-	if opts.HorizonName == "" {
+	h := opts.Horizon
+	if h == nil {
 		if opts.HorizonDepth != 0 {
-			return nil, 0, fmt.Errorf("a horizon depth needs a horizon name")
+			return nil, nil, fmt.Errorf("a horizon depth needs a Horizon")
 		}
-		return sc, 0, nil
+		return sc, nil, nil
 	}
-	if sc != nil {
-		if _, ok := sc.Horizon(); ok {
-			return sc, uint32(opts.HorizonDepth), nil
-		}
+	if _, ok := horizonOf(sc); ok {
+		return nil, nil, fmt.Errorf("a horizon on both StoreCone and Horizon")
 	}
-	h, err := cone.NewHorizon(strings.Repeat("0", 40), cone.RuleDescendants, cone.DepthContent)
-	if err != nil {
-		panic("libfossil.namedCloneCone: " + err.Error())
+	if h.Checkin == "" {
+		return nil, nil, fmt.Errorf("a Horizon with no check-in")
 	}
 	var include, exclude []string
 	if sc != nil {
 		include, exclude = sc.Include(), sc.Exclude()
 	}
-	nc, err := cone.NewWithHorizon(include, exclude, h)
-	return nc, uint32(opts.HorizonDepth), err
+	if opts.HorizonDepth == 0 && isFullHash(h.Checkin) {
+		hc, err := NewHorizonCone(include, exclude, *h)
+		return unwrapCone(hc), nil, err
+	}
+	level := cone.DepthContent
+	if h.Structural {
+		level = cone.DepthStructural
+	}
+	return sc, &internalsync.NamedHorizon{Name: h.Checkin, Depth: uint32(opts.HorizonDepth),
+		Rule: cone.HorizonRule(h.Rule), Level: level}, nil
+}
+
+// horizonOf is c's horizon, ok false for nil or a cone without one.
+func horizonOf(c *cone.Cone) (cone.Horizon, bool) {
+	if c == nil {
+		return cone.Horizon{}, false
+	}
+	return c.Horizon()
+}
+
+// isFullHash reports a 40 or 64 digit hex string, of either case.
+func isFullHash(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(strings.ToLower(s), "0123456789abcdef") == ""
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	libfossil "github.com/danmestas/go-libfossil"
@@ -62,11 +61,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		return fmt.Errorf("path required")
 	}
 
-	checkin, name, err := horizonNameFlags(c.Horizon, c.Depth)
-	if err != nil {
-		return err
-	}
-	storeCone, err := cloneConeFlags(c.Cone, c.ConeNot, checkin, c.Leaves, c.Structural)
+	storeCone, horizon, err := cloneConeFlags(c.Cone, c.ConeNot, c.Horizon, c.Depth, c.Leaves, c.Structural)
 	if err != nil {
 		return err
 	}
@@ -84,7 +79,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 		Password:     c.Pass,
 		StoreCone:    storeCone,
 		SeedKey:      c.SeedKey,
-		HorizonName:  name,
+		Horizon:      horizon,
 		HorizonDepth: c.Depth,
 	}
 
@@ -103,11 +98,11 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	fmt.Printf("  Rounds:       %d\n", result.Rounds)
 	fmt.Printf("  Blobs:        %d\n", result.BlobsRecvd)
 	fmt.Printf("  Project-code: %s\n", result.ProjectCode)
-	if storeCone != nil {
+	if storeCone != nil || horizon != nil {
 		fmt.Printf("  Elided:       %d\n", result.Elided)
 	}
-	if name != "" {
-		reportResolved(name, c.Depth, result)
+	if result.HorizonResolved != "" {
+		reportResolved(c.Horizon, c.Depth, result)
 	}
 	if c.Structural {
 		// Horizon §6.2.5: a client reports which mode a transfer used.
@@ -133,38 +128,6 @@ func rememberedSyncURL(raw string) string {
 	}
 	u.User = url.User(u.User.Username())
 	return u.String()
-}
-
-// namedStandIn is the check-in a named horizon's store cone carries until
-// the name resolves (CloneOpts.HorizonName); the store never records it.
-const namedStandIn = "0000000000000000000000000000000000000000"
-
-// horizonNameFlags splits --horizon and --depth into the check-in the store
-// cone is built at and the name the origin is asked to resolve: a full hash
-// at depth 0 is sent as the hash itself, which every horizon origin reads,
-// and anything else as a name (draft-fossil-horizon-00 §6.2.7).
-func horizonNameFlags(horizon string, depth int) (checkin, name string, err error) {
-	if depth < 0 {
-		return "", "", fmt.Errorf("--depth must not be negative")
-	}
-	if horizon == "" {
-		if depth > 0 {
-			return "", "", fmt.Errorf("--depth needs --horizon")
-		}
-		return "", "", nil
-	}
-	if depth == 0 && isFullHash(horizon) {
-		return horizon, "", nil
-	}
-	return namedStandIn, horizon, nil
-}
-
-// isFullHash reports a 40 or 64 digit hex string.
-func isFullHash(s string) bool {
-	if len(s) != 40 && len(s) != 64 {
-		return false
-	}
-	return strings.Trim(strings.ToLower(s), "0123456789abcdef") == ""
 }
 
 // reportResolved says which check-in a named horizon resolved to, who

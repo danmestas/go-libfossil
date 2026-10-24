@@ -203,7 +203,7 @@ func Clone(ctx context.Context, path string, t Transport, opts CloneOpts) (r *re
 		structural:            structural,
 		named:                 named,
 	}
-	if opts.StoreCone != nil {
+	if opts.StoreCone != nil || named != nil {
 		cs.sparseReceived = map[string]bool{}
 	}
 	cs.obs = resolveObserver(opts.Observer)
@@ -1018,9 +1018,9 @@ func (cs *cloneSession) bindRepo(bound *repo.Repo) func() {
 // servedHorizon reports a horizon clone whose origin has said it serves the
 // clone's horizon (horizon-served content) in a reply of this session.
 func (cs *cloneSession) servedHorizon() bool {
-	if cs.opts.StoreCone == nil || cs.result.HorizonServed == 0 {
+	if cs.result.HorizonServed == 0 {
 		return false
 	}
-	_, ok := cs.opts.StoreCone.Horizon()
-	return ok
+	_, ok := horizonOf(cs.opts.StoreCone)
+	return ok || cs.named != nil
 }

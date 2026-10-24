@@ -1283,8 +1283,11 @@ A clone has no history yet, so it cannot turn a branch name or a count into C. I
 
 ```go
 repo, res, err := libfossil.Clone(ctx, "repo.fossil", t, libfossil.CloneOpts{
-    HorizonName:  "trunk", // "tip", a branch or tag, or a full hash
-    HorizonDepth: 100,     // step back 100 check-ins along primary parents
+    Horizon: &libfossil.Horizon{
+        Checkin: "trunk",                 // "tip", a branch or tag, or a full hash
+        Rule:    libfossil.HorizonLeaves, // and Structural, as for any horizon
+    },
+    HorizonDepth: 100, // step back 100 check-ins along primary parents
 })
 fmt.Println(res.HorizonResolved, res.HorizonSteps, res.HorizonResolvedLocally)
 ```
@@ -1294,7 +1297,9 @@ fmt.Println(res.HorizonResolved, res.HorizonSteps, res.HorizonResolvedLocally)
 - The store records only the resolved hash. Every later request of the clone, and every later pull, sync or deepen, sends that hash, never the name.
 - A name the origin cannot resolve fails the clone with `horizon name not found: NAME`, and nothing is left on disk.
 
-Without a horizon in `StoreCone`, the clone takes a content horizon under the descendants rule, over `StoreCone`'s path members if it has any. To ask for the leaves rule or the structural cut by name, pass a horizon `StoreCone`: its rule and depth stand, and its `Checkin` is only a stand-in until the name resolves. A structural clone by name gets the seed the origin mints for the resolved C.
+`CloneOpts.Horizon` takes the same `Horizon` as a store cone, except that its `Checkin` may be a name. `StoreCone` then gives only the path members: giving a horizon on both is an error, as is `HorizonDepth` without `Horizon`. A full hash with no depth is sent as the hash itself, which every horizon origin reads. A structural clone by name gets the seed the origin mints for the resolved C.
+
+An origin resolves a name only for a requester that may read or clone. To anyone else it answers as if the request named no horizon, so whether a name exists cannot be learned from its replies.
 
 An origin that does not answer the name (stock fossil, zit 0.7.0 and earlier) serves the clone densely. The clone then resolves the name itself over what it received, classifies locally at the content horizon, and reports `HorizonResolvedLocally`; a structural request falls back to the content horizon and reports `HorizonFallback` (§6.3).
 

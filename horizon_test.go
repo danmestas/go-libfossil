@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -637,17 +638,24 @@ func TestHorizonHistoryURL(t *testing.T) {
 
 // A clone may name its horizon instead of giving its hash: the origin
 // resolves trunk's tip stepped back one check-in to c2, and the store
-// records c2. A path-only or absent StoreCone takes the content horizon
-// under the descendants rule; a horizon StoreCone keeps its rule and level.
+// records c2 under the rule CloneOpts.Horizon gives, over StoreCone's path
+// members. A full hash at depth 0 is the hash itself. A horizon given twice,
+// or a depth without one, is refused.
 func TestCloneNamedHorizon(t *testing.T) {
 	f := newHorizonFixture(t)
-	leaves, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c1, Rule: HorizonLeaves})
+	paths, err := NewCone([]string{"a"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sc := range []*Cone{nil, leaves} {
+	for _, tc := range []struct {
+		sc *Cone
+		h  Horizon
+	}{
+		{nil, Horizon{Checkin: "trunk"}},
+		{paths, Horizon{Checkin: "trunk", Rule: HorizonLeaves}},
+	} {
 		target, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), f.peer,
-			CloneOpts{StoreCone: sc, HorizonName: "trunk", HorizonDepth: 1})
+			CloneOpts{StoreCone: tc.sc, Horizon: &tc.h, HorizonDepth: 1})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -659,18 +667,36 @@ func TestCloneNamedHorizon(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := Horizon{Checkin: f.c2}
-		if sc != nil {
-			want.Rule = HorizonLeaves
+		if h, ok := got.Horizon(); !ok || h != (Horizon{Checkin: f.c2, Rule: tc.h.Rule}) {
+			t.Fatalf("store cone horizon = %+v, %v; want c2 %v", h, ok, tc.h.Rule)
 		}
-		if h, ok := got.Horizon(); !ok || h != want {
-			t.Fatalf("store cone horizon = %+v, %v; want %+v", h, ok, want)
+		if tc.sc != nil && !slices.Equal(got.Include(), []string{"a"}) {
+			t.Fatalf("store cone paths = %v, want [a]", got.Include())
 		}
 		if holdsBlob(t, target, "old a\n") {
 			t.Fatal("blob below the horizon was transferred")
 		}
 	}
-	for _, opts := range []CloneOpts{{HorizonDepth: 1}, {HorizonName: "trunk", HorizonDepth: -1}} {
+	byHash, res, err := Clone(context.Background(), filepath.Join(t.TempDir(), "h.fossil"), f.peer,
+		CloneOpts{Horizon: &Horizon{Checkin: f.c2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer byHash.Close()
+	if res.HorizonResolved != "" || res.HorizonServed == 0 {
+		t.Fatalf("a full hash at depth 0 was sent as a name: %+v", res)
+	}
+	hc, err := NewHorizonCone(nil, nil, Horizon{Checkin: f.c1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, opts := range []CloneOpts{
+		{HorizonDepth: 1},
+		{Horizon: &Horizon{Checkin: "trunk"}, HorizonDepth: -1},
+		{Horizon: &Horizon{Checkin: "trunk"}, StoreCone: hc},
+		{Horizon: &Horizon{Checkin: f.c2}, StoreCone: hc},
+		{Horizon: &Horizon{}},
+	} {
 		if _, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "x.fossil"), f.peer, opts); err == nil {
 			t.Fatalf("Clone(%+v) succeeded", opts)
 		}

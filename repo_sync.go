@@ -105,17 +105,15 @@ type CloneOpts struct {
 	// SettingHorizonSeedKey: every structural horizon seed is verified against
 	// it, in this clone and every later pull and rebuild.
 	SeedKey string
-	// HorizonName, when set, clones a horizon store whose check-in is named
-	// rather than given by hash: "tip", a branch or tag, or a full hash,
-	// stepped back HorizonDepth check-ins along primary parents. The origin
-	// resolves it (draft-fossil-horizon-00 §6.2.7); against one that does
-	// not, the clone resolves it over what it received, at the content
-	// horizon, and says so in CloneResult. The store records only the
-	// resolved check-in. A StoreCone with a horizon gives its rule and
-	// level, its Checkin standing in until the name resolves; otherwise
-	// the horizon is a content horizon under HorizonDescendants, over
-	// StoreCone's path members if it has any.
-	HorizonName  string
+	// Horizon, when set, is the horizon to clone at, its Checkin a full hash
+	// or a name: "tip", a branch or tag. HorizonDepth steps it back that
+	// many check-ins along primary parents. A name, or any depth, is
+	// resolved by the origin (draft-fossil-horizon-00 §6.2.7); against one
+	// that does not, the clone resolves it over what it received at the
+	// content horizon and says so in CloneResult. Only the resolved check-in
+	// is stored. StoreCone then gives the path members alone: a horizon on
+	// both is an error, as is a depth without a Horizon.
+	Horizon      *Horizon
 	HorizonDepth int
 }
 

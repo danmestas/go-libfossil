@@ -10,16 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Named horizons, as zit 0.7.1's erratum to draft-fossil-horizon-00 adds
-  them (§6.1, §6.2.7, §6.3). `CloneOpts.HorizonName` and `HorizonDepth`, and
-  `repo clone --horizon NAME --depth N`, clone a horizon store at `tip`, a
-  branch or tag, or a full hash, stepped back N check-ins along primary
-  parents. The client sends `pragma horizon-name` in the clone's first
+  them (§6.1, §6.2.7, §6.3). `CloneOpts.Horizon`, whose `Checkin` may be a
+  name, with `HorizonDepth`, and `repo clone --horizon NAME --depth N`, clone
+  a horizon store at `tip`, a branch or tag, or a full hash, stepped back N
+  check-ins along primary parents. The client sends `pragma horizon-name` in the clone's first
   request only; the origin resolves the name over its dense repository,
   echoes `pragma horizon-resolved HASH STEPS` and serves the request at that
   check-in, minting a structural seed for it; the store records the hash and
   every later request sends it. A name that resolves to nothing, or a
   malformed request, is answered with one error card and the clone leaves
-  nothing on disk. Against a peer that does not resolve names, such as stock
+  nothing on disk; a requester that may neither read nor clone is answered
+  as if it named no horizon. Against a peer that does not resolve names, such as stock
   fossil, the clone resolves the name over what it received at the content
   horizon. `CloneResult` reports the check-in (`HorizonResolved`), the steps
   taken (`HorizonSteps`) and whether it was resolved locally.

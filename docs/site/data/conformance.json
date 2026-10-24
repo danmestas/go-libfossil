@@ -4569,7 +4569,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 112,
+      "cases": 115,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4903,7 +4903,7 @@
           "id": "HZ-6.1-2",
           "section": "6.1",
           "status": "COVERED",
-          "cases": 1,
+          "cases": 2,
           "text": "A request may carry pragma horizon-name \u003cname\u003e \u003crule\u003e \u003cdepth\u003e in place of pragma horizon, never both: name is tip, a symbolic name or a full check-in hash, as a card token; rule as for pragma horizon; depth a required base-10 count, 0 the named check-in itself. A client sends it only in the first request of a clone; every later request of the clone, and every later pull, sync or deepen, sends pragma horizon \u003chash\u003e \u003crule\u003e with the resolved hash, and the store records the hash, never the name.",
           "notes": ""
         },
@@ -5047,7 +5047,7 @@
           "id": "HZ-6.2-18",
           "section": "6.2.7",
           "status": "COVERED",
-          "cases": 2,
+          "cases": 4,
           "text": "A horizon-name that resolves to nothing, a malformed depth, or both pragma forms in one request is answered with one error card and nothing else, horizon\\sname\\snot\\sfound:\\s\u003cname\u003e or malformed\\shorizon-name\\spragma; the client then fails the clone and leaves nothing on disk.",
           "notes": ""
         },

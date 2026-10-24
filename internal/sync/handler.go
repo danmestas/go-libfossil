@@ -477,12 +477,15 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	// request with no client-version gets its reply's pragma run here, at
 	// the head; otherwise it follows server-version (handlePragma).
 	h.peerReadsTrees = sendsSubmanifests(req.Cards)
-	// Horizon §6.2.7: a named horizon is served as the hash it resolves to.
-	cards, resolved, refusal, err := resolveRequestName(h.repo.DB(), req.Cards)
-	if err != nil {
-		return nil, err
+	// Horizon §6.2.7: a named horizon is served as the hash it resolves to,
+	// once the requester is known to read or clone.
+	cards := req.Cards
+	if h.nameAuthority(req.Cards) {
+		var err error
+		if cards, h.resolved, h.nameRefusal, err = resolveRequestName(h.repo.DB(), req.Cards); err != nil {
+			return nil, err
+		}
 	}
-	h.resolved, h.nameRefusal = resolved, refusal
 	var coneErr error
 	h.cone, coneErr = requestCone(cards)
 	if coneErr != nil {
@@ -569,9 +572,7 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 	if err := h.processCards(ctx, req.Cards); err != nil {
 		return err
 	}
-	if h.canRead() {
-		h.refuseName()
-	}
+	h.refuseName()
 	if h.fatal || h.aborted {
 		return errPassAborted
 	}

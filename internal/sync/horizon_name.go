@@ -105,14 +105,34 @@ func parseCount(s string) (uint32, bool) {
 }
 
 // echoResolved appends the request's horizon-resolved pragma, which goes
-// ahead of horizon-served and every file card (§6.2.7), to a requester who
-// may read or clone: to anyone else the hash a name resolves to is the
-// repository's to keep.
+// ahead of horizon-served and every file card (§6.2.7).
 func (h *handler) echoResolved() {
-	if h.resolved == nil || !h.canRead() && !auth.CanClone(h.caps) {
-		return
+	if h.resolved != nil {
+		h.resp = append(h.resp, h.resolved)
 	}
-	h.resp = append(h.resp, h.resolved)
+}
+
+// nameAuthority reports a requester who may read or clone, with the
+// capabilities nobody has and a request's one login card grants, as the
+// card loop will find them. Only for such a requester is a horizon-name
+// resolved (§6.2.7): for anyone else the request is served as if it named
+// no horizon, so no reply to them depends on whether a name exists, and
+// no walk back is made on their behalf.
+func (h *handler) nameAuthority(cards []xfer.Card) bool {
+	caps := h.caps
+	var logins []*xfer.LoginCard
+	for _, card := range cards {
+		if c, ok := card.(*xfer.LoginCard); ok {
+			logins = append(logins, c)
+		}
+	}
+	// The loop refuses a second login card, granting nothing.
+	if len(logins) == 1 && h.projectCode != "" {
+		if u, err := auth.VerifyLogin(h.repo.DB(), h.projectCode, logins[0]); err == nil {
+			caps += u.Cap
+		}
+	}
+	return h.cloneRead || auth.CanRead(caps) || auth.CanClone(caps)
 }
 
 // refuseName ends a request whose horizon-name the origin refused with that
@@ -129,34 +149,40 @@ func (h *handler) refuseName() bool {
 // namedClone is a clone's side of a horizon asked for by name (§6.1, §6.3):
 // what it asks for, until the origin resolves it or the clone must.
 type namedClone struct {
-	name    string
-	depth   uint32
-	want    *cone.Cone // the requested cone; its horizon's check-in stands in until resolved
-	sent    bool       // the current request carried horizon-name
-	content bool       // a file card has arrived
-	settled bool       // resolved, or left to resolve locally
-	local   bool       // the origin answered without resolving it
+	NamedHorizon
+	include, exclude []string // the store cone's path members
+	sent             bool     // the current request carried horizon-name
+	content          bool     // a file card has arrived
+	settled          bool     // resolved, or left to resolve locally
+	local            bool     // the origin answered without resolving it
 }
 
 // newNamedClone is the named horizon opts asks for, nil for none.
 func newNamedClone(opts CloneOpts) (*namedClone, error) {
-	if opts.HorizonName == "" {
-		if opts.HorizonDepth != 0 {
-			return nil, fmt.Errorf("sync.Clone: a horizon depth needs a horizon name")
-		}
+	if opts.Named == nil {
 		return nil, nil
 	}
-	if _, ok := horizonOf(opts.StoreCone); !ok {
-		return nil, fmt.Errorf("sync.Clone: a horizon name needs a store cone with a horizon")
+	if _, ok := horizonOf(opts.StoreCone); ok {
+		return nil, fmt.Errorf("sync.Clone: a named horizon and a store cone horizon conflict")
 	}
-	return &namedClone{name: opts.HorizonName, depth: opts.HorizonDepth, want: opts.StoreCone}, nil
+	if opts.Named.Name == "" {
+		return nil, fmt.Errorf("sync.Clone: empty horizon name")
+	}
+	if _, err := cone.ParseHorizonRule(opts.Named.Rule.String()); err != nil {
+		return nil, fmt.Errorf("sync.Clone: %w", err)
+	}
+	if _, err := cone.ParseHorizonDepth(opts.Named.Level.String()); err != nil {
+		return nil, fmt.Errorf("sync.Clone: %w", err)
+	}
+	n := &namedClone{NamedHorizon: *opts.Named}
+	if opts.StoreCone != nil {
+		n.include, n.exclude = opts.StoreCone.Include(), opts.StoreCone.Exclude()
+	}
+	return n, nil
 }
 
 // structural reports a request for the structural horizon.
-func (n *namedClone) structural() bool {
-	h, _ := n.want.Horizon()
-	return h.Depth() == cone.DepthStructural
-}
+func (n *namedClone) structural() bool { return n.Level == cone.DepthStructural }
 
 // noteContent records that a file card arrived: a horizon-resolved after it
 // is refused.
@@ -169,10 +195,10 @@ func (n *namedClone) noteContent() {
 // pathCone is the store cone a named clone holds until C is known: the
 // requested path members alone, nil when there are none.
 func (n *namedClone) pathCone() *cone.Cone {
-	if len(n.want.Include()) == 0 {
+	if len(n.include) == 0 {
 		return nil
 	}
-	c, err := cone.New(n.want.Include(), n.want.Exclude())
+	c, err := cone.New(n.include, n.exclude)
 	if err != nil {
 		panic("sync.namedClone.pathCone: " + err.Error())
 	}
@@ -181,12 +207,11 @@ func (n *namedClone) pathCone() *cone.Cone {
 
 // at is the requested cone with its horizon at hash and level.
 func (n *namedClone) at(hash string, level cone.HorizonDepth) (*cone.Cone, error) {
-	h, _ := n.want.Horizon()
-	nh, err := cone.NewHorizon(hash, h.Rule(), level)
+	nh, err := cone.NewHorizon(hash, n.Rule, level)
 	if err != nil {
 		return nil, err
 	}
-	return cone.NewWithHorizon(n.want.Include(), n.want.Exclude(), nh)
+	return cone.NewWithHorizon(n.include, n.exclude, nh)
 }
 
 // pragmas are the horizon pragmas a clone request carries while the name is
@@ -201,10 +226,9 @@ func (n *namedClone) pragmas(cleanup bool) []xfer.Card {
 		return nil
 	}
 	n.sent = true
-	h, _ := n.want.Horizon()
-	cards := []xfer.Card{&xfer.PragmaCard{Name: horizonNamePragma, Values: []string{deck.FossilEncode(n.name),
-		h.Rule().String(), strconv.FormatUint(uint64(n.depth), 10)}}}
-	if h.Depth() == cone.DepthStructural {
+	cards := []xfer.Card{&xfer.PragmaCard{Name: horizonNamePragma, Values: []string{deck.FossilEncode(n.Name),
+		n.Rule.String(), strconv.FormatUint(uint64(n.Depth), 10)}}}
+	if n.structural() {
 		cards = append(cards, &xfer.PragmaCard{Name: horizonStructuralPragma},
 			&xfer.PragmaCard{Name: horizonSeedPragma, Values: []string{noSeed}})
 	}
@@ -212,21 +236,21 @@ func (n *namedClone) pragmas(cleanup bool) []xfer.Card {
 }
 
 // resolved reads the origin's horizon-resolved (§6.2.7) and returns the
-// store cone at C. The clone fails on one it did not ask for, that follows
-// content, names no full hash, or took more steps than asked.
+// store cone at C. The clone fails on one it did not ask for in the request
+// this reply answers, a second one, one that follows content, one that
+// names no full hash, or one that took more steps than asked.
 func (n *namedClone) resolved(p *xfer.PragmaCard) (*cone.Cone, uint32, error) {
-	if n == nil || !n.sent || n.content {
+	if n == nil || !n.sent || n.settled || n.content {
 		return nil, 0, fmt.Errorf("sync.Clone: unexpected %s pragma", horizonResolvedPragma)
 	}
 	if len(p.Values) != 2 {
 		return nil, 0, fmt.Errorf("sync.Clone: malformed %s pragma", horizonResolvedPragma)
 	}
 	steps, ok := parseCount(p.Values[1])
-	if !ok || steps > n.depth {
-		return nil, 0, fmt.Errorf("sync.Clone: %s took %q steps, asked for %d", horizonResolvedPragma, p.Values[1], n.depth)
+	if !ok || steps > n.Depth {
+		return nil, 0, fmt.Errorf("sync.Clone: %s took %q steps, asked for %d", horizonResolvedPragma, p.Values[1], n.Depth)
 	}
-	h, _ := n.want.Horizon()
-	c, err := n.at(p.Values[0], h.Depth())
+	c, err := n.at(p.Values[0], n.Level)
 	if err != nil {
 		return nil, 0, fmt.Errorf("sync.Clone: %s: %w", horizonResolvedPragma, err)
 	}
@@ -234,9 +258,13 @@ func (n *namedClone) resolved(p *xfer.PragmaCard) (*cone.Cone, uint32, error) {
 	return c, steps, nil
 }
 
-// endReply settles the name after the first reply that answers the clone
-// (§6.3): one that carried no horizon-resolved came from a peer that
-// ignored the pragma, and the clone resolves the name itself.
+// endReply settles the name after the first reply that answers the clone,
+// the first carrying the clone sequence (§6.3): one that carried no
+// horizon-resolved came from a peer that ignored the pragma, and the clone
+// resolves the name itself. A reply without the sequence, such as a private
+// origin's challenge to a request without a login, settles nothing: the
+// request that follows resends the name with the login, and is still the
+// clone's first request in §6.1's sense, since no reply has answered it.
 func (n *namedClone) endReply(msg *xfer.Message) {
 	if n == nil || n.settled {
 		return
@@ -273,7 +301,7 @@ func (cs *cloneSession) settleNamed() error {
 		return nil
 	}
 	if !n.settled {
-		return fmt.Errorf("sync.Clone: no reply settled the horizon name %q", n.name)
+		return fmt.Errorf("sync.Clone: no reply settled the horizon name %q", n.Name)
 	}
 	q := cs.repo.DB()
 	if !n.local {
@@ -284,9 +312,9 @@ func (cs *cloneSession) settleNamed() error {
 		}
 		return err
 	}
-	got, err := horizon.ResolveName(q, n.name, n.depth)
+	got, err := horizon.ResolveName(q, n.Name, n.Depth)
 	if errors.Is(err, horizon.ErrNameNotFound) {
-		return fmt.Errorf("sync.Clone: %s", nameNotFound(n.name))
+		return fmt.Errorf("sync.Clone: %s", nameNotFound(n.Name))
 	}
 	if err != nil {
 		return fmt.Errorf("sync.Clone: %w", err)

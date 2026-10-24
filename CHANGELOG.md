@@ -95,6 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A pushed delta can no longer hold the write lock with a long basis-chain
+  walk. Any pusher could hold it about 30s per push by closing a two-delta
+  cycle, since the receive pass's chain walks ran to 1<<24 steps. They now
+  stop at `content.MaxDeltaChainDepth`, the depth any read stops at. A delta
+  that closes a cycle is still refused, now at once. A delta on a chain
+  deeper than that bound is still stored but never checked against its
+  name, since no read can produce its bytes; a dangling delta whose basis
+  arrives deeper than the bound is left unchecked for the same reason. The
+  horizon seed check's pending-row walk is bounded the same way, so such a
+  row stays withheld without being judged.
 - An origin holding a delta whose source it never received can be cloned.
   The origin tried to expand the delta, failed, and every clone stopped at
   clone sequence 1. It now withholds an artifact it cannot expand, as it

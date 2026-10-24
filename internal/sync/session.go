@@ -9,6 +9,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -435,6 +436,12 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)
 	}
 	s.result.ArtifactsLinked = linked
+	// No receive pass holds rids now: a pull that filled a pushed seed's
+	// basis refused its hash, and its rows can go (seedcheck).
+	if err := seedcheck.Sweep(s.repo.DB()); err != nil {
+		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
+		return &s.result, fmt.Errorf("sync: %w", err)
+	}
 	if s.sparseReceived != nil {
 		err := s.repo.WithTx(func(tx *db.Tx) error {
 			var err error

@@ -273,7 +273,7 @@ type handler struct {
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
-	danglingHere    []libfossil.FslID         // deltas this request stored before their basis was readable (horizon §5.2.3)
+	danglingHere    []storedDelta             // deltas this request stored unreadable (horizon §5.2.3)
 	withheld        map[libfossil.FslID]bool  // pushed artifacts pending or refused as seeds (seedcheck), read once
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
@@ -594,7 +594,11 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(refusal)
 		return errPassAborted
 	}
-	return nil
+	// The request's receive pass is done with rids: rows stored under a
+	// refused seed hash, a phantom an igot of one made included, can go
+	// (seedcheck). It only reads when there is nothing to delete, as in a
+	// read-only request.
+	return seedcheck.Sweep(h.repo.DB())
 }
 
 // bindRepo points the handler at bound, the repository bound to the request
@@ -1356,6 +1360,10 @@ func (h *handler) requestPhantoms() error {
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
 	}
+	refused, err := seedcheck.RefusedUUIDs(h.repo.DB())
+	if err != nil {
+		return err
+	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
 		return fmt.Errorf("handler: listing phantoms: %w", err)
@@ -1372,7 +1380,9 @@ func (h *handler) requestPhantoms() error {
 		// nothing it holds names it yet (horizon §5.1): a new check-in.
 		_, heard := h.remoteHas[uuid]
 		announced := heard && elided != nil && elided.Unnamed(rid)
-		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
+		// A refused seed's hash is never asked for again (seedcheck).
+		if h.remoteLacks[uuid] || refused[uuid] ||
+			(elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1566,7 +1576,7 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 		panic("handler.recordStored: a stored artifact must exist")
 	}
 	if !content.IsAvailable(q, rid) {
-		h.danglingHere = append(h.danglingHere, rid)
+		h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
 		return seedcheck.MarkPending(q, rid)
 	}
 	if h.pass == nil {
@@ -1582,6 +1592,12 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 		h.fail(seedRefusedText)
 	}
 	return nil
+}
+
+// storedDelta is a delta a request stored, by name and rid.
+type storedDelta struct {
+	uuid string
+	rid  libfossil.FslID
 }
 
 // withheldSeed reports whether rid is a pushed artifact not yet judged, or

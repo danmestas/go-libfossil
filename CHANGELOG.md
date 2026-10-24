@@ -47,26 +47,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - An origin refuses a pushed seed by its shape (horizon §5.2.3, as zit
-  0.7.1's erratum words it; #471). A pushed control artifact is a seed when
-  its U card is `go-libfossil`, the origin's own seed label, or when it
-  carries a `horizon-seed` T card under any label. It is judged on its
-  content after any delta is applied, a delta whose base arrives later in
-  the same request included. The refusal is atomic: the request stores
-  nothing, and its reply is the single error card `seed refused: a seed is
-  private to the clone that holds it; it is never pushed`, which the pusher
-  reports among its sync errors. Before, a seed was dropped only when the
-  request's `horizon-seed` named it, and was otherwise stored as an ordinary
-  control artifact; that name match now refuses the request the same way. A
-  pushed delta whose base has not arrived is recorded pending, and withheld
-  from every reply until judged; whatever fills the base (a later push, a
-  pull, a check-in, a tag, a sweep or a rebuild) judges it in the same
-  transaction. That request is stored as usual, and the seed is recorded as
-  refused in a store-local table no configuration group carries, never
-  crosslinked, announced or sent; a purge forgets the record. Another implementation's
-  label alone, such as `U zit-seed` with no `horizon-seed` card, stays
-  ordinary, and a user whose login is `go-libfossil` cannot push control
-  artifacts. The §5.7 stale-seed check is likewise judged on expanded
-  content, a late delta included.
+  0.7.1's erratum F.1 words it; #471). A pushed control artifact is a seed
+  when its U card is `go-libfossil`, the origin's own seed label, or when it
+  carries a `horizon-seed` T card under any label. It is judged when it
+  first becomes readable, on its content after any delta is applied. A push
+  that carries a seed the origin can read within it is refused atomically:
+  it stores nothing, and its reply is the single error card `seed refused:
+  a seed is private to the clone that holds it; it is never pushed`, which
+  the pusher reports among its sync errors. A pushed delta whose base has
+  not arrived is withheld from every reply until something supplies the
+  base (a later push, a pull, a check-in or a tag), which is stored as usual
+  while the seed is refused; each fill judges only the deltas waiting on
+  it. A refused seed's bytes are deleted and its hash kept in a store-local
+  table no configuration group carries, so the origin never asks for it and
+  refuses a re-push at once. Before, a seed was dropped only when the
+  request's `horizon-seed` named it (that name match now refuses the push
+  the same way) and was otherwise stored as an ordinary control artifact.
+  A seed-shaped artifact received by pull or clone stays ordinary, as does
+  another implementation's label alone, such as `U zit-seed` with no
+  `horizon-seed` card; a user whose login is `go-libfossil` cannot push
+  control artifacts. The §5.7 stale-seed check is likewise judged on
+  expanded content, a late delta included.
 
 ### Fixed
 

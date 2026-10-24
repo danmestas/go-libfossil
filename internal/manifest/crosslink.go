@@ -354,6 +354,11 @@ func CrosslinkRebuild(tx *db.Tx) (int, error) {
 	if err := prepareCrosslinkTables(tx); err != nil {
 		return 0, err
 	}
+	// A rebuild holds no receive pass: rows under a refused seed hash go
+	// before anything is linked (seedcheck).
+	if err := seedcheck.Sweep(tx); err != nil {
+		return 0, err
+	}
 	candidates, err := collectCrosslinkCandidates(tx)
 	if err != nil {
 		return 0, err
@@ -403,11 +408,6 @@ func prepareCrosslinkTables(q db.Querier) error {
 		return fmt.Errorf("manifest.Crosslink: %w", err)
 	}
 	if err := ensureNonArtifactTable(q); err != nil {
-		return fmt.Errorf("manifest.Crosslink: %w", err)
-	}
-	// Pushed artifacts left pending whose basis has since been filled are
-	// judged before anything is linked (seedcheck).
-	if err := seedcheck.JudgeReadable(q); err != nil {
 		return fmt.Errorf("manifest.Crosslink: %w", err)
 	}
 	return nil
@@ -886,16 +886,14 @@ func linkArtifact(
 		panic("manifest.linkArtifact: sched must not be nil")
 	}
 	// Every path that links an artifact reaches here, so a pushed seed still
-	// pending is judged before it is linked (seedcheck).
-	present, err := seedTablePresent(tx, sched)
+	// pending, or one refused and not yet swept, is never linked (seedcheck).
+	tables, err := seedTables(tx, sched)
 	if err != nil {
 		return false, err
 	}
-	if present {
-		refused, err := seedcheck.Judge(tx, rid, d)
-		if err != nil || refused {
-			return false, err
-		}
+	refused, err := seedcheck.Judge(tx, tables, rid, d)
+	if err != nil || refused {
+		return false, err
 	}
 	handled, err = linkArtifactRows(tx, rid, d, cache, sched)
 	if handled && err == nil {
@@ -904,20 +902,17 @@ func linkArtifact(
 	return handled, err
 }
 
-// seedTablePresent reports whether the seedcheck table exists, asking once
-// per transaction.
-func seedTablePresent(tx *db.Tx, sched *batchSchedule) (bool, error) {
-	if sched.seedTable == 0 {
-		ok, err := seedcheck.Exists(tx)
+// seedTables reports which seedcheck tables exist, asking once per
+// transaction.
+func seedTables(tx *db.Tx, sched *batchSchedule) (seedcheck.Tables, error) {
+	if sched.seedTables == nil {
+		t, err := seedcheck.Present(tx)
 		if err != nil {
-			return false, err
+			return seedcheck.Tables{}, err
 		}
-		sched.seedTable = 1
-		if ok {
-			sched.seedTable = 2
-		}
+		sched.seedTables = &t
 	}
-	return sched.seedTable == 2, nil
+	return *sched.seedTables, nil
 }
 
 // linkArtifactRows is linkArtifact's dispatch on the artifact's type.

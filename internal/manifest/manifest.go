@@ -3,6 +3,7 @@ package manifest
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -126,9 +127,9 @@ func CheckinContext(
 		if txErr != nil {
 			return txErr
 		}
-		// A file or the manifest may fill a pushed delta's basis; a seed it
-		// makes readable is judged in this transaction (seedcheck).
-		if err := seedcheck.JudgeReadable(tx); err != nil {
+		// A seed checkinTx's stores made readable goes: no receive pass holds
+		// rids here (seedcheck).
+		if err := seedcheck.Sweep(tx); err != nil {
 			return err
 		}
 		return ctx.Err()
@@ -203,6 +204,11 @@ func checkinTx(
 		if _, err := tx.Exec("INSERT OR IGNORE INTO unsent(rid) VALUES(?)", frid); err != nil {
 			return 0, "", tree, fmt.Errorf("unsent file: %w", err)
 		}
+	}
+	// A file or the manifest may fill a pushed delta's basis: the deltas
+	// pending on what this check-in stored are judged (seedcheck).
+	if _, err := seedcheck.JudgeFilled(tx, append(slices.Clone(fileRids), rid)); err != nil {
+		return 0, "", tree, err
 	}
 	return rid, uuid, tree, linkCheckinTags(tx, opts, rid, d.T)
 }

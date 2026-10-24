@@ -1,20 +1,22 @@
-// Package seedcheck keeps an origin from linking or serving a pushed horizon
-// seed (draft-fossil-horizon-00 §5.2.3, as zit 0.7.1's erratum amends it).
+// Package seedcheck keeps an origin from storing, linking or serving a
+// horizon seed pushed to it (draft-fossil-horizon-00 §5.2.3 and its zit
+// 0.7.1 erratum, F.1).
 //
-// A pushed artifact is judged when it first becomes readable. The push
-// handler judges what it can read at once; a delta it cannot read yet it
-// records as pending here. Every path that fills a basis judges the pending
-// rows it made readable in the same transaction (JudgeReadable): the push
-// and pull cascades, a check-in, a tag, the sweep and a rebuild; and the
-// crosslink step judges a pending row before it links it (Judge). A seed is
-// marked refused; anything else loses its row. Until a row is cleared, its
-// artifact is withheld: never announced or sent, pending or refused. Only
-// pushed artifacts are recorded, since a seed-shaped artifact that arrives
-// by any other route is ordinary.
+// A pushed control artifact is a seed when it carries this implementation's
+// seed label or a horizon-seed T card. It is judged when it first becomes
+// readable. The push handler judges what it can read at once. A delta whose
+// basis it lacks is recorded pending, under the root of its basis chain (the
+// row whose arrival makes it readable), and withheld from every reply until
+// judged. Whatever later fills that root (a push or pull, a check-in, a tag)
+// judges the rows pending under it, and only those (JudgeFilled); the link
+// step judges a pending row it reaches too (Judge). A seed is refused by its
+// hash: the hash is recorded, and the bytes are deleted at a point where no
+// receive pass holds rids (Sweep), so it is never stored, linked, announced
+// or sent, and a re-push of it is refused.
 //
-// The table is store-local: it is in no configuration group, so no peer
-// pulls it, and a refusal can never make a clone drop its own seed. It is
-// created on the first push that needs it; a store without it withholds
+// Both tables are store-local: no configuration group carries them, so no
+// peer pulls them and a refusal can never make a clone drop the seed it
+// holds. Each is created on first use; a store without them withholds
 // nothing.
 package seedcheck
 
@@ -39,18 +41,30 @@ const Label = "go-libfossil"
 // may carry it (§5.2.3).
 const Tag = "horizon-seed"
 
-// table holds one row per pushed artifact that was unreadable when it
-// arrived (refused 0, pending) or was found to be a seed (refused 1).
-const table = "seedcheck"
+const (
+	pendingTable = "seedpending" // pushed deltas not yet readable, by rid, under their chain root
+	refusedTable = "seedrefused" // hashes of refused seeds
+)
 
-const schema = `CREATE TABLE IF NOT EXISTS ` + table + `(
+const (
+	pendingSchema = `CREATE TABLE IF NOT EXISTS ` + pendingTable + `(
   rid INTEGER PRIMARY KEY,
-  refused INTEGER NOT NULL
+  root INTEGER NOT NULL
 )`
+	pendingIndex  = `CREATE INDEX IF NOT EXISTS ` + pendingTable + `_root ON ` + pendingTable + `(root)`
+	refusedSchema = `CREATE TABLE IF NOT EXISTS ` + refusedTable + `(uuid TEXT PRIMARY KEY) WITHOUT ROWID`
+)
 
-// judgeCacheBytes bounds the expanded content JudgeReadable keeps while it
-// walks the pending rows, so a pending chain is rebuilt once along its
-// length.
+// noRoot is the root of a delta nothing can make readable: its basis was a
+// refused seed, whose bytes are gone.
+const noRoot = 0
+
+// maxChainSteps bounds a basis-chain walk, so a cycle in the delta table is
+// an error rather than a hang.
+const maxChainSteps = 1 << 24
+
+// judgeCacheBytes bounds the expanded content one JudgeFilled call keeps,
+// so a chain pending under one root is rebuilt once along its length.
 const judgeCacheBytes = 16 << 20
 
 // IsSeed reports whether d is a seed an origin refuses: a control artifact
@@ -88,90 +102,188 @@ func IsSeedBytes(data []byte) bool {
 	return err == nil && IsSeed(d)
 }
 
-// MarkPending records rid, a pushed artifact not yet readable, for judging
-// when it becomes readable.
+// MarkPending records rid, a pushed delta not yet readable, under the root
+// of its basis chain, for judging when that root is filled. Rows pending
+// under rid itself move to the same root: rid is no more readable than its
+// own basis.
 func MarkPending(q db.Querier, rid libfossil.FslID) error {
 	if q == nil || rid <= 0 {
 		panic("seedcheck.MarkPending: q must not be nil and rid must be positive")
 	}
-	if _, err := q.Exec(schema); err != nil {
-		return fmt.Errorf("seedcheck.MarkPending: %w", err)
-	}
-	if _, err := q.Exec("INSERT OR IGNORE INTO "+table+"(rid, refused) VALUES(?, 0)", rid); err != nil {
-		return fmt.Errorf("seedcheck.MarkPending: %w", err)
-	}
-	return nil
-}
-
-// Judge decides rid, about to be linked with d its parsed content, and
-// reports whether it is refused. The caller has seen the table exist
-// (Exists), which it may cache for a transaction. A row not recorded is
-// never refused.
-func Judge(q db.Querier, rid libfossil.FslID, d *deck.Deck) (bool, error) {
-	if q == nil || rid <= 0 || d == nil {
-		panic("seedcheck.Judge: q and d must not be nil and rid must be positive")
-	}
-	refused, recorded, err := row(q, rid)
-	if err != nil || !recorded || refused {
-		return refused, err
-	}
-	return decide(q, rid, IsSeed(d))
-}
-
-// JudgeReadable judges every pending row whose content is now readable, in
-// rid order through one cache: a seed becomes refused, anything else, files
-// and bytes that hold no artifact included, loses its row. A row whose bytes
-// do not hash to its name is not the artifact it names; it stays pending,
-// withheld, rather than be judged on bytes that are not its own. Every path
-// that fills a basis calls this in the transaction that filled it.
-func JudgeReadable(q db.Querier) error {
-	if q == nil {
-		panic("seedcheck.JudgeReadable: q must not be nil")
-	}
-	ok, err := Exists(q)
-	if err != nil || !ok {
-		return err
-	}
-	pending, err := rids(q, "SELECT rid FROM "+table+" WHERE refused=0 ORDER BY rid")
+	root, err := chainRoot(q, rid)
 	if err != nil {
 		return err
 	}
-	cache := content.NewCache(judgeCacheBytes)
-	for _, rid := range pending {
-		if !content.IsAvailable(q, rid) {
-			continue
+	return markPending(q, rid, root)
+}
+
+func markPending(q db.Querier, rid, root libfossil.FslID) error {
+	for _, stmt := range []string{pendingSchema, pendingIndex} {
+		if _, err := q.Exec(stmt); err != nil {
+			return fmt.Errorf("seedcheck.MarkPending: %w", err)
 		}
-		data, err := cache.Expand(q, rid)
-		if errors.Is(err, content.ErrHashMismatch) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("seedcheck.JudgeReadable: rid=%d: %w", rid, err)
-		}
-		d, perr := deck.Parse(data)
-		if _, err := decide(q, rid, perr == nil && IsSeed(d)); err != nil {
-			return err
+	}
+	for _, stmt := range []string{
+		"INSERT OR REPLACE INTO " + pendingTable + "(rid, root) VALUES(?1, ?2)",
+		"UPDATE " + pendingTable + " SET root=?2 WHERE root=?1",
+	} {
+		if _, err := q.Exec(stmt, rid, root); err != nil {
+			return fmt.Errorf("seedcheck.MarkPending: %w", err)
 		}
 	}
 	return nil
 }
 
-// decide records the verdict on pending rid. A seed becomes refused and
-// leaves the unclustered table, so no inventory or cluster names it (a
-// pushed artifact is never in unsent, which only local writes fill);
-// anything else loses its row.
-func decide(q db.Querier, rid libfossil.FslID, seed bool) (bool, error) {
-	stmts := []string{"DELETE FROM " + table + " WHERE rid=?"}
-	if seed {
-		stmts = []string{
-			"UPDATE " + table + " SET refused=1 WHERE rid=?",
-			"DELETE FROM unclustered WHERE rid=?",
+// chainRoot follows delta.srcid from rid to the row with no delta, whose
+// arrival makes rid readable.
+func chainRoot(q db.Querier, rid libfossil.FslID) (libfossil.FslID, error) {
+	cur := rid
+	for steps := 0; ; steps++ {
+		if steps > maxChainSteps {
+			return 0, fmt.Errorf("seedcheck: basis chain of rid=%d does not end", rid)
+		}
+		var next libfossil.FslID
+		err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", cur).Scan(&next)
+		if errors.Is(err, sql.ErrNoRows) {
+			return cur, nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("seedcheck: basis chain of rid=%d: %w", rid, err)
+		}
+		cur = next
+	}
+}
+
+// JudgeFilled judges the rows pending under each of filled, rids whose
+// content was just stored, and reports how many rows it examined. Each fill
+// costs the rows that waited on it, not the whole pending set. A row now
+// readable is judged: a seed's hash is refused, and either way the row
+// goes. Rows still unreadable, because filled was stored as a delta on a
+// basis not held either, move to that basis's root.
+//
+// A row whose bytes do not hash to its name is not the artifact it names;
+// it stays pending, withheld, rather than be judged on bytes that are not
+// its own.
+func JudgeFilled(q db.Querier, filled []libfossil.FslID) (int, error) {
+	if q == nil {
+		panic("seedcheck.JudgeFilled: q must not be nil")
+	}
+	ok, err := tableExists(q, pendingTable)
+	if err != nil || !ok || len(filled) == 0 {
+		return 0, err
+	}
+	cache := content.NewCache(judgeCacheBytes)
+	examined := 0
+	for _, root := range filled {
+		if root <= 0 {
+			panic("seedcheck.JudgeFilled: filled rids must be positive")
+		}
+		waiting, err := rows(q, "SELECT p.rid, b.uuid FROM "+pendingTable+" p JOIN blob b ON b.rid=p.rid"+
+			" WHERE p.root=? ORDER BY p.rid", root)
+		if err != nil {
+			return examined, err
+		}
+		if len(waiting) == 0 {
+			continue
+		}
+		if !content.IsAvailable(q, root) {
+			moved, err := chainRoot(q, root)
+			if err != nil {
+				return examined, err
+			}
+			if moved != root {
+				if _, err := q.Exec("UPDATE "+pendingTable+" SET root=? WHERE root=?", moved, root); err != nil {
+					return examined, fmt.Errorf("seedcheck.JudgeFilled: %w", err)
+				}
+			}
+			continue
+		}
+		for _, w := range waiting {
+			examined++
+			data, err := cache.Expand(q, w.rid)
+			if errors.Is(err, content.ErrHashMismatch) {
+				continue
+			}
+			if err != nil {
+				return examined, fmt.Errorf("seedcheck.JudgeFilled: rid=%d: %w", w.rid, err)
+			}
+			if _, err := decide(q, w.rid, w.uuid, IsSeedBytes(data)); err != nil {
+				return examined, err
+			}
 		}
 	}
-	for _, stmt := range stmts {
-		if _, err := q.Exec(stmt, rid); err != nil {
-			return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)
+	return examined, nil
+}
+
+// Tables is which of the two tables a store has. A caller that links many
+// artifacts reads it once per transaction (Present) and hands it to Judge.
+type Tables struct {
+	Pending, Refused bool
+}
+
+// Present reads which tables exist.
+func Present(q db.Querier) (Tables, error) {
+	if q == nil {
+		panic("seedcheck.Present: q must not be nil")
+	}
+	var t Tables
+	var err error
+	if t.Pending, err = tableExists(q, pendingTable); err != nil {
+		return Tables{}, err
+	}
+	t.Refused, err = tableExists(q, refusedTable)
+	return t, err
+}
+
+// Judge decides rid, about to be linked with d its parsed content, given
+// the tables the store has, and reports whether it must not be linked: its
+// hash is refused, or it was pending and is a seed, which refuses its hash.
+// Any other pending row is cleared. This is the derive-time check every
+// link path reaches, behind JudgeFilled.
+func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, error) {
+	if q == nil || rid <= 0 || d == nil {
+		panic("seedcheck.Judge: q and d must not be nil and rid must be positive")
+	}
+	if !t.Pending && !t.Refused {
+		return false, nil
+	}
+	var uuid string
+	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+		return false, fmt.Errorf("seedcheck.Judge: rid=%d: %w", rid, err)
+	}
+	if t.Refused {
+		var n int
+		if err := q.QueryRow("SELECT count(*) FROM "+refusedTable+" WHERE uuid=?", uuid).Scan(&n); err != nil {
+			return false, fmt.Errorf("seedcheck.Judge: %w", err)
 		}
+		if n > 0 {
+			return true, nil
+		}
+	}
+	if !t.Pending {
+		return false, nil
+	}
+	var one int
+	err := q.QueryRow("SELECT 1 FROM "+pendingTable+" WHERE rid=?", rid).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("seedcheck.Judge: pending rid=%d: %w", rid, err)
+	}
+	return decide(q, rid, uuid, IsSeed(d))
+}
+
+// decide records the verdict on pending rid: a seed's hash is refused;
+// either way the pending row goes.
+func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, error) {
+	if seed {
+		if err := Refuse(q, uuid); err != nil {
+			return false, err
+		}
+	}
+	if _, err := q.Exec("DELETE FROM "+pendingTable+" WHERE rid=?", rid); err != nil {
+		return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)
 	}
 	return seed, nil
 }
@@ -181,123 +293,227 @@ func Clear(q db.Querier, rid libfossil.FslID) error {
 	if q == nil || rid <= 0 {
 		panic("seedcheck.Clear: q must not be nil and rid must be positive")
 	}
-	ok, err := Exists(q)
+	ok, err := tableExists(q, pendingTable)
 	if err != nil || !ok {
 		return err
 	}
-	if _, err := q.Exec("DELETE FROM "+table+" WHERE rid=? AND refused=0", rid); err != nil {
+	if _, err := q.Exec("DELETE FROM "+pendingTable+" WHERE rid=?", rid); err != nil {
 		return fmt.Errorf("seedcheck.Clear: %w", err)
 	}
 	return nil
 }
 
-// ForgetDeleted drops the rows whose blob rows are gone. A caller that
-// deletes blob rows runs it in the same transaction: rids are reused, so a
-// later artifact stored under one must inherit no verdict.
+// Refuse records uuid as a refused seed. A row stored under it is withheld
+// and never linked until Sweep deletes it.
+func Refuse(q db.Querier, uuid string) error {
+	if q == nil || uuid == "" {
+		panic("seedcheck.Refuse: q must not be nil and uuid must not be empty")
+	}
+	if _, err := q.Exec(refusedSchema); err != nil {
+		return fmt.Errorf("seedcheck.Refuse: %w", err)
+	}
+	if _, err := q.Exec("INSERT OR IGNORE INTO "+refusedTable+"(uuid) VALUES(?)", uuid); err != nil {
+		return fmt.Errorf("seedcheck.Refuse: %w", err)
+	}
+	return nil
+}
+
+// IsRefusedUUID reports whether uuid was refused as a seed: it is not
+// stored, asked for or accepted again.
+func IsRefusedUUID(q db.Querier, uuid string) (bool, error) {
+	if q == nil {
+		panic("seedcheck.IsRefusedUUID: q must not be nil")
+	}
+	ok, err := tableExists(q, refusedTable)
+	if err != nil || !ok {
+		return false, err
+	}
+	var n int
+	if err := q.QueryRow("SELECT count(*) FROM "+refusedTable+" WHERE uuid=?", uuid).Scan(&n); err != nil {
+		return false, fmt.Errorf("seedcheck.IsRefusedUUID: %w", err)
+	}
+	return n > 0, nil
+}
+
+// RefusedUUIDs returns every refused hash. The set is small: it holds only
+// seeds offered to this store.
+func RefusedUUIDs(q db.Querier) (map[string]bool, error) {
+	if q == nil {
+		panic("seedcheck.RefusedUUIDs: q must not be nil")
+	}
+	out := map[string]bool{}
+	ok, err := tableExists(q, refusedTable)
+	if err != nil || !ok {
+		return out, err
+	}
+	all, err := rows(q, "SELECT 0, uuid FROM "+refusedTable)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range all {
+		out[r.uuid] = true
+	}
+	return out, nil
+}
+
+// Sweep deletes every blob row stored under a refused hash, phantoms
+// included, so no peer is asked for it. A delta stored on one cannot come
+// from a legitimate peer: it is left unreadable and pending under no root,
+// so it stays withheld. It runs where no receive pass holds rids, since a
+// deleted rid is reused by the next row stored. It only reads when there is
+// nothing to delete.
+func Sweep(q db.Querier) error {
+	if q == nil {
+		panic("seedcheck.Sweep: q must not be nil")
+	}
+	ok, err := tableExists(q, refusedTable)
+	if err != nil {
+		return err
+	}
+	if ok {
+		doomed, err := rows(q, "SELECT b.rid, b.uuid FROM blob b JOIN "+refusedTable+" r ON r.uuid=b.uuid")
+		if err != nil {
+			return err
+		}
+		for _, d := range doomed {
+			if err := sweepRow(q, d.rid); err != nil {
+				return err
+			}
+		}
+	}
+	return ForgetDeleted(q)
+}
+
+func sweepRow(q db.Querier, rid libfossil.FslID) error {
+	deps, err := rows(q, "SELECT rid, '' FROM delta WHERE srcid=?", rid)
+	if err != nil {
+		return err
+	}
+	for _, dep := range deps {
+		if err := markPending(q, dep.rid, noRoot); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range []string{
+		"DELETE FROM delta WHERE rid=?",
+		"DELETE FROM phantom WHERE rid=?",
+		"DELETE FROM unclustered WHERE rid=?",
+		"DELETE FROM unsent WHERE rid=?",
+		"DELETE FROM private WHERE rid=?",
+		"DELETE FROM blob WHERE rid=?",
+	} {
+		if _, err := q.Exec(stmt, rid); err != nil {
+			return fmt.Errorf("seedcheck.Sweep: rid=%d: %w", rid, err)
+		}
+	}
+	return nil
+}
+
+// ForgetDeleted drops the pending rows whose blob rows are gone. A caller
+// that deletes blob rows runs it in the same transaction: rids are reused,
+// so a later artifact stored under one must not be withheld.
 func ForgetDeleted(q db.Querier) error {
 	if q == nil {
 		panic("seedcheck.ForgetDeleted: q must not be nil")
 	}
-	ok, err := Exists(q)
+	ok, err := tableExists(q, pendingTable)
 	if err != nil || !ok {
 		return err
 	}
-	if _, err := q.Exec("DELETE FROM " + table + " WHERE NOT EXISTS (SELECT 1 FROM blob WHERE rid=" +
-		table + ".rid)"); err != nil {
+	const gone = " FROM " + pendingTable + " WHERE NOT EXISTS (SELECT 1 FROM blob WHERE rid=" + pendingTable + ".rid)"
+	var n int
+	if err := q.QueryRow("SELECT count(*)" + gone).Scan(&n); err != nil || n == 0 {
+		return err
+	}
+	if _, err := q.Exec("DELETE" + gone); err != nil {
 		return fmt.Errorf("seedcheck.ForgetDeleted: %w", err)
 	}
 	return nil
 }
 
-// IsRefused reports whether rid was judged a seed.
-func IsRefused(q db.Querier, rid libfossil.FslID) (bool, error) {
-	if q == nil {
-		panic("seedcheck.IsRefused: q must not be nil")
-	}
-	ok, err := Exists(q)
-	if err != nil || !ok {
-		return false, err
-	}
-	refused, _, err := row(q, rid)
-	return refused, err
-}
-
-// IsWithheld reports whether rid has a row, pending or refused: a pushed
-// artifact not yet judged, or judged a seed. No reply announces or sends it.
+// IsWithheld reports whether rid is pending, or stored under a refused hash
+// that Sweep has not deleted yet. No reply announces or sends it.
 func IsWithheld(q db.Querier, rid libfossil.FslID) (bool, error) {
 	if q == nil {
 		panic("seedcheck.IsWithheld: q must not be nil")
 	}
-	ok, err := Exists(q)
-	if err != nil || !ok {
+	t, err := Present(q)
+	if err != nil {
 		return false, err
 	}
-	_, recorded, err := row(q, rid)
-	return recorded, err
+	var n int
+	if t.Pending {
+		if err := q.QueryRow("SELECT count(*) FROM "+pendingTable+" WHERE rid=?", rid).Scan(&n); err != nil {
+			return false, fmt.Errorf("seedcheck.IsWithheld: %w", err)
+		}
+	}
+	if n == 0 && t.Refused {
+		if err := q.QueryRow("SELECT count(*) FROM blob b JOIN "+refusedTable+" r ON r.uuid=b.uuid WHERE b.rid=?",
+			rid).Scan(&n); err != nil {
+			return false, fmt.Errorf("seedcheck.IsWithheld: %w", err)
+		}
+	}
+	return n > 0, nil
 }
 
 // Withheld returns every rid IsWithheld reports. The set is small: it holds
-// only pushed artifacts not yet readable, and pushed seeds.
+// only pushed deltas not yet readable, and seeds not yet swept.
 func Withheld(q db.Querier) (map[libfossil.FslID]bool, error) {
 	if q == nil {
 		panic("seedcheck.Withheld: q must not be nil")
 	}
-	out := map[libfossil.FslID]bool{}
-	ok, err := Exists(q)
-	if err != nil || !ok {
-		return out, err
-	}
-	all, err := rids(q, "SELECT rid FROM "+table)
+	t, err := Present(q)
 	if err != nil {
 		return nil, err
 	}
-	for _, rid := range all {
-		out[rid] = true
+	out := map[libfossil.FslID]bool{}
+	var queries []string
+	if t.Pending {
+		queries = append(queries, "SELECT rid, '' FROM "+pendingTable)
+	}
+	if t.Refused {
+		queries = append(queries, "SELECT b.rid, '' FROM blob b JOIN "+refusedTable+" r ON r.uuid=b.uuid")
+	}
+	for _, query := range queries {
+		found, err := rows(q, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range found {
+			out[r.rid] = true
+		}
 	}
 	return out, nil
 }
 
-// Exists reports whether the table was ever created: a store no unreadable
-// delta was pushed to has none.
-func Exists(q db.Querier) (bool, error) {
-	if q == nil {
-		panic("seedcheck.Exists: q must not be nil")
-	}
+func tableExists(q db.Querier, name string) (bool, error) {
 	var n int
-	if err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).
+	if err := q.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", name).
 		Scan(&n); err != nil {
 		return false, fmt.Errorf("seedcheck: %w", err)
 	}
 	return n > 0, nil
 }
 
-// row reads rid's row in a table known to exist: whether it is refused, and
-// whether it has one.
-func row(q db.Querier, rid libfossil.FslID) (refused, recorded bool, err error) {
-	var n int
-	err = q.QueryRow("SELECT refused FROM "+table+" WHERE rid=?", rid).Scan(&n)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, fmt.Errorf("seedcheck: row of rid=%d: %w", rid, err)
-	}
-	return n == 1, true, nil
+// row is a rid and, where the query selects one, its hash.
+type row struct {
+	rid  libfossil.FslID
+	uuid string
 }
 
-func rids(q db.Querier, query string) ([]libfossil.FslID, error) {
-	rows, err := q.Query(query)
+func rows(q db.Querier, query string, args ...any) ([]row, error) {
+	rs, err := q.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("seedcheck: %w", err)
 	}
-	defer rows.Close()
-	var out []libfossil.FslID
-	for rows.Next() {
-		var rid libfossil.FslID
-		if err := rows.Scan(&rid); err != nil {
+	defer rs.Close()
+	var out []row
+	for rs.Next() {
+		var r row
+		if err := rs.Scan(&r.rid, &r.uuid); err != nil {
 			return nil, fmt.Errorf("seedcheck: %w", err)
 		}
-		out = append(out, rid)
+		out = append(out, r)
 	}
-	return out, rows.Err()
+	return out, rs.Err()
 }

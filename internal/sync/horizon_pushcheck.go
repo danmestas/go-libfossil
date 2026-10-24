@@ -79,9 +79,10 @@ const seedRefusedText = "seed refused: a seed is private to the clone that holds
 // ownSeedReadable reports whether a delta this request stored before its
 // basis was readable has become readable and is a seed (horizon §5.2.3):
 // the seed is judged within the request that carried it, which is then
-// refused whole. A delta still unreadable stays pending in seedcheck and is
-// judged at the crosslink step of whatever later makes it readable; one
-// found not to be a seed loses its pending row.
+// refused whole. The cascade may have judged it already, refusing its hash;
+// so is a re-push of a hash refused before. A delta still unreadable stays
+// pending and is judged by whatever later fills its basis; one found not to
+// be a seed loses its pending row.
 func (h *handler) ownSeedReadable() (bool, error) {
 	if len(h.danglingHere) == 0 {
 		return false, nil
@@ -90,20 +91,24 @@ func (h *handler) ownSeedReadable() (bool, error) {
 		panic("handler.ownSeedReadable: a stored delta implies a receive pass")
 	}
 	q := h.repo.DB()
-	for _, rid := range h.danglingHere {
-		if !content.IsAvailable(q, rid) {
+	for _, d := range h.danglingHere {
+		refused, err := seedcheck.IsRefusedUUID(q, d.uuid)
+		if err != nil || refused {
+			return refused, err
+		}
+		if !content.IsAvailable(q, d.rid) {
 			continue
 		}
 		// The pass's basis cache keeps every node it rebuilds, so a chain of
 		// deltas is expanded once along its length, not once per delta.
-		data, err := h.pass.basis.ExpandUnchecked(q, rid)
+		data, err := h.pass.basis.ExpandUnchecked(q, d.rid)
 		if err != nil {
 			return false, fmt.Errorf("handler: seed check: %w", err)
 		}
 		if seedcheck.IsSeedBytes(data) {
 			return true, nil
 		}
-		if err := seedcheck.Clear(q, rid); err != nil {
+		if err := seedcheck.Clear(q, d.rid); err != nil {
 			return false, err
 		}
 	}

@@ -36,12 +36,14 @@ A content horizon keeps all structure and elides only blobs; a structural horizo
 
 ## Seeds are never pushed
 
-A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3):
+A seed is private to the clone that holds it, so a go-libfossil origin refuses any pushed control artifact that looks like one (§5.2.3 and its F.1 erratum):
 
 - its U card is `go-libfossil`, the label go-libfossil writes on every seed it mints; or
 - it carries a `horizon-seed` T card, whatever its U card.
 
-Each test runs on the artifact's content after any delta is applied, including a delta whose base arrives later in the same push. The refusal is atomic: nothing the push carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived cannot be read yet, so it is stored as any other dangling delta is, and judged when a later push supplies the base. Until it is judged it is withheld: never announced or sent. Whatever fills the base, a later push, a pull, a check-in or tag that writes the same bytes, judges it in the same transaction, and the crosslink step judges anything still pending before it links it. The push or pull that supplied the base is stored as usual, with no error, and the seed is recorded as refused in a table of the store's own that no peer pulls: it is never crosslinked (a rebuild included), announced or sent. A seed-shaped artifact that was never pushed, one pulled from a peer, say, is ordinary.
+The test runs when the artifact first becomes readable, on its content after any delta is applied. A push that carries a seed the origin can read within that push is refused whole: nothing it carried is stored, and the reply is one error card, `seed refused: a seed is private to the clone that holds it; it is never pushed`, which a go-libfossil pusher reports among its sync errors. A delta whose base has not arrived is stored as any dangling delta is, and withheld, never announced or sent, until something supplies the base: a later push, a pull, or a check-in or tag that writes the same bytes. That supplies only the base, so it is stored as usual, with no error, and the seed is refused then.
+
+A refused seed's bytes are deleted, and its hash is recorded in a table of the store's own that no configuration group carries, so no peer pulls it. The origin never asks for that hash, and refuses a re-push of it at once. A seed-shaped artifact a store receives by pull or clone is an ordinary control artifact.
 
 Two consequences follow:
 

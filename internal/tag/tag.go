@@ -129,8 +129,12 @@ func AddTag(r *repo.Repo, opts TagOpts) (libfossil.FslID, error) {
 			return fmt.Errorf("tag.AddTag: unsent: %w", err)
 		}
 		// The control artifact may fill a pushed delta's basis; a seed it
-		// makes readable is judged in this transaction (seedcheck).
-		return seedcheck.JudgeReadable(tx)
+		// makes readable is judged and dropped in this transaction
+		// (seedcheck). No receive pass holds rids here.
+		if _, err := seedcheck.JudgeFilled(tx, []libfossil.FslID{controlRid}); err != nil {
+			return err
+		}
+		return seedcheck.Sweep(tx)
 	})
 	if err != nil {
 		return 0, fmt.Errorf("tag.AddTag: %w", err)

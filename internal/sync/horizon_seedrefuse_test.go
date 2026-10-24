@@ -328,17 +328,17 @@ func isPhantomRow(q db.Querier, uuid string) (bool, error) {
 	return phantom, err
 }
 
-// assertRefused checks whether r records uuid as a refused seed, and that
-// no seed refusal ever lands in the shun table, which peers pull.
+// assertRefused checks whether r records uuid as a refused seed: refused by
+// its hash and no longer held. A refusal never lands in the shun table,
+// which peers pull.
 func assertRefused(t *testing.T, r *repo.Repo, uuid string, want bool) {
 	t.Helper()
-	rid, ok := blob.Exists(r.DB(), uuid)
-	if !ok {
-		t.Fatalf("%.10s is not held", uuid)
-	}
-	refused, err := seedcheck.IsRefused(r.DB(), rid)
+	refused, err := seedcheck.IsRefusedUUID(r.DB(), uuid)
 	if err != nil || refused != want {
 		t.Fatalf("%.10s refused = %v (%v), want %v", uuid, refused, err, want)
+	}
+	if _, held := blob.Exists(r.DB(), uuid); want && held {
+		t.Fatalf("the refused %.10s is still held", uuid)
 	}
 	if shunned, err := shun.IsShunned(r.DB(), uuid); err != nil || shunned {
 		t.Fatalf("%.10s is shunned (%v)", uuid, err)
@@ -487,22 +487,19 @@ func TestHorizonPendingFileClearedWhenJudged(t *testing.T) {
 	}
 }
 
-// Purging a refused seed forgets its record, so an innocent artifact that
+// Purging a pending delta forgets its record, so an innocent artifact that
 // is later stored under the reused rid is served.
-func TestHorizonPurgedSeedForgotten(t *testing.T) {
+func TestHorizonPurgedPendingForgotten(t *testing.T) {
 	o := newPCOrigin(t)
-	_, base := o.labelled("u", "b")
+	_, base := o.labelled("u", "never sent")
 	s := danglingSeed(t, o, base)
-	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
-		t.Fatalf("the base's push: errors %q", errs)
-	}
-	seedRID, _ := blob.Exists(o.r.DB(), s.UUID)
+	pendingRID, _ := blob.Exists(o.r.DB(), s.UUID)
 	var maxRID libfossil.FslID
 	if err := o.r.DB().QueryRow("SELECT max(rid) FROM blob").Scan(&maxRID); err != nil {
 		t.Fatal(err)
 	}
-	if seedRID != maxRID {
-		t.Fatalf("fixture: the seed is rid %d, not the last row %d", seedRID, maxRID)
+	if pendingRID != maxRID {
+		t.Fatalf("fixture: the pending delta is rid %d, not the last row %d", pendingRID, maxRID)
 	}
 	if err := shun.Add(o.r.DB(), s.UUID, "purge"); err != nil {
 		t.Fatal(err)
@@ -515,11 +512,11 @@ func TestHorizonPurgedSeedForgotten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rid != seedRID {
-		t.Fatalf("fixture: the innocent blob is rid %d, not the reused %d", rid, seedRID)
+	if rid != pendingRID {
+		t.Fatalf("fixture: the innocent blob is rid %d, not the reused %d", rid, pendingRID)
 	}
 	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || withheld {
-		t.Fatalf("the innocent blob inherited the seed's record (%v)", err)
+		t.Fatalf("the innocent blob inherited the pending record (%v)", err)
 	}
 }
 
@@ -557,9 +554,9 @@ func TestHorizonSeedWithheldFromPrivateInventory(t *testing.T) {
 	}
 }
 
-// A clone sending an artifact stored as a delta on a refused seed does not
-// send the seed as its source.
-func TestHorizonRefusedSeedNotCloneSource(t *testing.T) {
+// A delta whose basis is a refused seed cannot come from a legitimate peer:
+// it is unreadable and withheld, and the seed is never asked for.
+func TestHorizonDeltaOnRefusedSeedWithheld(t *testing.T) {
 	o := newPCOrigin(t)
 	_, base := o.labelled("u", "b")
 	s := danglingSeed(t, o, base)
@@ -567,26 +564,24 @@ func TestHorizonRefusedSeedNotCloneSource(t *testing.T) {
 		t.Fatalf("the base's push: errors %q", errs)
 	}
 	assertRefused(t, o.r, s.UUID, true)
-	seedRID, _ := blob.Exists(o.r.DB(), s.UUID)
-	seedBytes, err := content.Expand(o.r.DB(), seedRID)
-	if err != nil {
-		t.Fatal(err)
+	_, seedBytes := o.labelled(seedLogin, "a")
+	onSeed := append(slices.Clone(seedBytes), []byte("an artifact stored as a delta on the seed\n")...)
+	dep := deltaCard(t, seedBytes, s.UUID, onSeed)
+	resp := o.push(dep)
+	for _, c := range resp.Cards {
+		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == s.UUID {
+			t.Fatal("the origin asked for the refused seed")
+		}
 	}
-	onSeed := append(slices.Clone(seedBytes), []byte("an ordinary blob stored as a delta on the seed\n")...)
-	if errs := errorsOf(o.push(deltaCard(t, seedBytes, s.UUID, onSeed))); len(errs) != 0 {
-		t.Fatalf("the dependent's push: errors %q", errs)
+	rid, ok := blob.Exists(o.r.DB(), dep.UUID)
+	if !ok {
+		t.Fatal("the dependent was not stored")
 	}
-	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"),
-		handlerTransport(t, o.r), CloneOpts{})
-	if err != nil {
-		t.Fatal(err)
+	if withheld, err := seedcheck.IsWithheld(o.r.DB(), rid); err != nil || !withheld {
+		t.Fatalf("the dependent is not withheld (%v)", err)
 	}
-	defer clone.Close()
-	if _, ok := blob.Exists(clone.DB(), s.UUID); ok {
-		t.Fatal("a clone received the refused seed as a delta source")
-	}
-	if rid, ok := blob.Exists(clone.DB(), hash.SHA1(onSeed)); !ok || !content.IsAvailable(clone.DB(), rid) {
-		t.Fatal("a clone did not receive the dependent whole")
+	if phantom, err := isPhantomRow(o.r.DB(), s.UUID); err != nil || phantom {
+		t.Fatalf("the refused seed was left a phantom (%v)", err)
 	}
 }
 
@@ -669,5 +664,84 @@ func TestSeedcheckTableNotSynced(t *testing.T) {
 		if strings.Contains(tbl.table, "seedcheck") {
 			t.Fatalf("configuration group %s carries the seedcheck table", tbl.card)
 		}
+	}
+}
+
+// An origin that refused a seed by its hash refuses a re-push of it at
+// once, as full text or as a delta whose basis it lacks.
+func TestHorizonRePushRefusedByHash(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	if errs := errorsOf(o.push(&xfer.FileCard{UUID: hash.SHA3(base), Content: base})); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	assertRefused(t, o.r, s.UUID, true)
+	_, seed := o.labelled(seedLogin, "a")
+	_, other := o.labelled("u", "elsewhere")
+	for _, card := range []*xfer.FileCard{
+		{UUID: s.UUID, Content: seed},
+		deltaCard(t, other, hash.SHA3(other), seed),
+	} {
+		assertSeedRefused(t, o, o.push(o.blobCard(), card), o.fileUID)
+		assertRefused(t, o.r, s.UUID, true)
+	}
+	// A pusher announcing the hash is not asked for it.
+	for _, c := range o.push(&xfer.IGotCard{UUID: s.UUID}).Cards {
+		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == s.UUID {
+			t.Fatal("the origin asked for a refused seed a pusher announced")
+		}
+	}
+	if _, held := blob.Exists(o.r.DB(), s.UUID); held {
+		t.Fatal("the announcement left a row for the refused seed")
+	}
+}
+
+// A tag whose control artifact is a pending seed's basis judges the seed in
+// its own transaction: it is refused and dropped.
+func TestHorizonTagFillsSeedBase(t *testing.T) {
+	when := time.Date(2026, 10, 1, 20, 0, 0, 0, time.UTC)
+	addTag := func(o *pcOrigin) libfossil.FslID {
+		t.Helper()
+		target, ok := blob.Exists(o.r.DB(), o.p)
+		if !ok {
+			t.Fatal("origin does not hold p")
+		}
+		rid, err := tag.AddTag(o.r, tag.TagOpts{TargetRID: target, TagName: "release", TagType: tag.TagSingleton,
+			User: "u", Time: when})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rid
+	}
+	// The same tag on an identical origin gives the control artifact's bytes.
+	twin := newPCOrigin(t)
+	base, err := content.Expand(twin.r.DB(), addTag(twin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := newPCOrigin(t)
+	s := danglingSeed(t, o, base)
+	addTag(o)
+	assertRefused(t, o.r, s.UUID, true)
+}
+
+// A pending seed made readable by a path that judges nothing (a raw store
+// here) is still caught by the link step: it is refused and never linked.
+func TestHorizonLinkJudgesPendingSeed(t *testing.T) {
+	o := newPCOrigin(t)
+	base := []byte("a basis stored with no seed check\n")
+	s := danglingSeed(t, o, base)
+	if _, _, err := blob.Store(o.r.DB(), base); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Crosslink(o.r); err != nil {
+		t.Fatal(err)
+	}
+	if refused, err := seedcheck.IsRefusedUUID(o.r.DB(), s.UUID); err != nil || !refused {
+		t.Fatalf("the link step did not refuse the seed (%v)", err)
+	}
+	if n := seedLinkRows(t, o.r, s.UUID); n != 0 {
+		t.Fatalf("the seed was crosslinked: %d rows", n)
 	}
 }

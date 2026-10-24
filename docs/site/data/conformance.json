@@ -4769,7 +4769,7 @@
           "status": "PARTIAL",
           "cases": 9,
           "text": "An origin refuses a seed offered to it, and an artifact of the seed's shape arriving by any route but the horizon reply is an ordinary control artifact.",
-          "notes": "the cases also cover the zit 0.7.1 erratum ahead of the re-pin: the origin identifies a pushed seed by its own seed label, or by a horizon-seed T card under any label, on expanded content, a late delta included, and refuses the whole request with one error card, or, for a delta an earlier request left dangling, refuses it in a store-local table when whatever fills its base (a later push, a pull, a check-in) brings it to the crosslink step, the filling request being stored as usual, keeping the name match as an extra check; zit's push of such an artifact to go-libfossil is refused, but a zit origin refusing its own label waits for zit 0.7.1"
+          "notes": "the cases also cover the zit 0.7.1 erratum F.1 ahead of the re-pin: an origin identifies a pushed seed by its own seed label, or by a horizon-seed T card under any label, when it first becomes readable, on expanded content, a late delta included; it refuses the whole request with one error card, or, for a delta an earlier request left dangling, refuses its hash and drops its bytes when whatever fills its basis (a later push, a pull, a check-in, a tag) makes it readable, the filling request being stored as usual; it never asks for a refused hash and refuses its re-push; the name match stays as an extra check; zit's push of such an artifact to go-libfossil is refused, but a zit origin refusing its own label waits for zit 0.7.1"
         },
         {
           "id": "HZ-5.2-5",

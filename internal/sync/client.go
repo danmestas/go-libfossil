@@ -1369,7 +1369,14 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 		case verified:
 			return pass.verifyFrom(tx, rid)
 		}
-		if root, err = pass.rootOf(tx, srcRid); err != nil {
+		root, err = pass.rootOf(tx, srcRid)
+		if errors.Is(err, errChainTooDeep) {
+			// Stored, as a push onto any deep chain always was, but not
+			// tracked: no basis that arrives can make it readable, so there
+			// is nothing to check against its name later.
+			return nil
+		}
+		if err != nil {
 			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
 		dangling = rid

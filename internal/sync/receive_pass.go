@@ -106,21 +106,34 @@ func heldReal(q db.Querier, uuid string) (bool, error) {
 
 // rootOf finds the rid whose arrival makes a delta on srcRid available: the
 // end of srcRid's basis chain. A basis that is itself dangling in this pass
-// shares that delta's root.
+// shares that delta's root. The delta adds a node to the chain, so the walk
+// allows one node fewer than content.MaxDeltaChainDepth.
 func (p *receivePass) rootOf(q db.Querier, srcRid libfossil.FslID) (libfossil.FslID, error) {
-	return chainEnd(q, srcRid, p.dangling)
+	return chainEnd(q, srcRid, p.dangling, content.MaxDeltaChainDepth-1)
 }
 
+// errChainTooDeep is a basis chain longer than a delta stored on it may be
+// and still be read: content.Expand stops at content.MaxDeltaChainDepth.
+var errChainTooDeep = errors.New("basis chain too deep to read")
+
 // chainEnd follows delta.srcid from start to the row with no delta, which is
-// where the chain's bytes begin. A rid in memo ends the walk at that delta's
-// recorded root.
+// where the chain's bytes begin, visiting at most limit nodes. A rid in memo
+// ends the walk at that delta's recorded root. A chain that loops is an
+// error; one longer than limit is errChainTooDeep, since nothing could read
+// a delta stored on it. Both stop early, so a planted chain cannot hold the
+// write lock for a walk of every row it holds.
 func chainEnd(q db.Querier, start libfossil.FslID,
-	memo map[libfossil.FslID]danglingDelta) (libfossil.FslID, error) {
+	memo map[libfossil.FslID]danglingDelta, limit int) (libfossil.FslID, error) {
+	if limit <= 0 {
+		panic("sync.chainEnd: limit must be positive")
+	}
+	seen := make(map[libfossil.FslID]bool)
 	cur := start
-	for steps := 0; ; steps++ {
+	for nodes := 1; ; nodes++ {
 		if d, ok := memo[cur]; ok {
 			return d.root, nil
 		}
+		seen[cur] = true
 		var next libfossil.FslID
 		err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", cur).Scan(&next)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -129,16 +142,15 @@ func chainEnd(q db.Querier, start libfossil.FslID,
 		if err != nil {
 			return 0, fmt.Errorf("basis chain of rid=%d: %w", start, err)
 		}
-		if steps > maxChainSteps {
-			return 0, fmt.Errorf("basis chain of rid=%d does not end", start)
+		if seen[next] {
+			return 0, fmt.Errorf("basis chain of rid=%d loops at rid=%d", start, next)
+		}
+		if nodes >= limit {
+			return 0, errChainTooDeep
 		}
 		cur = next
 	}
 }
-
-// maxChainSteps bounds a basis-chain walk so a cycle in the delta table is an
-// error rather than a hang.
-const maxChainSteps = 1 << 24
 
 // track records a delta stored dangling, which must hash to uuid, whose bytes
 // become available when root arrives. Deltas waiting on rid itself now wait
@@ -166,6 +178,7 @@ func (p *receivePass) track(rid, root libfossil.FslID, uuid string) {
 type cascadeItem struct {
 	rid   libfossil.FslID
 	bytes []byte
+	depth int // nodes in rid's basis chain, rid and its root included
 }
 
 // verifyFrom checks every dangling delta that rid, just made available, now
@@ -198,7 +211,11 @@ func (p *receivePass) verifyFrom(q db.Querier, rid libfossil.FslID) error {
 	// get no HASH, as when fossil's blob_delta_apply fails on what
 	// content_get gave it.
 	rootBytes, _ := content.ExpandUnchecked(q, rid)
-	stack := []cascadeItem{{rid, rootBytes}}
+	rootDepth, err := chainDepth(q, rid)
+	if err != nil {
+		return err
+	}
+	stack := []cascadeItem{{rid, rootBytes, rootDepth}}
 	for len(stack) > 0 {
 		it := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
@@ -207,6 +224,12 @@ func (p *receivePass) verifyFrom(q db.Querier, rid libfossil.FslID) error {
 			return err
 		}
 		for _, kid := range kids {
+			// A row deeper than content.MaxDeltaChainDepth can never be
+			// read, so it, and every row on it, is not checked against its
+			// name: the pass owes nothing for bytes no read can produce.
+			if it.depth+1 > content.MaxDeltaChainDepth {
+				continue
+			}
 			kidBytes, ok, err := p.visit(q, kid, it.bytes)
 			if err != nil {
 				return err
@@ -214,7 +237,7 @@ func (p *receivePass) verifyFrom(q db.Querier, rid libfossil.FslID) error {
 			if !ok {
 				return &hashMismatchError{uuid: p.dangling[kid].uuid, late: true}
 			}
-			stack = append(stack, cascadeItem{kid, kidBytes})
+			stack = append(stack, cascadeItem{kid, kidBytes, it.depth + 1})
 		}
 	}
 	return nil
@@ -253,10 +276,10 @@ func pathRows(q db.Querier, root libfossil.FslID,
 	on := make(map[libfossil.FslID]bool, len(deps))
 	for _, d := range deps {
 		cur := d
-		for steps := 0; cur != root && !on[cur]; steps++ {
-			if steps > maxChainSteps {
-				return nil, fmt.Errorf("basis chain of rid=%d does not end", d)
-			}
+		// The walk stops at a row already on a path, so it visits each row
+		// once however the chains share or loop; and the cascade does not go
+		// past content.MaxDeltaChainDepth whatever this marks.
+		for cur != root && !on[cur] {
 			on[cur] = true
 			err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", cur).Scan(&cur)
 			if errors.Is(err, sql.ErrNoRows) {
@@ -268,6 +291,27 @@ func pathRows(q db.Querier, root libfossil.FslID,
 		}
 	}
 	return on, nil
+}
+
+// chainDepth counts the nodes of rid's basis chain, rid and its root
+// included, stopping one past content.MaxDeltaChainDepth: rid is readable,
+// so its chain ends within the bound unless the store is damaged.
+func chainDepth(q db.Querier, rid libfossil.FslID) (int, error) {
+	cur := rid
+	for nodes := 1; ; nodes++ {
+		if nodes > content.MaxDeltaChainDepth {
+			return nodes, nil
+		}
+		var next libfossil.FslID
+		err := q.QueryRow("SELECT srcid FROM delta WHERE rid=?", cur).Scan(&next)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nodes, nil
+		}
+		if err != nil {
+			return 0, fmt.Errorf("basis chain of rid=%d: %w", rid, err)
+		}
+		cur = next
+	}
 }
 
 // childRows lists the rows whose delta is against parent and that lie on a

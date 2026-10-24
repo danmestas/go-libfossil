@@ -575,7 +575,7 @@ func hzSeedProvenance(t *testing.T, s *hzSeed) error {
 	return nil
 }
 
-// TestHorizonSeedZit has zit 0.7.1 mint a seed for the same repository and
+// TestHorizonSeedZit has zit mint a seed for the same repository and
 // compares it with go-libfossil's: go-libfossil serves hzSeed, zit clones it
 // densely and serves that clone, and a second zit clone at C's structural
 // horizon receives the seed. Every tag event in hzSeed is on a whole second,

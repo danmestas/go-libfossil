@@ -30,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structural clone held, and the clone refused it as a replay and fell back
   to the content horizon. D now only moves later, and changes whenever any
   tag changes, so the next pull re-sends the seed. Seeds stay
-  byte-identical with zit's from zit `caeef421ee` on.
+  byte-identical with zit 0.7.2's, and interop is now pinned to zit 0.7.2.
 
 ## [0.16.0] - 2026-10-24
 

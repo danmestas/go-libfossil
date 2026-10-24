@@ -112,7 +112,7 @@ func hzStillStructural(r *repo.Repo) error {
 // A zit before check-in caeef421ee dates it at the latest tag in force,
 // earlier, and no string in its binary tells it apart, so the test detects
 // that from the seed and skips unless REQUIRE_ZIT_SEED_DATE=1; CI's pinned
-// zit 0.7.1 predates it.
+// zit 0.7.2 dates seeds this way, and CI sets REQUIRE_ZIT_SEED_DATE=1.
 func TestHorizonSeedDateZit(t *testing.T) {
 	bin := zitHorizonBinary(t)
 	s := newHZSeed(t)

@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `caeef421ee` (zit trunk after 0.7.1) | `ab18fa7f89` | `bbcc73a010a6d7b3…` |
+| `draft-fossil-horizon-00.txt` | `caeef421ee` (zit 0.7.2) | `ab18fa7f89` | `bbcc73a010a6d7b3…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,7 +57,8 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`caeef421ee`, zit trunk after 0.7.1. At that check-in the sparse-cone,
+`caeef421ee`; the `version-0.7.2` tag (`1dcb2d4a29`) carries the same
+bytes, and the interop tests are pinned to zit 0.7.2. At that check-in the sparse-cone,
 sub-manifest, repo-state and delta-format drafts are byte-identical to the
 copies here; the artifact-format and sync-protocol drafts differ and stay
 pinned at their own check-ins. Against the `236b7b4285` copy (zit 0.7.1)

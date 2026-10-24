@@ -9,7 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/danmestas/go-libfossil/internal/auth"
+	"github.com/danmestas/go-libfossil/internal/delta"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/sync"
+	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
 
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -114,6 +119,67 @@ func TestCloneRealFossilWithDeltaChain(t *testing.T) {
 	got := fossilCheckinCount(t, bin, clonePath)
 	if got != wantCheckins {
 		t.Fatalf("clone materialized %d check-ins, want %d (#152: cfile framing regression?)", got, wantCheckins)
+	}
+}
+
+// TestCloneRealFossilDanglingDelta clones, with a real fossil binary, an
+// origin that holds a delta whose source it never received. fossil rejects
+// a clone left with unresolved deltas, so the origin withholds the delta it
+// cannot expand, and fossil's clone succeeds without it.
+func TestCloneRealFossilDanglingDelta(t *testing.T) {
+	bin := testutil.RequireFossilBin(t)
+
+	dir := t.TempDir()
+	srcRepo, err := repo.Create(filepath.Join(dir, "source.fossil"), "testuser", simio.CryptoRand{}, "")
+	if err != nil {
+		t.Fatalf("repo.Create: %v", err)
+	}
+	defer srcRepo.Close()
+	if _, _, err := manifest.Checkin(srcRepo, manifest.CheckinOpts{
+		Comment: "first",
+		User:    "testuser",
+		Files:   []manifest.File{{Name: "a.txt", Content: []byte("a\n")}},
+	}); err != nil {
+		t.Fatalf("Checkin: %v", err)
+	}
+	if err := auth.UpdateCaps(srcRepo.DB(), "nobody", "gioi"); err != nil {
+		t.Fatalf("caps: %v", err)
+	}
+	projectCode, err := srcRepo.Config("project-code")
+	if err != nil {
+		t.Fatalf("project-code: %v", err)
+	}
+	base, target := []byte("missing base\n"), []byte("target content\n")
+	d, err := delta.Create(base, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sync.HandleSync(context.Background(), srcRepo, &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "s", ProjectCode: projectCode},
+		&xfer.FileCard{UUID: hash.SHA1(target), DeltaSrc: hash.SHA1(base), Content: d},
+	}}); err != nil {
+		t.Fatalf("push dangling delta: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	url := serveRepo(ctx, t, srcRepo)
+	clonePath := filepath.Join(dir, "clone.fossil")
+	cmd := exec.Command(bin, "clone", url, clonePath)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("real fossil clone of an origin with a dangling delta failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "sql", "-R", clonePath,
+		"SELECT count(*) FROM blob WHERE uuid='"+hash.SHA1(target)+"';").Output()
+	if err != nil {
+		t.Fatalf("reading the clone: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "0" {
+		t.Fatalf("the clone holds the dangling delta (%s rows); it should be withheld", got)
+	}
+	if got := fossilCheckinCount(t, bin, clonePath); got != 1 {
+		t.Fatalf("clone has %d check-ins, want 1", got)
 	}
 }
 

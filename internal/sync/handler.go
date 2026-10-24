@@ -2053,6 +2053,9 @@ func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
 	return false, nil
 }
 
+// errUnexpandableChain reports a clone chain that ends at a phantom.
+var errUnexpandableChain = errors.New("clone chain ends at a phantom")
+
 // cloneSend emits rid with its delta chain unless the chain would carry the
 // round past the client's decode bound; it reports whether rid was sent.
 func (h *handler) cloneSend(round *cloneBatch, rid int, uuid string, fullSize int) (bool, error) {
@@ -2067,6 +2070,9 @@ func (h *handler) cloneSend(round *cloneBatch, rid int, uuid string, fullSize in
 	// not arrived. The delta rides a cfile that names its source, as in
 	// canonical's send_compressed_file.
 	cards, rids, cost, err := h.buildCloneArtifact(rid, uuid, fullSize, round.sent)
+	if errors.Is(err, errUnexpandableChain) {
+		return true, nil // handled as a cone-excluded row is: sent as nothing
+	}
 	if err != nil {
 		return false, err
 	}
@@ -2210,6 +2216,15 @@ func (h *handler) walkCloneChain(rid int, uuid string, usize int, sent map[int]b
 			return nil, err
 		}
 		if !forwardable {
+			if info.size < 0 && info.uuid != "" {
+				// The chain ends at a phantom, so no artifact on it can be
+				// expanded and the clone gets none of them. fossil's
+				// send_compressed_file would send the delta naming the
+				// phantom, but a fossil client then rejects the whole clone
+				// for its unresolved deltas. A later pull fetches the chain
+				// once its source arrives.
+				return nil, errUnexpandableChain
+			}
 			m.expanded = true
 			return append(chain, m), nil // source unsendable: emit curRID full
 		}

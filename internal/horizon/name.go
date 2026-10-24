@@ -30,7 +30,7 @@ type Resolved struct {
 // propagated or not. A tie on mtime goes to the lexicographically lowest
 // full hash, never a local rid, so every origin resolves a name alike. From there it steps back up
 // to depth times along primary parents, stopping early at a check-in with
-// none.
+// none, in one query bounded by the check-ins the repository holds.
 func ResolveName(q db.Querier, name string, depth uint32) (Resolved, error) {
 	if q == nil {
 		panic("horizon.ResolveName: nil querier")
@@ -39,21 +39,22 @@ func ResolveName(q db.Querier, name string, depth uint32) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
+	// One query walks back, at most depth steps and never more than there
+	// are check-ins, so a corrupt cycle of primary parents ends too.
 	var steps uint32
-	for steps < depth {
-		var parent libfossil.FslID
-		err := q.QueryRow(`SELECT p.pid FROM plink p JOIN event e ON e.objid=p.pid AND e.type='ci'
-			WHERE p.cid=? AND p.isprim=1`, rid).Scan(&parent)
-		if errors.Is(err, sql.ErrNoRows) {
-			break
-		}
-		if err != nil {
-			return Resolved{}, fmt.Errorf("horizon: primary parent: %w", err)
-		}
-		if parent == rid {
-			panic("horizon.ResolveName: a check-in is its own primary parent")
-		}
-		rid, steps = parent, steps+1
+	err = q.QueryRow(`WITH RECURSIVE back(rid, n) AS (
+			SELECT ?1, 0
+			UNION ALL
+			SELECT p.pid, back.n+1 FROM back
+			JOIN plink p ON p.cid=back.rid AND p.isprim=1
+			JOIN event e ON e.objid=p.pid AND e.type='ci'
+			WHERE back.n < min(?2, (SELECT count(*) FROM event WHERE type='ci')))
+		SELECT rid, n FROM back ORDER BY n DESC LIMIT 1`, rid, int64(depth)).Scan(&rid, &steps)
+	if err != nil {
+		return Resolved{}, fmt.Errorf("horizon: primary parents: %w", err)
+	}
+	if steps > depth {
+		panic("horizon.ResolveName: walked past the depth")
 	}
 	var uuid string
 	if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {

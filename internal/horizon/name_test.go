@@ -3,6 +3,7 @@ package horizon_test
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -114,5 +115,34 @@ func TestResolveNameTie(t *testing.T) {
 			t.Errorf("ResolveName(%s) = %.12s, %v; want the lowest hash %.12s, not the lowest rid's %.12s",
 				name, got.Hash, err, want, hashes[0])
 		}
+	}
+}
+
+// TestResolveNameBounded: the walk back costs no more than the history it
+// walks. On a corrupt graph whose primary parents form a cycle, the deepest
+// depth ends within the repository's check-in count instead of circling.
+func TestResolveNameBounded(t *testing.T) {
+	d := newDAG(t)
+	c := d.chain("c1", "c2", "c3")
+	if _, err := d.r.DB().Exec("INSERT INTO plink(pid,cid,isprim,mtime) VALUES(?,?,1,0)", c[2], c[0]); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	var got horizon.Resolved
+	go func() {
+		var err error
+		got, err = horizon.ResolveName(d.r.DB(), "trunk", math.MaxUint32)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Steps > 3 {
+			t.Fatalf("walked %d steps over 3 check-ins", got.Steps)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the walk back did not end")
 	}
 }

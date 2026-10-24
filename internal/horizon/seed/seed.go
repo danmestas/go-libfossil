@@ -210,8 +210,12 @@ func Mint(q db.Querier, c libfossil.FslID, rule cone.HorizonRule, k []libfossil.
 	if date.UnixMilli() < floor {
 		panic("seed.Mint: postcondition: D is earlier than the minted floor")
 	}
-	if err := raiseFloor(q, date.UnixMilli()); err != nil {
-		return "", nil, err
+	if date.UnixMilli() > floor {
+		// Best effort, as the mark is a SHOULD: a store that cannot write, a
+		// read-only mirror or one whose write lock is held, serves this seed
+		// and dates the next from its tag rows, as before the mark. Only a
+		// later D writes, so an unchanged repository is served without one.
+		_ = raiseFloor(q, date.UnixMilli())
 	}
 	return hash.SHA3(data), data, nil
 }
@@ -246,14 +250,17 @@ func mintedFloor(q db.Querier) (int64, error) {
 
 // raiseFloor records d as the floor unless a later one is kept. The
 // comparison is in the statement, so of two concurrent mints the later D
-// stays, whichever writes last.
+// stays, whichever writes last. A value that is not a canonical integer,
+// one mintedFloor reads as 0, is replaced: cast, an overflowing one would
+// read as the largest integer and never be raised again.
 func raiseFloor(q db.Querier, d int64) error {
 	if d <= 0 {
 		panic("seed.raiseFloor: d must be positive")
 	}
 	_, err := q.Exec(`INSERT INTO config(name, value, mtime) VALUES(?1, ?2, strftime('%s','now'))
 		ON CONFLICT(name) DO UPDATE SET value=excluded.value, mtime=excluded.mtime
-		WHERE coalesce(CAST(config.value AS INTEGER), 0) < CAST(excluded.value AS INTEGER)`,
+		WHERE CAST(config.value AS INTEGER) < CAST(excluded.value AS INTEGER)
+			OR CAST(CAST(config.value AS INTEGER) AS TEXT) IS NOT config.value`,
 		floorConfig, strconv.FormatInt(d, 10))
 	if err != nil {
 		return fmt.Errorf("seed.Mint: %s: %w", floorConfig, err)

@@ -979,6 +979,52 @@ func TestMintDateKeepsTheMintedFloor(t *testing.T) {
 	}
 }
 
+// TestMintFloorIsBestEffort mints through a read-only handle, which cannot
+// keep the mark: the seed is still served, dated from the tag rows. It then
+// replaces a stored floor too large to read, which a cast would rank above
+// every D and keep for good.
+func TestMintFloorIsBestEffort(t *testing.T) {
+	w := newWorld(t)
+	w.tag(w.c3, "late", tag.TagSingleton, "", w.at(300))
+	k := w.k(w.c3)
+	path := w.r.Path()
+	if err := w.r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ro, err := db.OpenSQL(path, db.OpenConfig{}, map[string]string{"mode": "ro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, data, err := seed.Mint(ro, w.c3, cone.RuleDescendants, k, "origin")
+	ro.Close()
+	if err != nil {
+		t.Fatalf("Mint on a read-only handle: %v", err)
+	}
+	if want := "D 2026-10-28T00:00:00\n"; !strings.HasPrefix(string(data), want) {
+		t.Fatalf("the read-only seed is not dated %q:\n%s", want, data)
+	}
+	r, err := repo.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.r = r
+	t.Cleanup(func() { r.Close() })
+	if _, err := r.DB().Exec(`INSERT INTO config(name, value) VALUES('horizon-seed-floor', '99999999999999999999')`); err != nil {
+		t.Fatal(err)
+	}
+	_, data = w.mint(w.c3, "origin")
+	if want := "D 2026-10-28T00:00:00\n"; !strings.HasPrefix(string(data), want) {
+		t.Fatalf("over an unreadable floor the seed is not dated %q:\n%s", want, data)
+	}
+	var floor string
+	if err := r.DB().QueryRow(`SELECT value FROM config WHERE name='horizon-seed-floor'`).Scan(&floor); err != nil {
+		t.Fatal(err)
+	}
+	if want := "1793145600000"; floor != want {
+		t.Errorf("the unreadable floor became %q, want %q", floor, want)
+	}
+}
+
 func TestMintDateCountsCancels(t *testing.T) {
 	for _, target := range []string{"C", "ancestor"} {
 		w := newWorld(t)

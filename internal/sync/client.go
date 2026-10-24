@@ -17,6 +17,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/uv"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -544,6 +545,10 @@ func (s *session) buildFileCards() ([]xfer.Card, error) {
 func (s *session) loadFileCard(uuid string) (*xfer.FileCard, int, bool, error) {
 	rid, ok, err := content.CheckAvailableByUUID(s.repo.DB(), uuid)
 	if err != nil || !ok {
+		return nil, 0, false, err
+	}
+	// A pushed seed this store refused is never sent on (seedcheck).
+	if refused, err := seedcheck.IsRefused(s.repo.DB(), rid); err != nil || refused {
 		return nil, 0, false, err
 	}
 	data, err := s.cache.Expand(s.repo.DB(), rid)

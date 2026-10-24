@@ -20,6 +20,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 	"github.com/danmestas/go-libfossil/simio"
@@ -272,7 +273,8 @@ type handler struct {
 	servedCursor    *xfer.PragmaCard          // the reply's horizon-cursor, valued once the inventory is out
 	mergeBaseQuery  MergeBaseQuery            // the request's horizon-mergebase query (horizon §6.2.4); zero when none
 	received        []string                  // the artifacts this request stored, in card order
-	danglingHere    map[libfossil.FslID]bool  // deltas this request stored before their basis was readable (horizon §5.2.3)
+	danglingHere    []libfossil.FslID         // deltas this request stored before their basis was readable (horizon §5.2.3)
+	refusedSeeds    map[libfossil.FslID]bool  // pushed seeds this store refused (seedcheck), loaded once a reply serves
 	receipt         *db.Receipt               // what this request stores is recorded under
 	memo            *content.Memo             // the store's classification memo (horizon §6.2); nil classifies afresh
 	view            *content.MemoView         // what the inventory classified over, published once the request commits
@@ -563,6 +565,16 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return err
 	}
 	if h.fatal || h.aborted {
+		return errPassAborted
+	}
+	// Horizon §5.2.3: a seed this request carried, made readable by a basis
+	// later in it, refuses the request whole, its reply the refusal alone.
+	seed, err := h.ownSeedReadable()
+	if err != nil {
+		return err
+	}
+	if seed {
+		h.fail(seedRefusedText)
 		return errPassAborted
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
@@ -1432,6 +1444,9 @@ func (h *handler) handleGimme(c *xfer.GimmeCard) error {
 	if err != nil || shunned {
 		return err
 	}
+	if refused, err := h.refusedSeed(rid); err != nil || refused {
+		return err
+	}
 	if barred, err := h.submanifestBarred(rid); err != nil || barred {
 		return err
 	}
@@ -1530,16 +1545,18 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 
 // recordStored notes an artifact handleFile stored, for crosslinking and
 // for the seed check (horizon §5.2.3). An artifact is judged when it first
-// becomes readable: full text and a delta on a readable basis now, a
-// dangling delta when a phantom grounding it is filled (judgeGrounded).
+// becomes readable: full text and a delta on a readable basis now; a delta
+// on an unreadable basis is recorded pending in seedcheck, and judged by
+// ownSeedReadable or at the crosslink step of whatever later fills it.
 func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 	if payload == nil {
 		panic("handler.recordStored: payload must not be nil")
 	}
 	h.filesRecvd++
 	h.received = append(h.received, uuid)
+	h.refusedSeeds = nil // storing may have filled a basis and refused a seed
 	if deltaSrc == "" {
-		if isSeed(payload) {
+		if seedcheck.IsSeedBytes(payload) {
 			h.fail(seedRefusedText)
 		}
 		return nil
@@ -1550,11 +1567,8 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 		panic("handler.recordStored: a stored artifact must exist")
 	}
 	if !content.IsAvailable(q, rid) {
-		if h.danglingHere == nil {
-			h.danglingHere = make(map[libfossil.FslID]bool)
-		}
-		h.danglingHere[rid] = true
-		return nil
+		h.danglingHere = append(h.danglingHere, rid)
+		return seedcheck.MarkPending(q, rid)
 	}
 	if h.pass == nil {
 		panic("handler.recordStored: a stored delta implies a receive pass")
@@ -1565,10 +1579,23 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 	if err != nil {
 		return fmt.Errorf("handler: seed check: %w", err)
 	}
-	if isSeed(data) {
+	if seedcheck.IsSeedBytes(data) {
 		h.fail(seedRefusedText)
 	}
 	return nil
+}
+
+// refusedSeed reports whether rid is a pushed seed this store refused,
+// which no reply announces or sends (seedcheck).
+func (h *handler) refusedSeed(rid libfossil.FslID) (bool, error) {
+	if h.refusedSeeds == nil {
+		set, err := seedcheck.Refused(h.repo.DB())
+		if err != nil {
+			return false, err
+		}
+		h.refusedSeeds = set
+	}
+	return h.refusedSeeds[rid], nil
 }
 
 // storeFile stores a validated file or cfile card's content and reports the
@@ -1581,19 +1608,8 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	// storeReceivedFile's steps, with the seed check between storage and
-	// the after-dephantomize cascade, so a seed the filled phantom grounds
-	// is shunned before the cascade could crosslink it.
-	filled, err := storeReceived(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis, nil)
-	if err == nil && filled > 0 {
-		err = h.judgeGrounded(filled)
-	}
-	if filled > 0 {
-		manifest.AfterDephantomize(ctx, h.repo, filled)
-		if rerr := noteRekept(h.repo.DB(), filled); rerr != nil {
-			err = errors.Join(err, rerr)
-		}
-	}
+	err := storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
+		nil)
 	// A late mismatch names the delta at fault, which this request stored
 	// earlier, not the card that made its bytes available.
 	var mismatch *hashMismatchError
@@ -1694,6 +1710,12 @@ func (h *handler) emitIGots() error {
 		if int64(rid) <= floor || !h.keep.keeps(rid) {
 			continue
 		}
+		if refused, err := h.refusedSeed(rid); err != nil || refused {
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		// remoteHas is populated from client igot cards in handleIGot.
 		// Skip if the client already has this blob as public (non-private).
 		// If the client has it as private, we still emit the public igot so
@@ -1791,6 +1813,12 @@ func (h *handler) emitPrivateIGots(floor int64) (libfossil.FslID, error) {
 			return 0, err
 		}
 		if int64(rid) <= floor || !h.keep.keeps(rid) {
+			continue
+		}
+		if refused, err := h.refusedSeed(rid); err != nil || refused {
+			if err != nil {
+				return 0, err
+			}
 			continue
 		}
 		// Skip if the client already has this blob as private.
@@ -2084,6 +2112,9 @@ func (h *handler) cloneRow(round *cloneBatch, c cloneCandidate) (bool, error) {
 	if err != nil || shunned {
 		return err == nil, err
 	}
+	if refused, err := h.refusedSeed(libfossil.FslID(rid)); err != nil || refused {
+		return err == nil, err
+	}
 	isPriv := content.IsPrivate(h.repo.DB(), int64(rid))
 	if isPriv && !h.syncPrivate {
 		return true, nil // skip private blob, don't count toward batch
@@ -2224,6 +2255,9 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 	}
 	if shunned {
 		return cloneBlobRow{}, false, nil
+	}
+	if refused, err := h.refusedSeed(libfossil.FslID(rid)); err != nil || refused {
+		return cloneBlobRow{}, false, err
 	}
 	row.priv = content.IsPrivate(h.repo.DB(), int64(rid))
 	return row, true, nil

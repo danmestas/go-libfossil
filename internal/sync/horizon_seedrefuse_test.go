@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,9 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/manifest"
+	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/shun"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/verify"
@@ -111,7 +115,7 @@ func TestHorizonPushSeedUnexpandableAdmitted(t *testing.T) {
 
 // A seed admitted as a dangling delta is judged when a later request makes
 // it readable (spec F): that request is innocent and stored whole with no
-// error, while the seed is recorded as shunned, never crosslinked, announced
+// error, while the seed is recorded as refused, never crosslinked, announced
 // or sent. The label and the shape are both caught.
 func TestHorizonPushSeedBaseInLaterRequest(t *testing.T) {
 	for _, shape := range []string{"label", "shape"} {
@@ -135,9 +139,7 @@ func TestHorizonPushSeedBaseInLaterRequest(t *testing.T) {
 				t.Fatalf("%s: %.10s not stored (%v)", shape, u, err)
 			}
 		}
-		if shunned, err := shun.IsShunned(o.r.DB(), s.UUID); err != nil || !shunned {
-			t.Fatalf("%s: the seed is not recorded as refused (%v)", shape, err)
-		}
+		assertRefused(t, o.r, s.UUID, true)
 		var linked int
 		if err := o.r.DB().QueryRow(`SELECT (SELECT count(*) FROM tagxref JOIN blob ON blob.rid=tagxref.srcid
 			WHERE blob.uuid=?1) + (SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid WHERE blob.uuid=?1)`,
@@ -168,7 +170,7 @@ func TestHorizonPushSeedBaseInLaterRequest(t *testing.T) {
 
 // Every dependent the base grounds is judged: an ordinary one before the
 // seed is linked, and does not end the check. A forged dependent, whose
-// bytes are a seed but not the artifact its name names, is not shunned, so
+// bytes are a seed but not the artifact its name names, is not refused, so
 // a forgery cannot bar the real artifact.
 func TestHorizonPushSeedLaterJudgesEveryDependent(t *testing.T) {
 	o := newPCOrigin(t)
@@ -190,9 +192,7 @@ func TestHorizonPushSeedLaterJudgesEveryDependent(t *testing.T) {
 		uuid string
 		want bool
 	}{{ordinaryCard.UUID, false}, {s.UUID, true}, {forged.UUID, false}} {
-		if shunned, err := shun.IsShunned(o.r.DB(), c.uuid); err != nil || shunned != c.want {
-			t.Fatalf("%.10s shunned = %v (%v), want %v", c.uuid, shunned, err, c.want)
-		}
+		assertRefused(t, o.r, c.uuid, c.want)
 	}
 	var linked int
 	if err := o.r.DB().QueryRow(`SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid
@@ -324,4 +324,147 @@ func isPhantomRow(q db.Querier, uuid string) (bool, error) {
 	var phantom bool
 	err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM blob WHERE uuid=? AND size<0)", uuid).Scan(&phantom)
 	return phantom, err
+}
+
+// assertRefused checks whether r records uuid as a refused seed, and that
+// no seed refusal ever lands in the shun table, which peers pull.
+func assertRefused(t *testing.T, r *repo.Repo, uuid string, want bool) {
+	t.Helper()
+	rid, ok := blob.Exists(r.DB(), uuid)
+	if !ok {
+		t.Fatalf("%.10s is not held", uuid)
+	}
+	refused, err := seedcheck.IsRefused(r.DB(), rid)
+	if err != nil || refused != want {
+		t.Fatalf("%.10s refused = %v (%v), want %v", uuid, refused, err, want)
+	}
+	if shunned, err := shun.IsShunned(r.DB(), uuid); err != nil || shunned {
+		t.Fatalf("%.10s is shunned (%v)", uuid, err)
+	}
+}
+
+// seedLinkRows counts the derived rows sourced from uuid: tag rows and its
+// event.
+func seedLinkRows(t *testing.T, r *repo.Repo, uuid string) int {
+	t.Helper()
+	var n int
+	if err := r.DB().QueryRow(`SELECT (SELECT count(*) FROM tagxref JOIN blob ON blob.rid=tagxref.srcid
+		WHERE blob.uuid=?1) + (SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid WHERE blob.uuid=?1)`,
+		uuid).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// danglingSeed pushes a seed to o as a delta on base, which o lacks, and
+// returns the seed's card. The base is named as a new repository names
+// what it stores itself, by SHA3.
+func danglingSeed(t *testing.T, o *pcOrigin, base []byte) *xfer.FileCard {
+	t.Helper()
+	_, seed := o.labelled(seedLogin, "a")
+	s := deltaCard(t, base, hash.SHA3(base), seed)
+	if errs := errorsOf(o.push(s)); len(errs) != 0 {
+		t.Fatalf("the dangling delta: errors %q", errs)
+	}
+	return s
+}
+
+// The origin pulling the base from an upstream fills it through the client
+// path: the seed is judged there too, refused and never linked.
+func TestHorizonPullFillsSeedBase(t *testing.T) {
+	o := newPCOrigin(t)
+	upstream := setupPushableTestRepo(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	storeAndLink(t, upstream, base)
+	res, err := Sync(context.Background(), o.r, handlerTransport(t, upstream),
+		SyncOpts{Pull: true, ServerCode: "s", ProjectCode: testPC})
+	if err != nil || len(res.Errors) != 0 {
+		t.Fatalf("pull: %v %q", err, res.Errors)
+	}
+	if phantom, err := isPhantomRow(o.r.DB(), hash.SHA3(base)); err != nil || phantom {
+		t.Fatalf("the base was not pulled (%v)", err)
+	}
+	assertRefused(t, o.r, s.UUID, true)
+	if n := seedLinkRows(t, o.r, s.UUID); n != 0 {
+		t.Fatalf("the seed was crosslinked: %d rows", n)
+	}
+}
+
+// A local check-in that writes the base's bytes fills it too; the sweep
+// after it judges the seed.
+func TestHorizonCheckinFillsSeedBase(t *testing.T) {
+	o := newPCOrigin(t)
+	base := []byte("file content that is also the seed's base\n")
+	s := danglingSeed(t, o, base)
+	if _, _, err := manifest.Checkin(o.r, manifest.CheckinOpts{Files: []manifest.File{{Name: "f", Content: base}},
+		Comment: "f", User: "u", Parent: 0, Time: o.when.Add(5 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manifest.Crosslink(o.r); err != nil {
+		t.Fatal(err)
+	}
+	assertRefused(t, o.r, s.UUID, true)
+	if n := seedLinkRows(t, o.r, s.UUID); n != 0 {
+		t.Fatalf("the seed was crosslinked: %d rows", n)
+	}
+}
+
+// A refused seed is served by no path: not cloned, and not pushed on by the
+// origin acting as a client.
+func TestHorizonRefusedSeedNotServed(t *testing.T) {
+	o := newPCOrigin(t)
+	_, base := o.labelled("u", "b")
+	s := danglingSeed(t, o, base)
+	baseCard := &xfer.FileCard{UUID: hash.SHA3(base), Content: base}
+	if errs := errorsOf(o.push(baseCard)); len(errs) != 0 {
+		t.Fatalf("the base's push: errors %q", errs)
+	}
+	assertRefused(t, o.r, s.UUID, true)
+	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"),
+		handlerTransport(t, o.r), CloneOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clone.Close()
+	if _, ok := blob.Exists(clone.DB(), s.UUID); ok {
+		t.Fatal("a clone received the refused seed")
+	}
+	if _, ok := blob.Exists(clone.DB(), baseCard.UUID); !ok {
+		t.Fatal("a clone did not receive the base")
+	}
+	// The peer asks for the seed by name, as one that learned it elsewhere
+	// would: the origin, as a client, still does not send it.
+	peer := setupPushableTestRepo(t)
+	asked := false
+	tr := &MockTransport{Handler: func(req *xfer.Message) *xfer.Message {
+		for _, c := range req.Cards {
+			if f, ok := c.(*xfer.FileCard); ok && f.UUID == s.UUID {
+				t.Error("the origin pushed the refused seed on")
+			}
+		}
+		resp, err := HandleSync(context.Background(), peer, req)
+		if err != nil {
+			t.Errorf("HandleSync: %v", err)
+			return &xfer.Message{}
+		}
+		if !asked {
+			asked = true
+			resp.Cards = append(resp.Cards, &xfer.GimmeCard{UUID: s.UUID})
+		}
+		return resp
+	}}
+	if _, err := Sync(context.Background(), o.r, tr,
+		SyncOpts{Push: true, ServerCode: "s", ProjectCode: testPC}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The refusal record is store-local: no configuration group carries it.
+func TestSeedcheckTableNotSynced(t *testing.T) {
+	for _, tbl := range configTables {
+		if strings.Contains(tbl.table, "seedcheck") {
+			t.Fatalf("configuration group %s carries the seedcheck table", tbl.card)
+		}
+	}
 }

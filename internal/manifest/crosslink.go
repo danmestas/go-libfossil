@@ -18,6 +18,7 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/tag"
 )
 
@@ -467,10 +468,8 @@ func repairPlinkAndTags(tx *db.Tx, sched *batchSchedule) error {
 }
 
 // candidateQuerySQL selects every blob that still owes the sweep an
-// examination: it has real content, is not shunned, and has none of the
-// derived rows a crosslink writes and no recorded verdict that its bytes
-// hold no artifact. A shunned blob, such as a horizon seed an origin
-// recorded as refused, is never linked, by a sweep or by a rebuild.
+// examination: it has real content, none of the derived rows a crosslink
+// writes, and no recorded verdict that its bytes hold no artifact.
 //
 // ORDER BY b.rid only seeds deltaChainOrder's tie-break, not the final
 // visiting order -- but it must still be deterministic input: deferred
@@ -491,7 +490,6 @@ func repairPlinkAndTags(tx *db.Tx, sched *batchSchedule) error {
 const candidateQuerySQL = `
 	SELECT b.rid, b.uuid FROM blob b
 	WHERE b.size >= 0
-	  AND b.uuid NOT IN (SELECT uuid FROM shun)
 	  AND (b.rid IN (SELECT o.rid FROM orphan o JOIN blob dep ON dep.rid=o.baseline WHERE dep.size>=0)
 	    OR (b.rid NOT IN (SELECT objid FROM event WHERE objid IS NOT NULL)
 	  AND b.rid NOT IN (SELECT srcid FROM tagxref WHERE srcid IS NOT NULL)
@@ -881,6 +879,15 @@ func linkArtifact(
 ) (handled bool, err error) {
 	if sched == nil {
 		panic("manifest.linkArtifact: sched must not be nil")
+	}
+	// Every path that makes an artifact readable reaches here, so this is
+	// where a pushed seed recorded pending is judged (seedcheck). Only a
+	// control artifact can be one; another type's pending row is left, inert.
+	if d.Type == deck.Control {
+		refused, err := seedcheck.Judge(tx, rid, d)
+		if err != nil || refused {
+			return false, err
+		}
 	}
 	handled, err = linkArtifactRows(tx, rid, d, cache, sched)
 	if handled && err == nil {

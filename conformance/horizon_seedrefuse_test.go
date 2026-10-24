@@ -11,6 +11,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
 	"github.com/danmestas/go-libfossil/internal/verify"
@@ -296,6 +297,20 @@ func hzSeedLaterRequest(t *testing.T) error {
 	}
 	if n, err := linked(); err != nil || n != 0 {
 		return expectf("the seed was crosslinked: %d rows (%v)", n, err)
+	}
+	// The refusal is store-local. A shun entry would reach every peer that
+	// pulls the shun group, and a horizon clone holding this, its current
+	// seed, would then drop it.
+	rid, ok := blob.Exists(r.DB(), name)
+	if !ok {
+		return expectf("the seed's delta is not held")
+	}
+	if refused, err := seedcheck.IsRefused(r.DB(), rid); err != nil || !refused {
+		return expectf("the seed is not recorded as refused (%v)", err)
+	}
+	var shunned int
+	if err := r.DB().QueryRow("SELECT count(*) FROM shun").Scan(&shunned); err != nil || shunned != 0 {
+		return expectf("the refusal reached the shun table: %d rows (%v)", shunned, err)
 	}
 	if _, err := verify.Rebuild(r); err != nil {
 		return err

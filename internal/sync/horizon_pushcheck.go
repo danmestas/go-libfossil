@@ -1,19 +1,16 @@
 package sync
 
 import (
-	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
-	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/shun"
+	"github.com/danmestas/go-libfossil/internal/seedcheck"
 )
 
 // staleCancel is the push-time check of draft-fossil-horizon-00 §5.7, run
@@ -79,121 +76,38 @@ func (h *handler) staleCancel() (string, error) {
 // §5.2.3, as the zit 0.7.1 erratum words it).
 const seedRefusedText = "seed refused: a seed is private to the clone that holds it; it is never pushed"
 
-// seedTag is the tag name of a seed's binding card; no pushed control
-// artifact may carry it (horizon §5.2.3).
-const seedTag = "horizon-seed"
-
-// isSeed reports whether data, an artifact's full content, is a seed this
-// origin must refuse (horizon §5.2.3): a control artifact whose U card is
-// its own seed label, or one carrying a horizon-seed T card under any label.
-// Another implementation's label alone is ordinary, and so is a user's login
-// unless it equals seedLogin.
-func isSeed(data []byte) bool {
-	if data == nil {
-		panic("sync.isSeed: data must not be nil")
+// ownSeedReadable reports whether a delta this request stored before its
+// basis was readable has become readable and is a seed (horizon §5.2.3):
+// the seed is judged within the request that carried it, which is then
+// refused whole. A delta still unreadable stays pending in seedcheck and is
+// judged at the crosslink step of whatever later makes it readable; one
+// found not to be a seed loses its pending row.
+func (h *handler) ownSeedReadable() (bool, error) {
+	if len(h.danglingHere) == 0 {
+		return false, nil
 	}
-	labelled := bytes.Contains(data, []byte("\nU "+seedLogin+"\n"))
-	if !labelled && !bytes.Contains(data, []byte(seedTag)) {
-		return false
-	}
-	d, err := deck.Parse(data)
-	if err != nil || d.Type != deck.Control {
-		return false
-	}
-	if d.U != nil && *d.U == seedLogin {
-		return true
-	}
-	for _, t := range d.T {
-		if t.Name == seedTag {
-			return true
-		}
-	}
-	return false
-}
-
-// seedShunComment is the shun table's comment on a seed recorded as refused.
-const seedShunComment = "horizon seed refused (§5.2.3)"
-
-// judgeGrounded judges, as seeds (horizon §5.2.3), the dangling deltas that
-// filling the phantom filled has made readable. The test is made on the
-// artifact when it first becomes readable, whatever request carried it: a
-// seed this request carried refuses the request whole; one an earlier
-// request left dangling is recorded as shunned, so it is never crosslinked,
-// announced or sent, while this request, which only supplied its basis, is
-// stored as usual. A delta whose bytes do not hash to its name is not the
-// artifact it names and is left as it is: shunning that name would let a
-// forged delta bar the real artifact.
-func (h *handler) judgeGrounded(filled libfossil.FslID) error {
-	if filled <= 0 {
-		panic("handler.judgeGrounded: filled must be positive")
+	if h.pass == nil {
+		panic("handler.ownSeedReadable: a stored delta implies a receive pass")
 	}
 	q := h.repo.DB()
-	if !content.IsAvailable(q, filled) {
-		return nil // still dangling itself: nothing it grounds is readable
-	}
-	deps, err := dependentDeltas(q, []libfossil.FslID{filled})
-	if err != nil {
-		return err
-	}
-	for _, rid := range deps {
-		data, err := content.Expand(q, rid)
-		if errors.Is(err, content.ErrHashMismatch) {
+	for _, rid := range h.danglingHere {
+		if !content.IsAvailable(q, rid) {
 			continue
 		}
+		// The pass's basis cache keeps every node it rebuilds, so a chain of
+		// deltas is expanded once along its length, not once per delta.
+		data, err := h.pass.basis.ExpandUnchecked(q, rid)
 		if err != nil {
-			return fmt.Errorf("handler: seed check: %w", err)
+			return false, fmt.Errorf("handler: seed check: %w", err)
 		}
-		if !isSeed(data) {
-			continue
+		if seedcheck.IsSeedBytes(data) {
+			return true, nil
 		}
-		if h.danglingHere[rid] {
-			h.fail(seedRefusedText)
-			return nil
-		}
-		var uuid string
-		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
-			return fmt.Errorf("handler: seed check: %w", err)
-		}
-		if err := shun.Add(q, uuid, seedShunComment); err != nil {
-			return fmt.Errorf("handler: seed check: %w", err)
+		if err := seedcheck.Clear(q, rid); err != nil {
+			return false, err
 		}
 	}
-	return nil
-}
-
-// dependentDeltas is every row stored as a delta on one of roots, directly
-// or through other deltas: what filling roots can make readable.
-func dependentDeltas(q db.Querier, roots []libfossil.FslID) ([]libfossil.FslID, error) {
-	seen := make(map[libfossil.FslID]bool, len(roots))
-	queue := slices.Clone(roots)
-	var out []libfossil.FslID
-	for steps := 0; len(queue) > 0; steps++ {
-		if steps > maxChainSteps {
-			return nil, fmt.Errorf("handler: seed check: delta dependents do not end")
-		}
-		cur := queue[0]
-		queue = queue[1:]
-		rows, err := q.Query("SELECT rid FROM delta WHERE srcid=?", cur)
-		if err != nil {
-			return nil, fmt.Errorf("handler: seed check: %w", err)
-		}
-		for rows.Next() {
-			var rid libfossil.FslID
-			if err := rows.Scan(&rid); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("handler: seed check: %w", err)
-			}
-			if !seen[rid] {
-				seen[rid] = true
-				out = append(out, rid)
-				queue = append(queue, rid)
-			}
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("handler: seed check: %w", err)
-		}
-	}
-	return out, nil
+	return false, nil
 }
 
 // branchOfCheckin is the branch this repository derives for the check-in

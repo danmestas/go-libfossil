@@ -1553,6 +1553,9 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 		h.aborted = late
 		return nil
 	}
+	if h.fatal {
+		return nil // storeFile refused a seed: the request is refused whole
+	}
 	return h.recordStored(uuid, deltaSrc, payload)
 }
 
@@ -1579,8 +1582,10 @@ func (h *handler) recordStored(uuid, deltaSrc string, payload []byte) error {
 		panic("handler.recordStored: a stored artifact must exist")
 	}
 	if !content.IsAvailable(q, rid) {
+		// storeDeltaContent recorded it pending; this request judges it if a
+		// basis later in the request makes it readable (ownSeedReadable).
 		h.danglingHere = append(h.danglingHere, storedDelta{uuid: uuid, rid: rid})
-		return seedcheck.MarkPending(q, rid)
+		return nil
 	}
 	if h.pass == nil {
 		panic("handler.recordStored: a stored delta implies a receive pass")
@@ -1636,6 +1641,10 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	var mismatch *hashMismatchError
 	if errors.As(err, &mismatch) {
 		return wrongHashText(mismatch.uuid), mismatch.late
+	}
+	if errors.Is(err, errSeed) {
+		h.fail(seedRefusedText)
+		return "", false
 	}
 	if err != nil {
 		return fmt.Sprintf("storing %s: %v", uuid, err), false

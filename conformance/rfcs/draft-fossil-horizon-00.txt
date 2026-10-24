@@ -99,11 +99,11 @@ Table of Contents
        5.2.3.  Privacy . . . . . . . . . . . . . . . . . . . . . . .  13
        5.2.4.  Provenance  . . . . . . . . . . . . . . . . . . . . .  14
      5.3.  Boundary Hashes . . . . . . . . . . . . . . . . . . . . .  15
-     5.4.  Derived State . . . . . . . . . . . . . . . . . . . . . .  15
-     5.5.  Operations That Cross the Horizon . . . . . . . . . . . .  15
-     5.6.  Re-Seeding  . . . . . . . . . . . . . . . . . . . . . . .  16
+     5.4.  Derived State . . . . . . . . . . . . . . . . . . . . . .  16
+     5.5.  Operations That Cross the Horizon . . . . . . . . . . . .  16
+     5.6.  Re-Seeding  . . . . . . . . . . . . . . . . . . . . . . .  17
      5.7.  Commit and Push . . . . . . . . . . . . . . . . . . . . .  17
-     5.8.  Deepen  . . . . . . . . . . . . . . . . . . . . . . . . .  17
+     5.8.  Deepen  . . . . . . . . . . . . . . . . . . . . . . . . .  18
      5.9.  Trust . . . . . . . . . . . . . . . . . . . . . . . . . .  18
    6.  Sync Protocol Extension . . . . . . . . . . . . . . . . . . .  19
 
@@ -115,7 +115,7 @@ Internet-Draft               Fossil Horizons                October 2026
 
 
      6.1.  The Horizon Pragmas . . . . . . . . . . . . . . . . . . .  19
-     6.2.  Server Behavior . . . . . . . . . . . . . . . . . . . . .  19
+     6.2.  Server Behavior . . . . . . . . . . . . . . . . . . . . .  20
        6.2.1.  Delta Inflation . . . . . . . . . . . . . . . . . . .  21
        6.2.2.  Boundary Labels . . . . . . . . . . . . . . . . . . .  21
        6.2.3.  The Seed  . . . . . . . . . . . . . . . . . . . . . .  21
@@ -637,14 +637,21 @@ Internet-Draft               Fossil Horizons                October 2026
    mtime supersedes ([FossilRepoState] Section 5.3), so a seed always
    outranks the direct tag applications it stands in for when its D card
    is no earlier than the latest of them.  The origin MUST set each
-   seed's D card to the latest mtime among the tag events it summarizes,
-   rounded up to a whole second and written with no fractional part:
-   rounded down, a seed could precede an event with a sub-second time,
-   and with a fraction, two origins could write the same instant
-   differently.  A seed that summarizes no tag event takes C's own event
-   time, rounded the same way.  A clone holds one seed and replaces it
-   whole when a new one arrives (Section 6.2.3), so a seed never has to
-   outrank an earlier seed.
+   seed's D card to the latest mtime of any tag event in the repository,
+   whether it applied, propagated or cancelled a tag, rounded up to a
+   whole second and written with no fractional part: rounded down, a
+   seed could precede an event with a sub-second time, and with a
+   fraction, two origins could write the same instant differently.  A
+   tag event takes effect only over an older one, and the row it leaves
+   keeps its time, so no change to tag state moves this time earlier.
+   Dated from the events still in force instead, a seed would move
+   earlier when the latest of them is cancelled or a closed branch is
+   reopened, and a clone would refuse it as a replay (Section 5.2.4).  A
+   seed's D therefore changes whenever any tag in the repository
+   changes, and the next exchange carries the new seed.  A repository
+   with no tag event takes C's own event time, rounded the same way.  A
+   clone holds one seed and replaces it whole when a new one arrives
+   (Section 6.2.3), so a seed never has to outrank an earlier seed.
 
    The U card is the origin's own seed label, not the login of any user.
    A seed is applied by no one, and naming a user would attribute to
@@ -659,13 +666,6 @@ Internet-Draft               Fossil Horizons                October 2026
    Two origins serving one repository mint the same seed for the same C
    and the same state, up to the U card.  An origin keeps no record of
    which clients hold which seeds.
-
-
-
-
-
-
-
 
 
 
@@ -736,9 +736,28 @@ Internet-Draft               Fossil Horizons                October 2026
    them and are never pushed.  The stale-seed check of Section 5.7 is
    judged on expanded content in the same way.  An origin MAY
    additionally refuse a pushed artifact whose name matches a seed the
-   same request offered as held.  A clone that receives an artifact
-   matching the seed's shape outside a horizon-seed announcement treats
-   it as an ordinary control artifact.
+   same request offered as held.
+
+   A store never keeps a seed it did not receive through a horizon-seed
+   announcement.  On every receive path (pull, clone and sync) it drops
+   any artifact that is a seed by its own seed label or by a binding
+   card, and stores one that carries neither as an ordinary control
+   artifact.  The test is made when the artifact first becomes storable,
+   whether it arrives in full or as a delta completed in a later round.
+   A dropped artifact is not counted as received, and it MUST NOT be
+   requested again in the same session.  Across sessions a store SHOULD
+   keep a record of the hashes it dropped, keyed by hash and never
+   synchronized, and skip them when a peer announces them; a store
+   without one asks again and drops again, which is correct but costs
+   bandwidth.  A seed found on the origin path above is dropped the same
+   way.  Because nothing seed-shaped is stored, nothing seed-shaped is
+   served; a store still skips a stored seed when deriving, for a store
+   written before this rule.
+
+   A store that keeps a pushed or received delta whose base it lacks
+   MUST NOT announce or serve that delta while it cannot be expanded.
+   Dropping such deltas also conforms.  The rule does not require
+   dropping them, because Fossil keeps them.
 
 5.2.4.  Provenance
 
@@ -759,6 +778,14 @@ Internet-Draft               Fossil Horizons                October 2026
    yields an earlier D (Section 5.2.2), so an earlier one is a replay.
    A seed whose D equals the held one's is accepted.  A deepen discards
    the held seed first (Section 5.8), so the floor restarts at the new
+
+
+
+Mestas                    Expires 20 April 2027                [Page 14]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    C.  A refused seed is handled as a wrongly signed one: the clone
    falls back to the content horizon and reports it.  An origin's seed-
    signing command is configured apart from its check-in signing command
@@ -777,14 +804,6 @@ Internet-Draft               Fossil Horizons                October 2026
    a seed after the connection is gone, when the seed is read back from
    disk or carried into a deployment the transport never covered.
    Section 5.9 states what a wrong seed can and cannot affect.
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 14]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
 5.3.  Boundary Hashes
 
@@ -812,6 +831,17 @@ Internet-Draft               Fossil Horizons                October 2026
    omitted a label it is an over-fetch the omission caused, and the
    origin, which does not keep the parent, does not send it.
 
+
+
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 15]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
 5.4.  Derived State
 
    With the seed and the boundary labels in place, the derivation runs
@@ -834,13 +864,6 @@ Internet-Draft               Fossil Horizons                October 2026
    The following operations can need history below the horizon.  For
    each, an implementation MUST detect the crossing, MUST name the
    horizon in its diagnostic, and MUST offer the remedy stated.
-
-
-
-Mestas                    Expires 20 April 2027                [Page 15]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
    Merge base:  Under the leaves rule the merge base of any two
       childless check-ins is in K; under the descendants rule it is in K
@@ -868,6 +891,13 @@ Internet-Draft               Fossil Horizons                October 2026
    Bisect:  A bisection whose good end is below the horizon deepens to
       it before it begins.
 
+
+
+Mestas                    Expires 20 April 2027                [Page 16]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
 5.6.  Re-Seeding
 
    A tag applied to a check-in below the horizon changes the state in
@@ -883,20 +913,6 @@ Internet-Draft               Fossil Horizons                October 2026
    clone replaces the seed it holds with the new one, and applying it is
    an ordinary tag application.  The origin keeps no per-client state to
    do this; the request carries everything it needs.
-
-
-
-
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 16]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
 5.7.  Commit and Push
 
@@ -930,6 +946,14 @@ Internet-Draft               Fossil Horizons                October 2026
 
    Pushing is ordinary.  The origin holds every artifact the pushed
    check-in references, because the clone's held set came from the
+
+
+
+Mestas                    Expires 20 April 2027                [Page 17]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    origin and the clone added only what it created.  A structural
    horizon clone pushing to a peer that is not its origin and lacks the
    referenced ancestry leaves transit phantoms at that peer, exactly as
@@ -946,14 +970,6 @@ Internet-Draft               Fossil Horizons                October 2026
    the seed at C' reaches C through real manifests and the later-dated
    direct application at C would otherwise shadow it.  To prevent that
    shadow, a deepening clone MUST discard the old seed before applying
-
-
-
-Mestas                    Expires 20 April 2027                [Page 17]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    the new one; a seed is local and private, so discarding it is a local
    deletion with no synchronization consequence.
 
@@ -985,6 +1001,15 @@ Internet-Draft               Fossil Horizons                October 2026
    shared repository is protected by the origin's own derivation over
    real artifacts.
 
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 18]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
    A seed is verifiable by deepening.  The branch tag in force at C was
    applied to some ancestor A of C and propagated; a clone that deepens
    to A holds the real tag artifact and the real primary-parent chain,
@@ -996,19 +1021,6 @@ Internet-Draft               Fossil Horizons                October 2026
    A signature (Section 5.2) lets a clone reject a seed its origin did
    not mint, including one altered on disk after delivery.  It does not
    make a seed true.
-
-
-
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 18]
-
-Internet-Draft               Fossil Horizons                October 2026
-
 
 6.  Sync Protocol Extension
 
@@ -1045,6 +1057,15 @@ Internet-Draft               Fossil Horizons                October 2026
    the first request and in place of the horizon pragma, as
    Section 6.2.7 states.
 
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 19]
+
+Internet-Draft               Fossil Horizons                October 2026
+
+
 6.2.  Server Behavior
 
    An origin receiving a horizon pragma computes K over the dense graph
@@ -1058,14 +1079,6 @@ Internet-Draft               Fossil Horizons                October 2026
    The classification is a function of the cone and of the artifacts the
    origin holds, and every set it computes grows monotonically as
    artifacts are appended: a check-in that enters K never leaves it, a
-
-
-
-Mestas                    Expires 20 April 2027                [Page 19]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    blob named above the horizon stays above, a manifest K reaches stays
    reached.  The one exception is an artifact that arrives after an
    artifact already held cited it as a parent, baseline or node, which
@@ -1101,19 +1114,6 @@ Internet-Draft               Fossil Horizons                October 2026
    walk SHOULD be kept like the classification: descend only slots that
    may reach the cone, visit each node once per bound it is reached
    under (a node's last slot takes its bound from its parent, and a
-   wider bound decides for a narrower one), and record what was walked
-   with the classification, so a later request walks only the trees
-   appended since.  Its first walk then costs the manifests and their
-   in-cone nodes, not every node of history.
-
-   An origin SHOULD NOT send cluster artifacts in reply to a horizon-
-   scoped request.
-
-
-
-
-
-
 
 
 
@@ -1121,6 +1121,14 @@ Mestas                    Expires 20 April 2027                [Page 20]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   wider bound decides for a narrower one), and record what was walked
+   with the classification, so a later request walks only the trees
+   appended since.  Its first walk then costs the manifests and their
+   in-cone nodes, not every node of history.
+
+   An origin SHOULD NOT send cluster artifacts in reply to a horizon-
+   scoped request.
 
 6.2.1.  Delta Inflation
 
@@ -1163,20 +1171,18 @@ Internet-Draft               Fossil Horizons                October 2026
 
    pragma horizon-seed <hash-or-dash>
 
-   naming the seed the client currently holds, or - if it holds none.
-   The origin computes the seed for C.  If its name differs from the one
-   offered, the origin emits:
-
-   pragma horizon-seed <hash>
-
-
-
 
 
 Mestas                    Expires 20 April 2027                [Page 21]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   naming the seed the client currently holds, or - if it holds none.
+   The origin computes the seed for C.  If its name differs from the one
+   offered, the origin emits:
+
+   pragma horizon-seed <hash>
 
    naming the new seed, and sends it in the same reply as an ordinary
    full file card ([FossilSync] Section 7.1) whose HASH is that name.
@@ -1195,7 +1201,7 @@ Internet-Draft               Fossil Horizons                October 2026
    unless it is sending a seed in the same reply or the client's offered
    name is the seed it would send; a structural request it cannot seed
    is answered, and advertised, as content.  Because a seed's D card is
-   fixed by the tag events it summarizes (Section 5.2.2) and not by the
+   fixed by the repository's tag events (Section 5.2.2) and not by the
    time of minting, two mints over unchanged state produce the same
    bytes and the same name, and the offered name matches.
 
@@ -1220,12 +1226,6 @@ Internet-Draft               Fossil Horizons                October 2026
    counts them; cherry-pick, backout and integrate merges pending in the
    check-out are not secondaries.  An answer whose hashes do not repeat
    the query is no answer.  A card handler sees six tokens ([FossilSync]
-   Section 5.2), so an answer repeats at most three hashes: a query
-   carries at most two secondaries, and an origin answers none with
-   more.  An origin that does not hold every check-in named answers
-   nothing, since - would be a claim about history it cannot see.  The
-   client then deepens to the base (Section 5.8).  An origin MUST bound
-   the ancestry walk this requires.
 
 
 
@@ -1233,6 +1233,13 @@ Mestas                    Expires 20 April 2027                [Page 22]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   Section 5.2), so an answer repeats at most three hashes: a query
+   carries at most two secondaries, and an origin answers none with
+   more.  An origin that does not hold every check-in named answers
+   nothing, since - would be a claim about history it cannot see.  The
+   client then deepens to the base (Section 5.8).  An origin MUST bound
+   the ancestry walk this requires.
 
 6.2.5.  Capability
 
@@ -1275,13 +1282,6 @@ Internet-Draft               Fossil Horizons                October 2026
    A client holding a cursor for the origin it addresses sends it on
    every request, and MAY then announce nothing with igot on a pull-only
    request.  On a request that sends it MUST still announce, but MAY
-   announce only the artifacts it appended after the recorded count,
-   since every older artifact either came from this origin or was
-   announced to it by a prior converged exchange that sent.  The
-   recorded count therefore advances only past artifacts the origin
-   holds: a pull sends nothing of the client's, so it advances the count
-   by what it received, and only when nothing undelivered preceded them;
-   a client without a cursor announces its whole holding on its next
 
 
 
@@ -1290,6 +1290,13 @@ Mestas                    Expires 20 April 2027                [Page 23]
 Internet-Draft               Fossil Horizons                October 2026
 
 
+   announce only the artifacts it appended after the recorded count,
+   since every older artifact either came from this origin or was
+   announced to it by a prior converged exchange that sent.  The
+   recorded count therefore advances only past artifacts the origin
+   holds: a pull sends nothing of the client's, so it advances the count
+   by what it received, and only when nothing undelivered preceded them;
+   a client without a cursor announces its whole holding on its next
    request that sends.  An origin receiving a cursor MUST NOT announce
    an artifact at or below it in any reply, classified or not, and MUST
    announce every kept artifact above it the request did not name.  An
@@ -1331,13 +1338,6 @@ Internet-Draft               Fossil Horizons                October 2026
    the horizon pragma; and <depth> is required, plain base-10 digits
    that fit an unsigned 32-bit integer, 0 meaning the named check-in
    itself.  A request carries at most one of horizon and horizon-name;
-   the structural, seed, cursor and path-cone pragmas combine with
-   horizon-name exactly as they do with horizon.  Every later request,
-   for the rest of the clone and for every pull, sync or deepen after
-   it, carries pragma horizon <hash> <rule> with the resolved hash.  A
-   store records the hash, never the name.
-
-
 
 
 
@@ -1345,6 +1345,12 @@ Mestas                    Expires 20 April 2027                [Page 24]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   the structural, seed, cursor and path-cone pragmas combine with
+   horizon-name exactly as they do with horizon.  Every later request,
+   for the rest of the clone and for every pull, sync or deepen after
+   it, carries pragma horizon <hash> <rule> with the resolved hash.  A
+   store records the hash, never the name.
 
    The origin resolves <name> against its dense repository.  A well-
    formed full hash (40 or 64 hex digits) is looked up as a hash first,
@@ -1388,12 +1394,6 @@ Internet-Draft               Fossil Horizons                October 2026
    A client whose first reply carries horizon-resolved takes its hash as
    C, and when <steps> is less than the requested depth it reports that
    history ran out after <steps>.  A reply without it means the peer
-   ignored the pragma and served densely, as a horizon-ignorant peer
-   does.  The client then completes the dense transfer, resolves <name>
-   and <depth> over what it holds by the same rule, classifies locally
-   at the content horizon (Section 6.3), records the hash, and reports
-   that it resolved the name locally.  A structural request against such
-   a peer falls back to the content horizon, as Section 6.3 states.
 
 
 
@@ -1401,6 +1401,13 @@ Mestas                    Expires 20 April 2027                [Page 25]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   ignored the pragma and served densely, as a horizon-ignorant peer
+   does.  The client then completes the dense transfer, resolves <name>
+   and <depth> over what it holds by the same rule, classifies locally
+   at the content horizon (Section 6.3), records the hash, and reports
+   that it resolved the name locally.  A structural request against such
+   a peer falls back to the content horizon, as Section 6.3 states.
 
 6.3.  Graceful Degradation
 
@@ -1443,13 +1450,6 @@ Internet-Draft               Fossil Horizons                October 2026
 
    Path cones: compose by intersection on blobs, as Section 3 states,
    and elide the sub-manifest nodes outside the cone as the sparse store
-   does.  A path cone elides no manifest and the derivation reads no
-   node, so a path-cone-plus-content-horizon clone still derives
-   exactly, and a path-cone-plus-structural-horizon clone derives
-   exactly within K.
-
-
-
 
 
 
@@ -1457,6 +1457,11 @@ Mestas                    Expires 20 April 2027                [Page 26]
 
 Internet-Draft               Fossil Horizons                October 2026
 
+
+   does.  A path cone elides no manifest and the derivation reads no
+   node, so a path-cone-plus-content-horizon clone still derives
+   exactly, and a path-cone-plus-structural-horizon clone derives
+   exactly within K.
 
    Sub-manifests ([FossilSubManifests]): under a content horizon every
    node is held, or under a path cone every node on a path into it.
@@ -1498,14 +1503,9 @@ Internet-Draft               Fossil Horizons                October 2026
    synchronizes private content with another clone ([FossilSync]
    Section 7.5) MUST exclude the seed from that exchange.
 
-
-
-
-
-
-
-
-
+   The horizon pragmas enlarge the request-parse surface by a bounded
+   number of fixed-arity cards.  The held-set computation on the origin
+   is an ancestry walk; it MUST carry the same depth and visited-node
 
 
 
@@ -1514,9 +1514,6 @@ Mestas                    Expires 20 April 2027                [Page 27]
 Internet-Draft               Fossil Horizons                October 2026
 
 
-   The horizon pragmas enlarge the request-parse surface by a bounded
-   number of fixed-arity cards.  The held-set computation on the origin
-   is an ancestry walk; it MUST carry the same depth and visited-node
    bounds as any other server-side graph walk, and the merge-base query
    MUST be bounded the same way, so that a crafted request does not
    convert an unauthenticated round into an amplification primitive.
@@ -1557,9 +1554,12 @@ Internet-Draft               Fossil Horizons                October 2026
               00, 2026, <https://datatracker.ietf.org/doc/html/draft-
               fossil-repo-state-00>.
 
-
-
-
+   [FossilSparseCone]
+              Mestas, D., "The Fossil Distributed Version Control
+              System: Sparse Cones", Work in Progress, Internet-Draft,
+              draft-fossil-sparse-cone-00, 2026,
+              <https://datatracker.ietf.org/doc/html/draft-fossil-
+              sparse-cone-00>.
 
 
 
@@ -1569,13 +1569,6 @@ Mestas                    Expires 20 April 2027                [Page 28]
 
 Internet-Draft               Fossil Horizons                October 2026
 
-
-   [FossilSparseCone]
-              Mestas, D., "The Fossil Distributed Version Control
-              System: Sparse Cones", Work in Progress, Internet-Draft,
-              draft-fossil-sparse-cone-00, 2026,
-              <https://datatracker.ietf.org/doc/html/draft-fossil-
-              sparse-cone-00>.
 
    [FossilSync]
               Hipp, D. R., Ed., Beal, S., and D. Shearer, "The Fossil
@@ -1617,6 +1610,13 @@ Appendix A.  Implementation Sequencing
        content horizon over held manifests (Section 3, Section 4).
        Correct against every peer; efficient against an origin.
 
+   3.  The horizon pragmas and the origin's keep-set classification
+       (Section 6.1, Section 6.2).
+
+   4.  Measurement.  The structural horizon pays only when the manifests
+       below C are a meaningful share of what a content horizon still
+       transfers.  That share is a property of the repository, not of
+       this document.
 
 
 
@@ -1625,14 +1625,6 @@ Mestas                    Expires 20 April 2027                [Page 29]
 
 Internet-Draft               Fossil Horizons                October 2026
 
-
-   3.  The horizon pragmas and the origin's keep-set classification
-       (Section 6.1, Section 6.2).
-
-   4.  Measurement.  The structural horizon pays only when the manifests
-       below C are a meaningful share of what a content horizon still
-       transfers.  That share is a property of the repository, not of
-       this document.
 
    5.  The seed, boundary labels, re-seeding, and the structural horizon
        (Section 5), gated on the measurement.
@@ -1666,22 +1658,6 @@ Appendix C.  Changes in This Revision
    This revision of draft-fossil-horizon-00, dated 21 October 2026,
    makes the following changes to the earlier text.
 
-
-
-
-
-
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 30]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    *  Section 3.1, Section 3.4: the leaves rule is restated over P cards
       alone.  K is the descendants of C and of each nearest common
       ancestor of C and a childless check-in (one no P card names, open
@@ -1697,6 +1673,14 @@ Internet-Draft               Fossil Horizons                October 2026
       alone.  A branch forked below C that merges C in has such a check-
       in, and its branch state propagates to it from below the horizon;
       seeded at C only, it derived no branch.  Normative change.
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 30]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    *  Section 3.1, Section 3.4, Section 5, Section 5.5: the leaves rule
       names a check-in no P card names "childless", distinct from the
@@ -1726,18 +1710,6 @@ Internet-Draft               Fossil Horizons                October 2026
       and Section 6.2.6 voids a cursor when an appended tree makes an
       older withheld node kept.  Normative change.
 
-
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 31]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    *  Section 5.2: when no tag is in force at any check-in a seed would
       cover, the origin mints no seed and serves the content level,
       since a control artifact needs a T card.  The earlier text did not
@@ -1757,6 +1729,14 @@ Internet-Draft               Fossil Horizons                October 2026
    *  Section 3.4: states that the leaves rule can hold effectively the
       whole history when childless check-ins fork near the root, with
       the measurement on the Fossil repository.  No rule change.
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 31]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    *  Section 5.2, Section 5.2.2, Section 6.2.3: a seed's D card is the
       latest tag event it summarizes rounded up to a whole second, with
@@ -1783,17 +1763,6 @@ Internet-Draft               Fossil Horizons                October 2026
       no common ancestor: over a partial graph the common ancestor found
       need not be the nearest.  Normative change.
 
-
-
-
-
-
-
-Mestas                    Expires 20 April 2027                [Page 32]
-
-Internet-Draft               Fossil Horizons                October 2026
-
-
    *  Section 5.8: the deepen point is a common ancestor of C and the
       target, computed locally or asked of the origin.  When none is
       known the client refuses the deepen and names the remedy, and
@@ -1816,6 +1785,14 @@ Internet-Draft               Fossil Horizons                October 2026
       check-ins, so a held baseline's parent went unlabelled and the
       clone requested what the origin never sends; the paragraph that
       called this a bounded over-fetch is corrected.  Normative change.
+
+
+
+
+Mestas                    Expires 20 April 2027                [Page 32]
+
+Internet-Draft               Fossil Horizons                October 2026
+
 
    *  Section 5.2.2, Section 5.2.3: the seed's U card is the origin's
       own seed label, which appears on nothing it writes for sharing,
@@ -1842,6 +1819,29 @@ Internet-Draft               Fossil Horizons                October 2026
    *  Section 5.2, Section 5.2.3, Section 5.2.4: every seed carries a
       binding card, T +horizon-seed <C> <rule>, that names the horizon
       it was minted for and is stripped before derivation.  A clone
+      refuses a seed whose binding is not its own horizon or whose D is
+      earlier than the held seed's, and an origin refuses a pushed
+      control artifact carrying a binding card whatever its label.  An
+      SSH seed signature uses its own namespace.  The earlier text bound
+      a signed seed to neither C nor a time, so a seed for another
+      horizon, or an older one, verified.  Normative change.
+
+   *  Section 5.2.3: a store drops a seed that reaches it on any receive
+      path outside a horizon-seed announcement, and never announces or
+      serves a delta it cannot yet expand.  The earlier text had a clone
+      keep such an artifact as an ordinary control artifact, so a store
+      could pass a planted seed on to its peers.  Normative change.
+
+   *  Section 5.2.2, Section 6.2.3: a seed's D card is the latest tag
+      event in the repository, cancels included, not the latest of the
+      events it summarizes.  Dated from the events in force, a seed
+      moved earlier when the latest of them was cancelled or a closed
+      branch was reopened, and the clone's D floor refused the re-seed
+      as a replay.  Normative change.
+
+
+
+
 
 
 
@@ -1850,17 +1850,17 @@ Mestas                    Expires 20 April 2027                [Page 33]
 Internet-Draft               Fossil Horizons                October 2026
 
 
-      refuses a seed whose binding is not its own horizon or whose D is
-      earlier than the held seed's, and an origin refuses a pushed
-      control artifact carrying a binding card whatever its label.  An
-      SSH seed signature uses its own namespace.  The earlier text bound
-      a signed seed to neither C nor a time, so a seed for another
-      horizon, or an older one, verified.  Normative change.
-
 Author's Address
 
    Dan Mestas
    Email: dan5446@gmail.com
+
+
+
+
+
+
+
 
 
 

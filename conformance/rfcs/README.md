@@ -27,7 +27,7 @@ changed and no section number moved.
 | `draft-fossil-delta-format-00.txt` | `62a7d1bb3f` | `d8025d6d75` | `6a28ee7e2e146f80…` |
 | `draft-fossil-submanifests-00.txt` | `e03d91943e57afa20c3fdeab159a23a8a5eab66c` (branch `horizon-rfc`) | `b9b19fa418` | `99ea094690fe1386…` |
 | `draft-fossil-sparse-cone-00.txt` | `e6ee276c89` (branch `horizon-rfc`) | `c7ef80e7e1` | `2ecfc54f4b830938…` |
-| `draft-fossil-horizon-00.txt` | `236b7b4285` (zit 0.7.1) | `130b85e386` | `ce78240e414dddd0…` |
+| `draft-fossil-horizon-00.txt` | `caeef421ee` (zit trunk after 0.7.1) | `ab18fa7f89` | `bbcc73a010a6d7b3…` |
 
 The delta-format and sub-manifest files are byte-identical at `68a3f76cb7`
 and `62a7d1bb3f`. The delta-format draft is unchanged since `3f86ff4261`
@@ -57,14 +57,33 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`236b7b4285`, the zit 0.7.1 text; the `version-0.7.1` tag (`1c4cd7a165`)
-carries the same bytes. At that check-in the sparse-cone,
+`caeef421ee`, zit trunk after 0.7.1. At that check-in the sparse-cone,
 sub-manifest, repo-state and delta-format drafts are byte-identical to the
 copies here; the artifact-format and sync-protocol drafts differ and stay
-pinned at their own check-ins. The other six drafts are byte-identical at
-`3a2df62515`, `24457c7dd6` and `5d618aaeb1`. Against the `5d618aaeb1` copy
-it replaces, the horizon draft adds three Appendix C bullets, each a
-normative change.
+pinned at their own check-ins. Against the `236b7b4285` copy (zit 0.7.1)
+it replaces, the horizon draft adds two Appendix C bullets, each a
+normative change. The seed's date (§5.2.2, §6.2.3): a seed's D card is the
+latest mtime of any tag event in the repository, one that applied,
+propagated or cancelled a tag, rounded up as before, no longer the latest
+of the events the seed summarizes; dated from the events in force, a seed
+moved earlier when the newest of them was cancelled or a closed branch was
+reopened, and the clone's D floor refused the re-seed as a replay. The
+receive rule (§5.2.3): a store never keeps a seed it did not receive
+through a horizon-seed announcement; on every receive path it drops an
+artifact that is a seed by its own label or a binding card, judged when it
+first becomes storable, a delta completed in a later round included; a
+dropped artifact is not counted as received and is not requested again in
+the session, and a store should keep a never-synchronized record of the
+hashes it dropped; a store that keeps a pushed or received delta whose
+base it lacks does not announce or serve it while it cannot be expanded.
+The earlier text had a clone keep a seed-shaped artifact outside an
+announcement as an ordinary control artifact.
+
+The `236b7b4285` copy was the zit 0.7.1 text; the `version-0.7.1` tag
+(`1c4cd7a165`) carries the same bytes. The other six drafts are
+byte-identical at `3a2df62515`, `24457c7dd6` and `5d618aaeb1`. Against the
+`5d618aaeb1` copy it replaced, the `236b7b4285` horizon draft added three
+Appendix C bullets, each a normative change.
 Named horizons (§6.2.7, new, with §6.1 and §3.4): a cloning client that
 cannot name C by hash sends, in its first request only and in place of
 pragma horizon, `pragma horizon-name <name> <rule> <depth>`, where name is

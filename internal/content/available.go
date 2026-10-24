@@ -298,6 +298,15 @@ func (a *AvailabilityCache) ridForUUID(q db.Querier, uuid string) (libfossil.Fsl
 	return libfossil.FslID(rid), true
 }
 
+// Available is IsAvailable through the cache, for a caller that asks of many
+// rids sharing chains.
+func (a *AvailabilityCache) Available(q db.Querier, rid libfossil.FslID) bool {
+	if a == nil || q == nil {
+		panic("content.AvailabilityCache.Available: nil cache or querier")
+	}
+	return a.isAvailable(q, rid)
+}
+
 // isAvailable is IsAvailable with memoization. It walks rid's chain until it
 // reaches a node whose verdict is already cached, a phantom or unknown rid
 // (unavailable), a grounded full-text root (available), a cycle (unavailable),

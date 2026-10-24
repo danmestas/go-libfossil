@@ -1,10 +1,16 @@
-// Package seedcheck keeps an origin from linking or serving a horizon seed
-// pushed to it (draft-fossil-horizon-00 §5.2.3).
+// Package seedcheck keeps a store from linking or serving a horizon seed it
+// did not receive through a horizon-seed announcement
+// (draft-fossil-horizon-00 §5.2.3). The receive paths refuse a seed they can
+// read as it arrives, so it is never stored, and the link step refuses any
+// seed-shaped artifact it reaches (Judge), which then stays stored but is
+// never linked or served; what follows is the bookkeeping for a delta that
+// cannot be judged yet.
 //
-// A pushed control artifact is a seed when it carries this implementation's
-// seed label or a horizon-seed T card. It is judged when it first becomes
-// readable. The push handler judges what it can read at once, and refuses
-// the push. A delta whose basis it lacks is recorded pending, under the root
+// A control artifact is a seed when it carries this implementation's seed
+// label or a horizon-seed T card. It is judged when it first becomes
+// readable. A receive path judges what it can read at once: the push
+// handler refuses the push, a pull or clone drops the artifact. A delta
+// whose basis a push or pull lacks is recorded pending, under the root
 // of its basis chain (the row whose arrival makes it readable), and withheld
 // from every reply until judged. Whatever later fills that root (a push or
 // pull, a check-in, a tag) judges the rows pending under it, and only those
@@ -190,6 +196,30 @@ func DeltaStored(q db.Querier, rid libfossil.FslID) error {
 	return nil
 }
 
+// WithholdUnreadable records pending every delta row that cannot be
+// expanded, so none is announced or served until it can be (§5.2.3). A
+// clone, which serves no one while it runs and so records nothing as it
+// receives, calls it once at its end.
+func WithholdUnreadable(q db.Querier) error {
+	if q == nil {
+		panic("seedcheck.WithholdUnreadable: q must not be nil")
+	}
+	deltas, err := rows(q, "SELECT rid, '' FROM delta ORDER BY rid")
+	if err != nil {
+		return err
+	}
+	avail := content.NewAvailabilityCache()
+	for _, d := range deltas {
+		if avail.Available(q, d.rid) {
+			continue
+		}
+		if err := MarkPending(q, d.rid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // JudgeFilled judges the rows pending under each of filled, rids whose full
 // content was just stored, and reports how many rows it examined. Each fill
 // costs the rows that waited on it, not the whole pending set. Each row is
@@ -285,6 +315,22 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 	if q == nil || rid <= 0 || d == nil {
 		panic("seedcheck.Judge: q and d must not be nil and rid must be positive")
 	}
+	// Horizon F.2: a store never keeps a seed it did not receive through a
+	// horizon-seed announcement, and an announced seed is held outside the
+	// artifact store, so a seed-shaped artifact reaching the link step is
+	// refused whatever path stored it. This catches a seed completed in a
+	// later round of a pull or clone, which no pending row records. It
+	// stays stored, refused, as a seed refused on a push does.
+	if IsSeed(d) {
+		var uuid string
+		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
+			return false, fmt.Errorf("seedcheck.Judge: rid=%d: %w", rid, err)
+		}
+		if !t.Pending {
+			return true, refuse(q, rid, uuid)
+		}
+		return decide(q, rid, uuid, true)
+	}
 	if !t.Pending && !t.Refused {
 		return false, nil
 	}
@@ -321,7 +367,7 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 // pending row goes.
 func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, error) {
 	if seed {
-		if err := Refuse(q, uuid); err != nil {
+		if err := refuse(q, rid, uuid); err != nil {
 			return false, err
 		}
 	} else if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
@@ -331,6 +377,18 @@ func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, er
 		return false, fmt.Errorf("seedcheck: judge rid=%d: %w", rid, err)
 	}
 	return seed, nil
+}
+
+// refuse records the seed stored at rid as refused, and takes it out of the
+// unclustered table, so no inventory or cluster names it.
+func refuse(q db.Querier, rid libfossil.FslID, uuid string) error {
+	if err := Refuse(q, uuid); err != nil {
+		return err
+	}
+	if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+		return fmt.Errorf("seedcheck: refuse rid=%d: %w", rid, err)
+	}
+	return nil
 }
 
 // Refuse records uuid as a refused seed. The row stored under it is kept,
@@ -346,6 +404,27 @@ func Refuse(q db.Querier, uuid string) error {
 		return fmt.Errorf("seedcheck.Refuse: %w", err)
 	}
 	return nil
+}
+
+// RefusedUUIDs returns every refused hash. The set is small: it holds only
+// seeds offered to this store.
+func RefusedUUIDs(q db.Querier) (map[string]bool, error) {
+	if q == nil {
+		panic("seedcheck.RefusedUUIDs: q must not be nil")
+	}
+	out := map[string]bool{}
+	ok, err := tableExists(q, refusedTable)
+	if err != nil || !ok {
+		return out, err
+	}
+	all, err := rows(q, "SELECT 0, uuid FROM "+refusedTable)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range all {
+		out[r.uuid] = true
+	}
+	return out, nil
 }
 
 // IsRefusedUUID reports whether uuid was refused as a seed.

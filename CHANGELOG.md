@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The horizon draft is pinned at zit `caeef421ee`, with its §5.2.3 receive
+  rule. A store keeps a seed only through a `horizon-seed` announcement: a
+  pull, clone or sync drops a seed by this store's label or by a binding
+  card as soon as it can read it. A dropped seed is not stored, not counted
+  as received, and its hash is never asked for again, in this session or a
+  later one. The link step refuses a seed-shaped artifact whatever path
+  stored it, so one completed in a later round is kept but never linked,
+  announced or sent. A control artifact with neither the label nor a
+  binding card stays ordinary. A delta a store keeps without its base,
+  pushed or received, is not announced or served until it can be
+  expanded; a clone records the ones still unreadable when it ends.
+
+### Fixed
+
+- A seed's D card is the latest tag event in the repository, cancels and
+  propagated rows included (horizon §5.2.2; tracked in #479). It was the
+  latest of the tag rows the seed summarizes, so cancelling the newest tag,
+  or reopening a closed branch, minted a seed dated earlier than the one a
+  structural clone held, and the clone refused it as a replay and fell back
+  to the content horizon. D now only moves later, and changes whenever any
+  tag changes, so the next pull re-sends the seed. Seeds stay
+  byte-identical with zit's from zit `caeef421ee` on.
+
 ## [0.16.0] - 2026-10-24
 
 ### Added

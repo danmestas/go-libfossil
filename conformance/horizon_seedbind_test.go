@@ -251,17 +251,29 @@ func hzBindReplay(t *testing.T) error {
 	return hzBindDeepenFloor(t)
 }
 
-// hzBindDeepenFloor: a clone at c3 holds a seed dated after the seed for c2;
-// deepening to c2 discards it first, so the earlier seed for c2 is held.
+// hzBindDeepenFloor: a clone at c3 holds a seed dated after a seed for c2;
+// deepening to c2 discards it first, so the earlier seed for c2 is held. An
+// honest origin dates every seed at the repository's latest tag event
+// (§5.2.2), so the earlier seed for c2 is one minted before a later tag
+// event, served by a peer that replays it.
 func hzBindDeepenFloor(t *testing.T) error {
 	x := newHZStruct(t)
+	k2, err := horizon.HeldSet(context.Background(), x.s.f.r.DB(), x.s.c2, cone.RuleDescendants)
+	if err != nil {
+		return err
+	}
+	oldName, oldData, err := seed.Mint(x.s.f.r.DB(), x.s.c2, cone.RuleDescendants, k2, seedLoginGo)
+	if err != nil {
+		return err
+	}
 	x.s.tag(t, x.s.c3, "sym-v2", tag.TagSingleton, "")
 	r, _, err := x.clone(t, x.peer())
 	if err != nil {
 		return err
 	}
 	atC := mustHeld(t, r)
-	res, err := sync.Deepen(context.Background(), r, x.peer(), x.c2, sync.SyncOpts{})
+	res, err := sync.Deepen(context.Background(), r, &hzRewritingPeer{inner: x.peer(), rewrite: hzSwapSeed(oldName, oldData)},
+		x.c2, sync.SyncOpts{})
 	if err != nil || res.HorizonFallback {
 		return expectf("deepen to c2: %v, fell back %v", err, res != nil && res.HorizonFallback)
 	}

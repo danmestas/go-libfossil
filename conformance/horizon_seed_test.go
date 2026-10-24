@@ -48,7 +48,7 @@ var (
 	horizonSeedCards      = Case{ID: "horizon.5.2.1.seed-cards", Req: "HZ-5.2-1"}
 	horizonSeedDate       = Case{ID: "horizon.5.2.2.seed-date", Req: "HZ-5.2-2"}
 	horizonSeedPrivate    = Case{ID: "horizon.5.2.3.seed-private", Req: "HZ-5.2-3"}
-	horizonSeedOrdinary   = Case{ID: "horizon.5.2.3.seed-shaped-ordinary", Req: "HZ-5.2-4"}
+	horizonSeedOrdinary   = Case{ID: "horizon.5.2.3.seed-shaped-ordinary", Req: "HZ-5.2-14"}
 	horizonSeedProvenance = Case{ID: "horizon.5.2.4.seed-provenance", Req: "HZ-5.2-6"}
 	horizonSeedNone       = Case{ID: "horizon.5.2.1.no-tag-no-seed", Req: "HZ-5.2-7"}
 )
@@ -466,13 +466,28 @@ func hzSeedPrivate(t *testing.T, s *hzSeed) error {
 
 // hzSeedOrdinary: an artifact of the seed's shape arriving as an ordinary
 // artifact is stored and crosslinked as the control artifact it is, offered
-// to peers like any other, and never held as the seed.
+// to peers like any other, and never held as the seed. Under the zit 0.7.1
+// erratum (F.2) that holds only for one carrying neither the receiver's seed
+// label nor a binding card, so this one is minted under another
+// implementation's label; the receive paths drop the others
+// (horizon.5.2.3.seed-*).
 func hzSeedOrdinary(t *testing.T, s *hzSeed) error {
 	clone := s.lacking(t)
-	name, data, err := s.mint(seedLoginGo)
+	_, minted, err := s.mint("zit-seed")
 	if err != nil {
 		return err
 	}
+	// Neither this store's label nor a binding card (§5.2.3).
+	d, err := deck.Parse(minted)
+	if err != nil {
+		return err
+	}
+	d.T = slices.DeleteFunc(d.T, func(tc deck.TagCard) bool { return tc.Name == seed.BindingTag })
+	data, err := (&deck.Deck{Type: deck.Control, D: d.D, T: d.T, U: d.U}).Marshal()
+	if err != nil {
+		return err
+	}
+	name := hash.SHA3(data)
 	var rid libfossil.FslID
 	err = clone.WithTx(func(tx *db.Tx) error {
 		var err error

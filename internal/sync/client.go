@@ -1247,6 +1247,12 @@ func storeReceivedFile(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 	return err
 }
 
+// errSeed is storeReceived's refusal of a horizon seed received outside a
+// horizon-seed announcement (§5.2.3, F.1, F.2): nothing is stored. The push
+// handler refuses the request; a client or clone drops the artifact and
+// refuses its hash.
+var errSeed = errors.New("sync: a horizon seed outside a horizon-seed announcement")
+
 // storeReceived is storeReceivedFile without the after-dephantomize cascade:
 // it returns the rid of a phantom it filled, for which the caller owes the
 // cascade, with or without an error. The sync client runs those cascades once
@@ -1292,6 +1298,9 @@ func storeReceived(ctx context.Context, r *repo.Repo, pass *receivePass, uuid, d
 		}
 		if verdict == deltaMismatch {
 			return 0, &hashMismatchError{uuid: uuid}
+		}
+		if target != nil && seedcheck.IsSeedBytes(target) {
+			return 0, errSeed
 		}
 		return 0, storeDeltaContent(ctx, r, pass, uuid, deltaSrc, payload, storedBlob, vis,
 			linker, target)
@@ -1370,14 +1379,23 @@ func storeDeltaContent(ctx context.Context, r *repo.Repo, pass *receivePass, uui
 			return pass.verifyFrom(tx, rid)
 		}
 		root, err = pass.rootOf(tx, srcRid)
+		if err != nil && !errors.Is(err, errChainTooDeep) {
+			return fmt.Errorf("storeDeltaContent: %w", err)
+		}
+		// A delta that cannot be expanded is not announced or served until
+		// it can be (§5.2.3), and is judged then. A clone, which serves no
+		// one until it ends, records what is still unreadable at its end
+		// instead (seedcheck.WithholdUnreadable).
+		if linker == nil {
+			if err := seedcheck.MarkPending(tx, rid); err != nil {
+				return fmt.Errorf("storeDeltaContent: %w", err)
+			}
+		}
 		if errors.Is(err, errChainTooDeep) {
 			// Stored, as a push onto any deep chain always was, but not
 			// tracked: no basis that arrives can make it readable, so there
 			// is nothing to check against its name later.
 			return nil
-		}
-		if err != nil {
-			return fmt.Errorf("storeDeltaContent: %w", err)
 		}
 		dangling = rid
 		return nil
@@ -1481,6 +1499,9 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 	linker *manifest.ReceiveLinker) (libfossil.FslID, error) {
 	if !hashMatches(uuid, fullContent) {
 		return 0, &hashMismatchError{uuid: uuid}
+	}
+	if seedcheck.IsSeedBytes(fullContent) {
+		return 0, errSeed
 	}
 
 	var stored, dephantomizedRid libfossil.FslID
@@ -1779,6 +1800,12 @@ func (s *session) loadDBPhantoms() error {
 	if err != nil {
 		return err
 	}
+	// A dropped seed's phantom stays, inert: deleting a row would free its
+	// rid for reuse under a receive pass. Its hash is never asked for again.
+	refused, err := seedcheck.RefusedUUIDs(s.repo.DB())
+	if err != nil {
+		return err
+	}
 	rows, err := s.repo.DB().Query(
 		"SELECT b.rid, b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0" +
 			" AND NOT EXISTS(SELECT 1 FROM shun WHERE uuid=b.uuid)",
@@ -1797,7 +1824,7 @@ func (s *session) loadDBPhantoms() error {
 		// one its origin announces this session is kept there (horizon
 		// §4.5, §5.1) and is asked for.
 		announced := s.structural.active && s.remoteHas[uuid] && elided != nil && elided.Unnamed(rid)
-		if elided != nil && elided.Class(rid) == content.Elided && !announced {
+		if refused[uuid] || elided != nil && elided.Class(rid) == content.Elided && !announced {
 			delete(s.phantoms, uuid)
 			delete(s.phantomAge, uuid)
 			continue
@@ -1859,6 +1886,16 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 	if servedCluster(s.servedHorizon(), deltaSrc, payload) {
 		return false, nil
 	}
+	// Horizon F.2: a seed outside the announcement is dropped, not counted
+	// and not asked for again; its hash is refused (seedcheck).
+	refused, err := seedcheck.IsRefusedUUID(s.repo.DB(), uuid)
+	if err != nil {
+		return false, err
+	}
+	if refused {
+		delete(s.phantoms, uuid)
+		return false, nil
+	}
 	if err := rememberSparseReceived(s.repo.DB(), s.sparseReceived, uuid); err != nil {
 		return false, err
 	}
@@ -1866,6 +1903,10 @@ func (s *session) handleFileCard(ctx context.Context, uuid, deltaSrc string, pay
 		nil)
 	if rid > 0 {
 		s.dephantomized = append(s.dephantomized, rid)
+	}
+	if errors.Is(err, errSeed) {
+		delete(s.phantoms, uuid)
+		return false, seedcheck.Refuse(s.repo.DB(), uuid)
 	}
 	if err != nil {
 		return false, err

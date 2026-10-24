@@ -57,7 +57,8 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`236b7b4285`, the zit 0.7.1 text. At that check-in the sparse-cone,
+`236b7b4285`, the zit 0.7.1 text; the `version-0.7.1` tag (`1c4cd7a165`)
+carries the same bytes. At that check-in the sparse-cone,
 sub-manifest, repo-state and delta-format drafts are byte-identical to the
 copies here; the artifact-format and sync-protocol drafts differ and stay
 pinned at their own check-ins. The other six drafts are byte-identical at

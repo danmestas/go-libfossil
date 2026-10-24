@@ -3,6 +3,8 @@ package sync
 import (
 	"fmt"
 	"testing"
+
+	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
 // addDBPhantom makes a phantom row so converged's "phantoms remain" check
@@ -61,5 +63,23 @@ func TestGimmeCapFollowsFossilMxPhantomReq(t *testing.T) {
 	}
 	if got := len(s.buildGimmeCards()); got != 200 {
 		t.Fatalf("after 10 files: %d gimmes, want 200", got)
+	}
+}
+
+// TestGimmeOrderIsDeterministic pins that a round asks for its phantoms in
+// hash order, so a capped round always picks the same ones and a seeded
+// simulation replays the same wire. Map iteration order would not.
+func TestGimmeOrderIsDeterministic(t *testing.T) {
+	s, _ := newTestSession(t, SyncOpts{Pull: true})
+	fillPhantoms(s, 1000)
+	cards := s.buildGimmeCards()
+	if len(cards) != 200 {
+		t.Fatalf("%d gimmes, want 200", len(cards))
+	}
+	for i, c := range cards {
+		want := fmt.Sprintf("%040x", i+1)
+		if got := c.(*xfer.GimmeCard).UUID; got != want {
+			t.Fatalf("gimme %d asks for %s, want %s", i, got, want)
+		}
 	}
 }

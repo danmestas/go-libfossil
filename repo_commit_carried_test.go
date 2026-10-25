@@ -114,3 +114,45 @@ func TestCommit_CarriedByUUID_Rejections(t *testing.T) {
 		t.Errorf("unknown UUID: got %v, want 'not available'", err)
 	}
 }
+
+// A sparse store skips the held check for a file outside its cone, so the
+// UUID's shape is all that stands between caller text and the F card. Each
+// malformed UUID is refused there, including one whose newline would write
+// a card of its own into the check-in.
+func TestCommit_CarriedByUUID_MalformedOnSparseStore(t *testing.T) {
+	r := newTestRepo(t)
+	v1 := commit(t, r, 0, "v1", []FileToCommit{
+		{Name: "src/a.txt", Content: []byte("a\n")},
+	})
+	c, err := NewCone([]string{"src"}, nil)
+	if err != nil {
+		t.Fatalf("NewCone: %v", err)
+	}
+	if err := r.SetStoreCone(c); err != nil {
+		t.Fatalf("SetStoreCone: %v", err)
+	}
+
+	for _, uuid := range []string{
+		strings.Repeat("z", 64),
+		strings.Repeat("A", 40),
+		strings.Repeat("a", 41),
+		strings.Repeat("a", 40) + "\nT +sym-injected * x",
+	} {
+		_, _, err := r.Commit(CommitOpts{
+			ParentID: v1, Comment: "bad", User: "test",
+			Files: []FileToCommit{{Name: "docs/b.txt", UUID: uuid}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "not an artifact hash") {
+			t.Errorf("UUID %q: got %v, want 'not an artifact hash'", uuid, err)
+		}
+	}
+
+	// A well-formed hash outside the cone is still carried without being held.
+	elided := strings.Repeat("b", 64)
+	if _, _, err := r.Commit(CommitOpts{
+		ParentID: v1, Comment: "ok", User: "test",
+		Files: []FileToCommit{{Name: "docs/b.txt", UUID: elided}},
+	}); err != nil {
+		t.Errorf("elided well-formed UUID: %v", err)
+	}
+}

@@ -18,7 +18,7 @@ func adminLogin(t *testing.T, r *Repo) string {
 // create a repository, seeding fossil's fallback login "root", not panic on
 // an empty login.
 func TestCreate_NoUserAnywhereSeedsRoot(t *testing.T) {
-	for _, name := range []string{"USER", "LOGNAME", "USERNAME"} {
+	for _, name := range []string{"FOSSIL_USER", "USER", "LOGNAME", "USERNAME"} {
 		t.Setenv(name, "")
 	}
 	r, err := Create(filepath.Join(t.TempDir(), "r.fossil"), CreateOpts{})
@@ -31,9 +31,10 @@ func TestCreate_NoUserAnywhereSeedsRoot(t *testing.T) {
 	}
 }
 
-// The environment is consulted in fossil's order: USER, then LOGNAME, then
-// USERNAME.
+// The environment is consulted in fossil's order: FOSSIL_USER, then USER,
+// then LOGNAME, then USERNAME.
 func TestCreate_DefaultLoginEnvOrder(t *testing.T) {
+	t.Setenv("FOSSIL_USER", "")
 	t.Setenv("USER", "")
 	t.Setenv("LOGNAME", "from-logname")
 	t.Setenv("USERNAME", "from-username")
@@ -53,7 +54,17 @@ func TestCreate_DefaultLoginEnvOrder(t *testing.T) {
 	}
 	defer r2.Close()
 	if got := adminLogin(t, r2); got != "from-user" {
-		t.Errorf("seeded login = %q, want USER first", got)
+		t.Errorf("seeded login = %q, want USER before LOGNAME", got)
+	}
+
+	t.Setenv("FOSSIL_USER", "from-fossil-user")
+	r4, err := Create(filepath.Join(t.TempDir(), "r4.fossil"), CreateOpts{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	defer r4.Close()
+	if got := adminLogin(t, r4); got != "from-fossil-user" {
+		t.Errorf("seeded login = %q, want FOSSIL_USER first", got)
 	}
 
 	// An explicit user always wins.

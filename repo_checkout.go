@@ -50,7 +50,8 @@ type CommitOpts struct {
 // UUID, when set, carries an artifact the repository already holds into the
 // check-in by its name: the F card names it verbatim and nothing is read or
 // stored, so a caller that knows a file's hash from ListFiles can carry it
-// forward without its content. Content must be nil when UUID is set. The
+// forward without its content. Content must be nil when UUID is set, and
+// UUID must be a lowercase SHA1 or SHA3-256 hash. The
 // artifact must be held, except under a store cone that elides it
 // (draft-fossil-sparse-cone-00 §5.3); an unknown or phantom UUID fails the
 // commit. This is what PartialManifest callers use to name the unchanged

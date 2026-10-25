@@ -16,15 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the tree instead of re-reading and resubmitting it. Setting both `UUID` and
   `Content` is refused, as is a UUID the store does not hold outside a cone
   that elides it. The internal `manifest.File.UUID` path, which sparse
-  checkouts already used, is what it reaches.
+  checkouts already used, is what it reaches. A carried UUID must be a
+  lowercase SHA1 or SHA3-256 hash: a sparse store does not look up a file its
+  cone elides, so the hash's shape is what keeps caller text out of the F
+  card (tracked in #486).
 
 ### Fixed
 
 - `Create` with an empty `CreateOpts.User` panicked with `db.SeedUser: login
   must not be empty` whenever `USER` was unset in the environment, as it is
   in many containers and CI runners. The default login is now chosen as
-  fossil(1)'s `db_initial_setup` chooses it: the first of `USER`, `LOGNAME`
-  and `USERNAME` that is set, else `root`.
+  fossil(1)'s `db_create_default_users` chooses it: the first of
+  `FOSSIL_USER`, `USER`, `LOGNAME` and `USERNAME` that is set, else `root`
+  (tracked in #487). Fossil's global `default-user` setting, which it checks
+  first, has no library equivalent.
 
 - An origin dates a seed no earlier than the latest D it has minted
   (horizon §5.2.2; tracked in #483). Shunning and purging the latest tag

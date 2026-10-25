@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `FileToCommit.UUID` carries a file into a check-in by the hash the
+  repository already holds, with no content: the F card names it verbatim and
+  nothing is read or stored. A caller that lists a parent's files can now
+  commit with `PartialManifest` (to drop files) by naming the unchanged part of
+  the tree instead of re-reading and resubmitting it. Setting both `UUID` and
+  `Content` is refused, as is a UUID the store does not hold outside a cone
+  that elides it. The internal `manifest.File.UUID` path, which sparse
+  checkouts already used, is what it reaches.
+
 ### Fixed
 
 - An origin dates a seed no earlier than the latest D it has minted

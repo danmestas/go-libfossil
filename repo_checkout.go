@@ -46,11 +46,21 @@ type CommitOpts struct {
 // FileToCommit describes a file to include in a commit. OldName, when set,
 // records that the file was renamed from that name in the parent, as
 // fossil's commit records a rename (the F card's old-name field).
+//
+// UUID, when set, carries an artifact the repository already holds into the
+// check-in by its name: the F card names it verbatim and nothing is read or
+// stored, so a caller that knows a file's hash from ListFiles can carry it
+// forward without its content. Content must be nil when UUID is set. The
+// artifact must be held, except under a store cone that elides it
+// (draft-fossil-sparse-cone-00 §5.3); an unknown or phantom UUID fails the
+// commit. This is what PartialManifest callers use to name the unchanged
+// part of a tree without reading it.
 type FileToCommit struct {
 	Name    string
 	Content []byte
 	Perm    string
 	OldName string
+	UUID    string
 }
 
 // TagSpec describes a tag to attach to an artifact.
@@ -84,11 +94,15 @@ func (r *Repo) Commit(opts CommitOpts) (int64, string, error) {
 func (r *Repo) commit(ctx context.Context, opts CommitOpts) (int64, string, error) {
 	files := make([]manifest.File, len(opts.Files))
 	for i, f := range opts.Files {
+		if f.UUID != "" && f.Content != nil {
+			return 0, "", fmt.Errorf("libfossil: commit: file %q carries both UUID and Content", f.Name)
+		}
 		files[i] = manifest.File{
 			Name:    f.Name,
 			Content: f.Content,
 			Perm:    f.Perm,
 			OldName: f.OldName,
+			UUID:    f.UUID,
 		}
 	}
 	if opts.ParentID > 0 && !opts.PartialManifest {

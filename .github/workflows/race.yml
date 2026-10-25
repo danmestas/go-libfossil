@@ -1,0 +1,31 @@
+name: Race
+
+# The unit suite under the race detector. Sync, the content cache and the
+# checkout observer are used from several goroutines at once, and a data race
+# there corrupts a repository without failing any ordinary test. The suite
+# takes several times as long under -race as without, so it runs after each
+# merge to main and nightly, not as a gate on every pull request, which must
+# already be up to date with main before it merges.
+#
+# Fossil and zit are not installed: the tests that compare against them are
+# interop checks, which the Tests workflow runs, and skip here.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  race:
+    name: Race (modernc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Unit tests under -race
+        run: GOWORK=off go test -race $(GOWORK=off go list ./... | grep -v '/dst') -count=1 -timeout=80m

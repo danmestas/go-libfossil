@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowercase SHA1 or SHA3-256 hash: a sparse store does not look up a file its
   cone elides, so the hash's shape is what keeps caller text out of the F
   card (tracked in #486).
+- `OriginNamer`, an optional interface a `Transport` may implement with
+  `SyncOrigin() string`, names the peer the transport addresses. `Sync` and
+  `Clone` key the horizon cursor of draft-fossil-horizon-00 §6.2.6 by that
+  name, so an embedder's transport (NATS, in-process) keeps a cursor as the
+  HTTP transport does, and a pull after a converged exchange announces
+  nothing with `igot` instead of one card per held artifact. The hook was an
+  unexported method only the HTTP transport could satisfy; it now implements
+  `OriginNamer` itself. The name must identify the peer stably across
+  sessions and carry no credential (tracked in #488).
 
 ### Fixed
 

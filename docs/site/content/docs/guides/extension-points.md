@@ -9,7 +9,7 @@ libfossil exposes four surfaces for consumers that want to instrument, extend, o
 1. **Observer interfaces** for sync and checkout lifecycle events (`SyncObserver`, `CheckoutObserver`).
 2. **SQLite driver registration** (`db.Register`) — pick the SQLite backend at link time.
 3. **The `db.DB` abstraction** — an opaque wrapper around `database/sql` with Fossil-specific helpers. Treat it as internal; it is less stable than the observer and driver surfaces.
-4. **The `Transport` interface** — one method, `RoundTrip(ctx, payload) ([]byte, error)`, carries a sync round. `Repo.Sync` and `Clone` take any implementation, so sync can run over HTTP, WebSocket, NATS or an in-process pipe. `TransportFunc` adapts a plain function.
+4. **The `Transport` interface** — one method, `RoundTrip(ctx, payload) ([]byte, error)`, carries a sync round. `Repo.Sync` and `Clone` take any implementation, so sync can run over HTTP, WebSocket, NATS or an in-process pipe. `TransportFunc` adapts a plain function. A transport that also implements `OriginNamer` names its peer, which keeps the horizon cursor between pulls.
 
 ## Observer interfaces
 

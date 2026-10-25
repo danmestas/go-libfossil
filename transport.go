@@ -59,17 +59,43 @@ func WithHTTPClient(c *http.Client) HTTPOption {
 	return func(t *httpTransport) { t.client = c }
 }
 
+// OriginNamer is an optional interface a Transport may also implement to
+// name the peer it addresses. Sync and Clone keep the horizon cursor of
+// draft-fossil-horizon-00 §6.2.6 per origin under that name: "A client that
+// converged records the cursor of the last reply together with the count of
+// its own artifacts at the end of the exchange, per origin", and "A client
+// holding a cursor for the origin it addresses sends it on every request,
+// and MAY then announce nothing with igot on a pull-only request."
+//
+// The name must identify the same peer across sessions and must carry no
+// credential, since it is written into the repository's config table; the
+// HTTP transport uses its URL with any password removed. A Transport that
+// does not implement it, or returns "", keeps no cursor, and each of its
+// pulls announces the client's whole holding with igot, which §6.2.6 allows.
+type OriginNamer interface {
+	Transport
+	SyncOrigin() string
+}
+
+// syncOrigin is the origin t names, or "" when it names none.
+func syncOrigin(t Transport) string {
+	if o, ok := t.(OriginNamer); ok {
+		return o.SyncOrigin()
+	}
+	return ""
+}
+
 type httpTransport struct {
 	url    string
 	client *http.Client
 	peer   internalsync.PeerAddr
 }
 
-// syncOrigin names the peer this transport addresses, for state a sync keeps
+// SyncOrigin names the peer this transport addresses, for state a sync keeps
 // per origin (the horizon cursor of draft-fossil-horizon-00 §6.2.6): its URL
 // with any password removed, as last-sync-url keeps it, so no credential is
 // written into the repository.
-func (t *httpTransport) syncOrigin() string {
+func (t *httpTransport) SyncOrigin() string {
 	u, err := url.Parse(t.url)
 	if err != nil {
 		return ""

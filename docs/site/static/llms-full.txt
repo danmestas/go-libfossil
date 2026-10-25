@@ -865,7 +865,7 @@ sr, err := repo.Sync(ctx, t, libfossil.SyncOpts{
 })
 ```
 
-`Transport` is one method, `RoundTrip(ctx, payload) ([]byte, error)`, so any byte pipe works. `NewHTTPTransport` takes `WithHTTPClient` for a custom `http.Client`. `Repo.Pull(ctx, url, PullOpts{})` is a pull-only shortcut over HTTP.
+`Transport` is one method, `RoundTrip(ctx, payload) ([]byte, error)`, so any byte pipe works. `NewHTTPTransport` takes `WithHTTPClient` for a custom `http.Client`. A transport that also implements `OriginNamer` (`SyncOrigin() string`) keeps the horizon cursor for that peer; see [Horizons](/docs/concepts/horizons/). `Repo.Pull(ctx, url, PullOpts{})` is a pull-only shortcut over HTTP.
 
 `SyncOpts` also turns on unversioned files (`UV`), private artifacts (`Private`, §7.5), fossil's `--share-links` (`ShareLinks`, §9.5) and go-libfossil's own table sync (`XTableSync`). `SyncResult` reports rounds, files and bytes each way, and errors.
 
@@ -1441,7 +1441,7 @@ libfossil -R repo.fossil repo verify --seed
 
 - **The structural horizon needs an origin that serves it.** Against a peer that does not answer `horizon-served structural` (stock fossil, or a server without a current seed) the clone falls back to the content horizon and reports `HorizonFallback` (§6.3).
 - **PGP verification needs gpg.** A PGP-signed seed is verified by running `gpg`, so a clone keyed with a fingerprint needs gpg installed and the key in its keyring; on js/wasm only SSH keys verify. gpg-agent hangs at start under a very large open-file limit, which a macOS shell can set to 2^31 (`ulimit -n`): lower it, to 4096 say, in the environment that signs or verifies with gpg.
-- **The horizon cursor needs a transport that names its peer.** The cursor (`pragma horizon-cursor`, §6.2.6) lets an exchange skip re-announcing what both sides hold. The HTTP transport keys it by URL; a custom `Transport` keeps none and announces in full.
+- **The horizon cursor needs a transport that names its peer.** The cursor (`pragma horizon-cursor`, §6.2.6) lets an exchange skip re-announcing what both sides hold. The HTTP transport keys it by URL with any password removed. A custom `Transport` keeps one when it also implements `OriginNamer`, whose `SyncOrigin() string` must name the same peer across sessions and carry no credential, since it is written into the repository's config; any other keeps none and announces in full.
 - **A horizon is not a checkout cone.** Give a checkout a horizon and you get `ErrHorizonCheckout`.
 - **Compaction is irreversible locally.** `repo cone compact` drops the held blobs below the horizon; deepening later needs a peer that still has them.
 
@@ -1969,7 +1969,7 @@ libfossil exposes four surfaces for consumers that want to instrument, extend, o
 1. **Observer interfaces** for sync and checkout lifecycle events (`SyncObserver`, `CheckoutObserver`).
 2. **SQLite driver registration** (`db.Register`) — pick the SQLite backend at link time.
 3. **The `db.DB` abstraction** — an opaque wrapper around `database/sql` with Fossil-specific helpers. Treat it as internal; it is less stable than the observer and driver surfaces.
-4. **The `Transport` interface** — one method, `RoundTrip(ctx, payload) ([]byte, error)`, carries a sync round. `Repo.Sync` and `Clone` take any implementation, so sync can run over HTTP, WebSocket, NATS or an in-process pipe. `TransportFunc` adapts a plain function.
+4. **The `Transport` interface** — one method, `RoundTrip(ctx, payload) ([]byte, error)`, carries a sync round. `Repo.Sync` and `Clone` take any implementation, so sync can run over HTTP, WebSocket, NATS or an in-process pipe. `TransportFunc` adapts a plain function. A transport that also implements `OriginNamer` names its peer, which keeps the horizon cursor between pulls.
 
 ## Observer interfaces
 

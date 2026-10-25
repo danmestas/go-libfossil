@@ -274,11 +274,10 @@ func (r *Repo) Sync(ctx context.Context, t Transport, opts SyncOpts) (*SyncResul
 		Observer:    adaptObserver(opts.Observer),
 		Buggify:     opts.Buggify,
 	}
-	// A transport that names its peer keys the horizon cursor; any other
-	// keeps none, and its requests announce in full, which §6.2.6 allows.
-	if o, ok := t.(interface{ syncOrigin() string }); ok {
-		iOpts.Origin = o.syncOrigin()
-	}
+	// A transport that names its peer (OriginNamer) keys the horizon cursor;
+	// any other keeps none, and its requests announce in full, which §6.2.6
+	// allows.
+	iOpts.Origin = syncOrigin(t)
 	res, err := internalsync.Sync(ctx, r.inner, adapter, iOpts)
 	if err != nil {
 		return convertSyncResult(res), fmt.Errorf("libfossil: sync: %w", err)

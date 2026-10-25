@@ -8,7 +8,7 @@ import (
 
 // ExtractStart describes the beginning of an extract or update operation.
 type ExtractStart struct {
-	Operation string          // "extract" or "update"
+	Operation string // "extract" or "update"
 	TargetRID libfossil.FslID
 }
 
@@ -83,7 +83,7 @@ func (nopObserver) CommitStarted(ctx context.Context, _ CommitStart) context.Con
 	return ctx
 }
 func (nopObserver) CommitCompleted(_ context.Context, _ CommitEnd) {}
-func (nopObserver) Error(_ context.Context, _ error)              {}
+func (nopObserver) Error(_ context.Context, _ error)               {}
 
 // resolveObserver returns obs if non-nil, otherwise nopObserver{}.
 func resolveObserver(obs Observer) Observer {

@@ -221,8 +221,8 @@ type memDirEntry struct {
 	isDir bool
 }
 
-func (e *memDirEntry) Name() string               { return e.name }
-func (e *memDirEntry) IsDir() bool                { return e.isDir }
+func (e *memDirEntry) Name() string { return e.name }
+func (e *memDirEntry) IsDir() bool  { return e.isDir }
 func (e *memDirEntry) Type() fs.FileMode {
 	if e.isDir {
 		return fs.ModeDir
@@ -245,8 +245,8 @@ type memFileInfo struct {
 	mtime time.Time
 }
 
-func (f *memFileInfo) Name() string       { return f.name }
-func (f *memFileInfo) Size() int64        { return f.size }
+func (f *memFileInfo) Name() string { return f.name }
+func (f *memFileInfo) Size() int64  { return f.size }
 func (f *memFileInfo) Mode() os.FileMode {
 	if f.isDir {
 		return os.ModeDir | 0755

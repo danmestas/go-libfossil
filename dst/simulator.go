@@ -42,12 +42,12 @@ type Simulator struct {
 	safetyCheckInterval int
 
 	// Stats
-	Steps           int
-	TotalSyncs      int
-	TotalErrors     int
-	TotalUVSent     int
-	TotalUVRecvd    int
-	TotalUVGimmes   int
+	Steps         int
+	TotalSyncs    int
+	TotalErrors   int
+	TotalUVSent   int
+	TotalUVRecvd  int
+	TotalUVGimmes int
 }
 
 // SimConfig configures a simulation run.
@@ -55,7 +55,7 @@ type SimConfig struct {
 	Seed                int64
 	NumLeaves           int
 	PollInterval        time.Duration
-	TmpDir              string           // directory for repo files
+	TmpDir              string            // directory for repo files
 	Upstream            libsync.Transport // mock Fossil master
 	Buggify             bool              // enable BUGGIFY fault injection
 	UV                  bool              // sync unversioned files

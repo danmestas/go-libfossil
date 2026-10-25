@@ -1669,4 +1669,3 @@ func hashPW(projectCode, login, password string) string {
 	h := sha1pkg.Sum([]byte(projectCode + "/" + login + "/" + password))
 	return fmt.Sprintf("%x", h)
 }
-

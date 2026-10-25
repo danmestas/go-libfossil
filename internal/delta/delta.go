@@ -140,7 +140,8 @@ func Apply(source, delta []byte) (result []byte, err error) {
 // a reference to dst afterwards expecting it to be independent.
 //
 // Variable naming follows fossil/src/delta.c for cross-reference:
-//   cnt = count, offset = source offset, cmd = command byte
+//
+//	cnt = count, offset = source offset, cmd = command byte
 func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 	if source == nil {
 		panic("delta.ApplyInto: source must not be nil")
@@ -234,7 +235,7 @@ func ApplyInto(dst, source, delta []byte) (result []byte, err error) {
 		}
 
 		switch cmd {
-			case '@':
+		case '@':
 			// Fossil delta format: count@offset, (first int = byte count, second = source offset)
 			offset, err := r.getInt()
 			if err != nil {
@@ -461,7 +462,8 @@ type hashEntry struct {
 
 // Create generates a delta that transforms source into target.
 // Variable naming follows fossil/src/delta.c for cross-reference:
-//   nHash = NHASH, ei = entry index, ml = match length, tPos = target position, sOff = source offset
+//
+//	nHash = NHASH, ei = entry index, ml = match length, tPos = target position, sOff = source offset
 //
 // It returns ErrTooLarge when source or target is 2^32 bytes or longer; the
 // caller then stores the target whole, as fossil does when a delta is not

@@ -24,11 +24,11 @@ type SyncObserver struct {
 	tracer trace.Tracer
 	meter  metric.Meter
 
-	sessionCounter metric.Int64Counter
-	roundCounter   metric.Int64Counter
+	sessionCounter  metric.Int64Counter
+	roundCounter    metric.Int64Counter
 	fileSentCounter metric.Int64Counter
 	fileRecvCounter metric.Int64Counter
-	errorCounter   metric.Int64Counter
+	errorCounter    metric.Int64Counter
 
 	mu          sync.Mutex
 	sessionSpan trace.Span

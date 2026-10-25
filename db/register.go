@@ -35,4 +35,3 @@ func RegisteredDriver() *DriverConfig {
 	cfg := *registered
 	return &cfg
 }
-

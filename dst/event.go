@@ -12,10 +12,10 @@ type NodeID string
 type EventType int
 
 const (
-	EvTimer     EventType = iota // leaf poll timer fired
-	EvSyncNow                    // manual sync trigger for a leaf
-	EvUVWrite                    // write a UV file to a node's repo
-	EvUVDelete                   // delete a UV file from a node's repo
+	EvTimer    EventType = iota // leaf poll timer fired
+	EvSyncNow                   // manual sync trigger for a leaf
+	EvUVWrite                   // write a UV file to a node's repo
+	EvUVDelete                  // delete a UV file from a node's repo
 )
 
 // Event is a scheduled occurrence in the simulation.
@@ -31,10 +31,10 @@ type Event struct {
 // EventQueue is a min-heap of events ordered by time.
 type EventQueue []*Event
 
-func (q EventQueue) Len() int            { return len(q) }
-func (q EventQueue) Less(i, j int) bool  { return q[i].Time.Before(q[j].Time) }
-func (q EventQueue) Swap(i, j int)       { q[i], q[j] = q[j], q[i] }
-func (q *EventQueue) Push(x any)         { *q = append(*q, x.(*Event)) }
+func (q EventQueue) Len() int           { return len(q) }
+func (q EventQueue) Less(i, j int) bool { return q[i].Time.Before(q[j].Time) }
+func (q EventQueue) Swap(i, j int)      { q[i], q[j] = q[j], q[i] }
+func (q *EventQueue) Push(x any)        { *q = append(*q, x.(*Event)) }
 func (q *EventQueue) Pop() any {
 	old := *q
 	n := len(old)

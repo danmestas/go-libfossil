@@ -12,7 +12,7 @@ type ActionType int
 
 const (
 	ActionNone   ActionType = iota
-	ActionSynced                   // a sync round was executed
+	ActionSynced            // a sync round was executed
 )
 
 // Action is the result of processing a single event via Tick.

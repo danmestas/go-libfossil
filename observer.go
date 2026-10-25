@@ -72,7 +72,7 @@ type TableSyncStart struct {
 
 // TableSyncEnd describes the completion of a config table sync.
 type TableSyncEnd struct {
-	Table              string
+	Table               string
 	RowsSent, RowsRecvd int
 }
 
@@ -118,29 +118,29 @@ type CommitEnd struct {
 
 type nopSyncObserver struct{}
 
-func (nopSyncObserver) Started(SessionStart)              {}
-func (nopSyncObserver) RoundStarted(int)                  {}
-func (nopSyncObserver) RoundCompleted(int, RoundStats)    {}
-func (nopSyncObserver) Completed(SessionEnd)              {}
-func (nopSyncObserver) Error(error)                       {}
-func (nopSyncObserver) HandleStarted(HandleStart)         {}
-func (nopSyncObserver) HandleCompleted(HandleEnd)         {}
-func (nopSyncObserver) TableSyncStarted(TableSyncStart)   {}
-func (nopSyncObserver) TableSyncCompleted(TableSyncEnd)   {}
+func (nopSyncObserver) Started(SessionStart)            {}
+func (nopSyncObserver) RoundStarted(int)                {}
+func (nopSyncObserver) RoundCompleted(int, RoundStats)  {}
+func (nopSyncObserver) Completed(SessionEnd)            {}
+func (nopSyncObserver) Error(error)                     {}
+func (nopSyncObserver) HandleStarted(HandleStart)       {}
+func (nopSyncObserver) HandleCompleted(HandleEnd)       {}
+func (nopSyncObserver) TableSyncStarted(TableSyncStart) {}
+func (nopSyncObserver) TableSyncCompleted(TableSyncEnd) {}
 
 // NopSyncObserver returns a SyncObserver that silently discards all events.
 func NopSyncObserver() SyncObserver { return nopSyncObserver{} }
 
 type nopCheckoutObserver struct{}
 
-func (nopCheckoutObserver) ExtractStarted(ExtractStart)            {}
+func (nopCheckoutObserver) ExtractStarted(ExtractStart)               {}
 func (nopCheckoutObserver) ExtractFileCompleted(string, UpdateChange) {}
-func (nopCheckoutObserver) ExtractCompleted(ExtractEnd)            {}
-func (nopCheckoutObserver) ScanStarted(string)                     {}
-func (nopCheckoutObserver) ScanCompleted(ScanEnd)                  {}
-func (nopCheckoutObserver) CommitStarted(CommitStart)              {}
-func (nopCheckoutObserver) CommitCompleted(CommitEnd)              {}
-func (nopCheckoutObserver) Error(error)                            {}
+func (nopCheckoutObserver) ExtractCompleted(ExtractEnd)               {}
+func (nopCheckoutObserver) ScanStarted(string)                        {}
+func (nopCheckoutObserver) ScanCompleted(ScanEnd)                     {}
+func (nopCheckoutObserver) CommitStarted(CommitStart)                 {}
+func (nopCheckoutObserver) CommitCompleted(CommitEnd)                 {}
+func (nopCheckoutObserver) Error(error)                               {}
 
 // NopCheckoutObserver returns a CheckoutObserver that silently discards all events.
 func NopCheckoutObserver() CheckoutObserver { return nopCheckoutObserver{} }

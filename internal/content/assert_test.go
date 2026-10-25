@@ -28,4 +28,3 @@ func TestIsPhantom_NilQuerier(t *testing.T) {
 	}()
 	IsPhantom(nil, 1)
 }
-

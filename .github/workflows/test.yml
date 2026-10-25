@@ -110,6 +110,14 @@ jobs:
         run: GOWORK=off go test ./dst/... -count=1 -timeout=300s
       - name: Driver tests (modernc)
         run: cd db/driver/modernc && GOWORK=off go test ./... -count=1
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            echo "run gofmt -w on the files above" >&2
+            exit 1
+          fi
       - name: Vet
         run: GOWORK=off go vet ./...
 

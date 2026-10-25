@@ -37,7 +37,7 @@ func TestXRowCardType(t *testing.T) {
 func TestSchemaCard_RoundTrip(t *testing.T) {
 	original := &SchemaCard{
 		Table: "peer_registry", Version: 1, Hash: "abc123",
-		MTime: 1711300000,
+		MTime:   1711300000,
 		Content: []byte(`{"columns":[{"name":"id","type":"text","pk":true}],"conflict":"self-write"}`),
 	}
 	var buf bytes.Buffer

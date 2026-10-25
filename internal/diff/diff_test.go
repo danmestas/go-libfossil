@@ -8,10 +8,10 @@ import (
 
 func TestSplitLines(t *testing.T) {
 	tests := []struct {
-		name         string
-		input        string
-		want         []string
-		wantHasNL    bool
+		name      string
+		input     string
+		want      []string
+		wantHasNL bool
 	}{
 		{"empty", "", nil, true},
 		{"single no newline", "hello", []string{"hello"}, false},
@@ -375,8 +375,8 @@ func TestUnifiedNoTrailingNewlineBoth(t *testing.T) {
 // TestNoNewlineMarker_WithToWithout: file ends with newline, new version does not.
 // Marker should appear on the + side only.
 func TestNoNewlineMarker_WithToWithout(t *testing.T) {
-	a := []byte("line1\nline2\n")   // ends with newline
-	b := []byte("line1\nchanged")   // no trailing newline
+	a := []byte("line1\nline2\n") // ends with newline
+	b := []byte("line1\nchanged") // no trailing newline
 	got := Unified(a, b, Options{ContextLines: 3, SrcName: "a/f", DstName: "b/f"})
 	const marker = "\\ No newline at end of file"
 	if !strings.Contains(got, marker) {

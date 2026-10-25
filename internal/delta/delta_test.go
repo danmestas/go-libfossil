@@ -202,8 +202,8 @@ func BenchmarkApply_LargeTarget(b *testing.B) {
 // much larger amount the full command sequence would have produced --
 // proof the bound is enforced during the loop, not after it.
 func TestApply_LoopBoundsAgainstTargetDuringCommands(t *testing.T) {
-	const copySize = 64 * 1024 // 64 KiB per copy command
-	const numCopies = 200      // 200 * 64 KiB = 12.5 MiB if left unbounded
+	const copySize = 64 * 1024        // 64 KiB per copy command
+	const numCopies = 200             // 200 * 64 KiB = 12.5 MiB if left unbounded
 	const declaredTarget = 100 * 1024 // 100 KiB: two copies' worth
 
 	source := bytes.Repeat([]byte("x"), copySize)

@@ -71,7 +71,7 @@ Before it holds a seed, signed or not, a clone checks it (§5.2.4):
 
 A seed that fails either check is refused as a wrongly signed one: the clone falls back to the content horizon, completes, and reports `HorizonFallback`; later pulls keep the content horizon. A deepen discards the held seed first, so the floor starts again at the new C. A held seed that is no longer bound to the store's horizon is discarded when it is next applied, as one that fails its signature is. A seed held by v0.15.0, which carried no binding card, is replaced on the first pull from an origin that binds its seeds; a rebuild before that discards it, and the next pull fetches a bound one.
 
-zit 0.7.1 writes and checks the same card. zit 0.7.2 dates its seeds from the repository's latest tag event too, so the two implementations' seeds for one repository are byte-identical up to the U card; interop is tested against zit 0.7.2. Against zit 0.7.1 they still are wherever no tag has been cancelled.
+zit 0.7.1 writes and checks the same card. zit 0.7.2 dates its seeds from the repository's latest tag event too, and zit 0.7.3 keeps the same minted floor, so the two implementations' seeds for one repository are byte-identical up to the U card; interop is tested against zit 0.7.3. Against zit 0.7.2 they still are unless a shun has removed the latest tag events, and against zit 0.7.1 wherever no tag has been cancelled.
 
 ## Signed seeds
 

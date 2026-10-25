@@ -57,9 +57,9 @@ partition basis, with fetch or explicit refusal when necessary nodes are
 absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
-`39546186f4` (2026-10-24), which no zit release carries yet; the interop
-tests stay pinned to zit 0.7.2, whose seeds are the same bytes unless a
-shun has removed the latest tag events. At that check-in the sparse-cone,
+`39546186f4` (2026-10-24), which zit 0.7.3 (`version-0.7.3`, check-in
+`f18e3cc041`) carries; the interop tests are pinned to zit 0.7.3. At that
+check-in the sparse-cone,
 sub-manifest, repo-state and delta-format drafts are byte-identical to the
 copies here; the artifact-format and sync-protocol drafts differ and stay
 pinned at their own check-ins. Against the `caeef421ee` copy (zit 0.7.2)

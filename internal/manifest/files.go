@@ -29,7 +29,7 @@ func ListFiles(r *repo.Repo, rid libfossil.FslID) ([]FileEntry, error) {
 // listing many overlapping revisions, such as annotate walking one file's
 // history; see GetManifestCached.
 func ListFilesCached(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) ([]FileEntry, error) {
-	d, err := GetManifestCached(r, rid, cache)
+	d, err := checkinManifest(r, rid, cache)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFiles: %w", err)
 	}
@@ -262,7 +262,7 @@ func LookupFileCached(
 	if name == "" {
 		panic("manifest.LookupFile: name must not be empty")
 	}
-	d, err := GetManifestCached(r, rid, cache)
+	d, err := checkinManifest(r, rid, cache)
 	if err != nil {
 		return FileEntry{}, false, fmt.Errorf("manifest.LookupFile: %w", err)
 	}

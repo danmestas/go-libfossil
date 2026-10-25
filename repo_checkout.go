@@ -222,7 +222,7 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 
 // ListFiles returns the files in a manifest identified by blob row-id.
 func (r *Repo) ListFiles(rid int64) ([]FileEntry, error) {
-	entries, err := manifest.ListFiles(r.inner, fsltype.FslID(rid))
+	entries, err := manifest.ListFilesCached(r.inner, fsltype.FslID(rid), r.liveCache())
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: list files: %w", err)
 	}

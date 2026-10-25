@@ -40,6 +40,10 @@ type Options struct {
 	StartRID  libfossil.FslID // checkin to start from (tip)
 	Limit     int             // max ancestors to walk (0 = unlimited)
 	OriginRID libfossil.FslID // stop at this checkin (0 = none)
+	// Cache, when set, serves the walk in place of the one Annotate makes
+	// for itself, so a caller's longer-lived cache carries over between
+	// calls. The caller keeps its entries current.
+	Cache *content.Cache
 }
 
 // Annotate attributes each line of a file to the commit that last changed it.
@@ -66,7 +70,10 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 	// next older revision truncates its walk one link back -- O(revisions).
 	// Blob content is immutable and the repo is only read here, so no entry
 	// this loop caches can go stale; the cache is dropped when Annotate returns.
-	cache := content.NewCache(annotateCacheBytes)
+	cache := opts.Cache
+	if cache == nil {
+		cache = content.NewCache(annotateCacheBytes)
+	}
 
 	fileContent, err := loadFileAt(r, opts.StartRID, opts.FilePath, cache)
 	if err != nil {

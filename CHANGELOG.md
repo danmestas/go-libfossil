@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Create` with an empty `CreateOpts.User` panicked with `db.SeedUser: login
+  must not be empty` whenever `USER` was unset in the environment, as it is
+  in many containers and CI runners. The default login is now chosen as
+  fossil(1)'s `db_initial_setup` chooses it: the first of `USER`, `LOGNAME`
+  and `USERNAME` that is set, else `root`.
+
 - An origin dates a seed no earlier than the latest D it has minted
   (horizon §5.2.2; tracked in #483). Shunning and purging the latest tag
   removed the rows D was dated from, so the next seed was earlier than the

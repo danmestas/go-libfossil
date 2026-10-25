@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Repo.ListFilesIn` lists a check-in's files narrowed to a `Cone`; a nil cone
+  lists every file. The cone is applied at the enumeration seam the sparse-cone
+  draft requires (§4.1), so the result is `ListFiles` filtered by `Cone.Covers`
+  on flat and tree manifests alike. On a tree it skips every sub-manifest the
+  cone cannot reach, so the cost follows the cone plus the spine (§4.5), and
+  over a sparse store it succeeds where `ListFiles` fails on an elided node. It
+  reads through the cache `SetContentCache` attaches (tracked in #491).
 - `Repo.ReadBlob` reads one artifact by its full hash, such as a UUID
   `ListFiles` reports, without looking the path up in a check-in manifest. It
   applies the availability check `ReadFile` does, so content elided below a

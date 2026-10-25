@@ -56,17 +56,25 @@ type FileFilter interface {
 // covered part and the spine rather than the whole tree (§1.3, §4.5), and a
 // skipped node need not be held at all.
 func ListFilesFiltered(r *repo.Repo, rid libfossil.FslID, filter FileFilter) ([]FileEntry, error) {
+	return ListFilesFilteredCached(r, rid, filter, nil)
+}
+
+// ListFilesFilteredCached is ListFilesFiltered reading through cache, which
+// may be nil; see ListFilesCached.
+func ListFilesFilteredCached(
+	r *repo.Repo, rid libfossil.FslID, filter FileFilter, cache *content.Cache,
+) ([]FileEntry, error) {
 	if filter == nil {
-		return ListFiles(r, rid)
+		return ListFilesCached(r, rid, cache)
 	}
-	d, err := GetManifestCached(r, rid, nil)
+	d, err := GetManifestCached(r, rid, cache)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
 	}
 	if d.Type == deck.Submanifest {
 		return nil, fmt.Errorf("manifest.ListFilesFiltered: a sub-manifest is a slice of a check-in, not a check-in")
 	}
-	cards, err := checkinFileCardsFiltered(r.DB(), nil, d, filter)
+	cards, err := checkinFileCardsFiltered(r.DB(), cache, d, filter)
 	if err != nil {
 		return nil, fmt.Errorf("manifest.ListFilesFiltered: %w", err)
 	}

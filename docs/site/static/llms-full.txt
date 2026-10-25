@@ -1106,6 +1106,14 @@ n, err := repo.CompactStore(ctx)
 
 `SetStoreCone` moves no content. Widening makes the newly covered elided artifacts wanted again, and the next pull fetches them. `SetStoreConeContext` does the pull itself through an ordinary cone-scoped sync. With artifacts to fetch and no `Peer`, it refuses, names the count, and leaves the cone unchanged. If the transfer fails after the cone is replaced, the wider policy stays and the next pull heals it. While a store cone is set, a commit carries no R card. `CompactStore` on a dense store fails with `ErrNoStoreCone`.
 
+### List a check-in's files in a cone
+
+```go
+files, err := repo.ListFilesIn(rid, cone)
+```
+
+`ListFilesIn` returns what `ListFiles` returns, narrowed to the files the cone covers. A nil cone lists everything. On a tree manifest it skips every sub-manifest the cone cannot reach, so it costs the cone plus the path down to it, not the whole tree (§4.5). Over a sparse store it is the listing to use: `ListFiles` walks the whole tree and fails on the first elided node, while `ListFilesIn` never asks for one outside its cone. A cone that reaches a node the store does not hold still fails.
+
 ## Command line
 
 ### Open a sparse checkout

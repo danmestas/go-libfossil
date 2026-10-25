@@ -16,6 +16,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/leaf"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/seedcheck"
@@ -326,10 +327,15 @@ func storeFileBlobs(tx *db.Tx, files []File, storeCone *cone.Cone) ([]deck.FileC
 // reads its content, and a check-in naming content its writer lacks would
 // be committed blind. The exception is a file the store cone leaves out,
 // whose content a sparse store deliberately lacks: §5.3 references it by
-// hash without possession, and the check-in carries no R card.
+// hash without possession, and the check-in carries no R card. The UUID
+// must be a lowercase artifact hash: an elided file skips the store lookup,
+// so the hash's shape is all that keeps caller text out of the F card.
 func checkCarried(tx *db.Tx, f File, storeCone *cone.Cone) (libfossil.FslID, bool, error) {
 	if f.Content != nil {
 		panic("manifest.checkCarried: a carried file has content: " + f.Name)
+	}
+	if !hash.IsValidHash(f.UUID) {
+		return 0, false, fmt.Errorf("carried file %q: %q is not an artifact hash", f.Name, f.UUID)
 	}
 	rid, held, err := content.CheckAvailableByUUID(tx, f.UUID)
 	if err != nil {

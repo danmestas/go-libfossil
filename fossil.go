@@ -42,7 +42,7 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 	}
 	user := opts.User
 	if user == "" {
-		user = os.Getenv("USER")
+		user = defaultLogin()
 	}
 	rng := opts.Rand
 	if rng == nil {
@@ -53,6 +53,23 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 		return nil, fmt.Errorf("libfossil: create: %w", err)
 	}
 	return &Repo{inner: inner, path: path}, nil
+}
+
+// defaultLogin is the admin login a new repository seeds when CreateOpts.User
+// is empty, chosen as fossil(1)'s db_create_default_users chooses it: the
+// first of FOSSIL_USER, USER, LOGNAME and USERNAME that is set, else "root".
+// Fossil consults its global default-user setting first; a library has no
+// global config, so that step is skipped. A variable set to the empty string
+// counts as unset. The result is never empty, so a process with no user in
+// its environment, as a container or a CI runner often is, still creates a
+// repository instead of failing on an empty login.
+func defaultLogin() string {
+	for _, name := range []string{"FOSSIL_USER", "USER", "LOGNAME", "USERNAME"} {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return "root"
 }
 
 func isDir(path string) bool {

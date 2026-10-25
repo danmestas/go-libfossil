@@ -1,8 +1,7 @@
 # Requirements of draft-fossil-submanifests-00, written from the draft text,
 # reader and writer. Skipped, with reasons, in the suite's report: 5.6 and
 # 6.5 (informative), 8.2 (an operator rule for provisional repositories, not
-# observable in a library) and 11 (IANA). Not implemented: the 7.4 SHOULD
-# (memoized sub-manifest enumeration). The writer's construction is checked
+# observable in a library) and 11 (IANA). The writer's construction is checked
 # byte for byte against the Appendix A artifacts and against check-ins zit
 # wrote (testdata/zit-writer, replayed without zit in CI).
 # The draft is pinned with the 2026-10-19 errata applied: 7.2's capability
@@ -84,6 +83,7 @@ SM-7.2-3	7.2	A client that received avoid-submanifests emits no S card in a comm
 SM-7.2-4	7.2	A peer that reads sub-manifests sends pragma send-submanifests: a client in every request, right after client-version, and a server in every reply, clone replies included, right after server-version, whatever the enable-submanifests setting and the avoid-submanifests pragma; the version it announces is the fossil release whose protocol it speaks.
 SM-7.3-1	7.3	Crosslinking a tree manifest uses its full enumeration wherever a flat manifest's F cards are used, and an absent sub-manifest defers it as an absent baseline defers a delta.
 SM-7.3-2	7.3	A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.
+SM-7.4-1	7.4	Sub-manifest enumeration results are cached by artifact name, so a reader parses each distinct sub-manifest once and a tree that shares all but one leaf with one already read parses only its manifest and that leaf.
 SM-8.1-1	8.1	A writer emits no S card unless the enable-submanifests setting is true, which is false by default.
 SM-8.1-2	8.1	When the first S-bearing artifact is stored, a seen-submanifest indicator is recorded.
 SM-8.1-3	8.1	A local request to enable emission keeps a valid pin and refuses a different explicit k; a stored k outside 1 to 12 refuses a request without an explicit k, naming the stored value, and is replaced by an explicit k from 1 to 12; with no stored k it pins an explicit k from 1 to 12, refuses one outside, or selects one automatically; a request that cannot be met changes neither setting.

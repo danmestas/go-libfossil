@@ -74,9 +74,25 @@ type subtreeLoader struct {
 	resolved int
 }
 
+// nodeKey is the memo key of a parsed sub-manifest: its artifact name, which
+// §7.4 says enumeration results SHOULD be cached under ("keyed by artifact
+// name: unchanged subtrees are shared by hash across check-ins, so a
+// memoizing rebuild parses each distinct sub-manifest once").
+type nodeKey string
+
+// parsedNode is a resolved sub-manifest as the memo keeps it.
+type parsedNode struct {
+	d   *deck.Deck
+	rid libfossil.FslID
+}
+
 // load resolves uuid to an available artifact of type SUBMANIFEST (§5.2):
 // absent is a Missing SubmanifestError, anything else that is not a
-// sub-manifest is a fault of the referencing tree.
+// sub-manifest is a fault of the referencing tree. A resolved node is served
+// from, and kept in, the cache's sized memo, charged its bytes. Only a node
+// that resolved is kept, so an absent one is looked up afresh each time; and
+// content is only ever added while a cache lives (the Repo's is replaced at
+// every write), so a node available once stays available.
 func (l *subtreeLoader) load(uuid string) (*deck.Deck, libfossil.FslID, error) {
 	if uuid == "" {
 		panic("manifest.subtreeLoader.load: uuid must not be empty")
@@ -85,6 +101,10 @@ func (l *subtreeLoader) load(uuid string) (*deck.Deck, libfossil.FslID, error) {
 		return nil, 0, treeFault(uuid, "the tree resolves more than %d sub-manifests", maxTreeNodes)
 	}
 	l.resolved++
+	if v, ok := l.cache.DerivedSized(nodeKey(uuid)); ok {
+		n := v.(parsedNode)
+		return n.d, n.rid, nil
+	}
 	rid, ok := content.AvailableByUUID(l.q, uuid)
 	if !ok {
 		return nil, 0, &SubmanifestError{UUID: uuid, Missing: true}
@@ -100,6 +120,7 @@ func (l *subtreeLoader) load(uuid string) (*deck.Deck, libfossil.FslID, error) {
 	if d.Type != deck.Submanifest {
 		return nil, 0, treeFault(uuid, "not a sub-manifest")
 	}
+	l.cache.SetDerivedSized(nodeKey(uuid), parsedNode{d: d, rid: rid}, int64(len(data)))
 	return d, rid, nil
 }
 

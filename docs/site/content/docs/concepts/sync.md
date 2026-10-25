@@ -83,7 +83,7 @@ sr, err := repo.Sync(ctx, t, libfossil.SyncOpts{
 })
 ```
 
-`Transport` is one method, `RoundTrip(ctx, payload) ([]byte, error)`, so any byte pipe works. `NewHTTPTransport` takes `WithHTTPClient` for a custom `http.Client`. `Repo.Pull(ctx, url, PullOpts{})` is a pull-only shortcut over HTTP.
+`Transport` is one method, `RoundTrip(ctx, payload) ([]byte, error)`, so any byte pipe works. `NewHTTPTransport` takes `WithHTTPClient` for a custom `http.Client`. A transport that also implements `OriginNamer` (`SyncOrigin() string`) keeps the horizon cursor for that peer; see [Horizons](/docs/concepts/horizons/). `Repo.Pull(ctx, url, PullOpts{})` is a pull-only shortcut over HTTP.
 
 `SyncOpts` also turns on unversioned files (`UV`), private artifacts (`Private`, §7.5), fossil's `--share-links` (`ShareLinks`, §9.5) and go-libfossil's own table sync (`XTableSync`). `SyncResult` reports rounds, files and bytes each way, and errors.
 

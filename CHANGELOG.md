@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Repo.ReadBlob` reads one artifact by its full hash, such as a UUID
+  `ListFiles` reports, without looking the path up in a check-in manifest. It
+  applies the availability check `ReadFile` does, so content elided below a
+  horizon or outside a cone fails the same way, and a hash the repository does
+  not know returns `ErrArtifactNotFound` (tracked in #492).
+- `Repo.SetContentCache` attaches a cache of expanded content, bounded in
+  bytes, that `ReadFile`, `ReadFileAt`, `ReadBlob`, `ListFiles`, `Diff` and
+  `Annotate` share, so reads at one check-in parse its manifest once and do not
+  replay delta chains already expanded. It is off by default. Any write through
+  the `Repo` empties it, which is what keeps a purged, compacted or elided
+  artifact from being served from it; a write by another process is not seen.
+  `db.DB.Writes` is the finished-write count that rule reads (tracked in #492).
 - `FileToCommit.UUID` carries a file into a check-in by the hash the
   repository already holds, with no content: the F card names it verbatim and
   nothing is read or stored. A caller that lists a parent's files can now

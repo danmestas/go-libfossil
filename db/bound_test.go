@@ -105,6 +105,45 @@ func TestWithBoundTxNestedIsSavepoint(t *testing.T) {
 	}
 }
 
+// Writes counts a write once it has finished, so a reader that sees the count
+// unchanged knows no write of this DB landed in between: a pool Exec counts
+// when it returns, a transaction only when it ends, and a read counts nothing.
+func TestWritesCountsFinishedWrites(t *testing.T) {
+	d := openBoundTestDB(t)
+	before := d.Writes()
+	if _, err := d.Exec("INSERT INTO t VALUES(1)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Writes() - before; got != 1 {
+		t.Fatalf("after a pool Exec writes = %d, want 1", got)
+	}
+	err := d.WithBoundTx(func(b *db.DB) error {
+		if _, err := b.Exec("INSERT INTO t VALUES(2)"); err != nil {
+			return err
+		}
+		if got := d.Writes() - before; got != 1 {
+			t.Errorf("inside an open transaction writes = %d, want 1", got)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Writes() - before; got != 2 {
+		t.Fatalf("after a transaction writes = %d, want 2", got)
+	}
+	_ = d.WithTx(func(*db.Tx) error { return errors.New("roll back") })
+	if got := d.Writes() - before; got != 3 {
+		t.Fatalf("after a rolled-back transaction writes = %d, want 3", got)
+	}
+	if err := d.WithReadTx(func(tx *db.Tx) error { countRows(t, tx); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.Writes() - before; got != 3 {
+		t.Fatalf("a read transaction counted: writes = %d, want 3", got)
+	}
+}
+
 func TestWithBoundTxMisusePanics(t *testing.T) {
 	d := openBoundTestDB(t)
 	var kept *db.DB

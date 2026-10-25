@@ -5979,6 +5979,7 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) OpenCheckout\(dir string, opts CheckoutOpenOpts\) \(\*Checkout, error\)](<#Repo.OpenCheckout>)
   - [func \(r \*Repo\) Path\(\) string](<#Repo.Path>)
   - [func \(r \*Repo\) Pull\(ctx context.Context, url string, opts PullOpts\) \(\*SyncResult, error\)](<#Repo.Pull>)
+  - [func \(r \*Repo\) ReadBlob\(uuid string\) \(\[\]byte, error\)](<#Repo.ReadBlob>)
   - [func \(r \*Repo\) ReadFile\(rid int64, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFile>)
   - [func \(r \*Repo\) ReadFileAt\(version string, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFileAt>)
   - [func \(r \*Repo\) Redo\(dir string\) error](<#Repo.Redo>)
@@ -5989,6 +5990,7 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) ServeHTTP\(ctx context.Context, addr string\) error](<#Repo.ServeHTTP>)
   - [func \(r \*Repo\) SetCaps\(login, caps string\) error](<#Repo.SetCaps>)
   - [func \(r \*Repo\) SetConfig\(key, value string\) error](<#Repo.SetConfig>)
+  - [func \(r \*Repo\) SetContentCache\(bytes int64\)](<#Repo.SetContentCache>)
   - [func \(r \*Repo\) SetHashPolicy\(name string\) error](<#Repo.SetHashPolicy>)
   - [func \(r \*Repo\) SetPassword\(login, password string\) error](<#Repo.SetPassword>)
   - [func \(r \*Repo\) StashApply\(dir string, id int64\) error](<#Repo.StashApply>)
@@ -6070,7 +6072,7 @@ const (
 var ErrAmbiguousVersion = errors.New("libfossil: ambiguous version prefix")
 ```
 
-<a name="ErrArtifactNotFound"></a>ErrArtifactNotFound is returned by UUIDFromRID when the given RID does not correspond to any artifact in the repository's blob table. Callers can match with errors.Is.
+<a name="ErrArtifactNotFound"></a>ErrArtifactNotFound is returned by UUIDFromRID when the given RID does not correspond to any artifact in the repository's blob table, and by ReadBlob for a hash the blob table does not name. Callers can match with errors.Is.
 
 ```go
 var ErrArtifactNotFound = errors.New("libfossil: artifact not found")
@@ -7357,6 +7359,15 @@ Pull fetches commits and ancillary objects from a Fossil HTTP peer and applies t
 
 Tiger Style: hostile inputs panic via assert at the boundary; transport failures return wrapped errors. Idempotent on a repo already at peer's tip \(returns a SyncResult with Rounds=0–1 and FilesRecvd=0\).
 
+<a name="Repo.ReadBlob"></a>
+### func \(\*Repo\) [ReadBlob](<https://github.com/danmestas/go-libfossil/blob/main/repo_content_cache.go#L79>)
+
+```go
+func (r *Repo) ReadBlob(uuid string) ([]byte, error)
+```
+
+ReadBlob returns the content of the artifact named uuid, a full SHA1 or SHA3\-256 hash in lowercase hex, such as the UUID ListFiles reports for a file. An unknown hash returns ErrArtifactNotFound \(wrapped\). An artifact the store knows but does not hold, such as one elided below a horizon or outside a sparse cone, fails as ReadFile of a path naming it does.
+
 <a name="Repo.ReadFile"></a>
 ### func \(\*Repo\) [ReadFile](<https://github.com/danmestas/go-libfossil/blob/main/repo_history.go#L243>)
 
@@ -7465,6 +7476,17 @@ func (r *Repo) SetConfig(key, value string) error
 ```
 
 SetConfig writes a configuration value to the repo's config table.
+
+<a name="Repo.SetContentCache"></a>
+### func \(\*Repo\) [SetContentCache](<https://github.com/danmestas/go-libfossil/blob/main/repo_content_cache.go#L39>)
+
+```go
+func (r *Repo) SetContentCache(bytes int64)
+```
+
+SetContentCache attaches a cache of expanded artifact content, bounded by bytes, that ReadFile, ReadFileAt, ReadBlob, ListFiles, Diff and Annotate share. It replaces any cache already attached; bytes \<= 0 detaches it. The default is no cache. It is safe to call while other goroutines read.
+
+The bound covers expanded content; the parses of the few check\-in manifests read most recently are kept beside it. Any write through this Repo empties the cache. A write by another process, or through another Repo opened on the same file, does not: attach a cache only where this Repo is the store's one writer, or where no other writer purges, compacts or narrows it.
 
 <a name="Repo.SetHashPolicy"></a>
 ### func \(\*Repo\) [SetHashPolicy](<https://github.com/danmestas/go-libfossil/blob/main/repo_admin.go#L94>)

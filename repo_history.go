@@ -11,7 +11,6 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/annotate"
-	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/diff"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -125,6 +124,7 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
 	lines, err := annotate.Annotate(r.inner, annotate.Options{
 		FilePath: opts.FilePath,
 		StartRID: fsltype.FslID(opts.StartRID),
+		Cache:    r.liveCache(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: annotate: %w", err)
@@ -852,24 +852,21 @@ func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error) {
 // A checkin that does not contain filePath returns (nil, nil); callers treat
 // that as "empty side" for diff purposes. Errors surface only for real I/O
 // or consistency problems (unknown RID, missing blob for a listed UUID).
+//
+// The manifest and the blob go through the repository's content cache when
+// SetContentCache attached one, and are expanded afresh otherwise: one Diff
+// reads each side once, so only a caller making many reads gains from it.
 func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
 	if filePath == "" {
 		return nil, nil
 	}
-	f, found, err := manifest.LookupFile(r.inner, fsltype.FslID(checkinRID), filePath)
+	cache := r.liveCache()
+	f, found, err := manifest.LookupFileCached(r.inner, fsltype.FslID(checkinRID), filePath, cache)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, nil
 	}
-	rid, err := content.RequireAvailableByUUID(r.DB(), f.UUID)
-	if err != nil {
-		return nil, err
-	}
-	// Bare Expand: Diff is pairwise (two named checkins), not a walk over a
-	// file's whole history, so each side's blob is expanded once. There is
-	// no deep overlapping delta chain here for content.Cache to amortize --
-	// that pattern lives in annotate, which is cached.
-	return content.Expand(r.DB(), rid)
+	return readHeld(r, cache, f.UUID)
 }

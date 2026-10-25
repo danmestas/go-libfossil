@@ -1,6 +1,8 @@
 package libfossil
 
 import (
+	"sync/atomic"
+
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/repo"
 )
@@ -9,6 +11,8 @@ import (
 type Repo struct {
 	inner *repo.Repo
 	path  string
+	// cache is the content cache SetContentCache attached, nil when off.
+	cache atomic.Pointer[contentCache]
 }
 
 // CheckpointMode mirrors SQLite's PRAGMA wal_checkpoint(<mode>) argument.

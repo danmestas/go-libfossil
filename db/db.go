@@ -53,6 +53,7 @@ type DB struct {
 	stmts     stmtCache
 	poolExecs atomic.Int64
 	writeTxns atomic.Int64
+	writes    atomic.Int64
 	// root is set on a DB that WithBoundTx hands its callback: the pool's own
 	// DB, which keeps the counters. bound is the transaction every statement
 	// on it runs in, nil once that transaction has ended.
@@ -349,11 +350,28 @@ func (d *DB) WriteTxns() int64 {
 	return d.writeTxns.Load()
 }
 
+// Writes counts writes of this DB that have finished: pool Exec calls that
+// returned and WithTx transactions that ended, committed or not. A reader
+// that keeps what it read across calls compares two counts to learn whether a
+// write may have landed in between; counting at the end, not the start, is
+// what makes an unchanged count mean that. A write through another handle on
+// the same file, in this process or another, is not counted.
+func (d *DB) Writes() int64 {
+	if d == nil {
+		panic("db.Writes: receiver must not be nil")
+	}
+	if d.root != nil {
+		return d.root.Writes()
+	}
+	return d.writes.Load()
+}
+
 func (d *DB) Exec(query string, args ...any) (sql.Result, error) {
 	if tx := d.boundTx(); tx != nil {
 		return tx.Exec(query, args...)
 	}
 	d.poolExecs.Add(1)
+	defer d.writes.Add(1)
 	if !cacheableStmt(query) {
 		return d.conn.Exec(query, args...)
 	}
@@ -479,6 +497,7 @@ func (d *DB) WithTx(fn func(tx *Tx) error) error {
 		return tx.withSavepoint(fn)
 	}
 	d.writeTxns.Add(1)
+	defer d.writes.Add(1)
 	sqlTx, err := d.conn.Begin()
 	if err != nil {
 		return fmt.Errorf("db.WithTx begin: %w", err)

@@ -8,6 +8,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/repo"
 )
 
 // A sweep reads each check-in as a child, again as its child's parent, and
@@ -48,6 +49,22 @@ func parseManifestAt(q db.Querier, cache *content.Cache, rid libfossil.FslID) (*
 	d, err := deck.Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse manifest rid=%d: %w", rid, err)
+	}
+	rememberCheckin(cache, rid, d)
+	return d, nil
+}
+
+// checkinManifest is GetManifestCached for a reader of a check-in's file set,
+// which only reads the deck: a check-in's parse is served from, and kept in,
+// cache's derived memo, so reads of several names at one check-in parse its
+// manifest once. A nil cache is exactly GetManifestCached.
+func checkinManifest(r *repo.Repo, rid libfossil.FslID, cache *content.Cache) (*deck.Deck, error) {
+	if v, ok := cache.Derived(parsedKey(rid)); ok {
+		return v.(*deck.Deck), nil
+	}
+	d, err := GetManifestCached(r, rid, cache)
+	if err != nil {
+		return nil, err
 	}
 	rememberCheckin(cache, rid, d)
 	return d, nil

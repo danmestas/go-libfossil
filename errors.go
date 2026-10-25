@@ -83,6 +83,6 @@ var ErrVersionNotFound = errors.New("libfossil: version not found")
 var ErrAmbiguousVersion = errors.New("libfossil: ambiguous version prefix")
 
 // ErrArtifactNotFound is returned by UUIDFromRID when the given RID does not
-// correspond to any artifact in the repository's blob table. Callers can
-// match with errors.Is.
+// correspond to any artifact in the repository's blob table, and by ReadBlob
+// for a hash the blob table does not name. Callers can match with errors.Is.
 var ErrArtifactNotFound = errors.New("libfossil: artifact not found")

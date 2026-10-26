@@ -24,15 +24,19 @@ The [Querier](<#Querier>) interface \(Exec, QueryRow, Query\) is satisfied by bo
 
 ## Index
 
+- [Constants](<#constants>)
 - [func CreateRepoSchema\(d \*DB\) error](<#CreateRepoSchema>)
 - [func DefaultPragmas\(\) map\[string\]string](<#DefaultPragmas>)
 - [func OpenSQL\(path string, cfg OpenConfig, params map\[string\]string\) \(\*sql.DB, error\)](<#OpenSQL>)
+- [func ReceiptID\(q Querier\) \(int64, error\)](<#ReceiptID>)
 - [func Register\(cfg DriverConfig\)](<#Register>)
 - [func SQLDriverAndDSN\(path string, cfg OpenConfig, params map\[string\]string\) \(string, string\)](<#SQLDriverAndDSN>)
 - [func ScanInt\(v any\) \(int, bool\)](<#ScanInt>)
 - [func ScanJulianDay\(v any\) \(float64, bool\)](<#ScanJulianDay>)
+- [func ScanTextJulianDay\(v any\) \(float64, bool\)](<#ScanTextJulianDay>)
 - [func ScanTime\(v any\) \(time.Time, bool\)](<#ScanTime>)
 - [func SeedConfig\(d \*DB, rng simio.Rand, projectCode string\) error](<#SeedConfig>)
+- [func SeedDefaultUsers\(d \*DB, rng simio.Rand\) error](<#SeedDefaultUsers>)
 - [func SeedNobody\(d \*DB, caps string\) error](<#SeedNobody>)
 - [func SeedUser\(d \*DB, login string\) error](<#SeedUser>)
 - [type CheckpointMode](<#CheckpointMode>)
@@ -41,28 +45,55 @@ The [Querier](<#Querier>) interface \(Exec, QueryRow, Query\) is satisfied by bo
   - [func Open\(path string\) \(\*DB, error\)](<#Open>)
   - [func OpenWith\(path string, cfg OpenConfig\) \(\*DB, error\)](<#OpenWith>)
   - [func \(d \*DB\) ApplicationID\(\) \(int32, error\)](<#DB.ApplicationID>)
+  - [func \(d \*DB\) Bound\(\) bool](<#DB.Bound>)
   - [func \(d \*DB\) Checkpoint\(mode CheckpointMode\) error](<#DB.Checkpoint>)
   - [func \(d \*DB\) Close\(\) error](<#DB.Close>)
   - [func \(d \*DB\) Driver\(\) string](<#DB.Driver>)
   - [func \(d \*DB\) Exec\(query string, args ...any\) \(sql.Result, error\)](<#DB.Exec>)
   - [func \(d \*DB\) Path\(\) string](<#DB.Path>)
+  - [func \(d \*DB\) PoolExecs\(\) int64](<#DB.PoolExecs>)
   - [func \(d \*DB\) Query\(query string, args ...any\) \(\*sql.Rows, error\)](<#DB.Query>)
   - [func \(d \*DB\) QueryRow\(query string, args ...any\) \*sql.Row](<#DB.QueryRow>)
   - [func \(d \*DB\) SetApplicationID\(id int32\) error](<#DB.SetApplicationID>)
   - [func \(d \*DB\) SqlDB\(\) \*sql.DB](<#DB.SqlDB>)
+  - [func \(d \*DB\) UseReceipt\(rc \*Receipt\) \*Receipt](<#DB.UseReceipt>)
+  - [func \(d \*DB\) WithBoundReadTx\(fn func\(bound \*DB\) error\) error](<#DB.WithBoundReadTx>)
+  - [func \(d \*DB\) WithBoundTx\(fn func\(bound \*DB\) error\) error](<#DB.WithBoundTx>)
+  - [func \(d \*DB\) WithReadTx\(fn func\(tx \*Tx\) error\) error](<#DB.WithReadTx>)
   - [func \(d \*DB\) WithTx\(fn func\(tx \*Tx\) error\) error](<#DB.WithTx>)
+  - [func \(d \*DB\) WriteTxns\(\) int64](<#DB.WriteTxns>)
+  - [func \(d \*DB\) Writes\(\) int64](<#DB.Writes>)
 - [type DriverConfig](<#DriverConfig>)
   - [func RegisteredDriver\(\) \*DriverConfig](<#RegisteredDriver>)
 - [type OpenConfig](<#OpenConfig>)
 - [type Querier](<#Querier>)
+- [type Receipt](<#Receipt>)
+  - [func \(rc \*Receipt\) ID\(q Querier\) \(int64, error\)](<#Receipt.ID>)
 - [type Tx](<#Tx>)
   - [func \(t \*Tx\) Exec\(query string, args ...any\) \(sql.Result, error\)](<#Tx.Exec>)
   - [func \(t \*Tx\) Query\(query string, args ...any\) \(\*sql.Rows, error\)](<#Tx.Query>)
   - [func \(t \*Tx\) QueryRow\(query string, args ...any\) \*sql.Row](<#Tx.QueryRow>)
+  - [func \(t \*Tx\) UseReceipt\(rc \*Receipt\) \*Receipt](<#Tx.UseReceipt>)
 
+
+## Constants
+
+<a name="HashPolicySHA1"></a>Fossil's hash\-policy config values, in Fossil's own order \(see \`fossil help hash\-policy\`\). The row holds the integer as text.
+
+Naming follows from the value: SHA1 below HashPolicySHA3, SHA3 at or above it, except HashPolicyAuto, which names with SHA1 until a SHA3 artifact enters the repo. From HashPolicySHA3Only up, an artifact already stored under a legacy SHA1 name is not reused.
+
+```go
+const (
+    HashPolicySHA1     = 0
+    HashPolicyAuto     = 1
+    HashPolicySHA3     = 2
+    HashPolicySHA3Only = 3
+    HashPolicyShunSHA1 = 4
+)
+```
 
 <a name="CreateRepoSchema"></a>
-## func [CreateRepoSchema](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L220>)
+## func CreateRepoSchema
 
 ```go
 func CreateRepoSchema(d *DB) error
@@ -71,7 +102,7 @@ func CreateRepoSchema(d *DB) error
 
 
 <a name="DefaultPragmas"></a>
-## func [DefaultPragmas](<https://github.com/danmestas/go-libfossil/blob/main/db/config.go#L10>)
+## func DefaultPragmas
 
 ```go
 func DefaultPragmas() map[string]string
@@ -80,7 +111,7 @@ func DefaultPragmas() map[string]string
 DefaultPragmas returns the default pragma settings.
 
 <a name="OpenSQL"></a>
-## func [OpenSQL](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L60>)
+## func OpenSQL
 
 ```go
 func OpenSQL(path string, cfg OpenConfig, params map[string]string) (*sql.DB, error)
@@ -88,8 +119,17 @@ func OpenSQL(path string, cfg OpenConfig, params map[string]string) (*sql.DB, er
 
 OpenSQL opens a raw \*sql.DB using the registered driver and the same DSN construction as OpenWith. params are appended as URI query parameters after driver pragmas, so callers can request options such as mode=ro without constructing driver\-specific DSNs.
 
+<a name="ReceiptID"></a>
+## func ReceiptID
+
+```go
+func ReceiptID(q Querier) (int64, error)
+```
+
+ReceiptID returns the rcvid content stored through q is recorded under: the receipt of q's transaction, which is the one given by UseReceipt or, when none was, one made for that transaction alone. Content stored outside a transaction is a receipt of its own.
+
 <a name="Register"></a>
-## func [Register](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L14>)
+## func Register
 
 ```go
 func Register(cfg DriverConfig)
@@ -98,7 +138,7 @@ func Register(cfg DriverConfig)
 Register registers a SQLite driver for use by Open/OpenWith. Must be called exactly once \(typically from a driver package's init\(\)\). Panics if called more than once.
 
 <a name="SQLDriverAndDSN"></a>
-## func [SQLDriverAndDSN](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L75>)
+## func SQLDriverAndDSN
 
 ```go
 func SQLDriverAndDSN(path string, cfg OpenConfig, params map[string]string) (string, string)
@@ -107,7 +147,7 @@ func SQLDriverAndDSN(path string, cfg OpenConfig, params map[string]string) (str
 SQLDriverAndDSN returns the driver name and DSN OpenWith would use, with optional URI query params appended after driver\-specific options.
 
 <a name="ScanInt"></a>
-## func [ScanInt](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L43>)
+## func ScanInt
 
 ```go
 func ScanInt(v any) (int, bool)
@@ -116,7 +156,7 @@ func ScanInt(v any) (int, bool)
 ScanInt converts a scanned value to int. SQLite drivers differ on BOOLEAN columns: modernc returns int64, ncruces returns bool. Scan the column into an \`any\` variable, then pass it here.
 
 <a name="ScanJulianDay"></a>
-## func [ScanJulianDay](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L12>)
+## func ScanJulianDay
 
 ```go
 func ScanJulianDay(v any) (float64, bool)
@@ -124,35 +164,64 @@ func ScanJulianDay(v any) (float64, bool)
 
 ScanJulianDay converts a scanned mtime value to a float64 Julian Day Number. SQLite drivers return mtime differently: modernc returns float64, ncruces returns time.Time for DATETIME/TIMESTAMP/DATE columns. Scan the column into an \`any\` variable, then pass it here.
 
+The float64 branch returns the scanned value verbatim, and that exactness is load\-bearing rather than incidental. A float64 read off the row IS the stored value, so any "canonicalizing" transform can only move it away from what the row holds. Two consumers compare a scanned mtime against other stored mtimes and would silently return a wrong answer \(never an error\) if the value were perturbed even by one ulp:
+
+- Timeline's pagination cursor, whose predicate \`e.mtime \< ? OR \(e.mtime = ? AND b.rid \< ?\)\` needs the cursor to compare exactly equal to the row it came from. Raise it by an ulp and that row repeats as the next page's first row; lower it and rows are skipped.
+- tag propagation's \`tagxref.mtime \< ?\`, where SQLite compares the bound value against raw stored floats.
+
+Neither is hypothetical for values this library did not write: a value another writer computed differently, or at finer than millisecond resolution, is not on the grid TimeToJulian writes, and snapping it to that grid changes it.
+
+The time.Time branch is the one case where a transform is required rather than harmful — see timeToJulian.
+
+<a name="ScanTextJulianDay"></a>
+## func ScanTextJulianDay
+
+```go
+func ScanTextJulianDay(v any) (float64, bool)
+```
+
+ScanTextJulianDay is ScanJulianDay for a column fossil writes as SQL text: event, plink, attachment and forumpost times. Those hold the 16\-digit form \(fsltype.TextJulianDayFromMillis\), so a time.Time a driver hands back is converted to that form rather than to the exact julianday\(\) ScanJulianDay gives for tagxref.mtime. A float64 passes through unchanged either way.
+
 <a name="ScanTime"></a>
-## func [ScanTime](<https://github.com/danmestas/go-libfossil/blob/main/db/scan.go#L27>)
+## func ScanTime
 
 ```go
 func ScanTime(v any) (time.Time, bool)
 ```
 
-ScanTime converts a scanned mtime value to time.Time. Same driver\-compatibility rationale as ScanJulianDay.
+ScanTime converts a scanned mtime value to time.Time, at the millisecond SQLite's date functions give it: the time a check\-in's D card records. Same driver\-compatibility rationale as ScanJulianDay.
 
 <a name="SeedConfig"></a>
-## func [SeedConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L267>)
+## func SeedConfig
 
 ```go
 func SeedConfig(d *DB, rng simio.Rand, projectCode string) error
 ```
 
-SeedConfig seeds the config table with project\-code, server\-code, and schema markers. If projectCode is empty, a fresh 40\-char lowercase\-hex project\-code is generated from rng. If non\-empty, it must match ^\[0\-9a\-f\]\{40\}$; otherwise an error is returned and no rows are written. Server\-code is always generated.
+SeedConfig seeds the config table with project\-code, server\-code, the schema markers, and hash\-policy. If projectCode is empty, a fresh 40\-char lowercase\-hex project\-code is generated from rng. If non\-empty, it must match ^\[0\-9a\-f\]\{40\}$; otherwise an error is returned and no rows are written. Server\-code is always generated.
+
+hash\-policy is seeded to sha3, which is what \`fossil init\` writes and so what a repo created here has to say to name its artifacts the same way. A clone is the exception: it adopts its source's policy, not this one, so sync.Clone drops the row the same way it drops project\-code.
+
+<a name="SeedDefaultUsers"></a>
+## func SeedDefaultUsers
+
+```go
+func SeedDefaultUsers(d *DB, rng simio.Rand) error
+```
+
+SeedDefaultUsers inserts the four built\-in users \`fossil new\` creates, with fossil's capabilities \(src/db.c db\_create\_default\_users\). nobody's set is what every unauthenticated sync request is granted, so it is clone, read and zip only: check\-in rights must be granted explicitly. developer and reader are templates other users inherit through v and u. anonymous gets a random password, as fossil gives it; the others have none, so no login can reach them \(VerifyLogin requires a stored password\).
 
 <a name="SeedNobody"></a>
-## func [SeedNobody](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L251>)
+## func SeedNobody
 
 ```go
 func SeedNobody(d *DB, caps string) error
 ```
 
-SeedNobody inserts a "nobody" user with the given capabilities. This controls anonymous access policy for the repo.
+SeedNobody inserts a "nobody" user with the given capabilities. This controls anonymous access policy for the repo. A new repository gets fossil's built\-in users from SeedDefaultUsers instead.
 
 <a name="SeedUser"></a>
-## func [SeedUser](<https://github.com/danmestas/go-libfossil/blob/main/db/schema.go#L235>)
+## func SeedUser
 
 ```go
 func SeedUser(d *DB, login string) error
@@ -161,7 +230,7 @@ func SeedUser(d *DB, login string) error
 
 
 <a name="CheckpointMode"></a>
-## type [CheckpointMode](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L14>)
+## type CheckpointMode
 
 CheckpointMode mirrors SQLite's PRAGMA wal\_checkpoint\(\<mode\>\) argument.
 
@@ -187,7 +256,7 @@ const (
 ```
 
 <a name="CheckpointMode.String"></a>
-### func \(CheckpointMode\) [String](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L29>)
+### func \(CheckpointMode\) String
 
 ```go
 func (m CheckpointMode) String() string
@@ -196,7 +265,7 @@ func (m CheckpointMode) String() string
 
 
 <a name="DB"></a>
-## type [DB](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L45-L49>)
+## type DB
 
 DB wraps a SQLite database connection.
 
@@ -207,7 +276,7 @@ type DB struct {
 ```
 
 <a name="Open"></a>
-### func [Open](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L52>)
+### func Open
 
 ```go
 func Open(path string) (*DB, error)
@@ -216,7 +285,7 @@ func Open(path string) (*DB, error)
 Open opens a SQLite database with the registered driver and default pragmas.
 
 <a name="OpenWith"></a>
-### func [OpenWith](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L178>)
+### func OpenWith
 
 ```go
 func OpenWith(path string, cfg OpenConfig) (*DB, error)
@@ -225,7 +294,7 @@ func OpenWith(path string, cfg OpenConfig) (*DB, error)
 OpenWith opens a SQLite database with explicit configuration.
 
 <a name="DB.ApplicationID"></a>
-### func \(\*DB\) [ApplicationID](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L263>)
+### func \(\*DB\) ApplicationID
 
 ```go
 func (d *DB) ApplicationID() (int32, error)
@@ -233,8 +302,17 @@ func (d *DB) ApplicationID() (int32, error)
 
 
 
+<a name="DB.Bound"></a>
+### func \(\*DB\) Bound
+
+```go
+func (d *DB) Bound() bool
+```
+
+Bound reports whether d is a DB WithBoundTx handed its callback, whose statements run in a transaction that d does not own.
+
 <a name="DB.Checkpoint"></a>
-### func \(\*DB\) [Checkpoint](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L223>)
+### func \(\*DB\) Checkpoint
 
 ```go
 func (d *DB) Checkpoint(mode CheckpointMode) error
@@ -243,7 +321,7 @@ func (d *DB) Checkpoint(mode CheckpointMode) error
 Checkpoint runs PRAGMA wal\_checkpoint\(\<mode\>\) against the database. Safe to call on a live database. PASSIVE never blocks; TRUNCATE produces the most compact on\-disk layout. On a non\-WAL database the underlying PRAGMA is a no\-op and returns nil.
 
 <a name="DB.Close"></a>
-### func \(\*DB\) [Close](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L210>)
+### func \(\*DB\) Close
 
 ```go
 func (d *DB) Close() error
@@ -252,7 +330,7 @@ func (d *DB) Close() error
 Close runs PRAGMA wal\_checkpoint\(TRUNCATE\) before closing the underlying connection so the on\-disk file is readable by external SQLite/fossil tooling. The WASM/WASI build path does not use WAL, so the checkpoint is skipped there. Checkpoint errors are joined with the close error so the connection is always closed regardless of checkpoint outcome.
 
 <a name="DB.Driver"></a>
-### func \(\*DB\) [Driver](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L242>)
+### func \(\*DB\) Driver
 
 ```go
 func (d *DB) Driver() string
@@ -261,7 +339,7 @@ func (d *DB) Driver() string
 
 
 <a name="DB.Exec"></a>
-### func \(\*DB\) [Exec](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L246>)
+### func \(\*DB\) Exec
 
 ```go
 func (d *DB) Exec(query string, args ...any) (sql.Result, error)
@@ -270,7 +348,7 @@ func (d *DB) Exec(query string, args ...any) (sql.Result, error)
 
 
 <a name="DB.Path"></a>
-### func \(\*DB\) [Path](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L238>)
+### func \(\*DB\) Path
 
 ```go
 func (d *DB) Path() string
@@ -278,8 +356,17 @@ func (d *DB) Path() string
 
 
 
+<a name="DB.PoolExecs"></a>
+### func \(\*DB\) PoolExecs
+
+```go
+func (d *DB) PoolExecs() int64
+```
+
+PoolExecs returns how many statements have been executed on the pool rather than inside a transaction. Each one runs in its own implicit transaction, so it costs a BEGIN IMMEDIATE and an fsync of its own and contests the database's single write lock independently of every other. A path that issues one per artifact therefore degrades from slow to failing the moment anything else writes, which is what issue \#200 cost a large pull. Tests pin the per\-round budget against this counter.
+
 <a name="DB.Query"></a>
-### func \(\*DB\) [Query](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L254>)
+### func \(\*DB\) Query
 
 ```go
 func (d *DB) Query(query string, args ...any) (*sql.Rows, error)
@@ -288,7 +375,7 @@ func (d *DB) Query(query string, args ...any) (*sql.Rows, error)
 
 
 <a name="DB.QueryRow"></a>
-### func \(\*DB\) [QueryRow](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L250>)
+### func \(\*DB\) QueryRow
 
 ```go
 func (d *DB) QueryRow(query string, args ...any) *sql.Row
@@ -297,7 +384,7 @@ func (d *DB) QueryRow(query string, args ...any) *sql.Row
 
 
 <a name="DB.SetApplicationID"></a>
-### func \(\*DB\) [SetApplicationID](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L258>)
+### func \(\*DB\) SetApplicationID
 
 ```go
 func (d *DB) SetApplicationID(id int32) error
@@ -306,7 +393,7 @@ func (d *DB) SetApplicationID(id int32) error
 
 
 <a name="DB.SqlDB"></a>
-### func \(\*DB\) [SqlDB](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L198>)
+### func \(\*DB\) SqlDB
 
 ```go
 func (d *DB) SqlDB() *sql.DB
@@ -314,17 +401,71 @@ func (d *DB) SqlDB() *sql.DB
 
 SqlDB returns the underlying \*sql.DB connection.
 
+<a name="DB.UseReceipt"></a>
+### func \(\*DB\) UseReceipt
+
+```go
+func (d *DB) UseReceipt(rc *Receipt) *Receipt
+```
+
+UseReceipt is Tx.UseReceipt for the transaction a bound DB runs in. Only a bound DB has a transaction to give it to.
+
+<a name="DB.WithBoundReadTx"></a>
+### func \(\*DB\) WithBoundReadTx
+
+```go
+func (d *DB) WithBoundReadTx(fn func(bound *DB) error) error
+```
+
+WithBoundReadTx is WithBoundTx over a read transaction \(see WithReadTx\): a DB bound to one snapshot that takes no write lock. fn must not write.
+
+<a name="DB.WithBoundTx"></a>
+### func \(\*DB\) WithBoundTx
+
+```go
+func (d *DB) WithBoundTx(fn func(bound *DB) error) error
+```
+
+WithBoundTx runs fn in one write transaction and hands it a DB bound to that transaction. Every statement on the bound DB runs in the transaction, and every WithTx or WithBoundTx on it is a savepoint there, so code written against a \*DB, including code that opens its own transactions, joins this one instead of contending for the write lock from a second connection. The transaction commits when fn returns nil and rolls back everything fn did otherwise. The bound DB is valid only until fn returns, and it cannot be closed or checkpointed, nor hand out its \*sql.DB. On a DB that is itself bound, WithBoundTx is a savepoint of that transaction, as WithTx is.
+
+<a name="DB.WithReadTx"></a>
+### func \(\*DB\) WithReadTx
+
+```go
+func (d *DB) WithReadTx(fn func(tx *Tx) error) error
+```
+
+WithReadTx runs fn in a read transaction: one snapshot of the database, taken without the write lock, so it neither waits for a writer nor holds one up. fn must not write; the drivers refuse or contest a write in it. The transaction ends when fn returns, with nothing to commit. On a bound DB it runs fn in the bound transaction, as WithTx does.
+
 <a name="DB.WithTx"></a>
-### func \(\*DB\) [WithTx](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L285>)
+### func \(\*DB\) WithTx
 
 ```go
 func (d *DB) WithTx(fn func(tx *Tx) error) error
 ```
 
+WithTx runs fn in a write transaction, which commits when fn returns nil and rolls back otherwise. On a DB that WithBoundTx bound, it runs fn in a savepoint of the bound transaction instead, so it neither waits for a second connection nor commits on its own: fn's error undoes only fn's writes, and the bound transaction decides whether the rest commits.
 
+<a name="DB.WriteTxns"></a>
+### func \(\*DB\) WriteTxns
+
+```go
+func (d *DB) WriteTxns() int64
+```
+
+WriteTxns counts transactions begun through WithTx. Each is its own BEGIN IMMEDIATE and fsync, and each takes the single write lock independently, so a path that opens one per artifact is both slow and fragile under contention \-\- the cost issue \#200 measured at roughly three per received file. Tests pin the per\-round transaction budget against this, which PoolExecs cannot see: moving a per\-artifact write from the pool into its own transaction leaves PoolExecs unchanged while the real cost stays.
+
+<a name="DB.Writes"></a>
+### func \(\*DB\) Writes
+
+```go
+func (d *DB) Writes() int64
+```
+
+Writes counts writes of this DB that have finished: pool Exec calls that returned and WithTx transactions that ended, committed or not. A reader that keeps what it read across calls compares two counts to learn whether a write may have landed in between; counting at the end, not the start, is what makes an unchanged count mean that. A write through another handle on the same file, in this process or another, is not counted.
 
 <a name="DriverConfig"></a>
-## type [DriverConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L4-L7>)
+## type DriverConfig
 
 DriverConfig defines a SQLite driver's name and DSN builder.
 
@@ -336,7 +477,7 @@ type DriverConfig struct {
 ```
 
 <a name="RegisteredDriver"></a>
-### func [RegisteredDriver](<https://github.com/danmestas/go-libfossil/blob/main/db/register.go#L31>)
+### func RegisteredDriver
 
 ```go
 func RegisteredDriver() *DriverConfig
@@ -345,7 +486,7 @@ func RegisteredDriver() *DriverConfig
 RegisteredDriver returns a copy of the currently registered driver config, or nil if none.
 
 <a name="OpenConfig"></a>
-## type [OpenConfig](<https://github.com/danmestas/go-libfossil/blob/main/db/config.go#L4-L7>)
+## type OpenConfig
 
 OpenConfig allows callers to customize driver selection and pragmas.
 
@@ -357,7 +498,7 @@ type OpenConfig struct {
 ```
 
 <a name="Querier"></a>
-## type [Querier](<https://github.com/danmestas/go-libfossil/blob/main/db/querier.go#L8-L12>)
+## type Querier
 
 Querier is the common interface satisfied by both \*DB and \*Tx. Functions that need to work inside transactions accept Querier instead of \*DB.
 
@@ -369,8 +510,38 @@ type Querier interface {
 }
 ```
 
+<a name="Receipt"></a>
+## type Receipt
+
+Receipt is one arrival of content in the repository: a commit, a sync or clone, a push a server accepts. Fossil records each as a row of rcvfrom, made the first time that arrival stores anything \(content\_rcvid\_init in src/content.c\), and every blob or unversioned file it stores names the row in its rcvid. A receipt that stores nothing leaves no row.
+
+The fields are what the row will hold, read when it is made: UID is the user.uid the content came from, Nonce the nonce of the login card that authenticated it, and IPAddr the peer's address or, for local content, a description of its source. An empty Nonce or IPAddr is stored as NULL, as fossil stores an absent one. The row's mtime is the Julian day of the moment it is made, by Clock \(nil means real time\).
+
+A Receipt is not safe for concurrent use.
+
+```go
+type Receipt struct {
+    UID    int64
+    Nonce  string
+    IPAddr string
+    Clock  simio.Clock
+    // contains filtered or unexported fields
+}
+```
+
+<a name="Receipt.ID"></a>
+### func \(\*Receipt\) ID
+
+```go
+func (rc *Receipt) ID(q Querier) (int64, error)
+```
+
+ID returns the rcvid of the receipt's row, making the row through q if the receipt has none yet. Fossil holds that id for its process in g.rcvid and never looks at the row again \(src/content.c, content\_rcvid\_init\); a fossil whose transaction rolls back ends with it. A Receipt outlives transactions, so the transaction or savepoint that makes its row also forgets it if it rolls back \(Tx.forgetFrom\), and the next use makes a fresh row rather than naming one some other insert may since have taken. A kept id costs no query.
+
+A row made through a Querier that is neither a Tx nor a DB is taken as kept; a row made in one transaction should not be used from another connection before that transaction commits.
+
 <a name="Tx"></a>
-## type [Tx](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L269-L271>)
+## type Tx
 
 
 
@@ -381,7 +552,7 @@ type Tx struct {
 ```
 
 <a name="Tx.Exec"></a>
-### func \(\*Tx\) [Exec](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L273>)
+### func \(\*Tx\) Exec
 
 ```go
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error)
@@ -390,7 +561,7 @@ func (t *Tx) Exec(query string, args ...any) (sql.Result, error)
 
 
 <a name="Tx.Query"></a>
-### func \(\*Tx\) [Query](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L281>)
+### func \(\*Tx\) Query
 
 ```go
 func (t *Tx) Query(query string, args ...any) (*sql.Rows, error)
@@ -399,12 +570,21 @@ func (t *Tx) Query(query string, args ...any) (*sql.Rows, error)
 
 
 <a name="Tx.QueryRow"></a>
-### func \(\*Tx\) [QueryRow](<https://github.com/danmestas/go-libfossil/blob/main/db/db.go#L277>)
+### func \(\*Tx\) QueryRow
 
 ```go
 func (t *Tx) QueryRow(query string, args ...any) *sql.Row
 ```
 
 
+
+<a name="Tx.UseReceipt"></a>
+### func \(\*Tx\) UseReceipt
+
+```go
+func (t *Tx) UseReceipt(rc *Receipt) *Receipt
+```
+
+UseReceipt makes rc the receipt content stored in t is recorded under, and returns the one it replaces so a caller can put it back.
 
 Generated by [gomarkdoc](<https://github.com/princjef/gomarkdoc>)

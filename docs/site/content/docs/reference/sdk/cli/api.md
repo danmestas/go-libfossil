@@ -12,9 +12,15 @@ import "github.com/danmestas/go-libfossil/cli"
 
 ## Index
 
+- [Constants](<#constants>)
+- [Variables](<#variables>)
 - [func Version\(\) string](<#Version>)
+- [type ExitError](<#ExitError>)
+  - [func \(e \*ExitError\) Error\(\) string](<#ExitError.Error>)
+  - [func \(e \*ExitError\) Unwrap\(\) error](<#ExitError.Unwrap>)
 - [type Globals](<#Globals>)
   - [func \(g \*Globals\) OpenRepo\(\) \(\*libfossil.Repo, error\)](<#Globals.OpenRepo>)
+- [type RecoveryFlags](<#RecoveryFlags>)
 - [type RepoAddCmd](<#RepoAddCmd>)
   - [func \(c \*RepoAddCmd\) Run\(g \*Globals\) \(err error\)](<#RepoAddCmd.Run>)
 - [type RepoAnnotateCmd](<#RepoAnnotateCmd>)
@@ -51,6 +57,27 @@ import "github.com/danmestas/go-libfossil/cli"
 - [type RepoCmd](<#RepoCmd>)
 - [type RepoCoCmd](<#RepoCoCmd>)
   - [func \(c \*RepoCoCmd\) Run\(g \*Globals\) error](<#RepoCoCmd.Run>)
+- [type RepoConeAddCmd](<#RepoConeAddCmd>)
+  - [func \(c \*RepoConeAddCmd\) Run\(g \*Globals\) error](<#RepoConeAddCmd.Run>)
+- [type RepoConeCmd](<#RepoConeCmd>)
+- [type RepoConeCompactCmd](<#RepoConeCompactCmd>)
+  - [func \(c \*RepoConeCompactCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeCompactCmd.Run>)
+- [type RepoConeCostCmd](<#RepoConeCostCmd>)
+  - [func \(c \*RepoConeCostCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeCostCmd.Run>)
+- [type RepoConeDeepenCmd](<#RepoConeDeepenCmd>)
+  - [func \(c \*RepoConeDeepenCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeDeepenCmd.Run>)
+- [type RepoConeDenseCmd](<#RepoConeDenseCmd>)
+  - [func \(c \*RepoConeDenseCmd\) Run\(g \*Globals\) error](<#RepoConeDenseCmd.Run>)
+- [type RepoConeRemoveCmd](<#RepoConeRemoveCmd>)
+  - [func \(c \*RepoConeRemoveCmd\) Run\(g \*Globals\) error](<#RepoConeRemoveCmd.Run>)
+- [type RepoConeSetCmd](<#RepoConeSetCmd>)
+  - [func \(c \*RepoConeSetCmd\) Run\(g \*Globals\) error](<#RepoConeSetCmd.Run>)
+- [type RepoConeShowCmd](<#RepoConeShowCmd>)
+  - [func \(c \*RepoConeShowCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeShowCmd.Run>)
+- [type RepoConeStoreCmd](<#RepoConeStoreCmd>)
+  - [func \(c \*RepoConeStoreCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeStoreCmd.Run>)
+- [type RepoConeTestCmd](<#RepoConeTestCmd>)
+  - [func \(c \*RepoConeTestCmd\) Run\(g \*Globals\) \(err error\)](<#RepoConeTestCmd.Run>)
 - [type RepoConfigCmd](<#RepoConfigCmd>)
 - [type RepoConfigGetCmd](<#RepoConfigGetCmd>)
   - [func \(c \*RepoConfigGetCmd\) Run\(g \*Globals\) error](<#RepoConfigGetCmd.Run>)
@@ -84,6 +111,8 @@ import "github.com/danmestas/go-libfossil/cli"
   - [func \(c \*RepoInfoCmd\) Run\(g \*Globals\) error](<#RepoInfoCmd.Run>)
 - [type RepoInviteCmd](<#RepoInviteCmd>)
   - [func \(c \*RepoInviteCmd\) Run\(g \*Globals\) error](<#RepoInviteCmd.Run>)
+- [type RepoLogCmd](<#RepoLogCmd>)
+  - [func \(c \*RepoLogCmd\) Run\(g \*Globals\) \(err error\)](<#RepoLogCmd.Run>)
 - [type RepoLsCmd](<#RepoLsCmd>)
   - [func \(c \*RepoLsCmd\) Run\(g \*Globals\) error](<#RepoLsCmd.Run>)
 - [type RepoMergeCmd](<#RepoMergeCmd>)
@@ -117,6 +146,8 @@ import "github.com/danmestas/go-libfossil/cli"
   - [func \(c \*RepoSchemaShowCmd\) Run\(g \*Globals\) error](<#RepoSchemaShowCmd.Run>)
 - [type RepoServeCmd](<#RepoServeCmd>)
   - [func \(c \*RepoServeCmd\) Run\(g \*Globals\) error](<#RepoServeCmd.Run>)
+- [type RepoSnapshotCmd](<#RepoSnapshotCmd>)
+  - [func \(c \*RepoSnapshotCmd\) Run\(g \*Globals\) \(err error\)](<#RepoSnapshotCmd.Run>)
 - [type RepoStashApplyCmd](<#RepoStashApplyCmd>)
   - [func \(c \*RepoStashApplyCmd\) Run\(g \*Globals\) error](<#RepoStashApplyCmd.Run>)
 - [type RepoStashClearCmd](<#RepoStashClearCmd>)
@@ -181,8 +212,28 @@ import "github.com/danmestas/go-libfossil/cli"
   - [func \(c \*VersionCmd\) Run\(\) error](<#VersionCmd.Run>)
 
 
+## Constants
+
+<a name="ExitOK"></a>Exit statuses the machine\-facing commands \(snapshot, log, cat \-\-at, diff\) document and keep stable. Every other failure, including a usage error, is ExitFailure.
+
+```go
+const (
+    ExitOK       = 0
+    ExitFailure  = 1
+    ExitNotFound = 2 // the version, path or history asked for does not exist
+)
+```
+
+## Variables
+
+<a name="ErrConeTestElided"></a>ErrConeTestElided is what \`repo cone test\` returns when any path it was given is outside the cone, so the command works as a predicate.
+
+```go
+var ErrConeTestElided = errors.New("a path is elided by the sparse cone")
+```
+
 <a name="Version"></a>
-## func [Version](<https://github.com/danmestas/go-libfossil/blob/main/cli/version.go#L68>)
+## func Version
 
 ```go
 func Version() string
@@ -190,8 +241,38 @@ func Version() string
 
 Version returns a single\-line build identifier for this binary: the module version \(or a build\-time override\), the Go toolchain version, and the platform. The shape is fixed at four whitespace\-separated fields \-\- "libfossil \<version\> \<go version\> \<os\>/\<arch\>" \-\- regardless of which fields carried real data, so a caller can rely on strings.Fields\(Version\(\)\) unconditionally. This is the same string both \`libfossil version\` and \`libfossil \-\-version\` print.
 
+<a name="ExitError"></a>
+## type ExitError
+
+ExitError is a command failure that carries the process exit status it maps to. The binary's main exits with Code after printing Err.
+
+```go
+type ExitError struct {
+    Code int
+    Err  error
+}
+```
+
+<a name="ExitError.Error"></a>
+### func \(\*ExitError\) Error
+
+```go
+func (e *ExitError) Error() string
+```
+
+
+
+<a name="ExitError.Unwrap"></a>
+### func \(\*ExitError\) Unwrap
+
+```go
+func (e *ExitError) Unwrap() error
+```
+
+
+
 <a name="Globals"></a>
-## type [Globals](<https://github.com/danmestas/go-libfossil/blob/main/cli/shared.go#L16-L19>)
+## type Globals
 
 Globals holds flags shared by all CLI commands.
 
@@ -203,16 +284,31 @@ type Globals struct {
 ```
 
 <a name="Globals.OpenRepo"></a>
-### func \(\*Globals\) [OpenRepo](<https://github.com/danmestas/go-libfossil/blob/main/cli/shared.go#L23>)
+### func \(\*Globals\) OpenRepo
 
 ```go
 func (g *Globals) OpenRepo() (*libfossil.Repo, error)
 ```
 
-OpenRepo opens a Fossil repository using the handle API. If Repo is empty, it searches for a .fossil file or .fslckout checkout.
+OpenRepo opens a Fossil repository using the handle API. If Repo is empty, it searches for a .fossil file or checkout database.
+
+<a name="RecoveryFlags"></a>
+## type RecoveryFlags
+
+RecoveryFlags selects only the peer and credentials used to obtain content a local operation requires. It does not enable ordinary pull, push or autosync.
+
+```go
+type RecoveryFlags struct {
+    Remote      string        `help:"Required-content peer URL (default: saved last-sync-url)"`
+    SyncUser    string        `help:"Required-content authentication user"`
+    SyncPass    string        `help:"Required-content password (never saved)"`
+    SyncPrivate bool          `help:"Allow recovery of private required artifacts"`
+    Timeout     time.Duration `default:"10m" help:"Required-content deadline; 0 disables it"`
+}
+```
 
 <a name="RepoAddCmd"></a>
-## type [RepoAddCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_add.go#L9-L12>)
+## type RepoAddCmd
 
 RepoAddCmd stages files for addition in the checkout database.
 
@@ -224,7 +320,7 @@ type RepoAddCmd struct {
 ```
 
 <a name="RepoAddCmd.Run"></a>
-### func \(\*RepoAddCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_add.go#L14>)
+### func \(\*RepoAddCmd\) Run
 
 ```go
 func (c *RepoAddCmd) Run(g *Globals) (err error)
@@ -233,7 +329,7 @@ func (c *RepoAddCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoAnnotateCmd"></a>
-## type [RepoAnnotateCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_annotate.go#L10-L13>)
+## type RepoAnnotateCmd
 
 RepoAnnotateCmd annotates file lines with version history.
 
@@ -245,7 +341,7 @@ type RepoAnnotateCmd struct {
 ```
 
 <a name="RepoAnnotateCmd.Run"></a>
-### func \(\*RepoAnnotateCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_annotate.go#L15>)
+### func \(\*RepoAnnotateCmd\) Run
 
 ```go
 func (c *RepoAnnotateCmd) Run(g *Globals) error
@@ -254,7 +350,7 @@ func (c *RepoAnnotateCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectBadCmd"></a>
-## type [RepoBisectBadCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L27-L30>)
+## type RepoBisectBadCmd
 
 RepoBisectBadCmd marks a version as bad.
 
@@ -266,7 +362,7 @@ type RepoBisectBadCmd struct {
 ```
 
 <a name="RepoBisectBadCmd.Run"></a>
-### func \(\*RepoBisectBadCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L32>)
+### func \(\*RepoBisectBadCmd\) Run
 
 ```go
 func (c *RepoBisectBadCmd) Run(g *Globals) error
@@ -275,7 +371,7 @@ func (c *RepoBisectBadCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectCmd"></a>
-## type [RepoBisectCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L6-L14>)
+## type RepoBisectCmd
 
 RepoBisectCmd groups binary search operations.
 
@@ -292,7 +388,7 @@ type RepoBisectCmd struct {
 ```
 
 <a name="RepoBisectGoodCmd"></a>
-## type [RepoBisectGoodCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L17-L20>)
+## type RepoBisectGoodCmd
 
 RepoBisectGoodCmd marks a version as good.
 
@@ -304,7 +400,7 @@ type RepoBisectGoodCmd struct {
 ```
 
 <a name="RepoBisectGoodCmd.Run"></a>
-### func \(\*RepoBisectGoodCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L22>)
+### func \(\*RepoBisectGoodCmd\) Run
 
 ```go
 func (c *RepoBisectGoodCmd) Run(g *Globals) error
@@ -313,7 +409,7 @@ func (c *RepoBisectGoodCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectLsCmd"></a>
-## type [RepoBisectLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L65-L67>)
+## type RepoBisectLsCmd
 
 RepoBisectLsCmd shows the bisect path.
 
@@ -324,7 +420,7 @@ type RepoBisectLsCmd struct {
 ```
 
 <a name="RepoBisectLsCmd.Run"></a>
-### func \(\*RepoBisectLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L69>)
+### func \(\*RepoBisectLsCmd\) Run
 
 ```go
 func (c *RepoBisectLsCmd) Run(g *Globals) error
@@ -333,7 +429,7 @@ func (c *RepoBisectLsCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectNextCmd"></a>
-## type [RepoBisectNextCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L47-L49>)
+## type RepoBisectNextCmd
 
 RepoBisectNextCmd checks out the bisect midpoint version.
 
@@ -344,7 +440,7 @@ type RepoBisectNextCmd struct {
 ```
 
 <a name="RepoBisectNextCmd.Run"></a>
-### func \(\*RepoBisectNextCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L51>)
+### func \(\*RepoBisectNextCmd\) Run
 
 ```go
 func (c *RepoBisectNextCmd) Run(g *Globals) error
@@ -353,7 +449,7 @@ func (c *RepoBisectNextCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectResetCmd"></a>
-## type [RepoBisectResetCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L56-L58>)
+## type RepoBisectResetCmd
 
 RepoBisectResetCmd clears bisect state.
 
@@ -364,7 +460,7 @@ type RepoBisectResetCmd struct {
 ```
 
 <a name="RepoBisectResetCmd.Run"></a>
-### func \(\*RepoBisectResetCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L60>)
+### func \(\*RepoBisectResetCmd\) Run
 
 ```go
 func (c *RepoBisectResetCmd) Run(g *Globals) error
@@ -373,7 +469,7 @@ func (c *RepoBisectResetCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectSkipCmd"></a>
-## type [RepoBisectSkipCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L37-L40>)
+## type RepoBisectSkipCmd
 
 RepoBisectSkipCmd skips the current version.
 
@@ -385,7 +481,7 @@ type RepoBisectSkipCmd struct {
 ```
 
 <a name="RepoBisectSkipCmd.Run"></a>
-### func \(\*RepoBisectSkipCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L42>)
+### func \(\*RepoBisectSkipCmd\) Run
 
 ```go
 func (c *RepoBisectSkipCmd) Run(g *Globals) error
@@ -394,7 +490,7 @@ func (c *RepoBisectSkipCmd) Run(g *Globals) error
 
 
 <a name="RepoBisectStatusCmd"></a>
-## type [RepoBisectStatusCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L74-L76>)
+## type RepoBisectStatusCmd
 
 RepoBisectStatusCmd shows bisect state.
 
@@ -405,7 +501,7 @@ type RepoBisectStatusCmd struct {
 ```
 
 <a name="RepoBisectStatusCmd.Run"></a>
-### func \(\*RepoBisectStatusCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_bisect.go#L78>)
+### func \(\*RepoBisectStatusCmd\) Run
 
 ```go
 func (c *RepoBisectStatusCmd) Run(g *Globals) error
@@ -414,7 +510,7 @@ func (c *RepoBisectStatusCmd) Run(g *Globals) error
 
 
 <a name="RepoBlameCmd"></a>
-## type [RepoBlameCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_annotate.go#L47-L49>)
+## type RepoBlameCmd
 
 RepoBlameCmd is an alias for annotate.
 
@@ -425,7 +521,7 @@ type RepoBlameCmd struct {
 ```
 
 <a name="RepoBranchCloseCmd"></a>
-## type [RepoBranchCloseCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L169-L172>)
+## type RepoBranchCloseCmd
 
 RepoBranchCloseCmd closes a branch.
 
@@ -437,7 +533,7 @@ type RepoBranchCloseCmd struct {
 ```
 
 <a name="RepoBranchCloseCmd.Run"></a>
-### func \(\*RepoBranchCloseCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L174>)
+### func \(\*RepoBranchCloseCmd\) Run
 
 ```go
 func (c *RepoBranchCloseCmd) Run(g *Globals) error
@@ -446,7 +542,7 @@ func (c *RepoBranchCloseCmd) Run(g *Globals) error
 
 
 <a name="RepoBranchCmd"></a>
-## type [RepoBranchCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L14-L18>)
+## type RepoBranchCmd
 
 RepoBranchCmd groups branch operations.
 
@@ -459,7 +555,7 @@ type RepoBranchCmd struct {
 ```
 
 <a name="RepoBranchLsCmd"></a>
-## type [RepoBranchLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L21-L24>)
+## type RepoBranchLsCmd
 
 RepoBranchLsCmd lists branches.
 
@@ -471,7 +567,7 @@ type RepoBranchLsCmd struct {
 ```
 
 <a name="RepoBranchLsCmd.Run"></a>
-### func \(\*RepoBranchLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L26>)
+### func \(\*RepoBranchLsCmd\) Run
 
 ```go
 func (c *RepoBranchLsCmd) Run(g *Globals) error
@@ -480,7 +576,7 @@ func (c *RepoBranchLsCmd) Run(g *Globals) error
 
 
 <a name="RepoBranchNewCmd"></a>
-## type [RepoBranchNewCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L93-L98>)
+## type RepoBranchNewCmd
 
 RepoBranchNewCmd creates a new branch.
 
@@ -490,11 +586,12 @@ type RepoBranchNewCmd struct {
     From    string `help:"Parent version (default: tip)"`
     Message string `short:"m" help:"Checkin comment"`
     User    string `help:"Checkin user (default: OS username)"`
+    NoSign  bool   `name:"nosign" help:"Do not sign the branch's check-in, even with the clearsign setting on"`
 }
 ```
 
 <a name="RepoBranchNewCmd.Run"></a>
-### func \(\*RepoBranchNewCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_branch.go#L100>)
+### func \(\*RepoBranchNewCmd\) Run
 
 ```go
 func (c *RepoBranchNewCmd) Run(g *Globals) error
@@ -503,19 +600,20 @@ func (c *RepoBranchNewCmd) Run(g *Globals) error
 
 
 <a name="RepoCatCmd"></a>
-## type [RepoCatCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_cat.go#L13-L16>)
+## type RepoCatCmd
 
-RepoCatCmd outputs the content of an artifact.
+RepoCatCmd outputs the content of an artifact, or with \-\-at the content of a file as a version holds it, as fossil cat \-r does.
 
 ```go
 type RepoCatCmd struct {
-    Artifact string `arg:"" help:"Artifact UUID or prefix"`
+    Artifact string `arg:"" help:"Artifact UUID or prefix; with --at, the file name"`
+    At       string `name:"at" short:"r" help:"Version to read the file from (tip, trunk, a branch, a uuid or prefix)"`
     Raw      bool   `help:"Output raw blob (no delta expansion)"`
 }
 ```
 
 <a name="RepoCatCmd.Run"></a>
-### func \(\*RepoCatCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_cat.go#L18>)
+### func \(\*RepoCatCmd\) Run
 
 ```go
 func (c *RepoCatCmd) Run(g *Globals) error
@@ -524,24 +622,27 @@ func (c *RepoCatCmd) Run(g *Globals) error
 
 
 <a name="RepoCiCmd"></a>
-## type [RepoCiCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_ci.go#L13-L21>)
+## type RepoCiCmd
 
 RepoCiCmd commits the checkout's changes, as fossil's commit command does: every change, or only the named files. A pending merge is committed with the merged\-in checkin as a merge parent.
 
 ```go
 type RepoCiCmd struct {
+    RecoveryFlags
+    NoSync        bool     `help:"Suppress optional autosync, not required-content recovery"`
     Message       string   `short:"m" required:"" help:"Checkin comment"`
     Files         []string `arg:"" optional:"" help:"Files to commit (default: all changes)"`
     User          string   `help:"Checkin user (default: OS username)"`
     Branch        string   `help:"Branch name for this checkin"`
     AllowConflict bool     `help:"Commit files that still hold merge conflict markers"`
     AllowEmpty    bool     `help:"Commit even when nothing has changed"`
+    NoSign        bool     `name:"nosign" help:"Do not sign this check-in, even with the clearsign setting on"`
     Dir           string   `short:"d" help:"Checkout directory" default:"."`
 }
 ```
 
 <a name="RepoCiCmd.Run"></a>
-### func \(\*RepoCiCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_ci.go#L23>)
+### func \(\*RepoCiCmd\) Run
 
 ```go
 func (c *RepoCiCmd) Run(g *Globals) (err error)
@@ -550,23 +651,30 @@ func (c *RepoCiCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoCloneCmd"></a>
-## type [RepoCloneCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_clone.go#L13-L20>)
+## type RepoCloneCmd
 
 RepoCloneCmd clones a remote Fossil repository.
 
 ```go
 type RepoCloneCmd struct {
-    URL     string        `arg:"" optional:"" help:"Remote Fossil server URL"`
-    Path    string        `arg:"" optional:"" help:"Local path for new repository file"`
-    User    string        `short:"u" help:"Username for clone auth"`
-    Pass    string        `short:"p" help:"Password for clone auth"`
-    Invite  string        `help:"Invite token (from fossil invite)"`
-    Timeout time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+    URL        string        `arg:"" optional:"" help:"Remote Fossil server URL"`
+    Path       string        `arg:"" optional:"" help:"Local path for new repository file"`
+    User       string        `short:"u" help:"Username for clone auth"`
+    Pass       string        `short:"p" help:"Password for clone auth"`
+    Invite     string        `help:"Invite token (from fossil invite)"`
+    Timeout    time.Duration `default:"10m" help:"Abort the clone if it runs longer than this; 0 disables the deadline"`
+    Horizon    string        `help:"Clone a horizon store: elide blobs below this check-in, given as tip, a branch or tag, or its full 40 or 64 digit hash; the origin resolves a name, or the clone does over what an origin that cannot sends it; what each rule would hold needs a local repository ('repo cone cost') or a peer that exposes it out of band, as the origin's horizon-served URL may"`
+    Depth      int           `help:"With --horizon, step the check-in back this many check-ins along primary parents, stopping at a root"`
+    Leaves     bool          `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
+    Structural bool          `help:"With --horizon, also elide the manifests below the check-in, deriving their branch and tag state from the origin's seed"`
+    Cone       []string      `name:"cone" help:"Clone a sparse store: fetch only this path's subtree (repeatable)"`
+    ConeNot    []string      `name:"cone-not" help:"Carve this path out of a --cone (repeatable)"`
+    SeedKey    string        `name:"seed-key" help:"The origin's public key, an SSH public key line or an OpenPGP fingerprint: with --structural, a horizon seed not signed by it is discarded and the clone falls back to the content horizon; kept as the horizon-seed-key setting"`
 }
 ```
 
 <a name="RepoCloneCmd.Run"></a>
-### func \(\*RepoCloneCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_clone.go#L33>)
+### func \(\*RepoCloneCmd\) Run
 
 ```go
 func (c *RepoCloneCmd) Run(g *Globals) error
@@ -575,7 +683,7 @@ func (c *RepoCloneCmd) Run(g *Globals) error
 
 
 <a name="RepoCmd"></a>
-## type [RepoCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo.go#L5-L46>)
+## type RepoCmd
 
 RepoCmd is the top\-level command group for repository operations. Embed this in your CLI struct alongside Globals for a complete fossil CLI.
 
@@ -587,6 +695,8 @@ type RepoCmd struct {
     Co           RepoCoCmd           `cmd:"" help:"Checkout a version"`
     Ls           RepoLsCmd           `cmd:"" help:"List files in a version"`
     Timeline     RepoTimelineCmd     `cmd:"" help:"Show repository history"`
+    Snapshot     RepoSnapshotCmd     `cmd:"" help:"Commit a file's bytes onto trunk, no checkout needed"`
+    Log          RepoLogCmd          `cmd:"" help:"Show the check-ins that changed a path"`
     Cat          RepoCatCmd          `cmd:"" help:"Output artifact content"`
     Info         RepoInfoCmd         `cmd:"" help:"Repository statistics"`
     Hash         RepoHashCmd         `cmd:"" help:"Hash files (SHA1 or SHA3)"`
@@ -621,11 +731,12 @@ type RepoCmd struct {
     Invite       RepoInviteCmd       `cmd:"" help:"Generate invite token for a user"`
     Serve        RepoServeCmd        `cmd:"" help:"Serve repository over HTTP for sync/clone"`
     Submanifests RepoSubmanifestsCmd `cmd:"" help:"Sub-manifest tree settings"`
+    Cone         RepoConeCmd         `cmd:"" help:"Show or edit a checkout's sparse cone"`
 }
 ```
 
 <a name="RepoCoCmd"></a>
-## type [RepoCoCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_co.go#L12-L16>)
+## type RepoCoCmd
 
 RepoCoCmd checks out a version to the working directory.
 
@@ -638,7 +749,7 @@ type RepoCoCmd struct {
 ```
 
 <a name="RepoCoCmd.Run"></a>
-### func \(\*RepoCoCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_co.go#L18>)
+### func \(\*RepoCoCmd\) Run
 
 ```go
 func (c *RepoCoCmd) Run(g *Globals) error
@@ -646,8 +757,247 @@ func (c *RepoCoCmd) Run(g *Globals) error
 
 
 
+<a name="RepoConeAddCmd"></a>
+## type RepoConeAddCmd
+
+RepoConeAddCmd adds members to the cone.
+
+```go
+type RepoConeAddCmd struct {
+    RecoveryFlags
+    Paths []string `arg:"" help:"Paths to add"`
+    Not   bool     `help:"Add the paths as exclusions"`
+    Dir   string   `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeAddCmd.Run"></a>
+### func \(\*RepoConeAddCmd\) Run
+
+```go
+func (c *RepoConeAddCmd) Run(g *Globals) error
+```
+
+
+
+<a name="RepoConeCmd"></a>
+## type RepoConeCmd
+
+RepoConeCmd shows or edits a checkout's sparse cone \(draft\-fossil\-sparse\-cone\-00\): the paths, directory subtrees or single files, that the checkout materializes and tracks. An exclusion carves a part out of an inclusion; the longest member covering a path decides.
+
+```go
+type RepoConeCmd struct {
+    Show    RepoConeShowCmd    `cmd:"" default:"withargs" help:"List the cone's members (\"dense\" when there is none)"`
+    Add     RepoConeAddCmd     `cmd:"" help:"Widen the cone, or with --not carve paths out of it"`
+    Remove  RepoConeRemoveCmd  `cmd:"" help:"Remove members of either polarity"`
+    Set     RepoConeSetCmd     `cmd:"" help:"Replace the cone"`
+    Dense   RepoConeDenseCmd   `cmd:"" help:"Drop the cone and materialize every file"`
+    Test    RepoConeTestCmd    `cmd:"" help:"Classify paths against the cone and name the deciding member"`
+    Store   RepoConeStoreCmd   `cmd:"" help:"Show or replace the repository's store cone, fetching what widening covers"`
+    Deepen  RepoConeDeepenCmd  `cmd:"" help:"Move the store's horizon down to reach a check-in, fetching the history it keeps"`
+    Compact RepoConeCompactCmd `cmd:"" help:"Drop held blobs the store cone elides (irreversible locally)"`
+    Cost    RepoConeCostCmd    `cmd:"" help:"Report what each horizon rule would hold at a check-in, from this repository"`
+}
+```
+
+<a name="RepoConeCompactCmd"></a>
+## type RepoConeCompactCmd
+
+RepoConeCompactCmd is the narrow\-then\-compact deletion, zit's \`pack \-\-drop\-elided\`: it acts on the store cone, not a checkout's, and a later widening fetches the dropped blobs from a peer.
+
+```go
+type RepoConeCompactCmd struct{}
+```
+
+<a name="RepoConeCompactCmd.Run"></a>
+### func \(\*RepoConeCompactCmd\) Run
+
+```go
+func (c *RepoConeCompactCmd) Run(g *Globals) (err error)
+```
+
+
+
+<a name="RepoConeCostCmd"></a>
+## type RepoConeCostCmd
+
+RepoConeCostCmd reports what a horizon at a check\-in would hold under each rule \(draft\-fossil\-horizon\-00 §3.4\): the check\-ins of the held set and the bytes of the blobs they name, stored and expanded, so the rule is chosen with its cost in view. It reads the local repository, which must hold the history; a clone has none yet, so the figures come before it, from a peer that exposes them \(an origin may name such an interface through horizon\-served\) or from a repository already held.
+
+```go
+type RepoConeCostCmd struct {
+    Checkin string `arg:"" help:"Check-in to place the horizon at: a name, branch or hash prefix"`
+}
+```
+
+<a name="RepoConeCostCmd.Run"></a>
+### func \(\*RepoConeCostCmd\) Run
+
+```go
+func (c *RepoConeCostCmd) Run(g *Globals) (err error)
+```
+
+
+
+<a name="RepoConeDeepenCmd"></a>
+## type RepoConeDeepenCmd
+
+RepoConeDeepenCmd deepens the store's horizon \(draft\-fossil\-horizon\-00 §5.8\) so that it reaches a check\-in: C moves to that check\-in when it is an ancestor of C, else to a common ancestor of the two, which the remote is asked for when the store cannot see one. The rule, the depth and the path members stay. History comes from \-\-remote, else the saved last\-sync\-url.
+
+```go
+type RepoConeDeepenCmd struct {
+    RecoveryFlags
+    Checkin string `arg:"" help:"Check-in to reach: a full hash, which may lie below the horizon, or a name"`
+}
+```
+
+<a name="RepoConeDeepenCmd.Run"></a>
+### func \(\*RepoConeDeepenCmd\) Run
+
+```go
+func (c *RepoConeDeepenCmd) Run(g *Globals) (err error)
+```
+
+
+
+<a name="RepoConeDenseCmd"></a>
+## type RepoConeDenseCmd
+
+RepoConeDenseCmd drops the cone.
+
+```go
+type RepoConeDenseCmd struct {
+    RecoveryFlags
+    Dir string `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeDenseCmd.Run"></a>
+### func \(\*RepoConeDenseCmd\) Run
+
+```go
+func (c *RepoConeDenseCmd) Run(g *Globals) error
+```
+
+
+
+<a name="RepoConeRemoveCmd"></a>
+## type RepoConeRemoveCmd
+
+RepoConeRemoveCmd removes members from the cone.
+
+```go
+type RepoConeRemoveCmd struct {
+    RecoveryFlags
+    Paths []string `arg:"" help:"Members to remove"`
+    Dir   string   `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeRemoveCmd.Run"></a>
+### func \(\*RepoConeRemoveCmd\) Run
+
+```go
+func (c *RepoConeRemoveCmd) Run(g *Globals) error
+```
+
+
+
+<a name="RepoConeSetCmd"></a>
+## type RepoConeSetCmd
+
+RepoConeSetCmd replaces the cone.
+
+```go
+type RepoConeSetCmd struct {
+    RecoveryFlags
+    Paths []string `arg:"" help:"Inclusion members"`
+    Not   []string `help:"Exclusion members (repeatable)"`
+    Dir   string   `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeSetCmd.Run"></a>
+### func \(\*RepoConeSetCmd\) Run
+
+```go
+func (c *RepoConeSetCmd) Run(g *Globals) error
+```
+
+
+
+<a name="RepoConeShowCmd"></a>
+## type RepoConeShowCmd
+
+RepoConeShowCmd lists the inclusions, then the exclusions marked '\!'.
+
+```go
+type RepoConeShowCmd struct {
+    Dir string `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeShowCmd.Run"></a>
+### func \(\*RepoConeShowCmd\) Run
+
+```go
+func (c *RepoConeShowCmd) Run(g *Globals) (err error)
+```
+
+
+
+<a name="RepoConeStoreCmd"></a>
+## type RepoConeStoreCmd
+
+RepoConeStoreCmd shows or replaces the repository's store cone, the policy form of demand fetch \(draft\-fossil\-sparse\-cone\-00 §6.4\): artifacts the new cone covers that the old one elided are pulled from \-\-remote, else the saved last\-sync\-url. With such artifacts and no peer it refuses and changes nothing.
+
+A store cone may carry a horizon \(draft\-fossil\-horizon\-00\): \-\-horizon sets it, or deepens it when the check\-in is older than the current one, with \-\-structural taking the structural cut, and \-\-no\-horizon drops it. Either keeps the store's path members unless paths are given, which replace them.
+
+```go
+type RepoConeStoreCmd struct {
+    RecoveryFlags
+    Paths      []string `arg:"" optional:"" help:"Inclusion members; none shows the store cone"`
+    Not        []string `help:"Exclusion members (repeatable)"`
+    Dense      bool     `help:"Drop the store cone, fetching everything it elided"`
+    Horizon    string   `help:"Elide blobs below this check-in (name, branch or hash prefix), fetching what a deeper horizon keeps; 'repo cone cost' shows what each rule would hold"`
+    Leaves     bool     `help:"With --horizon, also hold every open leaf's ancestry back to the check-in, for merging across live branches offline; costly: on a repository with old unmerged branches that is nearly the whole history"`
+    Structural bool     `help:"With --horizon, also elide the manifests below the check-in; the next pull fetches the origin's seed"`
+    NoHorizon  bool     `help:"Drop the horizon, keeping the path members, and fetch what it elided"`
+}
+```
+
+<a name="RepoConeStoreCmd.Run"></a>
+### func \(\*RepoConeStoreCmd\) Run
+
+```go
+func (c *RepoConeStoreCmd) Run(g *Globals) (err error)
+```
+
+
+
+<a name="RepoConeTestCmd"></a>
+## type RepoConeTestCmd
+
+RepoConeTestCmd classifies paths as zit's \`cone test\` does.
+
+```go
+type RepoConeTestCmd struct {
+    Paths []string `arg:"" help:"Paths to classify"`
+    Quiet bool     `short:"q" help:"Print nothing; report through the exit status only"`
+    Dir   string   `short:"d" help:"Checkout directory" default:"."`
+}
+```
+
+<a name="RepoConeTestCmd.Run"></a>
+### func \(\*RepoConeTestCmd\) Run
+
+```go
+func (c *RepoConeTestCmd) Run(g *Globals) (err error)
+```
+
+
+
 <a name="RepoConfigCmd"></a>
-## type [RepoConfigCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L6-L10>)
+## type RepoConfigCmd
 
 RepoConfigCmd groups configuration operations.
 
@@ -660,7 +1010,7 @@ type RepoConfigCmd struct {
 ```
 
 <a name="RepoConfigGetCmd"></a>
-## type [RepoConfigGetCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L38-L40>)
+## type RepoConfigGetCmd
 
 RepoConfigGetCmd gets a single config value.
 
@@ -671,7 +1021,7 @@ type RepoConfigGetCmd struct {
 ```
 
 <a name="RepoConfigGetCmd.Run"></a>
-### func \(\*RepoConfigGetCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L42>)
+### func \(\*RepoConfigGetCmd\) Run
 
 ```go
 func (c *RepoConfigGetCmd) Run(g *Globals) error
@@ -680,7 +1030,7 @@ func (c *RepoConfigGetCmd) Run(g *Globals) error
 
 
 <a name="RepoConfigLsCmd"></a>
-## type [RepoConfigLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L13>)
+## type RepoConfigLsCmd
 
 RepoConfigLsCmd lists all config entries.
 
@@ -689,7 +1039,7 @@ type RepoConfigLsCmd struct{}
 ```
 
 <a name="RepoConfigLsCmd.Run"></a>
-### func \(\*RepoConfigLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L15>)
+### func \(\*RepoConfigLsCmd\) Run
 
 ```go
 func (c *RepoConfigLsCmd) Run(g *Globals) error
@@ -698,7 +1048,7 @@ func (c *RepoConfigLsCmd) Run(g *Globals) error
 
 
 <a name="RepoConfigSetCmd"></a>
-## type [RepoConfigSetCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L58-L61>)
+## type RepoConfigSetCmd
 
 RepoConfigSetCmd sets a config value.
 
@@ -710,7 +1060,7 @@ type RepoConfigSetCmd struct {
 ```
 
 <a name="RepoConfigSetCmd.Run"></a>
-### func \(\*RepoConfigSetCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_config.go#L63>)
+### func \(\*RepoConfigSetCmd\) Run
 
 ```go
 func (c *RepoConfigSetCmd) Run(g *Globals) error
@@ -719,7 +1069,7 @@ func (c *RepoConfigSetCmd) Run(g *Globals) error
 
 
 <a name="RepoConflictsCmd"></a>
-## type [RepoConflictsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L16-L23>)
+## type RepoConflictsCmd
 
 RepoConflictsCmd groups conflict management operations.
 
@@ -735,7 +1085,7 @@ type RepoConflictsCmd struct {
 ```
 
 <a name="RepoConflictsExtractCmd"></a>
-## type [RepoConflictsExtractCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L349-L352>)
+## type RepoConflictsExtractCmd
 
 RepoConflictsExtractCmd extracts all versions to disk for manual editing.
 
@@ -747,7 +1097,7 @@ type RepoConflictsExtractCmd struct {
 ```
 
 <a name="RepoConflictsExtractCmd.Run"></a>
-### func \(\*RepoConflictsExtractCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L354>)
+### func \(\*RepoConflictsExtractCmd\) Run
 
 ```go
 func (c *RepoConflictsExtractCmd) Run(g *Globals) error
@@ -756,7 +1106,7 @@ func (c *RepoConflictsExtractCmd) Run(g *Globals) error
 
 
 <a name="RepoConflictsLsCmd"></a>
-## type [RepoConflictsLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L26>)
+## type RepoConflictsLsCmd
 
 RepoConflictsLsCmd lists all conflicts.
 
@@ -765,7 +1115,7 @@ type RepoConflictsLsCmd struct{}
 ```
 
 <a name="RepoConflictsLsCmd.Run"></a>
-### func \(\*RepoConflictsLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L28>)
+### func \(\*RepoConflictsLsCmd\) Run
 
 ```go
 func (c *RepoConflictsLsCmd) Run(g *Globals) error
@@ -774,7 +1124,7 @@ func (c *RepoConflictsLsCmd) Run(g *Globals) error
 
 
 <a name="RepoConflictsMergeCmd"></a>
-## type [RepoConflictsMergeCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L277-L281>)
+## type RepoConflictsMergeCmd
 
 RepoConflictsMergeCmd resolves a conflict by re\-merging with a specified strategy.
 
@@ -787,7 +1137,7 @@ type RepoConflictsMergeCmd struct {
 ```
 
 <a name="RepoConflictsMergeCmd.Run"></a>
-### func \(\*RepoConflictsMergeCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L283>)
+### func \(\*RepoConflictsMergeCmd\) Run
 
 ```go
 func (c *RepoConflictsMergeCmd) Run(g *Globals) error
@@ -796,7 +1146,7 @@ func (c *RepoConflictsMergeCmd) Run(g *Globals) error
 
 
 <a name="RepoConflictsPickCmd"></a>
-## type [RepoConflictsPickCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L218-L224>)
+## type RepoConflictsPickCmd
 
 RepoConflictsPickCmd resolves a conflict by picking one version.
 
@@ -811,7 +1161,7 @@ type RepoConflictsPickCmd struct {
 ```
 
 <a name="RepoConflictsPickCmd.Run"></a>
-### func \(\*RepoConflictsPickCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L226>)
+### func \(\*RepoConflictsPickCmd\) Run
 
 ```go
 func (c *RepoConflictsPickCmd) Run(g *Globals) error
@@ -820,7 +1170,7 @@ func (c *RepoConflictsPickCmd) Run(g *Globals) error
 
 
 <a name="RepoConflictsShowCmd"></a>
-## type [RepoConflictsShowCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L159-L161>)
+## type RepoConflictsShowCmd
 
 RepoConflictsShowCmd shows all versions of a conflicted file.
 
@@ -831,7 +1181,7 @@ type RepoConflictsShowCmd struct {
 ```
 
 <a name="RepoConflictsShowCmd.Run"></a>
-### func \(\*RepoConflictsShowCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_conflicts.go#L163>)
+### func \(\*RepoConflictsShowCmd\) Run
 
 ```go
 func (c *RepoConflictsShowCmd) Run(g *Globals) error
@@ -840,7 +1190,7 @@ func (c *RepoConflictsShowCmd) Run(g *Globals) error
 
 
 <a name="RepoDeltaApplyCmd"></a>
-## type [RepoDeltaApplyCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_delta.go#L46-L50>)
+## type RepoDeltaApplyCmd
 
 RepoDeltaApplyCmd applies a delta to a source file.
 
@@ -853,7 +1203,7 @@ type RepoDeltaApplyCmd struct {
 ```
 
 <a name="RepoDeltaApplyCmd.Run"></a>
-### func \(\*RepoDeltaApplyCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_delta.go#L52>)
+### func \(\*RepoDeltaApplyCmd\) Run
 
 ```go
 func (c *RepoDeltaApplyCmd) Run(g *Globals) error
@@ -862,7 +1212,7 @@ func (c *RepoDeltaApplyCmd) Run(g *Globals) error
 
 
 <a name="RepoDeltaCmd"></a>
-## type [RepoDeltaCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_delta.go#L11-L14>)
+## type RepoDeltaCmd
 
 RepoDeltaCmd groups delta create/apply operations.
 
@@ -874,7 +1224,7 @@ type RepoDeltaCmd struct {
 ```
 
 <a name="RepoDeltaCreateCmd"></a>
-## type [RepoDeltaCreateCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_delta.go#L17-L21>)
+## type RepoDeltaCreateCmd
 
 RepoDeltaCreateCmd creates a delta between two files.
 
@@ -887,7 +1237,7 @@ type RepoDeltaCreateCmd struct {
 ```
 
 <a name="RepoDeltaCreateCmd.Run"></a>
-### func \(\*RepoDeltaCreateCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_delta.go#L23>)
+### func \(\*RepoDeltaCreateCmd\) Run
 
 ```go
 func (c *RepoDeltaCreateCmd) Run(g *Globals) error
@@ -896,20 +1246,23 @@ func (c *RepoDeltaCreateCmd) Run(g *Globals) error
 
 
 <a name="RepoDiffCmd"></a>
-## type [RepoDiffCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_diff.go#L15-L19>)
+## type RepoDiffCmd
 
-RepoDiffCmd shows changes in the working directory vs a repository version.
+RepoDiffCmd shows changes in the working directory vs a repository version, or, given two versions, the changes between them.
 
 ```go
 type RepoDiffCmd struct {
     Version string `arg:"" optional:"" help:"Version to diff against (default: tip)"`
+    To      string `arg:"" optional:"" help:"Second version: diff Version against it instead of the working directory"`
+    Path    string `arg:"" optional:"" help:"With two versions, only this file (default: every changed file)"`
+    JSON    bool   `help:"With two versions, print a JSON array of {name, unified} instead of text"`
     Dir     string `short:"d" help:"Working directory to compare" default:"."`
     Unified int    `short:"U" help:"Lines of context" default:"3"`
 }
 ```
 
 <a name="RepoDiffCmd.Run"></a>
-### func \(\*RepoDiffCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_diff.go#L21>)
+### func \(\*RepoDiffCmd\) Run
 
 ```go
 func (c *RepoDiffCmd) Run(g *Globals) error
@@ -918,7 +1271,7 @@ func (c *RepoDiffCmd) Run(g *Globals) error
 
 
 <a name="RepoExtractCmd"></a>
-## type [RepoExtractCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_extract.go#L12-L16>)
+## type RepoExtractCmd
 
 RepoExtractCmd extracts files from a version.
 
@@ -931,7 +1284,7 @@ type RepoExtractCmd struct {
 ```
 
 <a name="RepoExtractCmd.Run"></a>
-### func \(\*RepoExtractCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_extract.go#L18>)
+### func \(\*RepoExtractCmd\) Run
 
 ```go
 func (c *RepoExtractCmd) Run(g *Globals) error
@@ -940,7 +1293,7 @@ func (c *RepoExtractCmd) Run(g *Globals) error
 
 
 <a name="RepoHashCmd"></a>
-## type [RepoHashCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_hash.go#L11-L14>)
+## type RepoHashCmd
 
 RepoHashCmd hashes files using SHA1 or SHA3\-256.
 
@@ -952,7 +1305,7 @@ type RepoHashCmd struct {
 ```
 
 <a name="RepoHashCmd.Run"></a>
-### func \(\*RepoHashCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_hash.go#L16>)
+### func \(\*RepoHashCmd\) Run
 
 ```go
 func (c *RepoHashCmd) Run(g *Globals) error
@@ -961,7 +1314,7 @@ func (c *RepoHashCmd) Run(g *Globals) error
 
 
 <a name="RepoInfoCmd"></a>
-## type [RepoInfoCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_info.go#L6>)
+## type RepoInfoCmd
 
 RepoInfoCmd shows repository statistics.
 
@@ -970,7 +1323,7 @@ type RepoInfoCmd struct{}
 ```
 
 <a name="RepoInfoCmd.Run"></a>
-### func \(\*RepoInfoCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_info.go#L8>)
+### func \(\*RepoInfoCmd\) Run
 
 ```go
 func (c *RepoInfoCmd) Run(g *Globals) error
@@ -979,7 +1332,7 @@ func (c *RepoInfoCmd) Run(g *Globals) error
 
 
 <a name="RepoInviteCmd"></a>
-## type [RepoInviteCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_invite.go#L12-L17>)
+## type RepoInviteCmd
 
 RepoInviteCmd generates an invite token for a new user.
 
@@ -993,7 +1346,7 @@ type RepoInviteCmd struct {
 ```
 
 <a name="RepoInviteCmd.Run"></a>
-### func \(\*RepoInviteCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_invite.go#L19>)
+### func \(\*RepoInviteCmd\) Run
 
 ```go
 func (c *RepoInviteCmd) Run(g *Globals) error
@@ -1001,8 +1354,30 @@ func (c *RepoInviteCmd) Run(g *Globals) error
 
 
 
+<a name="RepoLogCmd"></a>
+## type RepoLogCmd
+
+RepoLogCmd lists the check\-ins that changed one path, newest first, as fossil finfo does.
+
+```go
+type RepoLogCmd struct {
+    Path  string `required:"" help:"File name in the repository"`
+    JSON  bool   `help:"Print a JSON array instead of text"`
+    Limit int    `short:"n" help:"Number of entries (default: all)"`
+}
+```
+
+<a name="RepoLogCmd.Run"></a>
+### func \(\*RepoLogCmd\) Run
+
+```go
+func (c *RepoLogCmd) Run(g *Globals) (err error)
+```
+
+
+
 <a name="RepoLsCmd"></a>
-## type [RepoLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_ls.go#L6-L9>)
+## type RepoLsCmd
 
 RepoLsCmd lists files in a version.
 
@@ -1014,7 +1389,7 @@ type RepoLsCmd struct {
 ```
 
 <a name="RepoLsCmd.Run"></a>
-### func \(\*RepoLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_ls.go#L11>)
+### func \(\*RepoLsCmd\) Run
 
 ```go
 func (c *RepoLsCmd) Run(g *Globals) error
@@ -1023,12 +1398,13 @@ func (c *RepoLsCmd) Run(g *Globals) error
 
 
 <a name="RepoMergeCmd"></a>
-## type [RepoMergeCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_merge.go#L10-L15>)
+## type RepoMergeCmd
 
-RepoMergeCmd merges a divergent version into the current checkout.
+RepoMergeCmd merges a divergent version into the current checkout. In a store with a structural horizon, a merge whose base lies below the horizon asks \-\-remote, else the saved last\-sync\-url, for the base and deepens the horizon to reach it before merging \(draft\-fossil\-horizon\-00 §5.5\).
 
 ```go
 type RepoMergeCmd struct {
+    RecoveryFlags
     Version  string `arg:"" help:"Version to merge into current checkout"`
     Strategy string `help:"Override merge strategy for all files"`
     DryRun   bool   `help:"Show what would be merged without writing"`
@@ -1037,7 +1413,7 @@ type RepoMergeCmd struct {
 ```
 
 <a name="RepoMergeCmd.Run"></a>
-### func \(\*RepoMergeCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_merge.go#L17>)
+### func \(\*RepoMergeCmd\) Run
 
 ```go
 func (c *RepoMergeCmd) Run(g *Globals) (err error)
@@ -1046,7 +1422,7 @@ func (c *RepoMergeCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoMergeResolveCmd"></a>
-## type [RepoMergeResolveCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_merge_resolve.go#L14-L17>)
+## type RepoMergeResolveCmd
 
 RepoMergeResolveCmd marks a file conflict as resolved.
 
@@ -1060,7 +1436,7 @@ type RepoMergeResolveCmd struct {
 ```
 
 <a name="RepoMergeResolveCmd.Run"></a>
-### func \(\*RepoMergeResolveCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_merge_resolve.go#L19>)
+### func \(\*RepoMergeResolveCmd\) Run
 
 ```go
 func (c *RepoMergeResolveCmd) Run(g *Globals) (err error)
@@ -1069,19 +1445,19 @@ func (c *RepoMergeResolveCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoNewCmd"></a>
-## type [RepoNewCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_new.go#L10-L13>)
+## type RepoNewCmd
 
-RepoNewCmd creates a new Fossil repository.
+RepoNewCmd creates a new Fossil repository, at Path or else at the \-R path.
 
 ```go
 type RepoNewCmd struct {
-    Path string `arg:"" help:"Path for new repository file"`
+    Path string `arg:"" optional:"" help:"Path for new repository file (default: -R)"`
     User string `help:"Default user name" default:""`
 }
 ```
 
 <a name="RepoNewCmd.Run"></a>
-### func \(\*RepoNewCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_new.go#L15>)
+### func \(\*RepoNewCmd\) Run
 
 ```go
 func (c *RepoNewCmd) Run(g *Globals) error
@@ -1090,18 +1466,20 @@ func (c *RepoNewCmd) Run(g *Globals) error
 
 
 <a name="RepoOpenCmd"></a>
-## type [RepoOpenCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_open.go#L12-L14>)
+## type RepoOpenCmd
 
 RepoOpenCmd opens a checkout in a directory, creating the .fslckout database.
 
 ```go
 type RepoOpenCmd struct {
-    Dir string `arg:"" optional:"" help:"Checkout directory (default: current dir)" default:"."`
+    Dir     string   `arg:"" optional:"" help:"Checkout directory (default: current dir)" default:"."`
+    Cone    []string `name:"cone" help:"Make a sparse checkout: materialize and track only this path's subtree (repeatable)"`
+    ConeNot []string `name:"cone-not" help:"Exclude this path's subtree from an enclosing --cone (repeatable)"`
 }
 ```
 
 <a name="RepoOpenCmd.Run"></a>
-### func \(\*RepoOpenCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_open.go#L16>)
+### func \(\*RepoOpenCmd\) Run
 
 ```go
 func (c *RepoOpenCmd) Run(g *Globals) error
@@ -1110,7 +1488,7 @@ func (c *RepoOpenCmd) Run(g *Globals) error
 
 
 <a name="RepoQueryCmd"></a>
-## type [RepoQueryCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_query.go#L9-L11>)
+## type RepoQueryCmd
 
 RepoQueryCmd executes raw SQL against the repository database.
 
@@ -1121,7 +1499,7 @@ type RepoQueryCmd struct {
 ```
 
 <a name="RepoQueryCmd.Run"></a>
-### func \(\*RepoQueryCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_query.go#L13>)
+### func \(\*RepoQueryCmd\) Run
 
 ```go
 func (c *RepoQueryCmd) Run(g *Globals) error
@@ -1130,7 +1508,7 @@ func (c *RepoQueryCmd) Run(g *Globals) error
 
 
 <a name="RepoRedoCmd"></a>
-## type [RepoRedoCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_undo.go#L18-L20>)
+## type RepoRedoCmd
 
 RepoRedoCmd re\-applies the last undone operation.
 
@@ -1141,7 +1519,7 @@ type RepoRedoCmd struct {
 ```
 
 <a name="RepoRedoCmd.Run"></a>
-### func \(\*RepoRedoCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_undo.go#L22>)
+### func \(\*RepoRedoCmd\) Run
 
 ```go
 func (c *RepoRedoCmd) Run(g *Globals) error
@@ -1150,7 +1528,7 @@ func (c *RepoRedoCmd) Run(g *Globals) error
 
 
 <a name="RepoRenameCmd"></a>
-## type [RepoRenameCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_rename.go#L6-L10>)
+## type RepoRenameCmd
 
 RepoRenameCmd renames a tracked file in the checkout and on disk.
 
@@ -1163,7 +1541,7 @@ type RepoRenameCmd struct {
 ```
 
 <a name="RepoRenameCmd.Run"></a>
-### func \(\*RepoRenameCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_rename.go#L12>)
+### func \(\*RepoRenameCmd\) Run
 
 ```go
 func (c *RepoRenameCmd) Run(g *Globals) (err error)
@@ -1172,7 +1550,7 @@ func (c *RepoRenameCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoResolveCmd"></a>
-## type [RepoResolveCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_resolve.go#L6-L8>)
+## type RepoResolveCmd
 
 RepoResolveCmd resolves a symbolic name to UUID and RID.
 
@@ -1183,7 +1561,7 @@ type RepoResolveCmd struct {
 ```
 
 <a name="RepoResolveCmd.Run"></a>
-### func \(\*RepoResolveCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_resolve.go#L10>)
+### func \(\*RepoResolveCmd\) Run
 
 ```go
 func (c *RepoResolveCmd) Run(g *Globals) error
@@ -1192,7 +1570,7 @@ func (c *RepoResolveCmd) Run(g *Globals) error
 
 
 <a name="RepoRevertCmd"></a>
-## type [RepoRevertCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_revert.go#L10-L13>)
+## type RepoRevertCmd
 
 RepoRevertCmd restores files to their checked\-out version.
 
@@ -1204,7 +1582,7 @@ type RepoRevertCmd struct {
 ```
 
 <a name="RepoRevertCmd.Run"></a>
-### func \(\*RepoRevertCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_revert.go#L15>)
+### func \(\*RepoRevertCmd\) Run
 
 ```go
 func (c *RepoRevertCmd) Run(g *Globals) (err error)
@@ -1213,7 +1591,7 @@ func (c *RepoRevertCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoRmCmd"></a>
-## type [RepoRmCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_rm.go#L6-L9>)
+## type RepoRmCmd
 
 RepoRmCmd stages files for removal from the checkout.
 
@@ -1225,7 +1603,7 @@ type RepoRmCmd struct {
 ```
 
 <a name="RepoRmCmd.Run"></a>
-### func \(\*RepoRmCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_rm.go#L11>)
+### func \(\*RepoRmCmd\) Run
 
 ```go
 func (c *RepoRmCmd) Run(g *Globals) (err error)
@@ -1234,7 +1612,7 @@ func (c *RepoRmCmd) Run(g *Globals) (err error)
 
 
 <a name="RepoSchemaAddCmd"></a>
-## type [RepoSchemaAddCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L22-L26>)
+## type RepoSchemaAddCmd
 
 RepoSchemaAddCmd registers a new synced table.
 
@@ -1247,7 +1625,7 @@ type RepoSchemaAddCmd struct {
 ```
 
 <a name="RepoSchemaAddCmd.Run"></a>
-### func \(\*RepoSchemaAddCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L28>)
+### func \(\*RepoSchemaAddCmd\) Run
 
 ```go
 func (c *RepoSchemaAddCmd) Run(g *Globals) error
@@ -1256,7 +1634,7 @@ func (c *RepoSchemaAddCmd) Run(g *Globals) error
 
 
 <a name="RepoSchemaCmd"></a>
-## type [RepoSchemaCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L14-L19>)
+## type RepoSchemaCmd
 
 RepoSchemaCmd groups synced table schema operations.
 
@@ -1270,7 +1648,7 @@ type RepoSchemaCmd struct {
 ```
 
 <a name="RepoSchemaListCmd"></a>
-## type [RepoSchemaListCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L60>)
+## type RepoSchemaListCmd
 
 RepoSchemaListCmd lists registered synced tables.
 
@@ -1279,7 +1657,7 @@ type RepoSchemaListCmd struct{}
 ```
 
 <a name="RepoSchemaListCmd.Run"></a>
-### func \(\*RepoSchemaListCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L62>)
+### func \(\*RepoSchemaListCmd\) Run
 
 ```go
 func (c *RepoSchemaListCmd) Run(g *Globals) error
@@ -1288,7 +1666,7 @@ func (c *RepoSchemaListCmd) Run(g *Globals) error
 
 
 <a name="RepoSchemaRemoveCmd"></a>
-## type [RepoSchemaRemoveCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L133-L135>)
+## type RepoSchemaRemoveCmd
 
 RepoSchemaRemoveCmd removes a synced table registration.
 
@@ -1299,7 +1677,7 @@ type RepoSchemaRemoveCmd struct {
 ```
 
 <a name="RepoSchemaRemoveCmd.Run"></a>
-### func \(\*RepoSchemaRemoveCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L137>)
+### func \(\*RepoSchemaRemoveCmd\) Run
 
 ```go
 func (c *RepoSchemaRemoveCmd) Run(g *Globals) error
@@ -1308,7 +1686,7 @@ func (c *RepoSchemaRemoveCmd) Run(g *Globals) error
 
 
 <a name="RepoSchemaShowCmd"></a>
-## type [RepoSchemaShowCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L93-L95>)
+## type RepoSchemaShowCmd
 
 RepoSchemaShowCmd shows table schema details.
 
@@ -1319,7 +1697,7 @@ type RepoSchemaShowCmd struct {
 ```
 
 <a name="RepoSchemaShowCmd.Run"></a>
-### func \(\*RepoSchemaShowCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_schema.go#L97>)
+### func \(\*RepoSchemaShowCmd\) Run
 
 ```go
 func (c *RepoSchemaShowCmd) Run(g *Globals) error
@@ -1328,9 +1706,9 @@ func (c *RepoSchemaShowCmd) Run(g *Globals) error
 
 
 <a name="RepoServeCmd"></a>
-## type [RepoServeCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_serve.go#L19-L21>)
+## type RepoServeCmd
 
-RepoServeCmd starts an HTTP xfer server for the repository so a remote fossil client \-\- the canonical binary or another instance of this tool \-\- can clone or sync against it. This is a thin wrapper: all serving logic lives in Repo.ServeHTTP; the command's job is to open the repo, resolve the bind address, and translate process interrupt into the context cancellation that ServeHTTP already honors. Access follows the user table, as with fossil serve: clients without credentials act as nobody, which may clone and pull a new repository but not push to it.
+RepoServeCmd starts an HTTP xfer server for the repository so a remote fossil client \-\- the canonical binary or another instance of this tool \-\- can clone or sync against it. This is a thin wrapper: all serving logic lives in Repo.ServeHTTP; the command's job is to open the repo, resolve the bind address, and translate process interrupt into the context cancellation that ServeHTTP already honors. Access follows the user table, as with fossil serve: clients without credentials act as nobody, which may clone and pull a new repository but not push to it. A repository with a store cone refuses clones its cone does not cover unless \`repo config set partial\-mirror on\` marks it a partial mirror.
 
 ```go
 type RepoServeCmd struct {
@@ -1339,7 +1717,7 @@ type RepoServeCmd struct {
 ```
 
 <a name="RepoServeCmd.Run"></a>
-### func \(\*RepoServeCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_serve.go#L23>)
+### func \(\*RepoServeCmd\) Run
 
 ```go
 func (c *RepoServeCmd) Run(g *Globals) error
@@ -1347,8 +1725,32 @@ func (c *RepoServeCmd) Run(g *Globals) error
 
 
 
+<a name="RepoSnapshotCmd"></a>
+## type RepoSnapshotCmd
+
+RepoSnapshotCmd commits the bytes of one file onto trunk without a checkout: the tip's other files carry forward, and bytes equal to the tip's are a no\-op that prints the existing tip.
+
+```go
+type RepoSnapshotCmd struct {
+    Message string `short:"m" required:"" help:"Checkin comment"`
+    Path    string `required:"" help:"File name in the repository (relative, slash-separated); the bytes come from this path on disk unless --stdin"`
+    Stdin   bool   `help:"Read the bytes from stdin instead of from --path on disk"`
+    User    string `help:"Checkin user (default: OS username)"`
+    JSON    bool   `help:"Print {\"uuid\":...,\"changed\":...} instead of the bare uuid"`
+}
+```
+
+<a name="RepoSnapshotCmd.Run"></a>
+### func \(\*RepoSnapshotCmd\) Run
+
+```go
+func (c *RepoSnapshotCmd) Run(g *Globals) (err error)
+```
+
+
+
 <a name="RepoStashApplyCmd"></a>
-## type [RepoStashApplyCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L45-L48>)
+## type RepoStashApplyCmd
 
 RepoStashApplyCmd applies a stash entry without removing it.
 
@@ -1360,7 +1762,7 @@ type RepoStashApplyCmd struct {
 ```
 
 <a name="RepoStashApplyCmd.Run"></a>
-### func \(\*RepoStashApplyCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L50>)
+### func \(\*RepoStashApplyCmd\) Run
 
 ```go
 func (c *RepoStashApplyCmd) Run(g *Globals) error
@@ -1369,7 +1771,7 @@ func (c *RepoStashApplyCmd) Run(g *Globals) error
 
 
 <a name="RepoStashClearCmd"></a>
-## type [RepoStashClearCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L98>)
+## type RepoStashClearCmd
 
 RepoStashClearCmd removes all stash entries.
 
@@ -1378,7 +1780,7 @@ type RepoStashClearCmd struct{}
 ```
 
 <a name="RepoStashClearCmd.Run"></a>
-### func \(\*RepoStashClearCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L100>)
+### func \(\*RepoStashClearCmd\) Run
 
 ```go
 func (c *RepoStashClearCmd) Run(g *Globals) error
@@ -1387,7 +1789,7 @@ func (c *RepoStashClearCmd) Run(g *Globals) error
 
 
 <a name="RepoStashCmd"></a>
-## type [RepoStashCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L6-L13>)
+## type RepoStashCmd
 
 RepoStashCmd groups stash operations.
 
@@ -1403,7 +1805,7 @@ type RepoStashCmd struct {
 ```
 
 <a name="RepoStashDropCmd"></a>
-## type [RepoStashDropCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L84-L86>)
+## type RepoStashDropCmd
 
 RepoStashDropCmd removes a stash entry by ID.
 
@@ -1414,7 +1816,7 @@ type RepoStashDropCmd struct {
 ```
 
 <a name="RepoStashDropCmd.Run"></a>
-### func \(\*RepoStashDropCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L88>)
+### func \(\*RepoStashDropCmd\) Run
 
 ```go
 func (c *RepoStashDropCmd) Run(g *Globals) error
@@ -1423,7 +1825,7 @@ func (c *RepoStashDropCmd) Run(g *Globals) error
 
 
 <a name="RepoStashLsCmd"></a>
-## type [RepoStashLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L60>)
+## type RepoStashLsCmd
 
 RepoStashLsCmd lists stash entries.
 
@@ -1432,7 +1834,7 @@ type RepoStashLsCmd struct{}
 ```
 
 <a name="RepoStashLsCmd.Run"></a>
-### func \(\*RepoStashLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L62>)
+### func \(\*RepoStashLsCmd\) Run
 
 ```go
 func (c *RepoStashLsCmd) Run(g *Globals) error
@@ -1441,7 +1843,7 @@ func (c *RepoStashLsCmd) Run(g *Globals) error
 
 
 <a name="RepoStashPopCmd"></a>
-## type [RepoStashPopCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L31-L33>)
+## type RepoStashPopCmd
 
 RepoStashPopCmd pops the top stash entry.
 
@@ -1452,7 +1854,7 @@ type RepoStashPopCmd struct {
 ```
 
 <a name="RepoStashPopCmd.Run"></a>
-### func \(\*RepoStashPopCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L35>)
+### func \(\*RepoStashPopCmd\) Run
 
 ```go
 func (c *RepoStashPopCmd) Run(g *Globals) error
@@ -1461,7 +1863,7 @@ func (c *RepoStashPopCmd) Run(g *Globals) error
 
 
 <a name="RepoStashSaveCmd"></a>
-## type [RepoStashSaveCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L16-L19>)
+## type RepoStashSaveCmd
 
 RepoStashSaveCmd saves working changes to the stash.
 
@@ -1473,7 +1875,7 @@ type RepoStashSaveCmd struct {
 ```
 
 <a name="RepoStashSaveCmd.Run"></a>
-### func \(\*RepoStashSaveCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_stash.go#L21>)
+### func \(\*RepoStashSaveCmd\) Run
 
 ```go
 func (c *RepoStashSaveCmd) Run(g *Globals) error
@@ -1482,9 +1884,9 @@ func (c *RepoStashSaveCmd) Run(g *Globals) error
 
 
 <a name="RepoStatusCmd"></a>
-## type [RepoStatusCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_status.go#L16-L18>)
+## type RepoStatusCmd
 
-RepoStatusCmd shows working directory changes vs the tip version.
+RepoStatusCmd shows the checkout's changes against its checked\-out version.
 
 ```go
 type RepoStatusCmd struct {
@@ -1493,7 +1895,7 @@ type RepoStatusCmd struct {
 ```
 
 <a name="RepoStatusCmd.Run"></a>
-### func \(\*RepoStatusCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_status.go#L20>)
+### func \(\*RepoStatusCmd\) Run
 
 ```go
 func (c *RepoStatusCmd) Run(g *Globals) error
@@ -1502,7 +1904,7 @@ func (c *RepoStatusCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsCmd"></a>
-## type [RepoSubmanifestsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L14-L19>)
+## type RepoSubmanifestsCmd
 
 RepoSubmanifestsCmd groups the sub\-manifest settings \(draft\-fossil\-submanifests\-00\): whether new check\-ins are written as trees, and the partition parameter k they are built with.
 
@@ -1516,7 +1918,7 @@ type RepoSubmanifestsCmd struct {
 ```
 
 <a name="RepoSubmanifestsDisableCmd"></a>
-## type [RepoSubmanifestsDisableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L75>)
+## type RepoSubmanifestsDisableCmd
 
 RepoSubmanifestsDisableCmd turns tree emission off; existing trees stay.
 
@@ -1525,7 +1927,7 @@ type RepoSubmanifestsDisableCmd struct{}
 ```
 
 <a name="RepoSubmanifestsDisableCmd.Run"></a>
-### func \(\*RepoSubmanifestsDisableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L77>)
+### func \(\*RepoSubmanifestsDisableCmd\) Run
 
 ```go
 func (c *RepoSubmanifestsDisableCmd) Run(g *Globals) error
@@ -1534,7 +1936,7 @@ func (c *RepoSubmanifestsDisableCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsEnableCmd"></a>
-## type [RepoSubmanifestsEnableCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L22-L24>)
+## type RepoSubmanifestsEnableCmd
 
 RepoSubmanifestsEnableCmd turns tree emission on, pinning k the first time.
 
@@ -1545,7 +1947,7 @@ type RepoSubmanifestsEnableCmd struct {
 ```
 
 <a name="RepoSubmanifestsEnableCmd.Run"></a>
-### func \(\*RepoSubmanifestsEnableCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L26>)
+### func \(\*RepoSubmanifestsEnableCmd\) Run
 
 ```go
 func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error
@@ -1554,7 +1956,7 @@ func (c *RepoSubmanifestsEnableCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsRetuneCmd"></a>
-## type [RepoSubmanifestsRetuneCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L54-L56>)
+## type RepoSubmanifestsRetuneCmd
 
 RepoSubmanifestsRetuneCmd re\-pins k; a re\-tune is always explicit.
 
@@ -1565,7 +1967,7 @@ type RepoSubmanifestsRetuneCmd struct {
 ```
 
 <a name="RepoSubmanifestsRetuneCmd.Run"></a>
-### func \(\*RepoSubmanifestsRetuneCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L58>)
+### func \(\*RepoSubmanifestsRetuneCmd\) Run
 
 ```go
 func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error
@@ -1574,7 +1976,7 @@ func (c *RepoSubmanifestsRetuneCmd) Run(g *Globals) error
 
 
 <a name="RepoSubmanifestsStatusCmd"></a>
-## type [RepoSubmanifestsStatusCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L100>)
+## type RepoSubmanifestsStatusCmd
 
 RepoSubmanifestsStatusCmd prints the three settings and whether the repository holds any S\-bearing artifact.
 
@@ -1583,7 +1985,7 @@ type RepoSubmanifestsStatusCmd struct{}
 ```
 
 <a name="RepoSubmanifestsStatusCmd.Run"></a>
-### func \(\*RepoSubmanifestsStatusCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_submanifests.go#L102>)
+### func \(\*RepoSubmanifestsStatusCmd\) Run
 
 ```go
 func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error
@@ -1592,7 +1994,7 @@ func (c *RepoSubmanifestsStatusCmd) Run(g *Globals) error
 
 
 <a name="RepoTagAddCmd"></a>
-## type [RepoTagAddCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_tag.go#L60-L64>)
+## type RepoTagAddCmd
 
 RepoTagAddCmd adds a tag to an artifact.
 
@@ -1605,7 +2007,7 @@ type RepoTagAddCmd struct {
 ```
 
 <a name="RepoTagAddCmd.Run"></a>
-### func \(\*RepoTagAddCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_tag.go#L66>)
+### func \(\*RepoTagAddCmd\) Run
 
 ```go
 func (c *RepoTagAddCmd) Run(g *Globals) error
@@ -1614,7 +2016,7 @@ func (c *RepoTagAddCmd) Run(g *Globals) error
 
 
 <a name="RepoTagCmd"></a>
-## type [RepoTagCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_tag.go#L9-L12>)
+## type RepoTagCmd
 
 RepoTagCmd groups tag operations.
 
@@ -1626,7 +2028,7 @@ type RepoTagCmd struct {
 ```
 
 <a name="RepoTagLsCmd"></a>
-## type [RepoTagLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_tag.go#L15-L17>)
+## type RepoTagLsCmd
 
 RepoTagLsCmd lists tags on an artifact.
 
@@ -1637,7 +2039,7 @@ type RepoTagLsCmd struct {
 ```
 
 <a name="RepoTagLsCmd.Run"></a>
-### func \(\*RepoTagLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_tag.go#L19>)
+### func \(\*RepoTagLsCmd\) Run
 
 ```go
 func (c *RepoTagLsCmd) Run(g *Globals) error
@@ -1646,7 +2048,7 @@ func (c *RepoTagLsCmd) Run(g *Globals) error
 
 
 <a name="RepoTimelineCmd"></a>
-## type [RepoTimelineCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_timeline.go#L10-L12>)
+## type RepoTimelineCmd
 
 RepoTimelineCmd shows repository timeline/history.
 
@@ -1657,7 +2059,7 @@ type RepoTimelineCmd struct {
 ```
 
 <a name="RepoTimelineCmd.Run"></a>
-### func \(\*RepoTimelineCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_timeline.go#L14>)
+### func \(\*RepoTimelineCmd\) Run
 
 ```go
 func (c *RepoTimelineCmd) Run(g *Globals) error
@@ -1666,7 +2068,7 @@ func (c *RepoTimelineCmd) Run(g *Globals) error
 
 
 <a name="RepoUVCmd"></a>
-## type [RepoUVCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L10-L15>)
+## type RepoUVCmd
 
 RepoUVCmd groups unversioned file operations.
 
@@ -1680,7 +2082,7 @@ type RepoUVCmd struct {
 ```
 
 <a name="RepoUVDeleteCmd"></a>
-## type [RepoUVDeleteCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L110-L112>)
+## type RepoUVDeleteCmd
 
 RepoUVDeleteCmd deletes an unversioned file \(creates a tombstone\).
 
@@ -1691,7 +2093,7 @@ type RepoUVDeleteCmd struct {
 ```
 
 <a name="RepoUVDeleteCmd.Run"></a>
-### func \(\*RepoUVDeleteCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L114>)
+### func \(\*RepoUVDeleteCmd\) Run
 
 ```go
 func (c *RepoUVDeleteCmd) Run(g *Globals) error
@@ -1700,7 +2102,7 @@ func (c *RepoUVDeleteCmd) Run(g *Globals) error
 
 
 <a name="RepoUVGetCmd"></a>
-## type [RepoUVGetCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L79-L82>)
+## type RepoUVGetCmd
 
 RepoUVGetCmd retrieves an unversioned file.
 
@@ -1712,7 +2114,7 @@ type RepoUVGetCmd struct {
 ```
 
 <a name="RepoUVGetCmd.Run"></a>
-### func \(\*RepoUVGetCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L84>)
+### func \(\*RepoUVGetCmd\) Run
 
 ```go
 func (c *RepoUVGetCmd) Run(g *Globals) error
@@ -1721,7 +2123,7 @@ func (c *RepoUVGetCmd) Run(g *Globals) error
 
 
 <a name="RepoUVLsCmd"></a>
-## type [RepoUVLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L18>)
+## type RepoUVLsCmd
 
 RepoUVLsCmd lists unversioned files.
 
@@ -1730,7 +2132,7 @@ type RepoUVLsCmd struct{}
 ```
 
 <a name="RepoUVLsCmd.Run"></a>
-### func \(\*RepoUVLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L20>)
+### func \(\*RepoUVLsCmd\) Run
 
 ```go
 func (c *RepoUVLsCmd) Run(g *Globals) error
@@ -1739,7 +2141,7 @@ func (c *RepoUVLsCmd) Run(g *Globals) error
 
 
 <a name="RepoUVPutCmd"></a>
-## type [RepoUVPutCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L53-L56>)
+## type RepoUVPutCmd
 
 RepoUVPutCmd adds or updates an unversioned file.
 
@@ -1751,7 +2153,7 @@ type RepoUVPutCmd struct {
 ```
 
 <a name="RepoUVPutCmd.Run"></a>
-### func \(\*RepoUVPutCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_uv.go#L58>)
+### func \(\*RepoUVPutCmd\) Run
 
 ```go
 func (c *RepoUVPutCmd) Run(g *Globals) error
@@ -1760,7 +2162,7 @@ func (c *RepoUVPutCmd) Run(g *Globals) error
 
 
 <a name="RepoUndoCmd"></a>
-## type [RepoUndoCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_undo.go#L4-L6>)
+## type RepoUndoCmd
 
 RepoUndoCmd undoes the last checkout operation.
 
@@ -1771,7 +2173,7 @@ type RepoUndoCmd struct {
 ```
 
 <a name="RepoUndoCmd.Run"></a>
-### func \(\*RepoUndoCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_undo.go#L8>)
+### func \(\*RepoUndoCmd\) Run
 
 ```go
 func (c *RepoUndoCmd) Run(g *Globals) error
@@ -1780,7 +2182,7 @@ func (c *RepoUndoCmd) Run(g *Globals) error
 
 
 <a name="RepoUserCmd"></a>
-## type [RepoUserCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L12-L18>)
+## type RepoUserCmd
 
 RepoUserCmd groups user management operations.
 
@@ -1795,16 +2197,21 @@ type RepoUserCmd struct {
 ```
 
 <a name="RepoVerifyCmd"></a>
-## type [RepoVerifyCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_verify.go#L6>)
+## type RepoVerifyCmd
 
-RepoVerifyCmd verifies repository integrity.
+RepoVerifyCmd verifies repository integrity: every held artifact against its name, delta chains, phantom records and the derived tables. It reports what the store lacks by class \(sparse\-cone §5.2\): transit phantoms, which sync still wants, apart from artifacts the store cone deliberately elides, which are healthy and never an error.
+
+\-\-seed first verifies a structural store's seed by deepening \(draft\-fossil\-horizon\-00 §5.9\): the history below the horizon is fetched from \-\-remote, else the saved last\-sync\-url, and what it derives is compared with what the seed asserted. The store is left a content\-horizon store, which holds no seed.
 
 ```go
-type RepoVerifyCmd struct{}
+type RepoVerifyCmd struct {
+    RecoveryFlags
+    Seed bool `help:"Verify the structural horizon's seed by fetching the history below it (keeps the content horizon)"`
+}
 ```
 
 <a name="RepoVerifyCmd.Run"></a>
-### func \(\*RepoVerifyCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_verify.go#L8>)
+### func \(\*RepoVerifyCmd\) Run
 
 ```go
 func (c *RepoVerifyCmd) Run(g *Globals) error
@@ -1813,7 +2220,7 @@ func (c *RepoVerifyCmd) Run(g *Globals) error
 
 
 <a name="RepoWikiCmd"></a>
-## type [RepoWikiCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_wiki.go#L13-L16>)
+## type RepoWikiCmd
 
 RepoWikiCmd groups wiki operations.
 
@@ -1825,7 +2232,7 @@ type RepoWikiCmd struct {
 ```
 
 <a name="RepoWikiExportCmd"></a>
-## type [RepoWikiExportCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_wiki.go#L60-L63>)
+## type RepoWikiExportCmd
 
 RepoWikiExportCmd exports a wiki page.
 
@@ -1837,7 +2244,7 @@ type RepoWikiExportCmd struct {
 ```
 
 <a name="RepoWikiExportCmd.Run"></a>
-### func \(\*RepoWikiExportCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_wiki.go#L65>)
+### func \(\*RepoWikiExportCmd\) Run
 
 ```go
 func (c *RepoWikiExportCmd) Run(g *Globals) error
@@ -1846,7 +2253,7 @@ func (c *RepoWikiExportCmd) Run(g *Globals) error
 
 
 <a name="RepoWikiLsCmd"></a>
-## type [RepoWikiLsCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_wiki.go#L19>)
+## type RepoWikiLsCmd
 
 RepoWikiLsCmd lists wiki pages.
 
@@ -1855,7 +2262,7 @@ type RepoWikiLsCmd struct{}
 ```
 
 <a name="RepoWikiLsCmd.Run"></a>
-### func \(\*RepoWikiLsCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_wiki.go#L21>)
+### func \(\*RepoWikiLsCmd\) Run
 
 ```go
 func (c *RepoWikiLsCmd) Run(g *Globals) error
@@ -1864,7 +2271,7 @@ func (c *RepoWikiLsCmd) Run(g *Globals) error
 
 
 <a name="UserAddCmd"></a>
-## type [UserAddCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L21-L24>)
+## type UserAddCmd
 
 UserAddCmd creates a new user.
 
@@ -1876,7 +2283,7 @@ type UserAddCmd struct {
 ```
 
 <a name="UserAddCmd.Run"></a>
-### func \(\*UserAddCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L26>)
+### func \(\*UserAddCmd\) Run
 
 ```go
 func (c *UserAddCmd) Run(g *Globals) error
@@ -1885,7 +2292,7 @@ func (c *UserAddCmd) Run(g *Globals) error
 
 
 <a name="UserListCmd"></a>
-## type [UserListCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L51>)
+## type UserListCmd
 
 UserListCmd lists all users.
 
@@ -1894,7 +2301,7 @@ type UserListCmd struct{}
 ```
 
 <a name="UserListCmd.Run"></a>
-### func \(\*UserListCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L53>)
+### func \(\*UserListCmd\) Run
 
 ```go
 func (c *UserListCmd) Run(g *Globals) error
@@ -1903,7 +2310,7 @@ func (c *UserListCmd) Run(g *Globals) error
 
 
 <a name="UserPasswdCmd"></a>
-## type [UserPasswdCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L111-L113>)
+## type UserPasswdCmd
 
 UserPasswdCmd resets a user's password.
 
@@ -1914,7 +2321,7 @@ type UserPasswdCmd struct {
 ```
 
 <a name="UserPasswdCmd.Run"></a>
-### func \(\*UserPasswdCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L115>)
+### func \(\*UserPasswdCmd\) Run
 
 ```go
 func (c *UserPasswdCmd) Run(g *Globals) error
@@ -1923,7 +2330,7 @@ func (c *UserPasswdCmd) Run(g *Globals) error
 
 
 <a name="UserRmCmd"></a>
-## type [UserRmCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L92-L94>)
+## type UserRmCmd
 
 UserRmCmd deletes a user.
 
@@ -1934,7 +2341,7 @@ type UserRmCmd struct {
 ```
 
 <a name="UserRmCmd.Run"></a>
-### func \(\*UserRmCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L96>)
+### func \(\*UserRmCmd\) Run
 
 ```go
 func (c *UserRmCmd) Run(g *Globals) error
@@ -1943,7 +2350,7 @@ func (c *UserRmCmd) Run(g *Globals) error
 
 
 <a name="UserUpdateCmd"></a>
-## type [UserUpdateCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L72-L75>)
+## type UserUpdateCmd
 
 UserUpdateCmd updates user capabilities.
 
@@ -1955,7 +2362,7 @@ type UserUpdateCmd struct {
 ```
 
 <a name="UserUpdateCmd.Run"></a>
-### func \(\*UserUpdateCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/repo_user.go#L77>)
+### func \(\*UserUpdateCmd\) Run
 
 ```go
 func (c *UserUpdateCmd) Run(g *Globals) error
@@ -1964,7 +2371,7 @@ func (c *UserUpdateCmd) Run(g *Globals) error
 
 
 <a name="VersionCmd"></a>
-## type [VersionCmd](<https://github.com/danmestas/go-libfossil/blob/main/cli/version.go#L52>)
+## type VersionCmd
 
 VersionCmd prints a single\-line, stable, machine\-parseable build identifier and exits 0.
 
@@ -1973,7 +2380,7 @@ type VersionCmd struct{}
 ```
 
 <a name="VersionCmd.Run"></a>
-### func \(\*VersionCmd\) [Run](<https://github.com/danmestas/go-libfossil/blob/main/cli/version.go#L56>)
+### func \(\*VersionCmd\) Run
 
 ```go
 func (c *VersionCmd) Run() error

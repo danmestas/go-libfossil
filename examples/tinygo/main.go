@@ -7,6 +7,10 @@
 // the ncruces driver, which embeds SQLite as a wasm module run by an
 // interpreter, is for standard Go builds. CI builds this example with TinyGo
 // so the module keeps compiling there.
+//
+// It imports sshverify, which links SSH signature verification, so the
+// build covers a store whose horizon-seed-key is an SSH key. An application
+// that never verifies an SSH signature leaves it out and is smaller.
 package main
 
 import (
@@ -14,6 +18,7 @@ import (
 	"log"
 
 	"github.com/danmestas/go-libfossil"
+	_ "github.com/danmestas/go-libfossil/sshverify"
 )
 
 func main() {

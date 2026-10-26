@@ -94,13 +94,28 @@ The clone verifies every seed it holds: at clone time, on every pull, and when i
 | Signed by the key, in namespace `fossil-horizon-seed` for SSH | yes | Held. |
 | Unsigned, signed by another key, or SSH-signed in another namespace | yes | Discarded; the store falls back to the content horizon. |
 | Any | no | Held. A clone with no key accepts an unsigned seed. |
-| Verifier could not run (gpg missing or timed out) | yes | The seed already held is kept and the error is reported. A new seed is refused. Nothing falls back. |
+| Verifier could not run (gpg missing or timed out, or an SSH key in a program that does not link `sshverify`) | yes | The seed already held is kept and the error is reported. A new seed is refused. Nothing falls back. |
 
 Whatever its signature, a seed is also refused when its binding card does not name the clone's own horizon or it is dated before the seed the clone holds; see [the binding card](/docs/concepts/horizons/#the-binding-card).
 
 Setting the origin's own `horizon-seed-key` to its public key makes it check a kept signature before serving it, so replacing the key behind an unchanged seed command takes effect at once.
 
 A signature proves where a seed came from, not that its derivation is right (§5.2.4). `repo verify --seed` (`Repo.VerifySeed`) checks the seed against the history it summarizes.
+
+## Verifying SSH signatures from Go
+
+SSH signatures are verified in process, and the library links that cryptography only into a program that asks for it. A program that verifies seeds against an SSH key imports the `sshverify` package for its side effect:
+
+```go
+import (
+    libfossil "github.com/danmestas/go-libfossil"
+    _ "github.com/danmestas/go-libfossil/sshverify"
+)
+```
+
+The `libfossil` command imports it. A program that does not, and never verifies an SSH signature, leaves out `golang.org/x/crypto/ssh` and the ECDSA, Ed25519 and RSA code it pulls in, which matters to a wasm build. Signing needs no import: it runs `ssh-keygen`. PGP keys are verified by `gpg` either way.
+
+Without the import, nothing signed is accepted unchecked. A clone whose `horizon-seed-key` is an SSH key refuses a new seed, and a sync or rebuild fails with an error wrapping `libfossil.ErrSSHVerifierUnavailable`, which names the package to import; the seed already held is kept, and nothing falls back. A seed whose signature is malformed or in another namespace is still discarded, since that needs no cryptography to tell. A clone with no key is unaffected. An origin whose own `horizon-seed-key` is an SSH key cannot check its kept signatures, so it signs each seed afresh for every request.
 
 ## Limits
 
@@ -110,6 +125,7 @@ A signature proves where a seed came from, not that its derivation is right (§5
 ## Where the code is
 
 - `signing.go`: the setting constants.
-- `internal/clearsign`: running the signer, the SSH envelope, SSH verification in process, gpg verification.
+- `internal/clearsign`: running the signer, the SSH envelope, gpg verification, and the registry the SSH verifier joins.
+- `sshverify`: SSH signature verification in process, linked by importing it.
 - `internal/manifest/manifest.go`: signing a check-in before it is stored.
 - `internal/sync/horizon_seedsign.go` and `internal/horizon/seed`: signing seeds at the origin and verifying them at the clone.

@@ -73,6 +73,7 @@ This file is generated from `docs/site/llms-header.md` plus the docs site. Every
 - [dst](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/dst/api/):   - func NewDefaultNode\(r \*repo.Repo, t sync.Transport, projectCode, serverCode string, opts DefaultNodeOpts\) \*DefaultNode   - func \(n \*DefaultNode\) Repo\(\) \*repo.Repo   - func \(n \*DefaultNode\) Tick\(ctx c...
 - [libfossil](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/libfossil/api/):   - [func \(c \*Checkout\) Add\(patterns \[\]string\) \(int, error\)](<#Checkout.Add>)   - func \(c \*Checkout\) Checkin\(opts CheckoutCommitOpts\) \(rid int64, uuid string, err error\)   - func \(c \*Checkout\) Check...
 - [observer/otel](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/observer/otel/api/): Package otel provides OpenTelemetry implementations of the libfossil SyncObserver and CheckoutObserver interfaces.
+- [sshverify](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/sdk/sshverify/api/): Package sshverify links in\-process verification of SSH signatures into a program that uses go\-libfossil.
 - [CLI](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/): The libfossil command, one page per command group.
 - [repo new](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-new/): Create a new repository
 - [repo clone](https://libfossil-docs.daniel-mestas.workers.dev/docs/reference/cli/repo-clone/): Clone a remote repository

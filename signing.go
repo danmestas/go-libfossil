@@ -33,7 +33,20 @@ const SettingPGPCommand = clearsign.SettingPGPCommand
 // unset, an unsigned seed is accepted. An SSH signature must carry the
 // namespace fossil-horizon-seed. CloneOpts.SeedKey sets it when the clone is
 // made. It is the clone's own: an origin never sends it.
+//
+// SSH signatures are verified only in a program that imports package
+// github.com/danmestas/go-libfossil/sshverify; without it, a seed under an
+// SSH key is refused with ErrSSHVerifierUnavailable.
 const SettingHorizonSeedKey = clearsign.SettingSeedKey
+
+// ErrSSHVerifierUnavailable is the error, wrapped, of an operation that had
+// to verify an SSH signature in a program that does not link the verifier:
+// a sync or rebuild of a store whose SettingHorizonSeedKey is an SSH key
+// fails with it, and the seed is neither accepted nor discarded. Import
+// package github.com/danmestas/go-libfossil/sshverify for its side effect
+// to verify SSH signatures; the library leaves that cryptography out of
+// programs that never verify one.
+var ErrSSHVerifierUnavailable = clearsign.ErrSSHVerifierUnavailable
 
 // SettingHorizonSeedCommand names the command an origin signs the
 // structural horizon seeds it mints with (draft-fossil-horizon-00 §5.2.4),

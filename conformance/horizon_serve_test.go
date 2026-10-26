@@ -51,19 +51,19 @@ func horizonServeCases() []Case {
 }
 
 func TestHorizonServe(t *testing.T) {
-	check(t, horizonServeRequest, func() error { return hzServeRequest(t) })
-	check(t, horizonServeAbove, func() error { return hzServeAbove(t) })
-	check(t, horizonServePaths, func() error { return hzServePaths(t) })
-	check(t, horizonServeTree, func() error { return hzServeTree(t) })
-	check(t, horizonServeRounds, func() error { return hzServeRounds(t) })
-	check(t, horizonServeClusters, func() error { return hzServeClusters(t) })
-	check(t, horizonServeInflate, func() error { return hzServeInflate(t) })
-	check(t, horizonServeServed, func() error { return hzServeServed(t) })
-	check(t, horizonServeIgnored, func() error { return hzServeIgnored(t) })
-	check(t, horizonServeRefuse, func() error { return hzServeRefuse(t) })
-	check(t, horizonServeNoChase, func() error { return hzServeNoChase(t) })
-	check(t, horizonServeOrigin, func() error { return hzServeOriginClusters(t) })
-	check(t, horizonServeHistory, func() error { return hzServeHistoryURL(t) })
+	check(t, horizonServeRequest, func(t *testing.T) error { return hzServeRequest(t) })
+	check(t, horizonServeAbove, func(t *testing.T) error { return hzServeAbove(t) })
+	check(t, horizonServePaths, func(t *testing.T) error { return hzServePaths(t) })
+	check(t, horizonServeTree, func(t *testing.T) error { return hzServeTree(t) })
+	check(t, horizonServeRounds, func(t *testing.T) error { return hzServeRounds(t) })
+	check(t, horizonServeClusters, func(t *testing.T) error { return hzServeClusters(t) })
+	check(t, horizonServeInflate, func(t *testing.T) error { return hzServeInflate(t) })
+	check(t, horizonServeServed, func(t *testing.T) error { return hzServeServed(t) })
+	check(t, horizonServeIgnored, func(t *testing.T) error { return hzServeIgnored(t) })
+	check(t, horizonServeRefuse, func(t *testing.T) error { return hzServeRefuse(t) })
+	check(t, horizonServeNoChase, func(t *testing.T) error { return hzServeNoChase(t) })
+	check(t, horizonServeOrigin, func(t *testing.T) error { return hzServeOriginClusters(t) })
+	check(t, horizonServeHistory, func(t *testing.T) error { return hzServeHistoryURL(t) })
 }
 
 // hzPragmas returns the values of every pragma named name in m.

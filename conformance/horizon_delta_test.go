@@ -31,8 +31,8 @@ var horizonDeltaBoundary = Case{ID: "horizon.5.3.baseline-parent", Req: "HZ-5.3-
 func horizonDeltaCases() []Case { return []Case{horizonDeltaBaseline, horizonDeltaBoundary} }
 
 func TestHorizonDeltaBaseline(t *testing.T) {
-	check(t, horizonDeltaBaseline, func() error { return hzDeltaBaseline(t) })
-	check(t, horizonDeltaBoundary, func() error { return hzDeltaBoundary(t) })
+	check(t, horizonDeltaBaseline, func(t *testing.T) error { return hzDeltaBaseline(t) })
+	check(t, horizonDeltaBoundary, func(t *testing.T) error { return hzDeltaBoundary(t) })
 }
 
 // hzDelta is c1 -> c2 -> c3 -> c4 at an origin, c3 and c4 delta manifests

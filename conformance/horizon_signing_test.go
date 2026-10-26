@@ -38,8 +38,8 @@ var (
 func horizonSigningCases() []Case { return []Case{horizonSeedSigned, horizonSeedVerified} }
 
 func TestHorizonSeedSigning(t *testing.T) {
-	check(t, horizonSeedSigned, func() error { return hzSeedSigned(t) })
-	check(t, horizonSeedVerified, func() error { return hzSeedKeyVerified(t) })
+	check(t, horizonSeedSigned, func(t *testing.T) error { return hzSeedSigned(t) })
+	check(t, horizonSeedVerified, func(t *testing.T) error { return hzSeedKeyVerified(t) })
 }
 
 // hzSigningOrigin makes command x's origin's seed-signing command.

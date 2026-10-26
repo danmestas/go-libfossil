@@ -39,7 +39,7 @@ type apiCase struct {
 
 func TestArtifactAPI(t *testing.T) {
 	for _, c := range apiCases() {
-		check(t, c.Case, func() error { return c.run(t) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t) })
 	}
 }
 

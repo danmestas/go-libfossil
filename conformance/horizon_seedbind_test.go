@@ -49,8 +49,8 @@ var (
 )
 
 func TestHorizonSeedBinding(t *testing.T) {
-	check(t, horizonBindingCard, func() error { return hzBindingCard(t) })
-	check(t, horizonBindOtherC, func() error {
+	check(t, horizonBindingCard, func(t *testing.T) error { return hzBindingCard(t) })
+	check(t, horizonBindOtherC, func(t *testing.T) error {
 		return hzBindRefused(t, func(x *hzStruct) (string, []byte, error) {
 			k, err := horizon.HeldSet(context.Background(), x.s.f.r.DB(), x.s.c4, cone.RuleDescendants)
 			if err != nil {
@@ -59,27 +59,27 @@ func TestHorizonSeedBinding(t *testing.T) {
 			return seed.Mint(x.s.f.r.DB(), x.s.c4, cone.RuleDescendants, k, seedLoginGo)
 		})
 	})
-	check(t, horizonBindOtherRule, func() error {
+	check(t, horizonBindOtherRule, func(t *testing.T) error {
 		return hzBindRefused(t, func(x *hzStruct) (string, []byte, error) {
 			return seed.Mint(x.s.f.r.DB(), x.s.c3, cone.RuleLeaves, x.s.k, seedLoginGo)
 		})
 	})
-	check(t, horizonBindNone, func() error {
+	check(t, horizonBindNone, func(t *testing.T) error {
 		return hzBindRefused(t, hzRebound(func(cards []deck.TagCard, _ *hzStruct) []deck.TagCard {
 			return slices.DeleteFunc(cards, func(tc deck.TagCard) bool { return tc.Name == seed.BindingTag })
 		}))
 	})
-	check(t, horizonBindTwice, func() error {
+	check(t, horizonBindTwice, func(t *testing.T) error {
 		// The extra card sorts before C's, so C's is the last a reader sees.
 		return hzBindRefused(t, hzRebound(func(cards []deck.TagCard, _ *hzStruct) []deck.TagCard {
 			return append(cards, deck.TagCard{Type: deck.TagSingleton, Name: seed.BindingTag,
 				UUID: strings.Repeat("0", 40), Value: "descendants"})
 		}))
 	})
-	check(t, horizonBindReplay, func() error { return hzBindReplay(t) })
-	check(t, horizonBindNamespace, func() error { return hzBindNamespace(t) })
-	check(t, horizonBindCommand, func() error { return hzBindCommand(t) })
-	check(t, horizonBindNotDerived, func() error { return hzBindNotDerived(t) })
+	check(t, horizonBindReplay, func(t *testing.T) error { return hzBindReplay(t) })
+	check(t, horizonBindNamespace, func(t *testing.T) error { return hzBindNamespace(t) })
+	check(t, horizonBindCommand, func(t *testing.T) error { return hzBindCommand(t) })
+	check(t, horizonBindNotDerived, func(t *testing.T) error { return hzBindNotDerived(t) })
 }
 
 // hzSwapSeed makes a reply's seed name and data: it renames the reply's

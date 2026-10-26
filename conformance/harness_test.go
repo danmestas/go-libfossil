@@ -60,12 +60,14 @@ func judge(c Case, problem error) (outcome, string) {
 
 // check runs one case as a subtest. conforms returns nil when go-libfossil
 // does what the case expects, or a one-line description of what it did
-// instead.
-func check(t *testing.T, c Case, conforms func() error) {
+// instead. It is handed the subtest's t, so a fixture that skips or fails
+// (fossil(1) absent, a setup error) ends that case alone; calling Skip or
+// FailNow on the parent from inside the subtest fails the whole run.
+func check(t *testing.T, c Case, conforms func(t *testing.T) error) {
 	t.Helper()
 	t.Run(c.ID, func(t *testing.T) {
 		t.Helper()
-		result, message := judge(c, conforms())
+		result, message := judge(c, conforms(t))
 		switch result {
 		case outcomePass:
 		case outcomeFail:

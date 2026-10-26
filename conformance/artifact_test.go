@@ -284,7 +284,7 @@ func TestArtifactBases(t *testing.T) {
 func TestArtifactParse(t *testing.T) {
 	ref := newFossilReference(t)
 	for _, c := range artifactCases() {
-		check(t, c.Case, func() error { return c.conforms(ref) })
+		check(t, c.Case, func(t *testing.T) error { return c.conforms(ref) })
 	}
 }
 

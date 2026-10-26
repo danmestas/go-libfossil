@@ -134,7 +134,7 @@ func runRepoStateCases(t *testing.T, cases []rsCase) {
 	for _, c := range cases {
 		script := rsBuild(c.arts)
 		for _, v := range c.variants() {
-			check(t, v.Case, func() error {
+			check(t, v.Case, func(t *testing.T) error {
 				if ref != nil {
 					if err := c.fossilAgrees(ref, script, v, loaded); err != nil {
 						return err

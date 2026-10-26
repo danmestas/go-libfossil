@@ -45,7 +45,7 @@ var (
 const horizonHash = "0123456789abcdef0123456789abcdef01234567"
 
 func TestHorizon(t *testing.T) {
-	check(t, horizonCanonical, func() error {
+	check(t, horizonCanonical, func(t *testing.T) error {
 		h, err := cone.NewHorizon(horizonHash, cone.RuleLeaves, cone.DepthContent)
 		if err != nil {
 			return err
@@ -91,7 +91,7 @@ func TestHorizon(t *testing.T) {
 		return nil
 	})
 
-	check(t, horizonUnknownVersion, func() error {
+	check(t, horizonUnknownVersion, func(t *testing.T) error {
 		// A version-2 cone with one inclusion, relabelled as each version
 		// above the horizon's: a reader that skipped the version would see
 		// "src".
@@ -116,9 +116,9 @@ func TestHorizon(t *testing.T) {
 		}
 		return nil
 	})
-	check(t, horizonHeldSetRules, func() error { return hzRules(t) })
-	check(t, horizonHeldSetRecomputed, func() error { return hzRecomputed(t) })
-	check(t, horizonHeldSetClosed, func() error { return hzClosed(t) })
+	check(t, horizonHeldSetRules, func(t *testing.T) error { return hzRules(t) })
+	check(t, horizonHeldSetRecomputed, func(t *testing.T) error { return hzRecomputed(t) })
+	check(t, horizonHeldSetClosed, func(t *testing.T) error { return hzClosed(t) })
 }
 
 // hzGraph is trunk c1..c4 with C = c3, a branch feat forked at c1 (below C)

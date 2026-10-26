@@ -296,14 +296,14 @@ func deltaSuiteCases() []Case {
 func TestDelta(t *testing.T) {
 	ref := newFossilReference(t)
 	for _, c := range deltaTableCases() {
-		check(t, c.Case, func() error { return c.conforms(ref) })
+		check(t, c.Case, func(t *testing.T) error { return c.conforms(ref) })
 	}
 }
 
 func TestDeltaProcedures(t *testing.T) {
 	ref := newFossilReference(t)
 	for _, c := range deltaFuncCases() {
-		check(t, c.Case, func() error { return c.run(t, ref) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t, ref) })
 	}
 }
 

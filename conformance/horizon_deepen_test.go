@@ -56,19 +56,19 @@ var (
 )
 
 func TestHorizonDeepen(t *testing.T) {
-	check(t, horizonMergeBaseQuery, func() error { return hzMergeBaseQuery(t) })
-	check(t, horizonMergeBaseBound, func() error { return hzMergeBaseBound(t) })
-	check(t, horizonDeepen, func() error { return hzDeepen(t) })
-	check(t, horizonDeepenPoint, func() error { return hzDeepenPoint(t) })
-	check(t, horizonDeepenFailed, func() error { return hzDeepenFailed(t) })
-	check(t, horizonDeepenRefused, func() error { return hzDeepenRefused(t) })
-	check(t, horizonMergeCrossing, func() error { return hzMergeCrossing(t) })
-	check(t, horizonMergeDeepen, func() error { return hzMergeDeepen(t) })
-	check(t, horizonMergeMustAsk, func() error { return hzMergeMustAsk(t) })
-	check(t, horizonMergeListForm, func() error { return hzMergeListForm(t) })
-	check(t, horizonPushCheck, func() error { return hzPushCheck(t) })
-	check(t, horizonSeedVerify, func() error { return hzSeedVerify(t) })
-	check(t, horizonBisectCrossing, func() error { return hzBisectCrossing(t) })
+	check(t, horizonMergeBaseQuery, func(t *testing.T) error { return hzMergeBaseQuery(t) })
+	check(t, horizonMergeBaseBound, func(t *testing.T) error { return hzMergeBaseBound(t) })
+	check(t, horizonDeepen, func(t *testing.T) error { return hzDeepen(t) })
+	check(t, horizonDeepenPoint, func(t *testing.T) error { return hzDeepenPoint(t) })
+	check(t, horizonDeepenFailed, func(t *testing.T) error { return hzDeepenFailed(t) })
+	check(t, horizonDeepenRefused, func(t *testing.T) error { return hzDeepenRefused(t) })
+	check(t, horizonMergeCrossing, func(t *testing.T) error { return hzMergeCrossing(t) })
+	check(t, horizonMergeDeepen, func(t *testing.T) error { return hzMergeDeepen(t) })
+	check(t, horizonMergeMustAsk, func(t *testing.T) error { return hzMergeMustAsk(t) })
+	check(t, horizonMergeListForm, func(t *testing.T) error { return hzMergeListForm(t) })
+	check(t, horizonPushCheck, func(t *testing.T) error { return hzPushCheck(t) })
+	check(t, horizonSeedVerify, func(t *testing.T) error { return hzSeedVerify(t) })
+	check(t, horizonBisectCrossing, func(t *testing.T) error { return hzBisectCrossing(t) })
 }
 
 // hzMergeBaseQuery: a structural clone asks its origin for the merge base of

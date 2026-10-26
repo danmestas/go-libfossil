@@ -46,15 +46,15 @@ func horizonNodesCases() []Case {
 }
 
 func TestHorizonNodes(t *testing.T) {
-	check(t, horizonNodesStore, func() error { return hzNodesClone(t, cone.DepthContent) })
-	check(t, horizonNodesHeld, func() error { return hzNodesClone(t, cone.DepthContent) })
-	check(t, horizonNodesContent, func() error { return hzNodesClone(t, cone.DepthContent) })
-	check(t, horizonNodesWholeTree, func() error { return hzNodesWholeTree(t) })
-	check(t, horizonNodesDerived, func() error { return hzNodesDerived(t) })
-	check(t, horizonNodesStructural, func() error { return hzNodesClone(t, cone.DepthStructural) })
-	check(t, horizonNodesServe, func() error { return hzNodesServe(t) })
-	check(t, horizonNodesWalk, func() error { return hzNodesWalk(t) })
-	check(t, horizonNodesRekept, func() error { return hzNodesRekept(t) })
+	check(t, horizonNodesStore, func(t *testing.T) error { return hzNodesClone(t, cone.DepthContent) })
+	check(t, horizonNodesHeld, func(t *testing.T) error { return hzNodesClone(t, cone.DepthContent) })
+	check(t, horizonNodesContent, func(t *testing.T) error { return hzNodesClone(t, cone.DepthContent) })
+	check(t, horizonNodesWholeTree, func(t *testing.T) error { return hzNodesWholeTree(t) })
+	check(t, horizonNodesDerived, func(t *testing.T) error { return hzNodesDerived(t) })
+	check(t, horizonNodesStructural, func(t *testing.T) error { return hzNodesClone(t, cone.DepthStructural) })
+	check(t, horizonNodesServe, func(t *testing.T) error { return hzNodesServe(t) })
+	check(t, horizonNodesWalk, func(t *testing.T) error { return hzNodesWalk(t) })
+	check(t, horizonNodesRekept, func(t *testing.T) error { return hzNodesRekept(t) })
 }
 
 // hzNodesOrigin is a tree origin with three check-ins, c1 below the horizon

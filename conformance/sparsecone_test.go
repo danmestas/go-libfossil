@@ -52,7 +52,7 @@ func sparseconeSuiteCases() []Case {
 
 func TestSparseCone(t *testing.T) {
 	for _, c := range sparseconeCases() {
-		check(t, c.Case, func() error { return c.run(t) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t) })
 	}
 }
 

@@ -34,9 +34,9 @@ func horizonCLICases() []Case {
 }
 
 func TestHorizonCLI(t *testing.T) {
-	check(t, horizonLeavesWarning, func() error { return hzLeavesWarning(t) })
-	check(t, horizonNoCountOrDate, func() error { return hzNoCountOrDate(t) })
-	check(t, horizonRuleCost, func() error { return hzRuleCost(t) })
+	check(t, horizonLeavesWarning, func(t *testing.T) error { return hzLeavesWarning(t) })
+	check(t, horizonNoCountOrDate, func(t *testing.T) error { return hzNoCountOrDate(t) })
+	check(t, horizonRuleCost, func(t *testing.T) error { return hzRuleCost(t) })
 }
 
 // hzRuleCost: a tool that lets the operator choose a horizon shows what each

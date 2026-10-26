@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifact from a machine whose clock runs behind is still found. An unknown
   hash is an error and an empty result is an empty slice (tracked in #504).
 
+### Fixed
+
+- `Create` refused every path under TinyGo wasm, where a repository lives in
+  a SQLite VFS and `os.Stat` is unsupported: its parent-directory check read
+  "cannot stat" as "missing". It now refuses only a parent the filesystem
+  confirms is missing or is not a directory, and otherwise lets SQLite's own
+  open report a real failure (tracked in #509).
+
 ## [0.16.2] - 2026-10-25
 
 ### Added

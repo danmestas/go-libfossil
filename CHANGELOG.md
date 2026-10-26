@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Repo.TicketAdd` and `Repo.TicketSet` create and amend tickets. Each writes
+  the change artifact `fossil ticket add` and `fossil ticket set` write for the
+  same fields, user and time, byte for byte, and links it in the same
+  transaction, so the ticket, ticketchng and timeline rows read back at once
+  and the artifact syncs like any other. Fields are checked against the
+  repository's ticket schema as fossil checks them; a `+name` field appends.
+  `TicketOpts.Comment` adds a remark the way the stock ticket forms store one
+  (icomment, with login, username and mimetype). `private_` fields are refused,
+  because fossil conceals their values and this does not (tracked in #503).
+- `Repo.TicketList` returns every ticket with its fields, status and last
+  change time, and `Repo.TicketChanges` returns one ticket's change artifacts in
+  the order fossil applies them, with author, time, fields and remark. Both
+  results encode to JSON with lower-case keys (tracked in #504).
+- `Repo.TimelineSince` returns the timeline entries newer than a given
+  artifact, optionally only those of the given kinds, so a caller holding a
+  known check-in can tell which tickets, wiki edits or forum posts came after
+  it. Newer means later in the timeline, by the artifacts' own times, not by
+  arrival. An empty result is an empty slice (tracked in #504).
+
 ## [0.16.2] - 2026-10-25
 
 ### Added

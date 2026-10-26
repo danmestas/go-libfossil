@@ -32,16 +32,17 @@ func goListDeps(t *testing.T, goos, goarch, pkg string) []string {
 	return strings.Fields(string(out))
 }
 
-// TestSSHVerifyIsOptIn: the library and its db package link no SSH
-// cryptography, for the host or for js/wasm, so an embedder that never
-// verifies an SSH signature does not carry it; the sshverify package
-// links it, and the libfossil command, which verifies, imports it.
+// TestSSHVerifyIsOptIn: the packages an embedder links (the library, db and
+// simio) carry no SSH cryptography, for the host or for js/wasm, so a
+// program that never verifies an SSH signature does not carry it; the
+// sshverify package links it, and the libfossil command, which verifies,
+// imports it.
 func TestSSHVerifyIsOptIn(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs the go tool")
 	}
 	for _, target := range [][2]string{{"", ""}, {"js", "wasm"}} {
-		for _, pkg := range []string{".", "./db"} {
+		for _, pkg := range []string{".", "./db", "./simio"} {
 			if slices.Contains(goListDeps(t, target[0], target[1], pkg), sshImportPath) {
 				t.Errorf("%s (GOOS=%q) links %s; import sshverify to opt in instead",
 					pkg, target[0], sshImportPath)

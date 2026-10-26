@@ -49,6 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OriginNamer` itself. The name must identify the peer stably across
   sessions and carry no credential (tracked in #488).
 
+### Changed
+
+- Reading a tree manifest parses each distinct sub-manifest once per content
+  cache rather than once per check-in (draft-fossil-submanifests-00 §7.4). The
+  walk keeps each node's parse under its hash beside the cached content, in
+  a memo bounded to a quarter of the cache's bytes, so a crosslink sweep, and
+  `ListFiles` with `Repo.SetContentCache` on, of a check-in that differs from
+  one already read in a single leaf parses only its manifest and that leaf.
+  Listing every check-in of zit's recorded tree history parses 48
+  sub-manifests where it parsed 109. A node that is a phantom is not
+  remembered and fails the walk as before (tracked in #493).
+
 ### Fixed
 
 - `Create` with an empty `CreateOpts.User` panicked with `db.SeedUser: login

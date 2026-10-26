@@ -637,6 +637,62 @@ func smMissingIsFatal(f *smFixture) error {
 	return nil
 }
 
+// smMemoized lists two trees that share all but their last leaf through one
+// cache: the second parses only its manifest and that leaf, each distinct
+// sub-manifest is parsed once, and both list as they do uncached.
+func smMemoized(f *smFixture) error {
+	refs, err := f.leaves([]string{"a"}, []string{"b"}, []string{"c"}, []string{"d"})
+	if err != nil {
+		return err
+	}
+	inner, err := f.interior(refs[0], refs[1])
+	if err != nil {
+		return err
+	}
+	revised, err := f.store([]byte("d, revised\n"))
+	if err != nil {
+		return err
+	}
+	leaf, err := f.storeDeck(&deck.Deck{F: []deck.FileCard{{Name: "d", UUID: revised}}})
+	if err != nil {
+		return err
+	}
+	rid1, uuid1, err := f.checkin(smTime, []deck.SubmanifestCard{inner, refs[2], refs[3]})
+	if err != nil {
+		return err
+	}
+	d2 := []deck.SubmanifestCard{inner, refs[2], {Name: "d", UUID: leaf}}
+	rid2, _, err := f.checkin(smTime.Add(time.Minute), d2, uuid1)
+	if err != nil {
+		return err
+	}
+	cache := content.NewCache(64 << 20)
+	var parsed int64
+	for _, rid := range []libfossil.FslID{rid1, rid2} {
+		before := cache.Stats()
+		cached, err := manifest.ListFilesCached(f.r, rid, cache)
+		if err != nil {
+			return err
+		}
+		plain, err := manifest.ListFiles(f.r, rid)
+		if err != nil {
+			return err
+		}
+		if fmt.Sprint(cached) != fmt.Sprint(plain) {
+			return fmt.Errorf("memoized listing %v, uncached %v", cached, plain)
+		}
+		after := cache.Stats()
+		parsed = after.Hits + after.Misses - before.Hits - before.Misses
+	}
+	if parsed != 2 {
+		return fmt.Errorf("the second tree parsed %d artifacts, want its manifest and one leaf", parsed)
+	}
+	if n := cache.Stats().SizedStores; n != 6 {
+		return fmt.Errorf("the walks parsed %d sub-manifests, want the 6 distinct ones", n)
+	}
+	return nil
+}
+
 func smGapRetried(f *smFixture) error {
 	file, err := f.file("b")
 	if err != nil {
@@ -792,6 +848,7 @@ func smStateCases() []smCase {
 		}),
 		smRepoCase("submanifest.7.1.dephantomize-retries", "SM-7.1-2", smGapRetried),
 		smRepoCase("submanifest.7.3.deferred-like-delta", "SM-7.3-1", smMissingIsFatal),
+		smRepoCase("submanifest.7.4.memoized-enumeration", "SM-7.4-1", smMemoized),
 		smRepoCase("submanifest.7.3.no-crosslink-effect", "SM-7.3-2", func(f *smFixture) error {
 			refs, err := f.leaves([]string{"a"})
 			if err != nil {

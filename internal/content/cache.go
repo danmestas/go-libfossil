@@ -27,6 +27,13 @@ type Cache struct {
 	derived      map[any]any
 	derivedOrder []any
 	derivedHits  int64
+	// sized is the byte-bounded LRU memo of cache_sized.go; sizedOrder is its
+	// recency order, most recent first, and sizedSize the bytes it charges.
+	sized       map[any]*list.Element
+	sizedOrder  *list.List
+	sizedSize   int64
+	sizedHits   int64
+	sizedStores int64
 	// unchecked marks a cache made by NewUncheckedCache, which holds bytes
 	// not checked against their names and serves only ExpandUnchecked.
 	unchecked bool
@@ -44,6 +51,11 @@ type CacheStats struct {
 	// DerivedHits counts Derived lookups that found a value: reads that
 	// reused work done on cached content rather than expanding it again.
 	DerivedHits int64
+	// SizedHits counts DerivedSized lookups that found a value, and
+	// SizedStores the values SetDerivedSized added under a key not held:
+	// for the sub-manifest walk, the nodes it reused and the nodes it parsed.
+	SizedHits   int64
+	SizedStores int64
 	Size        int64
 	MaxSize     int64
 	Entries     int
@@ -309,6 +321,7 @@ func (c *Cache) SetDerived(key, v any) {
 func (c *Cache) dropDerivedLocked() {
 	c.derived = nil
 	c.derivedOrder = c.derivedOrder[:0]
+	c.dropSizedLocked()
 }
 
 // Holds reports whether rid's content is cached, without counting a hit or a
@@ -363,6 +376,8 @@ func (c *Cache) Stats() CacheStats {
 		Hits:        c.hits,
 		Misses:      c.misses,
 		DerivedHits: c.derivedHits,
+		SizedHits:   c.sizedHits,
+		SizedStores: c.sizedStores,
 		Size:        c.curSize,
 		MaxSize:     c.maxSize,
 		Entries:     c.order.Len(),

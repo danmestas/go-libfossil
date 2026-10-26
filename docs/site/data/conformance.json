@@ -1,6 +1,6 @@
 {
-  "requirements": 635,
-  "covered": 628,
+  "requirements": 636,
+  "covered": 629,
   "partial": 7,
   "suites": [
     {
@@ -3431,13 +3431,13 @@
       "suite": "submanifest",
       "title": "Sub-manifests",
       "draft": "draft-fossil-submanifests-00",
-      "requirements": 75,
-      "covered": 75,
+      "requirements": 76,
+      "covered": 76,
       "partial": 0,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 142,
+      "cases": 143,
       "rows": [
         {
           "id": "SM-3.1-1",
@@ -3925,6 +3925,14 @@
           "status": "COVERED",
           "cases": 2,
           "text": "A SUBMANIFEST artifact has no crosslink effect of its own, and a derived view over an incomplete tree closure is not presented as complete.",
+          "notes": ""
+        },
+        {
+          "id": "SM-7.4-1",
+          "section": "7.4",
+          "status": "COVERED",
+          "cases": 1,
+          "text": "Sub-manifest enumeration results are cached by artifact name, so a reader parses each distinct sub-manifest once and a tree that shares all but one leaf with one already read parses only its manifest and that leaf.",
           "notes": ""
         },
         {

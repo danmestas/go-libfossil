@@ -768,6 +768,62 @@ func TestZitTreeBundle(t *testing.T) {
 		t.Fatal("no recorded listings")
 	}
 	checkTreeRepo(t, r, func(uuid string) []string { return want[uuid] })
+	checkTreeMemo(t, r, func(uuid string) []string { return want[uuid] })
+}
+
+// checkTreeMemo lists every check-in of r through one cache (§7.4): each
+// listing matches want, and each distinct sub-manifest is parsed once.
+func checkTreeMemo(t *testing.T, r *repo.Repo, want func(uuid string) []string) {
+	t.Helper()
+	cis, err := checkinRIDs(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := content.NewCache(256 << 20)
+	for rid, uuid := range cis {
+		files, err := manifest.ListFilesCached(r, rid, cache)
+		if err != nil {
+			t.Fatalf("ListFilesCached %s: %v", uuid, err)
+		}
+		var got []string
+		for _, f := range files {
+			got = append(got, f.Name+" "+f.UUID)
+		}
+		sort.Strings(got)
+		if strings.Join(got, "\n") != strings.Join(want(uuid), "\n") {
+			t.Errorf("memoized listing of %s:\n go  %q\n zit %q", uuid[:10], got, want(uuid))
+		}
+	}
+	nodes, err := r.DB().Query("SELECT rid FROM blob WHERE size>=0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rids []fsltype.FslID
+	for nodes.Next() {
+		var rid int64
+		if err := nodes.Scan(&rid); err != nil {
+			t.Fatal(err)
+		}
+		rids = append(rids, fsltype.FslID(rid))
+	}
+	nodes.Close()
+	distinct := 0
+	for _, rid := range rids {
+		data, err := content.Expand(r.DB(), rid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d, err := deck.Parse(data); err == nil && d.Type == deck.Submanifest {
+			distinct++
+		}
+	}
+	st := cache.Stats()
+	t.Logf("§7.4: %d sub-manifests parsed, %d resolutions served from the memo",
+		st.SizedStores, st.SizedHits)
+	if got := st.SizedStores; got != int64(distinct) {
+		t.Fatalf("listing every check-in parsed %d sub-manifests, want the %d distinct ones",
+			got, distinct)
+	}
 }
 
 func readZitListings() (map[string][]string, error) {

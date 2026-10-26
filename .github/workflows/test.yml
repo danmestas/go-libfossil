@@ -36,14 +36,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The checksummed release tarballs are cached by version and checksum,
+      # so their servers are needed only on a cache miss, not on every run;
+      # a cached copy is still verified before it is installed.
+      - name: Cache pinned Fossil
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fossil-release
+          key: fossil-linux-x64-${{ env.FOSSIL_VERSION }}-${{ env.FOSSIL_SHA256 }}
       - name: Install pinned Fossil
         run: |
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-            -o /tmp/fossil.tar.gz \
-            "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
-          echo "${FOSSIL_SHA256}  /tmp/fossil.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/fossil.tar.gz -C /usr/local/bin fossil
-          rm -f /tmp/fossil.tar.gz
+          tarball="$HOME/.cache/fossil-release/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          if ! echo "${FOSSIL_SHA256}  ${tarball}" | sha256sum -c - >/dev/null 2>&1; then
+            mkdir -p "$(dirname "$tarball")"
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
+              "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          fi
+          echo "${FOSSIL_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "$tarball" -C /usr/local/bin fossil
       - name: Verify Fossil version
         # A silent upstream change has to surface as an explicit failure here,
         # not as mysterious behavioural drift in the real-fossil-gated tests.
@@ -54,14 +64,21 @@ jobs:
             exit 1
           fi
           fossil version
+      - name: Cache pinned zit
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zit-release
+          key: zit-linux-x86_64-${{ env.ZIT_VERSION }}-${{ env.ZIT_SHA256 }}
       - name: Install pinned zit
         run: |
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-            -o /tmp/zit.tar.gz \
-            "https://fossil.craftdesign.group/zit/uv/releases/${ZIT_VERSION}/zit-${ZIT_VERSION}-linux-x86_64.tar.gz"
-          echo "${ZIT_SHA256}  /tmp/zit.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/zit.tar.gz -C /usr/local/bin --strip-components=1 "zit-${ZIT_VERSION}/zit"
-          rm -f /tmp/zit.tar.gz
+          tarball="$HOME/.cache/zit-release/zit-${ZIT_VERSION}-linux-x86_64.tar.gz"
+          if ! echo "${ZIT_SHA256}  ${tarball}" | sha256sum -c - >/dev/null 2>&1; then
+            mkdir -p "$(dirname "$tarball")"
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
+              "https://fossil.craftdesign.group/zit/uv/releases/${ZIT_VERSION}/zit-${ZIT_VERSION}-linux-x86_64.tar.gz"
+          fi
+          echo "${ZIT_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "$tarball" -C /usr/local/bin --strip-components=1 "zit-${ZIT_VERSION}/zit"
           zit version
       - name: Warm Fossil global config
         # Fossil keeps a per-user global config database outside any repository
@@ -132,14 +149,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The checksummed release tarballs are cached by version and checksum,
+      # so their servers are needed only on a cache miss, not on every run;
+      # a cached copy is still verified before it is installed.
+      - name: Cache pinned Fossil
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fossil-release
+          key: fossil-linux-x64-${{ env.FOSSIL_VERSION }}-${{ env.FOSSIL_SHA256 }}
       - name: Install pinned Fossil
         run: |
-          curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors \
-            -o /tmp/fossil.tar.gz \
-            "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
-          echo "${FOSSIL_SHA256}  /tmp/fossil.tar.gz" | sha256sum -c -
-          sudo tar -xzf /tmp/fossil.tar.gz -C /usr/local/bin fossil
-          rm -f /tmp/fossil.tar.gz
+          tarball="$HOME/.cache/fossil-release/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          if ! echo "${FOSSIL_SHA256}  ${tarball}" | sha256sum -c - >/dev/null 2>&1; then
+            mkdir -p "$(dirname "$tarball")"
+            curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o "$tarball" \
+              "https://fossil-scm.org/home/uv/fossil-linux-x64-${FOSSIL_VERSION}.tar.gz"
+          fi
+          echo "${FOSSIL_SHA256}  ${tarball}" | sha256sum -c -
+          sudo tar -xzf "$tarball" -C /usr/local/bin fossil
       - name: Verify Fossil version
         # A silent upstream change has to surface as an explicit failure here,
         # not as mysterious behavioural drift in the real-fossil-gated tests.

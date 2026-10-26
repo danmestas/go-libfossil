@@ -146,26 +146,29 @@ func (r *Repo) TicketChanges(ticket string) ([]TicketChange, error) {
 	return changes, nil
 }
 
-// TimelineSince returns the timeline entries newer than the artifact with
-// full hash hash, newest first, in Timeline's order: an entry is newer when
-// its time is later, or equal with a higher rid. kinds, when given, keeps only
-// entries of those kinds. An empty result is an empty slice, not nil.
+// TimelineSince returns the timeline entries whose artifacts arrived in this
+// repository after the artifact with full hash hash: stored by a later
+// receipt (a later push, pull or local write), or later within the same
+// one. kinds, when given, keeps only entries of those kinds. The entries are
+// in Timeline's order, newest first; an empty result is an empty slice, not
+// nil. A hash the repository does not hold is an error.
 //
-// Newer means later in the timeline, which is the artifacts' own times, not
-// the order they arrived in: an artifact made on a clock behind the given
-// artifact's is not newer, whenever it was received.
+// Arrival, not timestamp, is what "after" means, because the question this
+// answers is what a push brought in: an artifact made on a machine whose
+// clock runs behind the given artifact's still arrived after it. Arrival
+// order is this repository's own, so two clones can answer differently.
 func (r *Repo) TimelineSince(hash string, kinds ...EventKind) ([]TimelineEntry, error) {
 	for _, k := range kinds {
 		if k == "" || !k.Valid() {
 			return nil, fmt.Errorf("libfossil: timeline since: unknown event kind %q", k)
 		}
 	}
-	since, err := manifest.TimelineCursor(r.inner.DB(), hash)
+	rid, err := manifest.ArtifactRID(r.inner.DB(), hash)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline since: %w", err)
 	}
 	entries, err := manifest.Timeline(r.inner, manifest.TimelineOpts{
-		Kinds: []fsltype.EventKind(kinds), Since: since,
+		Kinds: []fsltype.EventKind(kinds), ArrivedAfter: rid,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline since: %w", err)

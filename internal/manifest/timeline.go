@@ -29,9 +29,10 @@ type TimelineOpts struct {
 	// Kinds, when not empty, restricts the enumeration to events of any of
 	// these kinds, alongside Type.
 	Kinds []libfossil.EventKind
-	// Since, when valid, restricts results to events strictly newer than this
-	// cursor: the mirror of After. TimelineCursor gives an artifact's.
-	Since libfossil.Cursor
+	// ArrivedAfter, when positive, restricts results to events whose artifact
+	// was stored after the artifact with this rid: a later receipt (rcvid),
+	// or the same receipt and a higher rid. See arrivedAfterCond.
+	ArrivedAfter libfossil.FslID
 }
 
 // TimelineEntry is a single event as returned by Timeline. It extends
@@ -165,9 +166,9 @@ func timelineQuery(opts TimelineOpts) (string, []any) {
 		conds = append(conds, "(e.mtime < ? OR (e.mtime = ? AND b.rid < ?))")
 		args = append(args, opts.After.Julian(), opts.After.Julian(), int64(opts.After.RID()))
 	}
-	if opts.Since.Valid() {
-		conds = append(conds, "(e.mtime > ? OR (e.mtime = ? AND b.rid > ?))")
-		args = append(args, opts.Since.Julian(), opts.Since.Julian(), int64(opts.Since.RID()))
+	if after := int64(opts.ArrivedAfter); after > 0 {
+		conds = append(conds, arrivedAfterCond)
+		args = append(args, after, after, after)
 	}
 	if len(conds) > 0 {
 		query += " WHERE " + strings.Join(conds, " AND ")
@@ -180,23 +181,28 @@ func timelineQuery(opts TimelineOpts) (string, []any) {
 	return query, args
 }
 
-// TimelineCursor returns the timeline position of the artifact with full
-// hash uuid, for TimelineOpts.Since or After. An artifact with no timeline
-// entry -- a file, a cluster -- has no position.
-func TimelineCursor(q db.Querier, uuid string) (libfossil.Cursor, error) {
-	var mtime any
+// arrivedAfterCond orders artifacts by when this repository stored their
+// content. blob.rcvid names the receipt that delivered it -- one push, one
+// pull, one local write -- and is set again when a phantom is filled, so an
+// artifact first known as a phantom counts as arriving with its content; a
+// rid alone would not, being allocated when the phantom is made. Within one
+// receipt the rid breaks the tie.
+const arrivedAfterCond = "(coalesce(b.rcvid, 0) > " +
+	"(SELECT coalesce(rcvid, 0) FROM blob WHERE rid = ?) " +
+	"OR (coalesce(b.rcvid, 0) = (SELECT coalesce(rcvid, 0) FROM blob WHERE rid = ?) " +
+	"AND b.rid > ?))"
+
+// ArtifactRID returns the rid of the artifact with full hash uuid whose
+// content the repository holds, or an error naming it.
+func ArtifactRID(q db.Querier, uuid string) (libfossil.FslID, error) {
 	var rid int64
-	err := q.QueryRow("SELECT e.mtime, e.objid FROM event e JOIN blob b ON b.rid = e.objid "+
-		"WHERE b.uuid = ?", strings.ToLower(uuid)).Scan(&mtime, &rid)
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid = ? AND size >= 0",
+		strings.ToLower(uuid)).Scan(&rid)
 	if err == sql.ErrNoRows {
-		return libfossil.Cursor{}, fmt.Errorf("artifact %s has no timeline entry", uuid)
+		return 0, fmt.Errorf("unknown artifact %s", uuid)
 	}
 	if err != nil {
-		return libfossil.Cursor{}, fmt.Errorf("timeline cursor: %w", err)
+		return 0, fmt.Errorf("artifact rid: %w", err)
 	}
-	julian, ok := db.ScanTextJulianDay(mtime)
-	if !ok {
-		return libfossil.Cursor{}, fmt.Errorf("timeline cursor: unexpected mtime type %T", mtime)
-	}
-	return libfossil.NewCursor(julian, libfossil.FslID(rid)), nil
+	return libfossil.FslID(rid), nil
 }

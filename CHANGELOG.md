@@ -22,11 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change time, and `Repo.TicketChanges` returns one ticket's change artifacts in
   the order fossil applies them, with author, time, fields and remark. Both
   results encode to JSON with lower-case keys (tracked in #504).
-- `Repo.TimelineSince` returns the timeline entries newer than a given
-  artifact, optionally only those of the given kinds, so a caller holding a
-  known check-in can tell which tickets, wiki edits or forum posts came after
-  it. Newer means later in the timeline, by the artifacts' own times, not by
-  arrival. An empty result is an empty slice (tracked in #504).
+- `Repo.TimelineSince` returns the timeline entries whose artifacts arrived in
+  the repository after a given artifact, optionally only those of the given
+  kinds, so a sync handler holding the tip from before a push can tell which
+  tickets, wiki edits or forum posts the push brought. After means stored
+  later (a later receipt, then a higher rid), not stamped later, so an
+  artifact from a machine whose clock runs behind is still found. An unknown
+  hash is an error and an empty result is an empty slice (tracked in #504).
 
 ## [0.16.2] - 2026-10-25
 

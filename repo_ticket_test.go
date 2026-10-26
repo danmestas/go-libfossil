@@ -336,6 +336,38 @@ func assertTicketJSON(
 	}
 }
 
+// TimelineSince goes by arrival, not timestamp: a ticket stamped before the
+// check-in but stored after it is returned, and one stamped after the
+// check-in but stored before it is not.
+func TestTimelineSinceIsArrivalOrder(t *testing.T) {
+	r := newTicketRepo(t)
+	_, early := mustTicketAdd(t, r, TicketOpts{
+		Fields: map[string]string{"title": "stored first, stamped late"}, User: "a",
+		Time: ticketT0.Add(time.Hour),
+	})
+	_, checkin, err := r.Commit(CommitOpts{
+		Files:   []FileToCommit{{Name: "a", Content: []byte("a")}},
+		Comment: "c", User: "alice", Time: ticketT0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, late := mustTicketAdd(t, r, TicketOpts{
+		Fields: map[string]string{"title": "stored last, stamped early"}, User: "b",
+		Time: ticketT0.Add(-30 * time.Minute),
+	})
+	got, err := r.TimelineSince(checkin, EventKindTicket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].UUID != late {
+		t.Fatalf("TimelineSince(checkin, t) = %v; want only %s, not %s", got, late, early)
+	}
+	if atTip, err := r.TimelineSince(late); err != nil || atTip == nil || len(atTip) != 0 {
+		t.Fatalf("TimelineSince at the last arrival = %#v, %v; want empty", atTip, err)
+	}
+}
+
 func TestTimelineSinceRejectsBadInput(t *testing.T) {
 	r := newTicketRepo(t)
 	_, checkin, err := r.Commit(CommitOpts{

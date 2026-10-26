@@ -18,7 +18,7 @@ import (
 )
 
 // HTTPTransport follows redirects as fossil's http_exchange does (src/http.c,
-// draft-fossil-sync-protocol-00 §4). See also transport_redirect_test.go in
+// draft-fossil-sync-protocol-00 §4). See also transport_test.go in
 // the root package, which covers the public transport.
 
 // emptyReply answers with a decodable, empty xfer message.

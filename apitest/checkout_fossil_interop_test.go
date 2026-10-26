@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Interop tests for checkouts created by the canonical fossil binary
 // (`fossil open`) and then driven through go-libfossil (#228).

@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Repo.Annotate against `fossil annotate` (#256, #257): each history is
 // committed with the fossil binary, then both annotate the tip and must

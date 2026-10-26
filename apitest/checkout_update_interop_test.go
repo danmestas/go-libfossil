@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Interop test for Checkout.Update with uncommitted changes: the same edits
 // made in a fossil checkout and in a go-libfossil checkout, each updated by

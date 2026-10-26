@@ -1,6 +1,6 @@
 //go:build !js
 
-package libfossil_test
+package apitest_test
 
 // Interop tests for reverting renames whose old name another file now holds
 // (#248): a swap, a chain, a new add or an untracked file at the old name.

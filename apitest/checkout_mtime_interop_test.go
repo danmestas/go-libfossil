@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Interop tests for vfile.mtime: fossil and go-libfossil record a checkout
 // file's mtime the same way and trust it the same way, so each reads the

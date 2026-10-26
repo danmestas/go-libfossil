@@ -81,7 +81,7 @@ targets or a seed sweep. They are run by hand.
 
 ## Corpus parity gate
 
-`TestCloneCorpusParity` (root package, `clone_corpus_parity_test.go`) clones one
+`TestCloneCorpusParity` (`apitest/` package, `apitest/clone_corpus_parity_test.go`) clones one
 repository two ways — with the canonical `fossil` binary and with
 `libfossil.Clone` — and compares what each derived. It is opt-in:
 
@@ -261,7 +261,7 @@ Two other implementations check libfossil's output.
 **Fossil.** CI downloads the official fossil 2.28 release tarball
 (`FOSSIL_VERSION` in `.github/workflows/test.yml`) and verifies its SHA-256
 and its reported version, so every run compares against the same build.
-Tests in `conformance/`, `cli/` and the root package create repositories with
+Tests in `conformance/`, `cli/`, `apitest/` and the root package create repositories with
 stock `fossil`, have it open and verify what libfossil wrote, and compare
 the rows libfossil derives with the rows fossil derives. Locally they use
 the `fossil` on `PATH`; `fossil version` should report 2.28.

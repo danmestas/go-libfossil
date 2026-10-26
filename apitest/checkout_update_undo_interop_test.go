@@ -1,6 +1,6 @@
 //go:build !js
 
-package libfossil_test
+package apitest_test
 
 // Interop tests for undoing an update (#446): the undo state go-libfossil's
 // Update saves is fossil's, so `fossil undo` reverses it, and Checkout.Undo

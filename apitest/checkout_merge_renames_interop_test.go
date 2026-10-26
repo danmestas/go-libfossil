@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Fossil-oracle tests for Checkout.Merge following renames. Each case
 // builds a history with the fossil binary, then merges feat into trunk

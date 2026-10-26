@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Interop tests for Checkout.Merge against the fossil binary (#244). Each
 // test builds the same divergent history with fossil, then merges it with

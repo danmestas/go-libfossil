@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   artifact from a machine whose clock runs behind is still found. An unknown
   hash is an error and an empty result is an empty slice (tracked in #504).
 
+### Changed
+
+- In-process SSH signature verification is opt-in: it lives in the new
+  package `github.com/danmestas/go-libfossil/sshverify`, which a program links
+  by importing it for its side effect. The library no longer links
+  `golang.org/x/crypto/ssh` and the ECDSA, P-256, Ed25519 and RSA code it pulls
+  in, about 330 KB of a TinyGo wasm build that never verifies an SSH
+  signature. Signing is unchanged (it runs `ssh-keygen`), as is PGP
+  verification (it runs `gpg`), and the `libfossil` command imports the
+  package. Without it nothing is accepted unchecked: a seed under an SSH
+  `horizon-seed-key` is refused, the one held is kept, and the sync or rebuild
+  fails with an error wrapping the new `ErrSSHVerifierUnavailable` (no issue;
+  wasm size work).
+
+  Upgrading: an embedder whose stores set `horizon-seed-key`
+  (`SettingHorizonSeedKey`, `CloneOpts.SeedKey`) to an SSH key adds
+  `import _ "github.com/danmestas/go-libfossil/sshverify"`. One with no seed
+  key, or a PGP fingerprint, needs nothing.
+
 ### Fixed
 
 - `Create` refused every path under TinyGo wasm, where a repository lives in

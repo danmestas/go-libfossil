@@ -18,6 +18,7 @@ packages=(
     "./db/ db/api.md"
     "./observer/otel/ observer/otel/api.md"
     "./dst/ dst/api.md"
+    "./sshverify/ sshverify/api.md"
 )
 for entry in "${packages[@]}"; do
     read -r pkg page <<<"$entry"

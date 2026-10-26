@@ -279,6 +279,8 @@ const SettingHorizonSeedCommand = clearsign.SettingSeedCommand
 
 <a name="SettingHorizonSeedKey"></a>SettingHorizonSeedKey names the setting holding the public key a clone verifies its origin's structural horizon seeds with \(draft\-fossil\-horizon\-00 §5.2.4\): an SSH public key line, verified in process, or the fingerprint of an OpenPGP key in the user's gpg keyring, verified by gpg. With a key set, a seed that is unsigned or not signed by that key is discarded and the clone falls back to the content horizon; unset, an unsigned seed is accepted. An SSH signature must carry the namespace fossil\-horizon\-seed. CloneOpts.SeedKey sets it when the clone is made. It is the clone's own: an origin never sends it.
 
+SSH signatures are verified only in a program that imports package github.com/danmestas/go\-libfossil/sshverify; without it, a seed under an SSH key is refused with ErrSSHVerifierUnavailable.
+
 ```go
 const SettingHorizonSeedKey = clearsign.SettingSeedKey
 ```
@@ -349,6 +351,12 @@ var ErrNoStoreCone = errors.New("libfossil: the store has no cone")
 
 ```go
 var ErrOutsideCone = checkout.ErrOutsideCone
+```
+
+<a name="ErrSSHVerifierUnavailable"></a>ErrSSHVerifierUnavailable is the error, wrapped, of an operation that had to verify an SSH signature in a program that does not link the verifier: a sync or rebuild of a store whose SettingHorizonSeedKey is an SSH key fails with it, and the seed is neither accepted nor discarded. Import package github.com/danmestas/go\-libfossil/sshverify for its side effect to verify SSH signatures; the library leaves that cryptography out of programs that never verify one.
+
+```go
+var ErrSSHVerifierUnavailable = clearsign.ErrSSHVerifierUnavailable
 ```
 
 <a name="ErrVersionNotFound"></a>ErrVersionNotFound is returned by ResolveVersion when the requested version string does not match any artifact in the repository. Callers can match with errors.Is.

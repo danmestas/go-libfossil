@@ -9,7 +9,7 @@ import (
 )
 
 // errNoProcesses: js/wasm runs no external signer or gpg. SSH signatures
-// still verify, in process.
+// still verify, in process, when package sshverify is linked.
 var errNoProcesses = errors.New("external signing commands are unavailable on js/wasm")
 
 func runClearsign(context.Context, string, []byte) ([]byte, error) { return nil, errNoProcesses }

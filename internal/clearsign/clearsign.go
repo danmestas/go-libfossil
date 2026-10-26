@@ -5,9 +5,11 @@
 //
 // Signing runs the repository's pgp-command as fossil and zit run it, so one
 // setting signs with either tool. Verification takes the signer's key: an SSH
-// public key is checked in process; a PGP fingerprint is checked by gpg
-// against the user's keyring, since an OpenPGP implementation is not worth a
-// dependency when every PGP signer already has gpg.
+// public key is checked in process, by the SSHVerifier package sshverify
+// registers, so a program that never verifies one does not link SSH
+// cryptography; a PGP fingerprint is checked by gpg against the user's
+// keyring, since an OpenPGP implementation is not worth a dependency when
+// every PGP signer already has gpg.
 package clearsign
 
 import (
@@ -201,7 +203,7 @@ func ParseKey(s string) (Key, error) {
 	if fpr, ok := fingerprint(s); ok {
 		return Key{pgp: fpr}, nil
 	}
-	if _, err := parseSSHKey(s); err != nil {
+	if err := checkSSHKey(s); err != nil {
 		return Key{}, fmt.Errorf("clearsign: %q is neither an SSH public key nor an OpenPGP fingerprint: %w",
 			s, err)
 	}
@@ -219,7 +221,9 @@ func (k Key) String() string {
 // Verify checks that signed carries a valid signature by k over exactly the
 // bytes a reader parses (deck.StripClearsign), and returns ErrUnsigned for
 // an artifact with no envelope. An SSH signature must carry namespace:
-// SSHNamespace for a check-in, SeedNamespace for a seed. PGP has none.
+// SSHNamespace for a check-in, SeedNamespace for a seed. PGP has none. A
+// well-formed SSH signature with no SSHVerifier registered is
+// ErrSSHVerifierUnavailable, never accepted.
 func (k Key) Verify(ctx context.Context, namespace string, signed []byte) error {
 	if k.ssh == "" && k.pgp == "" {
 		panic("clearsign.Key.Verify: zero Key")

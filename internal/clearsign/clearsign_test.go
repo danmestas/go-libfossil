@@ -64,58 +64,6 @@ func sign(t *testing.T, s *Signer, plain []byte) []byte {
 	return signed
 }
 
-// TestSSHSignVerify signs with ssh-keygen through the pgp-command contract
-// and verifies in process, for each key type ssh-keygen signs with.
-func TestSSHSignVerify(t *testing.T) {
-	for _, kind := range []string{"ed25519", "ecdsa", "rsa"} {
-		t.Run(kind, func(t *testing.T) {
-			signer, pub := sshKey(t, kind)
-			signed := sign(t, signer, manifest)
-			if !bytes.HasPrefix(signed, sshHeader) {
-				t.Fatalf("not fossil's SSH envelope:\n%s", signed)
-			}
-			if err := mustKey(t, pub).Verify(context.Background(), SSHNamespace, signed); err != nil {
-				t.Fatalf("Verify: %v", err)
-			}
-		})
-	}
-}
-
-// TestSSHVerifyRefuses covers each way an SSH-signed artifact must fail:
-// another key, another namespace, a changed body, a changed signature, and
-// no signature at all.
-func TestSSHVerifyRefuses(t *testing.T) {
-	signer, pub := sshKey(t, "ed25519")
-	_, otherPub := sshKey(t, "ed25519")
-	key := mustKey(t, pub)
-	signed := sign(t, signer, manifest)
-	git := &Signer{Command: strings.Replace(signer.Command, "-n "+SSHNamespace, "-n git", 1)}
-	wrongNamespace := sign(t, git, manifest)
-	changed := bytes.Replace(signed, []byte("trunk"), []byte("trunc"), 1)
-	sigAt := bytes.Index(signed, sshSigBegin) + len(sshSigBegin) + 40
-	flipped := append([]byte(nil), signed...)
-	flipped[sigAt] ^= 'A' ^ 'B'
-	cases := []struct {
-		name   string
-		key    Key
-		signed []byte
-		want   error
-	}{
-		{"other key", mustKey(t, otherPub), signed, ErrBadSignature},
-		{"namespace", key, wrongNamespace, ErrBadSignature},
-		{"body", key, changed, ErrBadSignature},
-		{"signature", key, flipped, ErrBadSignature},
-		{"unsigned", key, manifest, ErrUnsigned},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if err := c.key.Verify(context.Background(), SSHNamespace, c.signed); !errors.Is(err, c.want) {
-				t.Fatalf("Verify = %v, want %v", err, c.want)
-			}
-		})
-	}
-}
-
 // TestPGPSignVerify signs with gpg --clearsign, fossil's default command,
 // and verifies through gpg against the fingerprint.
 func TestPGPSignVerify(t *testing.T) {
@@ -290,32 +238,6 @@ func TestSSHVerifyRefusesSHA1RSA(t *testing.T) {
 	if err := key.Verify(context.Background(), SSHNamespace, signed); !errors.Is(err, ErrBadSignature) ||
 		!strings.Contains(err.Error(), "SHA-1") {
 		t.Fatalf("Verify = %v, want the SHA-1 signature refused", err)
-	}
-}
-
-// TestSSHNamespaceIsTheVerifiers: the namespace an SSH signature must carry
-// is the verifier's parameter, so a check-in's fossilscm signature never
-// verifies as a seed's, nor a seed's as a check-in's
-// (draft-fossil-horizon-00 §5.2.4).
-func TestSSHNamespaceIsTheVerifiers(t *testing.T) {
-	checkin, pub := sshKey(t, "ed25519")
-	key := mustKey(t, pub)
-	seedSigner := &Signer{Command: strings.Replace(checkin.Command, "-n "+SSHNamespace, "-n "+SeedNamespace, 1)}
-	byCheckin, bySeed := sign(t, checkin, manifest), sign(t, seedSigner, manifest)
-	for _, c := range []struct {
-		name, namespace string
-		signed          []byte
-		ok              bool
-	}{
-		{"check-in as check-in", SSHNamespace, byCheckin, true},
-		{"seed as seed", SeedNamespace, bySeed, true},
-		{"check-in as seed", SeedNamespace, byCheckin, false},
-		{"seed as check-in", SSHNamespace, bySeed, false},
-	} {
-		err := key.Verify(context.Background(), c.namespace, c.signed)
-		if c.ok && err != nil || !c.ok && !errors.Is(err, ErrBadSignature) {
-			t.Errorf("%s: Verify = %v, want ok %v", c.name, err, c.ok)
-		}
 	}
 }
 

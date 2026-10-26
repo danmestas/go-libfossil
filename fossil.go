@@ -2,7 +2,9 @@ package libfossil
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -37,8 +39,8 @@ func Create(path string, opts CreateOpts) (*Repo, error) {
 	if _, err := os.Stat(path); err == nil {
 		return nil, fmt.Errorf("libfossil: repository already exists: %s", path)
 	}
-	if dir := filepath.Dir(path); !isDir(dir) {
-		return nil, fmt.Errorf("libfossil: create %s: parent directory does not exist: %s", path, dir)
+	if err := checkParentDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("libfossil: create %s: %w", path, err)
 	}
 	user := opts.User
 	if user == "" {
@@ -72,9 +74,27 @@ func defaultLogin() string {
 	return "root"
 }
 
-func isDir(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.IsDir()
+// statParent is os.Stat; a test replaces it to stand in for a filesystem
+// that cannot answer.
+var statParent = os.Stat
+
+// checkParentDir refuses dir only when the filesystem confirms it cannot
+// hold a new repository: it does not exist, or it is not a directory. Any
+// other stat error means the filesystem cannot say, as under TinyGo wasm,
+// where the repository lives in a SQLite VFS and os.Stat is unsupported;
+// then SQLite's own open reports a real failure.
+func checkParentDir(dir string) error {
+	info, err := statParent(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("parent directory does not exist: %s", dir)
+	}
+	if err != nil {
+		return nil
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("parent is not a directory: %s", dir)
+	}
+	return nil
 }
 
 func isProjectCode40HexLower(s string) bool {

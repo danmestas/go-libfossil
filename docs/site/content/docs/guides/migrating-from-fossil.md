@@ -157,7 +157,11 @@ not yet exposed by `libfossil`:
 - **Full-text search CLI** — `internal/search` contains indexing and query
   primitives, but no CLI command surfaces them. Use the Go API directly.
 - **Ticket and forum subsystems** — no commands or pages. Ticket and forum
-  artifacts are synced and stored like any other artifact.
+  artifacts are synced and stored like any other artifact. Tickets have a Go
+  API: `Repo.TicketAdd` and `Repo.TicketSet` write the change artifact `fossil
+  ticket add` and `fossil ticket set` write, and `Repo.TicketList` and
+  `Repo.TicketChanges` read tickets back. Report formats, TH1 ticket scripts
+  and `private_` fields are not supported.
 - **Mirror / export bridges** to Git, svn, and other systems — not implemented.
 
 If any of these are load-bearing for your workflow, stay on upstream Fossil

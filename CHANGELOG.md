@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Repo.TicketAdd` and `Repo.TicketSet` create and amend tickets. Each writes
+  the change artifact `fossil ticket add` and `fossil ticket set` write for the
+  same fields, user and time, byte for byte, and links it in the same
+  transaction, so the ticket, ticketchng and timeline rows read back at once
+  and the artifact syncs like any other. Fields are checked against the
+  repository's ticket schema as fossil checks them; a `+name` field appends.
+  `TicketOpts.Comment` adds a remark the way the stock ticket forms store one
+  (icomment, with login, username and mimetype). `private_` fields are refused,
+  because fossil conceals their values and this does not (tracked in #503).
+- `Repo.TicketList` returns every ticket with its fields, status and last
+  change time, and `Repo.TicketChanges` returns one ticket's change artifacts in
+  the order fossil applies them, with author, time, fields and remark. Both
+  results encode to JSON with lower-case keys (tracked in #504).
+- `Repo.TimelineSince` returns the timeline entries whose artifacts arrived in
+  the repository after a given artifact, optionally only those of the given
+  kinds, so a sync handler holding the tip from before a push can tell which
+  tickets, wiki edits or forum posts the push brought. After means stored
+  later (a later receipt, then a higher rid), not stamped later, so an
+  artifact from a machine whose clock runs behind is still found. An unknown
+  hash is an error and an empty result is an empty slice (tracked in #504).
+
 ### Changed
 
 - In-process SSH signature verification is opt-in: it lives in the new
@@ -25,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SettingHorizonSeedKey`, `CloneOpts.SeedKey`) to an SSH key adds
   `import _ "github.com/danmestas/go-libfossil/sshverify"`. One with no seed
   key, or a PGP fingerprint, needs nothing.
+
+### Fixed
+
+- `Create` refused every path under TinyGo wasm, where a repository lives in
+  a SQLite VFS and `os.Stat` is unsupported: its parent-directory check read
+  "cannot stat" as "missing". It now refuses only a parent the filesystem
+  confirms is missing or is not a directory, and otherwise lets SQLite's own
+  open report a real failure (tracked in #509).
 
 ## [0.16.2] - 2026-10-25
 

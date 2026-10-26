@@ -5,7 +5,7 @@
 # `make docs-gen-sdk` produces stable bytes.
 set -euo pipefail
 
-SDK_ROOT="docs/site/content/docs/reference/sdk"
+SDK_ROOT="${SDK_ROOT:-docs/site/content/docs/reference/sdk}"
 
 while IFS= read -r f; do
     rel="${f#${SDK_ROOT}/}"

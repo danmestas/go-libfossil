@@ -1,4 +1,3 @@
-GOMARKDOC_VERSION := v1.1.0
 
 .PHONY: test test-drivers test-otel test-all vet build setup-hooks docs-gen-sdk docs-gen-llms docs-check-llms docs-gen docs-check docs-version docs-serve docs-build docs
 
@@ -30,13 +29,7 @@ setup-hooks:
 	@echo "Skip with: git commit --no-verify"
 
 docs-gen-sdk:
-	@command -v gomarkdoc >/dev/null 2>&1 || go install github.com/princjef/gomarkdoc/cmd/gomarkdoc@$(GOMARKDOC_VERSION)
-	gomarkdoc --output docs/site/content/docs/reference/sdk/libfossil/api.md     ./
-	gomarkdoc --output docs/site/content/docs/reference/sdk/cli/api.md           ./cli/
-	gomarkdoc --output docs/site/content/docs/reference/sdk/db/api.md            ./db/
-	gomarkdoc --output docs/site/content/docs/reference/sdk/observer/otel/api.md ./observer/otel/
-	gomarkdoc --output docs/site/content/docs/reference/sdk/dst/api.md           ./dst/
-	bash scripts/prepend-sdk-frontmatter.sh
+	./scripts/gen-sdk-docs.sh
 
 # llms.txt and llms-full.txt, from docs/site/llms-header.md and the content tree.
 docs-gen-llms:

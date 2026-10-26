@@ -5,14 +5,16 @@
 #   docs/site/data/conformance.json   per-draft coverage from TestCoverage (tools/docsgen/conformance)
 #   docs/site/data/facts.json         the reference fossil version CI pins, and the fuzz target count
 #   docs/site/content/docs/reference/cli/   the CLI reference (scripts/gen-cli-docs.sh)
+#   docs/site/content/docs/reference/sdk/   the SDK reference (scripts/gen-sdk-docs.sh)
 #   docs/site/static/llms*.txt        llms.txt and llms-full.txt (scripts/gen-llms-txt.sh)
 #
-# Run from the repo root. DATA_DIR, CLI_DIR and LLMS_DIR redirect the output;
+# Run from the repo root. DATA_DIR, CLI_DIR, SDK_DIR and LLMS_DIR redirect the output;
 # scripts/check-docs-generated.sh uses them to regenerate into a scratch dir.
 set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-docs/site/data}"
 CLI_DIR="${CLI_DIR:-docs/site/content/docs/reference/cli}"
+SDK_DIR="${SDK_DIR:-docs/site/content/docs/reference/sdk}"
 LLMS_DIR="${LLMS_DIR:-docs/site/static}"
 
 work="$(mktemp -d)"
@@ -34,6 +36,7 @@ printf '{\n  "fossilVersion": "%s",\n  "fuzzTargets": %d\n}\n' "$fossil_version"
     > "$DATA_DIR/facts.json"
 
 OUT_DIR="$CLI_DIR" ./scripts/gen-cli-docs.sh >/dev/null
+OUT_DIR="$SDK_DIR" ./scripts/gen-sdk-docs.sh >/dev/null
 OUT_DIR="$LLMS_DIR" ./scripts/gen-llms-txt.sh >/dev/null
 
-echo "gen-docs: wrote $DATA_DIR/{engine,conformance,facts}.json, $CLI_DIR/ and $LLMS_DIR/llms*.txt"
+echo "gen-docs: wrote $DATA_DIR/{engine,conformance,facts}.json, $CLI_DIR/, $SDK_DIR/ and $LLMS_DIR/llms*.txt"

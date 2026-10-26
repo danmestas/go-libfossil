@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // The times go-libfossil writes and stores, against the fossil binary as the
 // oracle: each check is the same operation done by both, at the same time,

@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Interop tests for Checkout.Update across renames (#445): the same local
 // changes, updated by fossil 2.28 and by go-libfossil, must leave the same

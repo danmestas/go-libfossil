@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 // Repro for: `fossil ls -R <repo> -r <branch-tip-rev>` returns EMPTY for
 // commits written via libfossil's manifest.Checkin, even though

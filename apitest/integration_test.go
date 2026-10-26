@@ -1,4 +1,4 @@
-package libfossil_test
+package apitest_test
 
 import (
 	"bytes"

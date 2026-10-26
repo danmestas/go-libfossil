@@ -18,7 +18,7 @@ import (
 )
 
 // These tests cover where Checkout.Merge differs from fossil's merge, and
-// its refusals; checkout_merge_interop_test.go compares it with fossil.
+// its refusals; apitest/checkout_merge_interop_test.go compares it with fossil.
 
 // mergeFixture is a repository with a base checkin and two children of it,
 // local and merged, and a checkout of local.

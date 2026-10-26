@@ -11,10 +11,8 @@ import (
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
-	"github.com/danmestas/go-libfossil/internal/seedcheck"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/tag"
-	"github.com/danmestas/go-libfossil/internal/verify"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
 
@@ -235,7 +233,11 @@ func hzPushCheckLate(t *testing.T) error {
 // origin lacks is stored dangling, since it cannot be judged. A later push
 // of the base alone succeeds and stores the base; the seed, judged when it
 // first becomes readable, is neither crosslinked nor served, and its tags
-// never reach derived state, a rebuild's included.
+// never reach derived state, a rebuild's included. It is refused by its
+// hash (F.1), kept stored but never linked or served. The refusal is
+// store-local: a shun entry would reach every peer that pulls the shun
+// group, and a horizon clone holding this, its current seed, would then
+// drop it.
 func hzSeedLaterRequest(t *testing.T) error {
 	x := newHZStruct(t)
 	r := x.s.f.r
@@ -247,94 +249,16 @@ func hzSeedLaterRequest(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	baseCard := seedCards[1].(*xfer.FileCard)
-	var pc string
-	if err := r.DB().QueryRow("SELECT value FROM config WHERE name='project-code'").Scan(&pc); err != nil {
+	if err := hzPushed(r, "the dangling delta", seedCards[0]); err != nil {
 		return err
 	}
-	push := func(cards ...xfer.Card) (*xfer.Message, error) {
-		req := &xfer.Message{Cards: append([]xfer.Card{&xfer.PushCard{ServerCode: "x", ProjectCode: pc}}, cards...)}
-		return sync.HandleSync(context.Background(), r, req)
-	}
-	noErrors := func(m *xfer.Message, what string) error {
-		for _, c := range m.Cards {
-			if e, ok := c.(*xfer.ErrorCard); ok {
-				return expectf("%s: error %q", what, e.Message)
-			}
-		}
-		return nil
-	}
-	first, err := push(seedCards[0])
-	if err != nil {
-		return err
-	}
-	if err := noErrors(first, "the dangling delta"); err != nil {
-		return err
-	}
-	second, err := push(baseCard)
-	if err != nil {
-		return err
-	}
-	if err := noErrors(second, "the base's push"); err != nil {
+	if err := hzPushed(r, "the base's push", seedCards[1]); err != nil {
 		return err
 	}
 	for _, u := range extra {
-		var real bool
-		if err := r.DB().QueryRow("SELECT EXISTS(SELECT 1 FROM blob WHERE uuid=? AND size>=0)", u).Scan(&real); err != nil {
-			return err
-		}
-		if !real {
+		if !hzHeldReal(r, u) {
 			return expectf("the base %.10s was not stored", u)
 		}
 	}
-	linked := func() (int, error) {
-		var n int
-		err := r.DB().QueryRow(`SELECT (SELECT count(*) FROM tagxref JOIN blob ON blob.rid=tagxref.srcid
-			WHERE blob.uuid=?1) + (SELECT count(*) FROM event JOIN blob ON blob.rid=event.objid
-			WHERE blob.uuid=?1)`, name).Scan(&n)
-		return n, err
-	}
-	if n, err := linked(); err != nil || n != 0 {
-		return expectf("the seed was crosslinked: %d rows (%v)", n, err)
-	}
-	// The seed is refused by its hash (F.1), kept stored but never linked or
-	// served. The refusal is store-local: a shun entry would reach every peer
-	// that pulls the shun group, and a horizon clone holding this, its current
-	// seed, would then drop it.
-	if refused, err := seedcheck.IsRefusedUUID(r.DB(), name); err != nil || !refused {
-		return expectf("the seed is not recorded as refused (%v)", err)
-	}
-	var shunned int
-	if err := r.DB().QueryRow("SELECT count(*) FROM shun").Scan(&shunned); err != nil || shunned != 0 {
-		return expectf("the refusal reached the shun table: %d rows (%v)", shunned, err)
-	}
-	if _, err := verify.Rebuild(r); err != nil {
-		return err
-	}
-	if n, err := linked(); err != nil || n != 0 {
-		return expectf("a rebuild crosslinked the seed: %d rows (%v)", n, err)
-	}
-	pull := &xfer.Message{Cards: []xfer.Card{&xfer.PullCard{ServerCode: "x", ProjectCode: pc},
-		&xfer.GimmeCard{UUID: name}}}
-	served, err := sync.HandleSync(context.Background(), r, pull)
-	if err != nil {
-		return err
-	}
-	for _, c := range served.Cards {
-		switch c := c.(type) {
-		case *xfer.FileCard:
-			if c.UUID == name {
-				return expectf("the seed was sent")
-			}
-		case *xfer.CFileCard:
-			if c.UUID == name {
-				return expectf("the seed was sent")
-			}
-		case *xfer.IGotCard:
-			if c.UUID == name {
-				return expectf("the seed was announced")
-			}
-		}
-	}
-	return nil
+	return hzSeedInert(r, name)
 }

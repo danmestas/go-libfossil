@@ -27,13 +27,16 @@ import (
 // "horizon seed date" regression (src/horizon_e2e.zig).
 
 func horizonSeedDateCases() []Case {
-	return []Case{horizonSeedDateCancel, horizonSeedDateAncestor, horizonSeedDateShun}
+	return []Case{
+		horizonSeedDateCancel, horizonSeedDateAncestor, horizonSeedDateShun, horizonSeedDateRestart,
+	}
 }
 
 var (
 	horizonSeedDateCancel   = Case{ID: "horizon.5.2.2.seed-date-cancel", Req: "HZ-5.2-2"}
 	horizonSeedDateAncestor = Case{ID: "horizon.5.2.2.seed-date-ancestor-cancel", Req: "HZ-5.2-2"}
 	horizonSeedDateShun     = Case{ID: "horizon.5.2.2.seed-date-shun", Req: "HZ-5.2-2"}
+	horizonSeedDateRestart  = Case{ID: "horizon.5.2.2.seed-date-restart", Req: "HZ-5.2-2"}
 )
 
 // hzDateStep is one tag event at the origin.
@@ -71,48 +74,65 @@ func TestHorizonSeedDate(t *testing.T) {
 // its rows, and tags again at an ordinary time. Dated from the rows left,
 // the next seed would be earlier than the clone's and refused as a replay;
 // the origin's minted floor (§5.2.2) dates it no earlier. This mirrors
-// zit's shun regression at check-in 39546186f4 (src/horizon_e2e.zig).
+// zit's shun regression at check-in 39546186f4 (src/horizon_e2e.zig). The
+// restart variant closes and reopens the origin's repository after the
+// shun: the floor is kept across restarts, so the reopened origin still
+// dates the seed no earlier.
 func TestHorizonSeedDateShun(t *testing.T) {
-	check(t, horizonSeedDateShun, func(t *testing.T) error {
-		x := newHZStruct(t)
-		r, _, err := x.clone(t, x.peer())
-		if err != nil {
-			return err
-		}
-		future := time.Unix(2500000000, 0).UTC()
-		rid, err := tag.AddTag(x.s.f.r, tag.TagOpts{
-			TargetRID: x.s.c3, TagName: "future", TagType: tag.TagSingleton, User: "u", Time: future,
-		})
-		if err != nil {
-			return err
-		}
-		if err := hzSeedDatePull(r, x, "future tag"); err != nil {
-			return err
-		}
-		held, err := seed.Held(r.DB())
-		if err != nil {
-			return err
-		}
-		if err := hzShunAndPurge(x.s.f.r, rid); err != nil {
-			return err
-		}
-		x.s.tag(t, x.s.c3, "later", tag.TagSingleton, "")
-		if err := hzSeedDatePull(r, x, "after the shun"); err != nil {
-			return err
-		}
-		after, err := seed.Held(r.DB())
-		if err != nil || after == nil || string(after) == string(held) {
-			return expectf("after the shun: the clone did not take the re-seed (%v)", err)
-		}
-		d, err := deck.Parse(after)
-		if err != nil {
-			return err
-		}
-		if d.D.Before(future) {
-			return expectf("after the shun: the seed is dated %v, before the floor %v", d.D, future)
-		}
-		return nil
+	check(t, horizonSeedDateShun, func(t *testing.T) error { return hzSeedDateShun(t, false) })
+	check(t, horizonSeedDateRestart, func(t *testing.T) error { return hzSeedDateShun(t, true) })
+}
+
+func hzSeedDateShun(t *testing.T, restart bool) error {
+	x := newHZStruct(t)
+	r, _, err := x.clone(t, x.peer())
+	if err != nil {
+		return err
+	}
+	future := time.Unix(2500000000, 0).UTC()
+	rid, err := tag.AddTag(x.s.f.r, tag.TagOpts{
+		TargetRID: x.s.c3, TagName: "future", TagType: tag.TagSingleton, User: "u", Time: future,
 	})
+	if err != nil {
+		return err
+	}
+	if err := hzSeedDatePull(r, x, "future tag"); err != nil {
+		return err
+	}
+	held, err := seed.Held(r.DB())
+	if err != nil {
+		return err
+	}
+	if err := hzShunAndPurge(x.s.f.r, rid); err != nil {
+		return err
+	}
+	if restart {
+		path := x.s.f.r.Path()
+		if err := x.s.f.r.Close(); err != nil {
+			return err
+		}
+		if x.s.f.r, err = repo.Open(path); err != nil {
+			return err
+		}
+		t.Cleanup(func() { x.s.f.r.Close() })
+	}
+	x.s.tag(t, x.s.c3, "later", tag.TagSingleton, "")
+	if err := hzSeedDatePull(r, x, "after the shun"); err != nil {
+		return err
+	}
+	after, err := seed.Held(r.DB())
+	if err != nil || after == nil || string(after) == string(held) {
+		return expectf("after the shun: the clone did not take the re-seed (%v)", err)
+	}
+	d, err := deck.Parse(after)
+	if err != nil {
+		return err
+	}
+	if d.D.Before(future) {
+		return expectf("after the shun (restart %v): the seed is dated %v, before the floor %v",
+			restart, d.D, future)
+	}
+	return nil
 }
 
 // hzSeedDatePull pulls r from x's origin: it must stay structural.

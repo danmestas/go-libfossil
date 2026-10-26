@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-10-25
+
 ### Added
 
 - `Repo.ListFilesIn` lists a check-in's files narrowed to a `Cone`; a nil cone

@@ -41,15 +41,15 @@ func horizonContentCases() []Case {
 }
 
 func TestHorizonContent(t *testing.T) {
-	check(t, horizonContentAlone, func() error { return hzContentAlone(t) })
-	check(t, horizonStoreRules, func() error { return hzStoreRules(t) })
-	check(t, horizonStoreRecompute, func() error { return hzStoreRecompute(t) })
-	check(t, horizonStoreLoss, func() error { return hzStoreLoss(t) })
-	check(t, horizonStorePaths, func() error { return hzStorePaths(t) })
-	check(t, horizonHoldings, func() error { return hzHoldings(t) })
-	check(t, horizonAboveTree, func() error { return hzAboveTree(t) })
-	check(t, horizonDeltaBase, func() error { return hzDeltaBase(t) })
-	check(t, horizonDerived, func() error { return hzDerived(t) })
+	check(t, horizonContentAlone, func(t *testing.T) error { return hzContentAlone(t) })
+	check(t, horizonStoreRules, func(t *testing.T) error { return hzStoreRules(t) })
+	check(t, horizonStoreRecompute, func(t *testing.T) error { return hzStoreRecompute(t) })
+	check(t, horizonStoreLoss, func(t *testing.T) error { return hzStoreLoss(t) })
+	check(t, horizonStorePaths, func(t *testing.T) error { return hzStorePaths(t) })
+	check(t, horizonHoldings, func(t *testing.T) error { return hzHoldings(t) })
+	check(t, horizonAboveTree, func(t *testing.T) error { return hzAboveTree(t) })
+	check(t, horizonDeltaBase, func(t *testing.T) error { return hzDeltaBase(t) })
+	check(t, horizonDerived, func(t *testing.T) error { return hzDerived(t) })
 }
 
 // hzFiles is the set of file blobs the check-ins rids of r name, read

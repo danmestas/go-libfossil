@@ -33,7 +33,7 @@ func scCompactCases() []scCase {
 
 func TestSparseCompaction(t *testing.T) {
 	for _, c := range scCompactCases() {
-		check(t, c.Case, func() error { return c.run(t) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t) })
 	}
 }
 

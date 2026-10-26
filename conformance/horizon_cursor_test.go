@@ -41,15 +41,15 @@ func horizonCursorCases() []Case {
 }
 
 func TestHorizonCursor(t *testing.T) {
-	check(t, horizonCursorOrigin, func() error { return hzCursorOrigin(t) })
-	check(t, horizonCursorPushOnly, func() error { return hzCursorPushOnly(t) })
-	check(t, horizonCursorRekept, func() error { return hzCursorRekept(t) })
-	check(t, horizonCursorMeeting, func() error { return hzCursorMeeting(t) })
-	check(t, horizonCursorClient, func() error { return hzCursorClient(t) })
-	check(t, horizonCursorGimme, func() error { return hzCursorGimme(t) })
-	check(t, horizonCursorLost, func() error { return hzCursorLost(t) })
-	check(t, horizonCursorCloneReply, func() error { return hzCursorCloneReply(t) })
-	check(t, horizonCursorCloneRecord, func() error { return hzCursorCloneRecord(t) })
+	check(t, horizonCursorOrigin, func(t *testing.T) error { return hzCursorOrigin(t) })
+	check(t, horizonCursorPushOnly, func(t *testing.T) error { return hzCursorPushOnly(t) })
+	check(t, horizonCursorRekept, func(t *testing.T) error { return hzCursorRekept(t) })
+	check(t, horizonCursorMeeting, func(t *testing.T) error { return hzCursorMeeting(t) })
+	check(t, horizonCursorClient, func(t *testing.T) error { return hzCursorClient(t) })
+	check(t, horizonCursorGimme, func(t *testing.T) error { return hzCursorGimme(t) })
+	check(t, horizonCursorLost, func(t *testing.T) error { return hzCursorLost(t) })
+	check(t, horizonCursorCloneReply, func(t *testing.T) error { return hzCursorCloneReply(t) })
+	check(t, horizonCursorCloneRecord, func(t *testing.T) error { return hzCursorCloneRecord(t) })
 }
 
 // hzNoCursor asks hzAsk for a request that carries no cursor.

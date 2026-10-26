@@ -105,11 +105,11 @@ func hzLinked(r *repo.Repo, uuid string) bool {
 }
 
 func TestHorizonReceive(t *testing.T) {
-	check(t, horizonReceivePull, func() error { return hzReceivePull(t) })
-	check(t, horizonReceiveClone, func() error { return hzReceiveClone(t) })
-	check(t, horizonReceiveLate, func() error { return hzReceiveLate(t) })
-	check(t, horizonReceiveRecord, func() error { return hzReceiveRecord(t) })
-	check(t, horizonReceiveWithheld, func() error { return hzReceiveWithheld(t) })
+	check(t, horizonReceivePull, func(t *testing.T) error { return hzReceivePull(t) })
+	check(t, horizonReceiveClone, func(t *testing.T) error { return hzReceiveClone(t) })
+	check(t, horizonReceiveLate, func(t *testing.T) error { return hzReceiveLate(t) })
+	check(t, horizonReceiveRecord, func(t *testing.T) error { return hzReceiveRecord(t) })
+	check(t, horizonReceiveWithheld, func(t *testing.T) error { return hzReceiveWithheld(t) })
 }
 
 // hzReceiveUpstream is a peer holding, stored raw as a peer predating the

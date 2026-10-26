@@ -17,6 +17,12 @@ on:
     - cron: "17 7 * * *"
   workflow_dispatch:
 
+# A run takes most of an hour, and merges land faster than that. Only the
+# newest commit on main needs an answer, so a new run cancels any older one.
+concurrency:
+  group: race-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   race:
     name: Race (modernc)

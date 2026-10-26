@@ -207,12 +207,12 @@ func hzHold(r *repo.Repo, name string, data []byte, v seed.Verifier) error {
 
 func TestHorizonSeed(t *testing.T) {
 	s := newHZSeed(t)
-	check(t, horizonSeedCards, func() error { return hzSeedCards(t, s) })
-	check(t, horizonSeedDate, func() error { return hzSeedDate(t) })
-	check(t, horizonSeedNone, func() error { return hzSeedNone(t) })
-	check(t, horizonSeedPrivate, func() error { return hzSeedPrivate(t, s) })
-	check(t, horizonSeedOrdinary, func() error { return hzSeedOrdinary(t, s) })
-	check(t, horizonSeedProvenance, func() error { return hzSeedProvenance(t, s) })
+	check(t, horizonSeedCards, func(t *testing.T) error { return hzSeedCards(t, s) })
+	check(t, horizonSeedDate, func(t *testing.T) error { return hzSeedDate(t) })
+	check(t, horizonSeedNone, func(t *testing.T) error { return hzSeedNone(t) })
+	check(t, horizonSeedPrivate, func(t *testing.T) error { return hzSeedPrivate(t, s) })
+	check(t, horizonSeedOrdinary, func(t *testing.T) error { return hzSeedOrdinary(t, s) })
+	check(t, horizonSeedProvenance, func(t *testing.T) error { return hzSeedProvenance(t, s) })
 }
 
 // hzSeedCards: the seed's T cards apply to each entry exactly the rows in

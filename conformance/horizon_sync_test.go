@@ -47,28 +47,28 @@ func horizonSyncCases() []Case {
 }
 
 func TestHorizonSync(t *testing.T) {
-	check(t, horizonSyncClonePull, func() error { return hzSyncClonePull(t, false) })
-	check(t, horizonSyncFossil, func() error { return hzSyncClonePull(t, true) })
-	check(t, horizonSyncTransit, func() error {
+	check(t, horizonSyncClonePull, func(t *testing.T) error { return hzSyncClonePull(t, false) })
+	check(t, horizonSyncFossil, func(t *testing.T) error { return hzSyncClonePull(t, true) })
+	check(t, horizonSyncTransit, func(t *testing.T) error {
 		if err := hzSyncTransit(t, false); err != nil {
 			return err
 		}
 		return hzSyncTransit(t, true)
 	})
-	check(t, horizonSyncDeepen, func() error {
+	check(t, horizonSyncDeepen, func(t *testing.T) error {
 		if err := hzSyncDeepen(t, false); err != nil {
 			return err
 		}
 		return hzSyncDeepen(t, true)
 	})
-	check(t, horizonSyncDemand, func() error { return hzSyncDemand(t) })
-	check(t, horizonSyncNoCluster, func() error {
+	check(t, horizonSyncDemand, func(t *testing.T) error { return hzSyncDemand(t) })
+	check(t, horizonSyncNoCluster, func(t *testing.T) error {
 		if err := hzSyncNoCluster(t, false); err != nil {
 			return err
 		}
 		return hzSyncNoCluster(t, true)
 	})
-	check(t, horizonSyncClusters, func() error { return hzSyncClusters(t) })
+	check(t, horizonSyncClusters, func(t *testing.T) error { return hzSyncClusters(t) })
 }
 
 // hzPeer is a dense origin that records the decoded requests it is sent.

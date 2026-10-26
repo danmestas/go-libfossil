@@ -47,7 +47,7 @@ func TestHorizonSeedDate(t *testing.T) {
 	type step = hzDateStep
 	onC := func(x *hzStruct) libfossil.FslID { return x.s.c3 }
 	onAncestor := func(x *hzStruct) libfossil.FslID { return x.s.c1 }
-	check(t, horizonSeedDateCancel, func() error {
+	check(t, horizonSeedDateCancel, func(t *testing.T) error {
 		return hzSeedDateSteps(t, []step{
 			{onC, "late", tag.TagSingleton},
 			{onC, "late", tag.TagCancel},
@@ -58,7 +58,7 @@ func TestHorizonSeedDate(t *testing.T) {
 	// A tag propagated from c1, below C, becomes the newest row at C;
 	// cancelling it at c1 deletes the row it propagated to C, the latest of
 	// the rows the old D was dated from. The cancel's own row stays at c1.
-	check(t, horizonSeedDateAncestor, func() error {
+	check(t, horizonSeedDateAncestor, func(t *testing.T) error {
 		return hzSeedDateSteps(t, []step{
 			{onAncestor, "tint", tag.TagPropagating},
 			{onAncestor, "tint", tag.TagCancel},
@@ -73,7 +73,7 @@ func TestHorizonSeedDate(t *testing.T) {
 // the origin's minted floor (§5.2.2) dates it no earlier. This mirrors
 // zit's shun regression at check-in 39546186f4 (src/horizon_e2e.zig).
 func TestHorizonSeedDateShun(t *testing.T) {
-	check(t, horizonSeedDateShun, func() error {
+	check(t, horizonSeedDateShun, func(t *testing.T) error {
 		x := newHZStruct(t)
 		r, _, err := x.clone(t, x.peer())
 		if err != nil {

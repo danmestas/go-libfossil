@@ -57,15 +57,15 @@ func horizonNamesCases() []Case {
 }
 
 func TestHorizonNames(t *testing.T) {
-	check(t, horizonNamedTip, func() error {
+	check(t, horizonNamedTip, func(t *testing.T) error {
 		g := newHZSyncGraph(t)
 		return hzNamed(t, g.f.r, "tip", 0, g.side2, 0)
 	})
-	check(t, horizonNamedBranch, func() error {
+	check(t, horizonNamedBranch, func(t *testing.T) error {
 		g := newHZSyncGraph(t)
 		return hzNamed(t, g.f.r, "side", 3, g.c2, 3) // side2 -> side1 -> c3 -> c2
 	})
-	check(t, horizonNamedTag, func() error {
+	check(t, horizonNamedTag, func(t *testing.T) error {
 		g := newHZSyncGraph(t)
 		g.f.when = g.f.when.Add(time.Hour)
 		if _, err := tag.AddTag(g.f.r, tag.TagOpts{TargetRID: g.c4, TagName: "sym-rel",
@@ -74,24 +74,24 @@ func TestHorizonNames(t *testing.T) {
 		}
 		return hzNamed(t, g.f.r, "rel", 0, g.c4, 0)
 	})
-	check(t, horizonNamedHash, func() error {
+	check(t, horizonNamedHash, func(t *testing.T) error {
 		g := newHZSyncGraph(t)
 		return hzNamed(t, g.f.r, hzUUID(t, g.f.r, g.m), 2, g.c3, 2) // m -> c4 -> c3
 	})
-	check(t, horizonNamedPastRoot, func() error {
+	check(t, horizonNamedPastRoot, func(t *testing.T) error {
 		g := newHZSyncGraph(t)
 		return hzNamed(t, g.f.r, "feat", 4, g.c1, 1) // feat -> c1, the root
 	})
-	check(t, horizonNamedStructural, func() error { return hzNamedStructural(t) })
-	check(t, horizonNamedUnknown, func() error { return hzNamedUnknown(t) })
-	check(t, horizonNamedMalformed, func() error { return hzNamedMalformed(t) })
-	check(t, horizonNamedChecked, func() error { return hzNamedChecked(t) })
-	check(t, horizonNamedFallback, func() error { return hzNamedFallback(t, false) })
-	check(t, horizonNamedFossil, func() error { return hzNamedFallback(t, true) })
-	check(t, horizonNamedLaterPull, func() error { return hzNamedLaterPull(t) })
-	check(t, horizonNamedNoOracle, func() error { return hzNamedNoOracle(t) })
-	check(t, horizonNamedPullName, func() error { return hzNamedPullName(t) })
-	check(t, horizonNamedLogin, func() error { return hzNamedLogin(t) })
+	check(t, horizonNamedStructural, func(t *testing.T) error { return hzNamedStructural(t) })
+	check(t, horizonNamedUnknown, func(t *testing.T) error { return hzNamedUnknown(t) })
+	check(t, horizonNamedMalformed, func(t *testing.T) error { return hzNamedMalformed(t) })
+	check(t, horizonNamedChecked, func(t *testing.T) error { return hzNamedChecked(t) })
+	check(t, horizonNamedFallback, func(t *testing.T) error { return hzNamedFallback(t, false) })
+	check(t, horizonNamedFossil, func(t *testing.T) error { return hzNamedFallback(t, true) })
+	check(t, horizonNamedLaterPull, func(t *testing.T) error { return hzNamedLaterPull(t) })
+	check(t, horizonNamedNoOracle, func(t *testing.T) error { return hzNamedNoOracle(t) })
+	check(t, horizonNamedPullName, func(t *testing.T) error { return hzNamedPullName(t) })
+	check(t, horizonNamedLogin, func(t *testing.T) error { return hzNamedLogin(t) })
 }
 
 // hzNamedClone clones origin through peer asking for the horizon by name

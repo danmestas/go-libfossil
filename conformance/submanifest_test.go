@@ -52,7 +52,7 @@ func submanifestSuiteCases() []Case {
 
 func TestSubmanifest(t *testing.T) {
 	for _, c := range submanifestCases() {
-		check(t, c.Case, func() error { return c.run(t) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t) })
 	}
 }
 

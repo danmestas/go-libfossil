@@ -32,8 +32,8 @@ var (
 func horizonMemoCases() []Case { return []Case{horizonMemoExtended, horizonMemoGraph} }
 
 func TestHorizonMemo(t *testing.T) {
-	check(t, horizonMemoExtended, func() error { return hzMemoExtended(t) })
-	check(t, horizonMemoGraph, func() error { return hzMemoGraph(t) })
+	check(t, horizonMemoExtended, func(t *testing.T) error { return hzMemoExtended(t) })
+	check(t, horizonMemoGraph, func(t *testing.T) error { return hzMemoGraph(t) })
 }
 
 // hzMemoOrigin is a pushable origin with a check-in chain written in order.

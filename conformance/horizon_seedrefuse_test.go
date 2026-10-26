@@ -42,8 +42,8 @@ var (
 const hzSeedRefused = "seed refused: a seed is private to the clone that holds it; it is never pushed"
 
 func TestHorizonSeedRefuse(t *testing.T) {
-	check(t, horizonSeedRefuseFull, func() error { return hzSeedRefuse(t, hzOwnSeed, hzFullText) })
-	check(t, horizonSeedRefuseDelta, func() error {
+	check(t, horizonSeedRefuseFull, func(t *testing.T) error { return hzSeedRefuse(t, hzOwnSeed, hzFullText) })
+	check(t, horizonSeedRefuseDelta, func(t *testing.T) error {
 		return hzSeedRefuse(t, hzOwnSeed, func(x *hzStruct, name string, data []byte) ([]xfer.Card, []string, error) {
 			rid, ok := blob.Exists(x.s.f.r.DB(), x.c3)
 			if !ok {
@@ -60,12 +60,12 @@ func TestHorizonSeedRefuse(t *testing.T) {
 			return []xfer.Card{&xfer.FileCard{UUID: name, DeltaSrc: x.c3, Content: d}}, nil, nil
 		})
 	})
-	check(t, horizonPushCheckLate, func() error { return hzPushCheckLate(t) })
-	check(t, horizonSeedRefuseLate, func() error { return hzSeedRefuse(t, hzOwnSeed, hzLateDelta) })
-	check(t, horizonSeedShapeFull, func() error { return hzSeedRefuse(t, hzForeignSeed(true), hzFullText) })
-	check(t, horizonSeedShapeLate, func() error { return hzSeedRefuse(t, hzForeignSeed(true), hzLateDelta) })
-	check(t, horizonForeignOrdinary, func() error { return hzForeignStored(t) })
-	check(t, horizonSeedLaterRequest, func() error { return hzSeedLaterRequest(t) })
+	check(t, horizonPushCheckLate, func(t *testing.T) error { return hzPushCheckLate(t) })
+	check(t, horizonSeedRefuseLate, func(t *testing.T) error { return hzSeedRefuse(t, hzOwnSeed, hzLateDelta) })
+	check(t, horizonSeedShapeFull, func(t *testing.T) error { return hzSeedRefuse(t, hzForeignSeed(true), hzFullText) })
+	check(t, horizonSeedShapeLate, func(t *testing.T) error { return hzSeedRefuse(t, hzForeignSeed(true), hzLateDelta) })
+	check(t, horizonForeignOrdinary, func(t *testing.T) error { return hzForeignStored(t) })
+	check(t, horizonSeedLaterRequest, func(t *testing.T) error { return hzSeedLaterRequest(t) })
 }
 
 // hzOwnSeed is the seed the origin mints, under its own label.

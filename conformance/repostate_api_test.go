@@ -40,7 +40,7 @@ type rsEnv struct {
 func TestRepoStateAPI(t *testing.T) {
 	ref := newFossilReference(t)
 	for _, c := range rsAPICases() {
-		check(t, c.Case, func() error {
+		check(t, c.Case, func(t *testing.T) error {
 			e, err := newEnv(t, ref, c.arts)
 			if err != nil {
 				return err

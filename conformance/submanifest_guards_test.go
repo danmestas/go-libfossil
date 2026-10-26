@@ -78,6 +78,6 @@ func smGuardFault(err error, uuid, reason string) error {
 
 func TestSubmanifestGuards(t *testing.T) {
 	for _, c := range smGuardCases() {
-		check(t, c.Case, func() error { return c.run(t) })
+		check(t, c.Case, func(t *testing.T) error { return c.run(t) })
 	}
 }

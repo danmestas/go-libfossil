@@ -14,7 +14,7 @@ import (
 var horizonStructAnnotate = Case{ID: "horizon.5.5.annotate-crossing", Req: "HZ-5.5-1"}
 
 func TestHorizonAnnotateCrossing(t *testing.T) {
-	check(t, horizonStructAnnotate, func() error { return hzAnnotateCrossing(t) })
+	check(t, horizonStructAnnotate, func(t *testing.T) error { return hzAnnotateCrossing(t) })
 }
 
 // hzAnnotateCrossing: annotating back past C (draft-fossil-horizon-00 §5.5).

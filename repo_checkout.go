@@ -226,6 +226,32 @@ func (r *Repo) ListFiles(rid int64) ([]FileEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: list files: %w", err)
 	}
+	return fileEntries(entries), nil
+}
+
+// ListFilesIn is ListFiles narrowed to the files c covers; a nil cone lists
+// every file. The cone is applied as a range predicate at the one enumeration
+// seam every file set comes from (draft-fossil-sparse-cone-00 §4.1), so the
+// result is ListFiles filtered by c.Covers, flat or tree, and a cone's
+// horizon plays no part. On a tree manifest the walk skips every
+// sub-manifest whose key range c cannot cover, so the cost follows the cone
+// plus the spine rather than the whole tree (§4.5). Over a sparse store that
+// makes it the listing that does not reach an elided out-of-cone node; a
+// cone that reaches a node the store lacks still fails, naming it.
+func (r *Repo) ListFilesIn(rid int64, c *Cone) ([]FileEntry, error) {
+	var filter manifest.FileFilter
+	if c != nil {
+		filter = c.inner
+	}
+	entries, err := manifest.ListFilesFilteredCached(
+		r.inner, fsltype.FslID(rid), filter, r.liveCache())
+	if err != nil {
+		return nil, fmt.Errorf("libfossil: list files: %w", err)
+	}
+	return fileEntries(entries), nil
+}
+
+func fileEntries(entries []manifest.FileEntry) []FileEntry {
 	result := make([]FileEntry, len(entries))
 	for i, e := range entries {
 		result[i] = FileEntry{
@@ -234,5 +260,5 @@ func (r *Repo) ListFiles(rid int64) ([]FileEntry, error) {
 			Perm: e.Perm,
 		}
 	}
-	return result, nil
+	return result
 }

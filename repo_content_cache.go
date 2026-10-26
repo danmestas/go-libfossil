@@ -26,9 +26,9 @@ type contentCache struct {
 }
 
 // SetContentCache attaches a cache of expanded artifact content, bounded by
-// bytes, that ReadFile, ReadFileAt, ReadBlob, ListFiles, Diff and Annotate
-// share. It replaces any cache already attached; bytes <= 0 detaches it. The
-// default is no cache. It is safe to call while other goroutines read.
+// bytes, that ReadFile, ReadFileAt, ReadBlob, ListFiles, ListFilesIn, Diff and
+// Annotate share. It replaces any cache already attached; bytes <= 0 detaches
+// it. The default is no cache. It is safe to call while other goroutines read.
 //
 // The bound covers expanded content; the parses of the few check-in
 // manifests read most recently are kept beside it. Any write through this

@@ -60,6 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Listing every check-in of zit's recorded tree history parses 48
   sub-manifests where it parsed 109. A node that is a phantom is not
   remembered and fails the walk as before (tracked in #493).
+- Horizon conformance cases now cover four rows that were partial: the seed
+  label on no artifact an origin or its structural clone stores, and the
+  minted floor kept across a restart of the origin (HZ-5.2-2); a seed's
+  missing base filled by a pull, a local check-in and a local tag
+  (HZ-5.2-9); the path-cone and cursor pragmas sent beside `horizon-name`
+  (HZ-6.1-2); and a tie in event mtime, and a name shaped like a full hash
+  that no check-in has, resolved as a symbolic name (HZ-6.2-17).
 
 ### Fixed
 

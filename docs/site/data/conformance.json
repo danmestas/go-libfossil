@@ -1,7 +1,7 @@
 {
   "requirements": 636,
-  "covered": 629,
-  "partial": 7,
+  "covered": 633,
+  "partial": 3,
   "suites": [
     {
       "suite": "artifact",
@@ -4572,12 +4572,12 @@
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
       "requirements": 76,
-      "covered": 69,
-      "partial": 7,
+      "covered": 73,
+      "partial": 3,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 140,
+      "cases": 149,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4774,10 +4774,10 @@
         {
           "id": "HZ-5.2-2",
           "section": "5.2.2",
-          "status": "PARTIAL",
-          "cases": 4,
+          "status": "COVERED",
+          "cases": 6,
           "text": "The origin sets each seed's D card to the latest mtime of any tag event in the repository, whether it applied, propagated or cancelled a tag, rounded up to a whole second and written with no fractional part (C's own event time, rounded the same way, in a repository with no tag event); no new tag event moves it earlier, and an origin should also date a seed no earlier than the latest D it has minted and keep that D across restarts, so a shun of the latest tag events does not move it earlier; it changes whenever any tag in the repository changes and the next exchange carries the new seed; its U card is the origin's own seed label, never a user's login, and the label must appear on no artifact the origin writes for sharing; an origin should choose a label no user holds, and a user whose login equals it has their pushed control artifacts refused; a seed is a function of C, the tag state and the latest D its origin has minted, so two origins mint the same seed for the same C and state up to the U card, unless a shun has left one a later D than the other. No seed need be dated later than the seed it replaces.",
-          "notes": "covered but for the label's exclusivity, which no case checks: go-libfossil writes its label (go-libfossil) on seeds alone, by construction rather than by test; keeping the minted D across restarts is checked by internal/horizon/seed's TestMintDateKeepsTheMintedFloor, not by a case"
+          "notes": ""
         },
         {
           "id": "HZ-5.2-3",
@@ -4798,10 +4798,10 @@
         {
           "id": "HZ-5.2-9",
           "section": "5.2.3",
-          "status": "PARTIAL",
-          "cases": 1,
+          "status": "COVERED",
+          "cases": 4,
           "text": "A seed is judged when it first becomes expandable, by whatever path supplies its missing base (a push, a pull or clone from another peer, a local check-in); a delta that then expands to a seed is never crosslinked, applied or served, and is recorded as refused in local state that is never synchronized, never in the shun list; the rest of the transfer that supplied the base is stored and crosslinked normally; the atomic refusal applies to the request that carried the seed whenever the seed can be judged within it.",
-          "notes": "the case fills the base by a later push; a base filled by a pull, a check-in or a tag is checked by internal/sync's tests (TestHorizonPullFillsSeedBase, TestHorizonCheckinFillsSeedBase, TestHorizonTagFillsSeedBase), not by a conformance case"
+          "notes": ""
         },
         {
           "id": "HZ-5.2-10",
@@ -4982,10 +4982,10 @@
         {
           "id": "HZ-6.1-2",
           "section": "6.1",
-          "status": "PARTIAL",
-          "cases": 2,
+          "status": "COVERED",
+          "cases": 4,
           "text": "A request may carry pragma horizon-name \u003cname\u003e \u003crule\u003e \u003cdepth\u003e in place of pragma horizon, never both: name is tip, a symbolic name or a full check-in hash, as a card token with Fossil's \\s escaping; rule as for pragma horizon; depth required, plain base-10 digits that fit an unsigned 32-bit integer, 0 the named check-in itself; the structural, seed, cursor and path-cone pragmas combine with it as with pragma horizon. A client sends it only in the first request of a clone; every later request of the clone, and every later pull, sync or deepen, sends pragma horizon \u003chash\u003e \u003crule\u003e with the resolved hash, and the store records the hash, never the name.",
-          "notes": "covered but for the cursor and path-cone pragmas beside horizon-name, which no case sends: a clone's first request carries no cursor, and the path members a named clone asks for are checked only by the root package's TestCloneNamedHorizon"
+          "notes": ""
         },
         {
           "id": "HZ-6.2-1",
@@ -5118,10 +5118,10 @@
         {
           "id": "HZ-6.2-17",
           "section": "6.2.7",
-          "status": "PARTIAL",
-          "cases": 5,
+          "status": "COVERED",
+          "cases": 7,
           "text": "An origin resolves a horizon-name over its dense repository: a well-formed full hash (40 or 64 hex digits) is looked up as a hash first and names that check-in if one has it, otherwise it is tried as a symbolic name; tip is the most recent check-in; any other name is the most recent check-in carrying sym-\u003cname\u003e as an active tag (singleton or propagated, not cancelled), covering branches and tags alike; most recent means the highest event mtime with a tie going to the lexicographically lowest full hash, never a local row number, and a hash prefix is never accepted; it then steps back depth times along primary parents, stopping at a check-in with none. Before any file card and before horizon-served it emits pragma horizon-resolved \u003chash\u003e \u003csteps\u003e, C's full hash and the steps taken, and serves the request as if it carried pragma horizon \u003chash\u003e \u003crule\u003e, minting any seed for that C.",
-          "notes": "covered but for the mtime tie, which internal/horizon's TestResolveNameTie checks and no conformance case does, and a full-hash-shaped name naming no check-in but carried as a symbolic name, which no test resolves (a full hash naming neither is checked refused)"
+          "notes": ""
         },
         {
           "id": "HZ-6.2-18",

@@ -177,7 +177,12 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) StoreCone\(\) \(\*Cone, error\)](<#Repo.StoreCone>)
   - [func \(r \*Repo\) Sync\(ctx context.Context, t Transport, opts SyncOpts\) \(\*SyncResult, error\)](<#Repo.Sync>)
   - [func \(r \*Repo\) Tag\(opts TagOpts\) \(int64, error\)](<#Repo.Tag>)
+  - [func \(r \*Repo\) TicketAdd\(opts TicketOpts\) \(ticketUUID, artifact string, err error\)](<#Repo.TicketAdd>)
+  - [func \(r \*Repo\) TicketChanges\(ticket string\) \(\[\]TicketChange, error\)](<#Repo.TicketChanges>)
+  - [func \(r \*Repo\) TicketList\(\) \(\[\]Ticket, error\)](<#Repo.TicketList>)
+  - [func \(r \*Repo\) TicketSet\(ticket string, opts TicketOpts\) \(artifact string, err error\)](<#Repo.TicketSet>)
   - [func \(r \*Repo\) Timeline\(opts TimelineOpts\) \(\[\]TimelineEntry, error\)](<#Repo.Timeline>)
+  - [func \(r \*Repo\) TimelineSince\(hash string, kinds ...EventKind\) \(\[\]TimelineEntry, error\)](<#Repo.TimelineSince>)
   - [func \(r \*Repo\) UUIDFromRID\(rid int64\) \(string, error\)](<#Repo.UUIDFromRID>)
   - [func \(r \*Repo\) UVDelete\(name string, mtime time.Time\) error](<#Repo.UVDelete>)
   - [func \(r \*Repo\) UVList\(\) \(\[\]UVEntry, error\)](<#Repo.UVList>)
@@ -207,6 +212,9 @@ import "github.com/danmestas/go-libfossil"
 - [type TableSyncStart](<#TableSyncStart>)
 - [type TagOpts](<#TagOpts>)
 - [type TagSpec](<#TagSpec>)
+- [type Ticket](<#Ticket>)
+- [type TicketChange](<#TicketChange>)
+- [type TicketOpts](<#TicketOpts>)
 - [type TimelineEntry](<#TimelineEntry>)
 - [type TimelineOpts](<#TimelineOpts>)
 - [type Transport](<#Transport>)
@@ -2286,6 +2294,42 @@ Tag creates a control artifact that adds a tag to a target artifact. Returns the
 
 As \`fossil tag add\` does, a name with a reserved prefix \("wiki\-", "tkt\-", "event\-"\) is refused, and when the target is a check\-in the name is placed in the symbolic namespace with a "sym\-" prefix so it resolves as a tag in commands such as update and merge; other artifact types keep the name bare. Pass the raw name: fossil prefixes the raw name, so "x" becomes "sym\-x" and "sym\-x" becomes "sym\-sym\-x" on a check\-in.
 
+<a name="Repo.TicketAdd"></a>
+### func \(\*Repo\) TicketAdd
+
+```go
+func (r *Repo) TicketAdd(opts TicketOpts) (ticketUUID, artifact string, err error)
+```
+
+TicketAdd creates a ticket, as \`fossil ticket add\` does, and returns its new id and the hash of the artifact that created it. The ticket table reflects it when TicketAdd returns, and the artifact is queued to sync.
+
+<a name="Repo.TicketChanges"></a>
+### func \(\*Repo\) TicketChanges
+
+```go
+func (r *Repo) TicketChanges(ticket string) ([]TicketChange, error)
+```
+
+TicketChanges returns the changes of the ticket whose id is or starts with ticket, oldest first: the order fossil applies them in, as \`fossil ticket history\` lists them.
+
+<a name="Repo.TicketList"></a>
+### func \(\*Repo\) TicketList
+
+```go
+func (r *Repo) TicketList() ([]Ticket, error)
+```
+
+TicketList returns every ticket, the most recently changed first.
+
+<a name="Repo.TicketSet"></a>
+### func \(\*Repo\) TicketSet
+
+```go
+func (r *Repo) TicketSet(ticket string, opts TicketOpts) (artifact string, err error)
+```
+
+TicketSet changes the ticket whose id is or starts with ticket, as \`fossil ticket set\` does, and returns the hash of the change artifact.
+
 <a name="Repo.Timeline"></a>
 ### func \(\*Repo\) Timeline
 
@@ -2296,6 +2340,17 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error)
 Timeline enumerates the repository's events newest\-first: every row of the event table by default, or just the rows matching opts.Type when set \(canonical \`fossil timeline\`'s \-t/\-\-type default: no filter unless one is given\). Unlike Ancestry, this does not start from or require any particular check\-in — it is a repository\-wide view, not a walk.
 
 Ordering is \(mtime DESC, rid DESC\), a total order with rid as a true tie\-break at exact mtime equality — a deliberate improvement over canonical fossil, which orders by mtime DESC alone with no tie\-break, and paginates with a bare\-timestamp web cursor carrying a one\-second slop, so rows at a page boundary there can repeat or be skipped. Do not "fix" this back to canonical: it is intentional. To page through the full result set, pass the last entry's Cursor back as the next call's TimelineOpts.After — never construct a cursor from a TimelineEntry's Time by hand; see Cursor's doc comment for why that round trip is lossy.
+
+<a name="Repo.TimelineSince"></a>
+### func \(\*Repo\) TimelineSince
+
+```go
+func (r *Repo) TimelineSince(hash string, kinds ...EventKind) ([]TimelineEntry, error)
+```
+
+TimelineSince returns the timeline entries whose artifacts arrived in this repository after the artifact with full hash hash: stored by a later receipt \(a later push, pull or local write\), or later within the same one. kinds, when given, keeps only entries of those kinds. The entries are in Timeline's order, newest first; an empty result is an empty slice, not nil. A hash the repository does not hold is an error.
+
+Arrival, not timestamp, is what "after" means, because the question this answers is what a push brought in: an artifact made on a machine whose clock runs behind the given artifact's still arrived after it. Arrival order is this repository's own, so two clones can answer differently.
 
 <a name="Repo.UUIDFromRID"></a>
 ### func \(\*Repo\) UUIDFromRID
@@ -2654,6 +2709,64 @@ TagSpec describes a tag to attach to an artifact.
 type TagSpec struct {
     Name  string
     Value string
+}
+```
+
+<a name="Ticket"></a>
+## type Ticket
+
+Ticket is one ticket as the ticket table holds it after every change.
+
+```go
+type Ticket struct {
+    UUID   string `json:"uuid"`
+    Status string `json:"status"`
+    // Changed is the time of the ticket's latest change.
+    Changed time.Time `json:"changed"`
+    // Fields holds every ticket-table field that has a value.
+    Fields map[string]string `json:"fields"`
+}
+```
+
+<a name="TicketChange"></a>
+## type TicketChange
+
+TicketChange is one change artifact of a ticket.
+
+```go
+type TicketChange struct {
+    // Artifact is the change artifact's hash.
+    Artifact string    `json:"artifact"`
+    User     string    `json:"user"`
+    Time     time.Time `json:"time"`
+    // Comment is the remark the change added, or "".
+    Comment string `json:"comment"`
+    // Fields holds the change's fields exactly as written, the remark's
+    // included: "+name" for an append.
+    Fields map[string]string `json:"fields"`
+}
+```
+
+<a name="TicketOpts"></a>
+## type TicketOpts
+
+TicketOpts is one change to a ticket.
+
+```go
+type TicketOpts struct {
+    // Fields maps a ticket field (a column of the repository's ticket
+    // schema: title, status, type, resolution, comment, ...) to its new
+    // value. A "+name" key appends the value to the field instead. A field
+    // with an empty value is left out, as `fossil ticket` leaves it out.
+    Fields map[string]string
+    // User is the change's author, its U card.
+    User string
+    // Comment, when not empty, is a remark added with the change, stored as
+    // the stock ticket forms store one: the icomment field, with login and
+    // username set to User and mimetype text/plain.
+    Comment string
+    // Time is the change's D card; zero means now.
+    Time time.Time
 }
 ```
 

@@ -26,6 +26,13 @@ type TimelineOpts struct {
 	// Limit caps the number of rows returned. Zero or negative means
 	// unbounded (matches LogOpts.Limit's convention).
 	Limit int
+	// Kinds, when not empty, restricts the enumeration to events of any of
+	// these kinds, alongside Type.
+	Kinds []libfossil.EventKind
+	// ArrivedAfter, when positive, restricts results to events whose artifact
+	// was stored after the artifact with this rid: a later receipt (rcvid),
+	// or the same receipt and a higher rid. See arrivedAfterCond.
+	ArrivedAfter libfossil.FslID
 }
 
 // TimelineEntry is a single event as returned by Timeline. It extends
@@ -72,29 +79,13 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 	if !opts.Type.Valid() {
 		panic("manifest.Timeline: opts.Type must be a valid EventKind")
 	}
+	for _, k := range opts.Kinds {
+		if k == "" || !k.Valid() {
+			panic("manifest.Timeline: opts.Kinds must hold valid, non-empty EventKinds")
+		}
+	}
 
-	query := "SELECT b.uuid, e.user, e.comment, e.mtime, e.objid, e.type " +
-		"FROM event e JOIN blob b ON b.rid = e.objid"
-
-	var conds []string
-	var args []any
-
-	if opts.Type != "" {
-		conds = append(conds, "e.type = ?")
-		args = append(args, string(opts.Type))
-	}
-	if opts.After.Valid() {
-		conds = append(conds, "(e.mtime < ? OR (e.mtime = ? AND b.rid < ?))")
-		args = append(args, opts.After.Julian(), opts.After.Julian(), int64(opts.After.RID()))
-	}
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
-	}
-	query += " ORDER BY e.mtime DESC, b.rid DESC"
-	if opts.Limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, opts.Limit)
-	}
+	query, args := timelineQuery(opts)
 
 	labels, err := content.BelowLabels(r.DB())
 	if err != nil {
@@ -150,4 +141,68 @@ func Timeline(r *repo.Repo, opts TimelineOpts) ([]TimelineEntry, error) {
 		return nil, fmt.Errorf("manifest.Timeline: %w", err)
 	}
 	return entries, nil
+}
+
+// timelineQuery builds Timeline's SELECT and its arguments from opts.
+func timelineQuery(opts TimelineOpts) (string, []any) {
+	query := "SELECT b.uuid, e.user, e.comment, e.mtime, e.objid, e.type " +
+		"FROM event e JOIN blob b ON b.rid = e.objid"
+
+	var conds []string
+	var args []any
+
+	if opts.Type != "" {
+		conds = append(conds, "e.type = ?")
+		args = append(args, string(opts.Type))
+	}
+	if len(opts.Kinds) > 0 {
+		marks := strings.TrimSuffix(strings.Repeat("?, ", len(opts.Kinds)), ", ")
+		conds = append(conds, "e.type IN ("+marks+")")
+		for _, k := range opts.Kinds {
+			args = append(args, string(k))
+		}
+	}
+	if opts.After.Valid() {
+		conds = append(conds, "(e.mtime < ? OR (e.mtime = ? AND b.rid < ?))")
+		args = append(args, opts.After.Julian(), opts.After.Julian(), int64(opts.After.RID()))
+	}
+	if after := int64(opts.ArrivedAfter); after > 0 {
+		conds = append(conds, arrivedAfterCond)
+		args = append(args, after, after, after)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ")
+	}
+	query += " ORDER BY e.mtime DESC, b.rid DESC"
+	if opts.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+	return query, args
+}
+
+// arrivedAfterCond orders artifacts by when this repository stored their
+// content. blob.rcvid names the receipt that delivered it -- one push, one
+// pull, one local write -- and is set again when a phantom is filled, so an
+// artifact first known as a phantom counts as arriving with its content; a
+// rid alone would not, being allocated when the phantom is made. Within one
+// receipt the rid breaks the tie.
+const arrivedAfterCond = "(coalesce(b.rcvid, 0) > " +
+	"(SELECT coalesce(rcvid, 0) FROM blob WHERE rid = ?) " +
+	"OR (coalesce(b.rcvid, 0) = (SELECT coalesce(rcvid, 0) FROM blob WHERE rid = ?) " +
+	"AND b.rid > ?))"
+
+// ArtifactRID returns the rid of the artifact with full hash uuid whose
+// content the repository holds, or an error naming it.
+func ArtifactRID(q db.Querier, uuid string) (libfossil.FslID, error) {
+	var rid int64
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid = ? AND size >= 0",
+		strings.ToLower(uuid)).Scan(&rid)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("unknown artifact %s", uuid)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("artifact rid: %w", err)
+	}
+	return libfossil.FslID(rid), nil
 }

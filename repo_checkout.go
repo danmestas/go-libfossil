@@ -201,6 +201,11 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: timeline: %w", err)
 	}
+	return timelineEntries(entries), nil
+}
+
+// timelineEntries converts manifest.Timeline's rows; the result is never nil.
+func timelineEntries(entries []manifest.TimelineEntry) []TimelineEntry {
 	result := make([]TimelineEntry, len(entries))
 	for i, e := range entries {
 		result[i] = TimelineEntry{
@@ -217,7 +222,7 @@ func (r *Repo) Timeline(opts TimelineOpts) ([]TimelineEntry, error) {
 			Cursor: e.Cursor,
 		}
 	}
-	return result, nil
+	return result
 }
 
 // ListFiles returns the files in a manifest identified by blob row-id.

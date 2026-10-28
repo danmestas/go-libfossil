@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SettingHorizonSeedKey`, `CloneOpts.SeedKey`) to an SSH key adds
   `import _ "github.com/danmestas/go-libfossil/sshverify"`. One with no seed
   key, or a PGP fingerprint, needs nothing.
+- A cone clone no longer sends a delta base twice. The server's walk sends an
+  in-cone version as a delta with the chain of newer versions ahead of it,
+  and each later round reaching one of those versions at its own check-in
+  sent it again, since each round restarts from the clone's cursor. The
+  walk's cookie now names each chain it forwarded (its head, length and a
+  checksum, at most 1,024 chains) until the walk reaches it, and the server
+  rebuilds the chain from its store, discarding one that no longer matches.
+  On a copy of fossil-scm.org's repository a cone clone of `src` received
+  72,835 blobs to hold 56,262, down from 100,212 (tracked in #465).
 
 ### Fixed
 

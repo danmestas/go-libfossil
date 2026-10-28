@@ -103,7 +103,7 @@ const cloneCapPrefix = "lf-clone-cap:"
 // cookies (e.g. arbitrary sync session cookies) leave the bound at zero,
 // which preserves pre-snapshot behavior for forward/back compat.
 func parseCloneCap(v string) (int, bool) {
-	fields, ok := cloneCapFields(v)
+	fields, _, ok := cloneCapFields(v)
 	if !ok {
 		return 0, false
 	}
@@ -114,23 +114,26 @@ func parseCloneCap(v string) (int, bool) {
 // sparse walk the row the next round starts at and, while that row is a
 // check-in part way through its walk, the last rid of the walk already sent
 // ("lf-clone-cap:MAX", "lf-clone-cap:MAX:ROW", "lf-clone-cap:MAX:ROW:LAST").
-func cloneCapFields(v string) ([]int, bool) {
+// A sparse walk's cookie may end in "/" and the delta bases it carried
+// (cloneCarriedRIDs), returned unparsed.
+func cloneCapFields(v string) ([]int, string, bool) {
 	if !strings.HasPrefix(v, cloneCapPrefix) {
-		return nil, false
+		return nil, "", false
 	}
-	parts := strings.Split(v[len(cloneCapPrefix):], ":")
+	head, carried, _ := strings.Cut(v[len(cloneCapPrefix):], "/")
+	parts := strings.Split(head, ":")
 	if len(parts) > 3 {
-		return nil, false
+		return nil, "", false
 	}
 	fields := make([]int, len(parts))
 	for i, part := range parts {
 		n, err := strconv.Atoi(part)
 		if err != nil || n < 0 {
-			return nil, false
+			return nil, "", false
 		}
 		fields[i] = n
 	}
-	return fields, true
+	return fields, carried, true
 }
 
 // HandleFunc is the server-side sync handler signature.
@@ -1971,6 +1974,9 @@ func (h *handler) emitCloneBatch() error {
 		return fmt.Errorf("handler: clone cursor must be positive, got %d", cursorAtEntry)
 	}
 	round := h.newCloneBatch()
+	if err := h.expandCloneRuns(round); err != nil {
+		return err
+	}
 	if err := h.walkCloneRows(round); err != nil {
 		return err
 	}
@@ -2021,8 +2027,16 @@ type cloneBatch struct {
 	// #141). It caps re-emission at once per round the way canonical fossil's
 	// per-request "sent" bag does; across rounds the ascending cursor resumes,
 	// and a source pulled in early in a prior round may be re-sent, which the
-	// receiver dedupes by hash.
+	// receiver dedupes by hash. A sparse walk adds the chains its cookie
+	// carried (runs).
 	sent map[int]bool
+	// runs are a sparse walk's delta chains sent ahead of the rows or walks
+	// that reach them, carried round to round in its cookie: the walk
+	// restarts at its cursor each round and would otherwise send each such
+	// base again there (issue #465). reached holds the bases this round's
+	// walk found sent already, which leave their runs.
+	runs    [][]int
+	reached map[int]bool
 	// count is the card total; sentTop counts top-level artifacts sent this
 	// round. Each carries a whole delta chain, so it is the quantity the
 	// truncate liveness guard reasons about.
@@ -2046,7 +2060,7 @@ type cloneBatch struct {
 }
 
 func (h *handler) newCloneBatch() *cloneBatch {
-	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}, entry: h.cloneSeq}
+	r := &cloneBatch{budget: DefaultCloneBatchBytes, sent: map[int]bool{}, reached: map[int]bool{}, entry: h.cloneSeq}
 	// BUGGIFY: 10% chance reduce the budget to one byte to stress pagination.
 	// The budget is consulted before each artifact and never suppresses the
 	// first one, so this yields exactly one artifact per round.
@@ -2214,6 +2228,9 @@ func (h *handler) cloneSend(round *cloneBatch, rid int, uuid string, fullSize in
 	h.resp = append(h.resp, cards...)
 	for _, r := range rids {
 		round.sent[r] = true
+	}
+	if h.keep != nil && h.keep.walk != nil {
+		round.noteRun(rids, rid)
 	}
 	h.filesSent += len(rids)
 	round.lastTopRID = rid

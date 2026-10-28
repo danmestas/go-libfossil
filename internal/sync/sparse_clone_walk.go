@@ -7,11 +7,13 @@ import (
 )
 
 // cloneResume is the walk state a cookie echoes: the row the round starts at
-// (aware), and for a check-in whose walk outgrew a round, the last rid of that
-// walk already sent (set).
+// (aware), for a check-in whose walk outgrew a round, the last rid of that
+// walk already sent (set), and the delta bases earlier rounds sent ahead of
+// the rows or walks that reach them (runs).
 type cloneResume struct {
 	row, last  int
 	aware, set bool
+	runs       []cloneRunRef
 }
 
 func cloneResumeFromCards(cards []xfer.Card) cloneResume {
@@ -21,10 +23,10 @@ func cloneResumeFromCards(cards []xfer.Card) cloneResume {
 		if !ok {
 			continue
 		}
-		if fields, ok := cloneCapFields(c.Value); ok {
+		if fields, carried, ok := cloneCapFields(c.Value); ok {
 			resume = cloneResume{}
 			if len(fields) >= 2 {
-				resume = cloneResume{row: fields[1], aware: true}
+				resume = cloneResume{row: fields[1], aware: true, runs: parseCloneRuns(carried)}
 			}
 			if len(fields) == 3 {
 				resume.last, resume.set = fields[2], true
@@ -44,8 +46,9 @@ func hasPullCard(cards []xfer.Card) bool {
 }
 
 // emitCloneResume sends a sparse walk's single cookie: the snapshot bound
-// with the row the next round starts at, and a part-walked check-in's
-// progress. A client echoing the cookie verbatim carries both back.
+// with the row the next round starts at, a part-walked check-in's progress,
+// and the delta bases sent ahead of what reaches them. A client echoing the
+// cookie verbatim carries all three back.
 func (h *handler) emitCloneResume(round *cloneBatch) {
 	if h.keep == nil || h.keep.walk == nil {
 		return
@@ -57,6 +60,9 @@ func (h *handler) emitCloneResume(round *cloneBatch) {
 	case round.nextRID > 0:
 		value = fmt.Sprintf("%s:%d", value, round.nextRID)
 	}
+	if runs := round.carriedRuns(); round.nextRID > 0 && len(runs) > 0 {
+		value += "/" + formatCloneRuns(runs)
+	}
 	h.resp = append(h.resp, &xfer.CookieCard{Value: value})
 }
 
@@ -64,7 +70,8 @@ func (h *handler) emitCloneResume(round *cloneBatch) {
 // for the check-in walk that reaches them in the cone, and are charged here
 // as an excluded row is, as is a cluster under a horizon; every other
 // artifact goes out at its row, followed by what its walk reaches, each
-// checked against the round's budget.
+// checked against the round's budget. A row or item already sent, in this
+// round or as a delta base an earlier round carried, is not sent again.
 func (h *handler) cloneSparseRow(round *cloneBatch, c cloneCandidate) (bool, error) {
 	rid, uuid, fullSize := c.rid, c.uuid, c.fullSize
 	w := h.keep.walk
@@ -75,6 +82,9 @@ func (h *handler) cloneSparseRow(round *cloneBatch, c cloneCandidate) (bool, err
 			round.bytesSent += excludedCost(c)
 		}
 		return true, nil
+	}
+	if already {
+		round.reached[rid] = true
 	}
 	resuming := round.resume.set && round.resume.row == rid
 	if !resuming && !already {
@@ -102,7 +112,11 @@ func (h *handler) cloneSparseRow(round *cloneBatch, c cloneCandidate) (bool, err
 // leaves the check-in as the cursor and its progress pending.
 func (h *handler) cloneWalkItems(round *cloneBatch, row int, items []int, last int) (bool, error) {
 	for _, item := range items {
-		if item <= last || round.sent[item] {
+		if item <= last {
+			continue
+		}
+		if round.sent[item] {
+			round.reached[item] = true
 			continue
 		}
 		info, ok, err := h.loadCloneBlob(item)

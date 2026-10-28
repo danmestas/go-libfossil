@@ -493,6 +493,9 @@ func TestFossilTicketAmendedHereShowsInHistory(t *testing.T) {
 	artifact, err := x.repo.TicketSet(uuid, TicketOpts{
 		Fields: map[string]string{"status": "Closed", "resolution": "Fixed"},
 		User:   "editor", Comment: "fixed in the next version",
+		// A minute on, so the two changes never share a second: fossil
+		// orders history by time alone and leaves a tie unordered.
+		Time: time.Now().Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -503,8 +506,9 @@ func TestFossilTicketAmendedHereShowsInHistory(t *testing.T) {
 	requireLines(t, "fossil ticket history", history,
 		"Ticket Change by bob on", "Ticket Change by editor on", "Change status: Closed",
 		"Change resolution: Fixed", "Change icomment: fixed in the next version")
-	if strings.Index(history, "by bob") > strings.Index(history, "by editor") {
-		t.Fatalf("fossil lists the amendment before the ticket:\n%s", history)
+	// `fossil ticket history` lists the newest change first.
+	if strings.Index(history, "by editor") > strings.Index(history, "by bob") {
+		t.Fatalf("fossil lists the ticket before its later amendment:\n%s", history)
 	}
 	show := x.fossil(t, "ticket", "show", "0", "tkt_uuid='"+uuid+"'")
 	requireLines(t, "fossil ticket show", show, "Closed", "Fixed")

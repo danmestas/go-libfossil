@@ -168,3 +168,26 @@ func TestSparseScaleFossilWrittenStoreReadsNoFiles(t *testing.T) {
 		t.Fatalf("outside files: big1v1=%v big2=%v, want elided", a.Class(f.big1v1), a.Class(f.big2))
 	}
 }
+
+// A push into a store fossil wrote starts the non-artifact record with what
+// arrived. Its older file versions stay proved by the claim tables, rather
+// than all going back to be read past the budget.
+func TestSparseScalePartialRecordReadsNoFiles(t *testing.T) {
+	f := newScaleFixture(t)
+	for _, stmt := range []string{
+		"DROP TABLE crosslink_nonartifact_v2",
+		"CREATE TABLE crosslink_nonartifact_v2(rid INTEGER PRIMARY KEY)",
+		"INSERT INTO crosslink_nonartifact_v2(rid) SELECT max(fid) FROM mlink",
+	} {
+		if _, err := f.r.DB().Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := content.SetStoreCone(f.r.DB(), mustConeExt(t, []string{"src"})); err != nil {
+		t.Fatal(err)
+	}
+	a := f.load(t)
+	if a.Class(f.big1v1) != content.Elided || a.Class(f.big2) != content.Elided {
+		t.Fatalf("outside files: big1v1=%v big2=%v, want elided", a.Class(f.big1v1), a.Class(f.big2))
+	}
+}

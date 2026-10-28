@@ -80,8 +80,8 @@ type storePrefix struct {
 	// moving otherwise means one was linked late, which an extension by the
 	// arrivals would miss.
 	links int64
-	// claims is claimRows at top: the claim rows of a store without the
-	// non-artifact record, or -1 for a store with it.
+	// claims is claimRows at top: the rids the claim tables name, which
+	// file versions follow (fileVersionsSQL).
 	claims int64
 }
 
@@ -293,8 +293,7 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 
 // settled reports whether the rids at or below s's prefix are as s read
 // them but for the phantoms filled: none was crosslinked late (as a check-in,
-// or as any artifact in a store whose file versions follow the claim
-// tables), and none was
+// or as any artifact, which file versions follow), and none was
 // stored as a delta of a filled phantom, which leaves it unreadable until the
 // fill and readable after.
 func (s *memoStore) settled(q db.Querier, filled []libfossil.FslID) (bool, error) {

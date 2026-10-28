@@ -88,13 +88,13 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 	return t, err
 }
 
-// loadFiles reads the file versions the tables prove. A store this
-// library crosslinked records each blob it found to be no artifact; one
-// fossil crosslinked does not, and there every file version was read
-// instead, past the byte budget on a real repository (fossil-scm.org's
-// classification failed outright). In such a store a version mlink names
-// and no table an artifact's crosslink writes claims is taken as file
-// content, as the cone walk takes it (knownFile), without reading it.
+// loadFiles reads the file versions the tables prove (fileVersionsSQL). A
+// store this library crosslinked records each blob it found to be no
+// artifact; one fossil crosslinked does not, and there every file version
+// was read instead, past the byte budget on a real repository
+// (fossil-scm.org's classification failed outright). So a version mlink
+// names and no table an artifact's crosslink writes claims is taken as file
+// content too, as the cone walk takes it (knownFile), without reading it.
 //
 // That is a decision, not a proof. Fossil links every blob it receives or
 // rebuilds that parses as an artifact, so in a store it wrote a file whose
@@ -102,29 +102,18 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 // linked as an artifact is the file mlink says it is, and goes where its
 // name puts it: out of the cone it is elided, which no client of the cone
 // misses, since none expects it. Its bytes go unread, so a corrupt version
-// outside the cone is elided too, where the record would have it read and
-// retained as unreadable; one inside the cone is sent by the walk and fails
-// there. A memo of such a store follows the claim tables (claimRows). A
-// store that has seen a tree proves nothing this way, since nothing claims
-// its nodes.
+// outside the cone is elided too, where reading it would retain it as
+// unreadable; one inside the cone is sent by the walk and fails there. A
+// memo follows the claim tables (claimRows). A store that has seen a tree
+// proves nothing this way, since nothing claims its nodes.
 func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids string) error {
-	var query string
+	query, err := fileVersionsSQL(q, t.present, t.trees, false)
+	if err != nil || query == "" {
+		return err
+	}
 	var args []any
-	switch {
-	case t.present:
-		query, args = restrictTo("SELECT rid FROM "+nonArtifactTable+
-			" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)%s", "rid", ids)
-	case t.trees:
-		return nil
-	default:
-		claims, err := artifactClaims(q)
-		if err != nil {
-			return err
-		}
-		query = "SELECT fid FROM mlink WHERE fid>0 UNION SELECT pid FROM mlink WHERE pid>0" + claims
-		if ids != "" {
-			query, args = query+" INTERSECT SELECT value FROM json_each(?1)", []any{ids}
-		}
+	if ids != "" {
+		query, args = query+" WHERE r IN (SELECT value FROM json_each(?1))", []any{ids}
 	}
 	return referenceRows(ctx, q, query, func(scan func(...any) error) error {
 		var rid libfossil.FslID
@@ -132,6 +121,39 @@ func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids strin
 		t.files[rid] = true
 		return err
 	}, args...)
+}
+
+// fileVersionsSQL selects, as column r, the file versions the tables prove:
+// those the non-artifact record holds that mlink names, and, but in a store
+// that has seen a tree, those mlink names that no claim table names. The
+// two agree wherever the record is complete; taking both keeps a record a
+// push started in a store fossil wrote, which names only what arrived, from
+// sending every older version back to be read. byMids restricts the mlink
+// rows to the check-ins of the JSON array ?1. Empty when nothing is proved.
+func fileVersionsSQL(q db.Querier, present, trees, byMids bool) (string, error) {
+	named := func(col string) string {
+		where := " WHERE " + col + ">0"
+		if byMids {
+			where += " AND mid IN (SELECT value FROM json_each(?1))"
+		}
+		return "SELECT " + col + " FROM mlink" + where
+	}
+	var parts []string
+	if present {
+		parts = append(parts, "SELECT rid FROM "+nonArtifactTable+" WHERE rid IN ("+
+			named("fid")+" UNION "+named("pid")+")")
+	}
+	if !trees {
+		claims, err := artifactClaims(q)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "SELECT * FROM ("+named("fid")+" UNION "+named("pid")+claims+")")
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return "WITH f(r) AS (" + strings.Join(parts, " UNION ") + ") SELECT r FROM f", nil
 }
 
 // artifactTables are the rows an artifact's crosslink writes, by table and
@@ -169,17 +191,12 @@ func artifactClaims(q db.Querier) (string, error) {
 }
 
 // claimRows counts the rids at or below top and outside the JSON array
-// except that a claim table names, in a store without the non-artifact
-// record, or returns -1 for a store with it. Such a store's file versions
-// follow these claims, which a sweep linking an artifact late adds without
-// adding a blob, so a memo of it holds only while the count does. It counts
-// rids, not rows: a check-in's tags propagate as rows naming an older
-// source, or none (srcid 0).
+// except that a claim table names. File versions follow these claims
+// (fileVersionsSQL), which a sweep linking an artifact late adds without
+// adding a blob, so a memo holds only while the count does. It counts rids,
+// not rows: a check-in's tags propagate as rows naming an older source, or
+// none (srcid 0).
 func claimRows(q db.Querier, top libfossil.FslID, except string) (int64, error) {
-	present, err := tableExists(q, nonArtifactTable)
-	if err != nil || present {
-		return -1, err
-	}
 	var parts []string
 	for _, a := range artifactTables {
 		exists, err := tableExists(q, a.table)

@@ -40,19 +40,17 @@ func (v *MemoView) TreesRead() (names []string, reads int) {
 	return slices.Collect(maps.Keys(v.trees)), v.treeReads
 }
 
-// TreeBytes is what m charges for the trees it keeps: its store's tree
-// index, or the trees its walks read when the store keeps none.
+// TreeBytes is what m charges for the trees it keeps.
 func (m *Memo) TreeBytes() int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.store != nil && m.store.trees != nil {
-		return m.store.trees.bytes
+	if m.trees == nil {
+		return 0
 	}
 	return m.trees.bytes
 }
 
-// LimitTrees sets the most m's store tree index may keep; past it, m's
-// walks read trees as they need them.
+// LimitTrees sets the most m keeps of its walks' trees.
 func (m *Memo) LimitTrees(bytes int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

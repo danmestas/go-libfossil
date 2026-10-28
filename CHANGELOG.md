@@ -32,15 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- An origin's classification memo reads the F cards of every tree in the
-  store once, with its other references, and extends them by appended
-  check-ins, so no horizon's walk reads a tree from the store
-  (draft-fossil-horizon-00 §6.2, HZ-6.2-10). Each tree is kept as sorted
-  blob ids, a full manifest as its difference from the one before it: on a
-  clone of fossil-scm.org the trees take 11 MiB, where the bounded cache of
-  walked trees took 50 MiB for two horizons. A store whose trees would pass
-  64 MiB falls back to that cache. A first classification now reads every
-  tree rather than its horizon's (tracked in #463).
+- An origin's classification memo keeps the trees its horizons' walks read
+  compactly: blob names as ids, each tree's files as sorted delta-varint
+  ids, and a full manifest as its difference from the one kept before it
+  (draft-fossil-horizon-00 §6.2). On a clone of fossil-scm.org every tree
+  in the history fits in about 11 MiB, so the 64 MiB bound, which used to
+  hold a few thousand trees, no longer evicts there; the walked-tree cache
+  of two horizons drops from 50 MiB to a few MiB (tracked in #463).
 - In-process SSH signature verification is opt-in: it lives in the new
   package `github.com/danmestas/go-libfossil/sshverify`, which a program links
   by importing it for its side effect. The library no longer links

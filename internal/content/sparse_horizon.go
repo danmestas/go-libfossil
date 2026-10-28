@@ -174,8 +174,8 @@ type treeWalk struct {
 	files   map[string]bool
 	visited map[string]bool
 	pending []string
-	// memo, when set, serves pieces from the memo's store (§6.2), and keeps
-	// those this walk reads when the store keeps no tree index.
+	// memo, when set, serves pieces a memo already read and keeps those
+	// this walk reads (§6.2).
 	memo *MemoView
 }
 
@@ -267,7 +267,7 @@ func (w *treeWalk) read(uuid string) (*plainTree, error) {
 		return &plainTree{}, nil
 	}
 	p := plainTreeOf(rid, size, d)
-	if w.memo != nil && w.memo.store.trees == nil {
+	if w.memo != nil {
 		w.memo.trees[uuid] = p
 	}
 	return p, nil

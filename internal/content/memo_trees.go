@@ -1,12 +1,8 @@
 package content
 
 import (
-	"container/list"
-	"context"
-	"database/sql"
+	"cmp"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"maps"
 	"math"
 	"slices"
@@ -17,16 +13,15 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// memoTreeBytes bounds what a Memo keeps of its store's trees
-// (draft-fossil-horizon-00 §6.2). A store's trees are read with its graph
-// into a treeIndex, which names each blob by a small id and keeps a full
-// check-in's file set as its difference from the one read before it:
+// memoTreeBytes bounds what a Memo keeps of the trees its horizons' walks
+// read (draft-fossil-horizon-00 §6.2), so a second horizon over the store
+// reads only the trees the first did not. The trees are kept as a
+// treeIndex, which names each blob by a small id and keeps a full
+// check-in's file set as its difference from the one kept before it:
 // fossil-scm.org's check-ins name about 21M F-card entries between them,
-// mostly the same few thousand blobs, which the index keeps in a few MiB.
-// A store whose index would pass the bound keeps none; its horizons' walks
-// read trees as they need them into a treeCache bounded alike, least
-// recently used evicted. Either way a miss costs a read, never a wrong
-// answer.
+// mostly the same few thousand blobs, and the index keeps every one of
+// its trees in about 11MiB. Past the bound the index starts again; a miss
+// costs a read, never a wrong answer.
 const memoTreeBytes = 64 << 20
 
 // treePieceBytes and treeNameBytes are what a kept piece and an interned
@@ -60,8 +55,8 @@ type plainTree struct {
 	s       []string
 }
 
-// plainTreeOf is d's piece. Its names share d's bytes until a cache or an
-// index interns them.
+// plainTreeOf is d's piece. Its names share d's bytes until an index
+// interns them.
 func plainTreeOf(rid libfossil.FslID, size int64, d *deck.Deck) *plainTree {
 	p := &plainTree{rid: rid, size: size, checkin: d.Type == deck.Checkin, b: d.B,
 		files: make([]string, 0, len(d.F))}
@@ -74,10 +69,6 @@ func plainTreeOf(rid libfossil.FslID, size int64, d *deck.Deck) *plainTree {
 		p.s = append(p.s, sc.UUID)
 	}
 	return p
-}
-
-func (p *plainTree) bytes() int64 {
-	return treePieceBytes + int64(len(p.files)+len(p.s)+1)*16
 }
 
 // readTree returns the check-in or sub-manifest rid holds, or nil when its
@@ -136,9 +127,8 @@ type treePiece struct {
 	full  bool
 }
 
-// treeIndex is the trees of one store prefix: every held check-in's, and
-// the baselines and nodes they reach. It is immutable once a memoStore
-// holds it; clone it to extend it.
+// treeIndex is tree pieces of one store lineage, by name. It is immutable
+// once a Memo holds it; clone it to extend it.
 type treeIndex struct {
 	names  treeNames
 	pieces map[uint32]*treePiece
@@ -295,103 +285,64 @@ func (d *treeDecoder) files(p *treePiece) []uint32 {
 	return ids
 }
 
-// readTrees returns x extended by the trees of the held check-ins ids
-// lists (every one when ids is empty) and the baselines and nodes they
-// reach that x lacks, or nil when the result would pass limit bytes. x is
-// not changed. Check-ins are read newest first, as fossil stores older
-// manifests as deltas of newer ones.
-func readTrees(ctx context.Context, q db.Querier, x *treeIndex, ids string, limit int64) (*treeIndex, error) {
-	type checkin struct {
-		rid  libfossil.FslID
-		name string
-		size int64
+// publishTrees keeps pieces, which a view of store lineage read, in the
+// memo's trees: a later lineage replaces them, an earlier one is stale and
+// is dropped. Pieces are added newest first, as a walk reads them. Past
+// the memo's tree limit the trees start again from the piece that passed
+// it. The caller holds m.mu.
+func (m *Memo) publishTrees(lineage uint64, pieces map[string]*plainTree) {
+	if lineage < m.treeLineage {
+		return
 	}
-	var checkins []checkin
-	query, args := restrictTo(`SELECT b.rid, b.uuid, b.size FROM blob b WHERE b.size>=0
-		AND b.rid IN (SELECT objid FROM event WHERE type='ci')%s ORDER BY b.rid DESC`, "b.rid", ids)
-	err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
-		var c checkin
-		err := scan(&c.rid, &c.name, &c.size)
-		if x.piece(c.name) == nil {
-			checkins = append(checkins, c)
-		}
-		return err
-	}, args...)
-	if err != nil {
-		return nil, fmt.Errorf("classification memo: trees: %w", err)
+	if lineage > m.treeLineage {
+		m.trees, m.treeLineage = nil, lineage
 	}
-	if len(checkins) == 0 {
-		return x, nil
+	if len(pieces) == 0 {
+		return
 	}
-	x = x.clone()
-	cache := NewCache(treeCacheBytes)
-	var pending []string
-	keep := func(name string, rid libfossil.FslID, size int64) bool {
-		t := &plainTree{rid: rid, size: size}
-		if d := readTree(q, cache, rid); d != nil {
-			t = plainTreeOf(rid, size, d)
-		}
-		x.add(name, t)
-		if t.b != "" {
-			pending = append(pending, t.b)
-		}
-		pending = append(pending, t.s...)
-		return x.bytes <= limit
+	names := slices.SortedFunc(maps.Keys(pieces), func(a, b string) int {
+		return cmp.Compare(pieces[b].rid, pieces[a].rid)
+	})
+	x := newTreeIndex()
+	if m.trees != nil {
+		x = m.trees.clone()
 	}
-	for _, c := range checkins {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if !keep(c.name, c.rid, c.size) {
-			return nil, nil
-		}
-	}
-	absent := map[string]bool{}
-	for len(pending) > 0 {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		name := pending[len(pending)-1]
-		pending = pending[:len(pending)-1]
-		if absent[name] || x.piece(name) != nil {
+	for _, name := range names {
+		if x.piece(name) != nil {
 			continue
 		}
-		var rid libfossil.FslID
-		var size int64
-		err := q.QueryRow("SELECT rid, size FROM blob WHERE uuid=? AND size>=0", name).Scan(&rid, &size)
-		if errors.Is(err, sql.ErrNoRows) {
-			absent[name] = true
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("classification memo: tree piece %s: %w", name, err)
-		}
-		if !keep(name, rid, size) {
-			return nil, nil
+		x.add(name, pieces[name])
+		if x.bytes > m.treeLimit {
+			x = newTreeIndex()
+			if x.add(name, pieces[name]); x.bytes > m.treeLimit {
+				x = newTreeIndex()
+			}
 		}
 	}
-	return x, nil
+	m.trees = x
 }
 
 // expandTree has w expand the piece name names as the view's store holds
-// it, and reports whether the view could: from the store's tree index, or,
-// for a store too large to index, from what this view or a published one
-// read before.
+// it, and reports whether the view could: read before by this view, or by
+// a published one. A piece read under a later prefix serves only when its
+// rid is held at the view's.
 func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
-	x := v.store.trees
-	if x == nil {
-		p := v.tree(name)
-		if p == nil {
-			return false, nil
-		}
+	if p := v.trees[name]; p != nil {
 		if err := w.charge(p.size); err != nil {
 			return true, err
 		}
 		w.take(p)
 		return true, nil
 	}
+	m := v.memo
+	m.mu.Lock()
+	x, lineage := m.trees, m.treeLineage
+	m.mu.Unlock()
+	if x == nil || lineage != v.store.lineage {
+		return false, nil
+	}
 	p := x.piece(name)
-	if p == nil {
+	if p == nil || p.rid > v.store.prefix.top || v.store.prefix.phantoms[p.rid] {
 		return false, nil
 	}
 	if err := w.charge(p.size); err != nil {
@@ -405,122 +356,4 @@ func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
 		w.push(x.names.name(s))
 	}
 	return true, nil
-}
-
-// treeCache is a Memo's least-recently-used tree pieces, by name, for one
-// store lineage, kept only for a store too large to index: within a
-// lineage a rid at or below a prefix's top that is no phantom there is
-// held there, as read, so a piece read under any prefix serves every view
-// whose prefix holds its rid. Names are interned, since consecutive trees
-// name mostly the same blobs. A lookup refreshes a piece's recency, which
-// a View that is never published may do: that changes what is evicted,
-// never an answer.
-type treeCache struct {
-	lineage uint64
-	pieces  map[string]*list.Element // of *cachedPiece
-	order   list.List                // most recently used first
-	names   map[string]internedName
-	bytes   int64
-}
-
-type cachedPiece struct {
-	name  string
-	piece *plainTree
-}
-
-type internedName struct {
-	name string
-	refs int
-}
-
-// get returns the piece name names under lineage, or nil.
-func (c *treeCache) get(lineage uint64, name string) *plainTree {
-	if c.lineage != lineage {
-		return nil
-	}
-	e := c.pieces[name]
-	if e == nil {
-		return nil
-	}
-	c.order.MoveToFront(e)
-	return e.Value.(*cachedPiece).piece
-}
-
-// publish keeps pieces, read under lineage, evicting the least recently
-// used past the cap. A later lineage replaces the cache; an earlier one is
-// stale and is dropped.
-func (c *treeCache) publish(lineage uint64, pieces map[string]*plainTree) {
-	if lineage < c.lineage || len(pieces) == 0 {
-		return
-	}
-	if lineage > c.lineage || c.pieces == nil {
-		*c = treeCache{lineage: lineage, pieces: map[string]*list.Element{}, names: map[string]internedName{}}
-	}
-	for name, p := range pieces {
-		if e := c.pieces[name]; e != nil {
-			c.order.MoveToFront(e)
-			continue
-		}
-		kept := &plainTree{rid: p.rid, size: p.size, checkin: p.checkin, b: c.intern(p.b)}
-		kept.files = make([]string, len(p.files))
-		for i, f := range p.files {
-			kept.files[i] = c.intern(f)
-		}
-		kept.s = make([]string, len(p.s))
-		for i, s := range p.s {
-			kept.s[i] = c.intern(s)
-		}
-		c.pieces[name] = c.order.PushFront(&cachedPiece{name: name, piece: kept})
-		c.bytes += kept.bytes()
-		for c.bytes > memoTreeBytes && c.order.Len() > 0 {
-			c.evict(c.order.Back())
-		}
-	}
-}
-
-func (c *treeCache) intern(name string) string {
-	if name == "" {
-		return ""
-	}
-	n, ok := c.names[name]
-	if !ok {
-		// A copy: the name may share the bytes of the whole tree it came from.
-		n = internedName{name: strings.Clone(name)}
-		c.bytes += treeNameBytes + int64(len(name))
-	}
-	n.refs++
-	c.names[name] = n
-	return n.name
-}
-
-func (c *treeCache) release(name string) {
-	if name == "" {
-		return
-	}
-	n := c.names[name]
-	if n.refs <= 0 {
-		panic("content.treeCache.release: name not interned")
-	}
-	if n.refs--; n.refs > 0 {
-		c.names[name] = n
-		return
-	}
-	delete(c.names, name)
-	c.bytes -= treeNameBytes + int64(len(name))
-}
-
-func (c *treeCache) evict(e *list.Element) {
-	cp := c.order.Remove(e).(*cachedPiece)
-	delete(c.pieces, cp.name)
-	c.bytes -= cp.piece.bytes()
-	c.release(cp.piece.b)
-	for _, f := range cp.piece.files {
-		c.release(f)
-	}
-	for _, s := range cp.piece.s {
-		c.release(s)
-	}
-	if c.bytes < 0 {
-		panic("content.treeCache.evict: negative size")
-	}
 }

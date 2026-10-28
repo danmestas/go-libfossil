@@ -246,21 +246,28 @@ func TestMemoUnpublishedViewDiscarded(t *testing.T) {
 	}
 }
 
-// draft-fossil-horizon-00 §6.2: the memo reads the store's trees with its
-// graph, so no horizon's walk reads a tree from the store, and classifies
-// as a fresh read does.
-func TestMemoTreesReadWithGraph(t *testing.T) {
+// draft-fossil-horizon-00 §6.2: the memo keeps the trees its horizons'
+// walks read, so a second horizon over the same store, under another C or
+// rule, reads from the store only the trees the first did not, and
+// classifies as a fresh read does. Past its tree limit the memo reads
+// trees again, and classifies alike.
+func TestMemoTreesReadOnce(t *testing.T) {
 	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
-		t.Run(string(mode), func(t *testing.T) {
-			ctx := context.Background()
-			m := newMemoRepo(t, mode)
-			tip := m.commit(0)
-			for i := 0; i < 5; i++ {
-				tip = m.commit(tip)
-			}
-			memo := content.NewMemo()
-			for round := 0; round < 2; round++ {
-				for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
+		for _, limited := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/limited=%v", mode, limited), func(t *testing.T) {
+				ctx := context.Background()
+				m := newMemoRepo(t, mode)
+				tip := m.commit(0)
+				for i := 0; i < 5; i++ {
+					tip = m.commit(tip)
+				}
+				memo := content.NewMemo()
+				if limited {
+					memo.LimitTrees(400)
+				}
+				seen := map[string]bool{}
+				again := 0
+				for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0], m.tips[3]} {
 					v, err := memo.View(ctx, m.r.DB())
 					if err != nil {
 						t.Fatal(err)
@@ -268,60 +275,32 @@ func TestMemoTreesReadWithGraph(t *testing.T) {
 					for _, sc := range m.memoCones(c) {
 						sameClassification(t, m.r, v, sc)
 					}
-					if names, reads := v.TreesRead(); reads != 0 || len(names) != 0 {
+					names, reads := v.TreesRead()
+					if reads != len(names) {
 						t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
 					}
-					v.Publish()
-				}
-				if memo.TreeBytes() == 0 {
-					t.Fatal("the memo keeps no trees")
-				}
-				tip = m.commit(tip) // extended, not read in full
-			}
-		})
-	}
-}
-
-// draft-fossil-horizon-00 §6.2: a store whose trees would pass the memo's
-// tree limit keeps the trees its horizons' walks read, so a second horizon
-// over the same store, under another C or rule, reads from the store only
-// the trees the first did not, and classifies as a fresh read does.
-func TestMemoTreesReadOnce(t *testing.T) {
-	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
-		t.Run(string(mode), func(t *testing.T) {
-			ctx := context.Background()
-			m := newMemoRepo(t, mode)
-			tip := m.commit(0)
-			for i := 0; i < 5; i++ {
-				tip = m.commit(tip)
-			}
-			memo := content.NewMemo()
-			memo.LimitTrees(0)
-			seen := map[string]bool{}
-			for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
-				v, err := memo.View(ctx, m.r.DB())
-				if err != nil {
-					t.Fatal(err)
-				}
-				for _, sc := range m.memoCones(c) {
-					sameClassification(t, m.r, v, sc)
-				}
-				names, reads := v.TreesRead()
-				if reads != len(names) {
-					t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
-				}
-				if len(seen) == 0 && len(names) == 0 {
-					t.Fatalf("the first horizon, at %d, read no tree", c)
-				}
-				for _, name := range names {
-					if seen[name] {
-						t.Fatalf("horizon at %d read %.10s again", c, name)
+					if len(seen) == 0 && len(names) == 0 {
+						t.Fatalf("the first horizon, at %d, read no tree", c)
 					}
-					seen[name] = true
+					for _, name := range names {
+						if seen[name] {
+							again++
+						}
+						seen[name] = true
+					}
+					v.Publish()
+					if limited && memo.TreeBytes() > 400 {
+						t.Fatalf("the memo keeps %d tree bytes past its limit", memo.TreeBytes())
+					}
 				}
-				v.Publish()
-			}
-		})
+				if !limited && again > 0 {
+					t.Fatalf("%d trees read again", again)
+				}
+				if limited && again == 0 {
+					t.Fatal("no tree read again past the limit")
+				}
+			})
+		}
 	}
 }
 

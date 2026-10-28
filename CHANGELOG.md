@@ -67,6 +67,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "cannot stat" as "missing". It now refuses only a parent the filesystem
   confirms is missing or is not a directory, and otherwise lets SQLite's own
   open report a real failure (tracked in #509).
+- A horizon seed that a pull, clone or push stored as a delta, and that only
+  became readable once a later round or request supplied its base, was refused
+  by its hash but kept in the store, and a pull or clone counted it as
+  received when the delta arrived. It is now dropped (draft-fossil-horizon-00
+  §5.2.3): every delta built on it is rewritten as full text first, so it still
+  reads, then the seed's row loses its content while keeping its rid. A pull or
+  clone counts a delta it could not read on arrival only once it is read and
+  judged not a seed. Conformance requirement HZ-5.2-14 is now covered.
+  - A delta that arrives on a seed already dropped is not stored as a delta,
+    since it could never be read: it is left a phantom and asked for again in
+    full, on a pull, a clone's phantom pull and a push to an origin alike. A
+    seed that arrives in full after deltas built on it is stored just long
+    enough to check them and rewrite them as full text, then dropped.
+  - A drop is all or nothing: a failure partway leaves the seed and its
+    dependents as they were.
+  - A refused seed's phantom is no longer asked for by an origin answering a
+    push, nor counted missing by a clone asking for what it left missing.
+  - Stores written by earlier releases kept refused seeds' content. A rebuild
+    (`verify.Rebuild`, or any crosslink that reaches such a row) now drops
+    it, silently and once.
+  - fossil's own `rebuild` (checked against 2.28) turns a dropped seed's
+    content-less row back into a phantom and deletes the store-local
+    `seedrefused` and `seedpending` tables, so the refusal record is lost. A
+    later pull may then ask for the seed once more; it arrives as a seed and
+    is dropped and refused again.
 
 ## [0.16.2] - 2026-10-25
 

@@ -708,6 +708,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	}
 	var done bool
 	recvd := s.result.FilesRecvd
+	noted := s.unjudged.mark()
 	cardErr, err := runPass(s.repo, func(bound *repo.Repo) (cardErr, err error) {
 		defer s.bindRepo(bound)()
 		done, cardErr, err = s.processReply(ctx, msg)
@@ -717,6 +718,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	if err != nil {
 		// The reply rolled back: what it counted is not stored.
 		s.result.FilesRecvd = recvd
+		s.unjudged.rollback(noted)
 		return false, err
 	}
 	if cardErr != nil {
@@ -822,13 +824,13 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	if err != nil {
 		return fmt.Errorf("sync: record phantoms: %w", err)
 	}
-	t.newPhantoms = created
+	t.newPhantoms += created
 	// Phantoms the round's storage created (a delta's basis, a cluster's
 	// members) join the session's, once per reply rather than per file.
 	if err := s.loadDBPhantoms(); err != nil {
 		return fmt.Errorf("sync: load phantoms: %w", err)
 	}
-	s.result.FilesRecvd += t.filesRecvd
+	s.result.FilesRecvd += t.filesRecvd - t.unjudged
 	return nil
 }
 
@@ -860,6 +862,7 @@ func (s *session) malformedFile(compressed bool) bool {
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
 	filesRecvd   int  // file and cfile cards received
+	unjudged     int  // of those, deltas not yet readable, counted once judged (unjudged)
 	filesSent    int  // files queued for the next request on the server's gimme
 	newPhantoms  int  // phantoms an igot created
 	privateIGots int  // igot HASH 1 answers queued for the server's gimme
@@ -943,12 +946,23 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 // receiveFile stores a received file or cfile and counts it.
 func (s *session) receiveFile(ctx context.Context, uuid, deltaSrc string,
 	payload, storedBlob []byte, t *replyTally) error {
-	stored, err := s.handleFileCard(ctx, uuid, deltaSrc, payload, storedBlob,
-		s.takeVisibility())
+	vis := s.takeVisibility()
+	// A delta on a dropped seed is asked for again in full (onRefusedBasis):
+	// a phantom it newly leaves continues the session (§3.7).
+	if again, created, err := onRefusedBasis(s.repo.DB(), uuid, deltaSrc, vis); again || err != nil {
+		if created {
+			t.newPhantoms++
+		}
+		return err
+	}
+	stored, err := s.handleFileCard(ctx, uuid, deltaSrc, payload, storedBlob, vis)
 	if err != nil || !stored {
 		return err // a shunned file is dropped, and not counted as received
 	}
 	t.filesRecvd++
+	if s.unjudged.note(s.repo.DB(), s.pass, uuid, deltaSrc) {
+		t.unjudged++
+	}
 	s.roundStats.BytesReceived += int64(len(payload))
 	delete(s.phantoms, uuid)
 	return nil
@@ -1501,6 +1515,9 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 		return 0, &hashMismatchError{uuid: uuid}
 	}
 	if seedcheck.IsSeedBytes(fullContent) {
+		if err := storeSeedBasis(r, pass, uuid, fullContent, linker); err != nil {
+			return 0, err
+		}
 		return 0, errSeed
 	}
 
@@ -1800,8 +1817,9 @@ func (s *session) loadDBPhantoms() error {
 	if err != nil {
 		return err
 	}
-	// A dropped seed's phantom stays, inert: deleting a row would free its
-	// rid for reuse under a receive pass. Its hash is never asked for again.
+	// A refused seed's phantom (a name the store knew of before the seed
+	// arrived and was refused, or one a rebuild made of a dropped seed's
+	// row) is never asked for again.
 	refused, err := seedcheck.RefusedUUIDs(s.repo.DB())
 	if err != nil {
 		return err

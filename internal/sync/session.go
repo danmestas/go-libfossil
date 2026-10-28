@@ -106,6 +106,7 @@ type SyncResult struct {
 // session holds the mutable state of a running sync.
 type session struct {
 	ctx            context.Context
+	unjudged       unjudged // deltas stored unreadable, counted once judged
 	sparseReceived map[string]bool
 	horizon        bool // the store cone has a horizon: no cluster is asked for
 	structural     structuralClient
@@ -435,6 +436,14 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return &s.result, fmt.Errorf("sync: crosslink: %w", xlinkErr)
 	}
 	s.result.ArtifactsLinked = linked
+	// Horizon §5.2.3: a delta stored unreadable is counted once the rounds
+	// and the crosslink have judged it, and only if it was not a seed.
+	kept, err := s.unjudged.settle(s.repo.DB())
+	if err != nil {
+		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
+		return &s.result, fmt.Errorf("sync: %w", err)
+	}
+	s.result.FilesRecvd += kept
 	if s.sparseReceived != nil {
 		err := s.repo.WithTx(func(tx *db.Tx) error {
 			var err error

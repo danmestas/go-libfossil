@@ -78,10 +78,8 @@ func TestZitHorizonOriginClustersInterop(t *testing.T) {
 		t.Fatalf("go-libfossil's horizon store from zit: %v", err)
 	}
 
-	// Named outright, a cluster is withheld from a horizon gimme. zit still
-	// answers req-clusters under a horizon pragma with the catalog, which
-	// go-libfossil's handler does not; a store served at its horizon never
-	// sends one (horizon.4.5.served-no-cluster-chase), so it is logged.
+	// Named outright, a cluster is withheld from a horizon gimme; whether zit
+	// also ignores req-clusters under a horizon pragma is probed below.
 	code, err := g.f.r.Config("project-code")
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +105,16 @@ func TestZitHorizonOriginClustersInterop(t *testing.T) {
 	if err := ask(gimmes...); err != nil {
 		t.Fatalf("zit's reply to a horizon gimme naming its clusters: %v", err)
 	}
+	// A horizon-scoped req-clusters is ignored by go-libfossil's origin
+	// (horizon.4.1.origin-no-cluster) and should be by zit. The dense
+	// req-clusters first proves the probe can see a catalog. A zit that
+	// answers is logged, not failed: the defect is zit's, not go-libfossil's.
+	if ask(&xfer.PragmaCard{Name: "req-clusters"}) == nil {
+		t.Fatal("fixture: zit sent no catalog to a dense req-clusters")
+	}
 	if err := ask(horizon, &xfer.PragmaCard{Name: "req-clusters"}); err != nil {
-		t.Logf("zit's reply to req-clusters under a horizon: %v", err)
+		t.Logf("%s answers req-clusters under a horizon pragma with the catalog: %v", zitVersion(bin), err)
+	} else {
+		t.Logf("%s ignores req-clusters under a horizon pragma", zitVersion(bin))
 	}
 }

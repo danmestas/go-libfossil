@@ -96,16 +96,22 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 // names and no table an artifact's crosslink writes claims is taken as file
 // content too, as the cone walk takes it (knownFile), without reading it.
 //
-// That is a decision, not a proof. Fossil links every blob it receives or
-// rebuilds that parses as an artifact, so in a store it wrote a file whose
-// bytes are an artifact is claimed and read as one. A blob nothing has
-// linked as an artifact is the file mlink says it is, and goes where its
-// name puts it: out of the cone it is elided, which no client of the cone
-// misses, since none expects it. Its bytes go unread, so a corrupt version
-// outside the cone is elided too, where reading it would retain it as
-// unreadable; one inside the cone is sent by the walk and fails there. A
-// memo follows the claim tables (claimRows). A store that has seen a tree
-// proves nothing this way, since nothing claims its nodes.
+// That is a decision, not a proof, and it applies to every store, the
+// record or not. A blob nothing has linked as an artifact is the file mlink
+// says it is, and goes where its name puts it: out of the cone it is
+// elided, which no client of the cone misses, since none expects it. Fossil
+// links every blob it receives or rebuilds that parses as an artifact, so
+// in a store it wrote a file whose bytes are an artifact is claimed and
+// read as one. This library's own store is not, between a Checkin that
+// commits such a file and the next crosslink sweep: until the sweep links
+// it, a cluster-bytes file outside the cone is elided rather than kept as a
+// cluster. The window closes by itself, since a sweep runs in batches
+// (crosslinkBatchSize) whose claims the memo sees (claimRows), and the next
+// classification reads the blob as the artifact it then is. Its bytes go
+// unread, so a corrupt version outside the cone is elided too, where
+// reading it would retain it as unreadable; one inside the cone is sent by
+// the walk and fails there. A store that has seen a tree proves nothing
+// this way, since nothing claims its nodes.
 func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids string) error {
 	query, err := fileVersionsSQL(q, t.present, t.trees, false)
 	if err != nil || query == "" {

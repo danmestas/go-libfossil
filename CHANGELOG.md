@@ -62,6 +62,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A server holding a repository fossil wrote, rather than this library,
+  failed to classify it for a cone clone: with no record of which blobs its
+  crosslinker found to be no artifact, classification read every file
+  version and exceeded its byte budget. The walk then kept no unreached
+  delta base, so every in-cone version went out whole, and a cone clone of
+  fossil-scm.org's repository took about 390 rounds, 2-4 MB of `sqlite3.c`
+  at a time, where a dense clone takes 8. Classification now also takes a
+  version that mlink names and no artifact table claims as file content, as
+  the walk already did, without reading it. That clone now takes 12 rounds
+  and 9 minutes, down from 390 and 30 (related to
+  #465).
 - `Create` refused every path under TinyGo wasm, where a repository lives in
   a SQLite VFS and `os.Stat` is unsupported: its parent-directory check read
   "cannot stat" as "missing". It now refuses only a parent the filesystem

@@ -345,8 +345,8 @@ func (p *receivePass) available(q db.Querier, uuid string) bool {
 	if q == nil {
 		panic("sync.receivePass.available: q must not be nil")
 	}
-	rid, held := blob.Exists(q, uuid)
-	if !held {
+	rid, held, err := contentRow(q, uuid)
+	if err != nil || !held {
 		return false
 	}
 	if p.basis.Holds(rid) {
@@ -356,6 +356,22 @@ func (p *receivePass) available(q db.Querier, uuid string) bool {
 		return false
 	}
 	return content.IsAvailable(q, rid)
+}
+
+// contentRow finds the row holding uuid's content. A row without content,
+// a phantom or a seed seedcheck dropped, is not held, even when the pass's
+// basis cache still has the bytes it was read with before the drop.
+func contentRow(q db.Querier, uuid string) (libfossil.FslID, bool, error) {
+	var rid libfossil.FslID
+	var size int64
+	err := q.QueryRow("SELECT rid, size FROM blob WHERE uuid=?", uuid).Scan(&rid, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("look up %s: %w", uuid, err)
+	}
+	return rid, size >= 0, nil
 }
 
 // deltaVerdict is what applying a received delta to its basis showed.
@@ -401,13 +417,12 @@ func (p *receivePass) checkDelta(q db.Querier, uuid, deltaSrc string,
 	if uuid == "" || deltaSrc == "" {
 		panic("sync.checkDelta: uuid and deltaSrc must not be empty")
 	}
-	var srcRid libfossil.FslID
-	err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", deltaSrc).Scan(&srcRid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return deltaUnverifiable, nil, nil
-	}
+	srcRid, held, err := contentRow(q, deltaSrc)
 	if err != nil {
-		return deltaUnverifiable, nil, fmt.Errorf("look up %s: %w", deltaSrc, err)
+		return deltaUnverifiable, nil, err
+	}
+	if !held {
+		return deltaUnverifiable, nil, nil
 	}
 	if _, dangling := p.dangling[srcRid]; dangling {
 		return deltaUnverifiable, nil, nil

@@ -170,3 +170,36 @@ func panics(fn func()) (did bool) {
 	fn()
 	return false
 }
+
+// WithSavepoint undoes only fn's writes when fn fails, leaving the
+// transaction open with the writes before it, and keeps them when fn succeeds.
+func TestTxWithSavepoint(t *testing.T) {
+	d := openBoundTestDB(t)
+	err := d.WithTx(func(tx *db.Tx) error {
+		if _, err := tx.Exec("INSERT INTO t VALUES(1)"); err != nil {
+			return err
+		}
+		failed := tx.WithSavepoint(func(sp *db.Tx) error {
+			if _, err := sp.Exec("INSERT INTO t VALUES(2)"); err != nil {
+				return err
+			}
+			return errors.New("undo the savepoint's write")
+		})
+		if failed == nil {
+			t.Error("WithSavepoint lost fn's error")
+		}
+		if n := countRows(t, tx); n != 1 {
+			t.Errorf("after the failed savepoint %d rows, want 1", n)
+		}
+		return tx.WithSavepoint(func(sp *db.Tx) error {
+			_, err := sp.Exec("INSERT INTO t VALUES(3)")
+			return err
+		})
+	})
+	if err != nil {
+		t.Fatalf("WithTx: %v", err)
+	}
+	if n := countRows(t, d); n != 2 {
+		t.Fatalf("rows = %d, want 2", n)
+	}
+}

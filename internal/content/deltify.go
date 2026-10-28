@@ -238,8 +238,9 @@ func deltifyWrite(tx *db.Tx, rid, srcRid libfossil.FslID, deltaBytes []byte) (in
 
 // Undelta rewrites rid as full content, dropping its delta link. Mirrors
 // content_undelta (src/content.c:745-769), including its update of blob.size,
-// which content_deltify deliberately does not touch.
-func Undelta(tx *db.Tx, rid libfossil.FslID) error {
+// which content_deltify deliberately does not touch. Its two writes belong
+// in the caller's transaction.
+func Undelta(tx db.Querier, rid libfossil.FslID) error {
 	if tx == nil {
 		panic("content.Undelta: tx must not be nil")
 	}

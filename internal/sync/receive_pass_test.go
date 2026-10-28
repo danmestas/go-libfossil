@@ -332,3 +332,40 @@ func TestReceivePassAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A row whose content was dropped (a seed seedcheck refused) is no basis,
+// even while the pass's cache still holds the bytes it had: a delta on it is
+// not verified against bytes the store no longer keeps.
+func TestReceivePassDroppedBasisUnverifiable(t *testing.T) {
+	r := setupSyncTestRepo(t)
+	base := []byte("a basis whose content a seed verdict drops\n")
+	err := inPass(r, func(r *repo.Repo, pass *receivePass) error {
+		rid, uuid, err := blob.Store(r.DB(), base)
+		if err != nil {
+			return err
+		}
+		pass.remember(rid, base)
+		if _, err := r.DB().Exec("UPDATE blob SET size=-1, content=NULL WHERE rid=?", rid); err != nil {
+			return err
+		}
+		target := append([]byte("on the dropped row\n"), base...)
+		d, err := delta.Create(base, target)
+		if err != nil {
+			return err
+		}
+		verdict, got, err := pass.checkDelta(r.DB(), hash.SHA1(target), uuid, d)
+		if err != nil {
+			return err
+		}
+		if verdict != deltaUnverifiable || got != nil {
+			return fmt.Errorf("a delta on a dropped row was judged %v", verdict)
+		}
+		if pass.available(r.DB(), uuid) {
+			return fmt.Errorf("the dropped row reads as available")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

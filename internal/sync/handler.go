@@ -1353,8 +1353,8 @@ const maxPhantomGimme = 500
 // requestPhantoms asks a pushing client for the server's phantoms, as
 // page_xfer's request_phantoms does after the card loop: every phantom but
 // those the client asked for this round (it lacks them), shunned names,
-// private ones outside a private sync (§3.3), and a sparse store's elided
-// ones, at most maxPhantomGimme.
+// refused seeds (horizon §5.2.3), private ones outside a private sync
+// (§3.3), and a sparse store's elided ones, at most maxPhantomGimme.
 func (h *handler) requestPhantoms() error {
 	if !h.pushOK {
 		panic("handler.requestPhantoms: push not accepted")
@@ -1368,6 +1368,11 @@ func (h *handler) requestPhantoms() error {
 	elided, err := elidedPhantoms(h.ctx, h.repo.DB())
 	if err != nil {
 		return fmt.Errorf("handler: classifying phantoms: %w", err)
+	}
+	// Horizon §5.2.3: a refused seed is never asked for.
+	refused, err := seedcheck.RefusedUUIDs(h.repo.DB())
+	if err != nil {
+		return err
 	}
 	rows, err := h.repo.DB().Query(query + " ORDER BY rid")
 	if err != nil {
@@ -1385,7 +1390,8 @@ func (h *handler) requestPhantoms() error {
 		// nothing it holds names it yet (horizon §5.1): a new check-in.
 		_, heard := h.remoteHas[uuid]
 		announced := heard && elided != nil && elided.Unnamed(rid)
-		if h.remoteLacks[uuid] || (elided != nil && elided.Class(rid) == content.Elided && !announced) {
+		if refused[uuid] || h.remoteLacks[uuid] ||
+			(elided != nil && elided.Class(rid) == content.Elided && !announced) {
 			continue
 		}
 		h.resp = append(h.resp, &xfer.GimmeCard{UUID: uuid})
@@ -1524,6 +1530,13 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	if shunned {
 		h.nextIsPrivate = false
 		return nil
+	}
+	// A delta on a seed this origin dropped is not stored but left a
+	// phantom, which the reply asks the pusher for in full (onRefusedBasis).
+	again, _, err := onRefusedBasis(h.repo.DB(), uuid, deltaSrc, visibility(h.nextIsPrivate))
+	if err != nil || again {
+		h.nextIsPrivate = false
+		return err
 	}
 	// Horizon §5.2.3: besides a seed's shape (isSeed), an origin
 	// refuses a file bearing the name the request's horizon-seed offered.

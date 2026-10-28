@@ -49,12 +49,15 @@ func (r *Repo) ReadFileAtContext(
 	return r.ReadFileContext(ctx, rid, filePath, required)
 }
 
-// AnnotateContext is Annotate with ReadFileContext's demand fetch: every
-// version of the file the walk needs below the horizon, along the primary
-// chain, is fetched in one round before the walk runs again, so lines are
-// attributed to the check-ins below the horizon that added them. A walk
-// that crosses a structural horizon still reports the lines it cannot
-// attribute as BelowHorizon, since naming those check-ins is a deepen.
+// AnnotateContext is Annotate with a demand fetch: on a content-horizon
+// store, each version of the file the walk reads below the horizon and the
+// store does not hold is fetched from Peer as the walk reaches it, so only
+// what the walk reads is fetched and lines are attributed to the check-ins
+// below the horizon that added them. A walk needing more than one demand
+// fetch's 200 payloads stops there and returns what it attributed, the rest
+// marked BelowHorizon, as does a walk that crosses a structural horizon,
+// since naming those check-ins is a deepen. A start check-in below the
+// horizon is fetched as ReadFileContext fetches it.
 func (r *Repo) AnnotateContext(
 	ctx context.Context, opts AnnotateOpts, required RequiredContentOpts,
 ) ([]AnnotatedLine, error) {
@@ -64,7 +67,7 @@ func (r *Repo) AnnotateContext(
 	var lines []AnnotatedLine
 	err := r.demandFetch(ctx, required, func() error {
 		var err error
-		lines, err = r.Annotate(opts)
+		lines, err = r.annotate(ctx, opts, required, content.DemandFetchLimit)
 		return err
 	})
 	return lines, err

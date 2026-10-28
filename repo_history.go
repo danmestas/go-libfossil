@@ -122,12 +122,32 @@ type BisectSession struct {
 }
 
 // Annotate attributes each line of a file to the commit that last changed it.
+//
+// On a store whose cone has a horizon, lines the walk cannot attribute past
+// the horizon are reported as originating at it, marked BelowHorizon;
+// AnnotateContext fetches the history that attributes them on a content
+// horizon store.
 func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
-	lines, err := annotate.Annotate(r.inner, annotate.Options{
+	return r.annotate(context.Background(), opts, RequiredContentOpts{}, 0)
+}
+
+// annotate runs the walk under ctx, fetching from required.Peer, when set,
+// up to limit payloads the walk reads below a content horizon.
+func (r *Repo) annotate(
+	ctx context.Context, opts AnnotateOpts, required RequiredContentOpts, limit int,
+) ([]AnnotatedLine, error) {
+	iopts := annotate.Options{
 		FilePath: opts.FilePath,
 		StartRID: fsltype.FslID(opts.StartRID),
 		Cache:    r.liveCache(),
-	})
+	}
+	if required.Peer != nil {
+		iopts.FetchLimit = limit
+		iopts.Fetch = func(ctx context.Context, names []string) error {
+			return required.recoverFiles(ctx, r.inner, names)
+		}
+	}
+	lines, err := annotate.AnnotateContext(ctx, r.inner, iopts)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: annotate: %w", err)
 	}
@@ -212,7 +232,10 @@ func (r *Repo) diffWholeCheckin(ctx context.Context, ridA, ridB int64) ([]DiffEn
 	filesB, errB := manifest.ListFiles(r.inner, fsltype.FslID(ridB))
 	if errA != nil || errB != nil {
 		missing, err := manifest.MissingStructure(ctx, r.inner.DB(), []fsltype.FslID{fsltype.FslID(ridA), fsltype.FslID(ridB)})
-		if err == nil && missing != nil {
+		if err != nil {
+			return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: %w", ridA, ridB, err)
+		}
+		if missing != nil {
 			return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: %w", ridA, ridB, missing)
 		}
 	}

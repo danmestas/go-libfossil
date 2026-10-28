@@ -1745,6 +1745,8 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error)
 
 Annotate attributes each line of a file to the commit that last changed it.
 
+On a store whose cone has a horizon, lines the walk cannot attribute past the horizon are reported as originating at it, marked BelowHorizon; AnnotateContext fetches the history that attributes them on a content horizon store.
+
 <a name="Repo.AnnotateContext"></a>
 ### func \(\*Repo\) AnnotateContext
 
@@ -1752,7 +1754,7 @@ Annotate attributes each line of a file to the commit that last changed it.
 func (r *Repo) AnnotateContext(ctx context.Context, opts AnnotateOpts, required RequiredContentOpts) ([]AnnotatedLine, error)
 ```
 
-AnnotateContext is Annotate with ReadFileContext's demand fetch: every version of the file the walk needs below the horizon, along the primary chain, is fetched in one round before the walk runs again, so lines are attributed to the check\-ins below the horizon that added them. A walk that crosses a structural horizon still reports the lines it cannot attribute as BelowHorizon, since naming those check\-ins is a deepen.
+AnnotateContext is Annotate with a demand fetch: on a content\-horizon store, each version of the file the walk reads below the horizon and the store does not hold is fetched from Peer as the walk reaches it, so only what the walk reads is fetched and lines are attributed to the check\-ins below the horizon that added them. A walk needing more than one demand fetch's 200 payloads stops there and returns what it attributed, the rest marked BelowHorizon, as does a walk that crosses a structural horizon, since naming those check\-ins is a deepen. A start check\-in below the horizon is fetched as ReadFileContext fetches it.
 
 <a name="Repo.BranchOpenLeaf"></a>
 ### func \(\*Repo\) BranchOpenLeaf

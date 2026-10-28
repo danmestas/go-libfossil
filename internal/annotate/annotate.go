@@ -5,8 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -47,14 +45,30 @@ type Options struct {
 	// for itself, so a caller's longer-lived cache carries over between
 	// calls. The caller keeps its entries current.
 	Cache *content.Cache
+	// Fetch, when set, is asked for the payloads of a version the walk
+	// reads below a content horizon and the store does not hold, a version
+	// at a time, so that only what the walk reads is fetched
+	// (draft-fossil-horizon-00 §4.4). At most FetchLimit names are asked
+	// for; past that, or with no Fetch, the walk stops at the horizon.
+	Fetch      func(ctx context.Context, names []string) error
+	FetchLimit int
 }
 
 // Annotate attributes each line of a file to the commit that last changed it.
 // It walks the primary parent chain from StartRID, pushing line attributions
 // back to the earliest ancestor that contains the same line.
 func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
-	if r == nil {
-		panic("annotate.Annotate: r must not be nil")
+	return AnnotateContext(context.Background(), r, opts)
+}
+
+// AnnotateContext is Annotate under ctx, which bounds the walk and any
+// demand fetch it makes.
+func AnnotateContext(ctx context.Context, r *repo.Repo, opts Options) ([]Line, error) {
+	if ctx == nil || r == nil {
+		panic("annotate.Annotate: nil context or repo")
+	}
+	if opts.FetchLimit < 0 {
+		panic("annotate.Annotate: negative FetchLimit")
 	}
 	if opts.StartRID <= 0 {
 		return nil, fmt.Errorf("annotate: invalid StartRID %d", opts.StartRID)
@@ -78,7 +92,7 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 		cache = content.NewCache(annotateCacheBytes)
 	}
 
-	fileContent, err := loadFileAt(r, opts.StartRID, opts.FilePath, cache)
+	fileContent, err := loadFileAt(ctx, r, opts.StartRID, opts.FilePath, cache)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: load file at start: %w", err)
 	}
@@ -92,7 +106,7 @@ func Annotate(r *repo.Repo, opts Options) ([]Line, error) {
 			"annotate: %s is binary or has a line over %d bytes", opts.FilePath, lengthMask)
 	}
 
-	credit, versions, horizon, err := walkAncestors(r, opts, fileContent, start, startInfo, cache)
+	credit, versions, horizon, err := walkAncestors(ctx, r, opts, fileContent, start, startInfo, cache)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: %w", err)
 	}
@@ -141,12 +155,14 @@ const annotateCacheBytes = 256 << 20
 // check-in, which is where fossil's annotate, reading mlink, sees that
 // version of the file appear.
 //
-// horizon is the store's structural horizon C when the walk stopped at a
-// parent below it (draft-fossil-horizon-00 §5.5), 0 otherwise: a line
-// without credit then originates at or below the horizon, which the store
-// cannot tell apart.
+// horizon is the store's horizon C when the walk stopped at a parent below
+// it (draft-fossil-horizon-00 §5.5): one a structural store does not hold,
+// or one whose version of the file a content-horizon store does not hold
+// and opts.Fetch did not bring. It is 0 otherwise. A line without credit
+// then originates at or below the horizon, which the store cannot tell
+// apart.
 func walkAncestors(
-	r *repo.Repo, opts Options, startContent []byte, start []dline,
+	ctx context.Context, r *repo.Repo, opts Options, startContent []byte, start []dline,
 	startInfo VersionInfo, cache *content.Cache,
 ) (credit []int, versions []VersionInfo, horizon libfossil.FslID, err error) {
 	credit = make([]int, len(start))
@@ -154,7 +170,7 @@ func walkAncestors(
 		credit[i] = -1
 	}
 	versions = []VersionInfo{startInfo}
-	untagged := len(start)
+	untagged, fetched := len(start), 0
 	currentRID, currentContent := opts.StartRID, startContent
 	for steps := 0; untagged > 0; steps++ {
 		if opts.Limit > 0 && steps >= opts.Limit {
@@ -167,22 +183,25 @@ func walkAncestors(
 		if err != nil || parentRID <= 0 {
 			break
 		}
-		parentContent, err := loadFileAt(r, parentRID, opts.FilePath, cache)
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, err
+		}
+		parentContent, err := loadFileAt(ctx, r, parentRID, opts.FilePath, cache)
+		var missing *content.MissingBelowHorizon
+		if errors.As(err, &missing) && len(missing.Checkins) == 0 && opts.Fetch != nil &&
+			fetched+len(missing.Names) <= opts.FetchLimit {
+			if err := opts.Fetch(ctx, missing.Names); err != nil {
+				return nil, nil, 0, err
+			}
+			fetched += len(missing.Names)
+			parentContent, err = loadFileAt(ctx, r, parentRID, opts.FilePath, cache)
+		}
 		if err != nil {
-			// The parent lies below a structural horizon, and what is left
-			// may not belong to this version; or the store does not hold
-			// the parent's version of the file, and every older one it
-			// lacks is named, so one demand fetch brings them all; or the
-			// file is new here, and what is left belongs to this version.
-			horizon, herr := crossedHorizon(r, parentRID)
-			if herr != nil || horizon != 0 {
-				return credit, versions, horizon, herr
-			}
-			var missing *content.MissingBelowHorizon
-			if errors.As(err, &missing) {
-				return nil, nil, 0, missingAlong(r, opts, parentRID, steps+1, missing, cache)
-			}
-			return credit, versions, 0, nil
+			// The parent lies below the horizon, and what is left may not
+			// belong to this version; or the file is new here, and what is
+			// left belongs to this version.
+			horizon, err = crossedHorizon(ctx, r, parentRID, err)
+			return credit, versions, horizon, err
 		}
 		parentInfo, err := versionInfoFor(r, parentRID)
 		if err != nil {
@@ -202,64 +221,27 @@ func walkAncestors(
 	return credit, versions, 0, nil
 }
 
-// missingAlong is missing joined with the payload of opts.FilePath at each
-// older check-in on the primary chain below from that the store does not
-// hold, walked as walkAncestors would walk it, with steps of opts.Limit
-// already taken: the names a demand fetch needs for the whole walk at once.
-// It stops at a check-in whose manifest is not held, where the file is new,
-// and once it names more than one demand fetch may carry.
-func missingAlong(
-	r *repo.Repo, opts Options, from libfossil.FslID, steps int,
-	missing *content.MissingBelowHorizon, cache *content.Cache,
-) error {
-	if missing == nil || from <= 0 {
-		panic("annotate.missingAlong: nothing missing or invalid rid")
-	}
-	names := map[string]bool{}
-	rid := from
-	for ; steps < maxMissingSteps; steps++ {
-		if len(missing.Names)+len(names) > content.DemandFetchLimit {
-			break
+// crossedHorizon is the rid of the store's horizon C when parent, whose
+// read failed with readErr, is a check-in below it: one a structural store
+// does not hold, or one whose version of the file a content-horizon store
+// does not hold. It is 0 otherwise.
+func crossedHorizon(
+	ctx context.Context, r *repo.Repo, parent libfossil.FslID, readErr error,
+) (libfossil.FslID, error) {
+	var missing *content.MissingBelowHorizon
+	hash := ""
+	if errors.As(readErr, &missing) {
+		hash = missing.Horizon
+	} else {
+		h, below, err := content.BelowHorizon(ctx, r.DB(), parent)
+		if err != nil || !below {
+			return 0, err
 		}
-		if opts.Limit > 0 && steps >= opts.Limit || opts.OriginRID > 0 && rid == opts.OriginRID {
-			break
-		}
-		parent, err := primaryParent(r, rid)
-		if err != nil || parent <= 0 {
-			break
-		}
-		f, found, err := manifest.LookupFileCached(r, parent, opts.FilePath, cache)
-		if err != nil || !found {
-			break
-		}
-		if _, held, err := content.CheckAvailableByUUID(r.DB(), f.UUID); err != nil {
-			return err
-		} else if !held {
-			names[f.UUID] = true
-		}
-		rid = parent
-	}
-	if len(names) == 0 {
-		return missing
-	}
-	more := &content.MissingBelowHorizon{Horizon: missing.Horizon, Names: slices.Sorted(maps.Keys(names))}
-	return missing.Join(more)
-}
-
-// maxMissingSteps bounds missingAlong's walk, as MergeAncestryLimit bounds
-// the walk deciding a merge's crossing.
-const maxMissingSteps = content.MergeAncestryLimit
-
-// crossedHorizon is the rid of the store's structural horizon C when parent
-// is a check-in below it, 0 otherwise.
-func crossedHorizon(r *repo.Repo, parent libfossil.FslID) (libfossil.FslID, error) {
-	h, below, err := content.BelowHorizon(context.Background(), r.DB(), parent)
-	if err != nil || !below {
-		return 0, err
+		hash = h.Hash()
 	}
 	var rid libfossil.FslID
-	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=? AND size>=0", h.Hash()).Scan(&rid); err != nil {
-		return 0, fmt.Errorf("the horizon %s: %w", h.Hash(), err)
+	if err := r.DB().QueryRow("SELECT rid FROM blob WHERE uuid=? AND size>=0", hash).Scan(&rid); err != nil {
+		return 0, fmt.Errorf("the horizon %s: %w", hash, err)
 	}
 	return rid, nil
 }
@@ -294,7 +276,7 @@ func creditInsertions(credit []int, edit []int, v int) int {
 // the checkin manifest and the file blob through cache so a full-history walk
 // amortizes their overlapping delta chains. A nil cache reads uncached.
 func loadFileAt(
-	r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache,
+	ctx context.Context, r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache,
 ) ([]byte, error) {
 	if r == nil {
 		panic("annotate.loadFileAt: r must not be nil")
@@ -307,7 +289,7 @@ func loadFileAt(
 	}
 	// One name, so ask for one name: LookupFileCached searches the delta's
 	// own F cards first (artifact-format-00 8.4).
-	data, found, err := manifest.ReadFileAt(context.Background(), r, rid, filePath, cache)
+	data, found, err := manifest.ReadFileAt(ctx, r, rid, filePath, cache)
 	if err != nil {
 		return nil, err
 	}

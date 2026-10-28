@@ -199,22 +199,21 @@ func TestDiffContextBelowHorizon(t *testing.T) {
 	}
 }
 
-// Annotate gathers every revision's missing payload below C into a single
-// demand fetch, then attributes each line to the check-in that added it.
-func TestAnnotateContextBelowHorizon(t *testing.T) {
+// linearHistory commits each of contents as file "a" on one line of
+// descent, and returns a peer serving it and the check-ins, oldest first.
+func linearHistory(t *testing.T, contents ...string) (Transport, []string) {
+	t.Helper()
 	source, err := Create(filepath.Join(t.TempDir(), "source.fossil"), CreateOpts{User: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() { source.Close() })
 	if err := source.SetHashPolicy("sha1"); err != nil {
 		t.Fatal(err)
 	}
 	var uuids []string
 	var parent int64
-	text := ""
-	for i := 1; i <= 4; i++ {
-		text += fmt.Sprintf("l%d\n", i)
+	for _, text := range contents {
 		rid, uuid, err := source.Commit(CommitOpts{User: "test", ParentID: parent,
 			Files: []FileToCommit{{Name: "a", Content: []byte(text)}}})
 		if err != nil {
@@ -223,34 +222,186 @@ func TestAnnotateContextBelowHorizon(t *testing.T) {
 		parent = rid
 		uuids = append(uuids, uuid)
 	}
-	peer := TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
+	return TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
 		return source.HandleSync(ctx, payload)
-	})
+	}), uuids
+}
+
+type wantLine struct {
+	uuid  string
+	below bool
+}
+
+func checkAnnotation(t *testing.T, lines []AnnotatedLine, want []wantLine) {
+	t.Helper()
+	if len(lines) != len(want) {
+		t.Fatalf("annotate returned %d lines, want %d", len(lines), len(want))
+	}
+	for i, w := range want {
+		if lines[i].UUID != w.uuid || lines[i].BelowHorizon != w.below {
+			t.Fatalf("line %d %q attributed to %.10s (below %v), want %.10s (below %v)",
+				i, lines[i].Text, lines[i].UUID, lines[i].BelowHorizon, w.uuid, w.below)
+		}
+	}
+}
+
+// Without a peer, annotate on a content-horizon store reports the lines it
+// cannot attribute past C as originating at the horizon, as a structural
+// store does. With one, it fetches each version its walk reads below C and
+// attributes every line to the check-in that added it.
+func TestAnnotateContextBelowHorizon(t *testing.T) {
+	peer, uuids := linearHistory(t, "l1\n", "l1\nl2\n", "l1\nl2\nl3\n", "l1\nl2\nl3\nl4\n")
 	target := horizonClone(t, peer, uuids[2], false)
 	tip, err := target.ResolveVersion(uuids[3])
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts := AnnotateOpts{FilePath: "a", StartRID: tip}
-	if _, err := target.Annotate(opts); !errors.Is(err, ErrBelowHorizon) {
-		t.Fatalf("Annotate across the horizon: %v, want ErrBelowHorizon", err)
+	lines, err := target.Annotate(opts)
+	if err != nil {
+		t.Fatalf("Annotate across a content horizon: %v", err)
 	}
+	c := uuids[2]
+	checkAnnotation(t, lines, []wantLine{{c, true}, {c, true}, {c, true}, {uuids[3], false}})
+
 	rec := &gimmeRecorder{t: t, peer: peer}
-	lines, err := target.AnnotateContext(context.Background(), opts, RequiredContentOpts{Peer: rec})
+	lines, err = target.AnnotateContext(context.Background(), opts, RequiredContentOpts{Peer: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := sortedNames(hash.SHA1([]byte("l1\n")), hash.SHA1([]byte("l1\nl2\n")))
-	if !slices.Equal(rec.sorted(), want) || rec.exchanges != 1 {
-		t.Fatalf("gimmes = %v over %d exchange(s), want %v in one", rec.gimmes, rec.exchanges, want)
+	if !slices.Equal(rec.sorted(), want) {
+		t.Fatalf("gimmes = %v, want %v", rec.gimmes, want)
 	}
-	if len(lines) != 4 {
-		t.Fatalf("annotate returned %d lines", len(lines))
+	checkAnnotation(t, lines, []wantLine{{uuids[0], false}, {uuids[1], false}, {uuids[2], false}, {uuids[3], false}})
+}
+
+// Annotate fetches only the versions its walk reads: once every line is
+// attributed the walk stops, and the older versions are not fetched.
+func TestAnnotateContextFetchesOnlyWalkedVersions(t *testing.T) {
+	peer, uuids := linearHistory(t, "a\n", "b\n", "c\n", "c\nd\n")
+	target := horizonClone(t, peer, uuids[3], false)
+	tip, err := target.ResolveVersion(uuids[3])
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i, l := range lines {
-		if l.UUID != uuids[i] || l.BelowHorizon {
-			t.Fatalf("line %d %q attributed to %s (below %v), want %s", i, l.Text, l.UUID, l.BelowHorizon, uuids[i])
+	rec := &gimmeRecorder{t: t, peer: peer}
+	lines, err := target.AnnotateContext(context.Background(), AnnotateOpts{FilePath: "a", StartRID: tip},
+		RequiredContentOpts{Peer: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := sortedNames(hash.SHA1([]byte("b\n")), hash.SHA1([]byte("c\n"))); !slices.Equal(rec.sorted(), want) {
+		t.Fatalf("gimmes = %v, want only the walked versions %v", rec.gimmes, want)
+	}
+	checkAnnotation(t, lines, []wantLine{{uuids[2], false}, {uuids[3], false}})
+}
+
+// A walk needing more versions than one demand fetch may carry returns what
+// it attributed, the rest marked at the horizon, and no error.
+func TestAnnotateContextOverLimitIsPartial(t *testing.T) {
+	peer, uuids := linearHistory(t, "l1\n", "l1\nl2\n", "l1\nl2\nl3\n", "l1\nl2\nl3\nl4\n")
+	target := horizonClone(t, peer, uuids[2], false)
+	tip, err := target.ResolveVersion(uuids[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &gimmeRecorder{t: t, peer: peer}
+	lines, err := target.annotate(context.Background(), AnnotateOpts{FilePath: "a", StartRID: tip},
+		RequiredContentOpts{Peer: rec}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{hash.SHA1([]byte("l1\nl2\n"))}; !slices.Equal(rec.sorted(), want) {
+		t.Fatalf("gimmes = %v, want %v", rec.gimmes, want)
+	}
+	c := uuids[2]
+	checkAnnotation(t, lines, []wantLine{{c, true}, {c, true}, {uuids[2], false}, {uuids[3], false}})
+}
+
+// An unheld payload that is not below the horizon (above C, outside the
+// store cone's paths) is not labelled below the horizon and is not fetched.
+func TestReadFileContextOutsidePathsNotBelowHorizon(t *testing.T) {
+	source, err := Create(filepath.Join(t.TempDir(), "source.fossil"), CreateOpts{User: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	r1, c1, err := source.Commit(CommitOpts{User: "test", Files: []FileToCommit{
+		{Name: "a", Content: []byte("a1\n")}, {Name: "b", Content: []byte("b1\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, c2, err := source.Commit(CommitOpts{User: "test", ParentID: r1, Files: []FileToCommit{
+		{Name: "a", Content: []byte("a1\n")}, {Name: "b", Content: []byte("b2\n")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
+		return source.HandleSync(ctx, payload)
+	})
+	hc, err := NewHorizonCone([]string{"a"}, nil, Horizon{Checkin: c1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "t.fossil"), peer,
+		CloneOpts{StoreCone: hc, PullPhantoms: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	_, err = target.ReadFileAt(c2, "b")
+	if err == nil || errors.Is(err, ErrBelowHorizon) {
+		t.Fatalf("ReadFileAt above C outside the paths: %v, want a refusal not below the horizon", err)
+	}
+	rec := &gimmeRecorder{t: t, peer: peer}
+	_, err = target.ReadFileAtContext(context.Background(), c2, "b", RequiredContentOpts{Peer: rec})
+	if err == nil || errors.Is(err, ErrBelowHorizon) || rec.exchanges != 0 {
+		t.Fatalf("ReadFileAtContext above C outside the paths: %v after %d exchange(s)", err, rec.exchanges)
+	}
+}
+
+// A structural read whose peer supplies the manifest but withholds the
+// payload fails on the second fetch, holding the manifest and not the payload.
+func TestReadFileContextStructuralPayloadWithheld(t *testing.T) {
+	f := newHorizonFixture(t)
+	target := horizonClone(t, f.peer, f.c2, true)
+	before := storeConeString(t, target)
+	payload := hash.SHA1([]byte("old a\n"))
+	withholding := TransportFunc(func(ctx context.Context, request []byte) ([]byte, error) {
+		reply, err := f.source.HandleSync(ctx, request)
+		if err != nil {
+			return nil, err
 		}
+		message, err := xfer.Decode(reply, xfer.ContentTypeCompressed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept := message.Cards[:0]
+		for _, card := range message.Cards {
+			if c, ok := card.(*xfer.FileCard); ok && c.UUID == payload {
+				continue
+			}
+			if c, ok := card.(*xfer.CFileCard); ok && c.UUID == payload {
+				continue
+			}
+			kept = append(kept, card)
+		}
+		message.Cards = kept
+		return message.Encode()
+	})
+	_, err := target.ReadFileAtContext(context.Background(), f.c1, "a", RequiredContentOpts{Peer: withholding})
+	if err == nil || !strings.Contains(err.Error(), payload) {
+		t.Fatalf("withheld payload: %v, want a refusal naming %s", err, payload)
+	}
+	if _, held, err := content.CheckAvailableByUUID(target.inner.DB(), f.c1); err != nil || !held {
+		t.Fatalf("the fetched manifest is not held (%v)", err)
+	}
+	if holdsBlob(t, target, "old a\n") {
+		t.Fatal("the withheld payload is held")
+	}
+	if after := storeConeString(t, target); after != before {
+		t.Fatalf("store cone moved: %q, was %q", after, before)
 	}
 }
 

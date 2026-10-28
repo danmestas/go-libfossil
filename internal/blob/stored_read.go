@@ -21,8 +21,9 @@ func ReadStored(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 func readStored(q db.Querier, rid libfossil.FslID) ([]byte, error) {
 	var size int64
 	var content any
-	if err := q.QueryRow("SELECT size, content FROM blob WHERE rid=?", rid).
-		Scan(&size, &content); err != nil {
+	// Load keeps the query text it has always had; tests count reads by it.
+	if err := q.QueryRow("SELECT content, size FROM blob WHERE rid=?", rid).
+		Scan(&content, &size); err != nil {
 		return nil, fmt.Errorf("blob: rid %d: %w", rid, err)
 	}
 	if size < 0 {

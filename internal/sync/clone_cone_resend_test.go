@@ -248,11 +248,13 @@ func TestCloneRunsExpansionBounded(t *testing.T) {
 	}
 }
 
-// A store re-deltified mid-clone changes the chains a cookie carries. Here a
-// version the first round forwarded is stored again as a delta of another
-// in-cone file the clone has not reached, so the chain from the cookie's
-// head now runs into a blob never sent: the server must see the chain is
-// not the one it sent, and the clone must end with every artifact whole.
+// A store re-deltified mid-clone changes the chains a cookie carries. Here
+// the first round forwards the file's history V2..V7 as a run. Another
+// in-cone file G, not yet reached, is stored as a delta of V7, and after the
+// first round V6 is stored again as a delta of G: the chain from the run's
+// head, for the run's length, is now V2..V6, G. Only the run's checksum tells
+// the server that is not the chain it sent; without it G counts as sent, is
+// skipped when its check-in is walked, and the clone ends with a phantom.
 func TestConeCloneSurvivesRedeltify(t *testing.T) {
 	origin, files, checkins := coneChainFixture(t)
 	uuidOf := func(rid libfossil.FslID) string {
@@ -272,6 +274,15 @@ func TestConeCloneSurvivesRedeltify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := origin.WithTx(func(tx *db.Tx) error {
+		_, err := content.Deltify(tx, other, last)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if src, err := content.DeltaSource(origin.DB(), other); err != nil || src != last {
+		t.Fatalf("G stored against %d, %v; want a delta of V7 (%d)", src, err, last)
+	}
 	data, err := (&deck.Deck{Type: deck.Checkin, C: "another file", D: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 		U: deck.User("u"), P: []string{uuidOf(checkins[len(checkins)-1])},
 		F: []deck.FileCard{{Name: "src/f", UUID: uuidOf(last)}, {Name: "src/g", UUID: otherUUID}}}).Marshal()
@@ -283,7 +294,7 @@ func TestConeCloneSurvivesRedeltify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := &redeltify{cfileCounter: cfileCounter{r: origin, sent: map[string]int{}}, rid: files[len(files)/2], src: other}
+	tr := &redeltify{cfileCounter: cfileCounter{r: origin, sent: map[string]int{}}, rid: files[len(files)-2], src: other}
 	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"),
 		tr, CloneOpts{StoreCone: c})
 	if err != nil {

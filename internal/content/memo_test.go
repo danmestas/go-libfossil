@@ -246,10 +246,46 @@ func TestMemoUnpublishedViewDiscarded(t *testing.T) {
 	}
 }
 
-// draft-fossil-horizon-00 §6.2: the memo keeps the trees its horizons'
-// walks read, so a second horizon over the same store, under another C or
-// rule, reads from the store only the trees the first did not, and
-// classifies as a fresh read does.
+// draft-fossil-horizon-00 §6.2: the memo reads the store's trees with its
+// graph, so no horizon's walk reads a tree from the store, and classifies
+// as a fresh read does.
+func TestMemoTreesReadWithGraph(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			m := newMemoRepo(t, mode)
+			tip := m.commit(0)
+			for i := 0; i < 5; i++ {
+				tip = m.commit(tip)
+			}
+			memo := content.NewMemo()
+			for round := 0; round < 2; round++ {
+				for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
+					v, err := memo.View(ctx, m.r.DB())
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, sc := range m.memoCones(c) {
+						sameClassification(t, m.r, v, sc)
+					}
+					if names, reads := v.TreesRead(); reads != 0 || len(names) != 0 {
+						t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
+					}
+					v.Publish()
+				}
+				if memo.TreeBytes() == 0 {
+					t.Fatal("the memo keeps no trees")
+				}
+				tip = m.commit(tip) // extended, not read in full
+			}
+		})
+	}
+}
+
+// draft-fossil-horizon-00 §6.2: a store whose trees would pass the memo's
+// tree limit keeps the trees its horizons' walks read, so a second horizon
+// over the same store, under another C or rule, reads from the store only
+// the trees the first did not, and classifies as a fresh read does.
 func TestMemoTreesReadOnce(t *testing.T) {
 	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -260,6 +296,7 @@ func TestMemoTreesReadOnce(t *testing.T) {
 				tip = m.commit(tip)
 			}
 			memo := content.NewMemo()
+			memo.LimitTrees(0)
 			seen := map[string]bool{}
 			for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
 				v, err := memo.View(ctx, m.r.DB())

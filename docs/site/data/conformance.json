@@ -1,7 +1,7 @@
 {
   "requirements": 636,
-  "covered": 634,
-  "partial": 2,
+  "covered": 635,
+  "partial": 1,
   "suites": [
     {
       "suite": "artifact",
@@ -4572,8 +4572,8 @@
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
       "requirements": 76,
-      "covered": 74,
-      "partial": 2,
+      "covered": 75,
+      "partial": 1,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
@@ -5070,10 +5070,10 @@
         {
           "id": "HZ-6.2-10",
           "section": "6.2",
-          "status": "PARTIAL",
+          "status": "COVERED",
           "cases": 1,
           "text": "An origin should read each structural artifact's kind and P, B, S, F and A references once per store into a cone-independent graph keyed to the same prefix, extend it by appended artifacts, and classify every cone over that graph.",
-          "notes": "covered but for the F cards of a horizon's trees, which the first walk to need each tree reads from the store rather than with the graph, into a cache later horizons under any C or rule reuse; the cache is bounded (64MiB, least recently used evicted) and dropped when the store is read in full, so a tree evicted from it is read again"
+          "notes": ""
         },
         {
           "id": "HZ-6.2-11",

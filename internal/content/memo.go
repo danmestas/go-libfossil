@@ -29,8 +29,11 @@ const (
 // references, read once and extended by the artifacts appended since; and,
 // keyed by cone digest and by horizon, the classifications computed over
 // them, each keyed by the store prefix it covers and extended the same way.
-// It also keeps, bounded, the trees its horizons' walks read, so a horizon
-// under another C or rule reads only the trees no earlier walk did.
+// It also keeps the store's trees, read with its references and extended
+// alike, so no horizon's walk reads a tree from the store; a store whose
+// trees would pass memoTreeBytes keeps instead, bounded, the trees its
+// horizons' walks read, so a horizon under another C or rule reads only the
+// trees no earlier walk did.
 // It recomputes in full only when an appended artifact carries a name a held
 // P, B or S card cited while it was absent, or the store changed other than
 // by appending and filling phantoms.
@@ -48,10 +51,13 @@ type Memo struct {
 	slots   []*memoSlots
 	trees   treeCache
 	lineage uint64 // the last store read in full
+	// treeLimit is memoTreeBytes but in tests: the most a store's tree
+	// index may keep.
+	treeLimit int64
 }
 
 // NewMemo returns an empty memo.
-func NewMemo() *Memo { return &Memo{} }
+func NewMemo() *Memo { return &Memo{treeLimit: memoTreeBytes} }
 
 // memoStore is the store's cone-independent references at one prefix: the
 // facts a path classification reads (kinds, F, P, B, S and A references),
@@ -64,6 +70,9 @@ type memoStore struct {
 	refs     *referenceState
 	graph    *horizon.Graph
 	dangling map[string]bool
+	// trees is the store's trees, or nil for a store whose index would
+	// pass the memo's tree limit.
+	trees *treeIndex
 }
 
 // storePrefix is what a store held when a memoStore read it: its highest
@@ -132,10 +141,12 @@ type MemoView struct {
 	cones map[string]*memoCone
 	cuts  map[cutKey]*memoCut
 	slots map[string]*memoSlots
-	// trees holds the tree pieces this view's walks read from the store, for
-	// the memo's tree cache on Publish; treeReads counts those reads.
-	trees     map[string]*treePiece
+	// trees holds the tree pieces this view's walks read from a store that
+	// keeps no tree index, for the memo's tree cache on Publish; treeReads
+	// counts the walks' reads from the store.
+	trees     map[string]*plainTree
 	treeReads int
+	decoder   treeDecoder
 }
 
 // View reads q's store prefix and returns the memo extended to it: by the
@@ -147,19 +158,20 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 	}
 	m.mu.Lock()
 	base := m.store
+	limit := m.treeLimit
 	m.mu.Unlock()
 	now, err := readPrefix(q)
 	if err != nil {
 		return nil, err
 	}
 	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{},
-		slots: map[string]*memoSlots{}, trees: map[string]*treePiece{}}
+		slots: map[string]*memoSlots{}, trees: map[string]*plainTree{}}
 	if base != nil && base.prefix.equal(now) {
 		v.store = base
 		return v, nil
 	}
 	if base != nil {
-		s, read, err := base.extend(ctx, q, now)
+		s, read, err := base.extend(ctx, q, now, limit)
 		if err != nil {
 			return nil, err
 		}
@@ -172,7 +184,7 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 	m.lineage++
 	lineage := m.lineage
 	m.mu.Unlock()
-	if v.store, err = loadMemoStore(ctx, q, now, lineage); err != nil {
+	if v.store, err = loadMemoStore(ctx, q, now, lineage, limit); err != nil {
 		return nil, err
 	}
 	v.read = len(v.store.refs.facts.names)
@@ -215,10 +227,16 @@ func (v *MemoView) Publish() {
 	if over := len(m.slots) - memoCones; over > 0 {
 		m.slots = slices.Delete(m.slots, 0, over)
 	}
+	if v.store.trees != nil {
+		m.trees = treeCache{}
+		return
+	}
 	m.trees.publish(v.store.lineage, v.trees)
 }
 
-func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineage uint64) (*memoStore, error) {
+func loadMemoStore(
+	ctx context.Context, q db.Querier, prefix storePrefix, lineage uint64, treeLimit int64,
+) (*memoStore, error) {
 	refs, _, err := loadReferenceState(ctx, q, defaultReferenceLimits.refs, true)
 	if err != nil {
 		return nil, err
@@ -231,12 +249,19 @@ func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineag
 	if err != nil {
 		return nil, err
 	}
-	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling}, nil
+	trees, err := readTrees(ctx, q, newTreeIndex(), "", treeLimit)
+	if err != nil {
+		return nil, err
+	}
+	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling,
+		trees: trees}, nil
 }
 
 // extend returns s brought up to the store now describes, and how many
 // artifacts it classified, or nil when only a full read is exact.
-func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (*memoStore, int, error) {
+func (s *memoStore) extend(
+	ctx context.Context, q db.Querier, now storePrefix, treeLimit int64,
+) (*memoStore, int, error) {
 	if now.top < s.prefix.top || now.count < s.prefix.count {
 		return nil, 0, nil
 	}
@@ -288,7 +313,14 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 	}
 	dangling := maps.Clone(s.dangling)
 	maps.Copy(dangling, added)
-	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling}, len(fresh), nil
+	trees := s.trees
+	if trees != nil && ids != "" {
+		if trees, err = readTrees(ctx, q, trees, ids, treeLimit); err != nil {
+			return nil, 0, err
+		}
+	}
+	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling,
+		trees: trees}, len(fresh), nil
 }
 
 // settled reports whether the rids at or below s's prefix are as s read
@@ -573,7 +605,7 @@ func (v *MemoView) cut(ctx context.Context, q db.Querier, h cone.Horizon) (*memo
 // tree returns the piece name names as the view's store holds it, read
 // before by this view or by a published one, or nil. A piece read under a
 // later prefix serves only when its rid is held at the view's.
-func (v *MemoView) tree(name string) *treePiece {
+func (v *MemoView) tree(name string) *plainTree {
 	p := v.trees[name]
 	if p == nil {
 		m := v.memo

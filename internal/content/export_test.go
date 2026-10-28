@@ -56,3 +56,17 @@ func (m *Memo) LimitTrees(bytes int64) {
 	defer m.mu.Unlock()
 	m.treeLimit = bytes
 }
+
+// TreeChainDepth is the most set differences any tree m keeps lies from
+// one kept whole.
+func (m *Memo) TreeChainDepth() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	depth := 0
+	if m.trees != nil {
+		for _, p := range m.trees.pieces {
+			depth = max(depth, p.depth)
+		}
+	}
+	return depth
+}

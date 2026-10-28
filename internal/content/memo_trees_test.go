@@ -1,7 +1,9 @@
 package content
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"testing"
@@ -27,6 +29,25 @@ func TestTreeIDsRoundTrip(t *testing.T) {
 		if got := decodeTreeIDs(nil, enc); !slices.Equal(got, ids) {
 			t.Fatalf("%d ids: round trip differs", n)
 		}
+	}
+	for _, enc := range [][]byte{
+		binary.AppendUvarint(binary.AppendUvarint(nil, math.MaxUint32), 1),
+		binary.AppendUvarint(binary.AppendUvarint(nil, 1), math.MaxUint64),
+		binary.AppendUvarint(nil, 0),
+		{0x80},
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("% x decoded", enc)
+				}
+			}()
+			decodeTreeIDs(nil, enc)
+		}()
+	}
+	top := []uint32{1, math.MaxUint32}
+	if got := decodeTreeIDs(nil, appendTreeIDs(nil, top)); !slices.Equal(got, top) {
+		t.Fatalf("decoded %v, want %v", got, top)
 	}
 	dense := []uint32{1, 2, 3, 4, 5, 100, 227}
 	if enc := appendTreeIDs(nil, dense); len(enc) != len(dense) {
@@ -190,5 +211,22 @@ func sameTree(t *testing.T, x *treeIndex, d *treeDecoder, name string, want *pla
 	files := slices.Compact(slices.Sorted(slices.Values(want.files)))
 	if !slices.Equal(got, files) {
 		t.Fatalf("%s: %d files decoded, want %d", name, len(got), len(files))
+	}
+}
+
+// BenchmarkTreeIndexClone clones an index the size of fossil-scm.org's
+// whole tree history, as a publish does.
+func BenchmarkTreeIndexClone(b *testing.B) {
+	x := newTreeIndex()
+	for i := 0; i < 45000; i++ {
+		x.intern(fmt.Sprintf("%040x", i))
+	}
+	for i := 0; i < 21000; i++ {
+		x.add(fmt.Sprintf("m%039x", i), &plainTree{rid: libfossil.FslID(i + 1), checkin: true,
+			files: []string{fmt.Sprintf("%040x", i), fmt.Sprintf("%040x", i+1)}})
+	}
+	b.ResetTimer()
+	for b.Loop() {
+		_ = x.clone()
 	}
 }

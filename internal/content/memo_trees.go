@@ -132,8 +132,9 @@ type treePiece struct {
 type treeIndex struct {
 	names  treeNames
 	pieces map[uint32]*treePiece
-	// last is the full check-in added last and lastIDs its file set: the
-	// next full check-in is kept as its difference from them.
+	// last is the full check-in added last and lastIDs its file set, which
+	// bytes counts: the next full check-in is kept as its difference from
+	// them.
 	last    *treePiece
 	lastIDs []uint32
 	bytes   int64
@@ -144,7 +145,11 @@ func newTreeIndex() *treeIndex {
 		pieces: map[uint32]*treePiece{}}
 }
 
-// clone returns a copy that x's readers do not see grow.
+// clone returns a copy that x's readers do not see grow. A publish that
+// read trees clones once, under the memo's lock: for an index of
+// fossil-scm.org's whole tree history (45k names, 21k pieces, about 11MiB)
+// that costs about 0.5ms (BenchmarkTreeIndexClone), and at the bound a few
+// ms, against the tens of ms the walk spent reading the trees it adds.
 func (x *treeIndex) clone() *treeIndex {
 	return &treeIndex{
 		names:  treeNames{names: slices.Clip(x.names.names), ids: maps.Clone(x.names.ids)},
@@ -196,6 +201,7 @@ func (x *treeIndex) add(name string, t *plainTree) {
 				p.files, p.base, p.depth = diff, x.last, x.last.depth+1
 			}
 		}
+		x.bytes += 4 * int64(len(own)-len(x.lastIDs))
 		x.last, x.lastIDs = p, own
 	}
 	p.files = slices.Clip(p.files)
@@ -222,7 +228,7 @@ func decodeTreeIDs(dst []uint32, enc []byte) []uint32 {
 	var prev uint64
 	for len(enc) > 0 {
 		gap, n := binary.Uvarint(enc)
-		if n <= 0 || gap == 0 || prev+gap > math.MaxUint32 {
+		if n <= 0 || gap == 0 || gap > math.MaxUint32-prev {
 			panic("content.decodeTreeIDs: malformed ids")
 		}
 		prev += gap

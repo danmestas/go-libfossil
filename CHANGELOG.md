@@ -29,8 +29,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   later (a later receipt, then a higher rid), not stamped later, so an
   artifact from a machine whose clock runs behind is still found. An unknown
   hash is an error and an empty result is an empty slice (tracked in #504).
+- `Repo.ReadFileContext`, `Repo.ReadFileAtContext`, `Repo.AnnotateContext`
+  and `Repo.DiffContext` read below the store cone's horizon by the targeted
+  demand fetch of draft-fossil-horizon-00 §4.4: given a peer in
+  `RequiredContentOpts`, they fetch exactly the artifacts the read needs (the
+  payload, and on a structural store first the check-in's manifest, baseline
+  and nodes) and read again. The store cone and its horizon do not move; what
+  is fetched is held content `CompactStore` may drop. Annotate fetches every
+  version below the horizon its walk needs in one round, and Diff both sides'.
+  A read needing more than one round's 200 artifacts is refused, naming
+  `DeepenHorizon` as the remedy (#489).
 
 ### Changed
+
+- `ReadFile`, `ReadFileAt`, `Diff` and `Annotate` on a store whose cone has a
+  horizon now fail with an error matching `ErrBelowHorizon` and naming the
+  horizon when the read needs content the store does not hold. Annotate on a
+  content-horizon store used to stop at the first version it could not read
+  and credit the remaining lines to the oldest version it had read; it now
+  refuses, and `AnnotateContext` fetches the history it needs (#489).
 
 - In-process SSH signature verification is opt-in: it lives in the new
   package `github.com/danmestas/go-libfossil/sshverify`, which a program links

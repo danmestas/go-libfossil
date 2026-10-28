@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/annotate"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/diff"
 	"github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
@@ -162,23 +164,34 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error) {
 // a follow-up; per-file diff behaviour for an explicitly named file is
 // unchanged.
 func (r *Repo) Diff(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
+	return r.diff(context.Background(), ridA, ridB, filePath)
+}
+
+func (r *Repo) diff(ctx context.Context, ridA, ridB int64, filePath string) ([]DiffEntry, error) {
 	if filePath == "" {
-		return r.diffWholeCheckin(ridA, ridB)
+		return r.diffWholeCheckin(ctx, ridA, ridB)
 	}
-	return r.diffSingleFile(ridA, ridB, filePath)
+	return r.diffSingleFile(ctx, ridA, ridB, filePath)
 }
 
 // diffSingleFile produces the diff for a single named path between two
 // checkins. Extracted from Diff so the whole-checkin path can reuse the
 // same per-file rendering for each changed file in the union set.
-func (r *Repo) diffSingleFile(ridA, ridB int64, filePath string) ([]DiffEntry, error) {
-	a, err := blobAt(r, ridA, filePath)
-	if err != nil {
+//
+// Content either side lacks below the horizon is named in one refusal, so
+// one demand fetch brings both.
+func (r *Repo) diffSingleFile(ctx context.Context, ridA, ridB int64, filePath string) ([]DiffEntry, error) {
+	var missing *content.MissingBelowHorizon
+	a, err := blobAt(ctx, r, ridA, filePath)
+	if missing, err = joinMissing(missing, err); err != nil {
 		return nil, fmt.Errorf("libfossil: diff: checkin %d: %w", ridA, err)
 	}
-	b, err := blobAt(r, ridB, filePath)
-	if err != nil {
+	b, err := blobAt(ctx, r, ridB, filePath)
+	if missing, err = joinMissing(missing, err); err != nil {
 		return nil, fmt.Errorf("libfossil: diff: checkin %d: %w", ridB, err)
+	}
+	if missing != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: %w", ridA, ridB, missing)
 	}
 	unified := diff.Unified(a, b, diff.Options{
 		ContextLines: 3,
@@ -194,14 +207,20 @@ func (r *Repo) diffSingleFile(ridA, ridB int64, filePath string) ([]DiffEntry, e
 // diffWholeCheckin enumerates the union of files across the two checkins
 // and emits one DiffEntry per file whose content UUID differs or that
 // exists on only one side. Results are sorted by Name.
-func (r *Repo) diffWholeCheckin(ridA, ridB int64) ([]DiffEntry, error) {
-	filesA, err := manifest.ListFiles(r.inner, fsltype.FslID(ridA))
-	if err != nil {
-		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridA, err)
+func (r *Repo) diffWholeCheckin(ctx context.Context, ridA, ridB int64) ([]DiffEntry, error) {
+	filesA, errA := manifest.ListFiles(r.inner, fsltype.FslID(ridA))
+	filesB, errB := manifest.ListFiles(r.inner, fsltype.FslID(ridB))
+	if errA != nil || errB != nil {
+		missing, err := manifest.MissingStructure(ctx, r.inner.DB(), []fsltype.FslID{fsltype.FslID(ridA), fsltype.FslID(ridB)})
+		if err == nil && missing != nil {
+			return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: %w", ridA, ridB, missing)
+		}
 	}
-	filesB, err := manifest.ListFiles(r.inner, fsltype.FslID(ridB))
-	if err != nil {
-		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridB, err)
+	if errA != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridA, errA)
+	}
+	if errB != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: list files at %d: %w", ridA, ridB, ridB, errB)
 	}
 
 	uuidA := make(map[string]string, len(filesA))
@@ -236,9 +255,10 @@ func (r *Repo) diffWholeCheckin(ridA, ridB int64) ([]DiffEntry, error) {
 	sort.Strings(names)
 
 	out := make([]DiffEntry, 0, len(names))
+	var missing *content.MissingBelowHorizon
 	for _, name := range names {
-		entries, err := r.diffSingleFile(ridA, ridB, name)
-		if err != nil {
+		entries, err := r.diffSingleFile(ctx, ridA, ridB, name)
+		if missing, err = joinMissing(missing, err); err != nil {
 			return nil, err
 		}
 		// diffSingleFile returns an empty slice when both sides are byte-
@@ -247,6 +267,9 @@ func (r *Repo) diffWholeCheckin(ridA, ridB int64) ([]DiffEntry, error) {
 		// an empty diff if it does happen.
 		out = append(out, entries...)
 	}
+	if missing != nil {
+		return nil, fmt.Errorf("libfossil: diff: checkins %d..%d: %w", ridA, ridB, missing)
+	}
 	return out, nil
 }
 
@@ -254,10 +277,14 @@ func (r *Repo) diffWholeCheckin(ridA, ridB int64) ([]DiffEntry, error) {
 // Returns ErrFileNotFound (wrapped) if the file is not tracked in that
 // checkin. A file that exists but is empty returns ([]byte{}, nil).
 func (r *Repo) ReadFile(rid int64, filePath string) ([]byte, error) {
+	return r.readFile(context.Background(), rid, filePath)
+}
+
+func (r *Repo) readFile(ctx context.Context, rid int64, filePath string) ([]byte, error) {
 	if filePath == "" {
 		return nil, fmt.Errorf("libfossil: read file: filePath is required")
 	}
-	data, err := blobAt(r, rid, filePath)
+	data, err := blobAt(ctx, r, rid, filePath)
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: read file: checkin %d: %w", rid, err)
 	}
@@ -851,22 +878,19 @@ func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error) {
 // blobAt returns the bytes of filePath as they exist in the given checkin.
 // A checkin that does not contain filePath returns (nil, nil); callers treat
 // that as "empty side" for diff purposes. Errors surface only for real I/O
-// or consistency problems (unknown RID, missing blob for a listed UUID).
+// or consistency problems (unknown RID, missing blob for a listed UUID), and
+// as a *content.MissingBelowHorizon for content a horizon store lacks.
 //
 // The manifest and the blob go through the repository's content cache when
 // SetContentCache attached one, and are expanded afresh otherwise: one Diff
 // reads each side once, so only a caller making many reads gains from it.
-func blobAt(r *Repo, checkinRID int64, filePath string) ([]byte, error) {
+func blobAt(ctx context.Context, r *Repo, checkinRID int64, filePath string) ([]byte, error) {
 	if filePath == "" {
 		return nil, nil
 	}
-	cache := r.liveCache()
-	f, found, err := manifest.LookupFileCached(r.inner, fsltype.FslID(checkinRID), filePath, cache)
-	if err != nil {
+	data, found, err := manifest.ReadFileAt(ctx, r.inner, fsltype.FslID(checkinRID), filePath, r.liveCache())
+	if err != nil || !found {
 		return nil, err
 	}
-	if !found {
-		return nil, nil
-	}
-	return readHeld(r, cache, f.UUID)
+	return data, nil
 }

@@ -3,7 +3,10 @@ package annotate
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -166,10 +169,20 @@ func walkAncestors(
 		}
 		parentContent, err := loadFileAt(r, parentRID, opts.FilePath, cache)
 		if err != nil {
-			// The file is new here, and what is left belongs to this
-			// version; or the parent lies below the horizon, and it may not.
-			horizon, err = crossedHorizon(r, parentRID)
-			return credit, versions, horizon, err
+			// The parent lies below a structural horizon, and what is left
+			// may not belong to this version; or the store does not hold
+			// the parent's version of the file, and every older one it
+			// lacks is named, so one demand fetch brings them all; or the
+			// file is new here, and what is left belongs to this version.
+			horizon, herr := crossedHorizon(r, parentRID)
+			if herr != nil || horizon != 0 {
+				return credit, versions, horizon, herr
+			}
+			var missing *content.MissingBelowHorizon
+			if errors.As(err, &missing) {
+				return nil, nil, 0, missingAlong(r, opts, parentRID, steps+1, missing, cache)
+			}
+			return credit, versions, 0, nil
 		}
 		parentInfo, err := versionInfoFor(r, parentRID)
 		if err != nil {
@@ -188,6 +201,54 @@ func walkAncestors(
 	}
 	return credit, versions, 0, nil
 }
+
+// missingAlong is missing joined with the payload of opts.FilePath at each
+// older check-in on the primary chain below from that the store does not
+// hold, walked as walkAncestors would walk it, with steps of opts.Limit
+// already taken: the names a demand fetch needs for the whole walk at once.
+// It stops at a check-in whose manifest is not held, where the file is new,
+// and once it names more than one demand fetch may carry.
+func missingAlong(
+	r *repo.Repo, opts Options, from libfossil.FslID, steps int,
+	missing *content.MissingBelowHorizon, cache *content.Cache,
+) error {
+	if missing == nil || from <= 0 {
+		panic("annotate.missingAlong: nothing missing or invalid rid")
+	}
+	names := map[string]bool{}
+	rid := from
+	for ; steps < maxMissingSteps; steps++ {
+		if len(missing.Names)+len(names) > content.DemandFetchLimit {
+			break
+		}
+		if opts.Limit > 0 && steps >= opts.Limit || opts.OriginRID > 0 && rid == opts.OriginRID {
+			break
+		}
+		parent, err := primaryParent(r, rid)
+		if err != nil || parent <= 0 {
+			break
+		}
+		f, found, err := manifest.LookupFileCached(r, parent, opts.FilePath, cache)
+		if err != nil || !found {
+			break
+		}
+		if _, held, err := content.CheckAvailableByUUID(r.DB(), f.UUID); err != nil {
+			return err
+		} else if !held {
+			names[f.UUID] = true
+		}
+		rid = parent
+	}
+	if len(names) == 0 {
+		return missing
+	}
+	more := &content.MissingBelowHorizon{Horizon: missing.Horizon, Names: slices.Sorted(maps.Keys(names))}
+	return missing.Join(more)
+}
+
+// maxMissingSteps bounds missingAlong's walk, as MergeAncestryLimit bounds
+// the walk deciding a merge's crossing.
+const maxMissingSteps = content.MergeAncestryLimit
 
 // crossedHorizon is the rid of the store's structural horizon C when parent
 // is a check-in below it, 0 otherwise.
@@ -246,18 +307,14 @@ func loadFileAt(
 	}
 	// One name, so ask for one name: LookupFileCached searches the delta's
 	// own F cards first (artifact-format-00 8.4).
-	f, found, err := manifest.LookupFileCached(r, rid, filePath, cache)
+	data, found, err := manifest.ReadFileAt(context.Background(), r, rid, filePath, cache)
 	if err != nil {
 		return nil, err
 	}
-	if found {
-		fileRID, err := content.RequireAvailableByUUID(r.DB(), f.UUID)
-		if err != nil {
-			return nil, err
-		}
-		return cache.Expand(r.DB(), fileRID)
+	if !found {
+		return nil, fmt.Errorf("file %q not found in checkin %d", filePath, rid)
 	}
-	return nil, fmt.Errorf("file %q not found in checkin %d", filePath, rid)
+	return data, nil
 }
 
 // versionInfoFor retrieves commit metadata for a checkin RID.

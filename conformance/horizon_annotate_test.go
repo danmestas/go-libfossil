@@ -2,11 +2,13 @@ package conformance
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/annotate"
 	"github.com/danmestas/go-libfossil/internal/cone"
+	icontent "github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 )
@@ -89,12 +91,21 @@ func hzAnnotateCrossing(t *testing.T) error {
 	}
 	// f's older versions are blobs below the horizon, which only a demand
 	// fetch brings (§4.4); what annotate makes of their absence is no
-	// crossing of a structural horizon.
+	// crossing of a structural horizon: a refusal naming them for that
+	// fetch, or lines none of which is marked below the horizon.
 	rid, err := hzRID(content, tip)
 	if err != nil {
 		return err
 	}
 	lines, err := annotate.Annotate(content, annotate.Options{FilePath: "f", StartRID: rid})
+	var missing *icontent.MissingBelowHorizon
+	if errors.As(err, &missing) {
+		if len(missing.Checkins) != 0 || len(missing.Names) != 1 {
+			return expectf("a content horizon's refusal names %v and %v, want f's payload at c1",
+				missing.Checkins, missing.Names)
+		}
+		return nil
+	}
 	if err != nil {
 		return err
 	}

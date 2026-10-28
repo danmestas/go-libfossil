@@ -64,18 +64,8 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 		nonArtifactTable, seenSubmanifestSetting).Scan(&t.present, &t.trees); err != nil {
 		return nil, fmt.Errorf("sparse preparation: %s: %w", nonArtifactTable, err)
 	}
-	if t.present {
-		query, args := restrictTo("SELECT rid FROM "+nonArtifactTable+
-			" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)%s", "rid", ids)
-		err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
-			var rid libfossil.FslID
-			err := scan(&rid)
-			t.files[rid] = true
-			return err
-		}, args...)
-		if err != nil {
-			return nil, err
-		}
+	if err := t.loadFiles(ctx, q, ids); err != nil {
+		return nil, err
 	}
 	if t.trees {
 		return t, nil
@@ -96,6 +86,156 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 		delete(t.linked, rid)
 	}
 	return t, err
+}
+
+// loadFiles reads the file versions the tables prove (fileVersionsSQL). A
+// store this library crosslinked records each blob it found to be no
+// artifact; one fossil crosslinked does not, and there every file version
+// was read instead, past the byte budget on a real repository
+// (fossil-scm.org's classification failed outright). So a version mlink
+// names and no table an artifact's crosslink writes claims is taken as file
+// content too, as the cone walk takes it (knownFile), without reading it.
+//
+// That is a decision, not a proof, and it applies to every store, the
+// record or not. A blob nothing has linked as an artifact is the file mlink
+// says it is, and goes where its name puts it: out of the cone it is
+// elided, which no client of the cone misses, since none expects it. Fossil
+// links every blob it receives or rebuilds that parses as an artifact, so
+// in a store it wrote a file whose bytes are an artifact is claimed and
+// read as one. This library's own store is not, between a Checkin that
+// commits such a file and the next crosslink sweep: until the sweep links
+// it, a cluster-bytes file outside the cone is elided rather than kept as a
+// cluster. The window closes by itself, since a sweep runs in batches
+// (crosslinkBatchSize) whose claims the memo sees (claimRows), and the next
+// classification reads the blob as the artifact it then is. Its bytes go
+// unread, so a corrupt version outside the cone is elided too, where
+// reading it would retain it as unreadable; one inside the cone is sent by
+// the walk and fails there. A store that has seen a tree proves nothing
+// this way, since nothing claims its nodes.
+func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids string) error {
+	query, err := fileVersionsSQL(q, t.present, t.trees, false)
+	if err != nil || query == "" {
+		return err
+	}
+	var args []any
+	if ids != "" {
+		query, args = query+" WHERE r IN (SELECT value FROM json_each(?1))", []any{ids}
+	}
+	return referenceRows(ctx, q, query, func(scan func(...any) error) error {
+		var rid libfossil.FslID
+		err := scan(&rid)
+		t.files[rid] = true
+		return err
+	}, args...)
+}
+
+// fileVersionsSQL selects, as column r, the file versions the tables prove:
+// those the non-artifact record holds that mlink names, and, but in a store
+// that has seen a tree, those mlink names that no claim table names. The
+// two agree wherever the record is complete; taking both keeps a record a
+// push started in a store fossil wrote, which names only what arrived, from
+// sending every older version back to be read. byMids restricts the mlink
+// rows to the check-ins of the JSON array ?1. Empty when nothing is proved.
+func fileVersionsSQL(q db.Querier, present, trees, byMids bool) (string, error) {
+	named := func(col string) string {
+		where := " WHERE " + col + ">0"
+		if byMids {
+			where += " AND mid IN (SELECT value FROM json_each(?1))"
+		}
+		return "SELECT " + col + " FROM mlink" + where
+	}
+	var parts []string
+	if present {
+		parts = append(parts, "SELECT rid FROM "+nonArtifactTable+" WHERE rid IN ("+
+			named("fid")+" UNION "+named("pid")+")")
+	}
+	if !trees {
+		claims, err := artifactClaims(q)
+		if err != nil {
+			return "", err
+		}
+		parts = append(parts, "SELECT * FROM ("+named("fid")+" UNION "+named("pid")+claims+")")
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return "WITH f(r) AS (" + strings.Join(parts, " UNION ") + ") SELECT r FROM f", nil
+}
+
+// artifactTables are the rows an artifact's crosslink writes, by table and
+// the column naming the artifact: check-ins and every event-bearing
+// artifact, control artifacts and clusters, attachments, forum posts and
+// ticket changes.
+var artifactTables = []struct{ table, column, where string }{
+	{"event", "objid", ""},
+	{"plink", "cid", ""},
+	{"tagxref", "srcid", ""},
+	{"tagxref", "rid", "tagid=7"},
+	{"attachment", "attachid", ""},
+	{"forumpost", "fpid", ""},
+	{"ticketchng", "tkt_rid", ""},
+}
+
+// artifactClaims is an EXCEPT clause per artifactTables row whose table the
+// store has; a table it lacks claims nothing.
+func artifactClaims(q db.Querier) (string, error) {
+	var b strings.Builder
+	for _, a := range artifactTables {
+		exists, err := tableExists(q, a.table)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			continue
+		}
+		b.WriteString(" EXCEPT SELECT " + a.column + " FROM " + a.table)
+		if a.where != "" {
+			b.WriteString(" WHERE " + a.where)
+		}
+	}
+	return b.String(), nil
+}
+
+// claimRows counts the rids at or below top and outside the JSON array
+// except that a claim table names. File versions follow these claims
+// (fileVersionsSQL), which a sweep linking an artifact late adds without
+// adding a blob, so a memo holds only while the count does. It counts rids,
+// not rows: a check-in's tags propagate as rows naming an older source, or
+// none (srcid 0).
+func claimRows(q db.Querier, top libfossil.FslID, except string) (int64, error) {
+	var parts []string
+	for _, a := range artifactTables {
+		exists, err := tableExists(q, a.table)
+		if err != nil {
+			return 0, err
+		}
+		if !exists {
+			continue
+		}
+		part := "SELECT " + a.column + " FROM " + a.table + " WHERE " + a.column + " BETWEEN 1 AND ?1 AND " +
+			a.column + " NOT IN (SELECT value FROM json_each(?2))"
+		if a.where != "" {
+			part += " AND " + a.where
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return 0, nil
+	}
+	var n int64
+	if err := q.QueryRow("SELECT count(*) FROM ("+strings.Join(parts, " UNION ")+")", top, except).Scan(&n); err != nil {
+		return 0, fmt.Errorf("sparse preparation: claims: %w", err)
+	}
+	return n, nil
+}
+
+func tableExists(q db.Querier, name string) (bool, error) {
+	var exists bool
+	err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)", name).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("sparse preparation: %s: %w", name, err)
+	}
+	return exists, nil
 }
 
 // referenceRows scans every row of query; each row runs ctx's check first.

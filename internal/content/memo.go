@@ -80,6 +80,9 @@ type storePrefix struct {
 	// moving otherwise means one was linked late, which an extension by the
 	// arrivals would miss.
 	links int64
+	// claims is claimRows at top: the rids the claim tables name, which
+	// file versions follow (fileVersionsSQL).
+	claims int64
 }
 
 // linkCountSQL counts the event and plink rows of the rids at or below ?1,
@@ -99,6 +102,9 @@ func readPrefix(q db.Querier) (storePrefix, error) {
 	if err := q.QueryRow(linkCountSQL, p.top, "[]").Scan(&p.links); err != nil {
 		return storePrefix{}, fmt.Errorf("classification memo: store prefix: %w", err)
 	}
+	if p.claims, err = claimRows(q, p.top, "[]"); err != nil {
+		return storePrefix{}, fmt.Errorf("classification memo: %w", err)
+	}
 	err = referenceRows(context.Background(), q, "SELECT rid FROM phantom", func(scan func(...any) error) error {
 		var rid libfossil.FslID
 		err := scan(&rid)
@@ -113,6 +119,7 @@ func readPrefix(q db.Querier) (storePrefix, error) {
 
 func (p storePrefix) equal(o storePrefix) bool {
 	return p.top == o.top && p.topUUID == o.topUUID && p.count == o.count && p.links == o.links &&
+		p.claims == o.claims &&
 		maps.Equal(p.phantoms, o.phantoms)
 }
 
@@ -285,7 +292,8 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 }
 
 // settled reports whether the rids at or below s's prefix are as s read
-// them but for the phantoms filled: none was crosslinked late, and none was
+// them but for the phantoms filled: none was crosslinked late (as a check-in,
+// or as any artifact, which file versions follow), and none was
 // stored as a delta of a filled phantom, which leaves it unreadable until the
 // fill and readable after.
 func (s *memoStore) settled(q db.Querier, filled []libfossil.FslID) (bool, error) {
@@ -303,7 +311,14 @@ func (s *memoStore) settled(q db.Querier, filled []libfossil.FslID) (bool, error
 	if err != nil {
 		return false, fmt.Errorf("classification memo: store prefix: %w", err)
 	}
-	return links == s.prefix.links && !based, nil
+	if links != s.prefix.links || based {
+		return false, nil
+	}
+	claims, err := claimRows(q, s.prefix.top, ids)
+	if err != nil {
+		return false, fmt.Errorf("classification memo: %w", err)
+	}
+	return claims == s.prefix.claims, nil
 }
 
 // arrivals lists the rids appended past s's prefix and the phantoms filled

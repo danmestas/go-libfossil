@@ -47,10 +47,10 @@ func extendReferenceState(
 	}
 	// The record appearing is every version it names being named anew.
 	named := ids
-	if !s.tables.present {
+	if !s.tables.present && added.present {
 		named = ""
 	}
-	renamed, err := oldFilesNamed(ctx, q, added.present, s.tables.files, named, in)
+	renamed, err := oldFilesNamed(ctx, q, added.present, s.tables.trees, s.tables.files, named, in)
 	if err != nil || readRaw(s.facts, renamed) {
 		return nil, false, err
 	}
@@ -110,25 +110,25 @@ func treeRecords(records []coneReferenceRecord) bool {
 }
 
 // oldFilesNamed lists the artifacts outside fresh and files that the
-// non-artifact record holds and that the mlink rows of the check-ins in ids
-// name, or any mlink row when ids is empty: a load now takes them for file
-// content, where the load being extended read them raw.
+// tables prove file versions (fileVersionsSQL) through the mlink rows of the
+// check-ins in ids, or through any mlink row when ids is empty: a load now
+// takes them for file content, where the load being extended read them raw.
+// The claims of the rids at or below the memo's prefix stand, as settled
+// checked.
 func oldFilesNamed(
-	ctx context.Context, q db.Querier, present bool, files map[libfossil.FslID]bool, ids string,
+	ctx context.Context, q db.Querier, present, trees bool, files map[libfossil.FslID]bool, ids string,
 	fresh map[libfossil.FslID]bool,
 ) ([]libfossil.FslID, error) {
-	if !present {
-		return nil, nil
+	query, err := fileVersionsSQL(q, present, trees, ids != "")
+	if err != nil || query == "" {
+		return nil, err
 	}
-	query, args := "SELECT rid FROM "+nonArtifactTable+" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)", []any(nil)
+	var args []any
 	if ids != "" {
-		query = "SELECT rid FROM " + nonArtifactTable + ` WHERE rid IN
-			(SELECT fid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1))
-			UNION SELECT pid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))`
 		args = []any{ids}
 	}
 	var renamed []libfossil.FslID
-	err := referenceRows(ctx, q, query, func(scan func(...any) error) error {
+	err = referenceRows(ctx, q, query, func(scan func(...any) error) error {
 		var rid libfossil.FslID
 		err := scan(&rid)
 		if !files[rid] && !fresh[rid] {

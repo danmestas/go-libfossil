@@ -22,8 +22,9 @@ func TestHorizonAnnotateCrossing(t *testing.T) {
 // unchanged since c1. In a clone at C's structural horizon the lines whose
 // origin lies at or below C -- f's first two, g's -- are reported as
 // originating at the horizon, and f's c3 line keeps c3. A clone at C's
-// content horizon holds every manifest (§4.1): it marks no line, and g, whose
-// blob K names, is attributed to c1 as the origin attributes it.
+// content horizon holds every manifest (§4.1): g, whose blob K names, is
+// attributed to c1 as the origin attributes it, while f, whose c1 blob it
+// does not hold, is reported at the horizon as in the structural clone.
 func hzAnnotateCrossing(t *testing.T) error {
 	origin := newSCSyncRepo(t, map[string]string{"f": "old\n", "g": "shared\n"})
 	c2 := origin.commit(t, map[string]string{"f": "old\nmid\n", "g": "shared\n"}, origin.c1)
@@ -87,21 +88,8 @@ func hzAnnotateCrossing(t *testing.T) error {
 	if err := run(content, "g", []want{{below, false}}); err != nil {
 		return err
 	}
-	// f's older versions are blobs below the horizon, which only a demand
-	// fetch brings (§4.4); what annotate makes of their absence is no
-	// crossing of a structural horizon.
-	rid, err := hzRID(content, tip)
-	if err != nil {
-		return err
-	}
-	lines, err := annotate.Annotate(content, annotate.Options{FilePath: "f", StartRID: rid})
-	if err != nil {
-		return err
-	}
-	for _, l := range lines {
-		if l.BelowHorizon {
-			return expectf("a content horizon marked %q below the horizon", l.Text)
-		}
-	}
-	return nil
+	// f's version at c1 is a blob below the horizon, which only a demand
+	// fetch brings (§4.4): without one the walk stops at C as a structural
+	// store's does, and the lines it cannot attribute are reported there.
+	return run(content, "f", []want{{c, true}, {c, true}, {tip, false}})
 }

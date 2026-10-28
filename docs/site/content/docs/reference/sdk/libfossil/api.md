@@ -120,6 +120,7 @@ import "github.com/danmestas/go-libfossil"
   - [func Open\(path string\) \(\*Repo, error\)](<#Open>)
   - [func \(r \*Repo\) Ancestry\(opts LogOpts\) \(\[\]LogEntry, error\)](<#Repo.Ancestry>)
   - [func \(r \*Repo\) Annotate\(opts AnnotateOpts\) \(\[\]AnnotatedLine, error\)](<#Repo.Annotate>)
+  - [func \(r \*Repo\) AnnotateContext\(ctx context.Context, opts AnnotateOpts, required RequiredContentOpts\) \(\[\]AnnotatedLine, error\)](<#Repo.AnnotateContext>)
   - [func \(r \*Repo\) BranchOpenLeaf\(name string\) \(rid int64, open bool, err error\)](<#Repo.BranchOpenLeaf>)
   - [func \(r \*Repo\) BranchTip\(name string\) \(int64, error\)](<#Repo.BranchTip>)
   - [func \(r \*Repo\) Checkpoint\(mode CheckpointMode\) error](<#Repo.Checkpoint>)
@@ -136,6 +137,7 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) DeleteUser\(login string\) error](<#Repo.DeleteUser>)
   - [func \(r \*Repo\) DetectForks\(\) \(\[\]Fork, error\)](<#Repo.DetectForks>)
   - [func \(r \*Repo\) Diff\(ridA, ridB int64, filePath string\) \(\[\]DiffEntry, error\)](<#Repo.Diff>)
+  - [func \(r \*Repo\) DiffContext\(ctx context.Context, ridA, ridB int64, filePath string, required RequiredContentOpts\) \(\[\]DiffEntry, error\)](<#Repo.DiffContext>)
   - [func \(r \*Repo\) DisableSubmanifests\(\) error](<#Repo.DisableSubmanifests>)
   - [func \(r \*Repo\) EnableSubmanifests\(k int\) \(pinned int, warning string, err error\)](<#Repo.EnableSubmanifests>)
   - [func \(r \*Repo\) FindCommonAncestor\(ridA, ridB int64\) \(int64, error\)](<#Repo.FindCommonAncestor>)
@@ -155,6 +157,8 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) ReadBlob\(uuid string\) \(\[\]byte, error\)](<#Repo.ReadBlob>)
   - [func \(r \*Repo\) ReadFile\(rid int64, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFile>)
   - [func \(r \*Repo\) ReadFileAt\(version string, filePath string\) \(\[\]byte, error\)](<#Repo.ReadFileAt>)
+  - [func \(r \*Repo\) ReadFileAtContext\(ctx context.Context, version string, filePath string, required RequiredContentOpts\) \(\[\]byte, error\)](<#Repo.ReadFileAtContext>)
+  - [func \(r \*Repo\) ReadFileContext\(ctx context.Context, rid int64, filePath string, required RequiredContentOpts\) \(\[\]byte, error\)](<#Repo.ReadFileContext>)
   - [func \(r \*Repo\) Redo\(dir string\) error](<#Repo.Redo>)
   - [func \(r \*Repo\) ResolveBranchStart\(name string\) \(int64, error\)](<#Repo.ResolveBranchStart>)
   - [func \(r \*Repo\) ResolveConflictFork\(filename string\) error](<#Repo.ResolveConflictFork>)
@@ -409,7 +413,9 @@ type AnnotateOpts struct {
 
 AnnotatedLine is a single line of blame/annotate output.
 
-BelowHorizon marks a line whose origin lies at or below the store's structural horizon \(draft\-fossil\-horizon\-00 §5.5\), which the store does not hold the history to attribute: UUID, User and Date then describe the horizon's check\-in, at which the line is reported as originating, and a deepen \(repo cone deepen\) brings the history that attributes it.
+BelowHorizon marks a line whose origin lies at or below the store's horizon C \(draft\-fossil\-horizon\-00 §5.5\), which the store does not hold the history to attribute: UUID, User and Date then describe C itself, at which the line is reported as originating, not the check\-in that added it. A deepen \(repo cone deepen\) brings the history that attributes it; on a content\-horizon store AnnotateContext fetches it.
+
+Such a result is partial, and the marks are its only signal: Annotate returns it with no error, as does an AnnotateContext that reached its demand\-fetch limit or whose peer could not supply a version.
 
 ```go
 type AnnotatedLine struct {
@@ -1741,6 +1747,17 @@ func (r *Repo) Annotate(opts AnnotateOpts) ([]AnnotatedLine, error)
 
 Annotate attributes each line of a file to the commit that last changed it.
 
+On a store whose cone has a horizon, lines the walk cannot attribute past the horizon are reported as originating at it, marked BelowHorizon; AnnotateContext fetches the history that attributes them on a content horizon store.
+
+<a name="Repo.AnnotateContext"></a>
+### func \(\*Repo\) AnnotateContext
+
+```go
+func (r *Repo) AnnotateContext(ctx context.Context, opts AnnotateOpts, required RequiredContentOpts) ([]AnnotatedLine, error)
+```
+
+AnnotateContext is Annotate with a demand fetch: on a content\-horizon store, each version of the file the walk reads below the horizon and the store does not hold is fetched from Peer as the walk reaches it, so only what the walk reads is fetched and lines are attributed to the check\-ins below the horizon that added them. A walk needing more than one demand fetch's 200 payloads stops there and returns what it attributed, the rest marked BelowHorizon, as does a walk that crosses a structural horizon, since naming those check\-ins is a deepen. A start check\-in below the horizon is fetched as ReadFileContext fetches it.
+
 <a name="Repo.BranchOpenLeaf"></a>
 ### func \(\*Repo\) BranchOpenLeaf
 
@@ -1894,6 +1911,15 @@ When filePath is non\-empty, returns 0 or 1 entries for that single file: the fi
 When filePath is empty, returns one entry per file that changed between the two checkins \(the union of files across both sides where the content UUID differs or the file exists on only one side\). Entries are sorted by Name for deterministic ordering. An empty slice is returned when the two checkins have identical file sets and content.
 
 Whole\-checkin enumeration is currently name\-keyed: a rename with no content change surfaces as a delete of the old name plus an add of the new name, and permission\-only changes are not reflected. Proper rename and perm\-change detection \(via the underlying mlink table\) is tracked as a follow\-up; per\-file diff behaviour for an explicitly named file is unchanged.
+
+<a name="Repo.DiffContext"></a>
+### func \(\*Repo\) DiffContext
+
+```go
+func (r *Repo) DiffContext(ctx context.Context, ridA, ridB int64, filePath string, required RequiredContentOpts) ([]DiffEntry, error)
+```
+
+DiffContext is Diff with ReadFileContext's demand fetch: what both sides lack below the horizon is fetched in one round.
 
 <a name="Repo.DisableSubmanifests"></a>
 ### func \(\*Repo\) DisableSubmanifests
@@ -2078,6 +2104,24 @@ func (r *Repo) ReadFileAt(version string, filePath string) ([]byte, error)
 ```
 
 ReadFileAt reads filePath from the checkin identified by a symbolic version name \(e.g. "tip", "trunk", a branch name, a UUID, or a UUID prefix\). It calls ResolveVersion to obtain the RID, then delegates to ReadFile. Use ReadFile directly when you already have a numeric RID.
+
+<a name="Repo.ReadFileAtContext"></a>
+### func \(\*Repo\) ReadFileAtContext
+
+```go
+func (r *Repo) ReadFileAtContext(ctx context.Context, version string, filePath string, required RequiredContentOpts) ([]byte, error)
+```
+
+ReadFileAtContext is ReadFileAt with ReadFileContext's demand fetch. The version is resolved locally; a structural store resolves a check\-in below its horizon by the full hash its phantom carries.
+
+<a name="Repo.ReadFileContext"></a>
+### func \(\*Repo\) ReadFileContext
+
+```go
+func (r *Repo) ReadFileContext(ctx context.Context, rid int64, filePath string, required RequiredContentOpts) ([]byte, error)
+```
+
+ReadFileContext is ReadFile that, when the check\-in's file lies below the store cone's horizon and the store does not hold it, fetches exactly the artifacts the read needs from Peer and reads again: the payload, and for a structural store first the check\-in's manifest, baseline and nodes. This is the targeted demand fetch of draft\-fossil\-horizon\-00 §4.4: the store cone and its horizon do not move, and what is fetched is held content a later CompactStore may drop. Without a Peer the read fails as ReadFile does, matching ErrBelowHorizon and naming the horizon. A read needing more than one demand fetch carries is refused; DeepenHorizon is its remedy.
 
 <a name="Repo.Redo"></a>
 ### func \(\*Repo\) Redo

@@ -523,3 +523,44 @@ func zitServeURL(t *testing.T, bin, home, dir string) string {
 	t.Fatal("zit serve did not start")
 	return ""
 }
+
+// An annotate whose peer cannot supply a version returns the partial result,
+// the lines past C marked at the horizon, as it does with no peer.
+func TestAnnotateContextPeerShortIsPartial(t *testing.T) {
+	peer, uuids := linearHistory(t, "l1\n", "l1\nl2\n", "l1\nl2\nl3\n", "l1\nl2\nl3\nl4\n")
+	target := horizonClone(t, peer, uuids[2], false)
+	tip, err := target.ResolveVersion(uuids[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	withheld := hash.SHA1([]byte("l1\n"))
+	short := TransportFunc(func(ctx context.Context, request []byte) ([]byte, error) {
+		reply, err := peer.RoundTrip(ctx, request)
+		if err != nil {
+			return nil, err
+		}
+		message, err := xfer.Decode(reply, xfer.ContentTypeCompressed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept := message.Cards[:0]
+		for _, card := range message.Cards {
+			if c, ok := card.(*xfer.FileCard); ok && c.UUID == withheld {
+				continue
+			}
+			if c, ok := card.(*xfer.CFileCard); ok && c.UUID == withheld {
+				continue
+			}
+			kept = append(kept, card)
+		}
+		message.Cards = kept
+		return message.Encode()
+	})
+	lines, err := target.AnnotateContext(context.Background(), AnnotateOpts{FilePath: "a", StartRID: tip},
+		RequiredContentOpts{Peer: short})
+	if err != nil {
+		t.Fatalf("annotate with a peer short of a version: %v", err)
+	}
+	c := uuids[2]
+	checkAnnotation(t, lines, []wantLine{{c, true}, {c, true}, {uuids[2], false}, {uuids[3], false}})
+}

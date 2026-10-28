@@ -92,7 +92,8 @@ func AnnotateContext(ctx context.Context, r *repo.Repo, opts Options) ([]Line, e
 		cache = content.NewCache(annotateCacheBytes)
 	}
 
-	fileContent, err := loadFileAt(ctx, r, opts.StartRID, opts.FilePath, cache)
+	place := &manifest.Placement{}
+	fileContent, err := loadFileAt(ctx, r, opts.StartRID, opts.FilePath, cache, place)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: load file at start: %w", err)
 	}
@@ -106,7 +107,7 @@ func AnnotateContext(ctx context.Context, r *repo.Repo, opts Options) ([]Line, e
 			"annotate: %s is binary or has a line over %d bytes", opts.FilePath, lengthMask)
 	}
 
-	credit, versions, horizon, err := walkAncestors(ctx, r, opts, fileContent, start, startInfo, cache)
+	credit, versions, horizon, err := walkAncestors(ctx, r, opts, fileContent, start, startInfo, cache, place)
 	if err != nil {
 		return nil, fmt.Errorf("annotate: %w", err)
 	}
@@ -163,7 +164,7 @@ const annotateCacheBytes = 256 << 20
 // apart.
 func walkAncestors(
 	ctx context.Context, r *repo.Repo, opts Options, startContent []byte, start []dline,
-	startInfo VersionInfo, cache *content.Cache,
+	startInfo VersionInfo, cache *content.Cache, place *manifest.Placement,
 ) (credit []int, versions []VersionInfo, horizon libfossil.FslID, err error) {
 	credit = make([]int, len(start))
 	for i := range credit {
@@ -186,15 +187,20 @@ func walkAncestors(
 		if err := ctx.Err(); err != nil {
 			return nil, nil, 0, err
 		}
-		parentContent, err := loadFileAt(ctx, r, parentRID, opts.FilePath, cache)
+		parentContent, err := loadFileAt(ctx, r, parentRID, opts.FilePath, cache, place)
 		var missing *content.MissingBelowHorizon
 		if errors.As(err, &missing) && len(missing.Checkins) == 0 && opts.Fetch != nil &&
 			fetched+len(missing.Names) <= opts.FetchLimit {
-			if err := opts.Fetch(ctx, missing.Names); err != nil {
-				return nil, nil, 0, err
+			// A peer that cannot supply the version leaves the walk where
+			// no peer would: stopped at the horizon, the result partial.
+			if ferr := opts.Fetch(ctx, missing.Names); ferr != nil {
+				if cerr := ctx.Err(); cerr != nil {
+					return nil, nil, 0, cerr
+				}
+			} else {
+				fetched += len(missing.Names)
+				parentContent, err = loadFileAt(ctx, r, parentRID, opts.FilePath, cache, place)
 			}
-			fetched += len(missing.Names)
-			parentContent, err = loadFileAt(ctx, r, parentRID, opts.FilePath, cache)
 		}
 		if err != nil {
 			// The parent lies below the horizon, and what is left may not
@@ -277,6 +283,7 @@ func creditInsertions(credit []int, edit []int, v int) int {
 // amortizes their overlapping delta chains. A nil cache reads uncached.
 func loadFileAt(
 	ctx context.Context, r *repo.Repo, rid libfossil.FslID, filePath string, cache *content.Cache,
+	place *manifest.Placement,
 ) ([]byte, error) {
 	if r == nil {
 		panic("annotate.loadFileAt: r must not be nil")
@@ -289,7 +296,7 @@ func loadFileAt(
 	}
 	// One name, so ask for one name: LookupFileCached searches the delta's
 	// own F cards first (artifact-format-00 8.4).
-	data, found, err := manifest.ReadFileAt(ctx, r, rid, filePath, cache)
+	data, found, err := manifest.ReadFileAt(ctx, r, rid, filePath, cache, place)
 	if err != nil {
 		return nil, err
 	}

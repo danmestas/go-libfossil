@@ -6897,7 +6897,9 @@ type AnnotateOpts struct {
 
 AnnotatedLine is a single line of blame/annotate output.
 
-BelowHorizon marks a line whose origin lies at or below the store's structural horizon \(draft\-fossil\-horizon\-00 §5.5\), which the store does not hold the history to attribute: UUID, User and Date then describe the horizon's check\-in, at which the line is reported as originating, and a deepen \(repo cone deepen\) brings the history that attributes it.
+BelowHorizon marks a line whose origin lies at or below the store's horizon C \(draft\-fossil\-horizon\-00 §5.5\), which the store does not hold the history to attribute: UUID, User and Date then describe C itself, at which the line is reported as originating, not the check\-in that added it. A deepen \(repo cone deepen\) brings the history that attributes it; on a content\-horizon store AnnotateContext fetches it.
+
+Such a result is partial, and the marks are its only signal: Annotate returns it with no error, as does an AnnotateContext that reached its demand\-fetch limit or whose peer could not supply a version.
 
 ```go
 type AnnotatedLine struct {

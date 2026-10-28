@@ -17,10 +17,11 @@
 // (JudgeFilled); a delta received onto the root, by any path, judges them
 // if it is readable and otherwise moves them to its own root (DeltaStored);
 // the link step judges a pending row it reaches too (Judge).
-// A seed found that way is refused by its hash: it stays stored, so a delta
-// built on it stays readable, but it is never linked, announced or sent, and
-// a re-push of it is refused on its bytes. Pulling the same hash from a peer
-// stores nothing new: the row is held already, and stays refused.
+// A seed found that way is refused by its hash and dropped: each delta built
+// on it is rewritten as full text, so it stays readable, and the seed's row
+// keeps its rid but loses its content, out of the phantom table so no
+// request asks for it. It is never linked, announced or sent, and a re-push
+// of it is refused on its bytes. A pull or clone skips the refused hash.
 //
 // Both tables are store-local: no configuration group carries them, so no
 // peer pulls them and a refusal can never make a clone drop the seed it
@@ -223,11 +224,11 @@ func WithholdUnreadable(q db.Querier) error {
 // JudgeFilled judges the rows pending under each of filled, rids whose full
 // content was just stored, and reports how many rows it examined. Each fill
 // costs the rows that waited on it, not the whole pending set. Each row is
-// readable now and is judged: a seed's hash is refused, and either way the
-// row goes. A delta pulled onto a pending row's basis and itself unreadable
-// is not marked pending, so the rows waiting on it stay pending, withheld,
-// until the link step reaches them (Judge); a plain file among them stays
-// withheld.
+// readable now and is judged: a seed's hash is refused and its content
+// dropped (Drop), and either way the pending row goes. A delta pulled onto a
+// pending row's basis and itself unreadable is not marked pending, so the
+// rows waiting on it stay pending, withheld, until the link step reaches
+// them (Judge); a plain file among them stays withheld.
 //
 // A row that does not expand, or whose bytes do not hash to its name, is
 // not the artifact it names; it stays pending, withheld, rather than be
@@ -319,15 +320,15 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 	// horizon-seed announcement, and an announced seed is held outside the
 	// artifact store, so a seed-shaped artifact reaching the link step is
 	// refused whatever path stored it. This catches a seed completed in a
-	// later round of a pull or clone, which no pending row records. It
-	// stays stored, refused, as a seed refused on a push does.
+	// later round of a pull or clone, which no pending row records. It is
+	// refused and dropped, as a pending seed is (Drop).
 	if IsSeed(d) {
 		var uuid string
 		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
 			return false, fmt.Errorf("seedcheck.Judge: rid=%d: %w", rid, err)
 		}
 		if !t.Pending {
-			return true, refuse(q, rid, uuid)
+			return true, Drop(q, rid, uuid)
 		}
 		return decide(q, rid, uuid, true)
 	}
@@ -367,7 +368,7 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 // pending row goes.
 func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, error) {
 	if seed {
-		if err := refuse(q, rid, uuid); err != nil {
+		if err := Drop(q, rid, uuid); err != nil {
 			return false, err
 		}
 	} else if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
@@ -379,20 +380,69 @@ func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, er
 	return seed, nil
 }
 
-// refuse records the seed stored at rid as refused, and takes it out of the
-// unclustered table, so no inventory or cluster names it.
-func refuse(q db.Querier, rid libfossil.FslID, uuid string) error {
-	if err := Refuse(q, uuid); err != nil {
+// Drop records the seed stored at rid as refused under uuid, takes it out of
+// the unclustered table, so no inventory or cluster names it, and drops its
+// content: a store never keeps a seed it did not receive through a
+// horizon-seed announcement (§5.2.3). It is all or nothing: a failure
+// partway leaves the row, and every delta on it, as they were.
+func Drop(q db.Querier, rid libfossil.FslID, uuid string) error {
+	if q == nil || rid <= 0 || uuid == "" {
+		panic("seedcheck.Drop: q must not be nil, rid must be positive and uuid must not be empty")
+	}
+	return atomic(q, func(q *db.Tx) error {
+		if err := Refuse(q, uuid); err != nil {
+			return err
+		}
+		if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+			return fmt.Errorf("seedcheck: refuse rid=%d: %w", rid, err)
+		}
+		return drop(q, rid)
+	})
+}
+
+// atomic runs fn so that its writes land together or not at all: in a
+// transaction of its own on a pool, in a savepoint on a transaction or on a
+// pool bound to one. A caller that logs a failure and commits (manifest's
+// judgeFilled) then commits none of them.
+func atomic(q db.Querier, fn func(tx *db.Tx) error) error {
+	switch q := q.(type) {
+	case *db.DB:
+		return q.WithTx(fn)
+	case *db.Tx:
+		return q.WithSavepoint(fn)
+	}
+	panic(fmt.Sprintf("seedcheck: a drop needs a *db.DB or *db.Tx, got %T", q))
+}
+
+// drop turns the seed stored at rid into a content-less row: size -1, no
+// content and no delta link. The row stays, so its rid is never handed to
+// another artifact while a receive pass still tracks rows by it, and it is
+// left out of the phantom table, so no request asks for it. Each delta built
+// on it is rewritten as full text first and still reads; one that does not
+// expand is left as it was, as unreadable as before.
+func drop(q db.Querier, rid libfossil.FslID) error {
+	kids, err := rows(q, "SELECT rid, '' FROM delta WHERE srcid=? ORDER BY rid", rid)
+	if err != nil {
 		return err
 	}
-	if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
-		return fmt.Errorf("seedcheck: refuse rid=%d: %w", rid, err)
+	for _, k := range kids {
+		if err := content.Undelta(q, k.rid); err != nil && !unreadable(err) {
+			return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
+		}
+	}
+	for _, stmt := range []string{
+		"DELETE FROM delta WHERE rid=?",
+		"UPDATE blob SET size=-1, content=NULL WHERE rid=?",
+	} {
+		if _, err := q.Exec(stmt, rid); err != nil {
+			return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
+		}
 	}
 	return nil
 }
 
-// Refuse records uuid as a refused seed. The row stored under it is kept,
-// so deltas on it stay readable, but it is withheld and never linked.
+// Refuse records uuid as a refused seed. A row stored under it is withheld
+// and never linked; one judged a seed here has its content dropped too.
 func Refuse(q db.Querier, uuid string) error {
 	if q == nil || uuid == "" {
 		panic("seedcheck.Refuse: q must not be nil and uuid must not be empty")

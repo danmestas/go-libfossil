@@ -86,10 +86,11 @@ type cloneSession struct {
 	seqno                 int
 	projectCode           string
 	serverCode            string
-	roundRecvd            int  // file/cfile cards the last reply delivered
-	roundFrom             int  // the clone sequence the last request named
-	roundPush             bool // the last reply carried a push card
-	coned                 bool // requests carry the store cone (§6.1)
+	roundRecvd            int      // file/cfile cards the last reply delivered
+	unjudged              unjudged // deltas stored unreadable, counted once judged
+	roundFrom             int      // the clone sequence the last request named
+	roundPush             bool     // the last reply carried a push card
+	coned                 bool     // requests carry the store cone (§6.1)
 	structural            structuralClient
 	structuralDecided     bool        // a reply carrying the clone sequence has decided the depth (horizon §6.2.5)
 	named                 *namedClone // a horizon asked for by name (horizon §6.2.7); nil otherwise
@@ -272,8 +273,17 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 		return cloneResult, fmt.Errorf("sync.Clone: horizon seed: %w", err)
 	}
 	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
-	if err := cs.fillPhantoms(ctx, t); err != nil {
-		return cloneResult, err
+	fillErr := cs.fillPhantoms(ctx, t)
+	// Horizon §5.2.3: a delta stored unreadable is counted once the rounds,
+	// the linker and any phantom pull have judged it, and only if it was not
+	// a seed.
+	kept, err := cs.unjudged.settle(cs.repo.DB())
+	if err != nil {
+		return cloneResult, fmt.Errorf("sync.Clone: %w", err)
+	}
+	cs.result.BlobsRecvd += kept
+	if fillErr != nil {
+		return cloneResult, fillErr
 	}
 	return cloneResult, cs.recordCursor()
 }
@@ -399,6 +409,12 @@ func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A refused seed's phantom is never asked for (horizon §5.2.3), so it is
+	// not missing either.
+	refused, err := seedcheck.RefusedUUIDs(r.DB())
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.DB().Query(
 		"SELECT b.rid,b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
 	if err != nil {
@@ -411,7 +427,7 @@ func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, errors.Join(fmt.Errorf("sync.Clone: scan phantom: %w", err), rows.Close())
 		}
-		if a != nil && a.Class(rid) == content.Elided {
+		if refused[uuid] || a != nil && a.Class(rid) == content.Elided {
 			continue
 		}
 		missing[uuid] = true
@@ -650,6 +666,7 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 		panic("sync.Clone.processResponse: msg must not be nil")
 	}
 	filesRecvd := 0
+	noted := cs.unjudged.mark()
 	cs.roundFrom = cs.seqno
 	defer func() { cs.roundRecvd = filesRecvd }()
 	if cs.refused {
@@ -676,9 +693,11 @@ func (cs *cloneSession) processResponse(ctx context.Context, cycle int, msg *xfe
 	if err != nil {
 		// The round rolled back, and with it the rows its pass cached.
 		cs.basis.Clear()
+		cs.unjudged.rollback(noted)
 		return err
 	}
-	cs.result.BlobsRecvd += filesRecvd
+	// A delta not yet readable is counted once judged (unjudged.settle).
+	cs.result.BlobsRecvd += filesRecvd - (cs.unjudged.mark() - noted)
 	// An authentication challenge includes push codes, and a cosmetic error
 	// may accompany content or a clone cursor. An error alone is a refusal,
 	// not a successful empty clone (sparse-cone §5.3).
@@ -950,12 +969,21 @@ func (cs *cloneSession) receiveContent(
 		delete(cs.phantoms, uuid)
 		return false, nil
 	}
+	// A delta on a dropped seed is left a phantom, for a pull to fetch in
+	// full (onRefusedBasis).
+	if again, _, err := onRefusedBasis(cs.repo.DB(), uuid, deltaSrc, visibilityPublic); again || err != nil {
+		return false, err
+	}
 	err = cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
 	if errors.Is(err, errSeed) {
 		delete(cs.phantoms, uuid)
 		return false, seedcheck.Refuse(cs.repo.DB(), uuid)
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	cs.unjudged.note(cs.repo.DB(), cs.pass, uuid, deltaSrc)
+	return true, nil
 }
 
 // handleFile stores a received file. storeReceivedFile now persists a

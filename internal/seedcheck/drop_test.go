@@ -1,10 +1,12 @@
 package seedcheck_test
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -147,4 +149,58 @@ func TestJudgeDropsSeedAtLinkStep(t *testing.T) {
 	}
 	assertDropped(t, r, seedRid, uuid)
 	assertExpands(t, r, childRid, child)
+}
+
+// A drop that fails partway leaves nothing applied: the seed keeps its
+// content and is not refused, and the delta rewritten before the failure is
+// a delta on it again. A caller that logs the failure and commits (the
+// after-dephantomize cascade) commits no half-dropped seed.
+func TestDropIsAtomic(t *testing.T) {
+	t.Run("pool", func(t *testing.T) {
+		testDropIsAtomic(t, func(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
+			_, err := seedcheck.Judge(r.DB(), seedcheck.Tables{}, rid, d)
+			return err
+		})
+	})
+	// In a transaction the caller commits after logging the failure.
+	t.Run("transaction", func(t *testing.T) {
+		testDropIsAtomic(t, func(r *repo.Repo, rid libfossil.FslID, d *deck.Deck) error {
+			var judged error
+			err := r.WithTx(func(tx *db.Tx) error {
+				_, judged = seedcheck.Judge(tx, seedcheck.Tables{}, rid, d)
+				return nil
+			})
+			return errors.Join(judged, err)
+		})
+	})
+}
+
+func testDropIsAtomic(t *testing.T, judge func(*repo.Repo, libfossil.FslID, *deck.Deck) error) {
+	r := dropRepo(t)
+	d, seed := seedDeck(t)
+	seedRid, uuid, err := blob.Store(r.DB(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	good := append([]byte("built on the seed\n"), seed...)
+	goodRid := onto(t, r, seedRid, seed, good)
+	bad := onto(t, r, seedRid, seed, append([]byte("whose stored bytes are damaged\n"), seed...))
+	if _, err := r.DB().Exec("UPDATE blob SET content=x'00000010deadbeef' WHERE rid=?", bad); err != nil {
+		t.Fatal(err)
+	}
+	if err := judge(r, seedRid, d); err == nil {
+		t.Fatal("a drop over a damaged dependent reported no error")
+	}
+	var size int64
+	r.DB().QueryRow("SELECT size FROM blob WHERE rid=?", seedRid).Scan(&size)
+	if size < 0 {
+		t.Fatal("the failed drop emptied the seed's row")
+	}
+	if refused, err := seedcheck.IsRefusedUUID(r.DB(), uuid); err != nil || refused {
+		t.Fatalf("the failed drop refused the seed (%v)", err)
+	}
+	if src, err := content.DeltaSource(r.DB(), goodRid); err != nil || src != seedRid {
+		t.Fatalf("the dependent rewritten before the failure kept its rewrite: source %d (%v)", src, err)
+	}
+	assertExpands(t, r, goodRid, good)
 }

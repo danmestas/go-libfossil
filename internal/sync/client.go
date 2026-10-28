@@ -824,7 +824,7 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	if err != nil {
 		return fmt.Errorf("sync: record phantoms: %w", err)
 	}
-	t.newPhantoms = created
+	t.newPhantoms += created
 	// Phantoms the round's storage created (a delta's basis, a cluster's
 	// members) join the session's, once per reply rather than per file.
 	if err := s.loadDBPhantoms(); err != nil {
@@ -946,8 +946,16 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 // receiveFile stores a received file or cfile and counts it.
 func (s *session) receiveFile(ctx context.Context, uuid, deltaSrc string,
 	payload, storedBlob []byte, t *replyTally) error {
-	stored, err := s.handleFileCard(ctx, uuid, deltaSrc, payload, storedBlob,
-		s.takeVisibility())
+	vis := s.takeVisibility()
+	// A delta on a dropped seed is asked for again in full (onRefusedBasis):
+	// the phantom it leaves continues the session (§3.7).
+	if again, err := onRefusedBasis(s.repo.DB(), uuid, deltaSrc); again || err != nil {
+		if again {
+			t.newPhantoms++
+		}
+		return err
+	}
+	stored, err := s.handleFileCard(ctx, uuid, deltaSrc, payload, storedBlob, vis)
 	if err != nil || !stored {
 		return err // a shunned file is dropped, and not counted as received
 	}
@@ -1507,6 +1515,9 @@ func storeResolvedContent(ctx context.Context, r *repo.Repo, pass *receivePass, 
 		return 0, &hashMismatchError{uuid: uuid}
 	}
 	if seedcheck.IsSeedBytes(fullContent) {
+		if err := storeSeedBasis(r, pass, uuid, fullContent, linker); err != nil {
+			return 0, err
+		}
 		return 0, errSeed
 	}
 
@@ -1806,8 +1817,9 @@ func (s *session) loadDBPhantoms() error {
 	if err != nil {
 		return err
 	}
-	// A dropped seed's phantom stays, inert: deleting a row would free its
-	// rid for reuse under a receive pass. Its hash is never asked for again.
+	// A refused seed's phantom (a name the store knew of before the seed
+	// arrived and was refused, or one a rebuild made of a dropped seed's
+	// row) is never asked for again.
 	refused, err := seedcheck.RefusedUUIDs(s.repo.DB())
 	if err != nil {
 		return err

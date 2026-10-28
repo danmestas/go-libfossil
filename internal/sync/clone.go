@@ -409,6 +409,12 @@ func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A refused seed's phantom is never asked for (horizon §5.2.3), so it is
+	// not missing either.
+	refused, err := seedcheck.RefusedUUIDs(r.DB())
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.DB().Query(
 		"SELECT b.rid,b.uuid FROM phantom p JOIN blob b ON p.rid = b.rid WHERE b.size < 0")
 	if err != nil {
@@ -421,7 +427,7 @@ func phantomUUIDs(ctx context.Context, r *repo.Repo) (map[string]bool, error) {
 		if err := rows.Scan(&rid, &uuid); err != nil {
 			return nil, errors.Join(fmt.Errorf("sync.Clone: scan phantom: %w", err), rows.Close())
 		}
-		if a != nil && a.Class(rid) == content.Elided {
+		if refused[uuid] || a != nil && a.Class(rid) == content.Elided {
 			continue
 		}
 		missing[uuid] = true
@@ -962,6 +968,11 @@ func (cs *cloneSession) receiveContent(
 	if refused {
 		delete(cs.phantoms, uuid)
 		return false, nil
+	}
+	// A delta on a dropped seed is left a phantom, for a pull to fetch in
+	// full (onRefusedBasis).
+	if again, err := onRefusedBasis(cs.repo.DB(), uuid, deltaSrc); again || err != nil {
+		return false, err
 	}
 	err = cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)
 	if errors.Is(err, errSeed) {

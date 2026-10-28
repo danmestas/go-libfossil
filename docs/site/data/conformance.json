@@ -4577,7 +4577,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 151,
+      "cases": 156,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4815,7 +4815,7 @@
           "id": "HZ-5.2-14",
           "section": "5.2.3",
           "status": "COVERED",
-          "cases": 6,
+          "cases": 11,
           "text": "A store never keeps a seed it did not receive through a horizon-seed announcement: on every receive path (pull, clone and sync) it drops an artifact that is a seed by its own seed label or by a binding card, and stores one that carries neither as an ordinary control artifact; the test is made when the artifact first becomes storable, whether it arrives in full or as a delta completed in a later round; a dropped artifact is not counted as received and must not be requested again in the same session; a seed found on the origin path is dropped the same way; a store still skips a stored seed when deriving.",
           "notes": ""
         },

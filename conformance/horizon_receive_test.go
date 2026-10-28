@@ -28,17 +28,24 @@ import (
 
 func horizonReceiveCases() []Case {
 	return []Case{horizonReceivePull, horizonReceiveClone, horizonReceiveLate, horizonReceiveLatePull,
-		horizonReceiveLateOrigin, horizonReceiveRecord, horizonReceiveWithheld}
+		horizonReceiveLateOrigin, horizonReceiveOnDroppedPull, horizonReceiveOnDroppedClone,
+		horizonReceiveOnDroppedOrigin,
+		horizonReceiveSeedBasisPull, horizonReceiveSeedBasisClone, horizonReceiveRecord, horizonReceiveWithheld}
 }
 
 var (
-	horizonReceivePull       = Case{ID: "horizon.5.2.3.receive-drop-pull", Req: "HZ-5.2-14"}
-	horizonReceiveClone      = Case{ID: "horizon.5.2.3.receive-drop-clone", Req: "HZ-5.2-14"}
-	horizonReceiveLate       = Case{ID: "horizon.5.2.3.receive-late-delta-unlinked", Req: "HZ-5.2-14"}
-	horizonReceiveLatePull   = Case{ID: "horizon.5.2.3.receive-late-delta-pull-dropped", Req: "HZ-5.2-14"}
-	horizonReceiveLateOrigin = Case{ID: "horizon.5.2.3.receive-late-delta-origin-dropped", Req: "HZ-5.2-14"}
-	horizonReceiveRecord     = Case{ID: "horizon.5.2.3.receive-dropped-not-asked-again", Req: "HZ-5.2-15"}
-	horizonReceiveWithheld   = Case{ID: "horizon.5.2.3.receive-dangling-withheld", Req: "HZ-5.2-16"}
+	horizonReceivePull            = Case{ID: "horizon.5.2.3.receive-drop-pull", Req: "HZ-5.2-14"}
+	horizonReceiveClone           = Case{ID: "horizon.5.2.3.receive-drop-clone", Req: "HZ-5.2-14"}
+	horizonReceiveLate            = Case{ID: "horizon.5.2.3.receive-late-delta-unlinked", Req: "HZ-5.2-14"}
+	horizonReceiveLatePull        = Case{ID: "horizon.5.2.3.receive-late-delta-pull-dropped", Req: "HZ-5.2-14"}
+	horizonReceiveLateOrigin      = Case{ID: "horizon.5.2.3.receive-late-delta-origin-dropped", Req: "HZ-5.2-14"}
+	horizonReceiveOnDroppedPull   = Case{ID: "horizon.5.2.3.receive-delta-on-dropped-seed-pull", Req: "HZ-5.2-14"}
+	horizonReceiveOnDroppedClone  = Case{ID: "horizon.5.2.3.receive-delta-on-dropped-seed-clone", Req: "HZ-5.2-14"}
+	horizonReceiveOnDroppedOrigin = Case{ID: "horizon.5.2.3.receive-delta-on-dropped-seed-origin", Req: "HZ-5.2-14"}
+	horizonReceiveSeedBasisPull   = Case{ID: "horizon.5.2.3.receive-seed-basis-after-delta-pull", Req: "HZ-5.2-14"}
+	horizonReceiveSeedBasisClone  = Case{ID: "horizon.5.2.3.receive-seed-basis-after-delta-clone", Req: "HZ-5.2-14"}
+	horizonReceiveRecord          = Case{ID: "horizon.5.2.3.receive-dropped-not-asked-again", Req: "HZ-5.2-15"}
+	horizonReceiveWithheld        = Case{ID: "horizon.5.2.3.receive-dangling-withheld", Req: "HZ-5.2-16"}
 )
 
 const hzReceivePC = "0123456789abcdef0123456789abcdef01234567"
@@ -113,6 +120,11 @@ func TestHorizonReceive(t *testing.T) {
 	check(t, horizonReceiveLate, func(t *testing.T) error { return hzReceiveLate(t) })
 	check(t, horizonReceiveLatePull, func(t *testing.T) error { return hzReceiveLatePull(t) })
 	check(t, horizonReceiveLateOrigin, func(t *testing.T) error { return hzReceiveLateOrigin(t) })
+	check(t, horizonReceiveOnDroppedPull, func(t *testing.T) error { return hzReceiveOnDropped(t, false) })
+	check(t, horizonReceiveOnDroppedClone, func(t *testing.T) error { return hzReceiveOnDropped(t, true) })
+	check(t, horizonReceiveOnDroppedOrigin, func(t *testing.T) error { return hzReceiveOnDroppedOrigin(t) })
+	check(t, horizonReceiveSeedBasisPull, func(t *testing.T) error { return hzReceiveSeedBasis(t, false) })
+	check(t, horizonReceiveSeedBasisClone, func(t *testing.T) error { return hzReceiveSeedBasis(t, true) })
 	check(t, horizonReceiveRecord, func(t *testing.T) error { return hzReceiveRecord(t) })
 	check(t, horizonReceiveWithheld, func(t *testing.T) error { return hzReceiveWithheld(t) })
 }
@@ -320,6 +332,52 @@ func hzReceiveLatePull(t *testing.T) error {
 	return nil
 }
 
+// hzReceiveOnDroppedOrigin: an origin pushed a delta on a seed it already
+// dropped does not keep it as one, asks the pusher for it, and keeps the
+// full text that answer brings.
+func hzReceiveOnDroppedOrigin(t *testing.T) error {
+	base := []byte("a base the next request pushes\n")
+	l, err := newHZLateSeed(t, base)
+	if err != nil {
+		return err
+	}
+	origin := hzReceiveRepo(t, "origin")
+	if _, err := origin.DB().Exec("UPDATE user SET cap='gio' WHERE login='nobody'"); err != nil {
+		return err
+	}
+	push := func(cards ...xfer.Card) (*xfer.Message, error) {
+		req := &xfer.Message{Cards: append([]xfer.Card{&xfer.PushCard{ServerCode: "s", ProjectCode: hzReceivePC}},
+			cards...)}
+		resp, err := sync.HandleSync(context.Background(), origin, req)
+		if err == nil && len(hzErrors(resp)) != 0 {
+			err = expectf("push: errors %q", hzErrors(resp))
+		}
+		return resp, err
+	}
+	for _, cards := range [][]xfer.Card{{l.seed}, {&xfer.FileCard{UUID: hash.SHA1(base), Content: base}}} {
+		if _, err := push(cards...); err != nil {
+			return err
+		}
+	}
+	resp, err := push(l.dependent)
+	if err != nil {
+		return err
+	}
+	asked := false
+	for _, c := range resp.Cards {
+		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == l.dependent.UUID {
+			asked = true
+		}
+	}
+	if !asked {
+		return expectf("the origin did not ask for the delta on the dropped seed in full")
+	}
+	if _, err := push(&xfer.FileCard{UUID: l.dependent.UUID, Content: l.dependentData}); err != nil {
+		return err
+	}
+	return l.dropped(origin)
+}
+
 // hzReceiveLateOrigin: an origin that stores a pushed seed as a delta whose
 // base only a later request supplies drops it then, keeps the delta built on
 // it readable, and does not ask the pusher for it.
@@ -362,6 +420,111 @@ func hzReceiveLateOrigin(t *testing.T) error {
 		}
 	}
 	return nil
+}
+
+// hzServe answers a pull or clone from fixed replies, one per request, and
+// a request asking for the dependent with its full text, as a peer sends a
+// gimme'd artifact. Requests past the last reply get an empty one.
+type hzServe struct {
+	l       hzLateSeed
+	replies [][]xfer.Card
+	asked   []*xfer.Message
+}
+
+func (p *hzServe) Exchange(_ context.Context, req *xfer.Message) (*xfer.Message, error) {
+	p.asked = append(p.asked, req)
+	for _, c := range req.Cards {
+		if g, ok := c.(*xfer.GimmeCard); ok && g.UUID == p.l.dependent.UUID {
+			return &xfer.Message{Cards: []xfer.Card{
+				&xfer.FileCard{UUID: p.l.dependent.UUID, Content: p.l.dependentData}}}, nil
+		}
+	}
+	if len(p.asked) > len(p.replies) {
+		return &xfer.Message{}, nil
+	}
+	return &xfer.Message{Cards: p.replies[len(p.asked)-1]}, nil
+}
+
+// hzReceiveVia runs a clone of p's replies, asking for what it left
+// missing, or a pull session per batch of sessions, and checks the seed was dropped, the delta built on it reads,
+// and the count is what is held.
+func hzReceiveVia(t *testing.T, p *hzServe, clone bool, sessions ...[][]xfer.Card) error {
+	var r *repo.Repo
+	var recvd int
+	if clone {
+		c, res, err := sync.Clone(context.Background(), filepath.Join(t.TempDir(), "c.fossil"), p,
+			sync.CloneOpts{PullPhantoms: true})
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		r, recvd = c, res.BlobsRecvd
+	} else {
+		// A pull ends once nothing it knows of is missing, so each batch of
+		// replies is a session of its own.
+		r = hzReceiveRepo(t, "client")
+		for _, replies := range sessions {
+			p.replies, p.asked = replies, nil
+			res, err := sync.Sync(context.Background(), r, p, sync.SyncOpts{Pull: true, ProjectCode: hzReceivePC})
+			if err != nil {
+				return err
+			}
+			recvd += res.FilesRecvd
+		}
+	}
+	if err := p.l.dropped(r); err != nil {
+		return err
+	}
+	if held := hzHeldCount(r); recvd != held {
+		return expectf("%d counted received, %d held", recvd, held)
+	}
+	return nil
+}
+
+// hzReceiveOnDropped: a delta on a seed already dropped can never be read
+// from what is stored, so it is not kept as one: it is asked for again,
+// and its full text expands.
+func hzReceiveOnDropped(t *testing.T, clone bool) error {
+	base := []byte("a base that completes the seed\n")
+	l, err := newHZLateSeed(t, base)
+	if err != nil {
+		return err
+	}
+	baseCard := &xfer.FileCard{UUID: hash.SHA1(base), Content: base}
+	p := &hzServe{l: l}
+	if !clone {
+		return hzReceiveVia(t, p, false, [][]xfer.Card{{l.seed}, {baseCard}}, [][]xfer.Card{{l.dependent}})
+	}
+	push := &xfer.PushCard{ServerCode: "s", ProjectCode: hzReceivePC}
+	p.replies = [][]xfer.Card{
+		{push, l.seed, &xfer.CloneSeqNoCard{SeqNo: 2}},
+		{baseCard, &xfer.CloneSeqNoCard{SeqNo: 3}},
+		{l.dependent, &xfer.CloneSeqNoCard{SeqNo: 0}},
+	}
+	return hzReceiveVia(t, p, true)
+}
+
+// hzReceiveSeedBasis: a delta stored on a basis it lacks, whose basis then
+// arrives in full and is a seed: the seed's bytes are the only way the delta
+// can be read, so it is read and kept, and the seed dropped.
+func hzReceiveSeedBasis(t *testing.T, clone bool) error {
+	l, err := newHZLateSeed(t, []byte("a base never sent\n"))
+	if err != nil {
+		return err
+	}
+	data := hzControl(t, seedcheck.Label, "alpha", hash.SHA1([]byte("a target\n")), false)
+	full := &xfer.FileCard{UUID: l.seed.UUID, Content: data}
+	l.seed = full
+	p := &hzServe{l: l}
+	if !clone {
+		return hzReceiveVia(t, p, false, [][]xfer.Card{{l.dependent}, {full}})
+	}
+	push := &xfer.PushCard{ServerCode: "s", ProjectCode: hzReceivePC}
+	p.replies = [][]xfer.Card{
+		{push, l.dependent, &xfer.CloneSeqNoCard{SeqNo: 2}},
+		{full, &xfer.CloneSeqNoCard{SeqNo: 0}},
+	}
+	return hzReceiveVia(t, p, true)
 }
 
 // hzReceiveRecord: a later session, from another peer that announces the

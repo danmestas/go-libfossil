@@ -225,10 +225,10 @@ func WithholdUnreadable(q db.Querier) error {
 // content was just stored, and reports how many rows it examined. Each fill
 // costs the rows that waited on it, not the whole pending set. Each row is
 // readable now and is judged: a seed's hash is refused and its content
-// dropped, and either way the pending row goes. A delta pulled onto a pending row's basis and itself unreadable
-// is not marked pending, so the rows waiting on it stay pending, withheld,
-// until the link step reaches them (Judge); a plain file among them stays
-// withheld.
+// dropped (Drop), and either way the pending row goes. A delta pulled onto a
+// pending row's basis and itself unreadable is not marked pending, so the
+// rows waiting on it stay pending, withheld, until the link step reaches
+// them (Judge); a plain file among them stays withheld.
 //
 // A row that does not expand, or whose bytes do not hash to its name, is
 // not the artifact it names; it stays pending, withheld, rather than be
@@ -321,14 +321,14 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 	// artifact store, so a seed-shaped artifact reaching the link step is
 	// refused whatever path stored it. This catches a seed completed in a
 	// later round of a pull or clone, which no pending row records. It is
-	// refused and dropped, as a pending seed is (refuse).
+	// refused and dropped, as a pending seed is (Drop).
 	if IsSeed(d) {
 		var uuid string
 		if err := q.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid); err != nil {
 			return false, fmt.Errorf("seedcheck.Judge: rid=%d: %w", rid, err)
 		}
 		if !t.Pending {
-			return true, refuse(q, rid, uuid)
+			return true, Drop(q, rid, uuid)
 		}
 		return decide(q, rid, uuid, true)
 	}
@@ -368,7 +368,7 @@ func Judge(q db.Querier, t Tables, rid libfossil.FslID, d *deck.Deck) (bool, err
 // pending row goes.
 func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, error) {
 	if seed {
-		if err := refuse(q, rid, uuid); err != nil {
+		if err := Drop(q, rid, uuid); err != nil {
 			return false, err
 		}
 	} else if _, err := q.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
@@ -380,18 +380,49 @@ func decide(q db.Querier, rid libfossil.FslID, uuid string, seed bool) (bool, er
 	return seed, nil
 }
 
-// refuse records the seed stored at rid as refused, takes it out of the
-// unclustered table, so no inventory or cluster names it, and drops its
+// Drop records the seed stored at rid as refused under uuid, takes it out of
+// the unclustered table, so no inventory or cluster names it, and drops its
 // content: a store never keeps a seed it did not receive through a
-// horizon-seed announcement (§5.2.3).
-func refuse(q db.Querier, rid libfossil.FslID, uuid string) error {
-	if err := Refuse(q, uuid); err != nil {
-		return err
+// horizon-seed announcement (§5.2.3). It is all or nothing: a failure
+// partway leaves the row, and every delta on it, as they were.
+func Drop(q db.Querier, rid libfossil.FslID, uuid string) error {
+	if q == nil || rid <= 0 || uuid == "" {
+		panic("seedcheck.Drop: q must not be nil, rid must be positive and uuid must not be empty")
 	}
-	if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
-		return fmt.Errorf("seedcheck: refuse rid=%d: %w", rid, err)
+	return atomic(q, func(q db.Querier) error {
+		if err := Refuse(q, uuid); err != nil {
+			return err
+		}
+		if _, err := q.Exec("DELETE FROM unclustered WHERE rid=?", rid); err != nil {
+			return fmt.Errorf("seedcheck: refuse rid=%d: %w", rid, err)
+		}
+		return drop(q, rid)
+	})
+}
+
+// dropSavepoint scopes Drop's writes inside a caller's transaction.
+const dropSavepoint = "seedcheck_drop"
+
+// atomic runs fn so that its writes land together or not at all: in a
+// transaction of its own on a pool (or a savepoint, if the pool is bound to
+// one), in a savepoint on a transaction. A caller that logs a failure and
+// commits (manifest's judgeFilled) then commits none of them.
+func atomic(q db.Querier, fn func(q db.Querier) error) error {
+	if d, ok := q.(*db.DB); ok {
+		return d.WithTx(func(tx *db.Tx) error { return fn(tx) })
 	}
-	return drop(q, rid)
+	if _, err := q.Exec("SAVEPOINT " + dropSavepoint); err != nil {
+		return fmt.Errorf("seedcheck: savepoint: %w", err)
+	}
+	if err := fn(q); err != nil {
+		_, rbErr := q.Exec("ROLLBACK TO " + dropSavepoint)
+		_, relErr := q.Exec("RELEASE " + dropSavepoint)
+		return errors.Join(err, rbErr, relErr)
+	}
+	if _, err := q.Exec("RELEASE " + dropSavepoint); err != nil {
+		return fmt.Errorf("seedcheck: release: %w", err)
+	}
+	return nil
 }
 
 // drop turns the seed stored at rid into a content-less row: size -1, no

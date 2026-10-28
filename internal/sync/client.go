@@ -708,6 +708,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	}
 	var done bool
 	recvd := s.result.FilesRecvd
+	noted := s.unjudged.mark()
 	cardErr, err := runPass(s.repo, func(bound *repo.Repo) (cardErr, err error) {
 		defer s.bindRepo(bound)()
 		done, cardErr, err = s.processReply(ctx, msg)
@@ -717,6 +718,7 @@ func (s *session) processResponse(ctx context.Context, msg *xfer.Message) (bool,
 	if err != nil {
 		// The reply rolled back: what it counted is not stored.
 		s.result.FilesRecvd = recvd
+		s.unjudged.rollback(noted)
 		return false, err
 	}
 	if cardErr != nil {
@@ -828,7 +830,7 @@ func (s *session) closeReply(ctx context.Context, t *replyTally) error {
 	if err := s.loadDBPhantoms(); err != nil {
 		return fmt.Errorf("sync: load phantoms: %w", err)
 	}
-	s.result.FilesRecvd += t.filesRecvd
+	s.result.FilesRecvd += t.filesRecvd - t.unjudged
 	return nil
 }
 
@@ -860,6 +862,7 @@ func (s *session) malformedFile(compressed bool) bool {
 // replyTally counts what one reply carried, for the convergence check.
 type replyTally struct {
 	filesRecvd   int  // file and cfile cards received
+	unjudged     int  // of those, deltas not yet readable, counted once judged (unjudged)
 	filesSent    int  // files queued for the next request on the server's gimme
 	newPhantoms  int  // phantoms an igot created
 	privateIGots int  // igot HASH 1 answers queued for the server's gimme
@@ -949,6 +952,9 @@ func (s *session) receiveFile(ctx context.Context, uuid, deltaSrc string,
 		return err // a shunned file is dropped, and not counted as received
 	}
 	t.filesRecvd++
+	if s.unjudged.note(s.repo.DB(), s.pass, uuid, deltaSrc) {
+		t.unjudged++
+	}
 	s.roundStats.BytesReceived += int64(len(payload))
 	delete(s.phantoms, uuid)
 	return nil

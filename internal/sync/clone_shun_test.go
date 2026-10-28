@@ -63,8 +63,10 @@ func TestCloneShunRules(t *testing.T) {
 	if cs.phantoms[baseUUID] {
 		t.Error("a shunned delta basis became a phantom to ask for")
 	}
-	if cs.result.BlobsRecvd != 2 {
-		t.Errorf("BlobsRecvd = %d, want 2 (the shunned cfile not counted)",
+	// The delta on the shunned basis can never be read, so it is never
+	// judged not a seed (horizon §5.2.3) and is not counted either.
+	if cs.result.BlobsRecvd != 1 {
+		t.Errorf("BlobsRecvd = %d, want 1 (the shunned cfile and the unreadable delta not counted)",
 			cs.result.BlobsRecvd)
 	}
 }

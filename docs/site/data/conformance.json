@@ -1,7 +1,7 @@
 {
   "requirements": 636,
-  "covered": 633,
-  "partial": 3,
+  "covered": 634,
+  "partial": 2,
   "suites": [
     {
       "suite": "artifact",
@@ -4572,12 +4572,12 @@
       "title": "Horizons",
       "draft": "draft-fossil-horizon-00",
       "requirements": 76,
-      "covered": 73,
-      "partial": 3,
+      "covered": 74,
+      "partial": 2,
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 149,
+      "cases": 151,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -4814,10 +4814,10 @@
         {
           "id": "HZ-5.2-14",
           "section": "5.2.3",
-          "status": "PARTIAL",
-          "cases": 4,
+          "status": "COVERED",
+          "cases": 6,
           "text": "A store never keeps a seed it did not receive through a horizon-seed announcement: on every receive path (pull, clone and sync) it drops an artifact that is a seed by its own seed label or by a binding card, and stores one that carries neither as an ordinary control artifact; the test is made when the artifact first becomes storable, whether it arrives in full or as a delta completed in a later round; a dropped artifact is not counted as received and must not be requested again in the same session; a seed found on the origin path is dropped the same way; a store still skips a stored seed when deriving.",
-          "notes": "covered but for a seed completed as a delta in a later round, or found on the origin path only once a later request supplies its base: it is refused by its hash and kept, inert (never linked, announced, served or asked for), rather than deleted, since deleting it would leave deltas built on it unreadable and free its rid under a receive pass; and it was counted as received when its delta arrived, before it could be judged"
+          "notes": ""
         },
         {
           "id": "HZ-5.2-15",

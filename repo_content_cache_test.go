@@ -122,10 +122,15 @@ func TestReadBlobBelowHorizon(t *testing.T) {
 		}
 		_, fileErr := target.ReadFile(rid1, "a")
 		_, blobErr := target.ReadBlob(old)
+		if !errors.Is(fileErr, ErrBelowHorizon) || !strings.Contains(fileErr.Error(), f.c2) {
+			t.Fatalf("cached=%v below-horizon file read: %v, want ErrBelowHorizon naming %s", cached, fileErr, f.c2)
+		}
+		if blobErr == nil || !strings.Contains(blobErr.Error(), "elided") {
+			t.Fatalf("cached=%v below-horizon blob read: %v", cached, blobErr)
+		}
 		for _, err := range []error{fileErr, blobErr} {
-			if err == nil || !strings.Contains(err.Error(), "elided") ||
-				!strings.Contains(err.Error(), "widen/deepen") {
-				t.Fatalf("cached=%v below-horizon read: %v", cached, err)
+			if !strings.Contains(err.Error(), "deepen") {
+				t.Fatalf("cached=%v below-horizon read names no deepen: %v", cached, err)
 			}
 		}
 		if got, err := target.ReadBlob(hash.SHA1([]byte("shared b\n"))); err != nil ||

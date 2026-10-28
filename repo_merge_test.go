@@ -1,6 +1,7 @@
 package libfossil
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -274,7 +275,7 @@ func TestMerge_AddOnOneSide(t *testing.T) {
 // Fails the test if the file is absent.
 func readBlob(t *testing.T, r *Repo, rid int64, filePath string) []byte {
 	t.Helper()
-	data, err := blobAt(r, rid, filePath)
+	data, err := blobAt(context.Background(), r, rid, filePath, nil)
 	if err != nil {
 		t.Fatalf("blobAt %s in rid=%d: %v", filePath, rid, err)
 	}

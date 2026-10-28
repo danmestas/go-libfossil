@@ -621,6 +621,19 @@ func (d *DB) mustBePool(op string) {
 	}
 }
 
+// WithSavepoint runs fn in a savepoint of t, as WithTx does on a DB bound to
+// a transaction: fn's error undoes fn's writes alone and is returned,
+// leaving t open with the writes before it.
+func (t *Tx) WithSavepoint(fn func(tx *Tx) error) error {
+	if t == nil {
+		panic("db.Tx.WithSavepoint: receiver must not be nil")
+	}
+	if fn == nil {
+		panic("db.Tx.WithSavepoint: fn must not be nil")
+	}
+	return t.withSavepoint(fn)
+}
+
 // withSavepoint runs fn in a savepoint of t. fn's error rolls back to the
 // savepoint and is returned, leaving t open for the writes before it.
 func (t *Tx) withSavepoint(fn func(tx *Tx) error) (err error) {

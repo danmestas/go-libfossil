@@ -971,7 +971,7 @@ func (cs *cloneSession) receiveContent(
 	}
 	// A delta on a dropped seed is left a phantom, for a pull to fetch in
 	// full (onRefusedBasis).
-	if again, err := onRefusedBasis(cs.repo.DB(), uuid, deltaSrc); again || err != nil {
+	if again, _, err := onRefusedBasis(cs.repo.DB(), uuid, deltaSrc, visibilityPublic); again || err != nil {
 		return false, err
 	}
 	err = cs.handleFile(ctx, uuid, deltaSrc, content, storedBlob)

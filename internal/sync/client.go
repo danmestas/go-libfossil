@@ -948,9 +948,9 @@ func (s *session) receiveFile(ctx context.Context, uuid, deltaSrc string,
 	payload, storedBlob []byte, t *replyTally) error {
 	vis := s.takeVisibility()
 	// A delta on a dropped seed is asked for again in full (onRefusedBasis):
-	// the phantom it leaves continues the session (§3.7).
-	if again, err := onRefusedBasis(s.repo.DB(), uuid, deltaSrc); again || err != nil {
-		if again {
+	// a phantom it newly leaves continues the session (§3.7).
+	if again, created, err := onRefusedBasis(s.repo.DB(), uuid, deltaSrc, vis); again || err != nil {
+		if created {
 			t.newPhantoms++
 		}
 		return err

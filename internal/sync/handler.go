@@ -1533,7 +1533,7 @@ func (h *handler) handleFile(ctx context.Context, uuid, deltaSrc string, payload
 	}
 	// A delta on a seed this origin dropped is not stored but left a
 	// phantom, which the reply asks the pusher for in full (onRefusedBasis).
-	again, err := onRefusedBasis(h.repo.DB(), uuid, deltaSrc)
+	again, _, err := onRefusedBasis(h.repo.DB(), uuid, deltaSrc, visibility(h.nextIsPrivate))
 	if err != nil || again {
 		h.nextIsPrivate = false
 		return err

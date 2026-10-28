@@ -5,6 +5,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/blob"
+	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -18,28 +19,39 @@ import (
 // one at all (onRefusedBasis).
 
 // onRefusedBasis reports whether deltaSrc names a seed this store refused,
-// whose content is gone. A delta on it could never be read, so it is not
-// stored: uuid becomes a phantom instead and is asked for again, which a
-// peer answers with its full text. A shunned uuid is left to the caller,
-// which drops it.
-func onRefusedBasis(q db.Querier, uuid, deltaSrc string) (bool, error) {
+// whose content is gone (taken). A delta on it could never be read, so it is
+// not stored: uuid becomes a phantom instead, private when the card was
+// (§7.4), and is asked for again, which a peer answers with its full text.
+// created reports whether this call made that phantom, so a peer resending
+// the delta adds nothing new. A shunned uuid is left to the caller, which
+// drops it.
+func onRefusedBasis(q db.Querier, uuid, deltaSrc string, vis visibility) (taken, created bool, err error) {
 	if q == nil || uuid == "" {
 		panic("sync.onRefusedBasis: q must not be nil and uuid must not be empty")
 	}
 	if deltaSrc == "" {
-		return false, nil
+		return false, false, nil
 	}
 	refused, err := seedcheck.IsRefusedUUID(q, deltaSrc)
 	if err != nil || !refused {
-		return false, err
+		return false, false, err
 	}
 	if shunned, err := shun.IsShunned(q, uuid); err != nil || shunned {
-		return false, err
+		return false, false, err
 	}
-	if _, err := blob.StorePhantom(q, uuid); err != nil {
-		return false, fmt.Errorf("sync: delta %s on a refused seed: %w", uuid, err)
+	if _, held := blob.Exists(q, uuid); held {
+		return true, false, nil
 	}
-	return true, nil
+	rid, err := blob.StorePhantom(q, uuid)
+	if err != nil {
+		return false, false, fmt.Errorf("sync: delta %s on a refused seed: %w", uuid, err)
+	}
+	if vis == visibilityPrivate {
+		if err := content.MakePrivate(q, int64(rid)); err != nil {
+			return false, false, fmt.Errorf("sync: delta %s on a refused seed: %w", uuid, err)
+		}
+	}
+	return true, true, nil
 }
 
 // storeSeedBasis is what storeResolvedContent does with a seed's full text

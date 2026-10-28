@@ -389,7 +389,7 @@ func Drop(q db.Querier, rid libfossil.FslID, uuid string) error {
 	if q == nil || rid <= 0 || uuid == "" {
 		panic("seedcheck.Drop: q must not be nil, rid must be positive and uuid must not be empty")
 	}
-	return atomic(q, func(q db.Querier) error {
+	return atomic(q, func(q *db.Tx) error {
 		if err := Refuse(q, uuid); err != nil {
 			return err
 		}
@@ -400,29 +400,18 @@ func Drop(q db.Querier, rid libfossil.FslID, uuid string) error {
 	})
 }
 
-// dropSavepoint scopes Drop's writes inside a caller's transaction.
-const dropSavepoint = "seedcheck_drop"
-
 // atomic runs fn so that its writes land together or not at all: in a
-// transaction of its own on a pool (or a savepoint, if the pool is bound to
-// one), in a savepoint on a transaction. A caller that logs a failure and
-// commits (manifest's judgeFilled) then commits none of them.
-func atomic(q db.Querier, fn func(q db.Querier) error) error {
-	if d, ok := q.(*db.DB); ok {
-		return d.WithTx(func(tx *db.Tx) error { return fn(tx) })
+// transaction of its own on a pool, in a savepoint on a transaction or on a
+// pool bound to one. A caller that logs a failure and commits (manifest's
+// judgeFilled) then commits none of them.
+func atomic(q db.Querier, fn func(tx *db.Tx) error) error {
+	switch q := q.(type) {
+	case *db.DB:
+		return q.WithTx(fn)
+	case *db.Tx:
+		return q.WithSavepoint(fn)
 	}
-	if _, err := q.Exec("SAVEPOINT " + dropSavepoint); err != nil {
-		return fmt.Errorf("seedcheck: savepoint: %w", err)
-	}
-	if err := fn(q); err != nil {
-		_, rbErr := q.Exec("ROLLBACK TO " + dropSavepoint)
-		_, relErr := q.Exec("RELEASE " + dropSavepoint)
-		return errors.Join(err, rbErr, relErr)
-	}
-	if _, err := q.Exec("RELEASE " + dropSavepoint); err != nil {
-		return fmt.Errorf("seedcheck: release: %w", err)
-	}
-	return nil
+	panic(fmt.Sprintf("seedcheck: a drop needs a *db.DB or *db.Tx, got %T", q))
 }
 
 // drop turns the seed stored at rid into a content-less row: size -1, no

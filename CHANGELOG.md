@@ -55,8 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   walk's cookie now names each chain it forwarded (its head, length and a
   checksum, at most 1,024 chains) until the walk reaches it, and the server
   rebuilds the chain from its store, discarding one that no longer matches.
-  On a copy of fossil-scm.org's repository a cone clone of `src` received
-  72,835 blobs to hold 56,262, down from 100,212 (tracked in #465).
+  On a copy of fossil-scm.org's repository, with that store classified, a
+  cone clone of `src` receives 57,041 blobs in 8 rounds to hold 56,262, down
+  from 83,521 in 12: the chains also cover the versions a merge check-in
+  brings in from a branch, which its walk sent again (tracked in #465).
 
 ### Fixed
 

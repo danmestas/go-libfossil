@@ -8,14 +8,19 @@ type DriverConfig struct {
 	// MaxValueBytes is the largest single value the backend accepts, for a
 	// hosted SQLite (such as a Durable Object's) that caps value size. A
 	// stored blob larger than this is written across rows of a blobpart
-	// table instead of into blob.content; hashes, deltas and the wire
-	// protocol are unchanged. Zero, the default, disables this: every value
-	// is stored inline and no blobpart table is created, so a local store
-	// stays byte-identical to stock fossil's.
+	// table, with its length left in blob.content as an INTEGER; hashes,
+	// deltas and the wire protocol are unchanged. Zero, the default,
+	// disables this: every value is stored inline and no blobpart table is
+	// created, so a local store stays byte-identical to stock fossil's.
+	//
+	// The setting is process-wide, like the registration that carries it:
+	// it applies to every repository the process writes. Only file blobs are
+	// chunked; unversioned.content is still written as one value and stays
+	// subject to the backend's cap.
 	//
 	// A store holding blobpart rows cannot be read by stock fossil, which
-	// sees those blobs as NULL content. Set it only for hosted backends.
-	// A nonzero value must be at least 1,000,000, the part size.
+	// sees those blobs' content as a bare integer. Set it only for hosted
+	// backends. A nonzero value must be at least 1,000,000, the part size.
 	MaxValueBytes int
 }
 

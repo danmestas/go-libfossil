@@ -61,9 +61,9 @@ func wantChunked(t *testing.T, d *db.DB, n int) {
 	t.Helper()
 	var rows, orphans int
 	if err := d.QueryRow(`SELECT
-		(SELECT count(*) FROM blob WHERE content IS NULL AND size>=0),
+		(SELECT count(*) FROM blob WHERE typeof(content)='integer'),
 		(SELECT count(*) FROM blobpart WHERE rid NOT IN
-			(SELECT rid FROM blob WHERE content IS NULL AND size>=0))`).Scan(&rows, &orphans); err != nil {
+			(SELECT rid FROM blob WHERE typeof(content)='integer'))`).Scan(&rows, &orphans); err != nil {
 		t.Fatal(err)
 	}
 	if rows != n || orphans != 0 {

@@ -137,12 +137,9 @@ func loadReferenceState(
 }
 
 // referenceMetadataSQL names every artifact with its expanded and stored
-// sizes; the stored size is -1 when the row holds no BLOB value.
-func referenceMetadataSQL(q db.Querier) (string, error) {
-	stored, err := blob.StoredLenSQL(q, "b")
-	return `SELECT b.rid,substr(b.uuid,1,65),b.size,` + stored + `,
-	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`, err
-}
+// sizes; the stored size is -1 when the row holds no stored value.
+var referenceMetadataSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,` + blob.StoredLenSQL("b") + `,
+	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid ORDER BY b.rid`
 
 // referencePreflight names every artifact. It reads no content, and charges
 // nothing but the artifact budget: a round charges what it selects.
@@ -171,11 +168,7 @@ func referencePreflight(
 		facts: &ConeReferenceFacts{names: make(map[libfossil.FslID]string, int(count)),
 			held: map[string]libfossil.FslID{}, nodes: map[libfossil.FslID]*deck.Deck{},
 			byUUID: map[string]*deck.Deck{}}}
-	query, err := referenceMetadataSQL(q)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := q.Query(query)
+	rows, err := q.Query(referenceMetadataSQL)
 	if err != nil {
 		return nil, err
 	}
@@ -216,10 +209,6 @@ func referencePreflightFor(
 	r := &referenceReader{ctx: ctx, q: q, budget: budget, index: map[libfossil.FslID]int{},
 		facts: &ConeReferenceFacts{names: names, held: map[string]libfossil.FslID{},
 			nodes: map[libfossil.FslID]*deck.Deck{}, byUUID: map[string]*deck.Deck{}}}
-	query, err := referenceMetadataForSQL(q)
-	if err != nil {
-		return nil, err
-	}
 	want := rids
 	for len(want) > 0 {
 		ids, err := ridsJSON(want)
@@ -227,7 +216,7 @@ func referencePreflightFor(
 			return nil, err
 		}
 		want = nil
-		err = referenceRows(ctx, q, query, func(scan func(...any) error) error {
+		err = referenceRows(ctx, q, referenceMetadataForSQL, func(scan func(...any) error) error {
 			var b referenceBlob
 			if err := scan(&b.rid, &b.uuid, &b.size, &b.stored, &b.source); err != nil {
 				return err
@@ -258,12 +247,9 @@ func referencePreflightFor(
 
 // referenceMetadataForSQL is referenceMetadataSQL for the rids of the JSON
 // array ?1.
-func referenceMetadataForSQL(q db.Querier) (string, error) {
-	stored, err := blob.StoredLenSQL(q, "b")
-	return `SELECT b.rid,substr(b.uuid,1,65),b.size,` + stored + `,
+var referenceMetadataForSQL = `SELECT b.rid,substr(b.uuid,1,65),b.size,` + blob.StoredLenSQL("b") + `,
 	coalesce(d.srcid,0) FROM blob b LEFT JOIN delta d ON d.rid=b.rid
-	WHERE b.rid IN (SELECT value FROM json_each(?1))`, err
-}
+	WHERE b.rid IN (SELECT value FROM json_each(?1))`
 
 // read reads the held blobs member selects, and parses them, reporting
 // whether any member could not be read. Delta ancestors are expanded too,
@@ -334,14 +320,11 @@ func (r *referenceReader) payloads(blobs []referenceBlob) error {
 			}
 			return fmt.Errorf("sparse preparation: invalid compressed prefix")
 		}
-		// The length check is the same-snapshot predicate: it guards
-		// accidental unbound use, where the row changed since metadata.
-		packed, err := blob.ReadStored(r.q, b.rid)
+		// The exact length is the same-snapshot predicate: a row changed
+		// since metadata, as by accidental unbound use, is never loaded.
+		packed, err := blob.ReadStoredExact(r.q, b.rid, b.stored)
 		if err != nil {
 			return err
-		}
-		if int64(len(packed)) != b.stored {
-			return fmt.Errorf("sparse preparation: stored bytes changed")
 		}
 		r.work.PayloadReads++
 		r.work.InflateBytes += b.inflated

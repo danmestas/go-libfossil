@@ -75,15 +75,23 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 		return 0, fmt.Errorf("receipt: %w", err)
 	}
 	if rid, ok := Exists(q, uuid); ok {
-		if _, err := q.Exec("UPDATE blob SET rcvid=?, size=? WHERE rid=?",
-			rcvid, size, rid); err != nil {
-			return 0, fmt.Errorf("fill phantom: %w", err)
-		}
-		if err := WriteStored(q, rid, compressed); err != nil {
-			return 0, fmt.Errorf("fill phantom: %w", err)
-		}
-		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
-			return 0, fmt.Errorf("clear phantom: %w", err)
+		// One unit, so a failed chunked fill leaves the phantom as it was
+		// rather than a row with a size and no content.
+		err := atomically(q, func(q db.Querier) error {
+			if _, err := q.Exec("UPDATE blob SET rcvid=?, size=? WHERE rid=?",
+				rcvid, size, rid); err != nil {
+				return fmt.Errorf("fill phantom: %w", err)
+			}
+			if err := WriteStored(q, rid, compressed); err != nil {
+				return fmt.Errorf("fill phantom: %w", err)
+			}
+			if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
+				return fmt.Errorf("clear phantom: %w", err)
+			}
+			return nil
+		})
+		if err != nil {
+			return 0, err
 		}
 		return rid, nil
 	}

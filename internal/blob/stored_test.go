@@ -91,13 +91,19 @@ func TestHostedValueLimit(t *testing.T) {
 	if err != nil || !bytes.Equal(got, content) {
 		t.Fatalf("round trip: %v", err)
 	}
-	var size int64
-	var inline []byte
-	if err := d.QueryRow("SELECT size, content FROM blob WHERE rid=?", rid).Scan(&size, &inline); err != nil {
+	// A chunked row's content is its stored length as an INTEGER.
+	var size, marker int64
+	var kind string
+	if err := d.QueryRow("SELECT size, typeof(content), content FROM blob WHERE rid=?", rid).
+		Scan(&size, &kind, &marker); err != nil {
 		t.Fatal(err)
 	}
-	if size != int64(len(content)) || inline != nil {
-		t.Fatalf("row: size=%d inline=%d bytes, want size=%d and NULL content", size, len(inline), len(content))
+	stored, err := ReadStored(d, rid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != int64(len(content)) || kind != "integer" || marker != int64(len(stored)) {
+		t.Fatalf("row: size=%d %s %d, want size=%d and integer %d", size, kind, marker, len(content), len(stored))
 	}
 	var parts, largest int
 	if err := d.QueryRow("SELECT count(*), max(length(content)) FROM blobpart WHERE rid=?", rid).
@@ -214,22 +220,120 @@ func TestStoredRollsBackParts(t *testing.T) {
 	}
 }
 
-// A chunked row with a missing part is reported, never returned short.
-func TestReadStoredMissingPart(t *testing.T) {
+// A chunked row missing any part, or holding a part too many or too short,
+// is reported as corrupt, never returned short.
+func TestReadStoredCorruptParts(t *testing.T) {
+	cases := []struct {
+		name, damage string
+	}{
+		{"middle part", "DELETE FROM blobpart WHERE rid=?1 AND seq=1"},
+		{"last part", "DELETE FROM blobpart WHERE rid=?1 AND seq=2"},
+		{"all but first", "DELETE FROM blobpart WHERE rid=?1 AND seq>0"},
+		{"all parts", "DELETE FROM blobpart WHERE rid=?1"},
+		{"extra part", "INSERT INTO blobpart VALUES(?1, 3, x'00')"},
+		{"short part", "UPDATE blobpart SET content=substr(content,1,10) WHERE rid=?1 AND seq=2"},
+		{"gap", "UPDATE blobpart SET seq=5 WHERE rid=?1 AND seq=2"},
+		{"wrong length", "UPDATE blob SET content=content+1 WHERE rid=?1"},
+		{"torn NULL row", "UPDATE blob SET content=NULL WHERE rid=?1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := setupTestDB(t)
+			withLimit(t, hostedLimit)
+			rid, _, err := Store(d, incompressible(2_100_000, 6))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := d.Exec(c.damage, rid); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := ReadStored(d, rid); err == nil {
+				t.Fatalf("ReadStored returned %d bytes from damaged parts", len(got))
+			}
+			if n, _, err := StoredHead(d, rid, 4); err == nil {
+				t.Fatalf("StoredHead returned length %d from damaged parts", n)
+			}
+			if _, err := Load(d, rid); err == nil {
+				t.Fatal("Load returned content from damaged parts")
+			}
+		})
+	}
+}
+
+// A chunked write that fails part-way leaves nothing behind, even with no
+// transaction around it: no row for an insert, an untouched phantom for a
+// fill.
+func TestStoredFailedWriteLeavesNoTornRow(t *testing.T) {
 	d := setupTestDB(t)
 	withLimit(t, hostedLimit)
-	rid, _, err := Store(d, incompressible(2_100_000, 6))
+	if err := ensureParts(d); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`CREATE TRIGGER fail_third_part BEFORE INSERT ON blobpart WHEN NEW.seq=2
+		BEGIN SELECT RAISE(ABORT, 'third part refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	content := incompressible(2_500_000, 11)
+	uuid := mustNaming(t, d).Hash(content)
+	if _, _, err := Store(d, content); err == nil || !strings.Contains(err.Error(), "third part refused") {
+		t.Fatalf("Store: %v, want the trigger's refusal", err)
+	}
+	var rows, parts int
+	if err := d.QueryRow("SELECT (SELECT count(*) FROM blob WHERE uuid=?), (SELECT count(*) FROM blobpart)",
+		uuid).Scan(&rows, &parts); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 || parts != 0 {
+		t.Fatalf("failed insert left %d rows and %d parts", rows, parts)
+	}
+
+	phantom, err := StorePhantom(d, uuid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Exec("DELETE FROM blobpart WHERE rid=? AND seq=1", rid); err != nil {
+	if _, _, _, err := StoreUnderPolicy(d, content); err == nil {
+		t.Fatal("phantom fill succeeded past the refused part")
+	}
+	if !isPhantom(d, phantom) || partCount(t, d, phantom) != 0 {
+		t.Fatal("failed fill left the phantom torn")
+	}
+}
+
+// A value needing more than maxParts parts is an error, not a panic: stored
+// values can arrive from peers.
+func TestPartsForBounds(t *testing.T) {
+	if n, err := partsFor(PartBytes * maxParts); err != nil || n != maxParts {
+		t.Fatalf("partsFor(max) = %d, %v", n, err)
+	}
+	if _, err := partsFor(PartBytes*maxParts + 1); err == nil {
+		t.Fatal("partsFor accepted a value over maxParts parts")
+	}
+}
+
+// ReadStoredExact reads only a value of the length the caller budgeted for.
+func TestReadStoredExact(t *testing.T) {
+	d := setupTestDB(t)
+	inline, _, err := Store(d, []byte("an inline value"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadStored(d, rid); err == nil {
-		t.Fatal("ReadStored returned a value with a part missing")
+	withLimit(t, hostedLimit)
+	big, _, err := Store(d, incompressible(2_100_000, 12))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Load(d, rid); err == nil {
-		t.Fatal("Load returned a value with a part missing")
+	for _, rid := range []libfossil.FslID{inline, big} {
+		stored, err := ReadStored(d, rid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := ReadStoredExact(d, rid, int64(len(stored)))
+		if err != nil || !bytes.Equal(got, stored) {
+			t.Fatalf("rid %d: exact read: %v", rid, err)
+		}
+		if _, err := ReadStoredExact(d, rid, int64(len(stored))-1); !errors.Is(err, ErrStoredChanged) {
+			t.Fatalf("rid %d: wrong length: %v, want ErrStoredChanged", rid, err)
+		}
 	}
 }
 
@@ -301,10 +405,7 @@ func TestStoredSQLExpressions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lenSQL, err := StoredLenSQL(d, "b")
-	if err != nil {
-		t.Fatal(err)
-	}
+	lenSQL := StoredLenSQL("b")
 	prefixSQL, err := StoredPrefixSQL(d, "b", 4)
 	if err != nil {
 		t.Fatal(err)

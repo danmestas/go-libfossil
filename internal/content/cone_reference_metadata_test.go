@@ -3,6 +3,7 @@ package content
 import (
 	"database/sql"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -11,8 +12,9 @@ import (
 
 // length(BLOB) and typeof use SQLite's metadata-only OP_Column flags. A CAST
 // or substr in this first pass removes that optimization and materializes the
-// entire content value before its stored-byte budget has been proved. A
-// store with chunked blobs uses a longer expression, which must keep it too.
+// entire content value before its stored-byte budget has been proved. The
+// one plain read is the chunked arm, CASE typeof(content) WHEN 'integer',
+// which only runs on a row whose content is an 8-byte INTEGER length.
 func TestConeReferenceMetadataDoesNotMaterializeContent(t *testing.T) {
 	d := setupTestDB(t)
 	assertMetadataLazy(t, d)
@@ -32,16 +34,12 @@ func assertMetadataLazy(t *testing.T, d *db.DB) {
 	if err := d.QueryRow("SELECT cid FROM pragma_table_info('blob') WHERE name='content'").Scan(&cid); err != nil {
 		t.Fatal(err)
 	}
-	query, err := referenceMetadataSQL(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := d.Query("EXPLAIN " + query)
+	rows, err := d.Query("EXPLAIN " + referenceMetadataSQL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	columns := 0
+	columns, plain := 0, 0
 	for rows.Next() {
 		var addr, p1, p2, p3, p5 int
 		var opcode string
@@ -53,7 +51,7 @@ func assertMetadataLazy(t *testing.T, d *db.DB) {
 			columns++
 			// SQLite OPFLAG_LENGTHARG=0x40, OPFLAG_TYPEOFARG=0x80.
 			if p5&0xc0 == 0 {
-				t.Fatalf("preflight materializes content: addr=%d flags=%d", addr, p5)
+				plain++
 			}
 		}
 	}
@@ -62,5 +60,8 @@ func assertMetadataLazy(t *testing.T, d *db.DB) {
 	}
 	if columns == 0 {
 		t.Fatal("did not inspect any content-column reads")
+	}
+	if plain != 1 || !strings.Contains(referenceMetadataSQL, "WHEN 'integer' THEN b.content") {
+		t.Fatalf("preflight reads content plainly %d times, want only the integer arm", plain)
 	}
 }

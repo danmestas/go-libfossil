@@ -93,13 +93,14 @@ func (f *requiredFetch) localPayload(q db.Querier, frame requiredLocalFrame) ([]
 	if err := f.reserve(int(packedSize + plainSize + 1)); err != nil {
 		return nil, err
 	}
-	// Re-checking length and prefix holds the read to the row the budget
-	// was reserved for; size and hash are checked once it is expanded.
-	packed, err := blob.ReadStored(q, frame.rid)
+	// Reading only the reserved length, then re-checking the prefix, holds
+	// the read to the row the budget was reserved for; size and hash are
+	// checked once it is expanded.
+	packed, err := blob.ReadStoredExact(q, frame.rid, packedSize)
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(packed)) != packedSize || !bytes.Equal(packed[:4], prefix) {
+	if !bytes.Equal(packed[:4], prefix) {
 		return nil, fmt.Errorf("sparse required content: local content changed")
 	}
 	return requiredInflate(packed, int(plainSize))

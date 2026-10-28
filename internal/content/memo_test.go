@@ -11,6 +11,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
+	"github.com/danmestas/go-libfossil/internal/deck"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
@@ -294,4 +295,94 @@ func maxRID(t *testing.T, r *repo.Repo) libfossil.FslID {
 		t.Fatal(err)
 	}
 	return n
+}
+
+// A store with no non-artifact record proves file versions by the tables an
+// artifact's crosslink writes, and those change when a sweep links an
+// artifact late: a checked-in file whose bytes are a cluster stays file
+// content until a sweep claims it. A memo extended past that sweep must
+// classify as a fresh read does.
+func TestMemoFossilWrittenStoreFollowsLateClaims(t *testing.T) {
+	ctx := context.Background()
+	m := newMemoRepo(t, hzFull)
+	root := m.commit(0)
+	cluster, err := (&deck.Deck{Type: deck.Cluster, M: []string{m.uuid(root)}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.when = m.when.Add(time.Hour)
+	tip, _, err := manifest.Checkin(m.r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "lib/cluster.txt", Content: cluster}, {Name: "src/a.c", Content: []byte("a\n")}},
+		Comment: "a file that parses as a cluster", User: "u", Parent: root, Time: m.when,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.tips = append(m.tips, tip)
+	if _, err := m.r.DB().Exec("DROP TABLE IF EXISTS crosslink_nonartifact_v2"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memo := content.NewMemo()
+	v, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameClassification(t, m.r, v, c)
+	v.Publish()
+	if _, err := manifest.Crosslink(m.r); err != nil {
+		t.Fatal(err)
+	}
+	for _, grow := range []bool{false, true} {
+		if grow {
+			m.commit(tip)
+		}
+		v, err := memo.View(ctx, m.r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameClassification(t, m.r, v, c)
+		v.Publish()
+	}
+}
+
+// A store with no non-artifact record takes a version mlink names and no
+// claim table names as the file it is, read or not: a checked-in file whose
+// bytes parse as a cluster, which no sweep linked as one, is elided outside
+// the cone like any other file (loadFiles), not kept as a cluster.
+func TestFossilWrittenStoreTakesUnlinkedArtifactBytesAsFile(t *testing.T) {
+	m := newMemoRepo(t, hzFull)
+	root := m.commit(0)
+	cluster, err := (&deck.Deck{Type: deck.Cluster, M: []string{m.uuid(root)}}).Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manifest.Checkin(m.r, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "lib/cluster.txt", Content: cluster}, {Name: "src/a.c", Content: []byte("a\n")}},
+		Comment: "a file that parses as a cluster", User: "u", Parent: root, Time: m.when.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.r.DB().Exec("DROP TABLE IF EXISTS crosslink_nonartifact_v2"); err != nil {
+		t.Fatal(err)
+	}
+	var rid libfossil.FslID
+	if err := m.r.DB().QueryRow(`SELECT fid FROM mlink JOIN filename USING(fnid)
+		WHERE name='lib/cluster.txt'`).Scan(&rid); err != nil {
+		t.Fatal(err)
+	}
+	c, err := cone.New([]string{"src"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := content.LoadConeReferences(context.Background(), m.r.DB(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refs.Outside(rid) || refs.Required(rid) {
+		t.Fatalf("lib/cluster.txt: outside=%v required=%v, want an elided file", refs.Outside(rid), refs.Required(rid))
+	}
 }

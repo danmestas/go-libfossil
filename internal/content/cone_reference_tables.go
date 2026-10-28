@@ -93,9 +93,20 @@ func loadReferenceTablesFor(ctx context.Context, q db.Querier, ids string) (*ref
 // fossil crosslinked does not, and there every file version was read
 // instead, past the byte budget on a real repository (fossil-scm.org's
 // classification failed outright). In such a store a version mlink names
-// and no table an artifact's crosslink writes claims is file content too: a
-// file whose bytes parse as an artifact was crosslinked as one. A store that
-// has seen a tree proves nothing this way, since nothing claims its nodes.
+// and no table an artifact's crosslink writes claims is taken as file
+// content, as the cone walk takes it (knownFile), without reading it.
+//
+// That is a decision, not a proof. Fossil links every blob it receives or
+// rebuilds that parses as an artifact, so in a store it wrote a file whose
+// bytes are an artifact is claimed and read as one. A blob nothing has
+// linked as an artifact is the file mlink says it is, and goes where its
+// name puts it: out of the cone it is elided, which no client of the cone
+// misses, since none expects it. Its bytes go unread, so a corrupt version
+// outside the cone is elided too, where the record would have it read and
+// retained as unreadable; one inside the cone is sent by the walk and fails
+// there. A memo of such a store follows the claim tables (claimRows). A
+// store that has seen a tree proves nothing this way, since nothing claims
+// its nodes.
 func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids string) error {
 	var query string
 	var args []any
@@ -123,17 +134,18 @@ func (t *referenceTables) loadFiles(ctx context.Context, q db.Querier, ids strin
 	}, args...)
 }
 
-// artifactTables are the rows an artifact's crosslink writes, by table:
-// check-ins and every event-bearing artifact, control artifacts and
-// clusters, attachments, forum posts and ticket changes.
-var artifactTables = []struct{ table, claim string }{
-	{"event", "SELECT objid FROM event"},
-	{"plink", "SELECT cid FROM plink"},
-	{"tagxref", "SELECT srcid FROM tagxref"},
-	{"tagxref", "SELECT rid FROM tagxref WHERE tagid=7"},
-	{"attachment", "SELECT attachid FROM attachment"},
-	{"forumpost", "SELECT fpid FROM forumpost"},
-	{"ticketchng", "SELECT tkt_rid FROM ticketchng"},
+// artifactTables are the rows an artifact's crosslink writes, by table and
+// the column naming the artifact: check-ins and every event-bearing
+// artifact, control artifacts and clusters, attachments, forum posts and
+// ticket changes.
+var artifactTables = []struct{ table, column, where string }{
+	{"event", "objid", ""},
+	{"plink", "cid", ""},
+	{"tagxref", "srcid", ""},
+	{"tagxref", "rid", "tagid=7"},
+	{"attachment", "attachid", ""},
+	{"forumpost", "fpid", ""},
+	{"ticketchng", "tkt_rid", ""},
 }
 
 // artifactClaims is an EXCEPT clause per artifactTables row whose table the
@@ -141,16 +153,66 @@ var artifactTables = []struct{ table, claim string }{
 func artifactClaims(q db.Querier) (string, error) {
 	var b strings.Builder
 	for _, a := range artifactTables {
-		var exists bool
-		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
-			a.table).Scan(&exists); err != nil {
-			return "", fmt.Errorf("sparse preparation: %s: %w", a.table, err)
+		exists, err := tableExists(q, a.table)
+		if err != nil {
+			return "", err
 		}
-		if exists {
-			b.WriteString(" EXCEPT " + a.claim)
+		if !exists {
+			continue
+		}
+		b.WriteString(" EXCEPT SELECT " + a.column + " FROM " + a.table)
+		if a.where != "" {
+			b.WriteString(" WHERE " + a.where)
 		}
 	}
 	return b.String(), nil
+}
+
+// claimRows counts the rids at or below top and outside the JSON array
+// except that a claim table names, in a store without the non-artifact
+// record, or returns -1 for a store with it. Such a store's file versions
+// follow these claims, which a sweep linking an artifact late adds without
+// adding a blob, so a memo of it holds only while the count does. It counts
+// rids, not rows: a check-in's tags propagate as rows naming an older
+// source, or none (srcid 0).
+func claimRows(q db.Querier, top libfossil.FslID, except string) (int64, error) {
+	present, err := tableExists(q, nonArtifactTable)
+	if err != nil || present {
+		return -1, err
+	}
+	var parts []string
+	for _, a := range artifactTables {
+		exists, err := tableExists(q, a.table)
+		if err != nil {
+			return 0, err
+		}
+		if !exists {
+			continue
+		}
+		part := "SELECT " + a.column + " FROM " + a.table + " WHERE " + a.column + " BETWEEN 1 AND ?1 AND " +
+			a.column + " NOT IN (SELECT value FROM json_each(?2))"
+		if a.where != "" {
+			part += " AND " + a.where
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return 0, nil
+	}
+	var n int64
+	if err := q.QueryRow("SELECT count(*) FROM ("+strings.Join(parts, " UNION ")+")", top, except).Scan(&n); err != nil {
+		return 0, fmt.Errorf("sparse preparation: claims: %w", err)
+	}
+	return n, nil
+}
+
+func tableExists(q db.Querier, name string) (bool, error) {
+	var exists bool
+	err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)", name).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("sparse preparation: %s: %w", name, err)
+	}
+	return exists, nil
 }
 
 // referenceRows scans every row of query; each row runs ctx's check first.

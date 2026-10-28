@@ -47,7 +47,7 @@ func extendReferenceState(
 	}
 	// The record appearing is every version it names being named anew.
 	named := ids
-	if !s.tables.present {
+	if !s.tables.present && added.present {
 		named = ""
 	}
 	renamed, err := oldFilesNamed(ctx, q, added.present, s.tables.files, named, in)
@@ -117,11 +117,25 @@ func oldFilesNamed(
 	ctx context.Context, q db.Querier, present bool, files map[libfossil.FslID]bool, ids string,
 	fresh map[libfossil.FslID]bool,
 ) ([]libfossil.FslID, error) {
-	if !present {
+	var query string
+	var args []any
+	switch {
+	case !present && ids == "":
 		return nil, nil
-	}
-	query, args := "SELECT rid FROM "+nonArtifactTable+" WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)", []any(nil)
-	if ids != "" {
+	case !present:
+		// Without the record a version is file content when mlink names
+		// it and no claim table does; the claims of old rids stand, as
+		// the memo checked (settled).
+		claims, err := artifactClaims(q)
+		if err != nil {
+			return nil, err
+		}
+		query = `SELECT fid FROM mlink WHERE fid>0 AND mid IN (SELECT value FROM json_each(?1))
+			UNION SELECT pid FROM mlink WHERE pid>0 AND mid IN (SELECT value FROM json_each(?1))` + claims
+		args = []any{ids}
+	case ids == "":
+		query = "SELECT rid FROM " + nonArtifactTable + " WHERE rid IN (SELECT fid FROM mlink UNION SELECT pid FROM mlink)"
+	default:
 		query = "SELECT rid FROM " + nonArtifactTable + ` WHERE rid IN
 			(SELECT fid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1))
 			UNION SELECT pid FROM mlink WHERE mid IN (SELECT value FROM json_each(?1)))`

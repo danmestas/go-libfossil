@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 )
 
 // The metadata-only pass must prove total stored bytes first: substr(BLOB) can
@@ -28,11 +29,12 @@ func referencePrefixes(
 		}
 		work.PrefixReads++
 		work.PrefixBytes += b.stored
-		var prefix []byte
-		err := q.QueryRow(`SELECT substr(content,1,6) FROM blob WHERE rid=?
-			AND typeof(content)='blob' AND length(content)=?`, b.rid, b.stored).Scan(&prefix)
+		stored, prefix, err := blob.StoredHead(q, b.rid, 6)
 		if err != nil {
 			return err
+		}
+		if stored != b.stored {
+			return fmt.Errorf("sparse preparation: stored bytes changed")
 		}
 		b.unreadable = len(prefix) != 6
 		if !b.unreadable {

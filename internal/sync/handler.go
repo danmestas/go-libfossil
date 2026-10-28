@@ -2096,9 +2096,13 @@ func (h *handler) newCloneBatch() *cloneBatch {
 }
 
 func (h *handler) walkCloneRows(round *cloneBatch) error {
+	prefix, err := blob.StoredPrefixSQL(h.repo.DB(), "b", 4)
+	if err != nil {
+		return fmt.Errorf("handler: clone batch: %w", err)
+	}
 	rows, err := h.repo.DB().Query(
-		`SELECT rid, uuid, size, substr(content, 1, 4) FROM blob
-		  WHERE rid >= ? AND rid <= ? AND size >= 0 ORDER BY rid`,
+		`SELECT b.rid, b.uuid, b.size, `+prefix+` FROM blob b
+		  WHERE b.rid >= ? AND b.rid <= ? AND b.size >= 0 ORDER BY b.rid`,
 		h.cloneSeq, h.cloneSnapMax,
 	)
 	if err != nil {
@@ -2340,8 +2344,7 @@ func (h *handler) loadCloneBlob(rid int) (cloneBlobRow, bool, error) {
 // storedContent returns rid's content as the blob table stores it: the
 // on-disk blob format, compressed, of the full artifact or of its delta.
 func (h *handler) storedContent(rid int) ([]byte, error) {
-	var stored []byte
-	err := h.repo.DB().QueryRow("SELECT content FROM blob WHERE rid = ?", rid).Scan(&stored)
+	stored, err := blob.ReadStored(h.repo.DB(), libfossil.FslID(rid))
 	if err != nil {
 		return nil, fmt.Errorf("handler: stored content of rid %d: %w", rid, err)
 	}

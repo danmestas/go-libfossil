@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
@@ -295,7 +296,7 @@ func filterSparseReceived(ctx context.Context, q db.Querier, received map[string
 		if _, err := q.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
 			return 0, err
 		}
-		if _, err := q.Exec("UPDATE blob SET content=NULL,size=-1 WHERE rid=?", rid); err != nil {
+		if err := blob.DropStored(q, rid); err != nil {
 			return 0, err
 		}
 		if _, err := q.Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", rid); err != nil {

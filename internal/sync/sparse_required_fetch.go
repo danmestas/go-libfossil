@@ -536,7 +536,7 @@ func (f *requiredFetch) prepareTarget(tx *db.Tx, uuid string) error {
 	if _, err := tx.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("UPDATE blob SET size=-1,content=NULL WHERE rid=?", rid); err != nil {
+	if err := blob.DropStored(tx, rid); err != nil {
 		return err
 	}
 	_, err = tx.Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", rid)

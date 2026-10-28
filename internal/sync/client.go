@@ -1617,8 +1617,11 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 	}
 	if exists {
 		// Fill phantom: update blob content, remove from phantom table.
-		if _, err := tx.Exec("UPDATE blob SET size=?, content=?, rcvid=? WHERE rid=?",
-			len(fullContent), compressed, rcvid, existingRid); err != nil {
+		if _, err := tx.Exec("UPDATE blob SET size=?, rcvid=? WHERE rid=?",
+			len(fullContent), rcvid, existingRid); err != nil {
+			return 0, false, false, err
+		}
+		if err := blob.WriteStored(tx, existingRid, compressed); err != nil {
 			return 0, false, false, err
 		}
 		if _, err := tx.Exec("DELETE FROM phantom WHERE rid=?", existingRid); err != nil {
@@ -1627,17 +1630,10 @@ func writeResolved(tx *db.Tx, uuid string, fullContent []byte,
 		rid = existingRid
 		filled = true
 	} else {
-		result, err := tx.Exec(
-			"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
-			uuid, len(fullContent), compressed, rcvid)
+		rid, err = blob.InsertStored(tx, uuid, int64(len(fullContent)), compressed, rcvid)
 		if err != nil {
 			return 0, false, false, err
 		}
-		id, err := result.LastInsertId()
-		if err != nil {
-			return 0, false, false, err
-		}
-		rid = libfossil.FslID(id)
 	}
 	if _, err := tx.Exec("INSERT OR IGNORE INTO unclustered(rid) VALUES(?)", rid); err != nil {
 		return 0, false, false, fmt.Errorf("unclustered rid=%d: %w", rid, err)

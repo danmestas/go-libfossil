@@ -4,6 +4,19 @@ package db
 type DriverConfig struct {
 	Name     string
 	BuildDSN func(path string, pragmas map[string]string) string
+
+	// MaxValueBytes is the largest single value the backend accepts, for a
+	// hosted SQLite (such as a Durable Object's) that caps value size. A
+	// stored blob larger than this is written across rows of a blobpart
+	// table instead of into blob.content; hashes, deltas and the wire
+	// protocol are unchanged. Zero, the default, disables this: every value
+	// is stored inline and no blobpart table is created, so a local store
+	// stays byte-identical to stock fossil's.
+	//
+	// A store holding blobpart rows cannot be read by stock fossil, which
+	// sees those blobs as NULL content. Set it only for hosted backends.
+	// A nonzero value must be at least 1,000,000, the part size.
+	MaxValueBytes int
 }
 
 var registered *DriverConfig
@@ -20,6 +33,11 @@ func Register(cfg DriverConfig) {
 	}
 	if cfg.BuildDSN == nil {
 		panic("db: BuildDSN must not be nil")
+	}
+	// Parts are a fixed 1,000,000 bytes (internal/blob.PartBytes), so a
+	// smaller limit could not hold even one of them.
+	if cfg.MaxValueBytes < 0 || (cfg.MaxValueBytes > 0 && cfg.MaxValueBytes < 1_000_000) {
+		panic("db: MaxValueBytes must be 0 or at least 1,000,000")
 	}
 	registered = &cfg
 	if registered.Name == "" || registered.BuildDSN == nil {

@@ -75,8 +75,11 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 		return 0, fmt.Errorf("receipt: %w", err)
 	}
 	if rid, ok := Exists(q, uuid); ok {
-		if _, err := q.Exec("UPDATE blob SET rcvid=?, size=?, content=? WHERE rid=?",
-			rcvid, size, compressed, rid); err != nil {
+		if _, err := q.Exec("UPDATE blob SET rcvid=?, size=? WHERE rid=?",
+			rcvid, size, rid); err != nil {
+			return 0, fmt.Errorf("fill phantom: %w", err)
+		}
+		if err := WriteStored(q, rid, compressed); err != nil {
 			return 0, fmt.Errorf("fill phantom: %w", err)
 		}
 		if _, err := q.Exec("DELETE FROM phantom WHERE rid=?", rid); err != nil {
@@ -84,18 +87,7 @@ func writeRow(q db.Querier, uuid string, size int64, compressed []byte) (libfoss
 		}
 		return rid, nil
 	}
-	result, err := q.Exec(
-		"INSERT INTO blob(uuid, size, content, rcvid) VALUES(?, ?, ?, ?)",
-		uuid, size, compressed, rcvid,
-	)
-	if err != nil {
-		return 0, fmt.Errorf("insert: %w", err)
-	}
-	ridInt, err := result.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("lastid: %w", err)
-	}
-	return libfossil.FslID(ridInt), nil
+	return InsertStored(q, uuid, size, compressed, rcvid)
 }
 
 func Store(q db.Querier, content []byte) (rid libfossil.FslID, uuid string, err error) {
@@ -421,19 +413,9 @@ func loadWith(q db.Querier, rid libfossil.FslID, inf *Inflater) (result []byte, 
 		}
 	}()
 
-	var content []byte
-	var size int64
-	err = q.QueryRow("SELECT content, size FROM blob WHERE rid=?", rid).Scan(&content, &size)
+	content, err := readStored(q, rid)
 	if err != nil {
-		return nil, fmt.Errorf("blob.Load query: %w", err)
-	}
-
-	if size == -1 {
-		return nil, fmt.Errorf("blob.Load: rid %d is a phantom", rid)
-	}
-
-	if content == nil || len(content) == 0 {
-		return nil, fmt.Errorf("blob.Load: rid %d has NULL or empty content", rid)
+		return nil, fmt.Errorf("blob.Load: %w", err)
 	}
 
 	// blob.content is always [4-byte BE length][zlib data]; Fossil inflates

@@ -2,19 +2,41 @@ package content
 
 import (
 	"database/sql"
+	"math/rand"
 	"testing"
+
+	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 )
 
 // length(BLOB) and typeof use SQLite's metadata-only OP_Column flags. A CAST
 // or substr in this first pass removes that optimization and materializes the
-// entire content value before its stored-byte budget has been proved.
+// entire content value before its stored-byte budget has been proved. A
+// store with chunked blobs uses a longer expression, which must keep it too.
 func TestConeReferenceMetadataDoesNotMaterializeContent(t *testing.T) {
 	d := setupTestDB(t)
+	assertMetadataLazy(t, d)
+
+	t.Cleanup(blob.SetMaxValueBytes(1_990_000))
+	big := make([]byte, 2_100_000)
+	_, _ = rand.New(rand.NewSource(1)).Read(big)
+	if _, _, err := blob.Store(d, big); err != nil {
+		t.Fatal(err)
+	}
+	assertMetadataLazy(t, d)
+}
+
+func assertMetadataLazy(t *testing.T, d *db.DB) {
+	t.Helper()
 	var cid int
 	if err := d.QueryRow("SELECT cid FROM pragma_table_info('blob') WHERE name='content'").Scan(&cid); err != nil {
 		t.Fatal(err)
 	}
-	rows, err := d.Query("EXPLAIN " + referenceMetadataSQL)
+	query, err := referenceMetadataSQL(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := d.Query("EXPLAIN " + query)
 	if err != nil {
 		t.Fatal(err)
 	}

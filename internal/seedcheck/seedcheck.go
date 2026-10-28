@@ -36,6 +36,7 @@ import (
 	"fmt"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/delta"
@@ -430,13 +431,11 @@ func drop(q db.Querier, rid libfossil.FslID) error {
 			return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
 		}
 	}
-	for _, stmt := range []string{
-		"DELETE FROM delta WHERE rid=?",
-		"UPDATE blob SET size=-1, content=NULL WHERE rid=?",
-	} {
-		if _, err := q.Exec(stmt, rid); err != nil {
-			return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
-		}
+	if _, err := q.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
+		return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
+	}
+	if err := blob.DropStored(q, rid); err != nil {
+		return fmt.Errorf("seedcheck: drop rid=%d: %w", rid, err)
 	}
 	return nil
 }

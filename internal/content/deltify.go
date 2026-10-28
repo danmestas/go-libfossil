@@ -202,8 +202,8 @@ func deltifyBreaksLoop(tx *db.Tx, rid, srcRid libfossil.FslID) (bool, error) {
 }
 
 func deltifyWrite(tx *db.Tx, rid, srcRid libfossil.FslID, deltaBytes []byte) (int, error) {
-	var before int
-	if err := tx.QueryRow("SELECT length(content) FROM blob WHERE rid=?", rid).Scan(&before); err != nil {
+	before, _, err := blob.StoredHead(tx, rid, 0)
+	if err != nil {
 		return 0, fmt.Errorf("content.Deltify: size rid=%d: %w", rid, err)
 	}
 	compressed, err := blob.Compress(deltaBytes)
@@ -215,7 +215,7 @@ func deltifyWrite(tx *db.Tx, rid, srcRid libfossil.FslID, deltaBytes []byte) (in
 	// the artifact expands to, not how many bytes the row holds. Canonical
 	// deliberately leaves size alone here (content.c:935) even though
 	// content_undelta does update it (content.c:761).
-	if _, err := tx.Exec("UPDATE blob SET content=? WHERE rid=?", compressed, rid); err != nil {
+	if err := blob.WriteStored(tx, rid, compressed); err != nil {
 		return 0, fmt.Errorf("content.Deltify: update rid=%d: %w", rid, err)
 	}
 	if _, err := tx.Exec("REPLACE INTO delta(rid, srcid) VALUES(?, ?)", rid, srcRid); err != nil {
@@ -229,7 +229,7 @@ func deltifyWrite(tx *db.Tx, rid, srcRid libfossil.FslID, deltaBytes []byte) (in
 		return 0, fmt.Errorf("content.Deltify: verify rid=%d: %w", rid, err)
 	}
 
-	saved := before - len(compressed)
+	saved := int(before) - len(compressed)
 	if saved < 0 {
 		saved = 0
 	}
@@ -264,9 +264,11 @@ func Undelta(tx db.Querier, rid libfossil.FslID) error {
 	if err != nil {
 		return fmt.Errorf("content.Undelta: compress rid=%d: %w", rid, err)
 	}
-	if _, err := tx.Exec("UPDATE blob SET content=?, size=? WHERE rid=?",
-		compressed, len(full), rid); err != nil {
+	if err := blob.WriteStored(tx, rid, compressed); err != nil {
 		return fmt.Errorf("content.Undelta: update rid=%d: %w", rid, err)
+	}
+	if _, err := tx.Exec("UPDATE blob SET size=? WHERE rid=?", len(full), rid); err != nil {
+		return fmt.Errorf("content.Undelta: size rid=%d: %w", rid, err)
 	}
 	if _, err := tx.Exec("DELETE FROM delta WHERE rid=?", rid); err != nil {
 		return fmt.Errorf("content.Undelta: unlink rid=%d: %w", rid, err)

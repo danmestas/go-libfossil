@@ -66,10 +66,12 @@ func Purge(d *db.DB) (PurgeResult, error) {
 			if err != nil {
 				return fmt.Errorf("compress rid %d: %w", rid, err)
 			}
-			_, err = tx.Exec("UPDATE blob SET content=?, size=? WHERE rid=?",
-				compressed, len(expanded), rid)
-			if err != nil {
+			if err := blob.WriteStored(tx, rid, compressed); err != nil {
 				return fmt.Errorf("update blob rid %d: %w", rid, err)
+			}
+			_, err = tx.Exec("UPDATE blob SET size=? WHERE rid=?", len(expanded), rid)
+			if err != nil {
+				return fmt.Errorf("update blob size rid %d: %w", rid, err)
 			}
 			_, err = tx.Exec("DELETE FROM delta WHERE rid=?", rid)
 			if err != nil {
@@ -90,6 +92,9 @@ func Purge(d *db.DB) (PurgeResult, error) {
 		}
 		n, _ := res.RowsAffected()
 		result.BlobsDeleted = int(n)
+		if err := blob.SweepParts(tx); err != nil {
+			return fmt.Errorf("delete shunned parts: %w", err)
+		}
 
 		_, err = tx.Exec("DROP TABLE toshun")
 		if err != nil {

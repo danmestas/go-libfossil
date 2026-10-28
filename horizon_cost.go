@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 	"github.com/danmestas/go-libfossil/internal/horizon"
@@ -55,14 +56,20 @@ func (r *Repo) HorizonCost(checkin string) ([]HorizonRuleCost, error) {
 					continue
 				}
 				seen[f.UUID] = true
-				var size, stored int64
+				var rid, size int64
 				err := r.inner.DB().QueryRow(
-					"SELECT size, coalesce(length(content), 0) FROM blob WHERE uuid=? AND size>=0", f.UUID,
-				).Scan(&size, &stored)
+					"SELECT rid, size FROM blob WHERE uuid=? AND size>=0", f.UUID,
+				).Scan(&rid, &size)
 				if errors.Is(err, sql.ErrNoRows) {
 					continue // a phantom or an elided blob: not held, so not counted
 				}
 				if err != nil {
+					return nil, fmt.Errorf("libfossil: horizon cost: blob %s: %w", f.UUID, err)
+				}
+				stored, _, err := blob.StoredHead(r.inner.DB(), libfossil.FslID(rid), 0)
+				if errors.Is(err, blob.ErrNotStored) {
+					stored = 0 // a row without content holds no stored bytes
+				} else if err != nil {
 					return nil, fmt.Errorf("libfossil: horizon cost: blob %s: %w", f.UUID, err)
 				}
 				cost.Blobs++

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `db.DriverConfig.MaxValueBytes` lets a hosted SQLite backend that caps
+  value size (such as a Durable Object's 2 MB limit) store file blobs larger
+  than the cap. A stored blob over the limit is written in 1,000,000-byte
+  parts to a `blobpart` table, created on first use, with `blob.content` left
+  NULL and `blob.size` unchanged; hashes, deltas, the wire protocol and memory
+  use are unchanged, and every read, delta rewrite, receive, clone send,
+  compaction, purge and verification goes through the same seam. Zero, the
+  default, stores everything inline as before, so local stores stay
+  byte-identical. A store holding `blobpart` rows is not readable by stock
+  fossil, so enable this only for hosted backends (tracked in #459).
+
 - `Repo.TicketAdd` and `Repo.TicketSet` create and amend tickets. Each writes
   the change artifact `fossil ticket add` and `fossil ticket set` write for the
   same fields, user and time, byte for byte, and links it in the same

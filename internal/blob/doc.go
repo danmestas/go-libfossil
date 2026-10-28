@@ -12,6 +12,11 @@
 // decision point for whether a receive path can skip [Compress] entirely
 // and write already-encoded wire bytes straight to blob.content.
 //
+// A row's stored bytes are read and written only through [ReadStored],
+// [WriteStored], [InsertStored], [StoredHead] and [DropStored] (and the scan
+// expressions [StoredLenSQL] and [StoredPrefixSQL]), because a value over
+// db.DriverConfig.MaxValueBytes lives in blobpart rows, not blob.content.
+//
 // This package does not decide what gets delta-encoded. Deltifying an
 // artifact that is already stored means rewriting an existing row, not
 // inserting a new one, and the decision needs to expand content, which

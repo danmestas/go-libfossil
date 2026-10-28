@@ -474,6 +474,19 @@ DriverConfig defines a SQLite driver's name and DSN builder.
 type DriverConfig struct {
     Name     string
     BuildDSN func(path string, pragmas map[string]string) string
+
+    // MaxValueBytes is the largest single value the backend accepts, for a
+    // hosted SQLite (such as a Durable Object's) that caps value size. A
+    // stored blob larger than this is written across rows of a blobpart
+    // table instead of into blob.content; hashes, deltas and the wire
+    // protocol are unchanged. Zero, the default, disables this: every value
+    // is stored inline and no blobpart table is created, so a local store
+    // stays byte-identical to stock fossil's.
+    //
+    // A store holding blobpart rows cannot be read by stock fossil, which
+    // sees those blobs as NULL content. Set it only for hosted backends.
+    // A nonzero value must be at least 1,000,000, the part size.
+    MaxValueBytes int
 }
 ```
 

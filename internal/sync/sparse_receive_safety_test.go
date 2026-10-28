@@ -81,7 +81,7 @@ type sparseCancelAfterDemotion struct {
 
 func (q *sparseCancelAfterDemotion) Exec(query string, args ...any) (sql.Result, error) {
 	res, err := q.Querier.Exec(query, args...)
-	if err == nil && strings.HasPrefix(query, "UPDATE blob SET content=NULL,size=-1") {
+	if err == nil && strings.HasPrefix(query, "UPDATE blob SET size=-1, content=NULL") {
 		q.demoted = true
 		q.cancel()
 	}

@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
@@ -77,10 +78,8 @@ func (f *requiredFetch) localPayload(q db.Querier, frame requiredLocalFrame) ([]
 	if err := f.ctx.Err(); err != nil {
 		return nil, err
 	}
-	var packedSize int64
-	var prefix []byte
-	if err := q.QueryRow("SELECT length(content),substr(content,1,4) FROM blob WHERE rid=?",
-		frame.rid).Scan(&packedSize, &prefix); err != nil {
+	packedSize, prefix, err := blob.StoredHead(q, frame.rid, 4)
+	if err != nil {
 		return nil, err
 	}
 	if len(prefix) != 4 || packedSize < 5 {
@@ -94,12 +93,14 @@ func (f *requiredFetch) localPayload(q db.Querier, frame requiredLocalFrame) ([]
 	if err := f.reserve(int(packedSize + plainSize + 1)); err != nil {
 		return nil, err
 	}
-	var packed []byte
-	err := q.QueryRow(`SELECT content FROM blob WHERE rid=? AND size=?
-		AND length(content)=? AND substr(content,1,4)=?`,
-		frame.rid, frame.size, packedSize, prefix).Scan(&packed)
+	// Re-checking length and prefix holds the read to the row the budget
+	// was reserved for; size and hash are checked once it is expanded.
+	packed, err := blob.ReadStored(q, frame.rid)
 	if err != nil {
 		return nil, err
+	}
+	if int64(len(packed)) != packedSize || !bytes.Equal(packed[:4], prefix) {
+		return nil, fmt.Errorf("sparse required content: local content changed")
 	}
 	return requiredInflate(packed, int(plainSize))
 }

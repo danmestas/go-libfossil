@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
@@ -54,7 +55,7 @@ func CompactStore(ctx context.Context, d *db.DB) (int, error) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if _, err := tx.Exec("UPDATE blob SET size=-1, content=NULL WHERE rid=?", rid); err != nil {
+			if err := blob.DropStored(tx, rid); err != nil {
 				return err
 			}
 			if _, err := tx.Exec("INSERT OR IGNORE INTO phantom(rid) VALUES(?)", rid); err != nil {

@@ -17,6 +17,12 @@ import (
 // in-cone file. A run dropped past the bound is only sent again.
 const maxCloneRuns = 1024
 
+// maxCloneRunRIDs bounds the rids one request rebuilds from its cookie's
+// runs, each a delta-table lookup: about the versions of fossil-scm.org's
+// src a clone forwards at once, and far short of what a forged cookie could
+// name (maxCloneRuns runs of maxCloneChainWalk).
+const maxCloneRunRIDs = 1 << 16
+
 // cloneRunRef is a run as a cookie names it: its head, the number of rids
 // its delta chain covers from the head, and a checksum of those rids. The
 // server rebuilds the run from its store and keeps it only when the checksum
@@ -48,7 +54,7 @@ func parseCloneRuns(v string) []cloneRunRef {
 	parts := strings.Split(v, ",")
 	runs := make([]cloneRunRef, 0, len(parts))
 	for _, part := range parts {
-		fields := strings.Split(part, ".")
+		fields := strings.SplitN(part, ".", 4)
 		if len(fields) != 3 {
 			return nil
 		}
@@ -64,9 +70,9 @@ func parseCloneRuns(v string) []cloneRunRef {
 }
 
 // formatCloneRuns is parseCloneRuns' inverse over runs' rids, keeping the
-// first maxCloneRuns.
+// last maxCloneRuns: the newest, since an old run may never be reached.
 func formatCloneRuns(runs [][]int) string {
-	runs = runs[:min(len(runs), maxCloneRuns)]
+	runs = runs[max(len(runs)-maxCloneRuns, 0):]
 	parts := make([]string, len(runs))
 	for i, run := range runs {
 		if len(run) == 0 {
@@ -84,7 +90,7 @@ func (h *handler) expandCloneRuns(round *cloneBatch) error {
 	if len(round.resume.runs) > maxCloneRuns {
 		panic("sync.expandCloneRuns: cookie carried more runs than maxCloneRuns")
 	}
-	for _, ref := range round.resume.runs {
+	for _, ref := range expandable(round.resume.runs) {
 		run, err := h.cloneRun(ref)
 		if err != nil {
 			return err
@@ -98,6 +104,25 @@ func (h *handler) expandCloneRuns(round *cloneBatch) error {
 		round.runs = append(round.runs, run)
 	}
 	return nil
+}
+
+// expandable is the runs a request rebuilds: each head once, and no more
+// than maxCloneRunRIDs rids in all, the newest runs first. One left out is
+// only sent again.
+func expandable(refs []cloneRunRef) []cloneRunRef {
+	out := make([]cloneRunRef, 0, len(refs))
+	heads := make(map[int]bool, len(refs))
+	total := 0
+	for i := len(refs) - 1; i >= 0; i-- {
+		ref := refs[i]
+		if heads[ref.head] || total+ref.n > maxCloneRunRIDs {
+			continue
+		}
+		heads[ref.head] = true
+		total += ref.n
+		out = append(out, ref)
+	}
+	return out
 }
 
 // cloneRun follows ref's delta chain from its head, or returns nil when the

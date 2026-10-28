@@ -110,6 +110,11 @@ func parseCloneCap(v string) (int, bool) {
 	return fields[0], true
 }
 
+// maxCloneCookieBytes bounds a clone-cap cookie the server reads: well past
+// the longest it writes (maxCloneRuns runs), and refused before it is split,
+// since a request carries a cookie of any length.
+const maxCloneCookieBytes = 64 << 10
+
 // cloneCapFields splits a clone-cap cookie: the snapshot bound, then from a
 // sparse walk the row the next round starts at and, while that row is a
 // check-in part way through its walk, the last rid of the walk already sent
@@ -117,11 +122,11 @@ func parseCloneCap(v string) (int, bool) {
 // A sparse walk's cookie may end in "/" and the delta bases it carried
 // (cloneCarriedRIDs), returned unparsed.
 func cloneCapFields(v string) ([]int, string, bool) {
-	if !strings.HasPrefix(v, cloneCapPrefix) {
+	if len(v) > maxCloneCookieBytes || !strings.HasPrefix(v, cloneCapPrefix) {
 		return nil, "", false
 	}
 	head, carried, _ := strings.Cut(v[len(cloneCapPrefix):], "/")
-	parts := strings.Split(head, ":")
+	parts := strings.SplitN(head, ":", 4)
 	if len(parts) > 3 {
 		return nil, "", false
 	}
@@ -2537,8 +2542,10 @@ func (h *handler) buildCloneArtifact(
 		m := chain[i]
 		rids = append(rids, m.rid)
 		// §7.6, Appendix A.2: the refusal takes a SHA3 artifact's place.
+		// Not sent, so not recorded as sent, as a withheld tree below.
 		if sha3Barred(m.uuid, h.peerVersion) {
 			cards = append(cards, sha3Refusal())
+			rids = rids[:len(rids)-1]
 			continue
 		}
 		// draft-fossil-submanifests-00 §7.2: so does a tree's, for a client

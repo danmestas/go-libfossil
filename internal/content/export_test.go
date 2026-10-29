@@ -70,3 +70,11 @@ func (m *Memo) TreeChainDepth() int {
 	}
 	return depth
 }
+
+// ForgetStore makes m's next view read its store in full, as one does after
+// an arrival a held artifact cited, keeping what else m holds.
+func (m *Memo) ForgetStore() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = nil
+}

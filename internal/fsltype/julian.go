@@ -2,7 +2,6 @@ package fsltype
 
 import (
 	"math"
-	"math/big"
 	"runtime"
 )
 
@@ -97,7 +96,10 @@ func platformLongDoubleBits(goos, goarch string) uint {
 // and round-to-nearest-even, as the C arithmetic is. It normalizes v to
 // [1, 10) by repeated scaling, adds a rounder (a double, as fossil's is) at
 // the 16th digit, and emits digits by truncate-and-multiply; past 16
-// significant digits it emits '0'.
+// significant digits it emits '0'. A 53-bit long double is a double, so that
+// case is computed in float64 (printf17gDouble); the wider ones need
+// extended precision (printf17gLong), which a wasm build, whose long double
+// is a double, leaves out.
 func fossilPrintf17g(v0 float64, prec uint) string {
 	if !(v0 > 0) || math.IsInf(v0, 0) {
 		panic("fsltype.fossilPrintf17g: only finite positive values")
@@ -105,55 +107,76 @@ func fossilPrintf17g(v0 float64, prec uint) string {
 	if prec != 53 && prec != 64 && prec != 113 {
 		panic("fsltype.fossilPrintf17g: unknown long double precision")
 	}
-	const precision = 17 - 1 // etGENERIC counts the leading digit
+	if prec == 53 {
+		return printf17gDouble(v0)
+	}
+	return printf17gLong(v0, prec)
+}
+
+// printf17gPrecision is %.17g's precision as etGENERIC counts it, less the
+// leading digit.
+const printf17gPrecision = 17 - 1
+
+// printf17gRounder is the double fossil adds at the 16th significant digit:
+// 0.5 scaled by 0.1 printf17gPrecision times, in double arithmetic.
+func printf17gRounder() float64 {
 	rounder := 0.5
-	for i := 0; i < precision; i++ {
+	for i := 0; i < printf17gPrecision; i++ {
 		rounder *= 0.1
 	}
-	ld := func(f float64) *big.Float { return new(big.Float).SetPrec(prec).SetFloat64(f) }
-	v := ld(v0)
-	scale := func(by float64) { v.Mul(v, ld(by)) }
+	return rounder
+}
+
+// printf17gDouble is fossilPrintf17g in double arithmetic. Every product is
+// converted explicitly, so no step fuses into a multiply-add and each rounds
+// to a double, as the C does.
+func printf17gDouble(v float64) string {
+	const precision = printf17gPrecision
 	exp := 0
-	for v.Cmp(ld(1e32)) >= 0 && exp <= 350 {
-		scale(1e-32)
+	for v >= 1e32 && exp <= 350 {
+		v = float64(v * 1e-32)
 		exp += 32
 	}
-	for v.Cmp(ld(1e8)) >= 0 && exp <= 350 {
-		scale(1e-8)
+	for v >= 1e8 && exp <= 350 {
+		v = float64(v * 1e-8)
 		exp += 8
 	}
-	for v.Cmp(ld(10)) >= 0 && exp <= 350 {
-		scale(0.1)
+	for v >= 10 && exp <= 350 {
+		v = float64(v * 0.1)
 		exp++
 	}
-	for v.Cmp(ld(1e-8)) < 0 && exp >= -350 {
-		scale(1e8)
+	for v < 1e-8 && exp >= -350 {
+		v = float64(v * 1e8)
 		exp -= 8
 	}
-	for v.Cmp(ld(1)) < 0 && exp >= -350 {
-		scale(10)
+	for v < 1 && exp >= -350 {
+		v = float64(v * 10)
 		exp--
 	}
-	v.Add(v, ld(rounder))
-	if v.Cmp(ld(10)) >= 0 {
-		scale(0.1)
+	v = float64(v + printf17gRounder())
+	if v >= 10 {
+		v = float64(v * 0.1)
 		exp++
 	}
 	if exp < -4 || exp > precision {
-		panic("fsltype.fossilPrintf17g: exponent form is not used for Julian days")
+		panic("fsltype.printf17gDouble: exponent form is not used for Julian days")
 	}
-	return fossilDigits(v, exp, precision-exp)
+	return fossilDigits(exp, precision-exp, func() int64 {
+		d := int64(v)
+		v = float64(v - float64(d))
+		v = float64(v * 10)
+		return d
+	})
 }
 
 // fossilDigits emits fossil's fixed-point digits for a value normalized to
 // [1, 10): exp+1 before the point, fraction after it, trailing zeros removed.
-// Each digit is et_getdigit's: truncate, subtract, multiply by ten, in v's
-// precision.
-func fossilDigits(v *big.Float, exp, fraction int) string {
+// next is et_getdigit: it returns the value's integer part and leaves the
+// value as its fraction times ten, in the value's precision.
+func fossilDigits(exp, fraction int, next func() int64) string {
 	if exp < 0 {
 		panic("fsltype.fossilDigits: leading zero form is not used for Julian days")
 	}
-	ten := new(big.Float).SetPrec(v.Prec()).SetInt64(10)
 	buf := make([]byte, 0, exp+fraction+2)
 	emitted := 0
 	digit := func() byte {
@@ -161,9 +184,10 @@ func fossilDigits(v *big.Float, exp, fraction int) string {
 		if emitted > fossilRealDigits {
 			return '0'
 		}
-		d, _ := v.Int64()
-		v.Sub(v, new(big.Float).SetPrec(v.Prec()).SetInt64(d))
-		v.Mul(v, ten)
+		d := next()
+		if d < 0 || d > 9 {
+			panic("fsltype.fossilDigits: digit out of range")
+		}
 		return byte('0' + d)
 	}
 	for i := 0; i <= exp; i++ {

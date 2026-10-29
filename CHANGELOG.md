@@ -78,6 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A wasm build no longer links `math/big`'s floating point, about 5 KB of a
+  gzipped TinyGo binary. Fossil's `%.17g` of a text Julian day is now
+  computed in `float64` wherever the platform's long double is a double
+  (wasm, macOS arm64, Windows), bit-identical to the `big.Float` emulation
+  at 53 bits, which remains for the 64- and 113-bit long doubles and is left
+  out of wasm builds. Stored times are unchanged.
 - An origin's classification memo keeps the trees its horizons' walks read
   compactly: blob names as ids, each tree's files as sorted delta-varint
   ids, and a full manifest as its difference from the one kept before it

@@ -3,7 +3,9 @@ package content
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -349,65 +351,93 @@ func (x *treeIndex) addPieces(names []string, pieces map[string]*plainTree, limi
 	return true
 }
 
-// treeUnexpandableSQL lists the rids whose content a store cannot expand:
-// those of the JSON array ?1 (its phantoms and the delta sources it holds
-// no row for) and every delta whose chain of sources reaches one.
-const treeUnexpandableSQL = `WITH RECURSIVE bad(rid) AS (
-	SELECT value FROM json_each(?1)
-	UNION SELECT delta.rid FROM delta JOIN bad ON delta.srcid=bad.rid)
-SELECT rid FROM bad`
-
-// sourcelessDeltas lists the delta sources the store holds no row for.
-// On fossil-scm.org's store it scans 59k delta rows in about 20ms, so a
-// memo reads it once per lineage, not once per view.
-func sourcelessDeltas(ctx context.Context, q db.Querier) ([]libfossil.FslID, error) {
-	var out []libfossil.FslID
-	err := referenceRows(ctx, q, `SELECT DISTINCT delta.srcid FROM delta
-		LEFT JOIN blob ON blob.rid=delta.srcid WHERE blob.rid IS NULL`, func(scan func(...any) error) error {
-		var rid libfossil.FslID
-		err := scan(&rid)
-		out = append(out, rid)
-		return err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("classification memo: delta sources: %w", err)
-	}
-	return out, nil
-}
-
-// treeExpandable reports whether the view's store holds name at rid and can
-// expand it, as a fresh read of the piece would; a phantom is among what it
-// cannot expand. A store goes on only by appending rows and filling
-// phantoms that nothing is a delta of (memoStore.settled), so the rids it
-// cannot expand are listed once per view, from its phantoms and the
-// sources its deltas lack (memoStore.sourceless): about 0.3ms on
-// fossil-scm.org's store.
+// treeExpandable reports whether the view's store holds name at rid and its
+// chain of delta sources ends at a blob held whole, not at a phantom, at a
+// rid the store holds no row for, or in a loop. It checks the chain only:
+// content that is corrupt, fails to decompress or misses its hash still
+// passes here, though a fresh read would skip that tree. Within a lineage a rid's answer never
+// changes, as a store goes on only by appending rows and filling phantoms
+// nothing is a delta of (memoStore.settled), so the memo keeps the answers
+// of a lineage (Memo.expands) and a chain is walked only to the first rid
+// with one. Each delta step is read once per lineage, for the trees looked
+// up; the store's phantoms, however many, are never listed.
 func (v *MemoView) treeExpandable(ctx context.Context, q db.Querier, name string, rid libfossil.FslID) (bool, error) {
 	if v.store.refs.facts.names[rid] != name {
 		return false, nil
 	}
-	if v.unexpandable == nil {
-		seeds := append(slices.Collect(maps.Keys(v.store.prefix.phantoms)), v.store.sourceless...)
-		seedsJSON, err := ridsJSON(seeds)
-		if err != nil {
+	known := v.publishedExpands()
+	seen := map[libfossil.FslID]bool{}
+	settle := func(ok bool) (bool, error) {
+		for r := range seen {
+			v.expands[r] = ok
+		}
+		return ok, nil
+	}
+	// A chain is no longer than the store has rows.
+	for r := rid; len(seen) <= len(v.store.refs.facts.names); {
+		if ok, hit := v.expands[r]; hit {
+			return settle(ok)
+		}
+		if ok, hit := known[r]; hit {
+			return settle(ok)
+		}
+		if seen[r] {
+			return settle(false) // a loop, which no expansion ends
+		}
+		if err := ctx.Err(); err != nil {
 			return false, err
 		}
-		if seedsJSON == "" {
-			seedsJSON = "[]"
+		seen[r] = true
+		var size int64
+		var src sql.NullInt64
+		err := q.QueryRow(`SELECT b.size, d.srcid FROM blob b LEFT JOIN delta d ON d.rid=b.rid
+			WHERE b.rid=?`, r).Scan(&size, &src)
+		if errors.Is(err, sql.ErrNoRows) || err == nil && size < 0 {
+			return settle(false)
 		}
-		v.unexpandable = map[libfossil.FslID]bool{}
-		err = referenceRows(ctx, q, treeUnexpandableSQL, func(scan func(...any) error) error {
-			var r libfossil.FslID
-			err := scan(&r)
-			v.unexpandable[r] = true
-			return err
-		}, seedsJSON)
 		if err != nil {
-			v.unexpandable = nil
-			return false, fmt.Errorf("classification memo: unexpandable trees: %w", err)
+			return false, fmt.Errorf("classification memo: delta chain of rid=%d: %w", rid, err)
 		}
+		if !src.Valid {
+			return settle(true)
+		}
+		r = libfossil.FslID(src.Int64)
 	}
-	return !v.unexpandable[rid], nil
+	panic("content.MemoView.treeExpandable: delta chain longer than the store")
+}
+
+// publishedExpands returns the expandability answers the memo keeps for the
+// view's lineage, read once per view, or nil.
+func (v *MemoView) publishedExpands() map[libfossil.FslID]bool {
+	if !v.expandsRead {
+		m := v.memo
+		m.mu.Lock()
+		if m.expandsLineage == v.store.lineage {
+			v.expandsKnown = m.expands
+		}
+		m.mu.Unlock()
+		v.expandsRead = true
+	}
+	return v.expandsKnown
+}
+
+// publishExpands keeps the expandability answers a view of store lineage
+// found: a later lineage's replace them, an earlier one's are dropped. The
+// kept map is replaced, never changed. The caller holds m.mu.
+func (m *Memo) publishExpands(lineage uint64, found map[libfossil.FslID]bool) {
+	if len(found) == 0 || lineage < m.expandsLineage {
+		return
+	}
+	if lineage > m.expandsLineage {
+		m.expands, m.expandsLineage = maps.Clone(found), lineage
+		return
+	}
+	merged := maps.Clone(m.expands)
+	if merged == nil {
+		merged = make(map[libfossil.FslID]bool, len(found))
+	}
+	maps.Copy(merged, found)
+	m.expands = merged
 }
 
 // expandTree has w expand the piece name names as the view's store holds

@@ -53,6 +53,11 @@ type Memo struct {
 	// ones before it; it is replaced, never changed, so a view reads one
 	// without the lock.
 	trees *treeIndex
+	// expands is whether the store of lineage expandsLineage can expand
+	// each rid a published view asked about (treeExpandable); replaced,
+	// never changed.
+	expands        map[libfossil.FslID]bool
+	expandsLineage uint64
 }
 
 // NewMemo returns an empty memo.
@@ -69,9 +74,6 @@ type memoStore struct {
 	refs     *referenceState
 	graph    *horizon.Graph
 	dangling map[string]bool
-	// sourceless is the delta sources the store holds no row for, read with
-	// the lineage: only deleting a row makes one, and that is no append.
-	sourceless []libfossil.FslID
 }
 
 // storePrefix is what a store held when a memoStore read it: its highest
@@ -146,9 +148,12 @@ type MemoView struct {
 	trees     map[string]*plainTree
 	treeReads int
 	decoder   treeDecoder
-	// unexpandable is the rids the view's store cannot expand, listed when
-	// a published tree is first asked for (treeExpandable).
-	unexpandable map[libfossil.FslID]bool
+	// expands is the expandability answers this view found, for the memo's
+	// on Publish; expandsKnown is the memo's for the view's lineage, read
+	// once (treeExpandable).
+	expands      map[libfossil.FslID]bool
+	expandsKnown map[libfossil.FslID]bool
+	expandsRead  bool
 }
 
 // View reads q's store prefix and returns the memo extended to it: by the
@@ -166,7 +171,8 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 		return nil, err
 	}
 	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{},
-		slots: map[string]*memoSlots{}, helds: map[cutKey]*memoHeld{}, trees: map[string]*plainTree{}}
+		slots: map[string]*memoSlots{}, helds: map[cutKey]*memoHeld{}, trees: map[string]*plainTree{},
+		expands: map[libfossil.FslID]bool{}}
 	if base != nil && base.prefix.equal(now) {
 		v.store = base
 		return v, nil
@@ -181,6 +187,13 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 			return v, nil
 		}
 	}
+	// The lineage is numbered when the view finds it must read in full, not
+	// at its read transaction's snapshot, which SQLite gives no order across
+	// connections. Two views reading in full at once may so publish out of
+	// snapshot order, and the older store replace the newer (Publish). That
+	// is never wrong, as every view checks the memo's store against its own
+	// before using it (equal, extended from it, or read in full); it costs
+	// the next view an extension or a full read.
 	m.mu.Lock()
 	m.lineage++
 	lineage := m.lineage
@@ -198,7 +211,8 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 func (v *MemoView) Read() int { return v.read }
 
 // Publish makes what v computed the memo's, unless the memo has since been
-// brought further: past v's store, or to a store read in full after it.
+// brought further: past v's store, or to a store whose full read was
+// numbered after v's (View says why that order is safe).
 // The trees v read are kept either way, as no store changes what a tree
 // says. Call it only once the store v read is durable.
 func (v *MemoView) Publish() {
@@ -206,6 +220,7 @@ func (v *MemoView) Publish() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.publishTrees(v.trees, memoTreeNames)
+	m.publishExpands(v.store.lineage, v.expands)
 	if m.store != nil && (m.store.lineage > v.store.lineage ||
 		m.store.lineage == v.store.lineage && m.store.prefix.top > v.store.prefix.top) {
 		return
@@ -254,12 +269,7 @@ func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineag
 	if err != nil {
 		return nil, err
 	}
-	sourceless, err := sourcelessDeltas(ctx, q)
-	if err != nil {
-		return nil, err
-	}
-	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling,
-		sourceless: sourceless}, nil
+	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling}, nil
 }
 
 // extend returns s brought up to the store now describes, and how many
@@ -316,8 +326,7 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 	}
 	dangling := maps.Clone(s.dangling)
 	maps.Copy(dangling, added)
-	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling,
-		sourceless: s.sourceless}, len(fresh), nil
+	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling}, len(fresh), nil
 }
 
 // settled reports whether the rids at or below s's prefix are as s read

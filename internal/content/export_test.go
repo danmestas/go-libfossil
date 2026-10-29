@@ -39,3 +39,34 @@ func LoadAbsencesWork(ctx context.Context, q db.Querier) (*Absences, ReferenceWo
 func (v *MemoView) TreesRead() (names []string, reads int) {
 	return slices.Collect(maps.Keys(v.trees)), v.treeReads
 }
+
+// TreeBytes is what m charges for the trees it keeps.
+func (m *Memo) TreeBytes() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.trees == nil {
+		return 0
+	}
+	return m.trees.bytes
+}
+
+// LimitTrees sets the most m keeps of its walks' trees.
+func (m *Memo) LimitTrees(bytes int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.treeLimit = bytes
+}
+
+// TreeChainDepth is the most set differences any tree m keeps lies from
+// one kept whole.
+func (m *Memo) TreeChainDepth() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	depth := 0
+	if m.trees != nil {
+		for _, p := range m.trees.pieces {
+			depth = max(depth, p.depth)
+		}
+	}
+	return depth
+}

@@ -49,16 +49,14 @@ type Memo struct {
 	slots   []*memoSlots
 	helds   []*memoHeld
 	lineage uint64 // the last store read in full
-	// trees is the trees the published views of store lineage treeLineage
-	// read; it is replaced, never changed, so a view reads one without the
-	// lock. treeLimit is memoTreeBytes but in tests.
-	trees       *treeIndex
-	treeLineage uint64
-	treeLimit   int64
+	// trees is the trees the published views read, of this store and the
+	// ones before it; it is replaced, never changed, so a view reads one
+	// without the lock.
+	trees *treeIndex
 }
 
 // NewMemo returns an empty memo.
-func NewMemo() *Memo { return &Memo{treeLimit: memoTreeBytes} }
+func NewMemo() *Memo { return &Memo{} }
 
 // memoStore is the store's cone-independent references at one prefix: the
 // facts a path classification reads (kinds, F, P, B, S and A references),
@@ -71,6 +69,9 @@ type memoStore struct {
 	refs     *referenceState
 	graph    *horizon.Graph
 	dangling map[string]bool
+	// sourceless is the delta sources the store holds no row for, read with
+	// the lineage: only deleting a row makes one, and that is no append.
+	sourceless []libfossil.FslID
 }
 
 // storePrefix is what a store held when a memoStore read it: its highest
@@ -145,6 +146,9 @@ type MemoView struct {
 	trees     map[string]*plainTree
 	treeReads int
 	decoder   treeDecoder
+	// unexpandable is the rids the view's store cannot expand, listed when
+	// a published tree is first asked for (treeExpandable).
+	unexpandable map[libfossil.FslID]bool
 }
 
 // View reads q's store prefix and returns the memo extended to it: by the
@@ -194,12 +198,16 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 func (v *MemoView) Read() int { return v.read }
 
 // Publish makes what v computed the memo's, unless the memo has since been
-// brought further. Call it only once the store v read is durable.
+// brought further: past v's store, or to a store read in full after it.
+// The trees v read are kept either way, as no store changes what a tree
+// says. Call it only once the store v read is durable.
 func (v *MemoView) Publish() {
 	m := v.memo
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.store != nil && m.store.prefix.top > v.store.prefix.top {
+	m.publishTrees(v.trees, memoTreeNames)
+	if m.store != nil && (m.store.lineage > v.store.lineage ||
+		m.store.lineage == v.store.lineage && m.store.prefix.top > v.store.prefix.top) {
 		return
 	}
 	m.store = v.store
@@ -231,7 +239,6 @@ func (v *MemoView) Publish() {
 	if over := len(m.helds) - memoCuts; over > 0 {
 		m.helds = slices.Delete(m.helds, 0, over)
 	}
-	m.publishTrees(v.store.lineage, v.trees)
 }
 
 func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineage uint64) (*memoStore, error) {
@@ -247,7 +254,12 @@ func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineag
 	if err != nil {
 		return nil, err
 	}
-	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling}, nil
+	sourceless, err := sourcelessDeltas(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return &memoStore{lineage: lineage, prefix: prefix, refs: refs, graph: graph, dangling: dangling,
+		sourceless: sourceless}, nil
 }
 
 // extend returns s brought up to the store now describes, and how many
@@ -304,7 +316,8 @@ func (s *memoStore) extend(ctx context.Context, q db.Querier, now storePrefix) (
 	}
 	dangling := maps.Clone(s.dangling)
 	maps.Copy(dangling, added)
-	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling}, len(fresh), nil
+	return &memoStore{lineage: s.lineage, prefix: now, refs: refs, graph: graph, dangling: dangling,
+		sourceless: s.sourceless}, len(fresh), nil
 }
 
 // settled reports whether the rids at or below s's prefix are as s read

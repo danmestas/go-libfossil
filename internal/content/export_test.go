@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 )
 
 // LoadAbsencesWithin is LoadAbsencesContext under injected budgets, and
@@ -50,13 +51,6 @@ func (m *Memo) TreeBytes() int64 {
 	return m.trees.bytes
 }
 
-// LimitTrees sets the most m keeps of its walks' trees.
-func (m *Memo) LimitTrees(bytes int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.treeLimit = bytes
-}
-
 // TreeChainDepth is the most set differences any tree m keeps lies from
 // one kept whole.
 func (m *Memo) TreeChainDepth() int {
@@ -69,4 +63,29 @@ func (m *Memo) TreeChainDepth() int {
 		}
 	}
 	return depth
+}
+
+// ForgetStore makes m's next view read its store in full, as one does after
+// an arrival a held artifact cited, keeping what else m holds.
+func (m *Memo) ForgetStore() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.store = nil
+}
+
+// HorizonAbove is what a fresh walk of h's held set names: the blobs its
+// trees name, by name.
+func HorizonAbove(ctx context.Context, q db.Querier, h cone.Horizon) (map[string]bool, error) {
+	var work ReferenceWork
+	cut, _, err := horizonTrees(ctx, q, h, defaultReferenceLimits, &work)
+	return cut.above, err
+}
+
+// HorizonAbove is HorizonAbove as v's walks give it.
+func (v *MemoView) HorizonAbove(ctx context.Context, q db.Querier, h cone.Horizon) (map[string]bool, error) {
+	c, err := v.cut(ctx, q, h)
+	if err != nil {
+		return nil, err
+	}
+	return c.cut.above, nil
 }

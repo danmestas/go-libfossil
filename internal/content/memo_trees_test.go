@@ -186,6 +186,52 @@ func TestTreeIndexExtendLeavesBase(t *testing.T) {
 	}
 }
 
+// The memo's trees hold no more names than their bound: a publish that
+// would pass it starts again from the view's own pieces, and keeps none
+// when even those pass it.
+func TestPublishTreesNamesBound(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 8))
+	names, trees := treeIndexFixture(rng)
+	pieces := func(lo, hi int) map[string]*plainTree {
+		out := map[string]*plainTree{}
+		for i := lo; i < hi; i++ {
+			out[names[i]] = trees[i]
+		}
+		return out
+	}
+	half := len(names) / 2
+	count := func(lo, hi int) int {
+		x := newTreeIndex()
+		x.addPieces(names[lo:hi], pieces(lo, hi), math.MaxInt)
+		return len(x.names.names)
+	}
+	first, whole := count(0, half), count(0, len(names))
+	limit := first + (whole-first)/2
+	if count(half, len(names)) > limit {
+		t.Fatalf("fixture: the second half's names pass the bound %d", limit)
+	}
+	m := &Memo{}
+	m.publishTrees(pieces(0, half), limit)
+	if m.trees == nil || m.trees.piece(names[0]) == nil {
+		t.Fatal("the first publish, under the bound, was not kept")
+	}
+	m.publishTrees(pieces(half, len(names)), limit)
+	if m.trees == nil || m.trees.piece(names[0]) != nil || m.trees.piece(names[len(names)-1]) == nil {
+		t.Fatal("past the bound the trees did not start again from the view's pieces")
+	}
+	if n := len(m.trees.names.names); n > limit {
+		t.Fatalf("%d names past the bound %d", n, limit)
+	}
+	var d treeDecoder
+	for i := half; i < len(names); i++ {
+		sameTree(t, m.trees, &d, names[i], trees[i])
+	}
+	m.publishTrees(pieces(0, len(names)), 10)
+	if m.trees != nil {
+		t.Fatalf("a view whose own pieces pass the bound left %d names", len(m.trees.names.names))
+	}
+}
+
 func sameTree(t *testing.T, x *treeIndex, d *treeDecoder, name string, want *plainTree) {
 	t.Helper()
 	p := x.piece(name)

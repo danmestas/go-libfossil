@@ -17,7 +17,8 @@ import (
 
 // TestCorpusMemoTrees reports what the classification memo costs on a real
 // repository (draft-fossil-horizon-00 §6.2): content horizons 1000 and 2000
-// check-ins back, each cold (a fresh memo) and warm (after the other), with
+// check-ins back, each cold (a fresh memo) and warm (after the other), then
+// 2000 back again after the memo reads its store in full, with
 // the heap the memo keeps, the bytes it charges for trees, and the peak
 // in-use heap, each inside a read transaction as an origin's request reads.
 // It is skipped unless LIBFOSSIL_CORPUS names a repository; it
@@ -49,14 +50,17 @@ func TestCorpusMemoTrees(t *testing.T) {
 		}
 		horizons[back] = h
 	}
-	for _, order := range [][2]int{{1000, 2000}, {2000, 1000}} {
+	for _, order := range [][3]int{{1000, 2000, 2000}, {2000, 1000, 2000}} {
 		runtime.GC()
 		var before runtime.MemStats
 		runtime.ReadMemStats(&before)
 		stop := corpusInUsePeak()
 		memo := content.NewMemo()
-		var took [2]time.Duration
+		var took [3]time.Duration
 		for i, back := range order {
+			if i == 2 {
+				memo.ForgetStore()
+			}
 			start := time.Now()
 			err := r.DB().WithReadTx(func(tx *db.Tx) error {
 				v, err := memo.View(context.Background(), tx)
@@ -79,11 +83,74 @@ func TestCorpusMemoTrees(t *testing.T) {
 		runtime.GC()
 		var after runtime.MemStats
 		runtime.ReadMemStats(&after)
-		t.Logf("horizon %d back cold %s, then %d back warm %s; memo heap %d MiB, tree bytes %d MiB, peak in-use heap %d MiB",
-			order[0], took[0], order[1], took[1], (int64(after.HeapInuse)-int64(before.HeapInuse))>>20,
+		t.Logf("horizon %d back cold %s, then %d back warm %s, then %d back after a full read %s; "+
+			"memo heap %d MiB, tree bytes %d MiB, peak in-use heap %d MiB",
+			order[0], took[0], order[1], took[1], order[2], took[2], (int64(after.HeapInuse)-int64(before.HeapInuse))>>20,
 			memo.TreeBytes()>>20, peak>>20)
 		runtime.KeepAlive(memo)
 	}
+}
+
+// TestCorpusMemoTreesWhole reports what the memo keeps of every tree a
+// repository holds: a content horizon at its first check-in, whose walk
+// reads them all, then again after the memo reads its store in full. It is
+// skipped unless LIBFOSSIL_CORPUS names a repository; it works on a copy.
+func TestCorpusMemoTreesWhole(t *testing.T) {
+	corpus := os.Getenv("LIBFOSSIL_CORPUS")
+	if corpus == "" {
+		t.Skip("set LIBFOSSIL_CORPUS to a .fossil repository to run")
+	}
+	work := filepath.Join(t.TempDir(), "corpus.fossil")
+	if err := corpusCopy(work, corpus); err != nil {
+		t.Fatalf("copy corpus: %v", err)
+	}
+	r, err := repo.Open(work)
+	if err != nil {
+		t.Fatalf("open corpus: %v", err)
+	}
+	t.Cleanup(func() { r.Close() })
+	var root string
+	if err := r.DB().QueryRow(`SELECT b.uuid FROM event e JOIN blob b ON b.rid=e.objid
+		WHERE e.type='ci' ORDER BY e.mtime LIMIT 1`).Scan(&root); err != nil {
+		t.Fatal(err)
+	}
+	h, err := cone.NewHorizon(root, cone.RuleDescendants, cone.DepthContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	stop := corpusInUsePeak()
+	memo := content.NewMemo()
+	var took [2]time.Duration
+	var reads [2]int
+	for i := range took {
+		if i == 1 {
+			memo.ForgetStore()
+		}
+		start := time.Now()
+		err := r.DB().WithReadTx(func(tx *db.Tx) error {
+			v, err := memo.View(context.Background(), tx)
+			if err != nil {
+				return err
+			}
+			_, _, placed, err := v.HorizonReach(context.Background(), tx, h)
+			if err == nil && !placed {
+				t.Fatal("whole-history horizon: not placed")
+			}
+			_, reads[i] = v.TreesRead()
+			v.Publish()
+			return err
+		})
+		took[i] = time.Since(start)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	peak := stop()
+	t.Logf("whole history cold %s (%d trees read), after a full read %s (%d trees read); "+
+		"tree bytes %d MiB, peak in-use heap %d MiB",
+		took[0], reads[0], took[1], reads[1], memo.TreeBytes()>>20, peak>>20)
+	runtime.KeepAlive(memo)
 }
 
 // corpusInUsePeak samples HeapInuse until stopped, which returns the peak.

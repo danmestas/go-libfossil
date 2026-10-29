@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
@@ -174,6 +175,17 @@ func sameClassification(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone
 		if fplaced != mplaced || !slices.Equal(fk, mk) || !maps.Equal(freach, mreach) {
 			t.Fatalf("%s: reach fresh K=%v placed=%v, memo K=%v placed=%v", c, fk, fplaced, mk, mplaced)
 		}
+		fabove, err := content.HorizonAbove(ctx, q, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mabove, err := v.HorizonAbove(ctx, q, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(fabove, mabove) {
+			t.Fatalf("%s: the walk names %d blobs fresh, %d from the memo", c, len(fabove), len(mabove))
+		}
 	}
 	rows, err := q.Query("SELECT rid FROM blob ORDER BY rid")
 	if err != nil {
@@ -279,25 +291,72 @@ func TestMemoUnpublishedViewDiscarded(t *testing.T) {
 // draft-fossil-horizon-00 §6.2: the memo keeps the trees its horizons'
 // walks read, so a second horizon over the same store, under another C or
 // rule, reads from the store only the trees the first did not, and
-// classifies as a fresh read does. Past its tree limit the memo reads
-// trees again, and classifies alike.
+// classifies as a fresh read does.
 func TestMemoTreesReadOnce(t *testing.T) {
 	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
-		for _, limited := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/limited=%v", mode, limited), func(t *testing.T) {
-				ctx := context.Background()
-				m := newMemoRepo(t, mode)
-				tip := m.commit(0)
-				for i := 0; i < 5; i++ {
-					tip = m.commit(tip)
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			m := newMemoRepo(t, mode)
+			tip := m.commit(0)
+			for i := 0; i < 5; i++ {
+				tip = m.commit(tip)
+			}
+			memo := content.NewMemo()
+			seen := map[string]bool{}
+			for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0], m.tips[3]} {
+				v, err := memo.View(ctx, m.r.DB())
+				if err != nil {
+					t.Fatal(err)
 				}
-				memo := content.NewMemo()
-				if limited {
-					memo.LimitTrees(400)
+				for _, sc := range m.memoCones(c) {
+					sameClassification(t, m.r, v, sc)
 				}
-				seen := map[string]bool{}
-				again := 0
-				for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0], m.tips[3]} {
+				names, reads := v.TreesRead()
+				if reads != len(names) {
+					t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
+				}
+				if len(seen) == 0 && len(names) == 0 {
+					t.Fatalf("the first horizon, at %d, read no tree", c)
+				}
+				for _, name := range names {
+					if seen[name] {
+						t.Fatalf("horizon at %d: tree %s read again", c, name)
+					}
+					seen[name] = true
+				}
+				v.Publish()
+			}
+		})
+	}
+}
+
+// draft-fossil-horizon-00 §6.2: over wide trees that rename, delete and
+// add files, in every manifest form, the memo's trees (kept as differences
+// along chains of the longest length) classify every cone as a fresh read
+// does, before and after the store gains check-ins. A branch's newer trees
+// head the chains that trunk trees continue, so a trunk horizon decodes
+// trees whose chain starts outside its held set.
+func TestMemoWideTreesMatchFresh(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			m := newMemoRepo(t, mode)
+			m.wide = map[string]string{}
+			for i := 0; i < 30; i++ {
+				m.wide[fmt.Sprintf("src/f%02d.c", i)] = fmt.Sprintf("f%d\n", i)
+			}
+			tip := m.commit(0)
+			for i := 0; i < 19; i++ {
+				tip = m.commit(tip)
+			}
+			branch := m.tips[5]
+			for i := 0; i < 6; i++ {
+				branch = m.commit(branch)
+			}
+			memo := content.NewMemo()
+			classify := func(cs ...libfossil.FslID) {
+				t.Helper()
+				for _, c := range cs {
 					v, err := memo.View(ctx, m.r.DB())
 					if err != nil {
 						t.Fatal(err)
@@ -305,90 +364,165 @@ func TestMemoTreesReadOnce(t *testing.T) {
 					for _, sc := range m.memoCones(c) {
 						sameClassification(t, m.r, v, sc)
 					}
-					names, reads := v.TreesRead()
-					if reads != len(names) {
-						t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
-					}
-					if len(seen) == 0 && len(names) == 0 {
-						t.Fatalf("the first horizon, at %d, read no tree", c)
-					}
-					for _, name := range names {
-						if seen[name] {
-							again++
-						}
-						seen[name] = true
-					}
 					v.Publish()
-					if limited && memo.TreeBytes() > 400 {
-						t.Fatalf("the memo keeps %d tree bytes past its limit", memo.TreeBytes())
-					}
 				}
-				if !limited && again > 0 {
-					t.Fatalf("%d trees read again", again)
+			}
+			classify(m.tips[0], m.tips[12], m.tips[6], m.tips[22])
+			if depth := memo.TreeChainDepth(); mode == hzFull && depth != 15 {
+				t.Fatalf("longest chain of differences %d, want 15", depth)
+			}
+			for i := 0; i < 4; i++ {
+				tip, branch = m.commit(tip), m.commit(branch)
+			}
+			classify(m.tips[0], m.tips[14], m.tips[23], m.tips[3])
+		})
+	}
+}
+
+// draft-fossil-horizon-00 §6.2: a tree's file set is fixed by its name, so
+// the trees a memo read outlive a full read of its store, as after an
+// arrival a held artifact cited: a horizon over the store read again reads
+// no tree it read before. A store holding the same trees at other rids
+// reads each again once, under its own rids, and every horizon classifies
+// as a fresh read does.
+func TestMemoTreesSurviveFullRead(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		t.Run(string(mode), func(t *testing.T) {
+			ctx := context.Background()
+			grow := func(m *memoRepo) {
+				tip := m.commit(0)
+				for i := 0; i < 5; i++ {
+					tip = m.commit(tip)
 				}
-				if limited && again == 0 {
-					t.Fatal("no tree read again past the limit")
+			}
+			m, shifted := newMemoRepo(t, mode), newMemoRepo(t, mode)
+			if _, _, err := blob.Store(shifted.r.DB(), []byte("a blob ahead of the trees\n")); err != nil {
+				t.Fatal(err)
+			}
+			grow(m)
+			grow(shifted)
+			for i, rid := range m.tips {
+				if m.uuid(rid) != shifted.uuid(shifted.tips[i]) || rid == shifted.tips[i] {
+					t.Fatalf("check-in %d: rid %d and %d, want one tree at two rids", i, rid, shifted.tips[i])
 				}
-			})
+			}
+			memo := content.NewMemo()
+			classify := func(m *memoRepo, c libfossil.FslID, full bool) int {
+				t.Helper()
+				v, err := memo.View(ctx, m.r.DB())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if full && v.Read() == 0 {
+					t.Fatal("the store was not read in full")
+				}
+				for _, sc := range m.memoCones(c) {
+					sameClassification(t, m.r, v, sc)
+				}
+				v.Publish()
+				_, reads := v.TreesRead()
+				return reads
+			}
+			if classify(m, m.tips[1], true) == 0 {
+				t.Fatal("the first horizon read no tree")
+			}
+			memo.ForgetStore()
+			if reads := classify(m, m.tips[1], true); reads != 0 {
+				t.Fatalf("after a full read the horizon read %d trees again", reads)
+			}
+			if classify(shifted, shifted.tips[1], true) == 0 {
+				t.Fatal("the trees held at other rids were not read")
+			}
+			if reads := classify(shifted, shifted.tips[1], false); reads != 0 {
+				t.Fatalf("the shifted store read %d trees twice", reads)
+			}
+			if classify(m, m.tips[1], true) == 0 {
+				t.Fatal("back on the first store, its trees were served at the shifted rids")
+			}
+			if reads := classify(m, m.tips[1], false); reads != 0 {
+				t.Fatalf("back on the first store, %d trees read twice", reads)
+			}
+		})
+	}
+}
+
+// A view whose store the memo has since gone past publishes nothing of its
+// store, but keeps the trees it read, which no store changes: a later
+// horizon reads only the trees that view did not.
+func TestMemoStaleViewKeepsTrees(t *testing.T) {
+	ctx := context.Background()
+	m := newMemoRepo(t, hzFull)
+	tip := m.commit(0)
+	for i := 0; i < 4; i++ {
+		tip = m.commit(tip)
+	}
+	memo := content.NewMemo()
+	stale, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.commit(tip)
+	ahead, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead.Publish()
+	h, err := cone.NewHorizon(m.uuid(m.tips[1]), cone.RuleDescendants, cone.DepthContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := stale.HorizonReach(ctx, m.r.DB(), h); err != nil {
+		t.Fatal(err)
+	}
+	read, reads := stale.TreesRead()
+	if reads == 0 {
+		t.Fatal("the stale view read no tree")
+	}
+	stale.Publish()
+	v, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Read() != 0 {
+		t.Fatalf("the stale view's store was published: the next view read %d artifacts", v.Read())
+	}
+	for _, sc := range m.memoCones(m.tips[1]) {
+		sameClassification(t, m.r, v, sc)
+	}
+	again, _ := v.TreesRead()
+	for _, name := range again {
+		if slices.Contains(read, name) {
+			t.Fatalf("tree %s, which the stale view read, read again", name)
 		}
 	}
 }
 
-// draft-fossil-horizon-00 §6.2: over wide trees that rename, delete and
-// add files, in every manifest form, the memo's trees (kept as differences
-// along chains of the longest length, or past a small limit started again
-// on most publishes) classify every cone as a fresh read does, before and
-// after the store gains check-ins. A branch's newer trees head the chains
-// that trunk trees continue, so a trunk horizon decodes trees whose chain
-// starts outside its held set.
-func TestMemoWideTreesMatchFresh(t *testing.T) {
-	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
-		for _, limit := range []int64{0, 6000} {
-			t.Run(fmt.Sprintf("%s/limit=%d", mode, limit), func(t *testing.T) {
-				ctx := context.Background()
-				m := newMemoRepo(t, mode)
-				m.wide = map[string]string{}
-				for i := 0; i < 30; i++ {
-					m.wide[fmt.Sprintf("src/f%02d.c", i)] = fmt.Sprintf("f%d\n", i)
-				}
-				tip := m.commit(0)
-				for i := 0; i < 19; i++ {
-					tip = m.commit(tip)
-				}
-				branch := m.tips[5]
-				for i := 0; i < 6; i++ {
-					branch = m.commit(branch)
-				}
-				memo := content.NewMemo()
-				if limit > 0 {
-					memo.LimitTrees(limit)
-				}
-				classify := func(cs ...libfossil.FslID) {
-					t.Helper()
-					for _, c := range cs {
-						v, err := memo.View(ctx, m.r.DB())
-						if err != nil {
-							t.Fatal(err)
-						}
-						for _, sc := range m.memoCones(c) {
-							sameClassification(t, m.r, v, sc)
-						}
-						v.Publish()
-						if limit > 0 && memo.TreeBytes() > limit {
-							t.Fatalf("the memo keeps %d tree bytes past %d", memo.TreeBytes(), limit)
-						}
-					}
-				}
-				classify(m.tips[0], m.tips[12], m.tips[6], m.tips[22])
-				if depth := memo.TreeChainDepth(); limit == 0 && mode == hzFull && depth != 15 {
-					t.Fatalf("longest chain of differences %d, want 15", depth)
-				}
-				for i := 0; i < 4; i++ {
-					tip, branch = m.commit(tip), m.commit(branch)
-				}
-				classify(m.tips[0], m.tips[14], m.tips[23], m.tips[3])
-			})
+// A store whose highest rid is deleted is read in full once, and the memo
+// then follows it: the next view reads nothing.
+func TestMemoFollowsDroppedTop(t *testing.T) {
+	ctx := context.Background()
+	m := newMemoRepo(t, hzFull)
+	m.commit(m.commit(0))
+	top, _, err := blob.Store(m.r.DB(), []byte("a blob deleted again\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memo := content.NewMemo()
+	for i, want := range []string{"full", "full", "none"} {
+		if i == 1 {
+			if _, err := m.r.DB().Exec("DELETE FROM blob WHERE rid=?", top); err != nil {
+				t.Fatal(err)
+			}
 		}
+		v, err := memo.View(ctx, m.r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (v.Read() == 0) != (want == "none") {
+			t.Fatalf("view %d read %d artifacts, want %s", i, v.Read(), want)
+		}
+		sameClassification(t, m.r, v, m.memoCones(m.tips[0])[1])
+		v.Publish()
 	}
 }
 

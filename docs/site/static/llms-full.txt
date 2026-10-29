@@ -1879,7 +1879,10 @@ not yet exposed by `libfossil`:
   API: `Repo.TicketAdd` and `Repo.TicketSet` write the change artifact `fossil
   ticket add` and `fossil ticket set` write, and `Repo.TicketList` and
   `Repo.TicketChanges` read tickets back. Report formats, TH1 ticket scripts
-  and `private_` fields are not supported.
+  and `private_` fields are not supported. Attachments to tickets, wiki pages
+  and tech notes have a Go API too: `Repo.AttachmentAdd`,
+  `Repo.AttachmentDelete`, `Repo.Attachments` and `Repo.AttachmentRead` write
+  and read the artifacts `fossil attachment add` and the attachment pages do.
 - **Mirror / export bridges** to Git, svn, and other systems — not implemented.
 
 If any of these are load-bearing for your workflow, stay on upstream Fossil
@@ -6503,6 +6506,8 @@ import "github.com/danmestas/go-libfossil"
 - [func TimeToJulian\(t time.Time\) float64](<#TimeToJulian>)
 - [type AnnotateOpts](<#AnnotateOpts>)
 - [type AnnotatedLine](<#AnnotatedLine>)
+- [type Attachment](<#Attachment>)
+- [type AttachmentOpts](<#AttachmentOpts>)
 - [type BisectSession](<#BisectSession>)
 - [type BuggifyChecker](<#BuggifyChecker>)
 - [type Checkout](<#Checkout>)
@@ -6565,6 +6570,7 @@ import "github.com/danmestas/go-libfossil"
 - [type Cursor](<#Cursor>)
 - [type DiffEntry](<#DiffEntry>)
 - [type EventKind](<#EventKind>)
+- [type ExternalRef](<#ExternalRef>)
 - [type ExtractEnd](<#ExtractEnd>)
 - [type ExtractOpts](<#ExtractOpts>)
 - [type ExtractStart](<#ExtractStart>)
@@ -6605,6 +6611,11 @@ import "github.com/danmestas/go-libfossil"
   - [func \(r \*Repo\) Ancestry\(opts LogOpts\) \(\[\]LogEntry, error\)](<#Repo.Ancestry>)
   - [func \(r \*Repo\) Annotate\(opts AnnotateOpts\) \(\[\]AnnotatedLine, error\)](<#Repo.Annotate>)
   - [func \(r \*Repo\) AnnotateContext\(ctx context.Context, opts AnnotateOpts, required RequiredContentOpts\) \(\[\]AnnotatedLine, error\)](<#Repo.AnnotateContext>)
+  - [func \(r \*Repo\) AttachmentAdd\(target, name string, content \[\]byte, opts AttachmentOpts\) \(artifact string, err error\)](<#Repo.AttachmentAdd>)
+  - [func \(r \*Repo\) AttachmentAddExternal\(target string, ref ExternalRef, opts AttachmentOpts\) \(artifact string, err error\)](<#Repo.AttachmentAddExternal>)
+  - [func \(r \*Repo\) AttachmentDelete\(target, name string, opts AttachmentOpts\) \(artifact string, err error\)](<#Repo.AttachmentDelete>)
+  - [func \(r \*Repo\) AttachmentRead\(target, name string\) \(a Attachment, content \[\]byte, err error\)](<#Repo.AttachmentRead>)
+  - [func \(r \*Repo\) Attachments\(target string\) \(\[\]Attachment, error\)](<#Repo.Attachments>)
   - [func \(r \*Repo\) BranchOpenLeaf\(name string\) \(rid int64, open bool, err error\)](<#Repo.BranchOpenLeaf>)
   - [func \(r \*Repo\) BranchTip\(name string\) \(int64, error\)](<#Repo.BranchTip>)
   - [func \(r \*Repo\) Checkpoint\(mode CheckpointMode\) error](<#Repo.Checkpoint>)
@@ -6805,6 +6816,12 @@ var ErrAmbiguousVersion = errors.New("libfossil: ambiguous version prefix")
 var ErrArtifactNotFound = errors.New("libfossil: artifact not found")
 ```
 
+<a name="ErrAttachmentNotFound"></a>ErrAttachmentNotFound is returned when a target has no current attachment by the name asked for: none was ever added, or the latest was deleted. Callers can match with errors.Is.
+
+```go
+var ErrAttachmentNotFound = errors.New("libfossil: attachment not found")
+```
+
 <a name="ErrBelowHorizon"></a>ErrBelowHorizon is matched by the error of an operation that needs history below the store's structural horizon \(draft\-fossil\-horizon\-00 §5.5\), such as a merge whose base lies there. The message names the horizon and the remedy, a deepen \(Repo.DeepenHorizon\).
 
 ```go
@@ -6908,6 +6925,50 @@ type AnnotatedLine struct {
     User         string
     Date         time.Time
     BelowHorizon bool
+}
+```
+
+<a name="Attachment"></a>
+## type Attachment
+
+Attachment is one current attachment: the latest artifact for its name on its target, when that artifact adds a file rather than deleting it.
+
+```go
+type Attachment struct {
+    // Artifact is the hash of the control artifact that attached the file.
+    Artifact string `json:"artifact"`
+    // Target is the full ticket id, wiki page name or tech note id.
+    Target string `json:"target"`
+    Name   string `json:"name"`
+    // Source is the hash of the blob the A card names: the file itself, or
+    // the stub when External is set.
+    Source  string    `json:"source"`
+    Comment string    `json:"comment"`
+    User    string    `json:"user"`
+    Time    time.Time `json:"time"`
+    // Size is the file's length in bytes: the blob's, or External.Size. It
+    // is -1 when the blob has not arrived in this repository.
+    Size int64 `json:"size"`
+    // External, when not nil, says the bytes live outside the repository:
+    // Source is a stub, and AttachmentRead returns no content.
+    External *ExternalRef `json:"external,omitempty"`
+}
+```
+
+<a name="AttachmentOpts"></a>
+## type AttachmentOpts
+
+AttachmentOpts is who makes an attachment change, when, and why.
+
+```go
+type AttachmentOpts struct {
+    // User is the change's author, its U card.
+    User string
+    // Comment is the attachment's description, its C card. Fossil writes
+    // none on a deletion, so AttachmentDelete refuses one.
+    Comment string
+    // Time is the change's D card; zero means now.
+    Time time.Time
 }
 ```
 
@@ -7707,6 +7768,24 @@ const (
 )
 ```
 
+<a name="ExternalRef"></a>
+## type ExternalRef
+
+ExternalRef names an attachment's bytes held outside the repository, in a bucket the host binds and keys attachments/\<SHA256\> \(Quarry RFC 0016\). The repository holds only a stub naming them; this library never reads or writes the bytes themselves.
+
+```go
+type ExternalRef struct {
+    // SHA256 is the bytes' SHA-256, 64 lowercase hex digits.
+    SHA256 string `json:"sha256"`
+    // Size is the bytes' length.
+    Size int64 `json:"size"`
+    // Type is the declared mimetype.
+    Type string `json:"type"`
+    // Name is the file's name, a bare name with no directory.
+    Name string `json:"name"`
+}
+```
+
 <a name="ExtractEnd"></a>
 ## type ExtractEnd
 
@@ -8251,6 +8330,55 @@ func (r *Repo) AnnotateContext(ctx context.Context, opts AnnotateOpts, required 
 ```
 
 AnnotateContext is Annotate with a demand fetch: on a content\-horizon store, each version of the file the walk reads below the horizon and the store does not hold is fetched from Peer as the walk reaches it, so only what the walk reads is fetched and lines are attributed to the check\-ins below the horizon that added them. A walk needing more than one demand fetch's 200 payloads stops there and returns what it attributed, the rest marked BelowHorizon, as does a walk that crosses a structural horizon, since naming those check\-ins is a deepen. A start check\-in below the horizon is fetched as ReadFileContext fetches it.
+
+<a name="Repo.AttachmentAdd"></a>
+### func \(\*Repo\) AttachmentAdd
+
+```go
+func (r *Repo) AttachmentAdd(target, name string, content []byte, opts AttachmentOpts) (artifact string, err error)
+```
+
+AttachmentAdd attaches content to target under name, as \`fossil attachment add\` does, and returns the hash of the control artifact. content is stored as one ordinary blob; only name's final path component is kept. The attachment table and timeline reflect it when AttachmentAdd returns, and both artifacts are queued to sync. The attachment becomes the latest for name: a zero opts.Time stamps it after whatever is latest now, and an explicit one no later than that is refused.
+
+target is a wiki page's exact name, or a ticket's or tech note's id or a unique prefix of it. Fossil is told the kind; here it is inferred, and a name more than one kind answers to is refused as ambiguous.
+
+Content that is a well\-formed external\-attachment stub is refused, since it would read back as an external attachment rather than as the bytes given: use AttachmentAddExternal. Content that parses as a fossil artifact is compressed and its name gains ".gz", as fossil does.
+
+<a name="Repo.AttachmentAddExternal"></a>
+### func \(\*Repo\) AttachmentAddExternal
+
+```go
+func (r *Repo) AttachmentAddExternal(target string, ref ExternalRef, opts AttachmentOpts) (artifact string, err error)
+```
+
+AttachmentAddExternal attaches the file ref names without its bytes, and returns the hash of the control artifact. The blob stored is the stub Quarry writes, and the control artifact's N card carries ref.Type, so stock fossil shows a small text file under ref.Name. The host stores the bytes; this records only where they are found. target resolves as in AttachmentAdd.
+
+<a name="Repo.AttachmentDelete"></a>
+### func \(\*Repo\) AttachmentDelete
+
+```go
+func (r *Repo) AttachmentDelete(target, name string, opts AttachmentOpts) (artifact string, err error)
+```
+
+AttachmentDelete removes the current attachment name from target, as fossil's attachment page does: a new control artifact whose A card names no file. The bytes stay in history. It returns the artifact's hash, and ErrAttachmentNotFound when target has no current attachment by that name. opts.Time, when set, must be later than the attachment's; when zero, the deletion is stamped after it even if it lies in the future.
+
+<a name="Repo.AttachmentRead"></a>
+### func \(\*Repo\) AttachmentRead
+
+```go
+func (r *Repo) AttachmentRead(target, name string) (a Attachment, content []byte, err error)
+```
+
+AttachmentRead returns target's current attachment name and its bytes. For an external attachment the bytes are not here: content is nil and a.External says where the host keeps them. It returns ErrAttachmentNotFound when there is no such current attachment.
+
+<a name="Repo.Attachments"></a>
+### func \(\*Repo\) Attachments
+
+```go
+func (r *Repo) Attachments(target string) ([]Attachment, error)
+```
+
+Attachments returns target's current attachments, the most recently attached first: one per name, leaving out deleted ones, as fossil lists them on the target's page. target resolves as in AttachmentAdd.
 
 <a name="Repo.BranchOpenLeaf"></a>
 ### func \(\*Repo\) BranchOpenLeaf

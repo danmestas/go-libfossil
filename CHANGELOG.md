@@ -17,6 +17,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in that lists it; nothing from that request is stored, and stock fossil
   prints the error. 0, the default, stores any size, and clones and pulls served
   from the repository are not limited (related to #459).
+- `Repo.AttachmentAdd`, `Repo.AttachmentDelete`, `Repo.Attachments` and
+  `Repo.AttachmentRead` attach files to tickets, wiki pages and tech notes the
+  way stock fossil 2.28 does (src/attach.c): the file is one ordinary blob and
+  a control artifact's A card binds its name to the target, with C, D, U and
+  Z cards; a deletion is an A card with no source. Both are linked in the same
+  transaction and queued to sync, so the attachment table and timeline read
+  back at once. A target is a wiki page's exact name or a ticket's or tech
+  note's id or unique prefix; a name more than one kind answers to is refused
+  as ambiguous. As in fossil, only a name's final path component is kept, and
+  a file that parses as an artifact is stored compressed under `NAME.gz`.
+  `Attachments` lists the current attachment per name, newest first, as
+  fossil's attachment list does; a missing one is `ErrAttachmentNotFound`.
+- `Repo.AttachmentAddExternal` attaches a file whose bytes live outside the
+  repository, in the stub format of Quarry RFC 0016: an ordinary blob of five
+  plain-text lines (`quarry-attachment 1`, `sha256`, `size`, `type`, `name`),
+  with the mimetype on the control artifact's N card. Stock fossil shows it as
+  a small text file. `Attachment.External` reports a stub's reference on list
+  and read, and `AttachmentRead` returns no content for one; a blob that opens
+  like a stub but is malformed is an ordinary file. The library never touches
+  the bytes themselves: the host keeps them, keyed `attachments/<sha256>`.
 - `Repo.TicketAdd` and `Repo.TicketSet` create and amend tickets. Each writes
   the change artifact `fossil ticket add` and `fossil ticket set` write for the
   same fields, user and time, byte for byte, and links it in the same

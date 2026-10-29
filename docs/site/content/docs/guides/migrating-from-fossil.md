@@ -161,7 +161,10 @@ not yet exposed by `libfossil`:
   API: `Repo.TicketAdd` and `Repo.TicketSet` write the change artifact `fossil
   ticket add` and `fossil ticket set` write, and `Repo.TicketList` and
   `Repo.TicketChanges` read tickets back. Report formats, TH1 ticket scripts
-  and `private_` fields are not supported.
+  and `private_` fields are not supported. Attachments to tickets, wiki pages
+  and tech notes have a Go API too: `Repo.AttachmentAdd`,
+  `Repo.AttachmentDelete`, `Repo.Attachments` and `Repo.AttachmentRead` write
+  and read the artifacts `fossil attachment add` and the attachment pages do.
 - **Mirror / export bridges** to Git, svn, and other systems — not implemented.
 
 If any of these are load-bearing for your workflow, stay on upstream Fossil

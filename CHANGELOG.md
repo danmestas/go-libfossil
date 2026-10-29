@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in that lists it; nothing from that request is stored, and stock fossil
   prints the error. 0, the default, stores any size, and clones and pulls served
   from the repository are not limited (related to #459).
+- The `libfossil_nohttp` build tag leaves `net/http` out of the library, for
+  a program that serves sync through `HandleSyncWithOpts` and syncs, if at
+  all, through a `Transport` its host supplies: `NewHTTPTransport`,
+  `WithHTTPClient`, `Repo.Pull`, `Repo.XferHandler` and `Repo.ServeHTTP` are
+  not built. Importing `net/http` at all links its TLS and X.509 code into a
+  TinyGo binary; for the html-artifact-publisher engine that is about 97 KB
+  of 1.1 MB gzipped. Without the tag nothing changes.
+- `HandleSyncWithOpts` reports a `HandleOpts.MaxStoredBytes` refusal as a
+  `*RefusedError` (match it with `errors.As`) beside the reply, whose one
+  error card it carries in `Message`. A host whose storage treats the
+  request's rollback as an abort of the whole call, and so loses the reply,
+  can report or render the refusal itself without parsing xfer; a host
+  serving HTTP sends the reply as before.
 - `Repo.AttachmentAdd`, `Repo.AttachmentDelete`, `Repo.Attachments` and
   `Repo.AttachmentRead` attach files to tickets, wiki pages and tech notes the
   way stock fossil 2.28 does (src/attach.c): the file is one ordinary blob and
@@ -78,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A wasm build no longer links `math/big`'s floating point, about 5 KB of a
+  gzipped TinyGo binary. Fossil's `%.17g` of a text Julian day is now
+  computed in `float64` wherever the platform's long double is a double
+  (wasm, macOS arm64, Windows), bit-identical to the `big.Float` emulation
+  at 53 bits, which remains for the 64- and 113-bit long doubles and is left
+  out of wasm builds. Stored times are unchanged.
 - An origin's classification memo keeps the trees its horizons' walks read
   compactly: blob names as ids, each tree's files as sorted delta-varint
   ids, and a full manifest as its difference from the one kept before it

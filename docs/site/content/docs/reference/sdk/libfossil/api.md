@@ -118,6 +118,8 @@ import "github.com/danmestas/go-libfossil"
 - [type PullOpts](<#PullOpts>)
 - [type RC](<#RC>)
   - [func \(rc RC\) String\(\) string](<#RC.String>)
+- [type RefusedError](<#RefusedError>)
+  - [func \(e \*RefusedError\) Error\(\) string](<#RefusedError.Error>)
 - [type Repo](<#Repo>)
   - [func Create\(path string, opts CreateOpts\) \(\*Repo, error\)](<#Create>)
   - [func Open\(path string\) \(\*Repo, error\)](<#Open>)
@@ -1502,10 +1504,11 @@ type HandleOpts struct {
     // value: a push carrying a bigger artifact is refused whole with an
     // error naming the artifact, its stored size and the limit, and the
     // file and check-in when this repository already holds a check-in
-    // listing it, so nothing from that request is stored. 0, the default,
-    // stores any size. Clones and pulls served from the repository are not
-    // limited. XferHandler and ServeHTTP serve without a budget: a host that
-    // needs one serves HandleSyncWithOpts itself.
+    // listing it, so nothing from that request is stored, and
+    // HandleSyncWithOpts returns a *RefusedError with that reply. 0, the
+    // default, stores any size. Clones and pulls served from the repository
+    // are not limited. XferHandler and ServeHTTP serve without a budget: a
+    // host that needs one serves HandleSyncWithOpts itself.
     MaxStoredBytes int
 }
 ```
@@ -1786,6 +1789,26 @@ func (rc RC) String() string
 ```
 
 
+
+<a name="RefusedError"></a>
+## type RefusedError
+
+RefusedError is the error HandleSyncWithOpts returns, beside the reply, when HandleOpts.MaxStoredBytes refused the request. Message is the text of the reply's one error card.
+
+```go
+type RefusedError struct {
+    Message string
+}
+```
+
+<a name="RefusedError.Error"></a>
+### func \(\*RefusedError\) Error
+
+```go
+func (e *RefusedError) Error() string
+```
+
+Error returns Message.
 
 <a name="Repo"></a>
 ## type Repo
@@ -2110,6 +2133,8 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 ```
 
 HandleSyncWithOpts processes an incoming xfer request with optional configuration.
+
+When opts.MaxStoredBytes refuses the request, it returns both the encoded reply, which holds only the error card naming the artifact, and a \*RefusedError carrying that card's text \(match it with errors.As\). The request was rolled back, so nothing from it is stored. A host serving the reply over HTTP sends it as usual, and the client prints the error; a host whose storage aborts the whole call on any rollback can report RefusedError.Message itself. Every other error returns a nil reply.
 
 <a name="Repo.HorizonCost"></a>
 ### func \(\*Repo\) HorizonCost

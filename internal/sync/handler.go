@@ -176,6 +176,9 @@ func HandleSync(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Mes
 
 // HandleSyncWithOpts processes an incoming xfer request with optional
 // fault injection. Used by DST harness; production callers use HandleSync.
+// A request opts.MaxStoredBytes refused returns its reply, the one error
+// card, with a *RefusedError carrying that card's text; the request was
+// rolled back, so nothing from it is stored.
 func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, opts HandleOpts) (*xfer.Message, error) {
 	if r == nil {
 		panic("sync.HandleSync: r must not be nil")
@@ -222,6 +225,12 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 		SparseClassified: h.keep.classified() + h.structuralRead,
 		Err:              err,
 	})
+	if err == nil && h.budgetRefusal != "" {
+		if !h.fatal {
+			panic("sync.HandleSync: a budget refusal must end the request")
+		}
+		return resp, &RefusedError{Message: h.budgetRefusal}
+	}
 	return resp, err
 }
 
@@ -247,6 +256,7 @@ type handler struct {
 	keep            *sparseKeep
 	partialMirror   bool
 	maxStored       int    // HandleOpts.MaxStoredBytes; 0 = no budget
+	budgetRefusal   string // the error card a maxStored refusal ended the request with
 	historyURL      string // named in a horizon reply's horizon-served (§6.2.5)
 	repo            *repo.Repo
 	buggify         BuggifyChecker
@@ -1726,6 +1736,7 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	}
 	if refusal != "" {
 		h.fail(refusal)
+		h.budgetRefusal = refusal
 		return "", false
 	}
 	err = storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,

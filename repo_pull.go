@@ -1,4 +1,9 @@
+//go:build !libfossil_nohttp
+
 package libfossil
+
+// Pull dials its peer through NewHTTPTransport, so a build with the
+// libfossil_nohttp tag, which leaves out net/http, leaves it out too.
 
 import (
 	"context"

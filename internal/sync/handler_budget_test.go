@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net/http/httptest"
@@ -31,17 +32,29 @@ func randomBytes(seed int64, n int) []byte {
 	return b
 }
 
-// pushBudgeted sends cards in one push round to r under a store budget.
+// pushBudgeted sends cards in one push round to r under a store budget. A
+// refused round's RefusedError must carry the reply's one error card.
 func pushBudgeted(t *testing.T, r *repo.Repo, limit int, cards ...xfer.Card) *xfer.Message {
 	t.Helper()
-	req := &xfer.Message{Cards: append([]xfer.Card{
-		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC}}, cards...)}
-	resp, err := HandleSyncWithOpts(context.Background(), r, req,
-		HandleOpts{MaxStoredBytes: limit})
+	resp, err := pushBudgetedErr(r, limit, cards...)
+	var refused *RefusedError
+	if errors.As(err, &refused) {
+		if got := onlyError(t, resp); got != refused.Message {
+			t.Fatalf("RefusedError %q, error card %q", refused.Message, got)
+		}
+		return resp
+	}
 	if err != nil {
 		t.Fatalf("HandleSyncWithOpts: %v", err)
 	}
 	return resp
+}
+
+func pushBudgetedErr(r *repo.Repo, limit int, cards ...xfer.Card) (*xfer.Message, error) {
+	req := &xfer.Message{Cards: append([]xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC}}, cards...)}
+	return HandleSyncWithOpts(context.Background(), r, req,
+		HandleOpts{MaxStoredBytes: limit})
 }
 
 // onlyError returns the text of resp's error card, failing unless the reply
@@ -132,6 +145,36 @@ func TestBudgetRefusesRoundWithOversizeFile(t *testing.T) {
 	}
 	requireAbsent(t, r, smallUUID, bigUUID)
 	requireUnchanged(t, r, before)
+}
+
+// A refused round returns its reply with a *RefusedError carrying the error
+// card's text, so a host that aborts on any rollback can report the refusal
+// without parsing the reply; a round that fits returns no error.
+func TestBudgetRefusalReturnsRefusedError(t *testing.T) {
+	r := setupPushableTestRepo(t)
+	big := randomBytes(9, 2*testBudget)
+	uuid := hash.SHA1(big)
+
+	resp, err := pushBudgetedErr(r, testBudget, &xfer.FileCard{UUID: uuid, Content: big})
+
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("err = %v, want *RefusedError", err)
+	}
+	want := budgetText(uuid, storedLen(t, big))
+	if refused.Message != want || refused.Error() != want {
+		t.Fatalf("RefusedError: Message %q, Error() %q, want %q", refused.Message, refused.Error(), want)
+	}
+	if resp == nil || onlyError(t, resp) != want {
+		t.Fatalf("refused round must still return its error-card reply: %+v", resp)
+	}
+
+	small := []byte("fits")
+	resp, err = pushBudgetedErr(r, testBudget, &xfer.FileCard{UUID: hash.SHA1(small), Content: small})
+	if err != nil {
+		t.Fatalf("a push that fits returned %v", err)
+	}
+	requireNoError(t, resp)
 }
 
 // A file whose length fits but whose zlib form does not is measured by what
@@ -319,8 +362,9 @@ func TestBudgetRefusesSyncRoundWhole(t *testing.T) {
 	}}
 	resp, err := HandleSyncWithOpts(context.Background(), r, req,
 		HandleOpts{MaxStoredBytes: testBudget, Observer: filesObserver{end: &end}})
-	if err != nil {
-		t.Fatalf("HandleSyncWithOpts: %v", err)
+	var refused *RefusedError
+	if !errors.As(err, &refused) {
+		t.Fatalf("HandleSyncWithOpts: %v, want *RefusedError", err)
 	}
 	if got, want := onlyError(t, resp), budgetText(bigUUID, storedLen(t, big)); got != want {
 		t.Fatalf("error card:\n got %q\nwant %q", got, want)

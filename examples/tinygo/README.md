@@ -24,6 +24,13 @@ Binaryen 133).
 
 A program that leaves out sync (no `net/http`, no TLS) is smaller.
 
+A library embedder that never uses the HTTP transport or server can build
+with `-tags libfossil_nohttp`, which leaves `net/http` and its TLS code out
+(about 97 KB gzipped). This example does not build with that tag, since it
+calls `NewHTTPTransport`, and neither does the `cli` package. A tagged
+embedder supplies its own transport and serving, for example a `Transport`
+for `Sync` and its own request handling around `HandleSyncWithOpts`.
+
 No SQLite driver is imported here. A TinyGo host registers a
 `database/sql` driver over its own SQLite. The `ncruces` driver runs SQLite
 as an embedded wasm module and is for standard Go builds; the `modernc`

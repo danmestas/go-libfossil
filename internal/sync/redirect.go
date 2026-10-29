@@ -1,4 +1,10 @@
+//go:build !libfossil_nohttp
+
 package sync
+
+// This file holds the net/http request path. A build with the libfossil_nohttp tag
+// leaves it out, and with it net/http, for a host that supplies its own
+// transport (docs: Install, TinyGo).
 
 import (
 	"bytes"

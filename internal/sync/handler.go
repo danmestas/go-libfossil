@@ -158,6 +158,14 @@ type HandleOpts struct {
 	// pushes (fossil's REMOTE_ADDR). "" takes the one WithRemoteAddr put in
 	// the context, if any.
 	RemoteAddr string
+	// MaxStoredBytes, when positive, is the most bytes one artifact this
+	// request pushes may occupy in blob.content, as stored (compressed, and
+	// as a delta when it arrives as one). A host whose storage caps a single
+	// value sets it: an artifact over it refuses the request whole, naming
+	// the artifact, instead of failing at the storage layer. 0 stores any
+	// size. Clone and pull replies are not limited. The HandleSync a
+	// ServeHTTP or XferHandler caller usually passes applies no budget.
+	MaxStoredBytes int
 }
 
 // HandleSync processes an incoming xfer request and produces a response.
@@ -175,6 +183,9 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	if req == nil {
 		panic("sync.HandleSync: req must not be nil")
 	}
+	if opts.MaxStoredBytes < 0 {
+		panic("sync.HandleSync: opts.MaxStoredBytes must not be negative")
+	}
 
 	obs := resolveObserver(opts.Observer)
 	ctx = obs.HandleStarted(ctx, HandleStart{
@@ -182,7 +193,7 @@ func HandleSyncWithOpts(ctx context.Context, r *repo.Repo, req *xfer.Message, op
 	})
 
 	h := &handler{repo: r, buggify: opts.Buggify, cache: opts.ContentCache, clock: opts.Clock, partialMirror: opts.PartialMirror, ctx: ctx,
-		memo: originMemo(r.DB())}
+		memo: originMemo(r.DB()), maxStored: opts.MaxStoredBytes}
 	if h.clock == nil {
 		h.clock = simio.RealClock{}
 	}
@@ -235,6 +246,7 @@ type handler struct {
 	cone            *cone.Cone
 	keep            *sparseKeep
 	partialMirror   bool
+	maxStored       int    // HandleOpts.MaxStoredBytes; 0 = no budget
 	historyURL      string // named in a horizon reply's horizon-served (§6.2.5)
 	repo            *repo.Repo
 	buggify         BuggifyChecker
@@ -1655,7 +1667,17 @@ func (h *handler) storeFile(ctx context.Context, uuid, deltaSrc string, payload 
 	if h.pass == nil {
 		h.pass = newReceivePass() // one pass per request
 	}
-	err := storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
+	// Refused before storing, so the storage layer never sees a value it
+	// cannot hold; the request rolls back whole (§8.1 fatal).
+	refusal, err := h.overBudget(uuid, payload, storedBlob)
+	if err != nil {
+		return fmt.Sprintf("storing %s: %v", uuid, err), false
+	}
+	if refusal != "" {
+		h.fail(refusal)
+		return "", false
+	}
+	err = storeReceivedFile(ctx, h.repo, h.pass, uuid, deltaSrc, payload, storedBlob, vis,
 		nil)
 	// A late mismatch names the delta at fault, which this request stored
 	// earlier, not the card that made its bytes available.

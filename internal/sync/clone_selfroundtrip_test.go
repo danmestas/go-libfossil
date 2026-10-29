@@ -60,6 +60,12 @@ func incompressibleBytes(seed int64, n int) []byte {
 // sleeping, and fails the test if the server returns before then.
 func serveRepo(ctx context.Context, t *testing.T, r *repo.Repo) string {
 	t.Helper()
+	return serveRepoWith(ctx, t, r, sync.HandleSync)
+}
+
+// serveRepoWith is serveRepo answering requests with h.
+func serveRepoWith(ctx context.Context, t *testing.T, r *repo.Repo, h sync.HandleFunc) string {
+	t.Helper()
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("reserve port: %v", err)
@@ -70,7 +76,7 @@ func serveRepo(ctx context.Context, t *testing.T, r *repo.Repo) string {
 	}
 
 	errc := make(chan error, 1)
-	go func() { errc <- sync.ServeHTTP(ctx, addr, r, sync.HandleSync) }()
+	go func() { errc <- sync.ServeHTTP(ctx, addr, r, h) }()
 
 	deadline := time.Now().Add(10 * time.Second)
 	for {

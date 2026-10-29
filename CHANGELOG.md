@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `HandleOpts.MaxStoredBytes` caps how large one pushed artifact may be as
+  the repository stores it (compressed, and as a delta when pushed as one), for
+  hosts whose storage limits a single value. A push carrying a bigger artifact
+  is refused whole with one error card naming the artifact, its stored size and
+  the limit, plus the file and check-in when the repository already holds a
+  check-in that lists it; nothing from that request is stored, and stock fossil
+  prints the error. 0, the default, stores any size, and clones and pulls served
+  from the repository are not limited (related to #459).
 - `Repo.AttachmentAdd`, `Repo.AttachmentDelete`, `Repo.Attachments` and
   `Repo.AttachmentRead` attach files to tickets, wiki pages and tech notes the
   way stock fossil 2.28 does (src/attach.c): the file is one ordinary blob and

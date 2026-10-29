@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
+	"github.com/danmestas/go-libfossil/internal/manifest"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -102,6 +103,34 @@ func hzPeerServed(reply *xfer.Message) error {
 	return nil
 }
 
+// hzPeerRefused fails unless reply refuses the pull half: its last card is
+// the one horizon-not-held error, and it carries no content, no
+// announcement and no pragma serving the horizon. The push half's cards
+// may precede the error.
+func hzPeerRefused(reply *xfer.Message) error {
+	n := len(reply.Cards)
+	if n == 0 {
+		return expectf("an empty reply")
+	}
+	if last, ok := reply.Cards[n-1].(*xfer.ErrorCard); !ok || last.Message != hzPeerRefusal {
+		return expectf("the last card is %T %v, want the error %q", reply.Cards[n-1], reply.Cards[n-1], hzPeerRefusal)
+	}
+	if sent := scSyncPayloads(reply); len(sent) != 0 {
+		return expectf("the refusal carries content %v", sent)
+	}
+	for _, card := range reply.Cards {
+		switch c := card.(type) {
+		case *xfer.IGotCard:
+			return expectf("the refusal announces %s", c.UUID)
+		case *xfer.PragmaCard:
+			if strings.HasPrefix(c.Name, "horizon-") {
+				return expectf("the refusal carries pragma %s", c.Name)
+			}
+		}
+	}
+	return nil
+}
+
 // hzPeerStore is a content-horizon clone of g's origin at g.c, open to nobody.
 func hzPeerStore(t *testing.T, g *hzSyncGraph) (*repo.Repo, *scSyncPeer, error) {
 	t.Helper()
@@ -135,8 +164,11 @@ func hzPeerRefusePull(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	if err := scSyncRefused(refused, hzPeerRefusal); err != nil || len(refused.Cards) != 1 {
-		return expectf("a pull at an earlier C: %v, %d cards; want the error alone", err, len(refused.Cards))
+	if err := hzPeerRefused(refused); err != nil {
+		return expectf("a pull at an earlier C: %v", err)
+	}
+	if err := scSyncRefused(refused, hzPeerRefusal); err != nil {
+		return expectf("a pull at an earlier C: %v", err)
 	}
 	_, relay, _, err := hzServeClone(t, g, hzStoreCone(t, earlier, cone.RuleDescendants, cone.DepthContent),
 		sync.HandleOpts{})
@@ -157,28 +189,79 @@ func hzPeerRefusePull(t *testing.T) error {
 	return nil
 }
 
-// A refused sync still stores its push: the refusal is judged once the
-// request's push half is in, and only the pull half is refused.
+// A sync refused by §6.4 still takes the peer's push: a client at an
+// earlier C with a check-in of its own syncs with the store through the real
+// client, whose first round only announces it. The store asks for it, the
+// client sends it in a later round and then fails with the refusal, and is
+// sent no content: §6.4's "no content" is what the store sends, not what it
+// accepts.
 func hzPeerRefusePush(t *testing.T) error {
 	g := newHZSyncGraph(t)
+	_, server, err := hzPeerStore(t, g)
+	if err != nil {
+		return err
+	}
+	earlier := hzStoreCone(t, hzUUID(t, g.f.r, g.c2), cone.RuleDescendants, cone.DepthContent)
+	_, relay, _, err := hzServeClone(t, g, earlier, sync.HandleOpts{})
+	if err != nil {
+		return err
+	}
+	var parent libfossil.FslID
+	if err := relay.DB().QueryRow("SELECT rid FROM blob WHERE uuid=?", hzUUID(t, g.f.r, g.m)).Scan(&parent); err != nil {
+		return err
+	}
+	rid, _, err := manifest.Checkin(relay, manifest.CheckinOpts{
+		Files:   []manifest.File{{Name: "relay", Content: []byte("relay\n")}},
+		Comment: "relay", User: "u", Parent: parent, Time: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		return err
+	}
+	pushed := hzUUID(t, relay, rid)
+	result, err := sync.Sync(context.Background(), relay, server, sync.SyncOpts{Pull: true, Push: true})
+	if err == nil || !strings.Contains(err.Error(), hzPeerRefusalPrefix) {
+		return expectf("the refused sync returned %v, want the refusal", err)
+	}
+	if result.FilesRecvd != 0 || len(hzSent(server.replies)) != 0 {
+		return expectf("the refused peer was sent %d files", result.FilesRecvd)
+	}
+	if err := hzPeerRefused(server.replies[0]); err != nil {
+		return expectf("the first reply: %v", err)
+	}
+	if err := hzHeld(server.r, map[string]bool{pushed: true}, true); err != nil {
+		return expectf("the push did not land: %v", err)
+	}
+	return hzPeerPushError(t, g)
+}
+
+// hzPeerPushError: a push the requester may not make keeps its error ahead
+// of the refusal, so the peer learns both.
+func hzPeerPushError(t *testing.T, g *hzSyncGraph) error {
 	store, server, err := hzPeerStore(t, g)
 	if err != nil {
+		return err
+	}
+	if _, err := store.DB().Exec("UPDATE user SET cap='go' WHERE login='nobody'"); err != nil {
 		return err
 	}
 	code, err := store.Config("project-code")
 	if err != nil {
 		return err
 	}
-	data := []byte("pushed alongside a refused pull\n")
-	refused, err := server.Exchange(context.Background(), hzPeerPull(t, store, hzUUID(t, g.f.r, g.c2), "descendants",
-		&xfer.PushCard{ServerCode: "x", ProjectCode: code}, &xfer.FileCard{UUID: hash.SHA1(data), Content: data}))
+	reply, err := server.Exchange(context.Background(), hzPeerPull(t, store, hzUUID(t, g.f.r, g.c2), "descendants",
+		&xfer.PushCard{ServerCode: "x", ProjectCode: code}))
 	if err != nil {
 		return err
 	}
-	if err := scSyncRefused(refused, hzPeerRefusal); err != nil || len(refused.Cards) != 1 {
-		return expectf("a sync at an earlier C: %v, %d cards; want the error alone", err, len(refused.Cards))
+	if err := hzPeerRefused(reply); err != nil {
+		return err
 	}
-	return hzHeld(store, map[string]bool{hash.SHA1(data): true}, true)
+	for _, card := range reply.Cards {
+		if c, ok := card.(*xfer.ErrorCard); ok && c.Message == "not authorized to write" {
+			return nil
+		}
+	}
+	return expectf("the push error did not survive the refusal: %v", reply.Cards)
 }
 
 // A peer at a later C is served, both one whose C the store holds, whose

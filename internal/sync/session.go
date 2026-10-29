@@ -110,6 +110,9 @@ type session struct {
 	sparseReceived map[string]bool
 	horizon        bool // the store cone has a horizon: no cluster is asked for
 	structural     structuralClient
+	// refused is the peer's horizon §6.4 refusal of this session's pull, ""
+	// while it has none: the push half goes on, and Sync then fails with it.
+	refused string
 	// reloadPhantoms makes the next phantom load ask for every wanted
 	// phantom, announced or not: a structural store that fell back wants the
 	// manifests below its horizon, which an origin announced while they were
@@ -471,6 +474,11 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 	}
 	if remedy != "" {
 		s.result.Errors = append(s.result.Errors, remedy)
+	}
+	if s.refused != "" {
+		err := fmt.Errorf("sync: %w", horizonRefusal(s.refused))
+		obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), err)
+		return &s.result, err
 	}
 
 	obs.Completed(ctx, sessionEndFromSync(&s.result, s.projectCode), nil)

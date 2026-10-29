@@ -126,8 +126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hold, such as one at an earlier C, from its own partial graph. It now
   refuses the pull with one error card beginning `horizon-not-held:` and no
   content, and a go-libfossil client fails on that prefix, as
-  draft-fossil-horizon-00 §6.4 requires. A push in the same request is still
-  stored. A peer at a later C, or one this store does not hold yet, is
+  draft-fossil-horizon-00 §6.4 requires. The push half of the same sync is
+  still taken: the client answers the store's gimmes in later rounds and fails
+  once its push converges, and no content is sent to it. A peer at a later C, or one this store does not hold yet, is
   served, and the store's own held set is kept between requests
   (`partial-mirror` serves it, as it does such a clone). A structural
   store no longer mints a seed from its own seed. It answers a structural

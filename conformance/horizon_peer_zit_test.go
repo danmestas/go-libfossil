@@ -54,8 +54,8 @@ func TestZitHorizonPeer(t *testing.T) {
 	if len(exchanges) != 1 || len(hzPragmas(exchanges[0].request, "horizon")) != 1 {
 		t.Fatalf("zit's refused pull made %d exchanges, want one horizon request", len(exchanges))
 	}
-	if reply := exchanges[0].reply; scSyncRefused(reply, hzPeerRefusal) != nil || len(reply.Cards) != 1 {
-		t.Fatalf("zit's refused pull was answered with %d cards: %v", len(reply.Cards), scSyncRefused(reply, hzPeerRefusal))
+	if err := hzPeerRefused(exchanges[0].reply); err != nil {
+		t.Fatalf("zit's refused pull: %v", err)
 	}
 }
 

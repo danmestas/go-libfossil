@@ -477,18 +477,14 @@ func abortsPass(err error) bool {
 // either an explicit fail-fast path for a client: the round that received it
 // commits nothing, its processed prefix included, and no further round
 // starts. A server still treats the early case as a card error (abortsPass).
-// A horizon store's §6.4 refusal fails the round the same way.
 func failsRound(err error) bool {
 	var mismatch *hashMismatchError
-	var refusal horizonRefusal
-	return errors.As(err, &mismatch) || errors.As(err, &refusal)
+	return errors.As(err, &mismatch)
 }
 
 // horizonRefusal is a horizon store's refusal of a pull whose held set it
-// does not hold (horizon §6.4). A client treats it as fatal, as the draft
-// requires: the reply is rolled back and no closing step runs, so a
-// structural store does not read the refusal's missing horizon-served as a
-// reason to fall back.
+// does not hold (horizon §6.4), which Sync returns once its push half has
+// converged: the draft makes the refusal fatal to the requesting client.
 type horizonRefusal string
 
 func (e horizonRefusal) Error() string { return "error: " + string(e) }

@@ -619,10 +619,8 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		return err
 	}
 	// The end-of-request steps run after a broken loop too (§6.4).
-	if !h.notHeld {
-		if err := h.emitInventory(ctx); err != nil {
-			return err
-		}
+	if err := h.emitInventory(ctx); err != nil {
+		return err
 	}
 	if err := h.crosslinkReceived(ctx); err != nil {
 		return err
@@ -855,8 +853,9 @@ func (h *handler) emitInventory(ctx context.Context) error {
 		}
 	}
 	// If pull was requested, emit igot for all non-phantom blobs. Horizon
-	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it.
-	if h.pullOK {
+	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it. A
+	// pull refused by horizon §6.4 gets none.
+	if h.pullOK && !h.notHeld {
 		if err := h.answerMergeBase(ctx); err != nil {
 			return err
 		}
@@ -1048,18 +1047,34 @@ const horizonNotHeldPrefix = "horizon-not-held:"
 const horizonNotHeldText = horizonNotHeldPrefix +
 	" this store does not hold the requested horizon; pull from an origin that holds it"
 
-// refuseHorizon answers a horizon pull or sync this store does not hold
-// (horizon §6.4), as refuseClone answers a clone it does not cover: the reply
-// is reset to one error card. It runs after the request's cards, so a push
-// in the same request is stored and kept; only the pull half is refused. The
-// reply carries no push card, which only fossil's clone client needs, and
-// process adds no timestamp: the reply is the error and no content.
+// refuseHorizon answers the pull half of a horizon pull or sync this store
+// does not hold (horizon §6.4). It runs after the request's cards, so the
+// push half stands: what the peer pushed is stored, and its reply cards stay,
+// the gimmes that ask for what the peer announced and any push error, so a
+// client can finish its push in later rounds. Everything the pull half put
+// in the reply is dropped, the content and announcements and the pragmas
+// serving the horizon, so the peer is sent no content, as §6.4 requires;
+// the error card goes last, since a client stops reading at an error card.
+// process adds no timestamp, so a pull alone is answered by the error alone.
 func (h *handler) refuseHorizon() {
 	if !h.notHeld {
 		return
 	}
-	h.resetContent()
-	h.resp = []xfer.Card{&xfer.ErrorCard{Message: horizonNotHeldText}}
+	h.resp = slices.DeleteFunc(h.resp, servesPull)
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: horizonNotHeldText})
+}
+
+// servesPull reports a reply card that serves a pull: content, an
+// announcement of it, or a pragma serving the request's cone or horizon.
+func servesPull(c xfer.Card) bool {
+	switch c := c.(type) {
+	case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard, *xfer.IGotCard,
+		*xfer.UVFileCard, *xfer.UVIGotCard, *xfer.ConfigCard:
+		return true
+	case *xfer.PragmaCard:
+		return c.Name == coneServedPragma || strings.HasPrefix(c.Name, "horizon-")
+	}
+	return false
 }
 
 // wrongProject refuses a push or pull card naming another project, ahead of

@@ -301,6 +301,8 @@ type handler struct {
 	structuralRead  int                       // what placing a structural horizon read through the memo
 	resolved        *xfer.PragmaCard          // echoed to a request naming its horizon (horizon §6.2.7)
 	nameRefusal     string                    // why the request's horizon-name is refused; "" when it is not
+	asked           cone.Horizon              // the request's horizon as asked, before serving cuts its depth
+	notHeld         bool                      // a horizon pull whose held set this store's does not contain (horizon §6.4)
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -516,6 +518,10 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return h.reply(), nil
 	}
 	if h.cone != nil && h.nameRefusal == "" {
+		h.asked, _ = h.cone.Horizon()
+		if err := h.judgeHeld(ctx, cards); err != nil {
+			return nil, err
+		}
 		if err := h.prepareStructural(ctx, cards); err != nil {
 			return nil, err
 		}
@@ -964,6 +970,10 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 		return
 	}
 	if auth.CanPull(h.caps) {
+		if h.notHeld {
+			h.refuseHorizon()
+			return
+		}
 		h.pullOK = true
 		return
 	}
@@ -1024,6 +1034,24 @@ func (h *handler) refuseClone(msg string) {
 		&xfer.PushCard{ServerCode: serverCode, ProjectCode: h.projectCode},
 		&xfer.ErrorCard{Message: msg})
 	h.broke = true
+}
+
+// horizonNotHeldText is the one error card a horizon store answers a
+// horizon pull with when the requested held set is not a subset of its own
+// (horizon §6.4). The client matches it to make the refusal fatal.
+const horizonNotHeldText = "Horizon store does not hold the requested horizon; pull from an origin that holds it."
+
+// refuseHorizon answers a horizon pull or sync this store does not hold
+// (horizon §6.4), as refuseClone answers a clone it does not cover: the reply
+// so far is reset to one error card. Unlike a clone, the reply carries no
+// push card, since only fossil's clone client needs the codes, and the
+// request is rolled back whole, so a push in the same request stores nothing
+// and no timestamp follows: the reply is the error and no content.
+func (h *handler) refuseHorizon() {
+	if !h.notHeld {
+		panic("handler.refuseHorizon: the request's horizon is held")
+	}
+	h.fail(horizonNotHeldText)
 }
 
 // wrongProject refuses a push or pull card naming another project, ahead of

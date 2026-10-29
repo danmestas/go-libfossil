@@ -892,6 +892,9 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 		// recorded first so it still surfaces. (A clone's first round
 		// tolerates an error card; that path is cloneSession.serverError.)
 		s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+		if c.Message == horizonNotHeldText {
+			return true, horizonRefusal(c.Message)
+		}
 		return true, nil
 	case *xfer.PrivateCard:
 		s.nextIsPrivate = true

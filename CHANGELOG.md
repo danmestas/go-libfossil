@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `CloneResult.HorizonRemedy` and `SyncResult.HorizonRemedy` say what to do
+  after a structural store falls back to the content horizon: they name C and
+  the dense origin to pull the manifests below it from, by the history
+  interface a reply named when one did (draft-fossil-horizon-00 §6.3). The CLI
+  prints it after a clone or cone command that fell back (#490).
 - `HandleOpts.MaxStoredBytes` caps how large one pushed artifact may be as
   the repository stores it (compressed, and as a delta when pushed as one), for
   hosts whose storage limits a single value. A push carrying a bigger artifact
@@ -116,6 +121,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A horizon store served a horizon pull or sync whose held set it does not
+  hold, such as one at an earlier C, from its own partial graph. It now
+  refuses it with one error card and no content, and a go-libfossil client
+  fails on that reply, as draft-fossil-horizon-00 §6.4 requires
+  (`partial-mirror` serves it, as it does such a clone). A structural
+  store no longer mints a seed from its own seed. It answers a structural
+  request at the content level and names its `horizon-history-url` (§6.2.3),
+  so the requester falls back and reports where the history below C is held
+  (#490).
 - A server holding a repository fossil wrote, rather than this library,
   failed to classify it for a cone clone: with no record of which blobs its
   crosslinker found to be no artifact, classification read every file

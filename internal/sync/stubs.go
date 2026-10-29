@@ -69,6 +69,10 @@ type CloneResult struct {
 	// origin says history below a horizon can be queried (horizon-served
 	// URL, §6.2.5), the last a reply named; "" when none did.
 	HorizonHistoryURL string
+	// HorizonRemedy is set when HorizonFallback is: it names C, the
+	// manifests below it the store now wants, and where they are held, the
+	// history interface a reply named when one did (§6.3, §6.4).
+	HorizonRemedy string
 	// HorizonResolved is the check-in a clone's Named horizon resolved to and
 	// HorizonSteps the steps back it took, fewer than its Depth when
 	// history ran out; HorizonResolvedLocally reports the clone resolved it

@@ -115,6 +115,9 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	if result.HorizonHistoryURL != "" {
 		fmt.Printf("  History:      %s\n", result.HorizonHistoryURL)
 	}
+	if result.HorizonRemedy != "" {
+		fmt.Printf("  Remedy:       %s\n", result.HorizonRemedy)
+	}
 	return nil
 }
 

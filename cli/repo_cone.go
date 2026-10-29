@@ -253,10 +253,13 @@ func (c *RepoConeDeepenCmd) Run(g *Globals) (err error) {
 
 // printHistoryURL names the interface at which the origin says history
 // below the horizon can be queried, when a reply named one
-// (draft-fossil-horizon-00 §6.2.5).
+// (draft-fossil-horizon-00 §6.2.5), and the remedy a fallback reports.
 func printHistoryURL(result *libfossil.SyncResult) {
 	if result != nil && result.HorizonHistoryURL != "" {
 		fmt.Printf("history: %s\n", result.HorizonHistoryURL)
+	}
+	if result != nil && result.HorizonRemedy != "" {
+		fmt.Printf("remedy: %s\n", result.HorizonRemedy)
 	}
 }
 

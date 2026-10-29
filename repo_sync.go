@@ -60,6 +60,12 @@ type SyncResult struct {
 	// named; "" when none did. An origin names it with
 	// SettingHorizonHistoryURL.
 	HorizonHistoryURL string
+	// HorizonRemedy is set when HorizonFallback is: it names the horizon,
+	// says the manifests below it are now wanted, and names where they are
+	// held, the dense origin at HorizonHistoryURL when a reply named one. A
+	// peer that is itself at a horizon does not hold them
+	// (draft-fossil-horizon-00 §6.2.3, §6.3, §6.4).
+	HorizonRemedy string
 }
 
 // HandleOpts configures server-side sync handling.
@@ -316,6 +322,7 @@ func convertSyncResult(r *internalsync.SyncResult) *SyncResult {
 		StructuralServed:  r.StructuralServed,
 		HorizonFallback:   r.HorizonFallback,
 		HorizonHistoryURL: r.HorizonHistoryURL,
+		HorizonRemedy:     r.HorizonRemedy,
 	}
 }
 

@@ -392,6 +392,8 @@ func rememberSparseReceived(q db.Querier, received map[string]bool, uuid string)
 // request's paths lie inside the store's, and under a store horizon the
 // request names a horizon whose held set lies inside the store's own, both
 // computed over the store. A horizon the store cannot place covers nothing.
+// The horizon judged is the one asked: a structural request this store
+// answers as content (prepareStructural) still asks for no manifest below C.
 func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
 	if !coneContains(have, h.cone) {
 		return false, nil
@@ -403,24 +405,68 @@ func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	want, ok := h.cone.Horizon()
-	if !ok {
+	if h.asked.Hash() == "" {
 		return false, nil
 	}
 	// A structural store holds no manifest below its horizon, which a
 	// content-horizon clone keeps.
-	if own.Depth() == cone.DepthStructural && want.Depth() != cone.DepthStructural {
+	if own.Depth() == cone.DepthStructural && h.asked.Depth() != cone.DepthStructural {
 		return false, nil
 	}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	held, placed, err := horizon.Place(ctx, h.repo.DB(), own)
+	return heldWithin(ctx, h.repo.DB(), own, h.asked)
+}
+
+// judgeHeld decides, ahead of the card loop, whether a horizon pull or sync
+// asks for a held set this store's horizon does not contain (horizon §6.4),
+// which handlePullCard then refuses. Only K is compared: a pull at the
+// store's own C and rule is served whatever its depth, since a structural
+// request is answered at the content level here and a content one keeps no
+// manifest this store's pulls could not already announce. A partial mirror
+// serves what it holds, as it does a clone it does not cover.
+func (h *handler) judgeHeld(ctx context.Context, cards []xfer.Card) error {
+	if ctx == nil || h.cone == nil {
+		panic("handler.judgeHeld: nil context or cone")
+	}
+	if h.asked.Hash() == "" || !hasPullCard(cards) {
+		return nil
+	}
+	have, err := content.StoreCone(h.repo.DB())
+	if err != nil {
+		return err
+	}
+	own, ok := horizonOf(have)
+	if !ok {
+		return nil
+	}
+	mirror, err := h.servesPartialMirror()
+	if err != nil || mirror {
+		return err
+	}
+	held, err := heldWithin(ctx, h.repo.DB(), own, h.asked)
+	h.notHeld = !held
+	return err
+}
+
+// heldWithin reports whether want's held set is a subset of own's, both
+// placed over q. A horizon q cannot place holds nothing and is held by none.
+func heldWithin(ctx context.Context, q db.Querier, own, want cone.Horizon) (bool, error) {
+	if ctx == nil || q == nil {
+		panic("sync.heldWithin: nil context or querier")
+	}
+	// A peer at the store's own C and rule, the usual case in a mesh, asks
+	// for the same set; the two held-set walks are skipped for it.
+	if own.Hash() == want.Hash() && own.Rule() == want.Rule() {
+		return true, nil
+	}
+	held, placed, err := horizon.Place(ctx, q, own)
 	if err != nil || !placed {
 		return false, err
 	}
-	asked, placed, err := horizon.Place(ctx, h.repo.DB(), want)
+	asked, placed, err := horizon.Place(ctx, q, want)
 	if err != nil || !placed {
 		return false, err
 	}

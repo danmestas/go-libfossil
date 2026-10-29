@@ -37,9 +37,10 @@ type structuralServe struct {
 }
 
 // prepareStructural places a structural request's horizon and mints its
-// seed. A request whose C the store cannot place, or that has nothing to
-// seed, is answered and advertised as the content horizon (§6.2.3): its
-// cone is cut at the content depth, so the keep set holds every manifest.
+// seed. A request whose C the store cannot place, that has nothing to
+// seed, or that a store at a structural horizon receives, is answered and
+// advertised as the content horizon (§6.2.3): its cone is cut at the
+// content depth, so the keep set holds every manifest.
 func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) error {
 	if ctx == nil || h.cone == nil {
 		panic("handler.prepareStructural: nil context or cone")
@@ -49,6 +50,15 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 		return nil
 	}
 	q := h.repo.DB()
+	// §6.2.3: a store that is itself at a structural horizon does not mint.
+	// Its tag state below C is its own seed, not the dense history the D
+	// floor and label rules were written for, so it cannot seed and answers
+	// as content; horizon-served names its history interface, which the
+	// requester's fallback reports as where the manifests below C are held.
+	if _, seeded, err := content.StructuralHorizon(q); err != nil || seeded {
+		h.cone = withDepth(h.cone, cone.DepthContent)
+		return err
+	}
 	k, reach, placed, err := h.structuralReach(ctx, hz)
 	if err != nil {
 		return err

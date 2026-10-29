@@ -92,6 +92,10 @@ type SyncResult struct {
 	// origin says history below a horizon can be queried (horizon-served
 	// URL, §6.2.5), the last a reply named; "" when none did.
 	HorizonHistoryURL string
+	// HorizonRemedy is set when HorizonFallback is: it names C, the
+	// manifests below it the store now wants, and where they are held, the
+	// history interface a reply named when one did (§6.3, §6.4).
+	HorizonRemedy string
 	// AvoidSubmanifests reports that this exchange received pragma
 	// avoid-submanifests (draft-fossil-submanifests-00 §7.2). Sync makes no
 	// commit; this observation does not bind a later local commit.
@@ -460,6 +464,9 @@ func Sync(ctx context.Context, r *repo.Repo, t Transport, opts SyncOpts) (result
 		return &s.result, fmt.Errorf("sync: horizon seed: %w", err)
 	}
 	s.result.HorizonFallback = s.result.HorizonFallback || fell
+	if s.result.HorizonRemedy, err = fallbackRemedy(s.repo.DB(), s.result.HorizonFallback, s.result.HorizonHistoryURL); err != nil {
+		return &s.result, fmt.Errorf("sync: %w", err)
+	}
 	if err := s.recordCursor(); err != nil {
 		return &s.result, err
 	}

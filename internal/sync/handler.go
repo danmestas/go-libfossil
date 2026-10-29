@@ -302,7 +302,8 @@ type handler struct {
 	resolved        *xfer.PragmaCard          // echoed to a request naming its horizon (horizon §6.2.7)
 	nameRefusal     string                    // why the request's horizon-name is refused; "" when it is not
 	asked           cone.Horizon              // the request's horizon as asked, before serving cuts its depth
-	notHeld         bool                      // a horizon pull whose held set this store's does not contain (horizon §6.4)
+	notHeld         bool                      // the pull half is refused: its held set is not in this store's (horizon §6.4)
+	judged          classifier                // what judgeHeld classified through, reused by the inventory
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -519,9 +520,6 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	}
 	if h.cone != nil && h.nameRefusal == "" {
 		h.asked, _ = h.cone.Horizon()
-		if err := h.judgeHeld(ctx, cards); err != nil {
-			return nil, err
-		}
 		if err := h.prepareStructural(ctx, cards); err != nil {
 			return nil, err
 		}
@@ -557,7 +555,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	if h.fatal || h.aborted {
 		h.filesRecvd = 0 // rolled back with the request
 	}
-	if h.fatal {
+	if h.fatal || h.notHeld {
 		return h.reply(), nil
 	}
 	h.resp = append(h.resp, h.timestampComment())
@@ -615,9 +613,16 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(seedRefusedText)
 		return errPassAborted
 	}
-	// The end-of-request steps run after a broken loop too (§6.4).
-	if err := h.emitInventory(ctx); err != nil {
+	// Horizon §6.4: judged once the pull card has passed its permission
+	// check and the push half is stored, so a refusal discards no push.
+	if err := h.judgeHeld(ctx); err != nil {
 		return err
+	}
+	// The end-of-request steps run after a broken loop too (§6.4).
+	if !h.notHeld {
+		if err := h.emitInventory(ctx); err != nil {
+			return err
+		}
 	}
 	if err := h.crosslinkReceived(ctx); err != nil {
 		return err
@@ -632,6 +637,7 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(refusal)
 		return errPassAborted
 	}
+	h.refuseHorizon()
 	return nil
 }
 
@@ -970,10 +976,6 @@ func (h *handler) handlePullCard(c *xfer.PullCard) {
 		return
 	}
 	if auth.CanPull(h.caps) {
-		if h.notHeld {
-			h.refuseHorizon()
-			return
-		}
 		h.pullOK = true
 		return
 	}
@@ -1036,22 +1038,28 @@ func (h *handler) refuseClone(msg string) {
 	h.broke = true
 }
 
-// horizonNotHeldText is the one error card a horizon store answers a
+// horizonNotHeldPrefix begins the one error card a horizon store answers a
 // horizon pull with when the requested held set is not a subset of its own
-// (horizon §6.4). The client matches it to make the refusal fatal.
-const horizonNotHeldText = "Horizon store does not hold the requested horizon; pull from an origin that holds it."
+// (horizon §6.4). It is machine-readable: a client matches the prefix, not
+// the human text after it, to make the refusal fatal.
+const horizonNotHeldPrefix = "horizon-not-held:"
+
+// horizonNotHeldText is this store's whole refusal.
+const horizonNotHeldText = horizonNotHeldPrefix +
+	" this store does not hold the requested horizon; pull from an origin that holds it"
 
 // refuseHorizon answers a horizon pull or sync this store does not hold
 // (horizon §6.4), as refuseClone answers a clone it does not cover: the reply
-// so far is reset to one error card. Unlike a clone, the reply carries no
-// push card, since only fossil's clone client needs the codes, and the
-// request is rolled back whole, so a push in the same request stores nothing
-// and no timestamp follows: the reply is the error and no content.
+// is reset to one error card. It runs after the request's cards, so a push
+// in the same request is stored and kept; only the pull half is refused. The
+// reply carries no push card, which only fossil's clone client needs, and
+// process adds no timestamp: the reply is the error and no content.
 func (h *handler) refuseHorizon() {
 	if !h.notHeld {
-		panic("handler.refuseHorizon: the request's horizon is held")
+		return
 	}
-	h.fail(horizonNotHeldText)
+	h.resetContent()
+	h.resp = []xfer.Card{&xfer.ErrorCard{Message: horizonNotHeldText}}
 }
 
 // wrongProject refuses a push or pull card naming another project, ahead of

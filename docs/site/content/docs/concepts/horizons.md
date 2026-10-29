@@ -253,9 +253,9 @@ libfossil -R repo.fossil repo verify --seed
 
 **A horizon store serving horizon peers.** Horizon clones can pull from one another, as in a mesh where each peer pulls from whichever one announced a commit. A store at a horizon serves another horizon store by three rules (§6.2.3, §6.4):
 
-- A horizon store serves a horizon request only when the held set the request names is a subset of its own. A pull or sync at an earlier C, or under a rule that holds more, gets one error card and nothing else, and the client fails. A clone it does not cover is refused the same way, unless `partial-mirror` is on.
+- A horizon store serves a horizon request only when the held set the request names is a subset of its own. A pull or sync at an earlier C, or under a rule that holds more, gets one error card beginning `horizon-not-held:` and nothing else, and the client fails. A push in the same sync is still stored. A peer at a later C, including one the store does not hold yet, is served. A clone it does not cover is refused the same way, unless `partial-mirror` is on.
 - A content-horizon store holds every manifest, so it serves any content-horizon request at or above its own C.
-- A structural store does not mint seeds. A structural request is answered at the content level. The requester falls back to the content horizon and reports `HorizonRemedy`. That names C and the dense origin to pull the manifests below C from, by the store's `horizon-history-url` when one is set. A structural store still refuses a content-horizon clone, since it lacks the manifests below C that the clone would keep.
+- A structural store does not mint seeds. A structural request is answered at the content level. The requester falls back to the content horizon and reports a `horizon-fallback:` remedy in `SyncResult.Errors` or `CloneResult.Messages`. That names C and the dense origin to pull the manifests below C from, by the store's `horizon-history-url` when one is set. A structural store still refuses a content-horizon clone, since it lacks the manifests below C that the clone would keep.
 
 **zit 0.7.4** fails a pull that a go-libfossil horizon store refuses. As a server, zit 0.7.4 serves a horizon pull at an earlier C than its own store's instead of refusing it.
 

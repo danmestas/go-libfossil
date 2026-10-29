@@ -1004,12 +1004,6 @@ type CloneResult struct {
     // named; "" when none did. An origin names it with
     // SettingHorizonHistoryURL.
     HorizonHistoryURL string
-    // HorizonRemedy is set when HorizonFallback is: it names the horizon,
-    // says the manifests below it are now wanted, and names where they are
-    // held, the dense origin at HorizonHistoryURL when a reply named one. A
-    // peer that is itself at a horizon does not hold them
-    // (draft-fossil-horizon-00 §6.2.3, §6.3, §6.4).
-    HorizonRemedy string
     // HorizonResolved is the check-in CloneOpts.Horizon named resolved to and
     // HorizonSteps the steps back it took, fewer than HorizonDepth when
     // history ran out; HorizonResolvedLocally reports that the origin did
@@ -2853,12 +2847,6 @@ type SyncResult struct {
     // named; "" when none did. An origin names it with
     // SettingHorizonHistoryURL.
     HorizonHistoryURL string
-    // HorizonRemedy is set when HorizonFallback is: it names the horizon,
-    // says the manifests below it are now wanted, and names where they are
-    // held, the dense origin at HorizonHistoryURL when a reply named one. A
-    // peer that is itself at a horizon does not hold them
-    // (draft-fossil-horizon-00 §6.2.3, §6.3, §6.4).
-    HorizonRemedy string
 }
 ```
 

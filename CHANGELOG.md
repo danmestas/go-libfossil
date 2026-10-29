@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `CloneResult.HorizonRemedy` and `SyncResult.HorizonRemedy` say what to do
-  after a structural store falls back to the content horizon: they name C and
-  the dense origin to pull the manifests below it from, by the history
-  interface a reply named when one did (draft-fossil-horizon-00 §6.3). The CLI
-  prints it after a clone or cone command that fell back (#490).
+- A structural store that falls back to the content horizon reports a
+  remedy beginning `horizon-fallback:`, in `SyncResult.Errors` or
+  `CloneResult.Messages`. It names C and the dense origin to pull the
+  manifests below C from, by the history interface a reply named when one
+  did (draft-fossil-horizon-00 §6.3). The CLI prints it after a clone or
+  cone command that fell back (#490).
 - `HandleOpts.MaxStoredBytes` caps how large one pushed artifact may be as
   the repository stores it (compressed, and as a delta when pushed as one), for
   hosts whose storage limits a single value. A push carrying a bigger artifact
@@ -123,8 +124,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A horizon store served a horizon pull or sync whose held set it does not
   hold, such as one at an earlier C, from its own partial graph. It now
-  refuses it with one error card and no content, and a go-libfossil client
-  fails on that reply, as draft-fossil-horizon-00 §6.4 requires
+  refuses the pull with one error card beginning `horizon-not-held:` and no
+  content, and a go-libfossil client fails on that prefix, as
+  draft-fossil-horizon-00 §6.4 requires. A push in the same request is still
+  stored. A peer at a later C, or one this store does not hold yet, is
+  served, and the store's own held set is kept between requests
   (`partial-mirror` serves it, as it does such a clone). A structural
   store no longer mints a seed from its own seed. It answers a structural
   request at the content level and names its `horizon-history-url` (§6.2.3),

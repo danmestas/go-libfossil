@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/danmestas/go-libfossil/internal/cone"
@@ -60,9 +61,10 @@ func TestZitHorizonPeer(t *testing.T) {
 
 // TestZitHorizonPeerServes has go-libfossil pull at an earlier C from zit's
 // horizon store. zit is the server: when it refuses with one error card and
-// no content (§6.4), go-libfossil's pull must fail and store nothing; a zit
-// that serves the pull instead does not implement the refusal, and the case
-// is skipped.
+// no content (§6.4) carrying the horizon-not-held: prefix, go-libfossil's
+// pull must fail and store nothing. A zit that serves the pull instead, or
+// refuses without the prefix, does not implement the refusal clients match,
+// and the case is skipped.
 func TestZitHorizonPeerServes(t *testing.T) {
 	bin := zitHorizonBinary(t)
 	dir := t.TempDir()
@@ -92,10 +94,13 @@ func TestZitHorizonPeerServes(t *testing.T) {
 			}
 		}
 	}
-	if refusal == "" {
+	switch {
+	case refusal == "":
 		t.Skipf("zit (%s) serves a horizon pull at an earlier C than its own (§6.4 refusal not implemented)", zitVersion(bin))
+	case !strings.HasPrefix(refusal, hzPeerRefusalPrefix):
+		t.Skipf("zit (%s) refuses with %q, which lacks the %s prefix a client matches", zitVersion(bin), refusal,
+			hzPeerRefusalPrefix)
 	}
-	t.Logf("zit refused with %q; go-libfossil's pull: %v", refusal, err)
 	if err == nil {
 		t.Fatalf("go-libfossil's pull took zit's refusal %q as non-fatal", refusal)
 	}

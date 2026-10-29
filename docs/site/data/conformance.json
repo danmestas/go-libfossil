@@ -4577,7 +4577,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 159,
+      "cases": 161,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -5175,7 +5175,7 @@
           "id": "HZ-6.4-1",
           "section": "6.4",
           "status": "COVERED",
-          "cases": 2,
+          "cases": 4,
           "text": "A server over a horizon clone refuses a dense clone request, and a horizon request whose held set is not a subset of its own, with one error card and no content; the requesting client treats that reply as fatal.",
           "notes": ""
         },

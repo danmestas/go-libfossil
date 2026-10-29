@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	libfossil "github.com/danmestas/go-libfossil"
@@ -115,8 +116,10 @@ func (c *RepoCloneCmd) Run(g *Globals) error {
 	if result.HorizonHistoryURL != "" {
 		fmt.Printf("  History:      %s\n", result.HorizonHistoryURL)
 	}
-	if result.HorizonRemedy != "" {
-		fmt.Printf("  Remedy:       %s\n", result.HorizonRemedy)
+	for _, m := range result.Messages {
+		if strings.HasPrefix(m, horizonFallbackPrefix) {
+			fmt.Printf("  Remedy:       %s\n", m)
+		}
 	}
 	return nil
 }

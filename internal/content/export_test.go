@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/danmestas/go-libfossil/db"
+	"github.com/danmestas/go-libfossil/internal/cone"
 )
 
 // LoadAbsencesWithin is LoadAbsencesContext under injected budgets, and
@@ -70,4 +71,21 @@ func (m *Memo) ForgetStore() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.store = nil
+}
+
+// HorizonAbove is what a fresh walk of h's held set names: the blobs its
+// trees name, by name.
+func HorizonAbove(ctx context.Context, q db.Querier, h cone.Horizon) (map[string]bool, error) {
+	var work ReferenceWork
+	cut, _, err := horizonTrees(ctx, q, h, defaultReferenceLimits, &work)
+	return cut.above, err
+}
+
+// HorizonAbove is HorizonAbove as v's walks give it.
+func (v *MemoView) HorizonAbove(ctx context.Context, q db.Querier, h cone.Horizon) (map[string]bool, error) {
+	c, err := v.cut(ctx, q, h)
+	if err != nil {
+		return nil, err
+	}
+	return c.cut.above, nil
 }

@@ -175,6 +175,17 @@ func sameClassification(t *testing.T, r *repo.Repo, v *content.MemoView, c *cone
 		if fplaced != mplaced || !slices.Equal(fk, mk) || !maps.Equal(freach, mreach) {
 			t.Fatalf("%s: reach fresh K=%v placed=%v, memo K=%v placed=%v", c, fk, fplaced, mk, mplaced)
 		}
+		fabove, err := content.HorizonAbove(ctx, q, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mabove, err := v.HorizonAbove(ctx, q, h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(fabove, mabove) {
+			t.Fatalf("%s: the walk names %d blobs fresh, %d from the memo", c, len(fabove), len(mabove))
+		}
 	}
 	rows, err := q.Query("SELECT rid FROM blob ORDER BY rid")
 	if err != nil {
@@ -425,8 +436,93 @@ func TestMemoTreesSurviveFullRead(t *testing.T) {
 			if reads := classify(shifted, shifted.tips[1], false); reads != 0 {
 				t.Fatalf("the shifted store read %d trees twice", reads)
 			}
-			classify(m, m.tips[1], true)
+			if classify(m, m.tips[1], true) == 0 {
+				t.Fatal("back on the first store, its trees were served at the shifted rids")
+			}
+			if reads := classify(m, m.tips[1], false); reads != 0 {
+				t.Fatalf("back on the first store, %d trees read twice", reads)
+			}
 		})
+	}
+}
+
+// A view whose store the memo has since gone past publishes nothing of its
+// store, but keeps the trees it read, which no store changes: a later
+// horizon reads only the trees that view did not.
+func TestMemoStaleViewKeepsTrees(t *testing.T) {
+	ctx := context.Background()
+	m := newMemoRepo(t, hzFull)
+	tip := m.commit(0)
+	for i := 0; i < 4; i++ {
+		tip = m.commit(tip)
+	}
+	memo := content.NewMemo()
+	stale, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.commit(tip)
+	ahead, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ahead.Publish()
+	h, err := cone.NewHorizon(m.uuid(m.tips[1]), cone.RuleDescendants, cone.DepthContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := stale.HorizonReach(ctx, m.r.DB(), h); err != nil {
+		t.Fatal(err)
+	}
+	read, reads := stale.TreesRead()
+	if reads == 0 {
+		t.Fatal("the stale view read no tree")
+	}
+	stale.Publish()
+	v, err := memo.View(ctx, m.r.DB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Read() != 0 {
+		t.Fatalf("the stale view's store was published: the next view read %d artifacts", v.Read())
+	}
+	for _, sc := range m.memoCones(m.tips[1]) {
+		sameClassification(t, m.r, v, sc)
+	}
+	again, _ := v.TreesRead()
+	for _, name := range again {
+		if slices.Contains(read, name) {
+			t.Fatalf("tree %s, which the stale view read, read again", name)
+		}
+	}
+}
+
+// A store whose highest rid is deleted is read in full once, and the memo
+// then follows it: the next view reads nothing.
+func TestMemoFollowsDroppedTop(t *testing.T) {
+	ctx := context.Background()
+	m := newMemoRepo(t, hzFull)
+	m.commit(m.commit(0))
+	top, _, err := blob.Store(m.r.DB(), []byte("a blob deleted again\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	memo := content.NewMemo()
+	for i, want := range []string{"full", "full", "none"} {
+		if i == 1 {
+			if _, err := m.r.DB().Exec("DELETE FROM blob WHERE rid=?", top); err != nil {
+				t.Fatal(err)
+			}
+		}
+		v, err := memo.View(ctx, m.r.DB())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (v.Read() == 0) != (want == "none") {
+			t.Fatalf("view %d read %d artifacts, want %s", i, v.Read(), want)
+		}
+		sameClassification(t, m.r, v, m.memoCones(m.tips[0])[1])
+		v.Publish()
 	}
 }
 

@@ -2,7 +2,9 @@ package content
 
 import (
 	"cmp"
+	"context"
 	"encoding/binary"
+	"fmt"
 	"maps"
 	"math"
 	"slices"
@@ -20,19 +22,19 @@ import (
 // about 21M F-card entries between them, mostly the same few thousand
 // blobs, and the index keeps every one of its trees in about 11MiB. A
 // piece costs a few bytes per F card its manifest spells in about 70, so
-// the index grows with the store, like the reference graph beside it; it
-// holds no more names than a store can hold artifacts (memoTreeNames).
+// the index grows with the store, like the reference graph beside it.
 //
 // A piece is what its name's bytes say, the same in every store that
-// holds it, so the index outlives a full read of the store; the rid a
-// piece was read at serves only a store that holds that name there. A
-// store that holds the name but could no longer expand it (a delta whose
-// source it since lost) is served the piece the store that read it saw:
-// the walk keeps more, never less (treeWalk).
+// holds it, so the index outlives a full read of the store. It serves a
+// view only where a fresh read would give the same piece: the view's store
+// holds the name at the piece's rid and can expand it (treeExpandable).
 
-// memoTreeNames bounds the names a tree index interns: past the most
-// artifacts a classified store holds, which only stores that renamed most
-// of what the index read can reach, the index starts again.
+// memoTreeNames bounds the names a tree index interns, in place of a bound
+// on its bytes: one store's trees name at most its artifacts, which a
+// classification bounds by coneReferenceNodes, so the bound is passed only
+// by an index that outlived stores which renamed most of what it read.
+// A publish that would pass it starts the index again from the view's own
+// pieces, and keeps none when even those pass it.
 const memoTreeNames = coneReferenceNodes
 
 // treePieceBytes and treeNameBytes are what a kept piece and an interned
@@ -303,20 +305,32 @@ func (d *treeDecoder) files(p *treePiece) []uint32 {
 	return ids
 }
 
-// publishTrees keeps pieces, which a view read, in the memo's trees, newest
-// first as a walk reads them. A piece the trees hold at another rid, which
-// a renumbered store holds, takes the view's rid. The caller holds m.mu.
-func (m *Memo) publishTrees(pieces map[string]*plainTree) {
+// publishTrees keeps pieces, which a view read, in the memo's trees, past
+// limit names (memoTreeNames) starting again. The caller holds m.mu.
+func (m *Memo) publishTrees(pieces map[string]*plainTree, limit int) {
 	if len(pieces) == 0 {
 		return
 	}
 	names := slices.SortedFunc(maps.Keys(pieces), func(a, b string) int {
 		return cmp.Compare(pieces[b].rid, pieces[a].rid)
 	})
-	x := newTreeIndex()
-	if m.trees != nil && len(m.trees.names.names)+len(pieces) <= memoTreeNames {
-		x = m.trees.clone()
+	if m.trees != nil {
+		if x := m.trees.clone(); x.addPieces(names, pieces, limit) {
+			m.trees = x
+			return
+		}
 	}
+	m.trees = nil
+	if x := newTreeIndex(); x.addPieces(names, pieces, limit) {
+		m.trees = x
+	}
+}
+
+// addPieces adds pieces, by names in order (newest first, as a walk reads
+// them), and reports whether x still holds no more than limit names,
+// stopping at the first piece that passes it. A piece x holds at another
+// rid, which a renumbered store holds, takes the new rid.
+func (x *treeIndex) addPieces(names []string, pieces map[string]*plainTree, limit int) bool {
 	for _, name := range names {
 		t := pieces[name]
 		if held := x.piece(name); held != nil {
@@ -328,15 +342,80 @@ func (m *Memo) publishTrees(pieces map[string]*plainTree) {
 			continue
 		}
 		x.add(name, t)
+		if len(x.names.names) > limit {
+			return false
+		}
 	}
-	m.trees = x
+	return true
+}
+
+// treeUnexpandableSQL lists the rids whose content a store cannot expand:
+// those of the JSON array ?1 (its phantoms and the delta sources it holds
+// no row for) and every delta whose chain of sources reaches one.
+const treeUnexpandableSQL = `WITH RECURSIVE bad(rid) AS (
+	SELECT value FROM json_each(?1)
+	UNION SELECT delta.rid FROM delta JOIN bad ON delta.srcid=bad.rid)
+SELECT rid FROM bad`
+
+// sourcelessDeltas lists the delta sources the store holds no row for.
+// On fossil-scm.org's store it scans 59k delta rows in about 20ms, so a
+// memo reads it once per lineage, not once per view.
+func sourcelessDeltas(ctx context.Context, q db.Querier) ([]libfossil.FslID, error) {
+	var out []libfossil.FslID
+	err := referenceRows(ctx, q, `SELECT DISTINCT delta.srcid FROM delta
+		LEFT JOIN blob ON blob.rid=delta.srcid WHERE blob.rid IS NULL`, func(scan func(...any) error) error {
+		var rid libfossil.FslID
+		err := scan(&rid)
+		out = append(out, rid)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("classification memo: delta sources: %w", err)
+	}
+	return out, nil
+}
+
+// treeExpandable reports whether the view's store holds name at rid and can
+// expand it, as a fresh read of the piece would; a phantom is among what it
+// cannot expand. A store goes on only by appending rows and filling
+// phantoms that nothing is a delta of (memoStore.settled), so the rids it
+// cannot expand are listed once per view, from its phantoms and the
+// sources its deltas lack (memoStore.sourceless): about 0.3ms on
+// fossil-scm.org's store.
+func (v *MemoView) treeExpandable(ctx context.Context, q db.Querier, name string, rid libfossil.FslID) (bool, error) {
+	if v.store.refs.facts.names[rid] != name {
+		return false, nil
+	}
+	if v.unexpandable == nil {
+		seeds := append(slices.Collect(maps.Keys(v.store.prefix.phantoms)), v.store.sourceless...)
+		seedsJSON, err := ridsJSON(seeds)
+		if err != nil {
+			return false, err
+		}
+		if seedsJSON == "" {
+			seedsJSON = "[]"
+		}
+		v.unexpandable = map[libfossil.FslID]bool{}
+		err = referenceRows(ctx, q, treeUnexpandableSQL, func(scan func(...any) error) error {
+			var r libfossil.FslID
+			err := scan(&r)
+			v.unexpandable[r] = true
+			return err
+		}, seedsJSON)
+		if err != nil {
+			v.unexpandable = nil
+			return false, fmt.Errorf("classification memo: unexpandable trees: %w", err)
+		}
+	}
+	return !v.unexpandable[rid], nil
 }
 
 // expandTree has w expand the piece name names as the view's store holds
 // it, and reports whether the view could: read before by this view, or by
-// a published one. A published piece serves only when the view's store
-// holds its name at its rid: a piece read under a later prefix, or in a
-// store that numbered its rids otherwise, is read again.
+// a published one. A published piece serves only where a fresh read would
+// give it (treeExpandable): a piece read under a later prefix, in a store
+// that numbered its rids otherwise, or whose content the store can no
+// longer expand, is read again.
 func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
 	if p := v.trees[name]; p != nil {
 		if err := w.charge(p.size); err != nil {
@@ -353,8 +432,11 @@ func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
 		return false, nil
 	}
 	p := x.piece(name)
-	if p == nil || v.store.refs.facts.names[p.rid] != name || v.store.prefix.phantoms[p.rid] {
+	if p == nil {
 		return false, nil
+	}
+	if ok, err := v.treeExpandable(w.ctx, w.q, name, p.rid); err != nil || !ok {
+		return false, err
 	}
 	if err := w.charge(p.size); err != nil {
 		return true, err

@@ -105,6 +105,8 @@ HZ-6.2-9	6.2	An origin should keep its classification keyed by the cone digest a
 # read once per memo, kept as blob ids (a full manifest as its difference from
 # the one before; fossil-scm.org's whole history in about 11MiB) with no byte
 # bound, and outlives a full read of the store, since its name fixes its bytes.
+# A kept tree serves only where a fresh read would give it: the store holds its
+# name at its rid and can expand it.
 HZ-6.2-10	6.2	An origin should read each structural artifact's kind and P, B, S, F and A references once per store into a cone-independent graph keyed to the same prefix, extend it by appended artifacts, and classify every cone over that graph.
 HZ-6.2-11	6.2.6	An origin that classified a request emits pragma horizon-cursor <n> in every reply, n its artifact-sequence position through which the reply was served; receiving a cursor it announces no artifact at or below it and every kept artifact above it the request did not name, and after a reclassification, or after an appended tree reaches through an in-cone slot an older node the classification withheld (which it then keeps), answers a request carrying a cursor below the position it recorded once as if it carried none; it announces with igot only in reply to a request that pulls, and a reply to a push-only request announces nothing, cursor or not.
 HZ-6.2-14	6.2	When a horizon request also carries path members, the origin withholds at either depth the sub-manifest nodes of the trees it keeps that no S-card slot that may hold an in-cone path reaches, neither sending them in a clone nor answering a request for them; a request without path members receives every node of those trees.

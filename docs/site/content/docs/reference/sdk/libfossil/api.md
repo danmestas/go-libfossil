@@ -1841,7 +1841,7 @@ AnnotateContext is Annotate with a demand fetch: on a content\-horizon store, ea
 func (r *Repo) AttachmentAdd(target, name string, content []byte, opts AttachmentOpts) (artifact string, err error)
 ```
 
-AttachmentAdd attaches content to target under name, as \`fossil attachment add\` does, and returns the hash of the control artifact. content is stored as one ordinary blob; only name's final path component is kept. The attachment table and timeline reflect it when AttachmentAdd returns, and both artifacts are queued to sync.
+AttachmentAdd attaches content to target under name, as \`fossil attachment add\` does, and returns the hash of the control artifact. content is stored as one ordinary blob; only name's final path component is kept. The attachment table and timeline reflect it when AttachmentAdd returns, and both artifacts are queued to sync. The attachment becomes the latest for name: a zero opts.Time stamps it after whatever is latest now, and an explicit one no later than that is refused.
 
 target is a wiki page's exact name, or a ticket's or tech note's id or a unique prefix of it. Fossil is told the kind; here it is inferred, and a name more than one kind answers to is refused as ambiguous.
 
@@ -1863,7 +1863,7 @@ AttachmentAddExternal attaches the file ref names without its bytes, and returns
 func (r *Repo) AttachmentDelete(target, name string, opts AttachmentOpts) (artifact string, err error)
 ```
 
-AttachmentDelete removes the current attachment name from target, as fossil's attachment page does: a new control artifact whose A card names no file. The bytes stay in history. It returns the artifact's hash, and ErrAttachmentNotFound when target has no current attachment by that name. opts.Time, when set, must be later than the attachment's.
+AttachmentDelete removes the current attachment name from target, as fossil's attachment page does: a new control artifact whose A card names no file. The bytes stay in history. It returns the artifact's hash, and ErrAttachmentNotFound when target has no current attachment by that name. opts.Time, when set, must be later than the attachment's; when zero, the deletion is stamped after it even if it lies in the future.
 
 <a name="Repo.AttachmentRead"></a>
 ### func \(\*Repo\) AttachmentRead

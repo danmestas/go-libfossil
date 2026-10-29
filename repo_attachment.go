@@ -67,7 +67,9 @@ type Attachment struct {
 // add` does, and returns the hash of the control artifact. content is stored
 // as one ordinary blob; only name's final path component is kept. The
 // attachment table and timeline reflect it when AttachmentAdd returns, and
-// both artifacts are queued to sync.
+// both artifacts are queued to sync. The attachment becomes the latest for
+// name: a zero opts.Time stamps it after whatever is latest now, and an
+// explicit one no later than that is refused.
 //
 // target is a wiki page's exact name, or a ticket's or tech note's id or a
 // unique prefix of it. Fossil is told the kind; here it is inferred, and a
@@ -94,8 +96,10 @@ func (r *Repo) AttachmentAdd(target, name string, content []byte, opts Attachmen
 // bytes; this records only where they are found. target resolves as in
 // AttachmentAdd.
 func (r *Repo) AttachmentAddExternal(target string, ref ExternalRef, opts AttachmentOpts) (artifact string, err error) {
-	if strings.ContainsAny(ref.Name, `/\`) {
-		return "", fmt.Errorf("libfossil: attachment add: external name %q holds a directory", ref.Name)
+	// The stub records ref.Name verbatim, so it must already be the bare
+	// name the A card can carry: no directory, and not "." or "..".
+	if strings.ContainsAny(ref.Name, `/\`) || ref.Name == "." || ref.Name == ".." {
+		return "", fmt.Errorf("libfossil: attachment add: external name %q is not a bare file name", ref.Name)
 	}
 	stub, err := attachstub.Format(attachstub.Ref(ref))
 	if err != nil {
@@ -126,7 +130,8 @@ func (r *Repo) attachmentAdd(target string, w manifest.AttachmentWrite, opts Att
 // fossil's attachment page does: a new control artifact whose A card names
 // no file. The bytes stay in history. It returns the artifact's hash, and
 // ErrAttachmentNotFound when target has no current attachment by that name.
-// opts.Time, when set, must be later than the attachment's.
+// opts.Time, when set, must be later than the attachment's; when zero, the
+// deletion is stamped after it even if it lies in the future.
 func (r *Repo) AttachmentDelete(target, name string, opts AttachmentOpts) (artifact string, err error) {
 	if strings.TrimSpace(opts.User) == "" {
 		return "", fmt.Errorf("libfossil: attachment delete: a deletion needs a user")
@@ -137,12 +142,6 @@ func (r *Repo) AttachmentDelete(target, name string, opts AttachmentOpts) (artif
 	cur, err := r.currentAttachment(target, name)
 	if err != nil {
 		return "", fmt.Errorf("libfossil: attachment delete: %w", err)
-	}
-	// The latest artifact per name wins by time; one no later than the
-	// attachment would leave it current, or tie and leave both current.
-	if !opts.Time.IsZero() && !opts.Time.After(cur.Time) {
-		return "", fmt.Errorf("libfossil: attachment delete: time %s is not after the attachment's %s",
-			opts.Time.UTC().Format(time.RFC3339Nano), cur.Time.UTC().Format(time.RFC3339Nano))
 	}
 	_, artifact, err = manifest.WriteAttachment(r.inner, manifest.AttachmentWrite{
 		Target: cur.Target, Name: cur.Name, User: opts.User, Time: opts.Time,

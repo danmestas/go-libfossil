@@ -45,6 +45,13 @@ type AttachmentWrite struct {
 //
 // Content that parses as an artifact is compressed and its name gains ".gz",
 // as fossil does, so an attached file is never linked as a control artifact.
+//
+// The artifact must become the latest for its name on its target, so it is
+// stamped strictly after the one that is latest now: a zero w.Time means now
+// or a millisecond after that one, whichever is later, and an explicit
+// w.Time no later than it is refused. Fossil marks every artifact sharing the
+// latest time as latest, so a tie would leave both an addition and its
+// deletion current.
 func WriteAttachment(r *repo.Repo, w AttachmentWrite) (libfossil.FslID, string, error) {
 	if r == nil {
 		panic("manifest.WriteAttachment: r must not be nil")
@@ -55,10 +62,6 @@ func WriteAttachment(r *repo.Repo, w AttachmentWrite) (libfossil.FslID, string, 
 	if w.Content == nil && (w.Comment != "" || w.Mimetype != "") {
 		panic("manifest.WriteAttachment: a deletion carries no comment or mimetype")
 	}
-	when := libfossil.CardTimeNow(time.Now())
-	if !w.Time.IsZero() {
-		when = libfossil.CardTime(w.Time)
-	}
 	uid, err := r.LocalUID(w.User)
 	if err != nil {
 		return 0, "", fmt.Errorf("manifest.WriteAttachment: %w", err)
@@ -68,7 +71,7 @@ func WriteAttachment(r *repo.Repo, w AttachmentWrite) (libfossil.FslID, string, 
 	err = r.WithReceipt(&db.Receipt{UID: uid}).WithTx(func(tx *db.Tx) error {
 		d := &deck.Deck{
 			Type: deck.Attachment, A: &deck.AttachmentCard{Filename: attachName(w.Name), Target: w.Target},
-			C: strings.TrimSpace(w.Comment), D: when, N: w.Mimetype, U: deck.User(w.User),
+			C: strings.TrimSpace(w.Comment), N: w.Mimetype, U: deck.User(w.User),
 		}
 		stored := []libfossil.FslID{}
 		if w.Content != nil {
@@ -77,6 +80,10 @@ func WriteAttachment(r *repo.Repo, w AttachmentWrite) (libfossil.FslID, string, 
 				return err
 			}
 			stored = append(stored, srcRID)
+		}
+		// The name is final only now: storing the file may add ".gz".
+		if d.D, err = attachmentTime(tx, w.Target, d.A.Filename, w.Time); err != nil {
+			return err
 		}
 		rid, uuid, err = storeAttachmentControl(tx, d)
 		if err != nil {
@@ -89,6 +96,30 @@ func WriteAttachment(r *repo.Repo, w AttachmentWrite) (libfossil.FslID, string, 
 		return 0, "", fmt.Errorf("manifest.WriteAttachment: %w", err)
 	}
 	return rid, uuid, nil
+}
+
+// attachmentTime is the D card for the next artifact on target's name:
+// want, or now when want is zero, and strictly after the current latest.
+func attachmentTime(q db.Querier, target, name string, want time.Time) (time.Time, error) {
+	prev, found, err := LatestAttachment(q, target, name)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if !want.IsZero() {
+		when := libfossil.CardTime(want)
+		if found && !when.After(libfossil.CardTime(prev.Time)) {
+			return time.Time{}, fmt.Errorf("time %s is not after %s, the latest for %q",
+				when.Format(time.RFC3339Nano), libfossil.CardTime(prev.Time).Format(time.RFC3339Nano), name)
+		}
+		return when, nil
+	}
+	when := libfossil.CardTimeNow(time.Now())
+	if found {
+		if next := libfossil.CardTime(prev.Time).Add(time.Millisecond); !when.After(next) {
+			when = next
+		}
+	}
+	return when, nil
 }
 
 // attachName is fossil's: the part after the last '/' or '\', or "unknown"
@@ -163,21 +194,23 @@ func ResolveAttachTarget(q db.Querier, target string) (string, error) {
 	if target == "" {
 		return "", fmt.Errorf("attachment target is empty")
 	}
-	var found []string
+	var found, kinds []string
 	var one int
 	switch err := q.QueryRow("SELECT 1 FROM tag WHERE tagname=?", "wiki-"+target).Scan(&one); {
 	case err == nil:
-		found = append(found, target)
+		found, kinds = append(found, target), append(kinds, "wiki page "+target)
 	case !errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("resolve attachment target: %w", err)
 	}
 	if prefix := strings.ToLower(target); len(prefix) <= 64 && isLowerHex(prefix) {
-		for _, kind := range []string{"tkt-", "event-"} {
-			ids, err := tagsWithPrefix(q, kind, prefix)
+		for _, kind := range [][2]string{{"tkt-", "ticket "}, {"event-", "tech note "}} {
+			ids, err := tagsWithPrefix(q, kind[0], prefix)
 			if err != nil {
 				return "", err
 			}
-			found = append(found, ids...)
+			for _, id := range ids {
+				found, kinds = append(found, id), append(kinds, kind[1]+id)
+			}
 		}
 	}
 	switch len(found) {
@@ -186,7 +219,7 @@ func ResolveAttachTarget(q db.Querier, target string) (string, error) {
 	case 1:
 		return found[0], nil
 	}
-	return "", fmt.Errorf("attachment target %q is ambiguous", target)
+	return "", fmt.Errorf("attachment target %q is ambiguous: %s", target, strings.Join(kinds, ", "))
 }
 
 // tagsWithPrefix returns up to two ids whose tag is kind followed by an id

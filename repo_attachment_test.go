@@ -550,3 +550,87 @@ func TestFossilAttachmentsReadHere(t *testing.T) {
 	requireLines(t, "fossil test-list-attachments", x.fossil(t, "test-list-attachments", "-latest", "Home"),
 		"(null) a.txt", "(null) gone.txt")
 }
+
+// requireCurrent checks the list and the read agree on whether name is
+// current on target, and that its bytes are want when it is.
+func requireCurrent(t *testing.T, r *Repo, target, name, want string, current bool) {
+	t.Helper()
+	list, err := r.Attachments(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := 0
+	for _, a := range list {
+		if a.Name == name {
+			listed++
+		}
+	}
+	_, content, err := r.AttachmentRead(target, name)
+	switch {
+	case current && (listed != 1 || err != nil || string(content) != want):
+		t.Fatalf("%s should be current: listed %d times, read %q, %v", name, listed, content, err)
+	case !current && (listed != 0 || !errors.Is(err, ErrAttachmentNotFound)):
+		t.Fatalf("%s should be gone: listed %d times, read error %v", name, listed, err)
+	}
+}
+
+// Adds and deletes at the default time, faster than the D card's
+// millisecond, each become the latest for the name: a tie would leave two
+// rows latest, listing a deleted file that cannot be read.
+func TestAttachmentDefaultTimesNeverTie(t *testing.T) {
+	r := newTicketRepo(t)
+	addWikiPage(t, r, "Home")
+	opts := AttachmentOpts{User: "alice"}
+	for i := 0; i < 20; i++ {
+		content := fmt.Sprintf("round %d", i)
+		mustAttach(t, r, "Home", "x.txt", content, opts)
+		requireCurrent(t, r, "Home", "x.txt", content, true)
+		if _, err := r.AttachmentDelete("Home", "x.txt", opts); err != nil {
+			t.Fatal(err)
+		}
+		requireCurrent(t, r, "Home", "x.txt", "", false)
+	}
+}
+
+// An attachment stamped in the future -- a synced one from a fast clock --
+// is still deleted and replaced by default-time writes, which land after
+// it; an explicit time no later than the latest is refused.
+func TestAttachmentAfterFutureAttachment(t *testing.T) {
+	r := newTicketRepo(t)
+	addWikiPage(t, r, "Home")
+	future := time.Now().Add(time.Hour)
+	mustAttach(t, r, "Home", "x.txt", "future", AttachmentOpts{User: "alice", Time: future})
+	if _, err := r.AttachmentDelete("Home", "x.txt", AttachmentOpts{User: "bob", Time: future}); err == nil {
+		t.Fatal("a deletion at the attachment's own time was accepted")
+	}
+	if _, err := r.AttachmentAdd("Home", "x.txt", []byte("older"), AttachmentOpts{User: "bob", Time: future}); err == nil {
+		t.Fatal("a re-add at the latest's own time was accepted")
+	}
+	if _, err := r.AttachmentDelete("Home", "x.txt", AttachmentOpts{User: "bob"}); err != nil {
+		t.Fatal(err)
+	}
+	requireCurrent(t, r, "Home", "x.txt", "", false)
+	mustAttach(t, r, "Home", "x.txt", "again", AttachmentOpts{User: "bob"})
+	requireCurrent(t, r, "Home", "x.txt", "again", true)
+	if a, _, err := r.AttachmentRead("Home", "x.txt"); err != nil || !a.Time.After(future) {
+		t.Fatalf("re-add stamped %v, not after %v (%v)", a.Time, future, err)
+	}
+}
+
+func TestAttachmentRefusalsAreSpecific(t *testing.T) {
+	r := newTicketRepo(t)
+	addWikiPage(t, r, "Home")
+	tkt, _ := mustTicketAdd(t, r, TicketOpts{Fields: map[string]string{"title": "x"}, User: "alice", Time: ticketT0})
+	addTechNote(t, r, tkt[:2]+"00000000000000000000000000000000000000")
+	_, err := r.AttachmentAdd(tkt[:2], "y.txt", []byte("y"), AttachmentOpts{User: "alice"})
+	if err == nil || !strings.Contains(err.Error(), "ticket") || !strings.Contains(err.Error(), "tech note") {
+		t.Fatalf("ambiguity error does not name the kinds: %v", err)
+	}
+	for _, name := range []string{".", ".."} {
+		_, err := r.AttachmentAddExternal("Home",
+			ExternalRef{SHA256: extSum, Size: 1, Type: "text/plain", Name: name}, AttachmentOpts{User: "alice"})
+		if err == nil || !strings.Contains(err.Error(), "external name") {
+			t.Fatalf("external name %q: %v", name, err)
+		}
+	}
+}

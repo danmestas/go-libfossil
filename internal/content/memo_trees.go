@@ -351,10 +351,11 @@ func (x *treeIndex) addPieces(names []string, pieces map[string]*plainTree, limi
 	return true
 }
 
-// treeExpandable reports whether the view's store holds name at rid and can
-// expand it, as a fresh read of the piece would: rid's chain of delta
-// sources ends at a blob held whole, not at a phantom, at a rid the store
-// holds no row for, or in a loop. Within a lineage a rid's answer never
+// treeExpandable reports whether the view's store holds name at rid and its
+// chain of delta sources ends at a blob held whole, not at a phantom, at a
+// rid the store holds no row for, or in a loop. It checks the chain only:
+// content that is corrupt, fails to decompress or misses its hash still
+// passes here, though a fresh read would skip that tree. Within a lineage a rid's answer never
 // changes, as a store goes on only by appending rows and filling phantoms
 // nothing is a delta of (memoStore.settled), so the memo keeps the answers
 // of a lineage (Memo.expands) and a chain is walked only to the first rid

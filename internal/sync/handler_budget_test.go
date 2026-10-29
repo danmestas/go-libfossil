@@ -3,13 +3,16 @@ package sync
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/danmestas/go-libfossil/internal/auth"
 	"github.com/danmestas/go-libfossil/internal/blob"
 	"github.com/danmestas/go-libfossil/internal/delta"
 	"github.com/danmestas/go-libfossil/internal/hash"
@@ -61,13 +64,33 @@ func onlyError(t *testing.T, resp *xfer.Message) string {
 	return msgs[0]
 }
 
-func blobCount(t *testing.T, r *repo.Repo) int {
+// storeDigest summarises every table a received artifact can touch, so a
+// refused round can be shown to have left all of them as they were.
+func storeDigest(t *testing.T, r *repo.Repo) string {
 	t.Helper()
-	var n int
-	if err := r.DB().QueryRow("SELECT count(*) FROM blob").Scan(&n); err != nil {
-		t.Fatal(err)
+	var parts []string
+	for _, q := range []string{
+		"SELECT group_concat(uuid || '/' || size || '/' || length(content), ',') FROM (SELECT * FROM blob ORDER BY uuid)",
+		"SELECT group_concat(rid, ',') FROM (SELECT rid FROM unclustered ORDER BY rid)",
+		"SELECT group_concat(rid, ',') FROM (SELECT rid FROM phantom ORDER BY rid)",
+		"SELECT group_concat(rid || '>' || srcid, ',') FROM (SELECT * FROM delta ORDER BY rid)",
+		"SELECT group_concat(mid || ':' || fid || ':' || fnid, ',') FROM (SELECT * FROM mlink ORDER BY mid, fnid)",
+	} {
+		var v sql.NullString
+		if err := r.DB().QueryRow(q).Scan(&v); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+		parts = append(parts, v.String)
 	}
-	return n
+	return strings.Join(parts, "\n")
+}
+
+// requireUnchanged fails when r's store differs from the digest before.
+func requireUnchanged(t *testing.T, r *repo.Repo, before string) {
+	t.Helper()
+	if after := storeDigest(t, r); after != before {
+		t.Fatalf("store changed across a refused round:\nbefore %s\n after %s", before, after)
+	}
 }
 
 func storedLen(t *testing.T, data []byte) int {
@@ -98,7 +121,7 @@ func TestBudgetRefusesRoundWithOversizeFile(t *testing.T) {
 	small := []byte("small file")
 	big := randomBytes(1, 2*testBudget)
 	smallUUID, bigUUID := hash.SHA1(small), hash.SHA1(big)
-	before := blobCount(t, r)
+	before := storeDigest(t, r)
 
 	resp := pushBudgeted(t, r, testBudget,
 		&xfer.FileCard{UUID: smallUUID, Content: small},
@@ -108,9 +131,7 @@ func TestBudgetRefusesRoundWithOversizeFile(t *testing.T) {
 		t.Fatalf("error card:\n got %q\nwant %q", got, want)
 	}
 	requireAbsent(t, r, smallUUID, bigUUID)
-	if after := blobCount(t, r); after != before {
-		t.Fatalf("blob rows %d -> %d across a refused round", before, after)
-	}
+	requireUnchanged(t, r, before)
 }
 
 // A file whose length fits but whose zlib form does not is measured by what
@@ -152,27 +173,162 @@ func requireNoError(t *testing.T, resp *xfer.Message) {
 }
 
 // A check-in already received names the phantom it lists, so the refusal
-// says which file of which check-in is too big.
+// says which file of which check-in is too big, but only to a pusher who may
+// read the repository, and never for a private check-in.
 func TestBudgetNamesPathAndCheckin(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, caps string
+		private, named   bool
+	}{
+		{name: "reader", path: "hello.txt", caps: "gijoryz", named: true},
+		{name: "private check-in", path: "hello.txt", caps: "gijoryz", private: true},
+		{name: "card syntax in path", path: "a b\nerror x", caps: "gijoryz", named: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := setupPushableTestRepo(t)
+			big := randomBytes(3, 2*testBudget)
+			bigUUID := hash.SHA1(big)
+			mBytes, mUUID := buildNamedCheckinManifest(t, tc.path, "adds a big file",
+				time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), bigUUID, big, nil)
+			requireNoError(t, pushBudgeted(t, r, testBudget,
+				&xfer.FileCard{UUID: mUUID, Content: mBytes}))
+			if tc.private {
+				markPrivate(t, r, mUUID)
+			}
+			if err := auth.UpdateCaps(r.DB(), "nobody", tc.caps); err != nil {
+				t.Fatal(err)
+			}
+			before := storeDigest(t, r)
+
+			resp := pushBudgeted(t, r, testBudget, &xfer.FileCard{UUID: bigUUID, Content: big})
+
+			want := budgetText(bigUUID, storedLen(t, big))
+			if tc.named {
+				want += ", named " + tc.path + " by check-in " + mUUID
+			}
+			if got := onlyError(t, resp); got != want {
+				t.Fatalf("error card:\n got %q\nwant %q", got, want)
+			}
+			requireOneErrorLine(t, resp, want)
+			requireUnchanged(t, r, before)
+		})
+	}
+}
+
+// Naming is gated on read, and every pusher reads: fossil's i implies o.
+// If that ever changes, the gate in overBudget starts to matter.
+func TestBudgetPushImpliesRead(t *testing.T) {
+	if !auth.CanRead("i") {
+		t.Fatal("push no longer implies read: add a push-only case to TestBudgetNamesPathAndCheckin")
+	}
+}
+
+func markPrivate(t *testing.T, r *repo.Repo, uuid string) {
+	t.Helper()
+	rid, ok := blob.Exists(r.DB(), uuid)
+	if !ok {
+		t.Fatalf("%s not held", uuid)
+	}
+	if _, err := r.DB().Exec("INSERT INTO private(rid) VALUES(?)", rid); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// requireOneErrorLine fails unless resp goes out as a single error line,
+// whatever the message holds, and decodes back to want.
+func requireOneErrorLine(t *testing.T, resp *xfer.Message, want string) {
+	t.Helper()
+	raw, err := resp.EncodeUncompressed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errLines int
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "error ") {
+			errLines++
+		}
+	}
+	if errLines != 1 {
+		t.Fatalf("want one error line on the wire, got %d:\n%s", errLines, raw)
+	}
+	back, err := xfer.Decode(raw, xfer.ContentTypeUncompressed)
+	if err != nil {
+		t.Fatalf("decode reply: %v", err)
+	}
+	if got := onlyError(t, back); got != want {
+		t.Fatalf("decoded error card:\n got %q\nwant %q", got, want)
+	}
+}
+
+// An artifact the store already holds in full stores nothing again, so the
+// budget does not refuse it.
+func TestBudgetSkipsArtifactHeldInFull(t *testing.T) {
 	r := setupPushableTestRepo(t)
-	big := randomBytes(3, 2*testBudget)
-	bigUUID := hash.SHA1(big)
-	mBytes, mUUID := buildCheckinManifest(t, "adds a big file",
-		time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC), bigUUID, big, nil)
-	requireNoError(t, pushBudgeted(t, r, testBudget,
-		&xfer.FileCard{UUID: mUUID, Content: mBytes}))
+	big := randomBytes(8, 2*testBudget)
+	uuid := hash.SHA1(big)
+	requireNoError(t, pushBudgeted(t, r, 0, &xfer.FileCard{UUID: uuid, Content: big}))
+	before := storeDigest(t, r)
+	requireNoError(t, pushBudgeted(t, r, testBudget, &xfer.FileCard{UUID: uuid, Content: big}))
+	requireUnchanged(t, r, before)
+}
 
-	resp := pushBudgeted(t, r, testBudget, &xfer.FileCard{UUID: bigUUID, Content: big})
-
-	want := budgetText(bigUUID, storedLen(t, big)) +
-		", named hello.txt by check-in " + mUUID
-	if got := onlyError(t, resp); got != want {
+// A phantom no check-in names is refused like any other artifact, and stays
+// a phantom.
+func TestBudgetRefusesOversizePhantom(t *testing.T) {
+	r := setupPushableTestRepo(t)
+	big := randomBytes(9, 2*testBudget)
+	uuid := hash.SHA1(big)
+	if _, err := blob.StorePhantom(r.DB(), uuid); err != nil {
+		t.Fatal(err)
+	}
+	before := storeDigest(t, r)
+	resp := pushBudgeted(t, r, testBudget, &xfer.FileCard{UUID: uuid, Content: big})
+	if got, want := onlyError(t, resp), budgetText(uuid, storedLen(t, big)); got != want {
 		t.Fatalf("error card:\n got %q\nwant %q", got, want)
 	}
-	requireAbsent(t, r, bigUUID)
-	if _, ok := blob.Exists(r.DB(), mUUID); !ok {
-		t.Fatal("the check-in an earlier round stored is gone")
+	requireUnchanged(t, r, before)
+	if !isPhantom(t, r, uuid) {
+		t.Fatal("the refused phantom is no longer a phantom")
 	}
+}
+
+// filesObserver records what the handler reports at the end of a request.
+type filesObserver struct {
+	nopObserver
+	end *HandleEnd
+}
+
+func (o filesObserver) HandleCompleted(_ context.Context, info HandleEnd) { *o.end = info }
+
+// A sync round, pull and igot cards beside the push, is refused whole too:
+// one error card, nothing stored, and no file reported received.
+func TestBudgetRefusesSyncRoundWhole(t *testing.T) {
+	r := setupPushableTestRepo(t)
+	small := []byte("small file")
+	big := randomBytes(10, 2*testBudget)
+	smallUUID, bigUUID := hash.SHA1(small), hash.SHA1(big)
+	other := hash.SHA1([]byte("an artifact the client holds"))
+	before := storeDigest(t, r)
+	var end HandleEnd
+	req := &xfer.Message{Cards: []xfer.Card{
+		&xfer.PushCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.PullCard{ServerCode: "test", ProjectCode: testPC},
+		&xfer.IGotCard{UUID: other},
+		&xfer.FileCard{UUID: smallUUID, Content: small},
+		&xfer.FileCard{UUID: bigUUID, Content: big},
+	}}
+	resp, err := HandleSyncWithOpts(context.Background(), r, req,
+		HandleOpts{MaxStoredBytes: testBudget, Observer: filesObserver{end: &end}})
+	if err != nil {
+		t.Fatalf("HandleSyncWithOpts: %v", err)
+	}
+	if got, want := onlyError(t, resp), budgetText(bigUUID, storedLen(t, big)); got != want {
+		t.Fatalf("error card:\n got %q\nwant %q", got, want)
+	}
+	if end.FilesReceived != 0 {
+		t.Fatalf("FilesReceived = %d after a refused round, want 0", end.FilesReceived)
+	}
+	requireUnchanged(t, r, before)
 }
 
 // A cfile card is measured by the stored form it carries.

@@ -17,11 +17,18 @@ import (
 // be empty for a root-of-tree checkin.
 func buildCheckinManifest(t *testing.T, comment string, when time.Time, fileUUID string, fileContent []byte, parents []string) ([]byte, string) {
 	t.Helper()
+	return buildNamedCheckinManifest(t, "hello.txt", comment, when, fileUUID, fileContent, parents)
+}
+
+// buildNamedCheckinManifest is buildCheckinManifest with the file named name.
+func buildNamedCheckinManifest(t *testing.T, name, comment string, when time.Time, fileUUID string,
+	fileContent []byte, parents []string) ([]byte, string) {
+	t.Helper()
 	d := &deck.Deck{
 		Type: deck.Checkin,
 		C:    comment,
 		D:    when,
-		F:    []deck.FileCard{{Name: "hello.txt", UUID: fileUUID}},
+		F:    []deck.FileCard{{Name: name, UUID: fileUUID}},
 		U:    deck.User("tester"),
 		P:    parents,
 		T: []deck.TagCard{

@@ -33,6 +33,12 @@ func (h *handler) overBudget(uuid string, payload, storedBlob []byte) (string, e
 	}
 	msg := fmt.Sprintf("artifact %s is %d bytes stored; this repository stores at most %d bytes per artifact",
 		uuid, n, h.maxStored)
+	// The name and check-in are read from this repository, so only a pusher
+	// who may read it learns them (phantomName also skips private check-ins).
+	// Today push implies read (auth.CanRead), so this holds by construction.
+	if !h.canRead() {
+		return msg, nil
+	}
 	name, checkin, err := phantomName(h.repo.DB(), uuid)
 	if err != nil {
 		return "", err
@@ -89,8 +95,9 @@ func holdsContent(q db.Querier, uuid string) (bool, error) {
 }
 
 // phantomName returns a file name and the check-in naming uuid, when a
-// check-in this store already crosslinked lists it, so a refusal can say
-// which file is too big; "" when none does.
+// public check-in this store already crosslinked lists it, so a refusal can
+// say which file is too big; "" when none does. A private check-in is never
+// named: the refusal goes to whoever pushed, private capability or not.
 func phantomName(q db.Querier, uuid string) (name, checkin string, err error) {
 	err = q.QueryRow(`SELECT filename.name, ci.uuid
 		FROM blob f
@@ -98,6 +105,7 @@ func phantomName(q db.Querier, uuid string) (name, checkin string, err error) {
 		JOIN filename ON filename.fnid = mlink.fnid
 		JOIN blob ci ON ci.rid = mlink.mid
 		WHERE f.uuid = ?
+		AND NOT EXISTS(SELECT 1 FROM private WHERE private.rid = mlink.mid)
 		ORDER BY mlink.mid LIMIT 1`, uuid).Scan(&name, &checkin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil

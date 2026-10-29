@@ -1504,7 +1504,8 @@ type HandleOpts struct {
     // file and check-in when this repository already holds a check-in
     // listing it, so nothing from that request is stored. 0, the default,
     // stores any size. Clones and pulls served from the repository are not
-    // limited.
+    // limited. XferHandler and ServeHTTP serve without a budget: a host that
+    // needs one serves HandleSyncWithOpts itself.
     MaxStoredBytes int
 }
 ```
@@ -2329,7 +2330,7 @@ func (r *Repo) ServeHTTP(ctx context.Context, addr string) error
 
 ServeHTTP starts an HTTP server that accepts Fossil xfer requests. Blocks until ctx is cancelled.
 
-Requests are authorized against the user table: one without a login card gets nobody's capabilities, which in a new repository allow clone and pull but not push. Grant more with SetCaps.
+Requests are authorized against the user table: one without a login card gets nobody's capabilities, which in a new repository allow clone and pull but not push. Grant more with SetCaps. Like XferHandler it serves with default HandleOpts, so no HandleOpts.MaxStoredBytes budget applies.
 
 <a name="Repo.SetCaps"></a>
 ### func \(\*Repo\) SetCaps
@@ -2629,7 +2630,7 @@ WithTx executes fn within a database transaction.
 func (r *Repo) XferHandler() http.HandlerFunc
 ```
 
-XferHandler returns an http.HandlerFunc that decodes Fossil xfer requests, dispatches to HandleSync, and encodes the response. Use this to compose a custom mux alongside operational endpoints \(e.g., /healthz\).
+XferHandler returns an http.HandlerFunc that decodes Fossil xfer requests, dispatches to HandleSync, and encodes the response. Use this to compose a custom mux alongside operational endpoints \(e.g., /healthz\). It serves with default HandleOpts, so no HandleOpts.MaxStoredBytes budget applies.
 
 <a name="RequiredContentOpts"></a>
 ## type RequiredContentOpts

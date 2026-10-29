@@ -163,7 +163,8 @@ type HandleOpts struct {
 	// as a delta when it arrives as one). A host whose storage caps a single
 	// value sets it: an artifact over it refuses the request whole, naming
 	// the artifact, instead of failing at the storage layer. 0 stores any
-	// size. Clone and pull replies are not limited.
+	// size. Clone and pull replies are not limited. The HandleSync a
+	// ServeHTTP or XferHandler caller usually passes applies no budget.
 	MaxStoredBytes int
 }
 

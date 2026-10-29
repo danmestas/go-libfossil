@@ -13,16 +13,27 @@ import (
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
 )
 
-// memoTreeBytes bounds what a Memo keeps of the trees its horizons' walks
-// read (draft-fossil-horizon-00 §6.2), so a second horizon over the store
-// reads only the trees the first did not. The trees are kept as a
-// treeIndex, which names each blob by a small id and keeps a full
-// check-in's file set as its difference from the one kept before it:
-// fossil-scm.org's check-ins name about 21M F-card entries between them,
-// mostly the same few thousand blobs, and the index keeps every one of
-// its trees in about 11MiB. Past the bound the index starts again; a miss
-// costs a read, never a wrong answer.
-const memoTreeBytes = 64 << 20
+// A Memo keeps every tree its horizons' walks read (draft-fossil-horizon-00
+// §6.2), so no tree is read twice. The trees are kept as a treeIndex, which
+// names each blob by a small id and keeps a full check-in's file set as its
+// difference from the one kept before it: fossil-scm.org's check-ins name
+// about 21M F-card entries between them, mostly the same few thousand
+// blobs, and the index keeps every one of its trees in about 11MiB. A
+// piece costs a few bytes per F card its manifest spells in about 70, so
+// the index grows with the store, like the reference graph beside it; it
+// holds no more names than a store can hold artifacts (memoTreeNames).
+//
+// A piece is what its name's bytes say, the same in every store that
+// holds it, so the index outlives a full read of the store; the rid a
+// piece was read at serves only a store that holds that name there. A
+// store that holds the name but could no longer expand it (a delta whose
+// source it since lost) is served the piece the store that read it saw:
+// the walk keeps more, never less (treeWalk).
+
+// memoTreeNames bounds the names a tree index interns: past the most
+// artifacts a classified store holds, which only stores that renamed most
+// of what the index read can reach, the index starts again.
+const memoTreeNames = coneReferenceNodes
 
 // treePieceBytes and treeNameBytes are what a kept piece and an interned
 // name are charged beyond their references and bytes: list element, map
@@ -292,18 +303,10 @@ func (d *treeDecoder) files(p *treePiece) []uint32 {
 	return ids
 }
 
-// publishTrees keeps pieces, which a view of store lineage read, in the
-// memo's trees: a later lineage replaces them, an earlier one is stale and
-// is dropped. Pieces are added newest first, as a walk reads them. Past
-// the memo's tree limit the trees start again from the piece that passed
-// it. The caller holds m.mu.
-func (m *Memo) publishTrees(lineage uint64, pieces map[string]*plainTree) {
-	if lineage < m.treeLineage {
-		return
-	}
-	if lineage > m.treeLineage {
-		m.trees, m.treeLineage = nil, lineage
-	}
+// publishTrees keeps pieces, which a view read, in the memo's trees, newest
+// first as a walk reads them. A piece the trees hold at another rid, which
+// a renumbered store holds, takes the view's rid. The caller holds m.mu.
+func (m *Memo) publishTrees(pieces map[string]*plainTree) {
 	if len(pieces) == 0 {
 		return
 	}
@@ -311,28 +314,29 @@ func (m *Memo) publishTrees(lineage uint64, pieces map[string]*plainTree) {
 		return cmp.Compare(pieces[b].rid, pieces[a].rid)
 	})
 	x := newTreeIndex()
-	if m.trees != nil {
+	if m.trees != nil && len(m.trees.names.names)+len(pieces) <= memoTreeNames {
 		x = m.trees.clone()
 	}
 	for _, name := range names {
-		if x.piece(name) != nil {
+		t := pieces[name]
+		if held := x.piece(name); held != nil {
+			if held.rid != t.rid {
+				moved := *held
+				moved.rid = t.rid
+				x.pieces[x.names.ids[name]] = &moved
+			}
 			continue
 		}
-		x.add(name, pieces[name])
-		if x.bytes > m.treeLimit {
-			x = newTreeIndex()
-			if x.add(name, pieces[name]); x.bytes > m.treeLimit {
-				x = newTreeIndex()
-			}
-		}
+		x.add(name, t)
 	}
 	m.trees = x
 }
 
 // expandTree has w expand the piece name names as the view's store holds
 // it, and reports whether the view could: read before by this view, or by
-// a published one. A piece read under a later prefix serves only when its
-// rid is held at the view's.
+// a published one. A published piece serves only when the view's store
+// holds its name at its rid: a piece read under a later prefix, or in a
+// store that numbered its rids otherwise, is read again.
 func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
 	if p := v.trees[name]; p != nil {
 		if err := w.charge(p.size); err != nil {
@@ -343,13 +347,13 @@ func (v *MemoView) expandTree(w *treeWalk, name string) (bool, error) {
 	}
 	m := v.memo
 	m.mu.Lock()
-	x, lineage := m.trees, m.treeLineage
+	x := m.trees
 	m.mu.Unlock()
-	if x == nil || lineage != v.store.lineage {
+	if x == nil {
 		return false, nil
 	}
 	p := x.piece(name)
-	if p == nil || p.rid > v.store.prefix.top || v.store.prefix.phantoms[p.rid] {
+	if p == nil || v.store.refs.facts.names[p.rid] != name || v.store.prefix.phantoms[p.rid] {
 		return false, nil
 	}
 	if err := w.charge(p.size); err != nil {

@@ -50,13 +50,6 @@ func (m *Memo) TreeBytes() int64 {
 	return m.trees.bytes
 }
 
-// LimitTrees sets the most m keeps of its walks' trees.
-func (m *Memo) LimitTrees(bytes int64) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.treeLimit = bytes
-}
-
 // TreeChainDepth is the most set differences any tree m keeps lies from
 // one kept whole.
 func (m *Memo) TreeChainDepth() int {

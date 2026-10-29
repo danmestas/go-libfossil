@@ -49,16 +49,14 @@ type Memo struct {
 	slots   []*memoSlots
 	helds   []*memoHeld
 	lineage uint64 // the last store read in full
-	// trees is the trees the published views of store lineage treeLineage
-	// read; it is replaced, never changed, so a view reads one without the
-	// lock. treeLimit is memoTreeBytes but in tests.
-	trees       *treeIndex
-	treeLineage uint64
-	treeLimit   int64
+	// trees is the trees the published views read, of this store and the
+	// ones before it; it is replaced, never changed, so a view reads one
+	// without the lock.
+	trees *treeIndex
 }
 
 // NewMemo returns an empty memo.
-func NewMemo() *Memo { return &Memo{treeLimit: memoTreeBytes} }
+func NewMemo() *Memo { return &Memo{} }
 
 // memoStore is the store's cone-independent references at one prefix: the
 // facts a path classification reads (kinds, F, P, B, S and A references),
@@ -231,7 +229,7 @@ func (v *MemoView) Publish() {
 	if over := len(m.helds) - memoCuts; over > 0 {
 		m.helds = slices.Delete(m.helds, 0, over)
 	}
-	m.publishTrees(v.store.lineage, v.trees)
+	m.publishTrees(v.trees)
 }
 
 func loadMemoStore(ctx context.Context, q db.Querier, prefix storePrefix, lineage uint64) (*memoStore, error) {

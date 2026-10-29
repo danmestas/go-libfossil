@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in that lists it; nothing from that request is stored, and stock fossil
   prints the error. 0, the default, stores any size, and clones and pulls served
   from the repository are not limited (related to #459).
+- The `libfossil_nohttp` build tag leaves `net/http` out of the library, for
+  a program that serves sync through `HandleSyncWithOpts` and syncs, if at
+  all, through a `Transport` its host supplies: `NewHTTPTransport`,
+  `WithHTTPClient`, `Repo.Pull`, `Repo.XferHandler` and `Repo.ServeHTTP` are
+  not built. Importing `net/http` at all links its TLS and X.509 code into a
+  TinyGo binary; for the html-artifact-publisher engine that is about 97 KB
+  of 1.1 MB gzipped. Without the tag nothing changes.
 - `HandleSyncWithOpts` reports a `HandleOpts.MaxStoredBytes` refusal as a
   `*RefusedError` (match it with `errors.As`) beside the reply, whose one
   error card it carries in `Message`. A host whose storage treats the

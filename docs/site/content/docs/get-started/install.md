@@ -50,6 +50,7 @@ wasm-opt -Oz --detect-features --strip-debug --strip-producers libfossil.wasm -o
 - **Driver:** a TinyGo build imports no SQLite driver. The host registers a `database/sql` driver over its own SQLite; ncruces is for standard Go builds and modernc has no wasm build.
 - **Stack:** `-stack-size=1MB`, because TinyGo's default goroutine stack is too small for the deeper paths.
 - **Differences:** under TinyGo a sync redirect ends the request with an error instead of being followed, and DNS failures are not classified as transient.
+- **Without HTTP:** a program that serves sync through `HandleSyncWithOpts` and syncs, if at all, through a `Transport` its host supplies can build with `-tags libfossil_nohttp`. That leaves out `NewHTTPTransport`, `WithHTTPClient`, `Repo.Pull`, `Repo.XferHandler` and `Repo.ServeHTTP`, and with them `net/http`, whose TLS and X.509 dependencies are about 97 KB of a gzipped TinyGo binary. Everything else is unchanged.
 
 CI builds `examples/tinygo` with TinyGo 0.43 on every change.
 

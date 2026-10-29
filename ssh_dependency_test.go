@@ -20,16 +20,23 @@ const sshImportPath = "golang.org/x/crypto/ssh"
 // goos/goarch, or for the host when goos is empty.
 func goListDeps(t *testing.T, goos, goarch, pkg string) []string {
 	t.Helper()
-	cmd := exec.Command("go", "list", "-deps", "-f={{.ImportPath}}", pkg)
+	return strings.Fields(goTool(t, goos, goarch, "list", "-deps", "-f={{.ImportPath}}", pkg))
+}
+
+// goTool runs the go tool for goos/goarch, or for the host when goos is
+// empty, and returns its combined output.
+func goTool(t *testing.T, goos, goarch string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("go", args...)
 	cmd.Env = os.Environ()
 	if goos != "" {
 		cmd.Env = append(cmd.Env, "GOOS="+goos, "GOARCH="+goarch)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("go list -deps %s: %v\n%s", pkg, err, out)
+		t.Fatalf("go %s (GOOS=%q): %v\n%s", strings.Join(args, " "), goos, err, out)
 	}
-	return strings.Fields(string(out))
+	return string(out)
 }
 
 // TestSSHVerifyIsOptIn: the packages an embedder links (the library, db and

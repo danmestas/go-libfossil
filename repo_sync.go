@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
 	internalsync "github.com/danmestas/go-libfossil/internal/sync"
 	"github.com/danmestas/go-libfossil/internal/xfer"
@@ -378,24 +377,4 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 		return nil, fmt.Errorf("libfossil: handle sync: %w", err)
 	}
 	return resp.Encode()
-}
-
-// XferHandler returns an http.HandlerFunc that decodes Fossil xfer requests,
-// dispatches to HandleSync, and encodes the response. Use this to compose
-// a custom mux alongside operational endpoints (e.g., /healthz). It serves
-// with default HandleOpts, so no HandleOpts.MaxStoredBytes budget applies.
-func (r *Repo) XferHandler() http.HandlerFunc {
-	h := internalsync.HandleSync
-	return internalsync.XferHandler(r.inner, h)
-}
-
-// ServeHTTP starts an HTTP server that accepts Fossil xfer requests.
-// Blocks until ctx is cancelled.
-//
-// Requests are authorized against the user table: one without a login card
-// gets nobody's capabilities, which in a new repository allow clone and pull
-// but not push. Grant more with SetCaps. Like XferHandler it serves with
-// default HandleOpts, so no HandleOpts.MaxStoredBytes budget applies.
-func (r *Repo) ServeHTTP(ctx context.Context, addr string) error {
-	return internalsync.ServeHTTP(ctx, addr, r.inner, internalsync.HandleSync)
 }

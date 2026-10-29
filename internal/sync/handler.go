@@ -1061,28 +1061,37 @@ const horizonNotHeldText = horizonNotHeldPrefix +
 // does not hold (horizon §6.4). It runs after the request's cards, so the
 // push half stands: what the peer pushed is stored, and its reply cards stay,
 // the gimmes that ask for what the peer announced and any push error, so a
-// client can finish its push in later rounds. Everything the pull half put
-// in the reply is dropped, the content and announcements and the pragmas
-// serving the horizon, so the peer is sent no content, as §6.4 requires;
+// client can finish its push in later rounds. Every other card is dropped
+// (keptOnRefusal), the pull half's content, announcements and the pragmas
+// serving the horizon among them, so the peer is sent no content (§6.4);
 // the error card goes last, since a client stops reading at an error card.
 // process adds no timestamp, so a pull alone is answered by the error alone.
 func (h *handler) refuseHorizon() {
 	if !h.notHeld {
 		return
 	}
-	h.resp = slices.DeleteFunc(h.resp, servesPull)
+	h.resp = slices.DeleteFunc(h.resp, func(c xfer.Card) bool { return !keptOnRefusal(c) })
 	h.resp = append(h.resp, &xfer.ErrorCard{Message: horizonNotHeldText})
 }
 
-// servesPull reports a reply card that serves a pull: content, an
-// announcement of it, or a pragma serving the request's cone or horizon.
-func servesPull(c xfer.Card) bool {
+// refusalKeeps lists the session-level pragmas a §6.4 refusal keeps: the
+// server's release and capabilities, a check-in lock answer, and whether
+// the requester may push unversioned files.
+var refusalKeeps = map[string]bool{
+	"server-version": true, "send-submanifests": true, "avoid-submanifests": true,
+	"ci-lock-fail": true, "uv-push-ok": true, "uv-pull-only": true,
+}
+
+// keptOnRefusal reports a reply card a §6.4 refusal keeps: one the push half
+// or the session needs, the gimmes asking for what the peer announced, an
+// error or message, and the session-level pragmas. It is an allowlist, so a
+// card type added later is dropped from a refusal until it is judged safe.
+func keptOnRefusal(c xfer.Card) bool {
 	switch c := c.(type) {
-	case *xfer.FileCard, *xfer.CFileCard, *xfer.PrivateCard, *xfer.IGotCard,
-		*xfer.UVFileCard, *xfer.UVIGotCard, *xfer.ConfigCard:
+	case *xfer.GimmeCard, *xfer.UVGimmeCard, *xfer.XGimmeCard, *xfer.ErrorCard, *xfer.MessageCard:
 		return true
 	case *xfer.PragmaCard:
-		return c.Name == coneServedPragma || strings.HasPrefix(c.Name, "horizon-")
+		return refusalKeeps[c.Name]
 	}
 	return false
 }

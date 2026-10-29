@@ -106,7 +106,8 @@ func hzPeerServed(reply *xfer.Message) error {
 // hzPeerRefused fails unless reply refuses the pull half: its last card is
 // the one horizon-not-held error, and it carries no content, no
 // announcement and no pragma serving the horizon. The push half's cards
-// may precede the error.
+// may precede the error, and only the card types a refusal allows: gimmes,
+// errors, messages and session-level pragmas.
 func hzPeerRefused(reply *xfer.Message) error {
 	n := len(reply.Cards)
 	if n == 0 {
@@ -120,15 +121,22 @@ func hzPeerRefused(reply *xfer.Message) error {
 	}
 	for _, card := range reply.Cards {
 		switch c := card.(type) {
-		case *xfer.IGotCard:
-			return expectf("the refusal announces %s", c.UUID)
+		case *xfer.GimmeCard, *xfer.UVGimmeCard, *xfer.XGimmeCard, *xfer.ErrorCard, *xfer.MessageCard:
 		case *xfer.PragmaCard:
-			if strings.HasPrefix(c.Name, "horizon-") {
+			if !hzPeerRefusalPragmas[c.Name] {
 				return expectf("the refusal carries pragma %s", c.Name)
 			}
+		default:
+			return expectf("the refusal carries a %T card", c)
 		}
 	}
 	return nil
+}
+
+// hzPeerRefusalPragmas are the session-level pragmas a refusal may keep.
+var hzPeerRefusalPragmas = map[string]bool{
+	"server-version": true, "send-submanifests": true, "avoid-submanifests": true,
+	"ci-lock-fail": true, "uv-push-ok": true, "uv-pull-only": true,
 }
 
 // hzPeerStore is a content-horizon clone of g's origin at g.c, open to nobody.
@@ -160,7 +168,12 @@ func hzPeerRefusePull(t *testing.T) error {
 		return expectf("a pull at the store's own C: %v", err)
 	}
 	earlier := hzUUID(t, g.f.r, g.c2)
-	refused, err := server.Exchange(context.Background(), hzPeerPull(t, store, earlier, "descendants"))
+	// A request that asks for pull-side cards of every kind: the version
+	// answer, the unversioned catalog, configuration and the clusters.
+	refused, err := server.Exchange(context.Background(), hzPeerPull(t, store, earlier, "descendants",
+		&xfer.PragmaCard{Name: "client-version", Values: []string{"22800", "20260101", "000000"}},
+		&xfer.PragmaCard{Name: "uv-hash", Values: []string{strings.Repeat("0", 40)}},
+		&xfer.PragmaCard{Name: "req-clusters"}, &xfer.ReqConfigCard{Name: "/project"}))
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,6 +101,8 @@ func TestPartialMirrorSettingDrivesCloneRefusal(t *testing.T) {
 
 // HandleOpts.MaxStoredBytes reaches the server: a push whose artifact stores
 // over it is refused with the budget's error and leaves the origin as it was.
+// HandleSyncWithOpts returns that error as a *RefusedError beside the reply,
+// which a host sends on so the client reads the error card.
 func TestHandleOptsMaxStoredBytesRefusesPush(t *testing.T) {
 	origin, err := Create(filepath.Join(t.TempDir(), "origin.fossil"), CreateOpts{User: "test"})
 	if err != nil {
@@ -109,8 +112,18 @@ func TestHandleOptsMaxStoredBytesRefusesPush(t *testing.T) {
 	if err := origin.SetCaps("nobody", "gijoryz"); err != nil {
 		t.Fatal(err)
 	}
+	var refusals []string
 	serve := TransportFunc(func(ctx context.Context, payload []byte) ([]byte, error) {
-		return origin.HandleSyncWithOpts(ctx, payload, HandleOpts{MaxStoredBytes: 1024})
+		reply, err := origin.HandleSyncWithOpts(ctx, payload, HandleOpts{MaxStoredBytes: 1024})
+		var refused *RefusedError
+		if errors.As(err, &refused) {
+			if len(reply) == 0 {
+				t.Fatal("a refused round returned no reply")
+			}
+			refusals = append(refusals, refused.Message)
+			return reply, nil
+		}
+		return reply, err
 	})
 	clone, _, err := Clone(context.Background(), filepath.Join(t.TempDir(), "clone.fossil"),
 		serve, CloneOpts{})
@@ -135,6 +148,9 @@ func TestHandleOptsMaxStoredBytesRefusesPush(t *testing.T) {
 	}
 	if !refused {
 		t.Fatalf("push of a big artifact was not refused by the budget: res=%+v err=%v", res, err)
+	}
+	if len(refusals) != 1 || !strings.Contains(refusals[0], "stores at most 1024 bytes per artifact") {
+		t.Fatalf("HandleSyncWithOpts refusals = %q, want one budget refusal", refusals)
 	}
 	if _, err := origin.ResolveVersion("tip"); err == nil {
 		t.Fatal("the refused push left a check-in on the origin")

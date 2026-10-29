@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"syscall"
 	"time"
@@ -90,9 +89,16 @@ func (e *StatusError) Error() string {
 // request itself, which repeating cannot fix and would only obscure.
 func (e *StatusError) RetryableTransportFault() bool {
 	return e.Code >= 500 ||
-		e.Code == http.StatusTooManyRequests ||
-		e.Code == http.StatusRequestTimeout
+		e.Code == statusTooManyRequests ||
+		e.Code == statusRequestTimeout
 }
+
+// The statuses net/http names, here so a libfossil_nohttp build, which links
+// no net/http, still classifies a host transport's StatusError.
+const (
+	statusTooManyRequests = 429
+	statusRequestTimeout  = 408
+)
 
 // exchangeWithRetry runs one exchange round, resending it after a bounded
 // exponential backoff when the failure was a transport fault rather than a

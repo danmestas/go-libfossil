@@ -2,6 +2,7 @@ package sync_test
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -44,7 +45,14 @@ func TestRealFossilPushOverBudget(t *testing.T) {
 	defer cancel()
 	base := serveRepoWith(ctx, t, srv,
 		func(ctx context.Context, r *repo.Repo, req *xfer.Message) (*xfer.Message, error) {
-			return sync.HandleSyncWithOpts(ctx, r, req, sync.HandleOpts{MaxStoredBytes: limit})
+			resp, err := sync.HandleSyncWithOpts(ctx, r, req, sync.HandleOpts{MaxStoredBytes: limit})
+			// A host serving HTTP sends a refused round's reply: its error
+			// card is what fossil prints.
+			var refused *sync.RefusedError
+			if errors.As(err, &refused) {
+				return resp, nil
+			}
+			return resp, err
 		})
 
 	clonePath := filepath.Join(dir, "clone.fossil")

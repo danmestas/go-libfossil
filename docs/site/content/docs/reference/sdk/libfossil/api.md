@@ -1420,6 +1420,16 @@ type HandleOpts struct {
     // rcvfrom row of whatever it pushes, as fossil records REMOTE_ADDR.
     // XferHandler and ServeHTTP fill it themselves.
     RemoteAddr string
+    // MaxStoredBytes, when positive, is the most bytes one pushed artifact
+    // may occupy as this repository stores it (compressed, and as a delta
+    // when pushed as one). Set it when the host's storage caps a single
+    // value: a push carrying a bigger artifact is refused whole with an
+    // error naming the artifact, its stored size and the limit, and the
+    // file and check-in when this repository already holds a check-in
+    // listing it, so nothing from that request is stored. 0, the default,
+    // stores any size. Clones and pulls served from the repository are not
+    // limited.
+    MaxStoredBytes int
 }
 ```
 

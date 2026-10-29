@@ -78,6 +78,16 @@ type HandleOpts struct {
 	// rcvfrom row of whatever it pushes, as fossil records REMOTE_ADDR.
 	// XferHandler and ServeHTTP fill it themselves.
 	RemoteAddr string
+	// MaxStoredBytes, when positive, is the most bytes one pushed artifact
+	// may occupy as this repository stores it (compressed, and as a delta
+	// when pushed as one). Set it when the host's storage caps a single
+	// value: a push carrying a bigger artifact is refused whole with an
+	// error naming the artifact, its stored size and the limit, and the
+	// file and check-in when this repository already holds a check-in
+	// listing it, so nothing from that request is stored. 0, the default,
+	// stores any size. Clones and pulls served from the repository are not
+	// limited.
+	MaxStoredBytes int
 }
 
 // CloneOpts configures a clone operation.
@@ -316,6 +326,10 @@ func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error) {
 
 // HandleSyncWithOpts processes an incoming xfer request with optional configuration.
 func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts HandleOpts) ([]byte, error) {
+	if opts.MaxStoredBytes < 0 {
+		return nil, fmt.Errorf("libfossil: HandleOpts.MaxStoredBytes is %d, must not be negative",
+			opts.MaxStoredBytes)
+	}
 	// The payload arrives without a Content-Type; a libfossil peer always sends
 	// the §4.1 compressed container (Message.Encode), so the framing is fixed.
 	msg, err := xfer.DecodeRequest(payload, xfer.ContentTypeCompressed, opts.LoginCookie)
@@ -323,8 +337,9 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 		return nil, fmt.Errorf("libfossil: decode xfer: %w", err)
 	}
 	iOpts := internalsync.HandleOpts{
-		Observer:   adaptObserver(opts.Observer),
-		RemoteAddr: opts.RemoteAddr,
+		Observer:       adaptObserver(opts.Observer),
+		RemoteAddr:     opts.RemoteAddr,
+		MaxStoredBytes: opts.MaxStoredBytes,
 	}
 	if opts.Buggify != nil {
 		iOpts.Buggify = opts.Buggify

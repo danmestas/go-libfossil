@@ -9,6 +9,17 @@ import (
 	"github.com/danmestas/go-libfossil/internal/blob"
 )
 
+// RefusedError is returned, beside the reply, by a HandleSyncWithOpts request
+// that HandleOpts.MaxStoredBytes refused. Message is the reply's one error
+// card, so a host whose storage aborts on the request's rollback can report
+// the refusal without parsing the reply.
+type RefusedError struct {
+	Message string
+}
+
+// Error returns Message.
+func (e *RefusedError) Error() string { return e.Message }
+
 // overBudget reports the refusal text for an artifact whose stored form
 // would exceed the handler's MaxStoredBytes, "" when it fits, there is no
 // budget, or the store already holds it (nothing would be written). payload

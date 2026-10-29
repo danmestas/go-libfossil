@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   check-in that lists it; nothing from that request is stored, and stock fossil
   prints the error. 0, the default, stores any size, and clones and pulls served
   from the repository are not limited (related to #459).
+- `HandleSyncWithOpts` reports a `HandleOpts.MaxStoredBytes` refusal as a
+  `*RefusedError` (match it with `errors.As`) beside the reply, whose one
+  error card it carries in `Message`. A host whose storage treats the
+  request's rollback as an abort of the whole call, and so loses the reply,
+  can report or render the refusal itself without parsing xfer; a host
+  serving HTTP sends the reply as before.
 - `Repo.AttachmentAdd`, `Repo.AttachmentDelete`, `Repo.Attachments` and
   `Repo.AttachmentRead` attach files to tickets, wiki pages and tech notes the
   way stock fossil 2.28 does (src/attach.c): the file is one ordinary blob and

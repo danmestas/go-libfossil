@@ -2,6 +2,7 @@ package libfossil
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -84,10 +85,11 @@ type HandleOpts struct {
 	// value: a push carrying a bigger artifact is refused whole with an
 	// error naming the artifact, its stored size and the limit, and the
 	// file and check-in when this repository already holds a check-in
-	// listing it, so nothing from that request is stored. 0, the default,
-	// stores any size. Clones and pulls served from the repository are not
-	// limited. XferHandler and ServeHTTP serve without a budget: a host that
-	// needs one serves HandleSyncWithOpts itself.
+	// listing it, so nothing from that request is stored, and
+	// HandleSyncWithOpts returns a *RefusedError with that reply. 0, the
+	// default, stores any size. Clones and pulls served from the repository
+	// are not limited. XferHandler and ServeHTTP serve without a budget: a
+	// host that needs one serves HandleSyncWithOpts itself.
 	MaxStoredBytes int
 }
 
@@ -325,7 +327,25 @@ func (r *Repo) HandleSync(ctx context.Context, payload []byte) ([]byte, error) {
 	return r.HandleSyncWithOpts(ctx, payload, HandleOpts{})
 }
 
+// RefusedError is the error HandleSyncWithOpts returns, beside the reply, when
+// HandleOpts.MaxStoredBytes refused the request. Message is the text of the
+// reply's one error card.
+type RefusedError struct {
+	Message string
+}
+
+// Error returns Message.
+func (e *RefusedError) Error() string { return e.Message }
+
 // HandleSyncWithOpts processes an incoming xfer request with optional configuration.
+//
+// When opts.MaxStoredBytes refuses the request, it returns both the encoded
+// reply, which holds only the error card naming the artifact, and a
+// *RefusedError carrying that card's text (match it with errors.As). The
+// request was rolled back, so nothing from it is stored. A host serving the
+// reply over HTTP sends it as usual, and the client prints the error; a host
+// whose storage aborts the whole call on any rollback can report
+// RefusedError.Message itself. Every other error returns a nil reply.
 func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts HandleOpts) ([]byte, error) {
 	if opts.MaxStoredBytes < 0 {
 		return nil, fmt.Errorf("libfossil: HandleOpts.MaxStoredBytes is %d, must not be negative",
@@ -346,6 +366,14 @@ func (r *Repo) HandleSyncWithOpts(ctx context.Context, payload []byte, opts Hand
 		iOpts.Buggify = opts.Buggify
 	}
 	resp, err := internalsync.HandleSyncWithOpts(ctx, r.inner, msg, iOpts)
+	var refused *internalsync.RefusedError
+	if errors.As(err, &refused) {
+		reply, encErr := resp.Encode()
+		if encErr != nil {
+			return nil, fmt.Errorf("libfossil: encode refusal: %w", encErr)
+		}
+		return reply, &RefusedError{Message: refused.Message}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("libfossil: handle sync: %w", err)
 	}

@@ -482,6 +482,13 @@ func failsRound(err error) bool {
 	return errors.As(err, &mismatch)
 }
 
+// horizonRefusal is a horizon store's refusal of a pull whose held set it
+// does not hold (horizon §6.4), which Sync returns once its push half has
+// converged: the draft makes the refusal fatal to the requesting client.
+type horizonRefusal string
+
+func (e horizonRefusal) Error() string { return "error: " + string(e) }
+
 // errPassAborted is what a pass's callback returns to roll its transaction
 // back once it has recorded why: the server's late mismatch and §8.1 fatal,
 // whose reply is already built.

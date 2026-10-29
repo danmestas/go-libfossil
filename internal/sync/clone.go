@@ -273,6 +273,13 @@ func (cs *cloneSession) complete(ctx context.Context, t Transport) (*CloneResult
 		return cloneResult, fmt.Errorf("sync.Clone: horizon seed: %w", err)
 	}
 	cs.result.HorizonFallback = cs.result.HorizonFallback || fell
+	remedy, err := fallbackRemedy(cs.repo.DB(), cs.result.HorizonFallback, cs.result.HorizonHistoryURL)
+	if err != nil {
+		return cloneResult, fmt.Errorf("sync.Clone: %w", err)
+	}
+	if remedy != "" {
+		cs.result.Messages = append(cs.result.Messages, remedy)
+	}
 	fillErr := cs.fillPhantoms(ctx, t)
 	// Horizon §5.2.3: a delta stored unreadable is counted once the rounds,
 	// the linker and any phantom pull have judged it, and only if it was not
@@ -386,6 +393,12 @@ func (cs *cloneSession) fillPhantoms(ctx context.Context, t Transport) error {
 	})
 	if res != nil {
 		cs.result.HorizonFallback = cs.result.HorizonFallback || res.HorizonFallback
+		// The phantom pull's own fallback remedy, if it fell back.
+		for _, e := range res.Errors {
+			if strings.HasPrefix(e, fallbackPrefix) {
+				cs.result.Messages = append(cs.result.Messages, e)
+			}
+		}
 	}
 	if res != nil {
 		cs.result.Rounds += res.Rounds

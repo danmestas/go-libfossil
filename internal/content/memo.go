@@ -47,6 +47,7 @@ type Memo struct {
 	cones   []*memoCone // least recently published first
 	cuts    []*memoCut
 	slots   []*memoSlots
+	helds   []*memoHeld
 	lineage uint64 // the last store read in full
 	// trees is the trees the published views of store lineage treeLineage
 	// read; it is replaced, never changed, so a view reads one without the
@@ -138,6 +139,7 @@ type MemoView struct {
 	cones map[string]*memoCone
 	cuts  map[cutKey]*memoCut
 	slots map[string]*memoSlots
+	helds map[cutKey]*memoHeld
 	// trees holds the tree pieces this view's walks read from the store,
 	// for the memo's trees on Publish; treeReads counts those reads.
 	trees     map[string]*plainTree
@@ -160,7 +162,7 @@ func (m *Memo) View(ctx context.Context, q db.Querier) (*MemoView, error) {
 		return nil, err
 	}
 	v := &MemoView{memo: m, cones: map[string]*memoCone{}, cuts: map[cutKey]*memoCut{},
-		slots: map[string]*memoSlots{}, trees: map[string]*plainTree{}}
+		slots: map[string]*memoSlots{}, helds: map[cutKey]*memoHeld{}, trees: map[string]*plainTree{}}
 	if base != nil && base.prefix.equal(now) {
 		v.store = base
 		return v, nil
@@ -221,6 +223,13 @@ func (v *MemoView) Publish() {
 	}
 	if over := len(m.slots) - memoCones; over > 0 {
 		m.slots = slices.Delete(m.slots, 0, over)
+	}
+	for key, c := range v.helds {
+		m.helds = slices.DeleteFunc(m.helds, func(o *memoHeld) bool { return o.key == key })
+		m.helds = append(m.helds, c)
+	}
+	if over := len(m.helds) - memoCuts; over > 0 {
+		m.helds = slices.Delete(m.helds, 0, over)
 	}
 	m.publishTrees(v.store.lineage, v.trees)
 }
@@ -580,6 +589,61 @@ func (v *MemoView) cut(ctx context.Context, q db.Querier, h cone.Horizon) (*memo
 func (v *MemoView) keepCut(c *memoCut) *memoCut {
 	v.cuts[c.key] = c
 	return c
+}
+
+// memoHeld is a held set computed over one store: valid while the view's
+// store is that store, since K moves only with the check-in graph, which a
+// new store (an appended or filled artifact) may change.
+type memoHeld struct {
+	key    cutKey
+	store  *memoStore
+	k      []libfossil.FslID
+	placed bool
+}
+
+func (m *Memo) lookupHeld(key cutKey, store *memoStore) *memoHeld {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.helds {
+		if c.key == key && c.store == store {
+			return c
+		}
+	}
+	return nil
+}
+
+// HeldSet is horizon.Place over the view's store graph: h's held set, and
+// whether the store holds h's C as a check-in. It is kept by horizon until
+// the store changes, so a store asked for the same held set on every
+// request walks its graph once, within the graph's visited-node bound.
+func (v *MemoView) HeldSet(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, bool, error) {
+	if v == nil || ctx == nil || q == nil {
+		panic("content.MemoView.HeldSet: nil view, context or querier")
+	}
+	key := cutKey{hash: h.Hash(), rule: h.Rule()}
+	c := v.helds[key]
+	if c == nil {
+		c = v.memo.lookupHeld(key, v.store)
+	}
+	if c != nil {
+		v.helds[key] = c
+		return c.k, c.placed, nil
+	}
+	out := &memoHeld{key: key, store: v.store}
+	var rid libfossil.FslID
+	err := q.QueryRow("SELECT rid FROM blob WHERE uuid=?", h.Hash()).Scan(&rid)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, false, fmt.Errorf("horizon: C: %w", err)
+	}
+	if err == nil {
+		out.k, err = v.store.graph.HeldSet(ctx, rid, h.Rule())
+		if err != nil && !errors.Is(err, horizon.ErrNotHeld) {
+			return nil, false, err
+		}
+		out.placed = err == nil
+	}
+	v.helds[key] = out
+	return out.k, out.placed, nil
 }
 
 // HorizonReach is HorizonReach over the view's store.

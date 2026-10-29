@@ -113,5 +113,10 @@ HZ-6.2-20	6.2.7	The client fails the clone and leaves nothing on disk when horiz
 HZ-6.2-21	6.2.7	A client whose reply carries no horizon-resolved completes the dense transfer, resolves the name and depth over what it holds by the same rule, classifies locally at the content horizon (Section 6.3), records the hash and reports that the name was resolved locally; a structural request against such a peer falls back to the content horizon.
 HZ-6.3-1	6.3	Against a horizon-ignorant peer a content-horizon client classifies locally, stores the blobs above the horizon, records elided phantoms and reports the counts; a structural clone request falls back to the content horizon for that transfer and reports that it did.
 HZ-6.3-2	6.3	A store at the structural horizon whose pull or sync replies carry no horizon-served structural falls back to the content horizon at the same C and rule, records that depth, discards its seed, fetches the manifests and nodes below C, and reports that it did.
+# HZ-6.4-1: a refused horizon sync still accepts the peer's push. The pull half
+# is refused and the reply sends the peer no content, which is what §6.4's "no
+# content" governs: the refusal protects the requester from a partial answer.
+# What the peer pushes is its own history, which the store can hold whatever its
+# horizon, so the gimmes answering its announcements stay and its files land.
 HZ-6.4-1	6.4	A server over a horizon clone refuses a dense clone request, and a horizon request whose held set is not a subset of its own, with one error card and no content; the requesting client treats that reply as fatal.
 HZ-8-1	8	The origin's held-set walk and merge-base query carry the depth and visited-node bounds of any server-side graph walk, and delta inflation on the serve path is bounded by the round's batch limit.

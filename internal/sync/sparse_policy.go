@@ -11,7 +11,6 @@ import (
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
-	"github.com/danmestas/go-libfossil/internal/horizon"
 	"github.com/danmestas/go-libfossil/internal/repo"
 	"github.com/danmestas/go-libfossil/internal/xfer"
 )
@@ -173,9 +172,12 @@ func (h *handler) ensureSparseKeep() error {
 		h.keep = &sparseKeep{walk: w}
 		return nil
 	}
-	cl, err := h.classifier(ctx, h.repo.DB())
-	if err != nil {
-		return err
+	cl := h.judged
+	if cl == nil {
+		var err error
+		if cl, err = h.classifier(ctx, h.repo.DB()); err != nil {
+			return err
+		}
 	}
 	keep, err := newSparseKeepWith(ctx, h.repo.DB(), h.cone, cl)
 	if err != nil {
@@ -392,6 +394,8 @@ func rememberSparseReceived(q db.Querier, received map[string]bool, uuid string)
 // request's paths lie inside the store's, and under a store horizon the
 // request names a horizon whose held set lies inside the store's own, both
 // computed over the store. A horizon the store cannot place covers nothing.
+// The horizon judged is the one asked: a structural request this store
+// answers as content (prepareStructural) still asks for no manifest below C.
 func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
 	if !coneContains(have, h.cone) {
 		return false, nil
@@ -403,37 +407,91 @@ func (h *handler) coversRequest(have *cone.Cone) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	want, ok := h.cone.Horizon()
-	if !ok {
+	if h.asked.Hash() == "" {
 		return false, nil
 	}
 	// A structural store holds no manifest below its horizon, which a
 	// content-horizon clone keeps.
-	if own.Depth() == cone.DepthStructural && want.Depth() != cone.DepthStructural {
+	if own.Depth() == cone.DepthStructural && h.asked.Depth() != cone.DepthStructural {
 		return false, nil
 	}
 	ctx := h.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	held, placed, err := horizon.Place(ctx, h.repo.DB(), own)
-	if err != nil || !placed {
-		return false, err
+	held, placed, err := heldWithin(ctx, freshClassifier{}, h.repo.DB(), own, h.asked)
+	return held && placed, err
+}
+
+// judgeHeld decides whether a horizon pull or sync asks for a held set this
+// store's horizon does not contain (horizon §6.4), which refuseHorizon then
+// refuses. It runs after the card loop, so only a pull card that passed its
+// permission check is judged, and a peer's push is already stored. Only K
+// is compared: a pull at the store's own C and rule is served whatever its
+// depth, since a structural request is answered at the content level here.
+// A requested C this store does not hold is a peer ahead of it, not one
+// asking for history it lacks, and is served what the store holds. A
+// partial mirror serves what it holds, as it does a clone it does not cover.
+func (h *handler) judgeHeld(ctx context.Context) error {
+	if ctx == nil {
+		panic("handler.judgeHeld: nil context")
 	}
-	asked, placed, err := horizon.Place(ctx, h.repo.DB(), want)
-	if err != nil || !placed {
-		return false, err
+	if !h.pullOK || h.asked.Hash() == "" {
+		return nil
 	}
-	inside := make(map[libfossil.FslID]bool, len(held))
-	for _, rid := range held {
+	q := h.repo.DB()
+	have, err := content.StoreCone(q)
+	if err != nil {
+		return err
+	}
+	own, ok := horizonOf(have)
+	if !ok {
+		return nil
+	}
+	mirror, err := h.servesPartialMirror()
+	if err != nil || mirror {
+		return err
+	}
+	// The inventory classifies through the same view: nothing is written
+	// between here and there, so the store it reads is the one judged.
+	if h.judged, err = h.classifier(ctx, q); err != nil {
+		return err
+	}
+	held, placed, err := heldWithin(ctx, h.judged, q, own, h.asked)
+	h.notHeld = placed && !held
+	return err
+}
+
+// heldWithin reports whether want's held set is a subset of own's, both
+// placed over q through cl, and whether q holds want's C at all. A store
+// that cannot place its own horizon holds nothing.
+func heldWithin(ctx context.Context, cl classifier, q db.Querier, own, want cone.Horizon) (held, placed bool, err error) {
+	if ctx == nil || cl == nil || q == nil {
+		panic("sync.heldWithin: nil context, classifier or querier")
+	}
+	// A peer at the store's own C and rule, the usual case in a mesh, asks
+	// for the same set; the held-set walks are skipped for it.
+	if own.Hash() == want.Hash() && own.Rule() == want.Rule() {
+		return true, true, nil
+	}
+	asked, placed, err := cl.heldSet(ctx, q, want)
+	if err != nil || !placed {
+		return false, placed, err
+	}
+	k, ownPlaced, err := cl.heldSet(ctx, q, own)
+	if err != nil || !ownPlaced {
+		return false, true, err
+	}
+	inside := make(map[libfossil.FslID]bool, len(k))
+	for _, rid := range k {
 		inside[rid] = true
 	}
 	for _, rid := range asked {
 		if !inside[rid] {
-			return false, nil
+			return false, true, nil
 		}
 	}
-	return true, nil
+	return true, true, nil
 }
 
 func coneContains(have, want *cone.Cone) bool {

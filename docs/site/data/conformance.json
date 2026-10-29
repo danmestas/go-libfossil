@@ -4577,7 +4577,7 @@
       "deviation": 0,
       "failing": 0,
       "gap": 0,
-      "cases": 156,
+      "cases": 161,
       "rows": [
         {
           "id": "HZ-1.1-1",
@@ -5031,7 +5031,7 @@
           "id": "HZ-6.2-6",
           "section": "6.2.3",
           "status": "COVERED",
-          "cases": 1,
+          "cases": 2,
           "text": "An origin does not advertise the structural level unless it sends a seed in the same reply or the client's offered seed is the one it would send; because the D card is fixed by the repository's tag events and the latest D the origin has minted, two mints over unchanged state produce the same name.",
           "notes": ""
         },
@@ -5167,7 +5167,7 @@
           "id": "HZ-6.3-2",
           "section": "6.3",
           "status": "COVERED",
-          "cases": 1,
+          "cases": 2,
           "text": "A store at the structural horizon whose pull or sync replies carry no horizon-served structural falls back to the content horizon at the same C and rule, records that depth, discards its seed, fetches the manifests and nodes below C, and reports that it did.",
           "notes": ""
         },
@@ -5175,7 +5175,7 @@
           "id": "HZ-6.4-1",
           "section": "6.4",
           "status": "COVERED",
-          "cases": 1,
+          "cases": 4,
           "text": "A server over a horizon clone refuses a dense clone request, and a horizon request whose held set is not a subset of its own, with one error card and no content; the requesting client treats that reply as fatal.",
           "notes": ""
         },

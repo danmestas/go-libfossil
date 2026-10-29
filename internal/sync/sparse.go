@@ -8,6 +8,7 @@ import (
 
 	"github.com/danmestas/go-libfossil/db"
 	"github.com/danmestas/go-libfossil/internal/cone"
+	"github.com/danmestas/go-libfossil/internal/content"
 	"github.com/danmestas/go-libfossil/internal/deck"
 	"github.com/danmestas/go-libfossil/internal/hash"
 	"github.com/danmestas/go-libfossil/internal/horizon/seed"
@@ -182,6 +183,39 @@ func historyURL(q db.Querier) (string, error) {
 		return "", fmt.Errorf("handler: read %s: %w", repo.SettingHorizonHistoryURL, err)
 	}
 	return value, nil
+}
+
+// fallbackPrefix begins the diagnostic fallbackRemedy writes, so a caller
+// can pick it out of a sync's Errors or a clone's Messages.
+const fallbackPrefix = "horizon-fallback:"
+
+// fallbackRemedy is what a store that fell back to the content horizon
+// reports (§6.3): the manifests below C are now wanted, and a peer that is
+// itself at a horizon does not hold them (§6.2.3, §6.4), so the remedy is a
+// dense origin, named by the history interface url when a reply named one.
+// It is "" when the store did not fall back.
+func fallbackRemedy(q db.Querier, fell bool, url string) (string, error) {
+	if q == nil {
+		panic("sync.fallbackRemedy: nil querier")
+	}
+	if !fell {
+		return "", nil
+	}
+	c, err := content.StoreCone(q)
+	if err != nil {
+		return "", err
+	}
+	h, ok := horizonOf(c)
+	if !ok {
+		return "", nil
+	}
+	where := "a dense origin"
+	if url != "" {
+		where = "the dense origin whose history is at " + url
+	}
+	return fmt.Sprintf(fallbackPrefix+" the structural horizon at %s was not served, so this store keeps the content horizon "+
+		"and wants the manifests below it; a peer at a horizon does not hold them: pull them from %s",
+		h.Hash(), where), nil
 }
 
 // requestSeedOffer is the seed a structural request says its client holds

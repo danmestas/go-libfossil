@@ -10,6 +10,7 @@ import (
 	"github.com/danmestas/go-libfossil/internal/cone"
 	"github.com/danmestas/go-libfossil/internal/content"
 	libfossil "github.com/danmestas/go-libfossil/internal/fsltype"
+	"github.com/danmestas/go-libfossil/internal/horizon"
 )
 
 // originMemos holds the classification memo of each store this process
@@ -60,6 +61,8 @@ type classifier interface {
 	// joinedAfter reports whether h's held set gained at or below cursor a
 	// check-in it lacked through cursor (§6.2.6).
 	joinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error)
+	// heldSet is horizon.Place: h's held set and whether q holds its C.
+	heldSet(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, bool, error)
 }
 
 type freshClassifier struct{}
@@ -90,6 +93,10 @@ func (freshClassifier) joinedAfter(ctx context.Context, q db.Querier, h cone.Hor
 	return content.HorizonJoinedAfter(ctx, q, h, cursor)
 }
 
+func (freshClassifier) heldSet(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, bool, error) {
+	return horizon.Place(ctx, q, h)
+}
+
 type memoClassifier struct{ v *content.MemoView }
 
 func (m memoClassifier) references(ctx context.Context, _ db.Querier, c *cone.Cone) (*content.ConeReferences, error) {
@@ -116,6 +123,10 @@ func (m memoClassifier) read(*content.ConeReferences) int { return m.v.Read() }
 
 func (m memoClassifier) joinedAfter(ctx context.Context, q db.Querier, h cone.Horizon, cursor int64) (bool, error) {
 	return m.v.HorizonJoinedAfter(ctx, q, h, cursor)
+}
+
+func (m memoClassifier) heldSet(ctx context.Context, q db.Querier, h cone.Horizon) ([]libfossil.FslID, bool, error) {
+	return m.v.HeldSet(ctx, q, h)
 }
 
 // classifier returns how this request classifies over q: through the

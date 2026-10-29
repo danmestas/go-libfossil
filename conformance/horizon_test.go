@@ -32,7 +32,7 @@ func horizonSuiteCases() []Case {
 	return append([]Case{horizonCanonical, horizonUnknownVersion, horizonHeldSetRules,
 		horizonHeldSetRecomputed, horizonHeldSetClosed}, slices.Concat(horizonContentCases(), horizonSyncCases(),
 		horizonServeCases(), horizonCLICases(), horizonCursorCases(), horizonSeedCases(), horizonSigningCases(), horizonStructuralCases(), horizonDeepenCases(), horizonDeltaCases(), horizonNodesCases(), horizonNamesCases(), horizonSeedRefuseCases(), horizonSeedBindCases(), horizonSeedDateCases(), horizonReceiveCases(),
-		horizonSeedFillCases(), horizonSeedLabelCases(), horizonNamedMoreCases())...)
+		horizonSeedFillCases(), horizonSeedLabelCases(), horizonNamedMoreCases(), horizonPeerCases())...)
 }
 
 var (

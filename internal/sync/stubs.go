@@ -64,7 +64,7 @@ type CloneResult struct {
 	ArtifactsLinked  int // Manifests crosslinked into event table
 	ProjectCode      string
 	ServerCode       string
-	Messages         []string // Informational messages from server
+	Messages         []string // Informational messages from server, and a horizon-fallback: remedy (§6.3)
 	// HorizonHistoryURL is the interface outside the protocol at which the
 	// origin says history below a horizon can be queried (horizon-served
 	// URL, §6.2.5), the last a reply named; "" when none did.

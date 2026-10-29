@@ -311,6 +311,9 @@ type handler struct {
 	structuralRead  int                       // what placing a structural horizon read through the memo
 	resolved        *xfer.PragmaCard          // echoed to a request naming its horizon (horizon §6.2.7)
 	nameRefusal     string                    // why the request's horizon-name is refused; "" when it is not
+	asked           cone.Horizon              // the request's horizon as asked, before serving cuts its depth
+	notHeld         bool                      // the pull half is refused: its held set is not in this store's (horizon §6.4)
+	judged          classifier                // what judgeHeld classified through, reused by the inventory
 
 	// Auth state
 	user   string // verified username ("nobody" if no login card)
@@ -526,6 +529,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 		return h.reply(), nil
 	}
 	if h.cone != nil && h.nameRefusal == "" {
+		h.asked, _ = h.cone.Horizon()
 		if err := h.prepareStructural(ctx, cards); err != nil {
 			return nil, err
 		}
@@ -561,7 +565,7 @@ func (h *handler) process(ctx context.Context, req *xfer.Message) (*xfer.Message
 	if h.fatal || h.aborted {
 		h.filesRecvd = 0 // rolled back with the request
 	}
-	if h.fatal {
+	if h.fatal || h.notHeld {
 		return h.reply(), nil
 	}
 	h.resp = append(h.resp, h.timestampComment())
@@ -619,6 +623,11 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(seedRefusedText)
 		return errPassAborted
 	}
+	// Horizon §6.4: judged once the pull card has passed its permission
+	// check and the push half is stored, so a refusal discards no push.
+	if err := h.judgeHeld(ctx); err != nil {
+		return err
+	}
 	// The end-of-request steps run after a broken loop too (§6.4).
 	if err := h.emitInventory(ctx); err != nil {
 		return err
@@ -636,6 +645,7 @@ func (h *handler) processInTx(ctx context.Context, req *xfer.Message) error {
 		h.fail(refusal)
 		return errPassAborted
 	}
+	h.refuseHorizon()
 	return nil
 }
 
@@ -853,8 +863,9 @@ func (h *handler) emitInventory(ctx context.Context) error {
 		}
 	}
 	// If pull was requested, emit igot for all non-phantom blobs. Horizon
-	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it.
-	if h.pullOK {
+	// §6.2.4: a merge-base answer goes ahead of them, where zit puts it. A
+	// pull refused by horizon §6.4 gets none.
+	if h.pullOK && !h.notHeld {
 		if err := h.answerMergeBase(ctx); err != nil {
 			return err
 		}
@@ -1034,6 +1045,55 @@ func (h *handler) refuseClone(msg string) {
 		&xfer.PushCard{ServerCode: serverCode, ProjectCode: h.projectCode},
 		&xfer.ErrorCard{Message: msg})
 	h.broke = true
+}
+
+// horizonNotHeldPrefix begins the one error card a horizon store answers a
+// horizon pull with when the requested held set is not a subset of its own
+// (horizon §6.4). It is machine-readable: a client matches the prefix, not
+// the human text after it, to make the refusal fatal.
+const horizonNotHeldPrefix = "horizon-not-held:"
+
+// horizonNotHeldText is this store's whole refusal.
+const horizonNotHeldText = horizonNotHeldPrefix +
+	" this store does not hold the requested horizon; pull from an origin that holds it"
+
+// refuseHorizon answers the pull half of a horizon pull or sync this store
+// does not hold (horizon §6.4). It runs after the request's cards, so the
+// push half stands: what the peer pushed is stored, and its reply cards stay,
+// the gimmes that ask for what the peer announced and any push error, so a
+// client can finish its push in later rounds. Every other card is dropped
+// (keptOnRefusal), the pull half's content, announcements and the pragmas
+// serving the horizon among them, so the peer is sent no content (§6.4);
+// the error card goes last, since a client stops reading at an error card.
+// process adds no timestamp, so a pull alone is answered by the error alone.
+func (h *handler) refuseHorizon() {
+	if !h.notHeld {
+		return
+	}
+	h.resp = slices.DeleteFunc(h.resp, func(c xfer.Card) bool { return !keptOnRefusal(c) })
+	h.resp = append(h.resp, &xfer.ErrorCard{Message: horizonNotHeldText})
+}
+
+// refusalKeeps lists the session-level pragmas a §6.4 refusal keeps: the
+// server's release and capabilities, a check-in lock answer, and whether
+// the requester may push unversioned files.
+var refusalKeeps = map[string]bool{
+	"server-version": true, "send-submanifests": true, "avoid-submanifests": true,
+	"ci-lock-fail": true, "uv-push-ok": true, "uv-pull-only": true,
+}
+
+// keptOnRefusal reports a reply card a §6.4 refusal keeps: one the push half
+// or the session needs, the gimmes asking for what the peer announced, an
+// error or message, and the session-level pragmas. It is an allowlist, so a
+// card type added later is dropped from a refusal until it is judged safe.
+func keptOnRefusal(c xfer.Card) bool {
+	switch c := c.(type) {
+	case *xfer.GimmeCard, *xfer.UVGimmeCard, *xfer.XGimmeCard, *xfer.ErrorCard, *xfer.MessageCard:
+		return true
+	case *xfer.PragmaCard:
+		return refusalKeeps[c.Name]
+	}
+	return false
 }
 
 // wrongProject refuses a push or pull card naming another project, ahead of

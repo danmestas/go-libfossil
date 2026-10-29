@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	libfossil "github.com/danmestas/go-libfossil"
 )
@@ -253,12 +254,25 @@ func (c *RepoConeDeepenCmd) Run(g *Globals) (err error) {
 
 // printHistoryURL names the interface at which the origin says history
 // below the horizon can be queried, when a reply named one
-// (draft-fossil-horizon-00 §6.2.5).
+// (draft-fossil-horizon-00 §6.2.5), and the remedy a fallback reports.
 func printHistoryURL(result *libfossil.SyncResult) {
 	if result != nil && result.HorizonHistoryURL != "" {
 		fmt.Printf("history: %s\n", result.HorizonHistoryURL)
 	}
+	if result == nil {
+		return
+	}
+	for _, e := range result.Errors {
+		if strings.HasPrefix(e, horizonFallbackPrefix) {
+			fmt.Printf("remedy: %s\n", e)
+		}
+	}
 }
+
+// horizonFallbackPrefix begins the remedy a store that fell back to the
+// content horizon reports among a sync's Errors and a clone's Messages
+// (draft-fossil-horizon-00 §6.3); it matches internal/sync's fallbackPrefix.
+const horizonFallbackPrefix = "horizon-fallback:"
 
 // structuralSuffix marks a structural horizon where one is printed; the
 // content horizon, the default, is printed bare.

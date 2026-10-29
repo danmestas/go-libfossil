@@ -1442,6 +1442,14 @@ libfossil -R repo.fossil repo verify --seed
 
 **Stock fossil 2.28.** A horizon store refuses a dense clone, because the clone would be silently incomplete.
 
+**A horizon store serving horizon peers.** Horizon clones can pull from one another, as in a mesh where each peer pulls from whichever one announced a commit. A store at a horizon serves another horizon store by three rules (§6.2.3, §6.4):
+
+- A horizon store serves a horizon request only when the held set the request names is a subset of its own. A pull or sync at an earlier C, or under a rule that holds more, gets one error card beginning `horizon-not-held:` and nothing else, and the client fails. A push in the same sync is still taken: the store asks for what the peer announced, the client sends it in later rounds, and only then fails. §6.4's "no content" is what the store sends, not what it accepts. A peer at a later C, including one the store does not hold yet, is served. A clone it does not cover is refused the same way, unless `partial-mirror` is on.
+- A content-horizon store holds every manifest, so it serves any content-horizon request at or above its own C.
+- A structural store does not mint seeds. A structural request is answered at the content level. The requester falls back to the content horizon and reports a `horizon-fallback:` remedy in `SyncResult.Errors` or `CloneResult.Messages`. That names C and the dense origin to pull the manifests below C from, by the store's `horizon-history-url` when one is set. A structural store still refuses a content-horizon clone, since it lacks the manifests below C that the clone would keep.
+
+**zit 0.7.4** fails a pull that a go-libfossil horizon store refuses. As a server, zit 0.7.4 serves a horizon pull at an earlier C than its own store's instead of refusing it.
+
 **zit 0.7.1** resolves horizon names and depths as go-libfossil's origin does. Against zit 0.7.0 and earlier a clone by name falls back to resolving locally.
 
 **A peer that knows nothing of horizons.** A horizon clone from stock Fossil works, by hash or by name. The client asks for nothing below the horizon, records the below-horizon blobs it is sent as elided instead of storing them, and classifies locally. `HorizonServed` stays 0. Stock Fossil can announce a new check-in only inside a cluster. A horizon store holds no clusters, so it requests the cluster members as transit and classifies what arrives (§4.5). Without that a new check-in would not be learned until a later one named it.

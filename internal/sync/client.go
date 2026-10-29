@@ -892,6 +892,9 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 		// recorded first so it still surfaces. (A clone's first round
 		// tolerates an error card; that path is cloneSession.serverError.)
 		s.result.Errors = append(s.result.Errors, "error: "+c.Message)
+		if strings.HasPrefix(c.Message, horizonNotHeldPrefix) {
+			s.refusePull(c.Message)
+		}
 		return true, nil
 	case *xfer.PrivateCard:
 		s.nextIsPrivate = true
@@ -941,6 +944,20 @@ func (s *session) handleReplyCard(ctx context.Context, card xfer.Card,
 		return false, s.processXTableCard(card)
 	}
 	return false, nil
+}
+
+// refusePull takes a peer's horizon §6.4 refusal of the pull half. The
+// refusal is fatal to the pull, which stops here: no later request carries a
+// pull card, and the store reads the reply as no answer to its horizon, so a
+// structural store does not fall back on it. The push half is not refused:
+// later rounds answer the reply's gimmes until the push converges, bounded
+// by MaxRounds as any push is, and Sync then returns the refusal.
+func (s *session) refusePull(msg string) {
+	if msg == "" {
+		panic("session.refusePull: empty refusal")
+	}
+	s.refused = msg
+	s.opts.Pull = false
 }
 
 // receiveFile stores a received file or cfile and counts it.

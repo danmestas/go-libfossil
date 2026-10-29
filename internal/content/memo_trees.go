@@ -100,7 +100,8 @@ func (n *treeNames) intern(name string) (id uint32, added bool) {
 	if id, ok := n.ids[name]; ok {
 		return id, false
 	}
-	if len(n.names) >= math.MaxUint32 {
+	// uint64: on 32-bit targets (TinyGo wasm) MaxUint32 overflows int.
+	if uint64(len(n.names)) >= math.MaxUint32 {
 		panic("content.treeNames.intern: ids exhausted")
 	}
 	id = uint32(len(n.names))

@@ -55,9 +55,13 @@ func (h *handler) prepareStructural(ctx context.Context, cards []xfer.Card) erro
 	// floor and label rules were written for, so it cannot seed and answers
 	// as content; horizon-served names its history interface, which the
 	// requester's fallback reports as where the manifests below C are held.
-	if _, seeded, err := content.StructuralHorizon(q); err != nil || seeded {
-		h.cone = withDepth(h.cone, cone.DepthContent)
+	_, seeded, err := content.StructuralHorizon(q)
+	if err != nil {
 		return err
+	}
+	if seeded {
+		h.cone = withDepth(h.cone, cone.DepthContent)
+		return nil
 	}
 	k, reach, placed, err := h.structuralReach(ctx, hz)
 	if err != nil {

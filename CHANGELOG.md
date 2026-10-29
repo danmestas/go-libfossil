@@ -72,6 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An origin's classification memo keeps the trees its horizons' walks read
+  compactly: blob names as ids, each tree's files as sorted delta-varint
+  ids, and a full manifest as its difference from the one kept before it
+  (draft-fossil-horizon-00 §6.2). On a clone of fossil-scm.org every tree
+  in the history fits in about 11 MiB, so the 64 MiB bound, which used to
+  hold a few thousand trees, no longer evicts there; the walked-tree cache
+  of two horizons drops from 50 MiB to a few MiB (tracked in #463).
 - `ReadFile`, `ReadFileAt` and `Diff` at a check-in below a store cone's
   horizon now fail with an error matching `ErrBelowHorizon` and naming the
   horizon when the read needs content the store does not hold. Annotate on a
@@ -79,7 +86,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and credit the remaining lines to the oldest version it had read; it now
   reports them at the horizon, marked `BelowHorizon`, as a structural store
   does, and `AnnotateContext` fetches the history that attributes them (#489).
-
 - In-process SSH signature verification is opt-in: it lives in the new
   package `github.com/danmestas/go-libfossil/sshverify`, which a program links
   by importing it for its side effect. The library no longer links

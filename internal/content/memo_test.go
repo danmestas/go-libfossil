@@ -27,6 +27,9 @@ type memoRepo struct {
 	when time.Time
 	tips []libfossil.FslID
 	n    int
+	// wide, when set, holds the files of a wide tree that every check-in
+	// renames, deletes or adds one of, and changes another.
+	wide map[string]string
 }
 
 func newMemoRepo(t *testing.T, mode hzMode) *memoRepo {
@@ -59,6 +62,9 @@ func (m *memoRepo) commit(parent libfossil.FslID) libfossil.FslID {
 		{Name: "src/a.c", Content: []byte("a\n")}, {Name: "src/b.c", Content: []byte("b\n")},
 	}
 	files[m.n%len(files)].Content = []byte(fmt.Sprintf("v%d\n", m.n))
+	if m.wide != nil {
+		files = m.widen()
+	}
 	rid, _, err := manifest.Checkin(m.r, manifest.CheckinOpts{
 		Files: files, Comment: fmt.Sprintf("c%d", m.n), User: "u", Parent: parent, Time: m.when,
 		Delta: m.mode == hzDelta && parent != 0,
@@ -68,6 +74,30 @@ func (m *memoRepo) commit(parent libfossil.FslID) libfossil.FslID {
 	}
 	m.tips = append(m.tips, rid)
 	return rid
+}
+
+// widen evolves the wide tree by one check-in and returns its files.
+func (m *memoRepo) widen() []manifest.File {
+	names := slices.Sorted(maps.Keys(m.wide))
+	pick := names[(m.n*7)%len(names)]
+	switch m.n % 4 {
+	case 0:
+		m.wide[fmt.Sprintf("lib/r%d.c", m.n)] = m.wide[pick]
+		delete(m.wide, pick)
+	case 1:
+		if len(m.wide) > 24 {
+			delete(m.wide, pick)
+		}
+	case 2:
+		m.wide[fmt.Sprintf("src/n%d.c", m.n)] = fmt.Sprintf("n%d\n", m.n)
+	}
+	names = slices.Sorted(maps.Keys(m.wide))
+	m.wide[names[(m.n*3)%len(names)]] = fmt.Sprintf("v%d\n", m.n)
+	files := make([]manifest.File, 0, len(m.wide))
+	for _, name := range slices.Sorted(maps.Keys(m.wide)) {
+		files = append(files, manifest.File{Name: name, Content: []byte(m.wide[name])})
+	}
+	return files
 }
 
 func (m *memoRepo) uuid(rid libfossil.FslID) string {
@@ -249,42 +279,116 @@ func TestMemoUnpublishedViewDiscarded(t *testing.T) {
 // draft-fossil-horizon-00 §6.2: the memo keeps the trees its horizons'
 // walks read, so a second horizon over the same store, under another C or
 // rule, reads from the store only the trees the first did not, and
-// classifies as a fresh read does.
+// classifies as a fresh read does. Past its tree limit the memo reads
+// trees again, and classifies alike.
 func TestMemoTreesReadOnce(t *testing.T) {
 	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
-		t.Run(string(mode), func(t *testing.T) {
-			ctx := context.Background()
-			m := newMemoRepo(t, mode)
-			tip := m.commit(0)
-			for i := 0; i < 5; i++ {
-				tip = m.commit(tip)
-			}
-			memo := content.NewMemo()
-			seen := map[string]bool{}
-			for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0]} {
-				v, err := memo.View(ctx, m.r.DB())
-				if err != nil {
-					t.Fatal(err)
+		for _, limited := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/limited=%v", mode, limited), func(t *testing.T) {
+				ctx := context.Background()
+				m := newMemoRepo(t, mode)
+				tip := m.commit(0)
+				for i := 0; i < 5; i++ {
+					tip = m.commit(tip)
 				}
-				for _, sc := range m.memoCones(c) {
-					sameClassification(t, m.r, v, sc)
+				memo := content.NewMemo()
+				if limited {
+					memo.LimitTrees(400)
 				}
-				names, reads := v.TreesRead()
-				if reads != len(names) {
-					t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
-				}
-				if len(seen) == 0 && len(names) == 0 {
-					t.Fatalf("the first horizon, at %d, read no tree", c)
-				}
-				for _, name := range names {
-					if seen[name] {
-						t.Fatalf("horizon at %d read %.10s again", c, name)
+				seen := map[string]bool{}
+				again := 0
+				for _, c := range []libfossil.FslID{m.tips[3], m.tips[1], m.tips[0], m.tips[3]} {
+					v, err := memo.View(ctx, m.r.DB())
+					if err != nil {
+						t.Fatal(err)
 					}
-					seen[name] = true
+					for _, sc := range m.memoCones(c) {
+						sameClassification(t, m.r, v, sc)
+					}
+					names, reads := v.TreesRead()
+					if reads != len(names) {
+						t.Fatalf("horizon at %d: %d tree reads of %d trees", c, reads, len(names))
+					}
+					if len(seen) == 0 && len(names) == 0 {
+						t.Fatalf("the first horizon, at %d, read no tree", c)
+					}
+					for _, name := range names {
+						if seen[name] {
+							again++
+						}
+						seen[name] = true
+					}
+					v.Publish()
+					if limited && memo.TreeBytes() > 400 {
+						t.Fatalf("the memo keeps %d tree bytes past its limit", memo.TreeBytes())
+					}
 				}
-				v.Publish()
-			}
-		})
+				if !limited && again > 0 {
+					t.Fatalf("%d trees read again", again)
+				}
+				if limited && again == 0 {
+					t.Fatal("no tree read again past the limit")
+				}
+			})
+		}
+	}
+}
+
+// draft-fossil-horizon-00 §6.2: over wide trees that rename, delete and
+// add files, in every manifest form, the memo's trees (kept as differences
+// along chains of the longest length, or past a small limit started again
+// on most publishes) classify every cone as a fresh read does, before and
+// after the store gains check-ins. A branch's newer trees head the chains
+// that trunk trees continue, so a trunk horizon decodes trees whose chain
+// starts outside its held set.
+func TestMemoWideTreesMatchFresh(t *testing.T) {
+	for _, mode := range []hzMode{hzFull, hzDelta, hzTree} {
+		for _, limit := range []int64{0, 6000} {
+			t.Run(fmt.Sprintf("%s/limit=%d", mode, limit), func(t *testing.T) {
+				ctx := context.Background()
+				m := newMemoRepo(t, mode)
+				m.wide = map[string]string{}
+				for i := 0; i < 30; i++ {
+					m.wide[fmt.Sprintf("src/f%02d.c", i)] = fmt.Sprintf("f%d\n", i)
+				}
+				tip := m.commit(0)
+				for i := 0; i < 19; i++ {
+					tip = m.commit(tip)
+				}
+				branch := m.tips[5]
+				for i := 0; i < 6; i++ {
+					branch = m.commit(branch)
+				}
+				memo := content.NewMemo()
+				if limit > 0 {
+					memo.LimitTrees(limit)
+				}
+				classify := func(cs ...libfossil.FslID) {
+					t.Helper()
+					for _, c := range cs {
+						v, err := memo.View(ctx, m.r.DB())
+						if err != nil {
+							t.Fatal(err)
+						}
+						for _, sc := range m.memoCones(c) {
+							sameClassification(t, m.r, v, sc)
+						}
+						v.Publish()
+						if limit > 0 && memo.TreeBytes() > limit {
+							t.Fatalf("the memo keeps %d tree bytes past %d", memo.TreeBytes(), limit)
+						}
+					}
+				}
+				classify(m.tips[0], m.tips[12], m.tips[6], m.tips[22])
+				if depth := memo.TreeChainDepth(); limit == 0 && mode == hzFull && depth != 15 {
+					t.Fatalf("longest chain of differences %d, want 15", depth)
+				}
+				for i := 0; i < 4; i++ {
+					tip, branch = m.commit(tip), m.commit(branch)
+				}
+				classify(m.tips[0], m.tips[14], m.tips[23], m.tips[3])
+			})
+		}
 	}
 }
 

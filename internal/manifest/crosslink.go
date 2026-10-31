@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -1024,7 +1023,7 @@ func (g *checkinDeferralGuard) recordDeferred(
 	}
 	var uuid string
 	_ = tx.QueryRow("SELECT uuid FROM blob WHERE rid=?", rid).Scan(&uuid)
-	slog.Debug("manifest."+source+": deferring checkin",
+	logDebug("manifest."+source+": deferring checkin",
 		"rid", rid,
 		"uuid", uuid,
 		"missing_count", len(missing),
@@ -1119,7 +1118,7 @@ func logDeferredCheckinSummary(source string, guard *checkinDeferralGuard, linke
 	for i, rid := range guard.deferredRids {
 		rids[i] = strconv.FormatInt(int64(rid), 10)
 	}
-	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
+	logInfo("manifest."+source+": deferred checkins awaiting missing blobs",
 		"defer_attempt_count", guard.deferredCount,
 		"missing_reference_observation_count", guard.missingReferenceCount,
 		"deferred_rid_sample", strings.Join(rids, " "),
@@ -1149,7 +1148,7 @@ func logDeferredCheckinLegacyRollup(source string, deferredCount int, deferredRi
 	for i, rid := range deferredRids {
 		rids[i] = strconv.FormatInt(int64(rid), 10)
 	}
-	slog.Info("manifest."+source+": deferred checkins awaiting missing blobs",
+	logInfo("manifest."+source+": deferred checkins awaiting missing blobs",
 		"deferred", deferredCount,
 		"linked", linked,
 		"deferred_rids", sampledList(rids, deferredCount),

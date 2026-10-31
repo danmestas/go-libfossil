@@ -46,16 +46,29 @@ func HashPrefix(hash string, n int) string {
 // forms. Go's html.EscapeString agrees on every character except the double
 // quote, which it writes as &#34; where fossil writes &quot;.
 func HTMLize(s string) string {
-	return fossilHTML.Replace(s)
+	if strings.IndexAny(s, "&<>\"'") < 0 {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 16)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; c {
+		case '&':
+			b.WriteString("&amp;")
+		case '<':
+			b.WriteString("&lt;")
+		case '>':
+			b.WriteString("&gt;")
+		case '"':
+			b.WriteString("&quot;")
+		case '\'':
+			b.WriteString("&#39;")
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
-
-var fossilHTML = strings.NewReplacer(
-	"&", "&amp;",
-	"<", "&lt;",
-	">", "&gt;",
-	`"`, "&quot;",
-	"'", "&#39;",
-)
 
 // HTTPize encodes s as fossil's %t conversion does (httpize in
 // src/encode.c): ASCII letters, digits and ".$~-_" pass through, a space

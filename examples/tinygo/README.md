@@ -31,6 +31,12 @@ calls `NewHTTPTransport`, and neither does the `cli` package. A tagged
 embedder supplies its own transport and serving, for example a `Transport`
 for `Sync` and its own request handling around `HandleSyncWithOpts`.
 
+`-tags libfossil_noslog` leaves `log/slog` out (about 33 KB gzipped): the
+check-in linker writes its info and warning messages to stderr instead and
+drops its debug messages. This example builds with it. For a program that
+needs to be smaller still, see "Smaller still" in the
+[install guide](../../docs/site/content/docs/get-started/install.md).
+
 No SQLite driver is imported here. A TinyGo host registers a
 `database/sql` driver over its own SQLite. The `ncruces` driver runs SQLite
 as an embedded wasm module and is for standard Go builds; the `modernc`

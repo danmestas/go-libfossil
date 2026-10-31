@@ -282,6 +282,38 @@ jobs:
           tinygo build -target=wasm -no-debug -opt=z -stack-size=1MB -o libfossil.wasm ./examples/tinygo/
           echo "raw $(wc -c < libfossil.wasm) bytes, gzip -9 $(gzip -9c libfossil.wasm | wc -c) bytes"
 
+  build-size-tags:
+    name: Build (size tags)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the library under libfossil_nohttp and libfossil_noslog
+        # Size-bound embedders such as html-artifact-publisher build with both
+        # tags, and no other job compiles the code behind them. The packages
+        # left out call the HTTP transport by design and are documented as
+        # not building with libfossil_nohttp.
+        env:
+          GOWORK: "off"
+        run: |
+          set -o pipefail
+          tags="libfossil_nohttp libfossil_noslog"
+          pkgs=$(go list -e -tags "$tags" ./... | grep -v \
+            -e '/cli$' -e '/cmd/libfossil$' -e '/examples/tinygo$' \
+            -e '/tools/docsgen/conformance$')
+          echo "$pkgs" | xargs go build -tags "$tags"
+      - name: Vet and test under libfossil_noslog
+        # The check-in linker's stderr logging replaces log/slog under this
+        # tag; the tests that read slog output skip themselves. Fossil-gated
+        # tests skip here too: the modernc job runs them without the tag.
+        env:
+          GOWORK: "off"
+        run: |
+          go vet -tags libfossil_noslog ./...
+          go test -tags libfossil_noslog ./internal/manifest/ -count=1 -timeout=10m
+
   test-otel:
     name: Test (observer/otel)
     runs-on: ubuntu-latest

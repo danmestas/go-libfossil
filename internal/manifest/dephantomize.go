@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 
 	"github.com/danmestas/go-libfossil/db"
@@ -52,7 +51,7 @@ func judgeFilled(r *repo.Repo, rids []libfossil.FslID) {
 		}
 	}
 	if _, err := seedcheck.JudgeFilled(r.DB(), filled); err != nil {
-		slog.Warn("manifest.AfterDephantomize: seed check failed, pending rows left", "err", err)
+		logWarn("manifest.AfterDephantomize: seed check failed, pending rows left", "err", err)
 	}
 }
 
@@ -387,7 +386,7 @@ func (rl *ReceiveLinker) linkInSavepoint(
 				fmt.Errorf("manifest.ReceiveLinker release rid=%d: %w", rid, err),
 			)
 		}
-		slog.Warn("manifest.ReceiveLinker: crosslink failed, blob left un-crosslinked",
+		logWarn("manifest.ReceiveLinker: crosslink failed, blob left un-crosslinked",
 			"rid", rid, "type", d.Type, "error", linkErr)
 		return false, nil
 	}
@@ -935,7 +934,7 @@ func (cl *cascadeLinker) flush(ctx context.Context) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		slog.Warn("manifest.AfterDephantomize: crosslink batch failed, blobs left un-crosslinked",
+		logWarn("manifest.AfterDephantomize: crosslink batch failed, blobs left un-crosslinked",
 			"artifacts", len(batch), "error", err)
 		return true
 	}
@@ -1023,10 +1022,10 @@ func (cl *cascadeLinker) linkOne(tx *db.Tx, item cascadeItem) error {
 // which side of the walk lost the blob.
 func (cl *cascadeLinker) warn(item cascadeItem, err error) {
 	if item.baseline != 0 {
-		slog.Warn("manifest.AfterDephantomize: crosslink of orphan failed, blob left un-crosslinked",
+		logWarn("manifest.AfterDephantomize: crosslink of orphan failed, blob left un-crosslinked",
 			"rid", item.rid, "baseline", item.baseline, "error", err)
 		return
 	}
-	slog.Warn("manifest.AfterDephantomize: crosslink failed, blob left un-crosslinked",
+	logWarn("manifest.AfterDephantomize: crosslink failed, blob left un-crosslinked",
 		"rid", item.rid, "error", err)
 }

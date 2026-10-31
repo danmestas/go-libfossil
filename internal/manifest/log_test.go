@@ -26,6 +26,9 @@ func captureInfo(t *testing.T) *bytes.Buffer {
 // clone of the Fossil repository was 417 hashes -- roughly 27 KB -- in one line.
 // The counts are the actionable part and stay exact; the lists are capped.
 func TestLogDeferredCheckinsBoundsIdentifierLists(t *testing.T) {
+	if !slogBuild {
+		t.Skip("libfossil_noslog: diagnostics go to stderr, not log/slog")
+	}
 	buf := captureInfo(t)
 
 	const (
@@ -75,6 +78,9 @@ func TestLogDeferredCheckinsBoundsIdentifierLists(t *testing.T) {
 // handful of deferred artifacts is small enough to print in full, and must not
 // grow a misleading "and 0 more".
 func TestLogDeferredCheckinsShortListsAreComplete(t *testing.T) {
+	if !slogBuild {
+		t.Skip("libfossil_noslog: diagnostics go to stderr, not log/slog")
+	}
 	buf := captureInfo(t)
 
 	logDeferredCheckins("AfterDephantomize",
@@ -96,6 +102,9 @@ func TestLogDeferredCheckinsShortListsAreComplete(t *testing.T) {
 // TestLogDeferredCheckinsSelectsSmallestSamples makes the bounded summary
 // stable when a receive sweep encounters identifiers in reverse order.
 func TestLogDeferredCheckinsSelectsSmallestSamples(t *testing.T) {
+	if !slogBuild {
+		t.Skip("libfossil_noslog: diagnostics go to stderr, not log/slog")
+	}
 	buf := captureInfo(t)
 	const deferrals = logDeferredSampleSize + 3
 
@@ -139,6 +148,9 @@ func TestLogDeferredCheckinsSelectsSmallestSamples(t *testing.T) {
 // distinguishes repeated deferral/reference observations from the bounded,
 // distinct diagnostic samples retained by the production guard.
 func TestLogDeferredCheckinSummaryReportsObservationsWithoutInventingElision(t *testing.T) {
+	if !slogBuild {
+		t.Skip("libfossil_noslog: diagnostics go to stderr, not log/slog")
+	}
 	buf := captureInfo(t)
 	guard := newCheckinDeferralGuard()
 

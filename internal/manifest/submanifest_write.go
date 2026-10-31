@@ -12,7 +12,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -117,7 +116,7 @@ func emissionK(s submanifestSettings, avoid bool) int {
 	}
 	if s.k == 0 {
 		// zit's report, naming this library's re-tune command.
-		slog.Warn(fmt.Sprintf("sub-manifests: pinned submanifest-k is out of range (%s; must be %d..%d)"+
+		logWarn(fmt.Sprintf("sub-manifests: pinned submanifest-k is out of range (%s; must be %d..%d)"+
 			" — emitting a flat manifest. Re-pin with 'libfossil repo submanifests retune --k N'.",
 			s.rawK, MinPartitionK, MaxPartitionK))
 	}
@@ -424,14 +423,14 @@ func (ct checkinTree) afterCommit(r *repo.Repo) {
 		ctx := context.Background()
 		AfterDephantomizeBatch(ctx, r, ct.filled)
 		if _, err := CrosslinkContext(ctx, r); err != nil {
-			slog.Warn("manifest.Checkin: linking check-ins that waited on a sub-manifest", "err", err)
+			logWarn("manifest.Checkin: linking check-ins that waited on a sub-manifest", "err", err)
 		}
 	}
 	if ct.k == 0 {
 		return
 	}
 	if err := r.WithTx(ct.retune); err != nil {
-		slog.Warn("manifest.Checkin: sub-manifest re-tune failed; the commit stands", "err", err)
+		logWarn("manifest.Checkin: sub-manifest re-tune failed; the commit stands", "err", err)
 	}
 }
 
@@ -453,7 +452,7 @@ func (ct checkinTree) retune(tx *db.Tx) error {
 		return nil
 	}
 	if !now.autoRetune {
-		slog.Info("manifest.Checkin: submanifest-k has drifted from the analyzed optimum",
+		logInfo("manifest.Checkin: submanifest-k has drifted from the analyzed optimum",
 			"submanifest-k", ct.k, "optimum", target)
 		return nil
 	}

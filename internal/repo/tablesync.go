@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,7 +46,22 @@ var reservedTables = map[string]bool{
 	"unversioned": true, // UV file storage
 }
 
-var validNameRegex = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+// validName reports whether name matches ^[a-z_][a-z0-9_]*$.
+func validName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		switch {
+		case c >= 'a' && c <= 'z', c == '_':
+		case c >= '0' && c <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
+}
 
 // ValidateTableName validates a synced table name.
 // Must match ^[a-z_][a-z0-9_]*$, not be reserved, and not start with x_.
@@ -55,7 +69,7 @@ func ValidateTableName(name string) error {
 	if name == "" {
 		return fmt.Errorf("table name must not be empty")
 	}
-	if !validNameRegex.MatchString(name) {
+	if !validName(name) {
 		return fmt.Errorf("table name %q must match ^[a-z_][a-z0-9_]*$", name)
 	}
 	if reservedTables[name] {
@@ -72,7 +86,7 @@ func ValidateColumnName(name string) error {
 	if name == "" {
 		return fmt.Errorf("column name must not be empty")
 	}
-	if !validNameRegex.MatchString(name) {
+	if !validName(name) {
 		return fmt.Errorf("column name %q must match ^[a-z_][a-z0-9_]*$", name)
 	}
 	return nil

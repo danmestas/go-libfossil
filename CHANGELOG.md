@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The `libfossil_noslog` build tag leaves `log/slog` out of the library: the
+  check-in linker's info and warning messages are written to stderr as plain
+  `LEVEL message key=value` lines instead, and its debug messages are dropped.
+  It is for size-bound builds such as TinyGo WebAssembly, where `slog` costs
+  about 33 KB gzipped.
 - A structural store that falls back to the content horizon reports a
   remedy beginning `horizon-fallback:`, in `SyncResult.Errors` or
   `CloneResult.Messages`. It names C and the dense origin to pull the
@@ -91,6 +96,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A build no longer links `regexp` or `strings.Replacer` through the library:
+  sync table names are checked, and `HTMLize` escapes, with byte loops. Output
+  is unchanged. In a TinyGo WebAssembly engine that uses no other regexp this
+  is about 84 KB gzipped.
 - A wasm build no longer links `math/big`'s floating point, about 5 KB of a
   gzipped TinyGo binary. Fossil's `%.17g` of a text Julian day is now
   computed in `float64` wherever the platform's long double is a double

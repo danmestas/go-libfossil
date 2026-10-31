@@ -94,6 +94,9 @@ func TestAfterDephantomizeDoesNotWarnForFileBlobs(t *testing.T) {
 // that parses as a manifest but cannot be linked is a real failure and still
 // has to be logged, or the fix would trade one blind spot for another.
 func TestAfterDephantomizeStillWarnsWhenLinkFails(t *testing.T) {
+	if !slogBuild {
+		t.Skip("libfossil_noslog: diagnostics go to stderr, not log/slog")
+	}
 	r := setupTestRepo(t)
 
 	_, fileUUID, err := blob.Store(r.DB(), []byte("content for the failing checkin"))

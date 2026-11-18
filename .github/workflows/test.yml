@@ -24,8 +24,8 @@ env:
   # own server, checked against the release's SHA256SUMS. The interop and
   # horizon-seed tests compare bytes with it, so a missing zit must fail the
   # run, not skip it.
-  ZIT_VERSION: "0.7.3"
-  ZIT_SHA256: "ee88d811170283bb8e348ef35eda8eb1b499473e4a2f74d995271212e02cf4b7"
+  ZIT_VERSION: "0.14.12"
+  ZIT_SHA256: "0f8136c962109edd06295d2f07fe1abb7bc29a300352dd17f765c5a2214d99f8"
 
 jobs:
   test:

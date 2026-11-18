@@ -85,10 +85,12 @@ func zwNames(set string) []string {
 			names = append(names, strings.Join(append(parts, fmt.Sprintf("leaf%03d.c", i)), "/"))
 		}
 	case "edge":
-		names = []string{"a b.c", "tab\there.c", "nl\nname.c", "ünï.c", "#hash.c", "-dash.c",
+		// No control bytes: zit 0.10.0 refuses them in new names. They are
+		// covered where zit only reads them, in zwGoCommitsOnZitTrees.
+		names = []string{"a b.c", "ünï.c", "#hash.c", "-dash.c",
 			"a", "a.b", "a-/b", "a b/c d.txt", "Upper.c", "lower.c", "日本語/ファイル.txt"}
 		for i := 0; i < 60; i++ {
-			names = append(names, fmt.Sprintf("bulk %02d/x\t%02d.c", i%6, i))
+			names = append(names, fmt.Sprintf("bulk %02d/x %02d.c", i%6, i))
 		}
 	}
 	return names
@@ -289,6 +291,9 @@ func zwZitCommits(t *testing.T, bin, home, work string, sc zwScenario) [][]byte 
 		t.Fatal(err)
 	}
 	zitRun(t, bin, home, work, "init")
+	// zit 0.9.0 turned repo-cksum off by default. Fossil and go-libfossil
+	// write the R card, so turn it on to compare manifests byte for byte.
+	zitRun(t, bin, home, work, "settings", "repo-cksum", "on")
 	if sc.k != 0 {
 		zitRun(t, bin, home, work, "submanifest", "enable", "--k", strconv.Itoa(sc.k))
 	}
@@ -433,6 +438,11 @@ func zwGoCommitsOnZitTrees(t *testing.T, bin, home, dir, work string, sc zwScena
 	last := sc.commits[len(sc.commits)-1]
 	files := zwManifestFiles(zwCommit{files: last.files})
 	files[0].Content = []byte("edited by go-libfossil\n")
+	// Fossil takes control bytes in names and zit refuses them in new ones
+	// (0.10.0), so only go-libfossil writes them; zit must still read them.
+	for _, name := range []string{"ctl/tab\there.c", "ctl/nl\nname.c"} {
+		files = append(files, manifest.File{Name: name, Content: []byte(name + "\n")})
+	}
 	// Millisecond time: zit refuses a D card with a longer fraction, which
 	// a zero Time (time.Now) would write.
 	rid, uuid, err := manifest.Checkin(cloned.Inner(), manifest.CheckinOpts{Files: files,

@@ -86,7 +86,8 @@ func TestZitHorizonCursorInterop(t *testing.T) {
 	// Its next pull sends zit's cursor and announces nothing; zit announces
 	// only what it appended since, which go-libfossil then holds.
 	above := hzCommit(t, g.f, "c6", []libfossil.FslID{g.m}, nil)
-	zitRun(t, bin, home, zdense, "pull", server.URL)
+	// c6 and c5 are both children of m, so this pull brings a fork.
+	zitRunExit(t, bin, home, zdense, zitExitForked, "pull", server.URL)
 	sent := &hzSentTransport{inner: peer}
 	peer.replies = nil
 	pulled, err := sync.Sync(context.Background(), r, sent, opts)

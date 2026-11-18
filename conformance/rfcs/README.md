@@ -58,7 +58,7 @@ absent. Section 5.1 permits outside payloads to be absent but does not
 require discarding already-held or demand-fetched payloads; §5.3 follows
 the corrected canonical-writing contract. The horizon copy is pinned at
 `39546186f4` (2026-10-24), which zit 0.7.3 (`version-0.7.3`, check-in
-`f18e3cc041`) carries; the interop tests are pinned to zit 0.7.3. At that
+`f18e3cc041`) carries; the interop tests run against zit 0.14.12. At that
 check-in the sparse-cone,
 sub-manifest, repo-state and delta-format drafts are byte-identical to the
 copies here; the artifact-format and sync-protocol drafts differ and stay

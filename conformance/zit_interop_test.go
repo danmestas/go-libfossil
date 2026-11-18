@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -129,6 +130,17 @@ func zitVersion(bin string) string {
 // its standard output.
 func zitRun(t *testing.T, bin, home, dir string, args ...string) string {
 	t.Helper()
+	return zitRunExit(t, bin, home, dir, 0, args...)
+}
+
+// zitExitForked is the exit status zit 0.11.0 and later give a sync or pull
+// that succeeded and brought or made a fork.
+const zitExitForked = 9
+
+// zitRunExit is zitRun that also accepts exit status ok, for a command whose
+// non-zero status reports an outcome rather than a failure.
+func zitRunExit(t *testing.T, bin, home, dir string, ok int, args ...string) string {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -136,7 +148,12 @@ func zitRun(t *testing.T, bin, home, dir string, args ...string) string {
 	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CONFIG_HOME="+home, "FOSSIL_HOME="+home, "USER=u")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if ok != 0 && errors.As(err, &exit) && exit.ExitCode() == ok {
+		err = nil
+	}
+	if err != nil {
 		t.Fatalf("zit %q: %v\n%s%s", args, err, stdout.Bytes(), stderr.Bytes())
 	}
 	return stdout.String()
